@@ -119,6 +119,17 @@ target/
 **/*.rs.bk
 *.pdb
 
+# Swift / SwiftPM
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# uniffi-rs generated bindings staged into Swift packages by build scripts
+apps/yana-mac/Sources/YanaMac/yana_uniffi.swift
+apps/yana-mac/Sources/yana_uniffiFFI/yana_uniffiFFI.h
+
 # Exceptions to above rules.
 !**/ios/**/default.mode1v3
 !**/ios/**/default.mode2v3
