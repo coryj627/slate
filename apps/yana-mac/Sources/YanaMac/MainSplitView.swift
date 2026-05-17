@@ -1,20 +1,18 @@
 import SwiftUI
 
-/// Skeleton split view shown once a vault is open.
+/// Split view shown once a vault is open.
 ///
-/// Sidebar and detail area are intentional placeholders for this
-/// milestone — the accessible file list lands in issue #11 and per-note
-/// reading lands in Milestone B. What this view does carry already:
-/// the vault name in the toolbar title, a Close Vault button, and
-/// announcement labels so VoiceOver users hear what regions exist even
-/// while they're empty.
+/// Sidebar carries the accessible file list (#11); the detail area is
+/// still a placeholder until Milestone B brings the per-note reader.
+/// What this view owns directly: the vault name in the toolbar title,
+/// the Close Vault button, and the broader "vault X opened" VoiceOver
+/// announcement.
 struct MainSplitView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
         NavigationSplitView {
-            sidebarPlaceholder
-                .navigationTitle("Files")
+            FileListSidebar()
         } detail: {
             detailPlaceholder
         }
@@ -34,41 +32,34 @@ struct MainSplitView: View {
         }
         .onAppear {
             postAccessibilityAnnouncement(
-                "Vault \(vaultTitle) opened. File list region is empty for this build."
+                "Vault \(vaultTitle) opened. Scanning files for the sidebar."
             )
         }
     }
 
     // MARK: - Subviews
 
-    private var sidebarPlaceholder: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("File list")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-            Text("Accessible file list lands in a follow-up issue.")
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("File list, not yet implemented.")
-    }
-
     private var detailPlaceholder: some View {
         VStack(spacing: 8) {
             Spacer()
-            Text("Select a file to read.")
-                .foregroundStyle(.secondary)
-            Text("Reading lands in a follow-up milestone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if let selectedPath = appState.selectedFilePath {
+                Text("Selected: \(selectedPath)")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Reading lands in a follow-up milestone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Select a file to read.")
+                    .foregroundStyle(.secondary)
+                Text("Reading lands in a follow-up milestone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Detail area; file viewing is not yet implemented.")
+        .padding()
     }
 
     private var vaultTitle: String {

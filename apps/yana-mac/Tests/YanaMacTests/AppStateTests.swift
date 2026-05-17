@@ -75,6 +75,64 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isVaultOpen)
     }
 
+    func testOpenVaultScansAndPopulatesFiles() async throws {
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Alpha".utf8).write(to: vault.appendingPathComponent("alpha.md"))
+        try Data("# Beta".utf8).write(to: vault.appendingPathComponent("beta.md"))
+        try Data("plain".utf8).write(to: vault.appendingPathComponent("not-markdown.txt"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        XCTAssertTrue(state.isVaultOpen)
+        XCTAssertTrue(
+            state.isScanning || state.scanTask != nil,
+            "openVault should kick off a scan task"
+        )
+
+        await state.scanTask?.value
+
+        XCTAssertFalse(state.isScanning)
+        XCTAssertNil(state.scanError)
+        XCTAssertEqual(state.files.map(\.name), ["alpha.md", "beta.md"])
+        XCTAssertTrue(state.files.allSatisfy { $0.isMarkdown })
+    }
+
+    func testFilesSortIsCaseInsensitiveByPath() async throws {
+        let vault = tempDir.appendingPathComponent("case-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        for name in ["Charlie.md", "alpha.md", "BRAVO.md"] {
+            try Data("#".utf8).write(to: vault.appendingPathComponent(name))
+        }
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        // Case-insensitive lexicographic: alpha, BRAVO, Charlie. A
+        // case-sensitive sort would put the uppercase names first.
+        XCTAssertEqual(state.files.map(\.name), ["alpha.md", "BRAVO.md", "Charlie.md"])
+    }
+
+    func testCloseVaultClearsFileListState() async throws {
+        let vault = tempDir.appendingPathComponent("close-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("#".utf8).write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        XCTAssertFalse(state.files.isEmpty)
+
+        state.selectedFilePath = state.files.first?.path
+        state.closeVault()
+
+        XCTAssertFalse(state.isVaultOpen)
+        XCTAssertEqual(state.files, [])
+        XCTAssertNil(state.selectedFilePath)
+        XCTAssertFalse(state.isScanning)
+    }
+
     func testRemoveRecentDropsEntryAndPersists() throws {
         let keeper = RecentVault(path: "/tmp/keep", displayName: "keep", lastOpenedMs: 1)
         let goner = RecentVault(path: "/tmp/gone", displayName: "gone", lastOpenedMs: 2)

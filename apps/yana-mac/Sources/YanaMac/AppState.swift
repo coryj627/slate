@@ -19,6 +19,26 @@ final class AppState: ObservableObject {
     /// the path no longer exists. WelcomeView reads this to drive the
     /// "missing vault, remove from recent?" confirmation alert.
     @Published var missingRecentVault: RecentVault?
+    /// Markdown files in the currently-open vault, sorted by relative
+    /// path (case-insensitive). Populated by `loadFiles()` after the
+    /// scanner finishes; empty while no vault is open or while the
+    /// initial scan is still running.
+    @Published private(set) var files: [FileSummary] = []
+    /// True while the initial scan + file load is in progress for the
+    /// current vault. Sidebar uses this to show a progress indicator.
+    @Published private(set) var isScanning: Bool = false
+    /// Surfaced when scanning or listing fails. Independent of
+    /// `lastError` (which guards the open path).
+    @Published var scanError: String?
+    /// Path of the file currently selected in the sidebar, if any. Not
+    /// wired to a content view yet — that lands in Milestone B.
+    @Published var selectedFilePath: String?
+
+    /// Handle on the in-flight scan + list task kicked off by
+    /// `openVault`. Exposed (internal, not Published) so tests can
+    /// `await state.scanTask?.value` to deterministically observe the
+    /// post-scan state.
+    private(set) var scanTask: Task<Void, Never>?
 
     private let recentsStore: RecentVaultsStore
 
@@ -47,7 +67,16 @@ final class AppState: ObservableObject {
             currentSession = session
             currentVaultURL = url
             lastError = nil
+            // Reset file-list state so the previous vault's contents
+            // don't briefly flash in the new vault's sidebar.
+            files = []
+            scanError = nil
+            selectedFilePath = nil
             recordOpened(url: url)
+            scanTask?.cancel()
+            scanTask = Task { [weak self] in
+                await self?.loadFiles()
+            }
         } catch let error as VaultError {
             currentSession = nil
             currentVaultURL = nil
@@ -90,8 +119,14 @@ final class AppState: ObservableObject {
     }
 
     func closeVault() {
+        scanTask?.cancel()
+        scanTask = nil
         currentSession = nil
         currentVaultURL = nil
+        files = []
+        scanError = nil
+        selectedFilePath = nil
+        isScanning = false
     }
 
     /// Drop a recent-vaults entry by path. Used by the welcome screen
@@ -108,6 +143,49 @@ final class AppState: ObservableObject {
                 "YANA: failed to persist recent-vaults removal: \(error)\n",
                 stderr
             )
+        }
+    }
+
+    /// Run the initial scan against the current session, then page
+    /// through `listFiles` to build the sidebar's in-memory list.
+    /// Called automatically after `openVault` succeeds; can be called
+    /// again later (e.g. a refresh action) once we have one.
+    ///
+    /// Idempotent: the Rust scanner upserts on path so re-running on
+    /// an already-indexed vault is fine.
+    func loadFiles() async {
+        guard let session = currentSession else { return }
+        isScanning = true
+        scanError = nil
+        defer { isScanning = false }
+
+        do {
+            // Scan + list both go through SQLite under a Mutex, so
+            // dispatching off the main actor keeps the UI responsive
+            // on multi-thousand-file vaults.
+            let loaded = try await Task.detached(priority: .userInitiated) {
+                let cancel = CancelToken()
+                _ = try session.scanInitial(cancel: cancel)
+                var all: [FileSummary] = []
+                var cursor: String? = nil
+                repeat {
+                    let page = try session.listFiles(
+                        filter: .markdownOnly,
+                        paging: Paging(cursor: cursor, limit: 1_000)
+                    )
+                    all.append(contentsOf: page.items)
+                    cursor = page.nextCursor
+                } while cursor != nil
+                return all
+            }.value
+
+            files = loaded.sorted { lhs, rhs in
+                lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
+            }
+        } catch let error as VaultError {
+            scanError = humanReadable(error)
+        } catch {
+            scanError = error.localizedDescription
         }
     }
 
