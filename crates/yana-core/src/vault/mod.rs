@@ -24,9 +24,9 @@
 //!   POSIX. The target is either at its old content or its new content,
 //!   never partial.
 //! - **Delete.** `delete` uses the `trash` crate to move-to-trash on
-//!   platforms that support it (macOS, Windows, most Linux desktops).
-//!   On platforms without trash support, the call falls back to
-//!   permanent deletion.
+//!   macOS and Windows (YANA's target platforms). On platforms without
+//!   trash support the call returns `VaultError::Trash`; the engine does
+//!   not silently fall back to permanent deletion.
 
 mod fs;
 mod provider;
