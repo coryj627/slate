@@ -13,7 +13,7 @@ struct WelcomeView: View {
             heading
 
             Button("Open Vault…") {
-                pickAndOpenVault()
+                appState.pickAndOpenVault()
             }
             .controlSize(.large)
             .focused($openButtonFocused)
@@ -57,18 +57,6 @@ struct WelcomeView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Welcome to YANA. Open a folder of Markdown files to start.")
-    }
-
-    // MARK: - Actions
-
-    private func pickAndOpenVault() {
-        guard let url = VaultPicker.pick() else { return }
-        appState.openVault(at: url)
-        if appState.isVaultOpen {
-            postAccessibilityAnnouncement(
-                "Opened vault \(url.lastPathComponent)."
-            )
-        }
     }
 
     // MARK: - Bindings

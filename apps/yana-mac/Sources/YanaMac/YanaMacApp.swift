@@ -20,17 +20,11 @@ struct YanaMacApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Open Vault…") {
-                    openVaultFromMenu()
+                    appState.pickAndOpenVault()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
             }
         }
-    }
-
-    @MainActor
-    private func openVaultFromMenu() {
-        guard let url = VaultPicker.pick() else { return }
-        appState.openVault(at: url)
     }
 }
 

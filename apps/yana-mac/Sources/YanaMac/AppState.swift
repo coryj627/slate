@@ -34,6 +34,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Show the directory picker and, if the user chose a folder, open
+    /// it as a vault. Centralizes the flow so the WelcomeView button
+    /// and the App-level Cmd+O command share the same code path.
+    func pickAndOpenVault() {
+        guard let url = VaultPicker.pick() else { return }
+        openVault(at: url)
+    }
+
     func closeVault() {
         currentSession = nil
         currentVaultURL = nil
