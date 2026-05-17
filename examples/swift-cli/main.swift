@@ -1,8 +1,10 @@
 // Swift smoke-test client for yana-uniffi.
 //
-// Validates that the Rust core can be called from Swift via the
-// uniffi-rs-generated bindings. Reads a path argument if given (or uses an
-// embedded sample), parses it as Markdown, and prints the extracted headings.
+// Three modes:
+//   (no args)        — Parse an embedded Markdown sample and print headings.
+//   <path-to-file>   — Read that file via the Rust core, print headings.
+//   --vault <path>   — Open the directory as a vault, scan, list files
+//                      via VaultSession (Milestone A demo).
 
 import Foundation
 
@@ -23,6 +25,11 @@ End of sample.
 func run() {
     let arguments = CommandLine.arguments
 
+    if arguments.count > 2, arguments[1] == "--vault" {
+        runVaultDemo(rootPath: arguments[2])
+        return
+    }
+
     if arguments.count > 1 {
         let path = arguments[1]
         print("Reading headings from: \(path)")
@@ -36,6 +43,8 @@ func run() {
                 message = m
             case .InvalidPath(let path, let reason):
                 message = "invalid path \(path): \(reason)"
+            case .Cancelled:
+                message = "operation cancelled"
             }
             FileHandle.standardError.write(Data("error: \(message)\n".utf8))
             exit(1)
@@ -55,6 +64,51 @@ func printHeadings(_ headings: [Heading]) {
     for heading in headings {
         let prefix = String(repeating: "#", count: Int(heading.level))
         print("  \(prefix) \(heading.text)")
+    }
+}
+
+func runVaultDemo(rootPath: String) {
+    print("Opening vault at: \(rootPath)")
+    do {
+        let session = try VaultSession.openFilesystem(rootPath: rootPath)
+        print("Vault opened. Scanning…")
+
+        let scanReport = try session.scanInitial()
+        print(
+            "Scan complete: \(scanReport.filesIndexed) files indexed, "
+                + "\(scanReport.bytesProcessed) bytes processed, "
+                + "\(scanReport.errors.count) errors."
+        )
+        for err in scanReport.errors {
+            print("  warn: \(err)")
+        }
+
+        let paging = Paging(cursor: nil, limit: 20)
+        let page = try session.listFiles(filter: .markdownOnly, paging: paging)
+        print(
+            "Markdown files (\(page.items.count) of \(page.totalFiltered) shown):"
+        )
+        for file in page.items {
+            print("  \(file.path) — \(file.sizeBytes) bytes")
+        }
+        if page.nextCursor != nil {
+            print("  … more pages available")
+        }
+    } catch let error as VaultError {
+        let message: String
+        switch error {
+        case .Io(let m), .Db(let m), .Trash(let m):
+            message = m
+        case .InvalidPath(let path, let reason):
+            message = "invalid path \(path): \(reason)"
+        case .Cancelled:
+            message = "operation cancelled"
+        }
+        FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+        exit(1)
+    } catch {
+        FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+        exit(1)
     }
 }
 

@@ -7,8 +7,12 @@
 //! pre-existing heading extraction used by the FFI smoke tests.
 
 pub mod db;
+pub mod session;
 pub mod vault;
 
+pub use session::{
+    CancelToken, FileFilter, FileSummary, Page, Paging, ScanReport, SessionConfig, VaultSession,
+};
 pub use vault::{
     content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,
     VaultProvider, WatchHandle,
@@ -31,6 +35,17 @@ pub enum VaultError {
 
     #[error("trash operation failed: {message}")]
     Trash { message: String },
+
+    #[error("operation cancelled")]
+    Cancelled,
+}
+
+// Convenience: bare rusqlite errors flow through the `Db` variant so
+// `?` works inside session code that calls SQLite directly.
+impl From<rusqlite::Error> for VaultError {
+    fn from(e: rusqlite::Error) -> Self {
+        VaultError::Db(db::DbError::from(e))
+    }
 }
 
 /// A heading parsed from a Markdown document.

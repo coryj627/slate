@@ -51,6 +51,9 @@ pub enum VaultError {
 
     #[error("trash operation failed: {message}")]
     Trash { message: String },
+
+    #[error("operation cancelled")]
+    Cancelled,
 }
 
 impl From<core::VaultError> for VaultError {
@@ -66,6 +69,7 @@ impl From<core::VaultError> for VaultError {
                 VaultError::InvalidPath { path, reason }
             }
             core::VaultError::Trash { message } => VaultError::Trash { message },
+            core::VaultError::Cancelled => VaultError::Cancelled,
         }
     }
 }
@@ -93,6 +97,146 @@ pub fn read_headings(path: String) -> Result<Vec<Heading>, VaultError> {
     core::read_headings(&path)
         .map(|hs| hs.into_iter().map(Heading::from).collect())
         .map_err(VaultError::from)
+}
+
+// =====================================================================
+// VaultSession FFI surface (Milestone A subset)
+// =====================================================================
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// FFI-exposed vault session. Wraps `yana_core::VaultSession`.
+///
+/// Constructed via `VaultSession.openFilesystem(rootPath:)` on the
+/// foreign side. Acquired sessions are reference-counted; releasing the
+/// last reference closes the underlying SQLite cache.
+#[derive(uniffi::Object)]
+pub struct VaultSession {
+    inner: core::VaultSession,
+}
+
+#[uniffi::export]
+impl VaultSession {
+    /// Open or create a vault rooted at `root_path` using the desktop
+    /// filesystem-backed provider. The cache database lives at
+    /// `<root_path>/.yana/cache.sqlite`.
+    #[uniffi::constructor]
+    pub fn open_filesystem(root_path: String) -> Result<Arc<Self>, VaultError> {
+        let inner = core::VaultSession::from_filesystem(PathBuf::from(root_path))?;
+        Ok(Arc::new(Self { inner }))
+    }
+
+    /// Walk the vault and index every file into the metadata cache.
+    /// Synchronous; callers should dispatch off the UI thread.
+    pub fn scan_initial(&self) -> Result<ScanReport, VaultError> {
+        let cancel = core::CancelToken::new();
+        let report = self.inner.scan_initial(&cancel)?;
+        Ok(report.into())
+    }
+
+    /// Return a page of indexed files matching `filter`.
+    pub fn list_files(
+        &self,
+        filter: FileFilter,
+        paging: Paging,
+    ) -> Result<FileSummaryPage, VaultError> {
+        let page = self.inner.list_files(filter.into(), paging.into())?;
+        Ok(page.into())
+    }
+}
+
+/// Filter passed to `list_files`.
+#[derive(uniffi::Enum)]
+pub enum FileFilter {
+    All,
+    MarkdownOnly,
+}
+
+impl From<FileFilter> for core::FileFilter {
+    fn from(f: FileFilter) -> Self {
+        match f {
+            FileFilter::All => core::FileFilter::All,
+            FileFilter::MarkdownOnly => core::FileFilter::MarkdownOnly,
+        }
+    }
+}
+
+/// Caller-supplied paging request.
+#[derive(uniffi::Record)]
+pub struct Paging {
+    pub cursor: Option<String>,
+    pub limit: u32,
+}
+
+impl From<Paging> for core::Paging {
+    fn from(p: Paging) -> Self {
+        Self {
+            cursor: p.cursor,
+            limit: p.limit,
+        }
+    }
+}
+
+/// Light-weight per-file row.
+#[derive(uniffi::Record)]
+pub struct FileSummary {
+    pub path: String,
+    pub name: String,
+    pub mtime_ms: i64,
+    pub size_bytes: u64,
+    pub is_markdown: bool,
+}
+
+impl From<core::FileSummary> for FileSummary {
+    fn from(s: core::FileSummary) -> Self {
+        Self {
+            path: s.path,
+            name: s.name,
+            mtime_ms: s.mtime_ms,
+            size_bytes: s.size_bytes,
+            is_markdown: s.is_markdown,
+        }
+    }
+}
+
+/// A page of `FileSummary`. uniffi doesn't take generics, so this is the
+/// concrete instantiation of `Page<FileSummary>` for the FFI boundary.
+#[derive(uniffi::Record)]
+pub struct FileSummaryPage {
+    pub items: Vec<FileSummary>,
+    pub next_cursor: Option<String>,
+    pub total_filtered: u64,
+}
+
+impl From<core::Page<core::FileSummary>> for FileSummaryPage {
+    fn from(p: core::Page<core::FileSummary>) -> Self {
+        Self {
+            items: p.items.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
+            total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// Summary of a scan operation.
+#[derive(uniffi::Record)]
+pub struct ScanReport {
+    pub files_seen: u64,
+    pub files_indexed: u64,
+    pub bytes_processed: u64,
+    pub errors: Vec<String>,
+}
+
+impl From<core::ScanReport> for ScanReport {
+    fn from(r: core::ScanReport) -> Self {
+        Self {
+            files_seen: r.files_seen,
+            files_indexed: r.files_indexed,
+            bytes_processed: r.bytes_processed,
+            errors: r.errors,
+        }
+    }
 }
 
 #[cfg(test)]

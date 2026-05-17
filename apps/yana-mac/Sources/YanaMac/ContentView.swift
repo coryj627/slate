@@ -123,6 +123,8 @@ struct ContentView: View {
                 lastError = message
             case .InvalidPath(let path, let reason):
                 lastError = "Invalid path \(path): \(reason)"
+            case .Cancelled:
+                lastError = "Operation cancelled."
             }
         } catch {
             lastError = error.localizedDescription
