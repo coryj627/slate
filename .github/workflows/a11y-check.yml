@@ -24,7 +24,6 @@ on:
 permissions:
   contents: read
   security-events: write   # for SARIF upload
-  actions: read            # codeql-action/upload-sarif reads the workflow run
   pull-requests: write     # for the score comment
 
 env:
@@ -43,6 +42,13 @@ jobs:
   a11y-check:
     name: SwiftUI Accessibility Check
     runs-on: macos-latest
+    # actions: read is only needed by codeql-action/upload-sarif within
+    # this job; scoping it here keeps the workflow-level grant minimal.
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+      actions: read
     steps:
       - name: Checkout YANA
         uses: actions/checkout@v4
@@ -88,7 +94,10 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        # Pinned to SHA for supply-chain hardening; corresponds to
+        # github/codeql-action/upload-sarif@v4.35.5. Bump deliberately
+        # when picking up new versions.
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba
         with:
           sarif_file: a11y-results.sarif
         continue-on-error: true
