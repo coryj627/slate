@@ -682,6 +682,36 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_scan_leaves_index_empty() {
+        // Cancel before scan_vault opens the write transaction; nothing
+        // partially-applied should land in `files`. Re-scanning after
+        // clearing the cancel flag must produce a fully populated index.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"a").unwrap();
+            p.write_file("notes/b.md", b"b").unwrap();
+        });
+
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        match session.scan_initial(&cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+
+        // No files indexed: the transaction was rolled back (in practice,
+        // never opened because the pre-tx check fires first).
+        let page = session
+            .list_files(FileFilter::All, Paging::first(100))
+            .unwrap();
+        assert!(page.items.is_empty(), "cancel should leave no rows behind");
+        assert_eq!(page.total_filtered, 0);
+
+        // Fresh token: scan succeeds and the index populates.
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_indexed, 2);
+    }
+
+    #[test]
     fn rescan_updates_existing_rows_via_on_conflict() {
         let (tmp, session) = make_vault(|p| {
             p.write_file("evolving.md", b"v1").unwrap();
