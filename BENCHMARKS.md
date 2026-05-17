@@ -84,14 +84,14 @@ Recorded against the synthetic fixture in `crates/yana-core/benches/common/mod.r
 | Benchmark | 1 000 files | 10 000 files | 50 000 files | V1 gate (10k / 50k) |
 |---|---|---|---|---|
 | `first_open_and_scan` | 24.6 ms | 295.5 ms | 1.557 s | <15 s / <60 s |
-| `reopen_with_cache` | 23.1 ms | 250.9 ms | 1.469 s | <2 s / <5 s |
+| `reopen_with_cache` | 6.4 ms | 49.1 ms | 243 ms | <2 s / <5 s |
 | `list_files_paged` | 131 µs | 1.66 ms | 15.86 ms | n/a |
 
 _Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/criterion/`; rerun `make bench` to refresh._
 
-**Headroom against V1 gates.** First-open beats the 10k target by ~50× and the 50k target by ~38×; re-open with cache beats by ~8× and ~3.4× respectively. All three sizes sit well under their gates on this hardware.
+**Headroom against V1 gates.** First-open beats the 10k target by ~50× and the 50k target by ~38×. Re-open with cache beats by ~40× and ~21× respectively after the mtime/size skip optimization landed (initial baseline was ~8× / ~3.4×).
 
-**Observation worth noting.** Re-open is barely faster than first-open at scale (1.47 s vs 1.56 s for 50k). The scanner re-hashes every file every time it runs — there's no mtime-based shortcut yet. That's fine for the current gate but is a clear lever if we approach the threshold on slower hardware: an mtime/size pre-check would skip blake3 on unchanged files.
+**Re-open is now decoupled from vault size.** The scanner's fast path skips blake3 hashing entirely for files whose on-disk `(mtime_ms, size_bytes)` already matches the cached row. At 50 k files, re-open dropped from 1.47 s to 0.24 s (-83 %), and that 0.24 s is now dominated by directory traversal + the per-file `SELECT` against SQLite, not file IO. Bench iterations also report `bytes_processed = 0` on a no-change rescan, confirming we never re-read content.
 
 ## When to rerun
 

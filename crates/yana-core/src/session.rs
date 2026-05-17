@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::db;
 use crate::vault::{content_hash, EntryKind, FsVaultProvider, VaultProvider};
@@ -183,7 +183,12 @@ impl CancelToken {
 #[derive(Debug, Default, Clone)]
 pub struct ScanReport {
     pub files_seen: u64,
+    /// Files whose content the scanner actually read + hashed this pass.
     pub files_indexed: u64,
+    /// Files the scanner could short-circuit because their on-disk
+    /// `(mtime_ms, size_bytes)` matched the cached row exactly. We
+    /// refresh `indexed_at_ms` for these but don't re-read or re-hash.
+    pub files_skipped: u64,
     pub bytes_processed: u64,
     /// Per-file errors that did not abort the scan. The scanner keeps
     /// going on individual-file failures so one unreadable file does not
@@ -398,6 +403,33 @@ fn index_file(
         extension.as_deref(),
         Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
     );
+
+    // Fast path: if the indexed row's (mtime_ms, size_bytes) already
+    // matches what we just stat'd, assume content is unchanged and
+    // skip the blake3 hash. This is the standard heuristic (used by
+    // ripgrep / git / etc.) — APFS / NTFS / ext4 all carry sub-second
+    // mtime resolution, so a same-instant overwrite with a same-size
+    // payload is rare enough to accept as a tradeoff for the perf
+    // win. We still refresh `indexed_at_ms` so a future stale-row
+    // sweep can tell "the scanner has visited this" from "this row is
+    // orphaned."
+    let existing: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT mtime_ms, size_bytes FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    if let Some((db_mtime_ms, db_size_bytes)) = existing {
+        if db_mtime_ms == stat.mtime_ms && db_size_bytes == stat.size_bytes as i64 {
+            tx.execute(
+                "UPDATE files SET indexed_at_ms = ?1 WHERE path = ?2",
+                rusqlite::params![now, path],
+            )?;
+            report.files_skipped += 1;
+            return Ok(());
+        }
+    }
 
     let content = provider.read_file(path)?;
     let hash = content_hash(&content);
@@ -644,9 +676,59 @@ mod tests {
             p.write_file("a.md", b"a").unwrap();
         });
         session.scan_initial(&CancelToken::new()).unwrap();
-        // Re-scan after the cache exists.
+        // Re-scan after the cache exists. With the mtime/size skip,
+        // a.md goes through the fast path on the second pass, so the
+        // assertion isn't about files_indexed specifically — it's
+        // about "we accounted for exactly one user file, no .yana
+        // entries leaked into the scan."
         let report = session.scan_initial(&CancelToken::new()).unwrap();
-        assert_eq!(report.files_indexed, 1);
+        assert_eq!(report.files_seen, 1);
+        assert_eq!(report.files_indexed + report.files_skipped, 1);
+    }
+
+    #[test]
+    fn rescan_with_changed_mtime_falls_through_to_rehash() {
+        // Same byte count, different content, deliberately spaced so
+        // the second write lands in a different millisecond — proves
+        // the fast-path checks BOTH mtime and size, not just size.
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"ABCDE").unwrap();
+        });
+        let first = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(first.files_indexed, 1);
+        assert_eq!(first.files_skipped, 0);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("a.md", b"XYZWQ").unwrap();
+
+        let second = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(
+            second.files_indexed, 1,
+            "mtime changed → must re-hash even though size matched"
+        );
+        assert_eq!(second.files_skipped, 0);
+        assert!(second.bytes_processed > 0);
+    }
+
+    #[test]
+    fn rescan_unchanged_files_skips_rehashing() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"alpha").unwrap();
+            p.write_file("b.md", b"beta").unwrap();
+        });
+        let first = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(first.files_indexed, 2);
+        assert_eq!(first.files_skipped, 0);
+
+        // Nothing on disk changed. The fast path should hit for every
+        // file and bytes_processed should be zero — we never re-read
+        // file content, so no IO bytes accumulate.
+        let second = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(second.files_seen, 2);
+        assert_eq!(second.files_indexed, 0);
+        assert_eq!(second.files_skipped, 2);
+        assert_eq!(second.bytes_processed, 0);
     }
 
     #[test]
