@@ -11,3 +11,7 @@ rust-version.workspace = true
 [dependencies]
 pulldown-cmark = { workspace = true }
 thiserror = { workspace = true }
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
