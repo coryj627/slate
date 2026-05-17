@@ -261,6 +261,7 @@ impl From<core::Page<core::FileSummary>> for FileSummaryPage {
 pub struct ScanReport {
     pub files_seen: u64,
     pub files_indexed: u64,
+    pub files_skipped: u64,
     pub bytes_processed: u64,
     pub errors: Vec<String>,
 }
@@ -270,6 +271,7 @@ impl From<core::ScanReport> for ScanReport {
         Self {
             files_seen: r.files_seen,
             files_indexed: r.files_indexed,
+            files_skipped: r.files_skipped,
             bytes_processed: r.bytes_processed,
             errors: r.errors,
         }
