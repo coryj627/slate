@@ -438,15 +438,22 @@ fn index_file(
         // works.
         let ctime_match = stat.ctime_ms == 0 || db_ctime_ms == 0 || db_ctime_ms == stat.ctime_ms;
         if mtime_size_match && ctime_match {
-            // Always rewrite ctime_ms alongside indexed_at_ms. For
-            // post-migration rows this is a no-op assignment (the
-            // values already match). For pre-migration-002 rows
-            // carrying ctime_ms = 0, it back-fills the column from
-            // the current stat — without this, those rows would
-            // permanently fall back to mtime+size-only semantics on
-            // every future rescan, defeating the ctime optimization.
+            // Update indexed_at_ms unconditionally; update ctime_ms
+            // only when the current stat actually carries one. The
+            // CASE guards against two regressions:
+            //   1. Pre-migration rows have ctime_ms = 0. Without the
+            //      back-fill, they'd keep degrading to mtime+size-
+            //      only semantics forever and miss mtime-preserving
+            //      writes.
+            //   2. Switching a vault between platforms (Linux with
+            //      ctime → Windows without, or a future runtime that
+            //      drops ctime support) must not clobber a known-good
+            //      ctime_ms with a 0 sentinel from the current stat.
             tx.execute(
-                "UPDATE files SET indexed_at_ms = ?1, ctime_ms = ?2 WHERE path = ?3",
+                "UPDATE files SET
+                    indexed_at_ms = ?1,
+                    ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END
+                 WHERE path = ?3",
                 rusqlite::params![now, stat.ctime_ms, path],
             )?;
             report.files_skipped += 1;
@@ -630,6 +637,42 @@ mod tests {
         }
         fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
             self.inner.stat(relative)
+        }
+        fn watch(
+            &self,
+            sink: Arc<dyn crate::FileEventSink>,
+        ) -> Result<Option<crate::WatchHandle>, VaultError> {
+            self.inner.watch(sink)
+        }
+    }
+
+    /// Wrapper that delegates to `FsVaultProvider` but zeroes
+    /// `stat.ctime_ms`. Used to simulate platforms / filesystems
+    /// without portable ctime access (Windows today).
+    struct ZeroCtimeProvider {
+        inner: FsVaultProvider,
+    }
+
+    impl crate::VaultProvider for ZeroCtimeProvider {
+        fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+            self.inner.list_dir(relative)
+        }
+        fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+            self.inner.read_file(relative)
+        }
+        fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+            self.inner.write_file(relative, contents)
+        }
+        fn delete(&self, relative: &str) -> Result<(), VaultError> {
+            self.inner.delete(relative)
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+            self.inner.rename(from, to)
+        }
+        fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+            let mut stat = self.inner.stat(relative)?;
+            stat.ctime_ms = 0;
+            Ok(stat)
         }
         fn watch(
             &self,
@@ -884,6 +927,71 @@ mod tests {
         assert!(
             ctime_ms > 0,
             "fast-path UPDATE should backfill ctime_ms from stat, got {ctime_ms}"
+        );
+    }
+
+    #[test]
+    fn fast_path_does_not_clobber_known_ctime_when_stat_returns_zero() {
+        // Scenario: a vault scanned on a platform that supports ctime
+        // (rows carry real ctime_ms values) is later reopened by a
+        // provider that returns ctime_ms = 0 from stat — the path the
+        // Windows / no-ctime build would take. The fast-path UPDATE
+        // must NOT zero out the known-good column.
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join(".yana");
+        let db_path = cache_dir.join("cache.sqlite");
+
+        // First pass: populate the index using the real provider so
+        // ctime_ms ends up non-zero (on Unix).
+        {
+            let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+            provider.write_file("a.md", b"alpha").unwrap();
+            let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+            session.scan_initial(&CancelToken::new()).unwrap();
+            drop(session);
+        }
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let initial_ctime_ms: i64 = conn
+            .query_row(
+                "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+        // Skip on platforms where the real provider also returns 0
+        // — the assertion would be vacuous.
+        if initial_ctime_ms == 0 {
+            return;
+        }
+
+        // Second pass: re-open with a provider that hands back
+        // ctime_ms = 0. The fast-path should hit (mtime+size match)
+        // and refresh indexed_at_ms WITHOUT zeroing ctime_ms.
+        let session = VaultSession::open(
+            Arc::new(ZeroCtimeProvider {
+                inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+            }),
+            SessionConfig::new(cache_dir.clone()),
+        )
+        .unwrap();
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_skipped, 1);
+        assert_eq!(report.files_indexed, 0);
+        drop(session);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let after_ctime_ms: i64 = conn
+            .query_row(
+                "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after_ctime_ms, initial_ctime_ms,
+            "fast-path UPDATE must not clobber a known-good ctime_ms with a 0 sentinel"
         );
     }
 
