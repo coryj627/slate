@@ -170,7 +170,7 @@ impl VaultProvider for FsVaultProvider {
         // is already gone so there's nothing recoverable to send to the
         // trash anyway — unlink the dangling entry directly.
         if meta.file_type().is_symlink() && !path.exists() {
-            return fs::remove_file(&path).map_err(VaultError::Io);
+            return unlink_dangling_symlink(&path, &meta).map_err(VaultError::Io);
         }
 
         match trash::delete(&path) {
@@ -239,6 +239,32 @@ impl VaultProvider for FsVaultProvider {
         // semantics, which works for the tester build.
         Ok(None)
     }
+}
+
+/// Remove a dangling symlink entry. Pulled out as a helper so the
+/// Windows-specific dir-vs-file branch lives in one place.
+///
+/// Unix: `unlink(2)` (which `fs::remove_file` calls) removes the
+/// directory entry of any symlink regardless of what it pointed at.
+///
+/// Windows: symlinks carry a type flag at creation time. A symlink
+/// declared as a directory symlink must be removed with `RemoveDirectory`
+/// (`fs::remove_dir`); calling `DeleteFile` (`fs::remove_file`) on it
+/// fails with `ERROR_ACCESS_DENIED`. The flag is exposed via
+/// `FileTypeExt::is_symlink_dir`.
+#[cfg(windows)]
+fn unlink_dangling_symlink(path: &Path, meta: &fs::Metadata) -> io::Result<()> {
+    use std::os::windows::fs::FileTypeExt;
+    if meta.file_type().is_symlink_dir() {
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+#[cfg(not(windows))]
+fn unlink_dangling_symlink(path: &Path, _meta: &fs::Metadata) -> io::Result<()> {
+    fs::remove_file(path)
 }
 
 /// Atomically replace the contents of `target` by writing into a temp
