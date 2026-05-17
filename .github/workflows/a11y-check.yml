@@ -1,0 +1,179 @@
+# SwiftUI accessibility analysis on every PR that touches Swift sources.
+#
+# Runs cvs-health/ios-swiftui-accessibility-techniques' `a11y-check`
+# static analyzer over the Mac app's SwiftUI code. 34 rules across 19
+# WCAG 2.2 criteria; the run fails if the score drops below the floor
+# defined in MIN_SCORE.
+#
+# The a11y-check binary is built from a pinned commit and cached so
+# subsequent runs skip the (~3 minute) swift build.
+
+name: Accessibility Check
+
+on:
+  pull_request:
+    paths:
+      - 'apps/yana-mac/**/*.swift'
+      - '.github/workflows/a11y-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/yana-mac/**/*.swift'
+      - '.github/workflows/a11y-check.yml'
+
+permissions:
+  contents: read
+  security-events: write   # for SARIF upload
+  pull-requests: write     # for the score comment
+
+env:
+  # Pin to a specific cvs-health/ios-swiftui-accessibility-techniques
+  # commit. Bump deliberately when you want newer rules; cache key
+  # includes this SHA so changing it invalidates the cache.
+  A11Y_CHECK_REF: bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8
+  A11Y_PATHS: "apps/yana-mac/Sources/YanaMac"
+  # Score floor: any regression below this fails the run. We're at
+  # 100/100 today — raise the bar once and treat any drop as a real
+  # signal worth investigating.
+  MIN_SCORE: "100"
+
+jobs:
+  a11y-check:
+    name: SwiftUI Accessibility Check
+    runs-on: macos-latest
+    steps:
+      - name: Checkout YANA
+        uses: actions/checkout@v4
+
+      - name: Restore cached a11y-check binary
+        id: cache-bin
+        uses: actions/cache@v4
+        with:
+          path: .a11y-bin
+          key: a11y-check-${{ env.A11Y_CHECK_REF }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build a11y-check (cache miss)
+        if: steps.cache-bin.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/cvs-health/ios-swiftui-accessibility-techniques.git tmp-a11y
+          cd tmp-a11y
+          git checkout "$A11Y_CHECK_REF"
+          cd a11y-check
+          swift build -c release
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p .a11y-bin
+          cp tmp-a11y/a11y-check/.build/release/a11y-check .a11y-bin/
+          rm -rf tmp-a11y
+
+      - name: Add a11y-check to PATH
+        run: echo "$GITHUB_WORKSPACE/.a11y-bin" >> "$GITHUB_PATH"
+
+      - name: Show version
+        run: a11y-check --version
+
+      - name: Run a11y-check (human-readable)
+        run: a11y-check "$A11Y_PATHS"
+
+      - name: Run a11y-check (JSON for downstream steps)
+        if: always()
+        run: a11y-check "$A11Y_PATHS" --format json --no-trend > a11y-results.json
+
+      - name: Run a11y-check (SARIF for code scanning)
+        if: always()
+        run: a11y-check "$A11Y_PATHS" --format sarif --no-trend > a11y-results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: a11y-results.sarif
+        continue-on-error: true
+
+      - name: Upload result artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-results
+          path: |
+            a11y-results.json
+            a11y-results.sarif
+
+      - name: Post score summary on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = JSON.parse(fs.readFileSync('a11y-results.json', 'utf8'));
+            const s = results.score || {};
+            const score = (s.score ?? 0).toFixed(1);
+            const grade = s.grade || 'F';
+            const errors = s.totalErrors ?? 0;
+            const warnings = s.totalWarnings ?? 0;
+            const min = parseFloat(process.env.MIN_SCORE);
+            const passed = parseFloat(score) >= min && errors === 0;
+            const emoji = passed ? '✅' : '❌';
+
+            const failed = (s.failedCriteria || [])
+              .map(c => `- \`${c.criterion}\` ${c.name} (${c.errors} errors, ${c.warnings} warnings)`)
+              .join('\n');
+            const failedBlock = failed.length
+              ? `### Failed WCAG criteria\n${failed}`
+              : '_All WCAG criteria pass._';
+
+            const body = [
+              `## ${emoji} Accessibility score: ${score} / 100 (${grade})`,
+              ``,
+              `**Issues:** ${errors} error(s), ${warnings} warning(s)`,
+              `**Minimum required:** ${min}`,
+              ``,
+              failedBlock,
+              ``,
+              `---`,
+              `Checked by [a11y-check](https://github.com/cvs-health/ios-swiftui-accessibility-techniques) against \`${process.env.A11Y_PATHS}\`.`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const tag = '## ✅ Accessibility score';
+            const altTag = '## ❌ Accessibility score';
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' &&
+              (c.body.startsWith(tag) || c.body.startsWith(altTag))
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Enforce score floor
+        run: |
+          set -euo pipefail
+          SCORE=$(jq -r '.score.score' a11y-results.json)
+          ERRORS=$(jq -r '.score.totalErrors' a11y-results.json)
+          echo "Score: $SCORE / Minimum: $MIN_SCORE / Errors: $ERRORS"
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::a11y-check reported $ERRORS error(s); see job log and SARIF results"
+            exit 1
+          fi
+          fail=$(awk -v s="$SCORE" -v m="$MIN_SCORE" 'BEGIN { print (s < m) ? 1 : 0 }')
+          if [ "$fail" = "1" ]; then
+            echo "::error::Accessibility score $SCORE is below minimum threshold $MIN_SCORE"
+            exit 1
+          fi
