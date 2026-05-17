@@ -34,18 +34,38 @@ impl From<core::Heading> for Heading {
 }
 
 /// Errors that may be returned across the FFI boundary.
+///
+/// Mirrors `yana_core::VaultError` with the inner sources flattened into
+/// strings so the FFI surface stays simple. Each variant maps 1:1 to a
+/// core error variant.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum YanaError {
-    #[error("io error reading vault file: {message}")]
+pub enum VaultError {
+    #[error("io error: {message}")]
     Io { message: String },
+
+    #[error("database error: {message}")]
+    Db { message: String },
+
+    #[error("invalid vault-relative path {path:?}: {reason}")]
+    InvalidPath { path: String, reason: String },
+
+    #[error("trash operation failed: {message}")]
+    Trash { message: String },
 }
 
-impl From<core::YanaError> for YanaError {
-    fn from(e: core::YanaError) -> Self {
+impl From<core::VaultError> for VaultError {
+    fn from(e: core::VaultError) -> Self {
         match e {
-            core::YanaError::Io(io) => YanaError::Io {
+            core::VaultError::Io(io) => VaultError::Io {
                 message: io.to_string(),
             },
+            core::VaultError::Db(db) => VaultError::Db {
+                message: db.to_string(),
+            },
+            core::VaultError::InvalidPath { path, reason } => {
+                VaultError::InvalidPath { path, reason }
+            }
+            core::VaultError::Trash { message } => VaultError::Trash { message },
         }
     }
 }
@@ -69,10 +89,10 @@ pub fn extract_headings(source: String) -> Vec<Heading> {
 /// host already has permission for. (Full vault-provider abstraction with
 /// host-implemented file access lands in a later iteration.)
 #[uniffi::export]
-pub fn read_headings(path: String) -> Result<Vec<Heading>, YanaError> {
+pub fn read_headings(path: String) -> Result<Vec<Heading>, VaultError> {
     core::read_headings(&path)
         .map(|hs| hs.into_iter().map(Heading::from).collect())
-        .map_err(YanaError::from)
+        .map_err(VaultError::from)
 }
 
 #[cfg(test)]
@@ -93,7 +113,7 @@ mod tests {
     fn read_headings_returns_io_error_for_missing_path() {
         let result = read_headings("/does/not/exist.md".to_string());
         match result {
-            Err(YanaError::Io { message }) => {
+            Err(VaultError::Io { message }) => {
                 assert!(message.contains("No such file") || message.contains("not found"));
             }
             other => panic!("expected Io error, got {other:?}"),

@@ -2,20 +2,35 @@
 //!
 //! The full API surface is documented in
 //! `docs/plans/05_locked_architecture_decisions.md`. This crate is currently
-//! mid-bootstrap: heading extraction (used by the existing FFI smoke tests)
-//! plus the SQLite-backed metadata index foundation (`db` module, the first
-//! piece of Milestone A).
+//! mid-bootstrap, building Milestone A: SQLite-backed metadata index (`db`
+//! module) and the vault filesystem abstraction (`vault` module) plus the
+//! pre-existing heading extraction used by the FFI smoke tests.
 
 pub mod db;
+pub mod vault;
+
+pub use vault::{
+    content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,
+    VaultProvider, WatchHandle,
+};
 
 use std::path::Path;
 use thiserror::Error;
 
-/// Errors produced by the YANA core library.
+/// Errors produced by the YANA core library's vault-facing API.
 #[derive(Debug, Error)]
-pub enum YanaError {
-    #[error("io error reading vault file: {0}")]
+pub enum VaultError {
+    #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("database error: {0}")]
+    Db(#[from] db::DbError),
+
+    #[error("invalid vault-relative path {path:?}: {reason}")]
+    InvalidPath { path: String, reason: String },
+
+    #[error("trash operation failed: {message}")]
+    Trash { message: String },
 }
 
 /// A heading parsed from a Markdown document.
@@ -26,7 +41,7 @@ pub struct Heading {
 }
 
 /// Read a Markdown file from disk and return its headings in document order.
-pub fn read_headings(path: impl AsRef<Path>) -> Result<Vec<Heading>, YanaError> {
+pub fn read_headings(path: impl AsRef<Path>) -> Result<Vec<Heading>, VaultError> {
     let source = std::fs::read_to_string(path)?;
     Ok(extract_headings(&source))
 }

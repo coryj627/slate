@@ -115,10 +115,14 @@ struct ContentView: View {
             headings = parsed
             sourceDescription = url.lastPathComponent
             lastError = nil
-        } catch let error as YanaError {
+        } catch let error as VaultError {
             switch error {
-            case .Io(let message):
+            case .Io(let message),
+                 .Db(let message),
+                 .Trash(let message):
                 lastError = message
+            case .InvalidPath(let path, let reason):
+                lastError = "Invalid path \(path): \(reason)"
             }
         } catch {
             lastError = error.localizedDescription
