@@ -29,12 +29,16 @@ func run() {
         do {
             let headings = try readHeadings(path: path)
             printHeadings(headings)
-        } catch let error as YanaError {
+        } catch let error as VaultError {
+            let message: String
             switch error {
-            case .Io(let message):
-                FileHandle.standardError.write(Data("error: \(message)\n".utf8))
-                exit(1)
+            case .Io(let m), .Db(let m), .Trash(let m):
+                message = m
+            case .InvalidPath(let path, let reason):
+                message = "invalid path \(path): \(reason)"
             }
+            FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+            exit(1)
         } catch {
             FileHandle.standardError.write(Data("error: \(error)\n".utf8))
             exit(1)
