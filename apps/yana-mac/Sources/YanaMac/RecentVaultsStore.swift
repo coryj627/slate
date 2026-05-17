@@ -33,12 +33,19 @@ public final class RecentVaultsStore {
     /// Returns the on-disk list, or an empty list if the file doesn't
     /// exist yet. Malformed JSON is treated as "no recent vaults" — we
     /// don't want a corrupt file to prevent the app from launching.
+    ///
+    /// The hard cap of `maxEntries` is also enforced on load so an
+    /// externally-modified file can't ship a 50-entry list past the
+    /// store; downstream UI code can trust the invariant unconditionally.
     public func load() -> [RecentVault] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         guard let data = try? Data(contentsOf: fileURL),
             let decoded = try? JSONDecoder().decode([RecentVault].self, from: data)
         else {
             return []
+        }
+        if decoded.count > Self.maxEntries {
+            return Array(decoded.prefix(Self.maxEntries))
         }
         return decoded
     }

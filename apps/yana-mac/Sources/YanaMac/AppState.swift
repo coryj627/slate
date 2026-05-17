@@ -97,15 +97,33 @@ final class AppState: ObservableObject {
     /// Drop a recent-vaults entry by path. Used by the welcome screen
     /// when the user confirms removal of a missing vault.
     func removeRecent(path: String) {
-        recentVaults = (try? recentsStore.remove(path: path)) ?? recentVaults
+        do {
+            recentVaults = try recentsStore.remove(path: path)
+        } catch {
+            // Recents persistence isn't critical to app function — the
+            // in-memory list is what the UI reads. Log so the failure
+            // isn't completely silent during dev, but don't surface to
+            // the user; they're already mid-flow on removing an entry.
+            fputs(
+                "YANA: failed to persist recent-vaults removal: \(error)\n",
+                stderr
+            )
+        }
     }
 
     // MARK: - Private
 
     private func recordOpened(url: URL) {
         let entry = RecentVault(url: url)
-        if let updated = try? recentsStore.add(entry) {
-            recentVaults = updated
+        do {
+            recentVaults = try recentsStore.add(entry)
+        } catch {
+            // Same rationale as removeRecent: don't block the open flow
+            // on a recents-list write failure.
+            fputs(
+                "YANA: failed to persist recent-vaults add: \(error)\n",
+                stderr
+            )
         }
     }
 

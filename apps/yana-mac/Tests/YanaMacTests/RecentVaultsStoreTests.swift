@@ -128,4 +128,23 @@ final class RecentVaultsStoreTests: XCTestCase {
         let after = try store.remove(path: "/tmp/missing")
         XCTAssertEqual(after.map(\.path), ["/tmp/alpha"])
     }
+
+    func testLoadTruncatesEntriesAboveCap() throws {
+        // Guard against an externally-modified file containing more
+        // than maxEntries — downstream UI code should be able to trust
+        // the invariant unconditionally.
+        let file = tempDir.appendingPathComponent("recent-vaults.json")
+        let oversized = (0..<(RecentVaultsStore.maxEntries + 5)).map { i in
+            RecentVault(
+                path: "/tmp/vault-\(i)",
+                displayName: "vault-\(i)",
+                lastOpenedMs: Int64(i)
+            )
+        }
+        let data = try JSONEncoder().encode(oversized)
+        try data.write(to: file)
+
+        let store = RecentVaultsStore(fileURL: file)
+        XCTAssertEqual(store.load().count, RecentVaultsStore.maxEntries)
+    }
 }
