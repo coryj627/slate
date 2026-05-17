@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/yana-core",
+    "crates/yana-uniffi",
 ]
 
 [workspace.package]
@@ -15,6 +16,7 @@ rust-version = "1.75"
 [workspace.dependencies]
 pulldown-cmark = { version = "0.10", default-features = false }
 thiserror = "1"
+uniffi = { version = "0.28", features = ["cli"] }
 
 [profile.dev]
 # Faster incremental builds during development.
