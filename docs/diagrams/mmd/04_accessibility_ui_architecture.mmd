@@ -1,0 +1,36 @@
+flowchart TB
+  subgraph Inputs["Input modes"]
+    Keyboard["Keyboard navigation"]
+    ScreenReader["Screen reader navigation"]
+    Voice["Voice control"]
+    Pointer["Pointer / touch"]
+  end
+
+  subgraph FlutterUI["Flutter UI layer"]
+    Focus["Focus model<br/>predictable order, roving focus where needed"]
+    Semantics["Semantics tree<br/>roles, labels, states, hints, actions"]
+    Shortcuts["Shortcut and command routing"]
+    NativeWidgets["Native accessible widgets<br/>lists, trees, data grids, forms"]
+    LiveRegions["Status announcements<br/>sync, search results, errors, task moves"]
+  end
+
+  subgraph Features["Feature renderers"]
+    Editor["Markdown editor"]
+    FileExplorer["File explorer tree"]
+    Bases["Bases data grid/list/cards"]
+    Graph["Graph visual renderer<br/>plus future relationship explorer"]
+    Canvas["Canvas visual renderer<br/>plus structured outline"]
+    Settings["Settings and plugin configuration"]
+  end
+
+  subgraph QA["Accessibility validation"]
+    ManualAT["Manual AT testing<br/>JAWS, NVDA, VoiceOver, TalkBack"]
+    KeyboardQA["Keyboard-only task tests"]
+    VoiceQA["Voice-control command tests"]
+    SemanticsTests["Automated semantics checks"]
+  end
+
+  Inputs --> FlutterUI
+  FlutterUI --> Features
+  Features --> QA
+  QA --> FlutterUI

@@ -1,0 +1,33 @@
+flowchart TB
+  Metadata["Metadata cache<br/>links, embeds, tags, folders, properties"] --> GraphData["Graph data service"]
+  GraphData --> Nodes["Nodes<br/>files, attachments, unresolved targets"]
+  GraphData --> Edges["Edges<br/>resolved links, embeds, inferred relationships"]
+  GraphData --> Metrics["Metrics<br/>in-degree, out-degree, centrality, orphan state"]
+
+  Nodes --> Filter["Graph query and filter service"]
+  Edges --> Filter
+  Metrics --> Filter
+
+  Filter --> GlobalGraph["Global graph result set"]
+  Filter --> LocalGraph["Local graph result set<br/>active note + depth"]
+  Filter --> Presets["Saved graph presets<br/>orphans, tag clusters, projects, unresolved links"]
+
+  GlobalGraph --> Layout["Layout engine<br/>force, radial, hierarchical, cached coordinates"]
+  LocalGraph --> Layout
+  Presets --> Layout
+
+  Layout --> Visual["Flutter visual graph renderer<br/>pan, zoom, select, group colors, node size"]
+  Layout --> Details["Selected-node details panel"]
+
+  GraphData --> AccessibleFuture["Future accessible graph modes"]
+  AccessibleFuture --> Table["Graph table<br/>sortable nodes and metrics"]
+  AccessibleFuture --> Relationship["Relationship explorer<br/>incoming, outgoing, mutual, shared tags"]
+  AccessibleFuture --> PathFinder["Path finder<br/>shortest path and explanation"]
+  AccessibleFuture --> Cluster["Cluster navigator<br/>groups and neighborhoods"]
+
+  Visual --> Actions["Node actions<br/>open, local graph, backlinks, reveal, copy link"]
+  Details --> Actions
+  Table --> Actions
+  Relationship --> Actions
+  PathFinder --> Actions
+  Cluster --> Actions

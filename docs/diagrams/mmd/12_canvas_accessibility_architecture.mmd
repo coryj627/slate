@@ -1,0 +1,21 @@
+flowchart TB
+  CanvasFile[".canvas JSON file"] --> CanvasParser["Canvas parser"]
+  CanvasParser --> Cards["Cards<br/>text, file, link, group, media"]
+  CanvasParser --> Edges["Edges<br/>source, target, side, label"]
+  CanvasParser --> Spatial["Spatial state<br/>x, y, width, height, z/order"]
+
+  Cards --> CanvasModel["Canvas model"]
+  Edges --> CanvasModel
+  Spatial --> CanvasModel
+
+  CanvasModel --> Visual["Visual canvas renderer<br/>pan, zoom, drag, connect"]
+  CanvasModel --> Outline["Accessible canvas outline<br/>groups, cards, links, reading order"]
+  CanvasModel --> Table["Canvas table<br/>card type, title, group, linked note"]
+  CanvasModel --> Navigator["Keyboard navigator<br/>next card, group, connection, path"]
+
+  Visual --> Actions["Canvas actions<br/>open card, edit, move, connect, group"]
+  Outline --> Actions
+  Table --> Actions
+  Navigator --> Actions
+  Actions --> Serializer["Canvas serializer"]
+  Serializer --> CanvasFile

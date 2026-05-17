@@ -1,0 +1,103 @@
+erDiagram
+  FILE {
+    string path PK
+    string type
+    int mtime
+    int ctime
+    int size
+    string hash
+    bool deleted
+  }
+
+  METADATA_RECORD {
+    string file_path FK
+    string parser_version
+    string metadata_json
+    datetime indexed_at
+  }
+
+  PROPERTY_VALUE {
+    string file_path FK
+    string property_name
+    string value_type
+    string value_json
+  }
+
+  LINK {
+    string source_path FK
+    string target_ref
+    string resolved_path
+    string link_type
+    int source_line
+    int source_offset
+  }
+
+  TAG_ASSIGNMENT {
+    string file_path FK
+    string tag
+    string source
+  }
+
+  HEADING {
+    string file_path FK
+    string text
+    int level
+    int line
+  }
+
+  BLOCK {
+    string file_path FK
+    string block_id
+    string section_id
+    int line
+  }
+
+  TASK {
+    string file_path FK
+    string task_id
+    string status
+    string text
+    date due_date
+    bool completed
+  }
+
+  BASE_FILE {
+    string path PK
+    string base_config_json
+  }
+
+  BASE_VIEW {
+    string base_path FK
+    string view_id
+    string view_type
+    string query_json
+  }
+
+  GRAPH_NODE {
+    string node_id PK
+    string file_path FK
+    string label
+    int in_degree
+    int out_degree
+    string group_json
+  }
+
+  GRAPH_EDGE {
+    string edge_id PK
+    string source_node_id FK
+    string target_node_id FK
+    string edge_type
+    int weight
+  }
+
+  FILE ||--o{ METADATA_RECORD : has
+  FILE ||--o{ PROPERTY_VALUE : has
+  FILE ||--o{ LINK : emits
+  FILE ||--o{ TAG_ASSIGNMENT : has
+  FILE ||--o{ HEADING : contains
+  FILE ||--o{ BLOCK : contains
+  FILE ||--o{ TASK : contains
+  BASE_FILE ||--o{ BASE_VIEW : defines
+  FILE ||--o{ GRAPH_NODE : represented_by
+  GRAPH_NODE ||--o{ GRAPH_EDGE : source_of
+  GRAPH_NODE ||--o{ GRAPH_EDGE : target_of

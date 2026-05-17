@@ -1,0 +1,27 @@
+flowchart TB
+  Vault["Local vault"] --> Watcher["Vault watcher<br/>create, modify, delete, rename"]
+  Watcher --> SyncQueue["Sync queue and local state<br/>path, hash, mtime, deleted, conflict flags"]
+  SyncQueue --> LocalSyncDB["Local sync database"]
+
+  LocalSyncDB --> Encrypt["Encryption layer<br/>passphrase, key derivation, encrypted chunks"]
+  Encrypt --> Replicator["LiveSync-compatible replicator"]
+
+  Replicator --> CouchDB["CouchDB-compatible backend"]
+  Replicator --> ObjectStorage["Object storage backend<br/>MinIO, S3, R2"]
+  Replicator --> P2P["Future / optional P2P path"]
+
+  CouchDB --> Pull["Pull remote changes"]
+  ObjectStorage --> Pull
+  P2P --> Pull
+  Pull --> Decrypt["Decrypt and validate"]
+  Decrypt --> Conflict["Conflict detector and resolver"]
+  Conflict --> Apply["Apply safe changes to vault"]
+  Apply --> Vault
+
+  SyncQueue --> Push["Push local changes"]
+  Push --> Encrypt
+
+  Config["LiveSync settings importer<br/>detect config, safe coexistence, diagnostics"] --> Replicator
+  Status["Accessible sync status UI<br/>pending, last sync, errors, conflicts, logs"] --> SyncQueue
+  Status --> Replicator
+  Conflict --> Status

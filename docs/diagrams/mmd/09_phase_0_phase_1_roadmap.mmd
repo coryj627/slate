@@ -1,0 +1,15 @@
+flowchart LR
+  P0Start["Phase 0 start<br/>definition and validation"] --> P0A["Evidence consolidation<br/>docs, bundle trace, demo vault, plugins, IndexedDB"]
+  P0A --> P0B["Compatibility contract<br/>vault files, .obsidian, plugin tiers, sync boundaries"]
+  P0B --> P0C["Accessibility requirements<br/>screen reader, keyboard, voice-control acceptance tests"]
+  P0C --> P0D["Technical spikes<br/>Flutter editor, metadata parser, Bases parser, graph prototype, LiveSync settings parser"]
+  P0D --> Gate0{"Phase 0 gate<br/>buildable MVP scope?"}
+
+  Gate0 --> P1A["Phase 1 foundation<br/>vault open/save, file explorer, settings import"]
+  P1A --> P1B["Metadata engine<br/>parser, index, links, tags, properties, tasks"]
+  P1B --> P1C["Accessible editor and navigation<br/>command palette, quick switcher, outline, backlinks"]
+  P1C --> P1D["Bases MVP<br/>.base parser, table/list views, filters, sort, property editing"]
+  P1D --> P1E["Graph data engine + visual MVP<br/>global/local graph, filters, groups, node actions"]
+  P1E --> P1F["Built-in golden features<br/>Tasks, templates, Kanban-compatible boards, Dataview-like query views"]
+  P1F --> P1G["Sync MVP<br/>safe coexistence, filesystem sync awareness, LiveSync config import"]
+  P1G --> Gate1{"Phase 1 gate<br/>usable accessible alpha?"}
