@@ -184,6 +184,16 @@ jobs:
             const score = s.score ?? 0;
             const errors = s.totalErrors ?? 0;
             const min = parseFloat(process.env.MIN_SCORE);
+            if (!Number.isFinite(min)) {
+              // parseFloat returns NaN for undefined/non-numeric input, and
+              // `score < NaN` is always false — silently disabling the gate.
+              // Fail loudly so the workflow's env block can't drift into a
+              // no-op enforcement step.
+              core.setFailed(
+                `MIN_SCORE must be a number; got ${JSON.stringify(process.env.MIN_SCORE)}`
+              );
+              return;
+            }
             core.info(`Score: ${score} / Minimum: ${min} / Errors: ${errors}`);
             if (errors > 0) {
               core.setFailed(
