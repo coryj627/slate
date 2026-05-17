@@ -6,7 +6,7 @@
 # picks it up). If you hit "cargo: command not found", source
 # the rustup env once: `. "$HOME/.cargo/env"`.
 
-.PHONY: help check test fmt fmt-check clippy ci swift-cli mac-app mac-app-run bench clean
+.PHONY: help check test fmt fmt-check clippy bench-check ci swift-cli mac-app mac-app-run bench clean
 
 help:
 	@echo "YANA — common commands"
@@ -16,7 +16,8 @@ help:
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --check (fails if unformatted)"
 	@echo "  make clippy        cargo clippy --all-targets --workspace -- -D warnings"
-	@echo "  make ci            fmt-check + clippy + test"
+	@echo "  make bench-check   cargo bench --no-run (compile benches without executing)"
+	@echo "  make ci            fmt-check + clippy + test + bench-check"
 	@echo "  make swift-cli     build + run the Swift command-line smoke test"
 	@echo "  make mac-app       build the SwiftUI smoke-test app"
 	@echo "  make mac-app-run   build + launch the SwiftUI smoke-test app"
@@ -40,7 +41,10 @@ fmt-check:
 clippy:
 	cargo clippy --all-targets --workspace -- -D warnings
 
-ci: fmt-check clippy test
+bench-check:
+	cargo bench -p yana-core --bench scan_bench --no-run
+
+ci: fmt-check clippy test bench-check
 
 swift-cli:
 	./scripts/build-swift-cli.sh

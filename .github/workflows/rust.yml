@@ -1,0 +1,60 @@
+# Rust CI for yana-core + yana-uniffi.
+#
+# Mirrors what `make ci` runs locally, plus a bench-compile step so
+# benchmark code can't silently rot. Runs on macos-14 (matching the
+# other Mac-flavored workflows) for toolchain consistency.
+
+name: Rust
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - '.github/workflows/rust.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - '.github/workflows/rust.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: fmt / clippy / test / bench-compile
+    # Pin to a specific runner image (rather than `macos-latest`) so
+    # GitHub's image rollovers don't silently change the toolchain.
+    # Bump deliberately. Matches swift-tests.yml and a11y-check.yml.
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Cache Rust build
+        # Caches target/ and ~/.cargo/registry keyed off Cargo.lock so
+        # cold cargo runs stay short. Same SHA as swift-tests.yml.
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        # --all-targets covers libs, tests, examples, AND benches —
+        # so a bench that doesn't compile fails CI here.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo bench --no-run
+        # Compile benches without running them. Full bench execution
+        # takes ~15 min and isn't a per-PR concern, but a broken bench
+        # binary should fail CI loudly.
+        run: cargo bench -p yana-core --bench scan_bench --no-run
