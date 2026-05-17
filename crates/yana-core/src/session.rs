@@ -532,8 +532,13 @@ fn index_file(
             rusqlite::params![path],
             |row| row.get(0),
         )?;
-        let text = std::str::from_utf8(&content).unwrap_or("");
-        replace_headings(tx, file_id, text)?;
+        // Lossy decode: a single stray non-UTF-8 byte shouldn't wipe
+        // a file's entire heading list. The replacement-char that
+        // from_utf8_lossy substitutes is rendered to pulldown-cmark
+        // as a regular character, so headings on otherwise-good lines
+        // still parse.
+        let text = String::from_utf8_lossy(&content);
+        replace_headings(tx, file_id, &text)?;
     }
 
     report.files_indexed += 1;
@@ -604,7 +609,10 @@ fn get_file_metadata_impl(
         return Ok(None);
     };
 
-    let mut stmt = conn.prepare(
+    // prepare_cached: get_file_metadata is called on every note
+    // selection in the UI, and the headings SELECT is the same
+    // statement each time. Caching avoids the prepare-step overhead.
+    let mut stmt = conn.prepare_cached(
         "SELECT ordinal, level, text, anchor_id
          FROM headings WHERE file_id = ?1
          ORDER BY ordinal ASC",
@@ -1612,6 +1620,26 @@ mod tests {
             .unwrap()
         };
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn headings_survive_non_utf8_bytes_via_lossy_decode() {
+        // Construct a payload with a valid Markdown heading followed
+        // by an invalid UTF-8 continuation byte. Without lossy
+        // decode, str::from_utf8 would fail and we'd silently lose
+        // the heading.
+        let mut bytes = b"# Heading survives\n\nBody line.\n".to_vec();
+        bytes.push(0xFF); // invalid as the start of a UTF-8 sequence
+        bytes.extend_from_slice(b"\n## Also here\n");
+
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", &bytes).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let md = session.get_file_metadata("a.md").unwrap().unwrap();
+        let texts: Vec<&str> = md.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, vec!["Heading survives", "Also here"]);
     }
 
     #[test]
