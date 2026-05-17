@@ -54,7 +54,8 @@ jobs:
         run: cargo test --workspace
 
       - name: cargo bench --no-run
-        # Compile benches without running them. Full bench execution
-        # takes ~15 min and isn't a per-PR concern, but a broken bench
-        # binary should fail CI loudly.
-        run: cargo bench -p yana-core --bench scan_bench --no-run
+        # Compile every bench in the workspace without running them.
+        # Full bench execution takes ~15 min and isn't a per-PR
+        # concern, but a broken bench binary anywhere in the workspace
+        # should fail CI loudly.
+        run: cargo bench --workspace --no-run

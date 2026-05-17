@@ -42,7 +42,7 @@ clippy:
 	cargo clippy --all-targets --workspace -- -D warnings
 
 bench-check:
-	cargo bench -p yana-core --bench scan_bench --no-run
+	cargo bench --workspace --no-run
 
 ci: fmt-check clippy test bench-check
 
