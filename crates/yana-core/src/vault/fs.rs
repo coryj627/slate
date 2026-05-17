@@ -62,6 +62,14 @@ impl FsVaultProvider {
         }
         Ok(path)
     }
+
+    /// Directory where `atomic_write` parks tempfiles. Lives under the
+    /// vault's hidden `.yana/` subtree so a crash-leak doesn't surface
+    /// as a visible entry and concurrent `list_dir` callers can't see
+    /// half-written files alongside their targets.
+    fn tmp_dir(&self) -> PathBuf {
+        self.root.join(".yana").join("tmp")
+    }
 }
 
 /// Compute the blake3 hex digest of a byte slice. Used for vault file
@@ -144,7 +152,7 @@ impl VaultProvider for FsVaultProvider {
 
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
         let path = self.resolve_for_mutation(relative)?;
-        atomic_write(&path, contents)?;
+        atomic_write(&path, &self.tmp_dir(), contents)?;
         Ok(())
     }
 
@@ -233,24 +241,49 @@ impl VaultProvider for FsVaultProvider {
     }
 }
 
-/// Atomically replace the contents of `path` by writing to a temp file
-/// in the same directory and renaming it into place.
-fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
+/// Atomically replace the contents of `target` by writing into a temp
+/// file under `tmp_dir` and renaming it into place.
+///
+/// `tmp_dir` must live on the same filesystem as `target` so the final
+/// rename is atomic — the caller passes `<vault_root>/.yana/tmp/` for
+/// that reason. Parking temps under `.yana/` (a) keeps the partial
+/// state invisible to `list_dir` callers reading the target's directory
+/// during the write, and (b) means a crash-leak doesn't surface as a
+/// visible vault entry.
+///
+/// If `target` already exists, its filesystem permissions are copied to
+/// the temp before rename so a 0644 file isn't silently downgraded to
+/// the temp's stricter default. New files keep the temp's permissions.
+///
+/// Note on symlinks: if `target` is a symlink, `rename(2)` replaces the
+/// symlink directory entry with the regular temp file. `write_file`
+/// does not transparently follow symlinks to write through to their
+/// target — see the vault module docs.
+fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = target.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "target path has no parent directory",
         )
     })?;
     fs::create_dir_all(parent)?;
+    fs::create_dir_all(tmp_dir)?;
 
-    // `tempfile::NamedTempFile::new_in` places the temp file alongside
-    // the target so the rename is atomic on the same filesystem.
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    // Best-effort permission preservation. We don't fail the write if
+    // we can't read the existing mode — the rename still produces a
+    // valid file, just with the temp's default permissions.
+    let existing_perms = fs::metadata(target).ok().map(|m| m.permissions());
+
+    let mut temp = tempfile::NamedTempFile::new_in(tmp_dir)?;
     temp.write_all(contents)?;
     temp.flush()?;
     temp.as_file().sync_data()?;
-    temp.persist(path).map_err(|e| e.error)?;
+    if let Some(perms) = existing_perms {
+        // Ignore failure: a successful overwrite with the temp's mode
+        // is still better than aborting the write on a perms snag.
+        let _ = temp.as_file().set_permissions(perms);
+    }
+    temp.persist(target).map_err(|e| e.error)?;
     Ok(())
 }
 
@@ -310,10 +343,18 @@ mod tests {
         p.write_file("apple.md", b"").unwrap();
         p.write_file("mango.md", b"").unwrap();
 
+        // Filter dotfiles: write_file auto-creates `.yana/tmp/` for its
+        // temp files, which is internal scaffolding rather than user
+        // content. Callers iterating user-visible vault entries should
+        // skip dot-prefixed names (same rule the scanner applies).
         let entries = p.list_dir("").unwrap();
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        let visible: Vec<&DirEntry> = entries
+            .iter()
+            .filter(|e| !e.name.starts_with('.'))
+            .collect();
+        let names: Vec<&str> = visible.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["apple.md", "mango.md", "zebra.md"]);
-        for e in &entries {
+        for e in &visible {
             assert_eq!(e.kind, EntryKind::File);
         }
     }
@@ -430,7 +471,11 @@ mod tests {
         p.write_file("a.md", b"").unwrap();
         p.write_file("b.md", b"").unwrap();
         let entries = p.list_dir("").unwrap();
-        assert_eq!(entries.len(), 2);
+        let visible: Vec<&DirEntry> = entries
+            .iter()
+            .filter(|e| !e.name.starts_with('.'))
+            .collect();
+        assert_eq!(visible.len(), 2);
     }
 
     #[test]
@@ -438,8 +483,12 @@ mod tests {
         let (_tmp, p) = vault();
         p.write_file("a.md", b"").unwrap();
         let entries = p.list_dir(".").unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "a.md");
+        let visible: Vec<&DirEntry> = entries
+            .iter()
+            .filter(|e| !e.name.starts_with('.'))
+            .collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "a.md");
     }
 
     #[test]
@@ -528,6 +577,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn write_places_temp_under_dot_yana_tmp_not_in_target_dir() {
+        let (tmp, p) = vault();
+        p.write_file("notes/foo.md", b"hi").unwrap();
+
+        // No .tmpXXXX siblings of the target after a successful write.
+        let notes_entries = p.list_dir("notes").unwrap();
+        for entry in &notes_entries {
+            assert!(
+                !entry.name.starts_with(".tmp"),
+                "found leftover temp {entry:?} alongside the target"
+            );
+        }
+        let names: Vec<&str> = notes_entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["foo.md"]);
+
+        // The hidden tmp dir was created.
+        assert!(
+            tmp.path().join(".yana").join("tmp").is_dir(),
+            ".yana/tmp/ should exist after the first write"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn rename_moves_broken_symlink() {
@@ -566,5 +638,30 @@ mod tests {
 
         p.delete("broken.md").expect("delete should succeed");
         assert!(tmp.path().join("broken.md").symlink_metadata().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_preserves_existing_file_permissions_on_overwrite() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, p) = vault();
+        p.write_file("notes/foo.md", b"first").unwrap();
+
+        // Loosen the file to 0644 (NamedTempFile's default is 0600).
+        let path = p.resolve("notes/foo.md").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+
+        p.write_file("notes/foo.md", b"second").unwrap();
+
+        let after = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            after, 0o644,
+            "overwrite must not downgrade existing-file permissions"
+        );
     }
 }
