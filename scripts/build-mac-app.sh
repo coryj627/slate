@@ -70,6 +70,28 @@ echo "Built: $ABS_BINARY"
 echo "Run with:"
 echo "  DYLD_LIBRARY_PATH=\"$WORKSPACE_ROOT/$TARGET_DIR\" $ABS_BINARY"
 
+# Best-effort SwiftUI accessibility check using
+# cvs-health/ios-swiftui-accessibility-techniques' a11y-check. CI runs
+# the canonical version of this; locally we surface findings inline so
+# you don't have to push to hear about a regression.
+cd "$WORKSPACE_ROOT"
+if command -v a11y-check >/dev/null 2>&1; then
+    echo
+    echo "==> Running a11y-check on apps/yana-mac/Sources/YanaMac"
+    if ! a11y-check apps/yana-mac/Sources/YanaMac --only error; then
+        echo
+        echo "a11y-check reported errors above. CI will fail until they're fixed." >&2
+        exit 1
+    fi
+else
+    echo
+    echo "==> Skipping a11y-check (not installed)."
+    echo "    Install with:"
+    echo "      brew tap cvs-health/ios-swiftui-accessibility-techniques \\"
+    echo "        https://github.com/cvs-health/ios-swiftui-accessibility-techniques.git"
+    echo "      brew install --HEAD cvs-health/ios-swiftui-accessibility-techniques/a11y-check"
+fi
+
 if [[ "$RUN" == "1" ]]; then
     echo
     echo "==> Launching YanaMac"
