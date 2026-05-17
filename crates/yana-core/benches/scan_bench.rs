@@ -112,10 +112,13 @@ fn bench_list_files_paged(c: &mut Criterion) {
                             },
                         )
                         .expect("list_files");
-                    // black_box the per-page items so the compiler
+                    // black_box the per-page count so the compiler
                     // can't elide rows it observes are unused before
-                    // the outer total is consumed.
-                    total += black_box(page.items).len();
+                    // the outer total is consumed. Wrapping the count
+                    // (rather than the Vec) avoids consuming
+                    // page.items and keeps `page` available for the
+                    // next_cursor read below.
+                    total += black_box(page.items.len());
                     match page.next_cursor {
                         Some(c) => cursor = Some(c),
                         None => break,
