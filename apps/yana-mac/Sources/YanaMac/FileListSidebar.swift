@@ -102,10 +102,17 @@ struct FileListSidebar: View {
 
     // MARK: - Helpers
 
-    private func relativeDate(for mtimeMs: Int64) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(mtimeMs) / 1000)
+    /// Cached so a vault of 10k rows doesn't allocate 10k formatters.
+    /// RelativeDateTimeFormatter is thread-safe for `localizedString`
+    /// reads, and we only mutate `unitsStyle` once at init.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter
+    }()
+
+    private func relativeDate(for mtimeMs: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(mtimeMs) / 1000)
+        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }

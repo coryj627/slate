@@ -114,6 +114,39 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.files.map(\.name), ["alpha.md", "BRAVO.md", "Charlie.md"])
     }
 
+    func testCloseVaultMidScanDoesNotRepopulateFiles() async throws {
+        // Reproduces the bug Codoki flagged on PR 36: closeVault fires
+        // mid-scan, and the in-flight detached task must not later
+        // overwrite the freshly-cleared `files` with stale results.
+        let vault = tempDir.appendingPathComponent("cancel-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        for i in 0..<32 {
+            try Data("# n\(i)".utf8).write(
+                to: vault.appendingPathComponent("note-\(i).md")
+            )
+        }
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        let task = state.scanTask
+        // Close immediately — the detached scan task may still be
+        // running. The cancellation handler should bridge through to
+        // the CancelToken, and even if the scan completes anyway, the
+        // post-scan publish must be suppressed.
+        state.closeVault()
+
+        // Wait for the cancelled task to wind down (it may take a beat
+        // to drain pending paging calls).
+        await task?.value
+
+        XCTAssertEqual(
+            state.files, [],
+            "files must stay empty after closeVault, even if the scan task finishes"
+        )
+        XCTAssertFalse(state.isVaultOpen)
+        XCTAssertFalse(state.isScanning)
+    }
+
     func testCloseVaultClearsFileListState() async throws {
         let vault = tempDir.appendingPathComponent("close-vault")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)

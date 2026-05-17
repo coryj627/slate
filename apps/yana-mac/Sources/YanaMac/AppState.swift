@@ -153,38 +153,65 @@ final class AppState: ObservableObject {
     ///
     /// Idempotent: the Rust scanner upserts on path so re-running on
     /// an already-indexed vault is fine.
+    ///
+    /// Honors `Task.isCancelled`: closing the vault or opening a
+    /// different one cancels the wrapping task, which (a) signals the
+    /// in-flight `scan_initial` via the `CancelToken` so the Rust side
+    /// bails at the next per-entry cancel check, and (b) suppresses
+    /// the post-scan publish so a late completion can't repopulate
+    /// `files` after the user has already moved on.
     func loadFiles() async {
         guard let session = currentSession else { return }
         isScanning = true
         scanError = nil
         defer { isScanning = false }
 
-        do {
-            // Scan + list both go through SQLite under a Mutex, so
-            // dispatching off the main actor keeps the UI responsive
-            // on multi-thousand-file vaults.
-            let loaded = try await Task.detached(priority: .userInitiated) {
-                let cancel = CancelToken()
-                _ = try session.scanInitial(cancel: cancel)
-                var all: [FileSummary] = []
-                var cursor: String? = nil
-                repeat {
-                    let page = try session.listFiles(
-                        filter: .markdownOnly,
-                        paging: Paging(cursor: cursor, limit: 1_000)
-                    )
-                    all.append(contentsOf: page.items)
-                    cursor = page.nextCursor
-                } while cursor != nil
-                return all
-            }.value
+        let cancel = CancelToken()
 
+        do {
+            let loaded: [FileSummary] = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                // Scan + list both go through SQLite under a Mutex, so
+                // dispatching off the main actor keeps the UI responsive
+                // on multi-thousand-file vaults.
+                return try await Task.detached(priority: .userInitiated) {
+                    _ = try session.scanInitial(cancel: cancel)
+                    var all: [FileSummary] = []
+                    var cursor: String? = nil
+                    repeat {
+                        let page = try session.listFiles(
+                            filter: .markdownOnly,
+                            paging: Paging(cursor: cursor, limit: 1_000)
+                        )
+                        all.append(contentsOf: page.items)
+                        cursor = page.nextCursor
+                    } while cursor != nil
+                    return all
+                }.value
+            } onCancel: {
+                // Bridge structured-concurrency cancellation across to
+                // the CancelToken the Rust scanner is polling.
+                cancel.cancel()
+            }
+
+            // If we were cancelled mid-flight (e.g. closeVault fired
+            // between the detached task starting and finishing), don't
+            // overwrite the freshly-cleared state with stale results.
+            guard !Task.isCancelled else { return }
             files = loaded.sorted { lhs, rhs in
                 lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
             }
+        } catch is CancellationError {
+            // Cancellation isn't an error condition the user needs to
+            // see; the new vault flow will start its own scan.
         } catch let error as VaultError {
+            // Cancelled scans surface from Rust as VaultError.Cancelled
+            // — also intentionally non-user-visible.
+            if case .Cancelled = error { return }
+            guard !Task.isCancelled else { return }
             scanError = humanReadable(error)
         } catch {
+            guard !Task.isCancelled else { return }
             scanError = error.localizedDescription
         }
     }
