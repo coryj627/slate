@@ -32,9 +32,10 @@ env:
   # includes this SHA so changing it invalidates the cache.
   A11Y_CHECK_REF: bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8
   A11Y_PATHS: "apps/yana-mac/Sources/YanaMac"
-  # Score floor: any regression below this fails the run. We're at
-  # 100/100 today — raise the bar once and treat any drop as a real
-  # signal worth investigating.
+  # Score floor on the 0–100 a11y-check scale. Must be a non-empty
+  # numeric string — the enforcement step validates this and fails
+  # loudly on malformed/missing values rather than silently weakening
+  # the gate. We're at 100/100 today; treat any drop as a real signal.
   MIN_SCORE: "100"
 
 jobs:
@@ -183,14 +184,19 @@ jobs:
             const s = results.score || {};
             const score = s.score ?? 0;
             const errors = s.totalErrors ?? 0;
-            // Number() rejects partial numerics ('90%' → NaN) where
-            // parseFloat would accept them ('90%' → 90). We want the
-            // strict form so a typo in the env block fails loudly.
-            const min = Number(process.env.MIN_SCORE);
+            // Three things have to be true for the gate to actually
+            // enforce: the env var must be set, must be non-empty after
+            // trimming, and must parse strictly as a finite number.
+            // `Number('')` coerces to 0 and `parseFloat('90%')` returns
+            // 90 — both would silently weaken the threshold, so we
+            // reject them explicitly.
+            const rawMin = (process.env.MIN_SCORE ?? '').trim();
+            if (rawMin === '') {
+              core.setFailed('MIN_SCORE is unset or empty');
+              return;
+            }
+            const min = Number(rawMin);
             if (!Number.isFinite(min)) {
-              // `score < NaN` is always false — a silently-disabled gate
-              // would be worse than no gate. Fail loudly so the workflow's
-              // env block can't drift into a no-op enforcement step.
               core.setFailed(
                 `MIN_SCORE must be a number; got ${JSON.stringify(process.env.MIN_SCORE)}`
               );
