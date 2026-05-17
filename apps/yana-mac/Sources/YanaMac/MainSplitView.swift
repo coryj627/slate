@@ -27,7 +27,6 @@ struct MainSplitView: View {
                         "Vault closed. Returned to the welcome screen."
                     )
                 }
-                .accessibilityLabel("Close vault")
                 .accessibilityHint(
                     "Returns to the welcome screen. The vault on disk is not modified."
                 )

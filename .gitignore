@@ -133,6 +133,11 @@ DerivedData/
 apps/yana-mac/Sources/YanaMac/yana_uniffi.swift
 apps/yana-mac/Sources/yana_uniffiFFI/yana_uniffiFFI.h
 
+# a11y-check (cvs-health/ios-swiftui-accessibility-techniques) writes a
+# local score-trend file next to the scanned sources. The fresh-on-each-run
+# checks in CI are authoritative; this file is developer-local state.
+.a11y-scores.json
+
 # Exceptions to above rules.
 !**/ios/**/default.mode1v3
 !**/ios/**/default.mode2v3

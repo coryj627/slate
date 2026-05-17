@@ -17,7 +17,6 @@ struct WelcomeView: View {
             }
             .controlSize(.large)
             .focused($openButtonFocused)
-            .accessibilityLabel("Open vault")
             .accessibilityHint(
                 "Shows a folder picker. The selected folder becomes your active vault."
             )
@@ -52,11 +51,9 @@ struct WelcomeView: View {
                 .font(.largeTitle)
                 .accessibilityAddTraits(.isHeader)
             Text("Open a folder of Markdown files to start.")
-                .font(.title3)
+                .font(.body)
                 .foregroundStyle(.secondary)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Welcome to YANA. Open a folder of Markdown files to start.")
     }
 
     // MARK: - Bindings
