@@ -118,7 +118,12 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
 
 /// Returns the highest applied migration version, or 0 if none have been
 /// applied yet.
+///
+/// Safe to call on a fresh database that has never been migrated:
+/// `ensure_version_table` is invoked first so the underlying query
+/// always has a table to read from.
 pub fn current_version(conn: &Connection) -> Result<u32, DbError> {
+    ensure_version_table(conn)?;
     let value: i64 = conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_version",
         [],
@@ -316,8 +321,10 @@ mod tests {
 
     #[test]
     fn current_version_is_zero_on_empty_db() {
+        // No `ensure_version_table` setup: a fresh connection should
+        // work directly, because `current_version` is responsible for
+        // creating the schema_version table on demand if it's missing.
         let conn = fresh_db();
-        ensure_version_table(&conn).unwrap();
         assert_eq!(current_version(&conn).unwrap(), 0);
     }
 
