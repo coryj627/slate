@@ -106,7 +106,7 @@ pub enum FileFilter {
 // --- Summary type ---
 
 /// Light-weight per-file row returned by `list_files`. The full per-file
-/// metadata (`FileMetadata`) is hydrated on demand by future milestones.
+/// metadata (`FileMetadata`) is hydrated on demand via `get_file_metadata`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileSummary {
     pub path: String,
@@ -114,6 +114,22 @@ pub struct FileSummary {
     pub mtime_ms: i64,
     pub size_bytes: u64,
     pub is_markdown: bool,
+}
+
+// --- Metadata type ---
+
+/// Full per-file metadata: the summary fields plus parsed structure
+/// (headings today; properties and links join the type as later
+/// milestones land).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMetadata {
+    pub path: String,
+    pub name: String,
+    pub mtime_ms: i64,
+    pub size_bytes: u64,
+    pub is_markdown: bool,
+    pub content_hash: String,
+    pub headings: Vec<crate::Heading>,
 }
 
 // --- Paging ---
@@ -274,6 +290,15 @@ impl VaultSession {
             self.config.parser_version,
             cancel,
         )
+    }
+
+    /// Fetch full per-file metadata, including parsed headings.
+    ///
+    /// Returns `Ok(None)` if the path isn't in the index yet — call
+    /// `scan_initial` first, or pass a path the scanner has visited.
+    pub fn get_file_metadata(&self, path: &str) -> Result<Option<FileMetadata>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        get_file_metadata_impl(&conn, path)
     }
 
     /// Page through the indexed files.
@@ -493,9 +518,126 @@ fn index_file(
         ],
     )?;
 
+    // For Markdown files, parse + persist headings on the slow path.
+    // The fast path (mtime+size+ctime match) never reaches here, so
+    // unchanged files don't churn the headings table. Non-Markdown
+    // files have no headings worth indexing — pulldown-cmark would
+    // happily parse them but it's noise.
+    if is_markdown {
+        // Need the file_id for the foreign key. INSERT … ON CONFLICT
+        // DO UPDATE doesn't expose the row id directly, so query it
+        // back — cheap given we just touched the row.
+        let file_id: i64 = tx.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| row.get(0),
+        )?;
+        // Lossy decode: a single stray non-UTF-8 byte shouldn't wipe
+        // a file's entire heading list. The replacement-char that
+        // from_utf8_lossy substitutes is rendered to pulldown-cmark
+        // as a regular character, so headings on otherwise-good lines
+        // still parse.
+        let text = String::from_utf8_lossy(&content);
+        replace_headings(tx, file_id, &text)?;
+    }
+
     report.files_indexed += 1;
     report.bytes_processed += stat.size_bytes;
     Ok(())
+}
+
+/// Atomically replace all `headings` rows for `file_id` with the
+/// headings extracted from `markdown_source`.
+///
+/// Called on the scanner's slow path only — the fast path never
+/// touches the headings table, so unchanged files don't churn it.
+fn replace_headings(
+    tx: &rusqlite::Transaction,
+    file_id: i64,
+    markdown_source: &str,
+) -> Result<(), VaultError> {
+    tx.execute(
+        "DELETE FROM headings WHERE file_id = ?1",
+        rusqlite::params![file_id],
+    )?;
+    let headings = crate::extract_headings(markdown_source);
+    if headings.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = tx.prepare_cached(
+        "INSERT INTO headings (file_id, ordinal, level, text, anchor_id)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for heading in headings {
+        stmt.execute(rusqlite::params![
+            file_id,
+            heading.ordinal as i64,
+            heading.level as i64,
+            heading.text,
+            heading.anchor_id,
+        ])?;
+    }
+    Ok(())
+}
+
+// --- Internal: get_file_metadata ---
+
+fn get_file_metadata_impl(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<FileMetadata>, VaultError> {
+    let summary: Option<(i64, String, String, i64, i64, i64, String)> = conn
+        .query_row(
+            "SELECT id, path, name, mtime_ms, size_bytes, is_markdown, content_hash
+             FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((file_id, path, name, mtime_ms, size_bytes, is_markdown, content_hash)) = summary
+    else {
+        return Ok(None);
+    };
+
+    // prepare_cached: get_file_metadata is called on every note
+    // selection in the UI, and the headings SELECT is the same
+    // statement each time. Caching avoids the prepare-step overhead.
+    let mut stmt = conn.prepare_cached(
+        "SELECT ordinal, level, text, anchor_id
+         FROM headings WHERE file_id = ?1
+         ORDER BY ordinal ASC",
+    )?;
+    let headings: Result<Vec<crate::Heading>, rusqlite::Error> = stmt
+        .query_map(rusqlite::params![file_id], |row| {
+            Ok(crate::Heading {
+                ordinal: row.get::<_, i64>(0)? as u32,
+                level: row.get::<_, i64>(1)? as u8,
+                text: row.get::<_, String>(2)?,
+                anchor_id: row.get::<_, String>(3)?,
+            })
+        })?
+        .collect();
+    let headings = headings?;
+
+    Ok(Some(FileMetadata {
+        path,
+        name,
+        mtime_ms,
+        size_bytes: size_bytes as u64,
+        is_markdown: is_markdown != 0,
+        content_hash,
+        headings,
+    }))
 }
 
 // --- Internal: list_files ---
@@ -1349,5 +1491,174 @@ mod tests {
             .unwrap();
         let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, vec!["real.md"]);
+    }
+
+    #[test]
+    fn scan_persists_headings_in_document_order() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "notes/example.md",
+                b"# Top\n\nIntro.\n\n## Sub one\n\n## Sub two\n\n### Deeper\n",
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let md = session
+            .get_file_metadata("notes/example.md")
+            .unwrap()
+            .expect("note should be indexed");
+        let summary: Vec<(u32, u8, &str, &str)> = md
+            .headings
+            .iter()
+            .map(|h| (h.ordinal, h.level, h.text.as_str(), h.anchor_id.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (0, 1, "Top", "top"),
+                (1, 2, "Sub one", "sub-one"),
+                (2, 2, "Sub two", "sub-two"),
+                (3, 3, "Deeper", "deeper"),
+            ]
+        );
+        assert!(md.is_markdown);
+        assert!(!md.content_hash.is_empty());
+    }
+
+    #[test]
+    fn get_file_metadata_returns_none_for_unknown_path() {
+        let (_tmp, session) = make_vault(|_| {});
+        assert!(session.get_file_metadata("missing.md").unwrap().is_none());
+    }
+
+    #[test]
+    fn editing_a_note_replaces_its_heading_rows_no_orphans() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"# Old\n\n## Stale\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Force mtime to advance so the fast path doesn't skip the rescan.
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        let original_mtime = provider.stat("a.md").unwrap().mtime_ms;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            provider.write_file("a.md", b"# Brand new\n").unwrap();
+            if provider.stat("a.md").unwrap().mtime_ms != original_mtime {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "mtime did not advance on rewrite — FS resolution too coarse"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let md = session.get_file_metadata("a.md").unwrap().unwrap();
+        let texts: Vec<&str> = md.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, vec!["Brand new"], "stale headings must be cleared");
+    }
+
+    #[test]
+    fn fast_path_rescan_does_not_touch_headings_table() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"# Stable\n").unwrap();
+        });
+        let first = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(first.files_indexed, 1);
+
+        // Snapshot the heading rows before the rescan so we can prove
+        // identity, not just equivalence, after the fast path runs.
+        let before: Vec<(i64, u32, u8, String, String)> = {
+            let conn = session.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT file_id, ordinal, level, text, anchor_id
+                     FROM headings ORDER BY file_id, ordinal",
+                )
+                .unwrap();
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)? as u32,
+                    row.get::<_, i64>(2)? as u8,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+        };
+
+        // Unchanged file → fast path → no heading rewrites.
+        let second = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(second.files_skipped, 1);
+        assert_eq!(second.files_indexed, 0);
+
+        let after: Vec<(i64, u32, u8, String, String)> = {
+            let conn = session.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT file_id, ordinal, level, text, anchor_id
+                     FROM headings ORDER BY file_id, ordinal",
+                )
+                .unwrap();
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)? as u32,
+                    row.get::<_, i64>(2)? as u8,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+        };
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn headings_survive_non_utf8_bytes_via_lossy_decode() {
+        // Construct a payload with a valid Markdown heading followed
+        // by an invalid UTF-8 continuation byte. Without lossy
+        // decode, str::from_utf8 would fail and we'd silently lose
+        // the heading.
+        let mut bytes = b"# Heading survives\n\nBody line.\n".to_vec();
+        bytes.push(0xFF); // invalid as the start of a UTF-8 sequence
+        bytes.extend_from_slice(b"\n## Also here\n");
+
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", &bytes).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let md = session.get_file_metadata("a.md").unwrap().unwrap();
+        let texts: Vec<&str> = md.headings.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, vec!["Heading survives", "Also here"]);
+    }
+
+    #[test]
+    fn non_markdown_files_have_no_headings() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/note.md", b"# Heading\n").unwrap();
+            p.write_file("notes/img.png", b"\x89PNG\x0d\x0a\x1a\x0a")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let md_note = session.get_file_metadata("notes/note.md").unwrap().unwrap();
+        assert_eq!(md_note.headings.len(), 1);
+
+        let md_img = session.get_file_metadata("notes/img.png").unwrap().unwrap();
+        assert!(
+            md_img.headings.is_empty(),
+            "non-markdown files should never carry headings"
+        );
+        assert!(!md_img.is_markdown);
     }
 }
