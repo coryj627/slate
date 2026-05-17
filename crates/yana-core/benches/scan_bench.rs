@@ -16,7 +16,7 @@
 
 use std::fs;
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
 use yana_core::{CancelToken, FileFilter, Paging, VaultSession};
 
@@ -46,7 +46,11 @@ fn bench_first_open_and_scan(c: &mut Criterion) {
                 },
                 |path| {
                     let session = VaultSession::from_filesystem(path).expect("open vault");
-                    session.scan_initial(&CancelToken::new()).expect("scan")
+                    // black_box the result so the compiler can't elide
+                    // the work (criterion's iter_batched already does
+                    // this on the return value, but being explicit
+                    // survives refactors).
+                    black_box(session.scan_initial(&CancelToken::new()).expect("scan"))
                 },
                 BatchSize::SmallInput,
             );
@@ -76,7 +80,7 @@ fn bench_reopen_with_cache(c: &mut Criterion) {
             b.iter(|| {
                 let session =
                     VaultSession::from_filesystem(vault.path().to_path_buf()).expect("reopen");
-                session.scan_initial(&CancelToken::new()).expect("rescan")
+                black_box(session.scan_initial(&CancelToken::new()).expect("rescan"))
             });
         });
         drop(vault);
@@ -108,13 +112,16 @@ fn bench_list_files_paged(c: &mut Criterion) {
                             },
                         )
                         .expect("list_files");
-                    total += page.items.len();
+                    // black_box the per-page items so the compiler
+                    // can't elide rows it observes are unused before
+                    // the outer total is consumed.
+                    total += black_box(page.items).len();
                     match page.next_cursor {
                         Some(c) => cursor = Some(c),
                         None => break,
                     }
                 }
-                total
+                black_box(total)
             });
         });
 
