@@ -438,9 +438,16 @@ fn index_file(
         // works.
         let ctime_match = stat.ctime_ms == 0 || db_ctime_ms == 0 || db_ctime_ms == stat.ctime_ms;
         if mtime_size_match && ctime_match {
+            // Always rewrite ctime_ms alongside indexed_at_ms. For
+            // post-migration rows this is a no-op assignment (the
+            // values already match). For pre-migration-002 rows
+            // carrying ctime_ms = 0, it back-fills the column from
+            // the current stat — without this, those rows would
+            // permanently fall back to mtime+size-only semantics on
+            // every future rescan, defeating the ctime optimization.
             tx.execute(
-                "UPDATE files SET indexed_at_ms = ?1 WHERE path = ?2",
-                rusqlite::params![now, path],
+                "UPDATE files SET indexed_at_ms = ?1, ctime_ms = ?2 WHERE path = ?3",
+                rusqlite::params![now, stat.ctime_ms, path],
             )?;
             report.files_skipped += 1;
             return Ok(());
@@ -828,6 +835,56 @@ mod tests {
             "ctime changed → must re-hash even though mtime and size match"
         );
         assert_eq!(second.files_skipped, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fast_path_backfills_ctime_for_pre_migration_rows() {
+        // Simulate the upgrade path: a vault scanned before migration
+        // 002 has rows with `ctime_ms = 0`. After migration runs and
+        // the rescan hits the fast path, we want ctime to be
+        // backfilled from the current stat — otherwise these rows
+        // would degrade to mtime+size-only forever and miss mtime-
+        // preserving writes that the ctime optimization is supposed
+        // to catch.
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"ABCDE").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Force the row into the pre-migration shape.
+        let db_path = tmp.path().join(".yana").join("cache.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("UPDATE files SET ctime_ms = 0", []).unwrap();
+            let zeroed: i64 = conn
+                .query_row(
+                    "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(zeroed, 0, "test precondition: row is in legacy shape");
+        }
+
+        // Unchanged file → fast path hits → backfill should write the
+        // real ctime even though we skipped the read+hash.
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_skipped, 1);
+        assert_eq!(report.files_indexed, 0);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let ctime_ms: i64 = conn
+            .query_row(
+                "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            ctime_ms > 0,
+            "fast-path UPDATE should backfill ctime_ms from stat, got {ctime_ms}"
+        );
     }
 
     #[cfg(unix)]
