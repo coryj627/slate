@@ -178,14 +178,19 @@ impl VaultProvider for FsVaultProvider {
         let to_path = self.resolve_for_mutation(to)?;
         // Refuse early if the source is missing so we don't leave behind
         // freshly-minted destination parent directories on a failed move.
-        // Propagate try_exists's IO error directly (permission denied,
-        // etc.) instead of collapsing every failure to NotFound.
-        let exists = from_path.try_exists().map_err(VaultError::Io)?;
-        if !exists {
-            return Err(VaultError::Io(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("rename source does not exist: {from}"),
-            )));
+        // `symlink_metadata` (lstat) checks the directory entry itself,
+        // so a broken symlink — still a real entry that `rename(2)` will
+        // happily move — is not mistakenly classified as NotFound, and
+        // other io errors (permission denied, etc.) propagate untouched.
+        match from_path.symlink_metadata() {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(VaultError::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("rename source does not exist: {from}"),
+                )));
+            }
+            Err(e) => return Err(VaultError::Io(e)),
         }
         if let Some(parent) = to_path.parent() {
             fs::create_dir_all(parent)?;
@@ -521,6 +526,28 @@ mod tests {
             listing.is_empty(),
             "vault root should be empty, found {listing:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_moves_broken_symlink() {
+        let (tmp, p) = vault();
+        std::os::unix::fs::symlink(
+            tmp.path().join("does-not-exist.md"),
+            tmp.path().join("broken.md"),
+        )
+        .unwrap();
+
+        p.rename("broken.md", "still-broken.md")
+            .expect("rename should move the dangling entry");
+
+        assert!(tmp.path().join("broken.md").symlink_metadata().is_err());
+        let moved = tmp
+            .path()
+            .join("still-broken.md")
+            .symlink_metadata()
+            .expect("renamed symlink should be a real entry at the destination");
+        assert!(moved.file_type().is_symlink());
     }
 
     #[cfg(unix)]
