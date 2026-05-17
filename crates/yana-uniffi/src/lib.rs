@@ -129,9 +129,12 @@ impl VaultSession {
 
     /// Walk the vault and index every file into the metadata cache.
     /// Synchronous; callers should dispatch off the UI thread.
-    pub fn scan_initial(&self) -> Result<ScanReport, VaultError> {
-        let cancel = core::CancelToken::new();
-        let report = self.inner.scan_initial(&cancel)?;
+    ///
+    /// The supplied `cancel` token can be cancelled from another thread
+    /// (typically the UI) to abort an in-progress scan. A pre-cancelled
+    /// token returns `VaultError::Cancelled` without touching the cache.
+    pub fn scan_initial(&self, cancel: Arc<CancelToken>) -> Result<ScanReport, VaultError> {
+        let report = self.inner.scan_initial(&cancel.inner)?;
         Ok(report.into())
     }
 
@@ -143,6 +146,40 @@ impl VaultSession {
     ) -> Result<FileSummaryPage, VaultError> {
         let page = self.inner.list_files(filter.into(), paging.into())?;
         Ok(page.into())
+    }
+}
+
+/// Cooperative cancellation token exposed to foreign callers.
+///
+/// Construct one with `CancelToken()`, hand it to a long-running call
+/// like `scan_initial`, and call `cancel()` from another thread (or
+/// dispatch queue) to abort. The token is reference-counted via
+/// `Arc` so the foreground UI and the worker can share the same
+/// instance without cloning state.
+#[derive(uniffi::Object)]
+pub struct CancelToken {
+    inner: core::CancelToken,
+}
+
+#[uniffi::export]
+impl CancelToken {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: core::CancelToken::new(),
+        })
+    }
+
+    /// Signal cancellation. Subsequent checks inside running operations
+    /// (e.g. `scan_initial`) will return `VaultError::Cancelled`.
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+
+    /// Whether cancellation has been signalled. Useful for callers that
+    /// want to short-circuit work before invoking an FFI call.
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled()
     }
 }
 
@@ -261,6 +298,47 @@ mod tests {
                 assert!(message.contains("No such file") || message.contains("not found"));
             }
             other => panic!("expected Io error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancel_token_round_trips_through_scan_initial() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), b"# a").unwrap();
+
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert!(cancel.is_cancelled());
+
+        match session.scan_initial(cancel) {
+            Err(VaultError::Cancelled) => {}
+            Err(other) => panic!("expected Cancelled, got error {other:?}"),
+            Ok(_) => panic!("expected Cancelled, scan returned Ok"),
+        }
+    }
+
+    #[test]
+    fn cancel_token_shared_state_visible_to_scan() {
+        // Mirrors the host UI pattern: the caller keeps a strong
+        // reference (e.g. on a view model) and hands a second reference
+        // to the worker, then triggers cancel from the UI side. Both
+        // sides see the same flag because uniffi gives back the same
+        // Arc<CancelToken>.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), b"# a").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+
+        let cancel = CancelToken::new();
+        let cancel_for_worker = Arc::clone(&cancel);
+        cancel.cancel();
+
+        match session.scan_initial(cancel_for_worker) {
+            Err(VaultError::Cancelled) => {}
+            Err(other) => panic!("expected Cancelled, got error {other:?}"),
+            Ok(_) => panic!("expected Cancelled, scan returned Ok"),
         }
     }
 }
