@@ -153,15 +153,9 @@ impl VaultProvider for FsVaultProvider {
         // `symlink_metadata` uses lstat and does not follow symlinks, so
         // a broken symlink (a real directory entry whose target is gone)
         // still passes this guard. `path.exists()` would have hidden it.
-        let meta = match path.symlink_metadata() {
-            Ok(m) => m,
-            Err(_) => {
-                return Err(VaultError::Io(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("path does not exist: {}", path.display()),
-                )));
-            }
-        };
+        // Propagate the raw io::Error so permission-denied (etc.)
+        // doesn't get masked as NotFound.
+        let meta = path.symlink_metadata().map_err(VaultError::Io)?;
 
         // Broken symlinks: some `trash` backends reject dangling links
         // (macOS routes through Finder, which refuses). The target file
@@ -184,10 +178,13 @@ impl VaultProvider for FsVaultProvider {
         let to_path = self.resolve_for_mutation(to)?;
         // Refuse early if the source is missing so we don't leave behind
         // freshly-minted destination parent directories on a failed move.
-        if !from_path.try_exists().unwrap_or(false) {
+        // Propagate try_exists's IO error directly (permission denied,
+        // etc.) instead of collapsing every failure to NotFound.
+        let exists = from_path.try_exists().map_err(VaultError::Io)?;
+        if !exists {
             return Err(VaultError::Io(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("rename source does not exist: {}", from_path.display()),
+                format!("rename source does not exist: {from}"),
             )));
         }
         if let Some(parent) = to_path.parent() {
