@@ -20,12 +20,18 @@ if [[ "$PROFILE" == "release" ]]; then
 fi
 
 RUN=0
+SKIP_A11Y_CHECK=0
 for arg in "$@"; do
     case "$arg" in
         --run) RUN=1 ;;
+        --skip-a11y-check) SKIP_A11Y_CHECK=1 ;;
         --help|-h)
-            echo "usage: $0 [--run]"
-            echo "  --run   Launch the app after building (otherwise build only)."
+            echo "usage: $0 [--run] [--skip-a11y-check]"
+            echo "  --run               Launch the app after building."
+            echo "  --skip-a11y-check   Don't run a11y-check after swift build."
+            echo "                      Useful for CI jobs that only care about"
+            echo "                      build/test pass and leave a11y to its"
+            echo "                      own workflow."
             exit 0
             ;;
     esac
@@ -73,9 +79,15 @@ echo "  DYLD_LIBRARY_PATH=\"$WORKSPACE_ROOT/$TARGET_DIR\" $ABS_BINARY"
 # Best-effort SwiftUI accessibility check using
 # cvs-health/ios-swiftui-accessibility-techniques' a11y-check. CI runs
 # the canonical version of this; locally we surface findings inline so
-# you don't have to push to hear about a regression.
+# you don't have to push to hear about a regression. CI jobs that only
+# care about build/test (e.g. the Swift tests workflow) pass
+# `--skip-a11y-check` to avoid conflating an a11y regression with a
+# build/test failure — a11y has its own dedicated workflow.
 cd "$WORKSPACE_ROOT"
-if command -v a11y-check >/dev/null 2>&1; then
+if [[ "$SKIP_A11Y_CHECK" == "1" ]]; then
+    echo
+    echo "==> Skipping a11y-check (--skip-a11y-check)."
+elif command -v a11y-check >/dev/null 2>&1; then
     echo
     echo "==> Running a11y-check on apps/yana-mac/Sources/YanaMac"
     if ! a11y-check apps/yana-mac/Sources/YanaMac --only error; then

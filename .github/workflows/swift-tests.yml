@@ -1,0 +1,62 @@
+# Swift tests for the Mac app.
+#
+# Runs the YanaMac XCTest target on every PR that touches the app's
+# Swift sources or the Rust crates the app links against. The test
+# target imports YanaMac which depends on the yana_uniffi dylib, so we
+# need cargo build + uniffi-bindgen before `swift test`.
+
+name: Swift Tests
+
+on:
+  pull_request:
+    paths:
+      - 'apps/yana-mac/**'
+      - 'crates/yana-uniffi/**'
+      - 'crates/yana-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/swift-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/yana-mac/**'
+      - 'crates/yana-uniffi/**'
+      - 'crates/yana-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/swift-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  swift-tests:
+    name: Mac app XCTest suite
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Cache Rust build
+        # Caches target/ and ~/.cargo/registry keyed off Cargo.lock so a
+        # cold cargo build for yana-uniffi stays under a minute instead
+        # of compiling the whole crate graph from scratch every run.
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Build yana-uniffi + generate Swift bindings + swift build
+        # scripts/build-mac-app.sh runs:
+        #   cargo build -p yana-uniffi
+        #   uniffi-bindgen generate (Swift)
+        #   stage bindings into apps/yana-mac/Sources/
+        #   swift build inside apps/yana-mac/
+        # `--skip-a11y-check` keeps a11y enforcement isolated to the
+        # dedicated Accessibility Check workflow; a regression there
+        # shouldn't also break this run.
+        run: ./scripts/build-mac-app.sh --skip-a11y-check
+
+      - name: Run swift test
+        run: |
+          cd apps/yana-mac
+          DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug" swift test
