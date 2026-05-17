@@ -687,6 +687,31 @@ mod tests {
     }
 
     #[test]
+    fn rescan_with_changed_mtime_falls_through_to_rehash() {
+        // Same byte count, different content, deliberately spaced so
+        // the second write lands in a different millisecond — proves
+        // the fast-path checks BOTH mtime and size, not just size.
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"ABCDE").unwrap();
+        });
+        let first = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(first.files_indexed, 1);
+        assert_eq!(first.files_skipped, 0);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("a.md", b"XYZWQ").unwrap();
+
+        let second = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(
+            second.files_indexed, 1,
+            "mtime changed → must re-hash even though size matched"
+        );
+        assert_eq!(second.files_skipped, 0);
+        assert!(second.bytes_processed > 0);
+    }
+
+    #[test]
     fn rescan_unchanged_files_skips_rehashing() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file("a.md", b"alpha").unwrap();
