@@ -84,14 +84,16 @@ Recorded against the synthetic fixture in `crates/yana-core/benches/common/mod.r
 | Benchmark | 1 000 files | 10 000 files | 50 000 files | V1 gate (10k / 50k) |
 |---|---|---|---|---|
 | `first_open_and_scan` | 24.6 ms | 295.5 ms | 1.557 s | <15 s / <60 s |
-| `reopen_with_cache` | 6.4 ms | 49.1 ms | 243 ms | <2 s / <5 s |
+| `reopen_with_cache` | 5.5 ms | 53.0 ms | 269 ms | <2 s / <5 s |
 | `list_files_paged` | 131 µs | 1.66 ms | 15.86 ms | n/a |
 
 _Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/criterion/`; rerun `make bench` to refresh._
 
-**Headroom against V1 gates.** First-open beats the 10k target by ~50× and the 50k target by ~38×. Re-open with cache beats by ~40× and ~21× respectively after the mtime/size skip optimization landed (initial baseline was ~8× / ~3.4×).
+**Headroom against V1 gates.** First-open beats the 10k target by ~50× and the 50k target by ~38×. Re-open with cache beats by ~38× and ~19× respectively after the mtime/size/ctime skip optimization landed (initial baseline was ~8× / ~3.4×).
 
-**Re-open is now decoupled from vault size.** The scanner's fast path skips blake3 hashing entirely for files whose on-disk `(mtime_ms, size_bytes)` already matches the cached row. At 50 k files, re-open dropped from 1.47 s to 0.24 s (-83 %), and that 0.24 s is now dominated by directory traversal + the per-file `SELECT` against SQLite, not file IO. Bench iterations also report `bytes_processed = 0` on a no-change rescan, confirming we never re-read content.
+**Re-open is now decoupled from vault size.** The scanner's fast path skips blake3 hashing entirely for files whose on-disk `(mtime_ms, size_bytes, ctime_ms)` already matches the cached row. At 50 k files, re-open dropped from 1.47 s to 0.27 s (-82 %), and that's now dominated by directory traversal + the per-file `SELECT` against SQLite, not file IO. Bench iterations also report `bytes_processed = 0` on a no-change rescan, confirming we never re-read content.
+
+The fast path checks ctime in addition to mtime+size, which catches mtime-preserving writers like `cp -p` and `rsync -a` that the original optimization (PR #40) would have wrongly skipped. ctime adds one extra `i64` to the per-file `SELECT`, costing about 10 % vs the mtime/size-only version on 10k+ — still ~19× under the V1 50 k gate. On platforms without portable ctime access (Windows) the column stays at 0 and the fast path keeps its mtime+size semantics.
 
 ## When to rerun
 

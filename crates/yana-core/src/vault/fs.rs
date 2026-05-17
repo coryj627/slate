@@ -229,6 +229,7 @@ impl VaultProvider for FsVaultProvider {
         Ok(FileStat {
             size_bytes: meta.len(),
             mtime_ms,
+            ctime_ms: ctime_ms_of(&meta),
             kind,
         })
     }
@@ -265,6 +266,26 @@ fn unlink_dangling_symlink(path: &Path, meta: &fs::Metadata) -> io::Result<()> {
 #[cfg(not(windows))]
 fn unlink_dangling_symlink(path: &Path, _meta: &fs::Metadata) -> io::Result<()> {
     fs::remove_file(path)
+}
+
+/// Extract inode change time (ctime) as Unix epoch milliseconds.
+///
+/// Unix exposes ctime via `MetadataExt`. On other platforms (Windows,
+/// WASI) `std::fs::Metadata` has no portable ctime accessor, so we
+/// return `0` and the scanner's fast-path falls back to mtime+size
+/// only. ctime catches mtime-preserving writes (`cp -p`, `rsync -a`,
+/// snapshot restore) that mtime alone would miss.
+#[cfg(unix)]
+fn ctime_ms_of(meta: &fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.ctime()
+        .saturating_mul(1_000)
+        .saturating_add(meta.ctime_nsec() / 1_000_000)
+}
+
+#[cfg(not(unix))]
+fn ctime_ms_of(_meta: &fs::Metadata) -> i64 {
+    0
 }
 
 /// Atomically replace the contents of `target` by writing into a temp

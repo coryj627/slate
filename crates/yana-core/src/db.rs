@@ -51,10 +51,16 @@ struct Migration {
 
 /// Ordered list of migrations. Index + 1 is the schema version applied by
 /// each entry. Append new migrations; never reorder or remove existing ones.
-const MIGRATIONS: &[Migration] = &[Migration {
-    description: "init: files table",
-    sql: include_str!("../migrations/001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        description: "init: files table",
+        sql: include_str!("../migrations/001_init.sql"),
+    },
+    Migration {
+        description: "files: add ctime_ms",
+        sql: include_str!("../migrations/002_files_ctime.sql"),
+    },
+];
 
 /// Open or create a SQLite database at `path` with YANA's standard PRAGMAs.
 ///
@@ -180,10 +186,10 @@ mod tests {
     }
 
     #[test]
-    fn migrate_from_empty_creates_schema_version_1() {
+    fn migrate_from_empty_lands_at_latest_version() {
         let mut conn = fresh_db();
         let version = migrate(&mut conn).expect("migrate");
-        assert_eq!(version, 1);
+        assert_eq!(version, MIGRATIONS.len() as u32);
     }
 
     #[test]
@@ -216,13 +222,13 @@ mod tests {
         let v1 = migrate(&mut conn).expect("first migrate");
         let v2 = migrate(&mut conn).expect("second migrate");
         assert_eq!(v1, v2);
-        assert_eq!(v1, 1);
+        assert_eq!(v1, MIGRATIONS.len() as u32);
 
-        // schema_version has exactly one row.
+        // schema_version has one row per applied migration.
         let count: u32 = conn
             .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, MIGRATIONS.len() as u32);
     }
 
     #[test]
@@ -346,7 +352,11 @@ mod tests {
 
         let conn = open_database(&path, 512).unwrap();
         let version = current_version(&conn).unwrap();
-        assert_eq!(version, 1, "schema version should persist across opens");
+        assert_eq!(
+            version,
+            MIGRATIONS.len() as u32,
+            "schema version should persist across opens"
+        );
 
         let count: u32 = conn
             .query_row(
