@@ -119,6 +119,9 @@ target/
 **/*.rs.bk
 *.pdb
 
+# YANA per-vault cache directories (created by VaultSession at <vault>/.yana/)
+**/.yana/
+
 # Swift / SwiftPM
 .build/
 .swiftpm/
