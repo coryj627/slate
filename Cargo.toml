@@ -21,6 +21,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 
 [profile.dev]
 # Faster incremental builds during development.
