@@ -516,6 +516,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU32;
 
     fn make_vault(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
         let tmp = tempfile::tempdir().unwrap();
@@ -523,6 +524,62 @@ mod tests {
         setup(&provider);
         let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
         (tmp, session)
+    }
+
+    /// Test provider that delegates to an `FsVaultProvider` but cancels a
+    /// shared `CancelToken` after the Nth `list_dir` call. Used to drive
+    /// scan-cancellation tests at a specific point in the scan timeline.
+    struct CancellingProvider {
+        inner: FsVaultProvider,
+        cancel: CancelToken,
+        list_dir_calls: AtomicU32,
+        cancel_after_list_dirs: u32,
+    }
+
+    impl CancellingProvider {
+        fn new(inner: FsVaultProvider, cancel: CancelToken, cancel_after: u32) -> Self {
+            Self {
+                inner,
+                cancel,
+                list_dir_calls: AtomicU32::new(0),
+                cancel_after_list_dirs: cancel_after,
+            }
+        }
+    }
+
+    impl crate::VaultProvider for CancellingProvider {
+        fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+            let result = self.inner.list_dir(relative);
+            let n = self
+                .list_dir_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if n == self.cancel_after_list_dirs {
+                self.cancel.cancel();
+            }
+            result
+        }
+        fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+            self.inner.read_file(relative)
+        }
+        fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+            self.inner.write_file(relative, contents)
+        }
+        fn delete(&self, relative: &str) -> Result<(), VaultError> {
+            self.inner.delete(relative)
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+            self.inner.rename(from, to)
+        }
+        fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+            self.inner.stat(relative)
+        }
+        fn watch(
+            &self,
+            sink: Arc<dyn crate::FileEventSink>,
+        ) -> Result<Option<crate::WatchHandle>, VaultError> {
+            self.inner.watch(sink)
+        }
     }
 
     #[test]
@@ -679,6 +736,45 @@ mod tests {
             Err(VaultError::Cancelled) => { /* expected */ }
             other => panic!("expected Cancelled, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cancel_after_transaction_opens_rolls_back_inserts() {
+        // Triggers cancellation from inside the provider so the cancel
+        // fires *after* scan_vault has opened the write transaction.
+        // This is the case Codoki flagged as needing dedicated coverage
+        // beyond the pre-tx cancel path.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("a/one.md", b"a").unwrap();
+        provider.write_file("a/two.md", b"a").unwrap();
+        provider.write_file("b/three.md", b"b").unwrap();
+
+        let cancel = CancelToken::new();
+        // Trigger cancellation on the third list_dir call. By then the
+        // scan has already opened its transaction, listed the root,
+        // descended into one subdirectory, and inserted that subdir's
+        // single file — so the assertion "index is empty after cancel"
+        // proves the transaction was rolled back, not just bailed
+        // before doing any work.
+        let cancelling = Arc::new(CancellingProvider::new(provider, cancel.clone(), 3));
+        let cache_dir = tmp.path().join(".yana");
+        let config = SessionConfig::new(cache_dir);
+        let session = VaultSession::open(cancelling, config).unwrap();
+
+        match session.scan_initial(&cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+
+        let page = session
+            .list_files(FileFilter::All, Paging::first(100))
+            .unwrap();
+        assert!(
+            page.items.is_empty(),
+            "mid-transaction cancel must roll back any in-progress inserts"
+        );
+        assert_eq!(page.total_filtered, 0);
     }
 
     #[test]
