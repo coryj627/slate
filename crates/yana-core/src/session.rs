@@ -317,14 +317,26 @@ impl VaultSession {
     /// - Path validation (no absolute, no `..`, no Windows prefix)
     ///   is inherited from `FsVaultProvider::read_file`.
     pub fn read_text(&self, path: &str) -> Result<String, VaultError> {
+        let limit = self.config.large_file_refuse_bytes;
         let stat = self.provider.stat(path)?;
-        if stat.size_bytes > self.config.large_file_refuse_bytes {
+        if stat.size_bytes > limit {
             return Err(VaultError::FileTooLarge {
                 path: path.to_string(),
                 size: stat.size_bytes,
             });
         }
         let bytes = self.provider.read_file(path)?;
+        // Post-read TOCTOU guard: the file can grow between stat and
+        // read. Without this check we'd buffer the actual size (which
+        // could be arbitrarily large) before returning. The first
+        // size_bytes check still matters — it lets us refuse a known-
+        // large file without doing the read at all.
+        if (bytes.len() as u64) > limit {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: bytes.len() as u64,
+            });
+        }
         String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
             path: path.to_string(),
         })
@@ -1704,6 +1716,74 @@ mod tests {
         match session.read_text("/etc/passwd") {
             Err(VaultError::InvalidPath { .. }) => {}
             other => panic!("expected InvalidPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_text_refuses_files_grown_after_stat_toctou() {
+        // Provider that lies: stat() reports a tiny size, but
+        // read_file() returns a large payload. Reproduces the TOCTOU
+        // window where a file grows between the size pre-check and
+        // the actual read.
+        struct GrowingProvider {
+            inner: FsVaultProvider,
+        }
+        impl crate::VaultProvider for GrowingProvider {
+            fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+                self.inner.list_dir(relative)
+            }
+            fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+                // Pretend the file grew between stat and read.
+                let mut bytes = self.inner.read_file(relative)?;
+                bytes.resize(1_000, b'x');
+                Ok(bytes)
+            }
+            fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+                self.inner.write_file(relative, contents)
+            }
+            fn delete(&self, relative: &str) -> Result<(), VaultError> {
+                self.inner.delete(relative)
+            }
+            fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+                self.inner.rename(from, to)
+            }
+            fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+                // Lie about the size: report 1 byte.
+                let mut stat = self.inner.stat(relative)?;
+                stat.size_bytes = 1;
+                Ok(stat)
+            }
+            fn watch(
+                &self,
+                sink: Arc<dyn crate::FileEventSink>,
+            ) -> Result<Option<crate::WatchHandle>, VaultError> {
+                self.inner.watch(sink)
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let real = FsVaultProvider::new(tmp.path().to_path_buf());
+        real.write_file("a.md", b"tiny").unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 100;
+        let session = VaultSession::open(
+            Arc::new(GrowingProvider {
+                inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+            }),
+            config,
+        )
+        .unwrap();
+
+        match session.read_text("a.md") {
+            Err(VaultError::FileTooLarge { path, size }) => {
+                assert_eq!(path, "a.md");
+                assert_eq!(
+                    size, 1_000,
+                    "size should reflect the actual read length, not the lying stat"
+                );
+            }
+            other => panic!("expected FileTooLarge from post-read guard, got {other:?}"),
         }
     }
 
