@@ -12,19 +12,24 @@
 //!   validated. Absolute paths and `..` traversal are rejected with
 //!   `VaultError::InvalidPath`. `.` components are allowed and stripped.
 //! - **Symlinks.** `list_dir` reports symlinks as their own
-//!   `EntryKind::Symlink` variant without following. Per-call
-//!   operations (`read_file`, `stat`, `write_file`) follow symlinks via
-//!   the OS default. Mutators (`delete`, `rename`) treat the directory
-//!   entry itself — they use lstat-style existence checks so a broken
-//!   symlink can still be cleaned up or moved. Recursive enumeration —
-//!   handled at the `VaultSession` layer, not here — will need cycle
-//!   detection, but `FsVaultProvider`'s per-call API is symlink-safe by
-//!   virtue of not recursing.
-//! - **Atomic writes.** `write_file` writes to a temporary file in the
-//!   target's parent directory and renames it into place. The temp file
-//!   shares a filesystem with the target so the rename is atomic on
-//!   POSIX. The target is either at its old content or its new content,
-//!   never partial.
+//!   `EntryKind::Symlink` variant without following. `read_file` and
+//!   `stat` follow symlinks via the OS default. `write_file` does
+//!   *not* — its rename-into-place semantics replace a symlink's
+//!   directory entry with a regular file rather than writing through
+//!   the link to its target. Mutators (`delete`, `rename`) treat the
+//!   directory entry itself — they use lstat-style existence checks
+//!   so a broken symlink can still be cleaned up or moved. Recursive
+//!   enumeration — handled at the `VaultSession` layer, not here —
+//!   will need cycle detection, but `FsVaultProvider`'s per-call API
+//!   is symlink-safe by virtue of not recursing.
+//! - **Atomic writes.** `write_file` writes a temp file under the
+//!   vault's hidden `.yana/tmp/` directory, then renames it onto the
+//!   target. Same filesystem → atomic rename. Parking the temp inside
+//!   `.yana/` keeps half-written files out of `list_dir` results for
+//!   the target's directory and means a crash-leak doesn't surface as
+//!   a visible vault entry. Existing-file permissions are preserved
+//!   across overwrite; new files take the tempfile crate's default
+//!   (0600 on POSIX).
 //! - **Delete.** `delete` uses the `trash` crate to move-to-trash on
 //!   macOS and Windows (YANA's target platforms). On platforms without
 //!   trash support the call returns `VaultError::Trash`; the engine does
