@@ -1,15 +1,10 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-// Smoke-test SwiftUI app for YANA on macOS.
-//
-// Calls the Rust `yana-core` library through the `yana-uniffi`
-// FFI wrapper. Builds the bindings into a SwiftPM executable.
-//
-// The real Mac app will eventually be an Xcode project with a
-// proper .app bundle, code signing, and sandbox entitlements. For
-// now this validates that the Rust → uniffi → SwiftUI toolchain
-// works end-to-end on Apple Silicon.
+// SwiftUI Mac app for YANA. Calls the Rust `yana-core` library through
+// the `yana-uniffi` FFI wrapper. Built as a SwiftPM executable while we
+// bootstrap; this will graduate to an Xcode project once it needs a
+// real .app bundle, entitlements, and code signing.
 
 let package = Package(
     name: "YanaMac",
@@ -38,6 +33,19 @@ let package = Package(
                 // -L points at the workspace's Cargo target dir. The
                 // build-mac-app.sh script ensures the dylib is built
                 // before swift build runs.
+                .unsafeFlags([
+                    "-L", "../../target/debug",
+                ]),
+            ]
+        ),
+        .testTarget(
+            name: "YanaMacTests",
+            dependencies: ["YanaMac"],
+            linkerSettings: [
+                // The test binary transitively links yana_uniffi via
+                // YanaMac. Reuse the same -L flag so swift test can
+                // find the dylib produced by build-mac-app.sh.
+                .linkedLibrary("yana_uniffi"),
                 .unsafeFlags([
                     "-L", "../../target/debug",
                 ]),
