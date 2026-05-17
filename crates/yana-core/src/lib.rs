@@ -39,6 +39,12 @@ pub enum VaultError {
 
     #[error("operation cancelled")]
     Cancelled,
+
+    #[error("file at {path:?} is not valid UTF-8")]
+    InvalidUtf8 { path: String },
+
+    #[error("file at {path:?} is {size} bytes, larger than the configured refuse threshold")]
+    FileTooLarge { path: String, size: u64 },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so

@@ -58,6 +58,12 @@ pub enum VaultError {
 
     #[error("operation cancelled")]
     Cancelled,
+
+    #[error("file at {path:?} is not valid UTF-8")]
+    InvalidUtf8 { path: String },
+
+    #[error("file at {path:?} is {size} bytes, larger than the configured refuse threshold")]
+    FileTooLarge { path: String, size: u64 },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -74,6 +80,10 @@ impl From<core::VaultError> for VaultError {
             }
             core::VaultError::Trash { message } => VaultError::Trash { message },
             core::VaultError::Cancelled => VaultError::Cancelled,
+            core::VaultError::InvalidUtf8 { path } => VaultError::InvalidUtf8 { path },
+            core::VaultError::FileTooLarge { path, size } => {
+                VaultError::FileTooLarge { path, size }
+            }
         }
     }
 }
@@ -158,6 +168,16 @@ impl VaultSession {
     /// `scan_initial` first, or pass a path the scanner has visited.
     pub fn get_file_metadata(&self, path: String) -> Result<Option<FileMetadata>, VaultError> {
         Ok(self.inner.get_file_metadata(&path)?.map(Into::into))
+    }
+
+    /// Read the given vault file's bytes as UTF-8 text.
+    ///
+    /// Refuses files larger than the configured large-file refuse
+    /// threshold with `FileTooLarge` (no IO on the file itself), and
+    /// surfaces non-UTF-8 content as `InvalidUtf8` rather than
+    /// silently substituting replacement characters.
+    pub fn read_text(&self, path: String) -> Result<String, VaultError> {
+        Ok(self.inner.read_text(&path)?)
     }
 }
 

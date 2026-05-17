@@ -301,6 +301,35 @@ impl VaultSession {
         get_file_metadata_impl(&conn, path)
     }
 
+    /// Read a vault file's contents as UTF-8 text.
+    ///
+    /// - Refuses to read files larger than
+    ///   `SessionConfig::large_file_refuse_bytes` and returns
+    ///   `VaultError::FileTooLarge { path, size }` without ever
+    ///   touching the file's bytes.
+    /// - Returns `VaultError::InvalidUtf8 { path }` if the contents
+    ///   aren't valid UTF-8. Unlike the scanner's heading parse —
+    ///   which uses lossy decode to preserve as much structure as
+    ///   possible — the editor / reader path needs to be honest
+    ///   about decode failures so we don't silently substitute
+    ///   replacement characters into a file the user is about to
+    ///   look at.
+    /// - Path validation (no absolute, no `..`, no Windows prefix)
+    ///   is inherited from `FsVaultProvider::read_file`.
+    pub fn read_text(&self, path: &str) -> Result<String, VaultError> {
+        let stat = self.provider.stat(path)?;
+        if stat.size_bytes > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: stat.size_bytes,
+            });
+        }
+        let bytes = self.provider.read_file(path)?;
+        String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
+            path: path.to_string(),
+        })
+    }
+
     /// Page through the indexed files.
     pub fn list_files(
         &self,
@@ -1640,6 +1669,67 @@ mod tests {
         let md = session.get_file_metadata("a.md").unwrap().unwrap();
         let texts: Vec<&str> = md.headings.iter().map(|h| h.text.as_str()).collect();
         assert_eq!(texts, vec!["Heading survives", "Also here"]);
+    }
+
+    #[test]
+    fn read_text_round_trips_utf8_content() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/hello.md", "# Hello, vault! 🦀\n".as_bytes())
+                .unwrap();
+        });
+        let text = session.read_text("notes/hello.md").unwrap();
+        assert_eq!(text, "# Hello, vault! 🦀\n");
+    }
+
+    #[test]
+    fn read_text_rejects_invalid_utf8_typed() {
+        // 0xFF can't start a valid UTF-8 sequence. read_text must
+        // surface this as InvalidUtf8 rather than silently producing
+        // replacement characters — the editor / reader path is
+        // user-facing and shouldn't lie about file contents.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("bad.md", &[b'#', b' ', 0xFF, b'\n']).unwrap();
+        });
+        match session.read_text("bad.md") {
+            Err(VaultError::InvalidUtf8 { path }) => assert_eq!(path, "bad.md"),
+            other => panic!("expected InvalidUtf8 for bad.md, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_text_rejects_absolute_paths() {
+        // Provider-level path validation is reused — read_text must
+        // not accept absolutes / parent traversal / Windows prefixes.
+        let (_tmp, session) = make_vault(|_| {});
+        match session.read_text("/etc/passwd") {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_text_refuses_files_over_large_file_threshold() {
+        // Custom SessionConfig with a small refuse threshold so we
+        // can write a tiny file that still trips it. Default
+        // `large_file_refuse_bytes` is 50 MB which would make this
+        // test prohibitive.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file("big.md", b"more than ten bytes please")
+            .unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 10;
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+
+        match session.read_text("big.md") {
+            Err(VaultError::FileTooLarge { path, size }) => {
+                assert_eq!(path, "big.md");
+                assert!(size > 10, "size should be the actual file size, got {size}");
+            }
+            other => panic!("expected FileTooLarge, got {other:?}"),
+        }
     }
 
     #[test]
