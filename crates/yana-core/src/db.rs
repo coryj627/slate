@@ -60,6 +60,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "files: add ctime_ms",
         sql: include_str!("../migrations/002_files_ctime.sql"),
     },
+    Migration {
+        description: "headings: per-file Markdown headings",
+        sql: include_str!("../migrations/003_headings.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with YANA's standard PRAGMAs.

@@ -22,6 +22,8 @@ uniffi::setup_scaffolding!();
 pub struct Heading {
     pub level: u8,
     pub text: String,
+    pub ordinal: u32,
+    pub anchor_id: String,
 }
 
 impl From<core::Heading> for Heading {
@@ -29,6 +31,8 @@ impl From<core::Heading> for Heading {
         Heading {
             level: h.level,
             text: h.text,
+            ordinal: h.ordinal,
+            anchor_id: h.anchor_id,
         }
     }
 }
@@ -147,6 +151,14 @@ impl VaultSession {
         let page = self.inner.list_files(filter.into(), paging.into())?;
         Ok(page.into())
     }
+
+    /// Fetch full per-file metadata (basic columns + headings).
+    ///
+    /// Returns `nil` if the path isn't in the index yet — call
+    /// `scan_initial` first, or pass a path the scanner has visited.
+    pub fn get_file_metadata(&self, path: String) -> Result<Option<FileMetadata>, VaultError> {
+        Ok(self.inner.get_file_metadata(&path)?.map(Into::into))
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -223,6 +235,32 @@ pub struct FileSummary {
     pub mtime_ms: i64,
     pub size_bytes: u64,
     pub is_markdown: bool,
+}
+
+/// Full per-file metadata returned by `get_file_metadata`.
+#[derive(uniffi::Record)]
+pub struct FileMetadata {
+    pub path: String,
+    pub name: String,
+    pub mtime_ms: i64,
+    pub size_bytes: u64,
+    pub is_markdown: bool,
+    pub content_hash: String,
+    pub headings: Vec<Heading>,
+}
+
+impl From<core::FileMetadata> for FileMetadata {
+    fn from(m: core::FileMetadata) -> Self {
+        Self {
+            path: m.path,
+            name: m.name,
+            mtime_ms: m.mtime_ms,
+            size_bytes: m.size_bytes,
+            is_markdown: m.is_markdown,
+            content_hash: m.content_hash,
+            headings: m.headings.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 impl From<core::FileSummary> for FileSummary {

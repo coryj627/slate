@@ -11,7 +11,8 @@ pub mod session;
 pub mod vault;
 
 pub use session::{
-    CancelToken, FileFilter, FileSummary, Page, Paging, ScanReport, SessionConfig, VaultSession,
+    CancelToken, FileFilter, FileMetadata, FileSummary, Page, Paging, ScanReport, SessionConfig,
+    VaultSession,
 };
 pub use vault::{
     content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,
@@ -49,10 +50,17 @@ impl From<rusqlite::Error> for VaultError {
 }
 
 /// A heading parsed from a Markdown document.
+///
+/// `ordinal` is the heading's 0-based index within its source file.
+/// `anchor_id` is a deterministic slug derived from `text`, deduped
+/// within the file so each heading has a unique identifier the UI
+/// (and future deep-link URLs) can target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
     pub level: u8,
     pub text: String,
+    pub ordinal: u32,
+    pub anchor_id: String,
 }
 
 /// Read a Markdown file from disk and return its headings in document order.
@@ -63,6 +71,12 @@ pub fn read_headings(path: impl AsRef<Path>) -> Result<Vec<Heading>, VaultError>
 
 /// Extract headings from a Markdown source string in document order.
 ///
+/// Assigns each heading an `ordinal` (0-based index) and a per-file-
+/// unique `anchor_id` slug. Anchor IDs are case-folded ASCII with
+/// non-alphanumerics collapsed to `-`; duplicates within a file get a
+/// `-2`, `-3` … suffix; an empty slug (heading composed entirely of
+/// punctuation, say) falls back to `section`.
+///
 /// # Examples
 ///
 /// ```
@@ -71,13 +85,14 @@ pub fn read_headings(path: impl AsRef<Path>) -> Result<Vec<Heading>, VaultError>
 /// let headings = extract_headings("# Hello\n\n## World");
 /// assert_eq!(headings.len(), 2);
 /// assert_eq!(headings[0].text, "Hello");
+/// assert_eq!(headings[0].anchor_id, "hello");
 /// assert_eq!(headings[1].level, 2);
 /// ```
 pub fn extract_headings(source: &str) -> Vec<Heading> {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
     let parser = Parser::new(source);
-    let mut headings = Vec::new();
+    let mut raw: Vec<(u8, String)> = Vec::new();
     let mut current_level: Option<u8> = None;
     let mut current_text = String::new();
 
@@ -89,10 +104,7 @@ pub fn extract_headings(source: &str) -> Vec<Heading> {
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(level) = current_level.take() {
-                    headings.push(Heading {
-                        level,
-                        text: std::mem::take(&mut current_text),
-                    });
+                    raw.push((level, std::mem::take(&mut current_text)));
                 }
             }
             Event::Text(s) | Event::Code(s) if current_level.is_some() => {
@@ -102,7 +114,57 @@ pub fn extract_headings(source: &str) -> Vec<Heading> {
         }
     }
 
-    headings
+    let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    raw.into_iter()
+        .enumerate()
+        .map(|(idx, (level, text))| {
+            let base = slugify(&text);
+            let counter = seen.entry(base.clone()).or_insert(0);
+            *counter += 1;
+            let anchor_id = if *counter == 1 {
+                base
+            } else {
+                format!("{base}-{counter}")
+            };
+            Heading {
+                level,
+                text,
+                ordinal: idx as u32,
+                anchor_id,
+            }
+        })
+        .collect()
+}
+
+/// Slugify heading text into an ASCII-only anchor id.
+///
+/// Lowercase ASCII alphanumerics pass through unchanged; everything
+/// else (whitespace, punctuation, non-ASCII) collapses to single `-`
+/// runs. Leading / trailing dashes are stripped. An empty result (a
+/// heading composed entirely of non-alphanumeric content) falls back
+/// to `section` so every heading still gets a usable anchor.
+fn slugify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_dash = true; // suppress leading dash
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() {
+            for lc in c.to_lowercase() {
+                out.push(lc);
+            }
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "section".to_string()
+    } else {
+        out
+    }
 }
 
 fn heading_level_to_u8(level: pulldown_cmark::HeadingLevel) -> u8 {
@@ -121,6 +183,15 @@ fn heading_level_to_u8(level: pulldown_cmark::HeadingLevel) -> u8 {
 mod tests {
     use super::*;
 
+    fn h(level: u8, text: &str, ordinal: u32, anchor: &str) -> Heading {
+        Heading {
+            level,
+            text: text.into(),
+            ordinal,
+            anchor_id: anchor.into(),
+        }
+    }
+
     #[test]
     fn extracts_simple_headings() {
         let source = "# First\n\n## Second\n\n### Third\n";
@@ -128,18 +199,9 @@ mod tests {
         assert_eq!(
             headings,
             vec![
-                Heading {
-                    level: 1,
-                    text: "First".into()
-                },
-                Heading {
-                    level: 2,
-                    text: "Second".into()
-                },
-                Heading {
-                    level: 3,
-                    text: "Third".into()
-                },
+                h(1, "First", 0, "first"),
+                h(2, "Second", 1, "second"),
+                h(3, "Third", 2, "third"),
             ]
         );
     }
@@ -148,26 +210,14 @@ mod tests {
     fn ignores_non_heading_content() {
         let source = "Some text.\n\n# Heading\n\nMore text.\n";
         let headings = extract_headings(source);
-        assert_eq!(
-            headings,
-            vec![Heading {
-                level: 1,
-                text: "Heading".into()
-            }]
-        );
+        assert_eq!(headings, vec![h(1, "Heading", 0, "heading")]);
     }
 
     #[test]
     fn includes_inline_code_text_in_headings() {
         let source = "# Use `cargo test`\n";
         let headings = extract_headings(source);
-        assert_eq!(
-            headings,
-            vec![Heading {
-                level: 1,
-                text: "Use cargo test".into()
-            }]
-        );
+        assert_eq!(headings, vec![h(1, "Use cargo test", 0, "use-cargo-test")]);
     }
 
     #[test]
@@ -182,5 +232,39 @@ mod tests {
         assert_eq!(headings.len(), 6);
         assert_eq!(headings[0].level, 1);
         assert_eq!(headings[5].level, 6);
+        assert_eq!(headings[0].ordinal, 0);
+        assert_eq!(headings[5].ordinal, 5);
+    }
+
+    #[test]
+    fn duplicate_heading_text_gets_unique_anchor_ids() {
+        let source = "# Notes\n\n# Notes\n\n## Notes\n";
+        let headings = extract_headings(source);
+        let anchors: Vec<&str> = headings.iter().map(|h| h.anchor_id.as_str()).collect();
+        assert_eq!(anchors, vec!["notes", "notes-2", "notes-3"]);
+    }
+
+    #[test]
+    fn punctuation_only_heading_falls_back_to_section_slug() {
+        let source = "# !!!\n\n# ???\n";
+        let headings = extract_headings(source);
+        assert_eq!(headings[0].anchor_id, "section");
+        assert_eq!(headings[1].anchor_id, "section-2");
+    }
+
+    #[test]
+    fn slug_collapses_punctuation_and_strips_edges() {
+        let source = "# Hello,  World!\n";
+        let headings = extract_headings(source);
+        assert_eq!(headings[0].anchor_id, "hello-world");
+    }
+
+    #[test]
+    fn slug_lowercases_and_replaces_non_ascii() {
+        let source = "# Café Résumé 2026\n";
+        let headings = extract_headings(source);
+        // Non-ASCII collapses to dashes; the year stays. Slug is
+        // deterministic; that's all we promise here.
+        assert_eq!(headings[0].anchor_id, "caf-r-sum-2026");
     }
 }
