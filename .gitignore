@@ -114,6 +114,11 @@ app.*.symbols
 .DS_Store
 .claude/
 
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
 # Exceptions to above rules.
 !**/ios/**/default.mode1v3
 !**/ios/**/default.mode2v3
