@@ -17,6 +17,8 @@ rust-version = "1.75"
 pulldown-cmark = { version = "0.10", default-features = false }
 thiserror = "1"
 uniffi = { version = "0.28", features = ["cli"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+tempfile = "3"
 
 [profile.dev]
 # Faster incremental builds during development.

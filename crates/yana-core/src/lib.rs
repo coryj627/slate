@@ -1,11 +1,12 @@
 //! Core engine for YANA, an accessibility-first knowledge workspace.
 //!
-//! This is the initial bootstrap crate. The shape of the API will evolve
-//! significantly as the architecture from
-//! `docs/plans/05_locked_architecture_decisions.md` is implemented. For now,
-//! this crate validates the Rust toolchain and `pulldown-cmark` integration
-//! with the simplest possible useful operation: extract headings from a
-//! Markdown file.
+//! The full API surface is documented in
+//! `docs/plans/05_locked_architecture_decisions.md`. This crate is currently
+//! mid-bootstrap: heading extraction (used by the existing FFI smoke tests)
+//! plus the SQLite-backed metadata index foundation (`db` module, the first
+//! piece of Milestone A).
+
+pub mod db;
 
 use std::path::Path;
 use thiserror::Error;
