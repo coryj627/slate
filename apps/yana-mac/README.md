@@ -33,6 +33,18 @@ After the script succeeds, the executable lives at `.build/debug/YanaMac` inside
 DYLD_LIBRARY_PATH="$(pwd)/../../target/debug" .build/debug/YanaMac
 ```
 
+## Tests
+
+Run the Swift test target after building (so the Rust dylib is available to link against):
+
+```sh
+./scripts/build-mac-app.sh
+cd apps/yana-mac
+DYLD_LIBRARY_PATH="$(pwd)/../../target/debug" swift test
+```
+
+The test target lives at `Tests/YanaMacTests/` and uses `@testable import YanaMac` to reach internal types. It depends on the same `yana_uniffi` dylib as the executable target, hence the `DYLD_LIBRARY_PATH` setup.
+
 ## Accessibility checks
 
 `a11y-check` from [cvs-health/ios-swiftui-accessibility-techniques](https://github.com/cvs-health/ios-swiftui-accessibility-techniques) statically analyzes SwiftUI sources for WCAG 2.2 issues. The repo's CI (`.github/workflows/a11y-check.yml`) runs it on every PR that touches Mac sources and fails the run if the score drops or any errors land.
