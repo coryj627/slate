@@ -37,6 +37,12 @@ final class AppState: ObservableObject {
     /// Show the directory picker and, if the user chose a folder, open
     /// it as a vault. Centralizes the flow so the WelcomeView button
     /// and the App-level Cmd+O command share the same code path.
+    ///
+    /// `@MainActor` is redundant given the class-level annotation but
+    /// is repeated here for self-documenting clarity: this method
+    /// presents an `NSOpenPanel`, which AppKit requires on the main
+    /// thread.
+    @MainActor
     func pickAndOpenVault() {
         guard let url = VaultPicker.pick() else { return }
         openVault(at: url)
