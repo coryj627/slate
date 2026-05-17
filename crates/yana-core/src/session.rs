@@ -228,7 +228,17 @@ impl VaultSession {
 
     /// Convenience: open a vault rooted at `root` using `FsVaultProvider`.
     /// Cache lives at `<root>/.yana` per the locked storage layout.
+    ///
+    /// The vault root must already exist as a directory. A typo'd path
+    /// would otherwise `create_dir_all` its way into existence under
+    /// `open`, silently materializing a fresh empty vault on disk.
     pub fn from_filesystem(root: PathBuf) -> Result<Self, VaultError> {
+        if !root.is_dir() {
+            return Err(VaultError::InvalidPath {
+                path: root.display().to_string(),
+                reason: "vault root does not exist or is not a directory".into(),
+            });
+        }
         let cache_dir = root.join(".yana");
         let config = SessionConfig::new(cache_dir);
         let provider = Arc::new(FsVaultProvider::new(root));
@@ -289,6 +299,11 @@ fn scan_vault(
     let mut report = ScanReport::default();
     let now = now_ms();
 
+    // Bail before opening a write transaction so a pre-cancelled token
+    // doesn't pay SQLite's open-tx cost.
+    if cancel.is_cancelled() {
+        return Err(VaultError::Cancelled);
+    }
     let tx = conn.transaction()?;
 
     let mut stack: Vec<String> = vec![String::new()];
@@ -306,6 +321,13 @@ fn scan_vault(
         };
 
         for entry in entries {
+            // Check inside the inner loop so a cancel request in the
+            // middle of a flat directory of many large files doesn't
+            // wait for the whole directory to finish hashing.
+            if cancel.is_cancelled() {
+                return Err(VaultError::Cancelled);
+            }
+
             // Skip hidden files/directories. `.yana` (our cache) and
             // `.obsidian` (Obsidian-compatible vault config) must not be
             // indexed; the general "starts with dot" rule covers them
@@ -320,13 +342,12 @@ fn scan_vault(
                 format!("{}/{}", dir, entry.name)
             };
 
-            report.files_seen += 1;
-
             match entry.kind {
                 EntryKind::Directory => {
                     stack.push(path);
                 }
-                EntryKind::File | EntryKind::Symlink => {
+                EntryKind::File => {
+                    report.files_seen += 1;
                     if let Err(e) = index_file(
                         &tx,
                         provider,
@@ -338,6 +359,15 @@ fn scan_vault(
                     ) {
                         report.errors.push(format!("{path}: {e}"));
                     }
+                }
+                EntryKind::Symlink => {
+                    // Symlinks are skipped entirely. Following them risks
+                    // hashing out-of-vault data (a link pointing at
+                    // /etc/passwd would otherwise land in the index) and
+                    // the engine has no way to enforce that the target
+                    // stays under the vault root without canonicalize
+                    // logic in the provider. Cycle/escape handling is a
+                    // future-issue concern; for now, don't index links.
                 }
             }
         }
@@ -357,10 +387,13 @@ fn index_file(
     report: &mut ScanReport,
 ) -> Result<(), VaultError> {
     let stat = provider.stat(path)?;
+    // Case-fold the extension so macOS (APFS) and Windows (NTFS) files
+    // saved as `README.MD` or `Notes.Markdown` are still recognized as
+    // markdown by `is_markdown` (and therefore by FileFilter::MarkdownOnly).
     let extension = std::path::Path::new(name)
         .extension()
         .and_then(|s| s.to_str())
-        .map(str::to_string);
+        .map(|s| s.to_ascii_lowercase());
     let is_markdown = matches!(
         extension.as_deref(),
         Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
@@ -483,6 +516,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU32;
 
     fn make_vault(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
         let tmp = tempfile::tempdir().unwrap();
@@ -490,6 +524,62 @@ mod tests {
         setup(&provider);
         let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
         (tmp, session)
+    }
+
+    /// Test provider that delegates to an `FsVaultProvider` but cancels a
+    /// shared `CancelToken` after the Nth `list_dir` call. Used to drive
+    /// scan-cancellation tests at a specific point in the scan timeline.
+    struct CancellingProvider {
+        inner: FsVaultProvider,
+        cancel: CancelToken,
+        list_dir_calls: AtomicU32,
+        cancel_after_list_dirs: u32,
+    }
+
+    impl CancellingProvider {
+        fn new(inner: FsVaultProvider, cancel: CancelToken, cancel_after: u32) -> Self {
+            Self {
+                inner,
+                cancel,
+                list_dir_calls: AtomicU32::new(0),
+                cancel_after_list_dirs: cancel_after,
+            }
+        }
+    }
+
+    impl crate::VaultProvider for CancellingProvider {
+        fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+            let result = self.inner.list_dir(relative);
+            let n = self
+                .list_dir_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if n == self.cancel_after_list_dirs {
+                self.cancel.cancel();
+            }
+            result
+        }
+        fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+            self.inner.read_file(relative)
+        }
+        fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+            self.inner.write_file(relative, contents)
+        }
+        fn delete(&self, relative: &str) -> Result<(), VaultError> {
+            self.inner.delete(relative)
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+            self.inner.rename(from, to)
+        }
+        fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+            self.inner.stat(relative)
+        }
+        fn watch(
+            &self,
+            sink: Arc<dyn crate::FileEventSink>,
+        ) -> Result<Option<crate::WatchHandle>, VaultError> {
+            self.inner.watch(sink)
+        }
     }
 
     #[test]
@@ -649,6 +739,75 @@ mod tests {
     }
 
     #[test]
+    fn cancel_after_transaction_opens_rolls_back_inserts() {
+        // Triggers cancellation from inside the provider so the cancel
+        // fires *after* scan_vault has opened the write transaction.
+        // This is the case Codoki flagged as needing dedicated coverage
+        // beyond the pre-tx cancel path.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("a/one.md", b"a").unwrap();
+        provider.write_file("a/two.md", b"a").unwrap();
+        provider.write_file("b/three.md", b"b").unwrap();
+
+        let cancel = CancelToken::new();
+        // Trigger cancellation on the third list_dir call. By then the
+        // scan has already opened its transaction, listed the root,
+        // descended into one subdirectory, and inserted that subdir's
+        // single file — so the assertion "index is empty after cancel"
+        // proves the transaction was rolled back, not just bailed
+        // before doing any work.
+        let cancelling = Arc::new(CancellingProvider::new(provider, cancel.clone(), 3));
+        let cache_dir = tmp.path().join(".yana");
+        let config = SessionConfig::new(cache_dir);
+        let session = VaultSession::open(cancelling, config).unwrap();
+
+        match session.scan_initial(&cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+
+        let page = session
+            .list_files(FileFilter::All, Paging::first(100))
+            .unwrap();
+        assert!(
+            page.items.is_empty(),
+            "mid-transaction cancel must roll back any in-progress inserts"
+        );
+        assert_eq!(page.total_filtered, 0);
+    }
+
+    #[test]
+    fn cancelled_scan_leaves_index_empty() {
+        // Cancel before scan_vault opens the write transaction; nothing
+        // partially-applied should land in `files`. Re-scanning after
+        // clearing the cancel flag must produce a fully populated index.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"a").unwrap();
+            p.write_file("notes/b.md", b"b").unwrap();
+        });
+
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        match session.scan_initial(&cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+
+        // No files indexed: the transaction was rolled back (in practice,
+        // never opened because the pre-tx check fires first).
+        let page = session
+            .list_files(FileFilter::All, Paging::first(100))
+            .unwrap();
+        assert!(page.items.is_empty(), "cancel should leave no rows behind");
+        assert_eq!(page.total_filtered, 0);
+
+        // Fresh token: scan succeeds and the index populates.
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_indexed, 2);
+    }
+
+    #[test]
     fn rescan_updates_existing_rows_via_on_conflict() {
         let (tmp, session) = make_vault(|p| {
             p.write_file("evolving.md", b"v1").unwrap();
@@ -692,5 +851,104 @@ mod tests {
         assert!(!c2.is_cancelled());
         c1.cancel();
         assert!(c2.is_cancelled(), "clone shares the underlying flag");
+    }
+
+    #[test]
+    fn from_filesystem_rejects_nonexistent_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let bogus = parent.path().join("not-a-vault");
+        assert!(!bogus.exists(), "precondition: path must not exist yet");
+
+        match VaultSession::from_filesystem(bogus.clone()) {
+            Ok(_) => panic!("from_filesystem should reject a nonexistent root"),
+            Err(VaultError::InvalidPath { .. }) => {}
+            Err(other) => panic!("expected InvalidPath, got {other:?}"),
+        }
+
+        // Regression: open must not have silently created the vault.
+        assert!(
+            !bogus.exists(),
+            "from_filesystem must not materialize a missing vault root"
+        );
+    }
+
+    #[test]
+    fn from_filesystem_rejects_file_as_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_root = tmp.path().join("vault-is-a-file");
+        std::fs::write(&file_root, b"oops").unwrap();
+
+        match VaultSession::from_filesystem(file_root) {
+            Ok(_) => panic!("from_filesystem should reject a regular file as root"),
+            Err(VaultError::InvalidPath { .. }) => {}
+            Err(other) => panic!("expected InvalidPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn case_insensitive_markdown_extensions_are_detected() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("UPPER.MD", b"# upper").unwrap();
+            p.write_file("Mixed.Markdown", b"# mixed").unwrap();
+            p.write_file("lower.md", b"# lower").unwrap();
+            p.write_file("not-md.TXT", b"plain").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let page = session
+            .list_files(FileFilter::MarkdownOnly, Paging::first(100))
+            .unwrap();
+        let mut names: Vec<&str> = page.items.iter().map(|f| f.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["Mixed.Markdown", "UPPER.MD", "lower.md"]);
+        assert_eq!(page.total_filtered, 3);
+        for item in &page.items {
+            assert!(item.is_markdown);
+        }
+    }
+
+    #[test]
+    fn files_seen_counts_only_files_not_directories() {
+        let (_tmp, session) = make_vault(|p| {
+            // Five files spread across three subdirectories.
+            p.write_file("a.md", b"a").unwrap();
+            p.write_file("notes/b.md", b"b").unwrap();
+            p.write_file("notes/c.md", b"c").unwrap();
+            p.write_file("notes/sub/d.md", b"d").unwrap();
+            p.write_file("attachments/e.png", b"\x89PNG").unwrap();
+        });
+
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(
+            report.files_seen, 5,
+            "files_seen should count only files, not the three directories"
+        );
+        assert_eq!(report.files_indexed, 5);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_pointing_out_of_vault_are_not_indexed() {
+        // Sentinel file outside the vault.
+        let outside_dir = tempfile::tempdir().unwrap();
+        let secret = outside_dir.path().join("secret.txt");
+        std::fs::write(&secret, b"SECRET").unwrap();
+
+        let (vault_tmp, session) = make_vault(|p| {
+            p.write_file("real.md", b"# real").unwrap();
+        });
+        // Symlink inside the vault pointing at the outside sentinel.
+        std::os::unix::fs::symlink(&secret, vault_tmp.path().join("leak.md")).unwrap();
+
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+
+        // The vault has one real file; the symlink should be skipped.
+        assert_eq!(report.files_indexed, 1);
+
+        let page = session
+            .list_files(FileFilter::All, Paging::first(100))
+            .unwrap();
+        let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["real.md"]);
     }
 }
