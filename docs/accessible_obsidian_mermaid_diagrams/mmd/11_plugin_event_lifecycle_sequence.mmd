@@ -1,0 +1,30 @@
+sequenceDiagram
+  participant User
+  participant Shell as Flutter shell
+  participant Runtime as JS plugin runtime
+  participant Shim as Obsidian API shim
+  participant Vault
+  participant Metadata as Metadata cache
+  participant Workspace
+  participant Renderer as Native renderer/adapters
+
+  User->>Shell: Enable compatible plugin
+  Shell->>Runtime: Load manifest and main.js
+  Runtime->>Shim: Construct Plugin(app)
+  Shim-->>Runtime: Provide App, Vault, Workspace, MetadataCache
+  Runtime->>Shim: registerCommand, registerEvent, registerView, addSettingTab
+  Shim->>Shell: Register commands and settings
+  Shim->>Workspace: Register view factories
+
+  User->>Vault: Create or modify file
+  Vault->>Metadata: Re-index changed file
+  Metadata-->>Shim: changed / resolved events
+  Shim-->>Runtime: Invoke plugin event handlers
+  Runtime->>Shim: Read/write vault, update view, save plugin data
+  Shim->>Renderer: Route output to native accessible renderer or adapter
+  Renderer-->>User: Announce result or update UI
+
+  User->>Shell: Disable plugin
+  Shell->>Runtime: onunload
+  Runtime->>Shim: Cleanup registered events, commands, views
+  Shim->>Shell: Remove plugin contributions

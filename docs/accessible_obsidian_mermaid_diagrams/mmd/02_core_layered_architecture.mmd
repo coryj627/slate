@@ -1,0 +1,46 @@
+flowchart TB
+  subgraph UI["Accessible Flutter application shell"]
+    Shell["App shell<br/>navigation, command palette, settings"]
+    Editor["Accessible Markdown editor"]
+    BasesUI["Bases views<br/>table, list, cards, future map"]
+    GraphUI["Graph views<br/>visual graph + future relationship explorer"]
+    CanvasUI["Canvas views<br/>visual canvas + structured outline"]
+  end
+
+  subgraph AppServices["Application services"]
+    Commands["Command registry"]
+    Workspace["Workspace manager<br/>tabs, panes, saved layouts"]
+    Search["Search service"]
+    Properties["Property editor and schema service"]
+    Automation["Templates and capture workflows"]
+  end
+
+  subgraph Intelligence["Vault intelligence layer"]
+    Parser["Markdown parser"]
+    Metadata["Metadata cache<br/>links, embeds, headings, blocks, tags, tasks"]
+    LinkResolver["Link resolver<br/>resolved and unresolved links"]
+    Query["Query engine<br/>Bases, tasks, dashboards"]
+    GraphEngine["Graph engine<br/>nodes, edges, groups, layout inputs"]
+  end
+
+  subgraph Persistence["Persistence layer"]
+    VaultFS["Vault filesystem<br/>.md, .canvas, .base, attachments"]
+    Config[".obsidian compatibility<br/>settings, plugins, workspaces"]
+    LocalDB["Local app database<br/>cache, file recovery, graph layout, sync state"]
+  end
+
+  subgraph Interop["Interoperability layer"]
+    PluginShim["Obsidian plugin API shim"]
+    NativeAdapters["Native adapters for golden plugins"]
+    SyncAdapters["Sync adapters<br/>filesystem, Git, LiveSync-compatible"]
+  end
+
+  UI --> AppServices
+  AppServices --> Intelligence
+  Intelligence --> Persistence
+  Interop --> AppServices
+  Interop --> Intelligence
+  Interop --> Persistence
+  PluginShim --> NativeAdapters
+  SyncAdapters --> VaultFS
+  SyncAdapters --> LocalDB

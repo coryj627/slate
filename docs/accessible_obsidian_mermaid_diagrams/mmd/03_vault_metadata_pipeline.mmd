@@ -1,0 +1,34 @@
+flowchart LR
+  VaultChange["Vault change<br/>create, modify, delete, rename"] --> Watcher["File watcher and event normalizer"]
+  Watcher --> FileState["File-state record<br/>path, mtime, size, hash"]
+  FileState --> DirtyQueue["Dirty-file queue"]
+  DirtyQueue --> Parser["Markdown and frontmatter parser"]
+
+  Parser --> Headings["Headings"]
+  Parser --> Links["Links and embeds"]
+  Parser --> Tags["Tags and aliases"]
+  Parser --> Blocks["Blocks, sections, footnotes"]
+  Parser --> Tasks["Tasks and list items"]
+  Parser --> Props["Properties / YAML frontmatter"]
+
+  Headings --> MetadataCache["Metadata cache"]
+  Links --> MetadataCache
+  Tags --> MetadataCache
+  Blocks --> MetadataCache
+  Tasks --> MetadataCache
+  Props --> MetadataCache
+
+  MetadataCache --> LinkResolver["Link resolver"]
+  LinkResolver --> Resolved["Resolved links"]
+  LinkResolver --> Unresolved["Unresolved links"]
+
+  MetadataCache --> Search["Search"]
+  MetadataCache --> Backlinks["Backlinks / outgoing links"]
+  MetadataCache --> Outline["Outline"]
+  MetadataCache --> Bases["Bases / query views"]
+  MetadataCache --> Graph["Graph engine"]
+  MetadataCache --> Plugins["Plugin API MetadataCache shim"]
+
+  MetadataCache --> LocalDB["Persisted local cache"]
+  LocalDB --> Startup["Fast startup / cache warm load"]
+  Startup --> MetadataCache

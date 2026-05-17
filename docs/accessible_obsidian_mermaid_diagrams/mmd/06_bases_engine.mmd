@@ -1,0 +1,30 @@
+flowchart TB
+  Vault["Vault files"] --> Metadata["Metadata and property index"]
+  BaseFiles[".base files and embedded base blocks"] --> BaseParser["Base syntax parser"]
+
+  Metadata --> QueryPlanner["Base query planner"]
+  BaseParser --> QueryPlanner
+
+  QueryPlanner --> Filters["Filters<br/>global + view-specific"]
+  QueryPlanner --> Formulas["Formula evaluator"]
+  QueryPlanner --> Sorts["Sort engine"]
+  QueryPlanner --> Groups["Group engine"]
+  QueryPlanner --> Summaries["Summary engine"]
+
+  Filters --> ResultModel["Base result model<br/>rows, columns, computed values, provenance"]
+  Formulas --> ResultModel
+  Sorts --> ResultModel
+  Groups --> ResultModel
+  Summaries --> ResultModel
+
+  ResultModel --> Table["Accessible table / data grid"]
+  ResultModel --> List["Accessible list view"]
+  ResultModel --> Cards["Accessible cards view"]
+  ResultModel --> Map["Future map view"]
+  ResultModel --> Export["Export<br/>Markdown, CSV, JSON"]
+  ResultModel --> PluginAPI["Plugin/API compatibility surface"]
+
+  Table --> Edit["Inline property editing"]
+  List --> Edit
+  Cards --> Edit
+  Edit --> Vault

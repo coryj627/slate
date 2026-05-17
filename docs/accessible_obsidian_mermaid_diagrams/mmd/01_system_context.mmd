@@ -1,0 +1,35 @@
+flowchart LR
+  SRU["Screen reader user"]
+  KBU["Keyboard-only user"]
+  VCU["Voice-control user"]
+  SU["Sighted visual user"]
+
+  App["Accessible Flutter vault client"]
+  OS["Platform accessibility APIs<br/>Semantics, focus, keyboard, voice"]
+  Vault["Existing Obsidian-compatible vault<br/>Markdown, .canvas, .base, .obsidian"]
+  BuiltIns["Built-in golden-plugin features<br/>Tasks, Dataview-like queries, Kanban, Templates, Bases"]
+  PluginLayer["Selective plugin compatibility layer<br/>Obsidian API shim + native adapters"]
+  Sync["Open sync adapters<br/>File-system, Git, LiveSync-compatible"]
+  LiveSync["Self-hosted LiveSync infrastructure<br/>CouchDB, object storage, optional P2P"]
+  External["External tools<br/>Editors, static site generators, backup tools"]
+
+  SRU --> App
+  KBU --> App
+  VCU --> App
+  SU --> App
+
+  App --> OS
+  App <--> Vault
+  App --> BuiltIns
+  App --> PluginLayer
+  App --> Sync
+  Sync <--> LiveSync
+  Vault <--> External
+
+  classDef primary fill:#eef,stroke:#447,stroke-width:2px
+  classDef data fill:#efe,stroke:#484,stroke-width:1px
+  classDef external fill:#fff4dd,stroke:#a76,stroke-width:1px
+
+  class App primary
+  class Vault,LiveSync data
+  class External,Sync,PluginLayer,BuiltIns,OS external

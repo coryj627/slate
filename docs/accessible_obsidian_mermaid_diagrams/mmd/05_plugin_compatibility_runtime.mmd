@@ -1,0 +1,33 @@
+flowchart TB
+  PluginPkg["Plugin package<br/>manifest.json, main.js, optional styles.css, data.json"] --> Classifier["Compatibility classifier"]
+
+  Classifier --> DataPlugin["Tier 1-2<br/>data, commands, metadata, settings"]
+  Classifier --> ViewPlugin["Tier 3<br/>custom views"]
+  Classifier --> EditorPlugin["Tier 4<br/>editor / CodeMirror extensions"]
+  Classifier --> DesktopPlugin["Tier 5<br/>Node/Electron/desktop-only APIs"]
+
+  DataPlugin --> JSRuntime["Sandboxed JavaScript runtime"]
+  ViewPlugin --> AdapterDecision["Native adapter or restricted HTML fallback?"]
+  EditorPlugin --> UnsupportedOrAdapter["Native adapter or unsupported initially"]
+  DesktopPlugin --> PermissionGateway["Explicit desktop permission gateway<br/>likely unsupported in MVP"]
+
+  JSRuntime --> ApiShim["Obsidian API shim"]
+  ApiShim --> App["App"]
+  ApiShim --> Vault["Vault"]
+  ApiShim --> MetadataCache["MetadataCache"]
+  ApiShim --> Workspace["Workspace"]
+  ApiShim --> Commands["Commands"]
+  ApiShim --> Settings["Settings"]
+  ApiShim --> MarkdownRenderer["MarkdownRenderer"]
+
+  AdapterDecision --> NativeAdapters["Native accessible adapters<br/>Dataview, Tasks, Kanban, Templater, LiveSync-aware sync"]
+  NativeAdapters --> AppServices["Flutter app services"]
+  App --> AppServices
+  Vault --> AppServices
+  MetadataCache --> AppServices
+  Workspace --> AppServices
+  Commands --> AppServices
+  Settings --> AppServices
+  MarkdownRenderer --> AppServices
+
+  AppServices --> Audit["Plugin capability audit log<br/>permissions, events, file access, network access"]
