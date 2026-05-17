@@ -45,6 +45,23 @@ impl FsVaultProvider {
     fn resolve(&self, relative: &str) -> Result<PathBuf, VaultError> {
         resolve_relative(&self.root, relative)
     }
+
+    /// Like `resolve`, but rejects paths that resolve to the vault root.
+    ///
+    /// Mutator entry points (`write_file`, `delete`, `rename`) use this
+    /// so that `""` and `"."` cannot trash, overwrite, or move the
+    /// vault directory itself. Read-side operations keep using `resolve`
+    /// because listing/stating the root is well-defined.
+    fn resolve_for_mutation(&self, relative: &str) -> Result<PathBuf, VaultError> {
+        let path = self.resolve(relative)?;
+        if path == self.root {
+            return Err(VaultError::InvalidPath {
+                path: relative.to_string(),
+                reason: "operation would target the vault root".into(),
+            });
+        }
+        Ok(path)
+    }
 }
 
 /// Compute the blake3 hex digest of a byte slice. Used for vault file
@@ -126,21 +143,28 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
-        let path = self.resolve(relative)?;
+        let path = self.resolve_for_mutation(relative)?;
         atomic_write(&path, contents)?;
         Ok(())
     }
 
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
-        let path = self.resolve(relative)?;
-        // Refuse to delete what doesn't exist — surfacing this as Io
-        // (NotFound) rather than silently succeeding.
-        if !path.exists() {
-            return Err(VaultError::Io(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("path does not exist: {}", path.display()),
-            )));
+        let path = self.resolve_for_mutation(relative)?;
+        // `symlink_metadata` uses lstat and does not follow symlinks, so
+        // a broken symlink (a real directory entry whose target is gone)
+        // still passes this guard. `path.exists()` would have hidden it.
+        // Propagate the raw io::Error so permission-denied (etc.)
+        // doesn't get masked as NotFound.
+        let meta = path.symlink_metadata().map_err(VaultError::Io)?;
+
+        // Broken symlinks: some `trash` backends reject dangling links
+        // (macOS routes through Finder, which refuses). The target file
+        // is already gone so there's nothing recoverable to send to the
+        // trash anyway — unlink the dangling entry directly.
+        if meta.file_type().is_symlink() && !path.exists() {
+            return fs::remove_file(&path).map_err(VaultError::Io);
         }
+
         match trash::delete(&path) {
             Ok(()) => Ok(()),
             Err(e) => Err(VaultError::Trash {
@@ -150,8 +174,24 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
-        let from_path = self.resolve(from)?;
-        let to_path = self.resolve(to)?;
+        let from_path = self.resolve_for_mutation(from)?;
+        let to_path = self.resolve_for_mutation(to)?;
+        // Refuse early if the source is missing so we don't leave behind
+        // freshly-minted destination parent directories on a failed move.
+        // `symlink_metadata` (lstat) checks the directory entry itself,
+        // so a broken symlink — still a real entry that `rename(2)` will
+        // happily move — is not mistakenly classified as NotFound, and
+        // other io errors (permission denied, etc.) propagate untouched.
+        match from_path.symlink_metadata() {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(VaultError::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("rename source does not exist: {from}"),
+                )));
+            }
+            Err(e) => return Err(VaultError::Io(e)),
+        }
         if let Some(parent) = to_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -435,5 +475,96 @@ mod tests {
             entries.iter().map(|e| (e.name.as_str(), e.kind)).collect();
         assert_eq!(map.get("target.md"), Some(&EntryKind::File));
         assert_eq!(map.get("link.md"), Some(&EntryKind::Symlink));
+    }
+
+    #[test]
+    fn mutators_refuse_vault_root() {
+        let (tmp, p) = vault();
+        p.write_file("survivor.md", b"hi").unwrap();
+
+        for relative in ["", "."] {
+            let err = p.delete(relative).unwrap_err();
+            assert!(
+                matches!(err, VaultError::InvalidPath { .. }),
+                "delete({relative:?}) should reject vault root, got {err:?}"
+            );
+            let err = p.write_file(relative, b"x").unwrap_err();
+            assert!(
+                matches!(err, VaultError::InvalidPath { .. }),
+                "write_file({relative:?}) should reject vault root, got {err:?}"
+            );
+            let err = p.rename(relative, "elsewhere.md").unwrap_err();
+            assert!(
+                matches!(err, VaultError::InvalidPath { .. }),
+                "rename(from={relative:?}) should reject vault root, got {err:?}"
+            );
+            let err = p.rename("survivor.md", relative).unwrap_err();
+            assert!(
+                matches!(err, VaultError::InvalidPath { .. }),
+                "rename(to={relative:?}) should reject vault root, got {err:?}"
+            );
+        }
+
+        // The vault directory and its sole file are untouched.
+        assert!(tmp.path().is_dir());
+        assert_eq!(p.read_file("survivor.md").unwrap(), b"hi");
+    }
+
+    #[test]
+    fn rename_missing_source_does_not_create_destination_parents() {
+        let (_tmp, p) = vault();
+        let err = p
+            .rename("nope.md", "archive/2026/old.md")
+            .expect_err("missing source should error");
+        match err {
+            VaultError::Io(io) => assert_eq!(io.kind(), io::ErrorKind::NotFound),
+            other => panic!("expected Io NotFound, got {other:?}"),
+        }
+        // The dest tree must not exist — that's the regression we're guarding.
+        let listing = p.list_dir("").unwrap();
+        assert!(
+            listing.is_empty(),
+            "vault root should be empty, found {listing:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_moves_broken_symlink() {
+        let (tmp, p) = vault();
+        std::os::unix::fs::symlink(
+            tmp.path().join("does-not-exist.md"),
+            tmp.path().join("broken.md"),
+        )
+        .unwrap();
+
+        p.rename("broken.md", "still-broken.md")
+            .expect("rename should move the dangling entry");
+
+        assert!(tmp.path().join("broken.md").symlink_metadata().is_err());
+        let moved = tmp
+            .path()
+            .join("still-broken.md")
+            .symlink_metadata()
+            .expect("renamed symlink should be a real entry at the destination");
+        assert!(moved.file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_removes_broken_symlink() {
+        let (tmp, p) = vault();
+        std::os::unix::fs::symlink(
+            tmp.path().join("does-not-exist.md"),
+            tmp.path().join("broken.md"),
+        )
+        .unwrap();
+        // Sanity: the broken link is visible to list_dir but `exists()`
+        // would have hidden it.
+        assert!(!tmp.path().join("broken.md").exists());
+        assert!(tmp.path().join("broken.md").symlink_metadata().is_ok());
+
+        p.delete("broken.md").expect("delete should succeed");
+        assert!(tmp.path().join("broken.md").symlink_metadata().is_err());
     }
 }
