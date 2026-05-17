@@ -20,3 +20,6 @@ path = "src/bin/uniffi-bindgen.rs"
 yana-core = { path = "../yana-core" }
 uniffi = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

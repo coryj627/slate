@@ -73,7 +73,11 @@ func runVaultDemo(rootPath: String) {
         let session = try VaultSession.openFilesystem(rootPath: rootPath)
         print("Vault opened. Scanning…")
 
-        let scanReport = try session.scanInitial()
+        // CancelToken is constructed up-front so a real UI could hand
+        // the same instance to a Cancel button. The CLI never cancels,
+        // but exercising the parameter keeps the FFI shape honest.
+        let cancel = CancelToken()
+        let scanReport = try session.scanInitial(cancel: cancel)
         print(
             "Scan complete: \(scanReport.filesIndexed) files indexed, "
                 + "\(scanReport.bytesProcessed) bytes processed, "
