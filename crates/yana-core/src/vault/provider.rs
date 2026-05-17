@@ -58,6 +58,12 @@ pub struct FileStat {
     pub size_bytes: u64,
     /// Last-modified time as Unix epoch milliseconds.
     pub mtime_ms: i64,
+    /// Inode change time as Unix epoch milliseconds. Unix only; `0` on
+    /// platforms where `std::fs::Metadata` doesn't expose ctime (e.g.
+    /// Windows). Used by the scanner's fast-path to catch
+    /// mtime-preserving copies (`cp -p`, `rsync -a`) that mtime alone
+    /// can't see.
+    pub ctime_ms: i64,
     pub kind: EntryKind,
 }
 

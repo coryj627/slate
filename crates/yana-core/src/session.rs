@@ -404,27 +404,57 @@ fn index_file(
         Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
     );
 
-    // Fast path: if the indexed row's (mtime_ms, size_bytes) already
-    // matches what we just stat'd, assume content is unchanged and
-    // skip the blake3 hash. This is the standard heuristic (used by
-    // ripgrep / git / etc.) — APFS / NTFS / ext4 all carry sub-second
-    // mtime resolution, so a same-instant overwrite with a same-size
-    // payload is rare enough to accept as a tradeoff for the perf
-    // win. We still refresh `indexed_at_ms` so a future stale-row
-    // sweep can tell "the scanner has visited this" from "this row is
-    // orphaned."
-    let existing: Option<(i64, i64)> = tx
+    // Fast path: if the indexed row's (mtime_ms, size_bytes, ctime_ms)
+    // already match what we just stat'd, assume content is unchanged
+    // and skip the blake3 hash. ctime catches the case where mtime is
+    // preserved by the writer (`cp -p`, `rsync -a`, snapshot restore)
+    // — mtime alone would miss those. Pre-migration-002 rows store
+    // ctime_ms = 0, and platforms without portable ctime (Windows)
+    // hand us stat.ctime_ms = 0; in either case the ctime check is
+    // skipped and the fast path keeps its mtime+size semantics. We
+    // still refresh `indexed_at_ms` so a future stale-row sweep can
+    // tell "the scanner has visited this" from "this row is orphaned."
+    let existing: Option<(i64, i64, i64)> = tx
         .query_row(
-            "SELECT mtime_ms, size_bytes FROM files WHERE path = ?1",
+            "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1",
             rusqlite::params![path],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         )
         .optional()?;
-    if let Some((db_mtime_ms, db_size_bytes)) = existing {
-        if db_mtime_ms == stat.mtime_ms && db_size_bytes == stat.size_bytes as i64 {
+    if let Some((db_mtime_ms, db_size_bytes, db_ctime_ms)) = existing {
+        let mtime_size_match =
+            db_mtime_ms == stat.mtime_ms && db_size_bytes == stat.size_bytes as i64;
+        // ctime is an additional axis when both sides have it: it
+        // catches mtime-preserving writes (`cp -p`, `rsync -a`) that
+        // the mtime+size pair alone can't see. When either side is 0
+        // — pre-migration-002 rows, or a platform without portable
+        // ctime — fall back to mtime+size only so the fast path still
+        // works.
+        let ctime_match = stat.ctime_ms == 0 || db_ctime_ms == 0 || db_ctime_ms == stat.ctime_ms;
+        if mtime_size_match && ctime_match {
+            // Update indexed_at_ms unconditionally; update ctime_ms
+            // only when the current stat actually carries one. The
+            // CASE guards against two regressions:
+            //   1. Pre-migration rows have ctime_ms = 0. Without the
+            //      back-fill, they'd keep degrading to mtime+size-
+            //      only semantics forever and miss mtime-preserving
+            //      writes.
+            //   2. Switching a vault between platforms (Linux with
+            //      ctime → Windows without, or a future runtime that
+            //      drops ctime support) must not clobber a known-good
+            //      ctime_ms with a 0 sentinel from the current stat.
             tx.execute(
-                "UPDATE files SET indexed_at_ms = ?1 WHERE path = ?2",
-                rusqlite::params![now, path],
+                "UPDATE files SET
+                    indexed_at_ms = ?1,
+                    ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END
+                 WHERE path = ?3",
+                rusqlite::params![now, stat.ctime_ms, path],
             )?;
             report.files_skipped += 1;
             return Ok(());
@@ -436,14 +466,15 @@ fn index_file(
 
     tx.execute(
         "INSERT INTO files
-            (path, name, extension, size_bytes, mtime_ms, content_hash,
-             parser_version, indexed_at_ms, is_markdown)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+             content_hash, parser_version, indexed_at_ms, is_markdown)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(path) DO UPDATE SET
             name           = excluded.name,
             extension      = excluded.extension,
             size_bytes     = excluded.size_bytes,
             mtime_ms       = excluded.mtime_ms,
+            ctime_ms       = excluded.ctime_ms,
             content_hash   = excluded.content_hash,
             parser_version = excluded.parser_version,
             indexed_at_ms  = excluded.indexed_at_ms,
@@ -454,6 +485,7 @@ fn index_file(
             extension,
             stat.size_bytes as i64,
             stat.mtime_ms,
+            stat.ctime_ms,
             hash,
             parser_version,
             now,
@@ -614,6 +646,42 @@ mod tests {
         }
     }
 
+    /// Wrapper that delegates to `FsVaultProvider` but zeroes
+    /// `stat.ctime_ms`. Used to simulate platforms / filesystems
+    /// without portable ctime access (Windows today).
+    struct ZeroCtimeProvider {
+        inner: FsVaultProvider,
+    }
+
+    impl crate::VaultProvider for ZeroCtimeProvider {
+        fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+            self.inner.list_dir(relative)
+        }
+        fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+            self.inner.read_file(relative)
+        }
+        fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+            self.inner.write_file(relative, contents)
+        }
+        fn delete(&self, relative: &str) -> Result<(), VaultError> {
+            self.inner.delete(relative)
+        }
+        fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+            self.inner.rename(from, to)
+        }
+        fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+            let mut stat = self.inner.stat(relative)?;
+            stat.ctime_ms = 0;
+            Ok(stat)
+        }
+        fn watch(
+            &self,
+            sink: Arc<dyn crate::FileEventSink>,
+        ) -> Result<Option<crate::WatchHandle>, VaultError> {
+            self.inner.watch(sink)
+        }
+    }
+
     #[test]
     fn open_creates_cache_database() {
         let tmp = tempfile::tempdir().unwrap();
@@ -688,9 +756,11 @@ mod tests {
 
     #[test]
     fn rescan_with_changed_mtime_falls_through_to_rehash() {
-        // Same byte count, different content, deliberately spaced so
-        // the second write lands in a different millisecond — proves
-        // the fast-path checks BOTH mtime and size, not just size.
+        // Same byte count, different content. We poll until the FS
+        // actually advances mtime past the original value rather than
+        // assuming a fixed sleep duration is enough — coarse-
+        // resolution filesystems (FAT, HFS+, some SMB mounts) would
+        // make a fixed sleep flaky.
         let (tmp, session) = make_vault(|p| {
             p.write_file("a.md", b"ABCDE").unwrap();
         });
@@ -698,9 +768,9 @@ mod tests {
         assert_eq!(first.files_indexed, 1);
         assert_eq!(first.files_skipped, 0);
 
-        std::thread::sleep(std::time::Duration::from_millis(20));
         let provider = FsVaultProvider::new(tmp.path().to_path_buf());
-        provider.write_file("a.md", b"XYZWQ").unwrap();
+        let original_mtime = provider.stat("a.md").unwrap().mtime_ms;
+        rewrite_until_mtime_advances(&provider, "a.md", b"XYZWQ", original_mtime);
 
         let second = session.scan_initial(&CancelToken::new()).unwrap();
         assert_eq!(
@@ -709,6 +779,253 @@ mod tests {
         );
         assert_eq!(second.files_skipped, 0);
         assert!(second.bytes_processed > 0);
+    }
+
+    /// Repeatedly write a file until its stat'd `mtime_ms` differs from
+    /// `original`. Used by tests that need a guaranteed mtime advance
+    /// without relying on a fixed sleep, which would be flaky on
+    /// filesystems with coarse mtime resolution (FAT, HFS+, some SMB).
+    /// Panics after a generous deadline so a truly stuck FS surfaces
+    /// as a test failure rather than a hang.
+    fn rewrite_until_mtime_advances(
+        provider: &FsVaultProvider,
+        relative: &str,
+        content: &[u8],
+        original: i64,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            provider.write_file(relative, content).unwrap();
+            let now = provider.stat(relative).unwrap().mtime_ms;
+            if now != original {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "mtime did not advance past {original} within 5 s — \
+                     filesystem mtime resolution too coarse for this test"
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rescan_with_mtime_preserved_but_ctime_changed_rehashes() {
+        // The mtime/size heuristic alone misses mtime-preserving
+        // writers like `cp -p` and `rsync -a`. ctime catches them
+        // because the inode change time always bumps when content
+        // (or any inode field) is touched, even if the writer
+        // restores the original mtime afterward. This test simulates
+        // that scenario by writing a same-size payload and then
+        // restoring the original mtime via utimensat — mtime + size
+        // both look unchanged, but ctime advances.
+        use std::os::unix::fs::MetadataExt;
+
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"ABCDE").unwrap();
+        });
+        let _ = session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Capture the original mtime as a (sec, nsec) pair so we can
+        // restore it after the second write.
+        let abs_path = tmp.path().join("a.md");
+        let original_meta = std::fs::metadata(&abs_path).unwrap();
+        let original_atime = filetime_from(original_meta.atime(), original_meta.atime_nsec());
+        let original_mtime = filetime_from(original_meta.mtime(), original_meta.mtime_nsec());
+        let original_ctime_ms = original_meta
+            .ctime()
+            .saturating_mul(1_000)
+            .saturating_add(original_meta.ctime_nsec() / 1_000_000);
+
+        // Wait long enough that ctime is guaranteed to advance past
+        // the original on the next write (1 s = 1_000 ms, well above
+        // any reasonable ctime resolution on the test filesystem).
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("a.md", b"XYZWQ").unwrap();
+        // Restore the original atime/mtime via utimes. ctime cannot
+        // be set from userspace — that's precisely why this test
+        // proves the optimization is robust.
+        set_atime_mtime(&abs_path, original_atime, original_mtime);
+
+        let after_meta = std::fs::metadata(&abs_path).unwrap();
+        let after_mtime_ms = after_meta
+            .mtime()
+            .saturating_mul(1_000)
+            .saturating_add(after_meta.mtime_nsec() / 1_000_000);
+        let after_ctime_ms = after_meta
+            .ctime()
+            .saturating_mul(1_000)
+            .saturating_add(after_meta.ctime_nsec() / 1_000_000);
+        assert_eq!(
+            after_mtime_ms,
+            original_mtime
+                .0
+                .saturating_mul(1_000)
+                .saturating_add(original_mtime.1 as i64 / 1_000_000),
+            "test precondition: mtime should be restored to its original value",
+        );
+        assert!(
+            after_ctime_ms > original_ctime_ms,
+            "test precondition: ctime should have advanced past the original"
+        );
+
+        let second = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(
+            second.files_indexed, 1,
+            "ctime changed → must re-hash even though mtime and size match"
+        );
+        assert_eq!(second.files_skipped, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fast_path_backfills_ctime_for_pre_migration_rows() {
+        // Simulate the upgrade path: a vault scanned before migration
+        // 002 has rows with `ctime_ms = 0`. After migration runs and
+        // the rescan hits the fast path, we want ctime to be
+        // backfilled from the current stat — otherwise these rows
+        // would degrade to mtime+size-only forever and miss mtime-
+        // preserving writes that the ctime optimization is supposed
+        // to catch.
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"ABCDE").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Force the row into the pre-migration shape.
+        let db_path = tmp.path().join(".yana").join("cache.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("UPDATE files SET ctime_ms = 0", []).unwrap();
+            let zeroed: i64 = conn
+                .query_row(
+                    "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(zeroed, 0, "test precondition: row is in legacy shape");
+        }
+
+        // Unchanged file → fast path hits → backfill should write the
+        // real ctime even though we skipped the read+hash.
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_skipped, 1);
+        assert_eq!(report.files_indexed, 0);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let ctime_ms: i64 = conn
+            .query_row(
+                "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            ctime_ms > 0,
+            "fast-path UPDATE should backfill ctime_ms from stat, got {ctime_ms}"
+        );
+    }
+
+    #[test]
+    fn fast_path_does_not_clobber_known_ctime_when_stat_returns_zero() {
+        // Scenario: a vault scanned on a platform that supports ctime
+        // (rows carry real ctime_ms values) is later reopened by a
+        // provider that returns ctime_ms = 0 from stat — the path the
+        // Windows / no-ctime build would take. The fast-path UPDATE
+        // must NOT zero out the known-good column.
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join(".yana");
+        let db_path = cache_dir.join("cache.sqlite");
+
+        // First pass: populate the index using the real provider so
+        // ctime_ms ends up non-zero (on Unix).
+        {
+            let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+            provider.write_file("a.md", b"alpha").unwrap();
+            let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+            session.scan_initial(&CancelToken::new()).unwrap();
+            drop(session);
+        }
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let initial_ctime_ms: i64 = conn
+            .query_row(
+                "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+        // Skip on platforms where the real provider also returns 0
+        // — the assertion would be vacuous.
+        if initial_ctime_ms == 0 {
+            return;
+        }
+
+        // Second pass: re-open with a provider that hands back
+        // ctime_ms = 0. The fast-path should hit (mtime+size match)
+        // and refresh indexed_at_ms WITHOUT zeroing ctime_ms.
+        let session = VaultSession::open(
+            Arc::new(ZeroCtimeProvider {
+                inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+            }),
+            SessionConfig::new(cache_dir.clone()),
+        )
+        .unwrap();
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_skipped, 1);
+        assert_eq!(report.files_indexed, 0);
+        drop(session);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let after_ctime_ms: i64 = conn
+            .query_row(
+                "SELECT ctime_ms FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after_ctime_ms, initial_ctime_ms,
+            "fast-path UPDATE must not clobber a known-good ctime_ms with a 0 sentinel"
+        );
+    }
+
+    #[cfg(unix)]
+    fn filetime_from(secs: i64, nanos: i64) -> (i64, u32) {
+        (secs, nanos as u32)
+    }
+
+    #[cfg(unix)]
+    fn set_atime_mtime(path: &std::path::Path, atime: (i64, u32), mtime: (i64, u32)) {
+        // Use the libc `utimensat` syscall directly so we don't pull
+        // in a `filetime` dev-dependency just for one Unix-only test.
+        use std::ffi::CString;
+        let cpath = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        let times = [
+            libc::timespec {
+                tv_sec: atime.0 as libc::time_t,
+                tv_nsec: atime.1 as libc::c_long,
+            },
+            libc::timespec {
+                tv_sec: mtime.0 as libc::time_t,
+                tv_nsec: mtime.1 as libc::c_long,
+            },
+        ];
+        // SAFETY: cpath is a NUL-terminated path; times is a fixed
+        // two-element array as the API requires; flags=0 means "follow
+        // symlinks", consistent with the rest of FsVaultProvider.
+        let rc = unsafe { libc::utimensat(libc::AT_FDCWD, cpath.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(
+            rc,
+            0,
+            "utimensat failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     #[test]
