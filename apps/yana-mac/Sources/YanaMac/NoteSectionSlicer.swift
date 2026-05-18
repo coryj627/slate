@@ -23,7 +23,16 @@ struct NoteSection: Equatable {
 /// isn't actually a heading) are folded into the body of the prior
 /// section — same fallback as a plain paragraph line.
 func sliceIntoSections(text: String, headings: [Heading]) -> [NoteSection] {
-    let lines = text.components(separatedBy: "\n")
+    // Normalize CRLF + bare CR to LF before splitting. CommonMark
+    // §2.3 treats all three line-ending forms as identical, and so
+    // does pulldown_cmark on the Rust side — without this step a
+    // Windows-saved file would leave a trailing `\r` on every line
+    // (so `# Title\r` !== scanner's `"Title"`) and the slicer would
+    // fall through into one giant unanchored section.
+    let normalized = text
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+    let lines = normalized.components(separatedBy: "\n")
     var sections: [NoteSection] = []
     var current = NoteSection(heading: nil, anchorId: "__preamble", body: "")
     var bodyBuf: [String] = []
