@@ -350,6 +350,9 @@ pub enum ScanProgress {
         report: ScanReport,
     },
     Cancelled,
+    Failed {
+        message: String,
+    },
 }
 
 impl From<core::ScanProgress> for ScanProgress {
@@ -369,6 +372,7 @@ impl From<core::ScanProgress> for ScanProgress {
                 report: report.into(),
             },
             core::ScanProgress::Cancelled => ScanProgress::Cancelled,
+            core::ScanProgress::Failed { message } => ScanProgress::Failed { message },
         }
     }
 }

@@ -228,12 +228,17 @@ pub trait ScanProgressListener: Send + Sync {
 
 /// Incremental events emitted during a scan.
 ///
-/// Listeners always see `Started` first, followed by a `FileIndexed`
-/// for every Markdown / data file the scanner visits (both slow path
-/// and fast path), and then exactly one terminal event:
-/// `Finished { report }` on success, `Cancelled` if cancellation
-/// fires mid-scan. Listeners can rely on always seeing a terminal
-/// event — no half-finished streams.
+/// Once `Started` fires, the listener is guaranteed exactly one
+/// terminal event:
+/// - `Finished { report }` on success.
+/// - `Cancelled` if cancellation fires after `Started`.
+/// - `Failed { message }` on any non-cancellation error after
+///   `Started` (typically a SQLite commit failure).
+///
+/// Errors that happen *before* `Started` (e.g. a pre-cancel, or the
+/// initial `conn.transaction()` failing) return through the caller's
+/// `Result` without emitting any listener event, since the stream
+/// hadn't actually started.
 #[derive(Debug, Clone)]
 pub enum ScanProgress {
     /// Scan is about to begin. `total_files` is the count of file-
@@ -253,9 +258,14 @@ pub enum ScanProgress {
     /// Scan completed normally. `report` is the same value the
     /// caller will see returned from `scan_initial`.
     Finished { report: ScanReport },
-    /// Scan was cancelled before completion. Caller's `scan_initial`
+    /// Scan was cancelled after `Started`. Caller's `scan_initial`
     /// returns `Err(VaultError::Cancelled)`.
     Cancelled,
+    /// Scan aborted after `Started` for a non-cancellation reason —
+    /// almost always a SQLite commit failure. `message` is a
+    /// human-readable summary; the same underlying error is also
+    /// returned through the caller's `Result`.
+    Failed { message: String },
 }
 
 // --- The session ---
@@ -435,10 +445,11 @@ fn scan_vault(
     cancel: &CancelToken,
     listener: Option<&dyn ScanProgressListener>,
 ) -> Result<ScanReport, VaultError> {
-    /// Helper that fires `Cancelled` to the listener (if any) right
-    /// before returning the cancellation error. Used at every cancel-
-    /// check site so listeners always see a terminal event.
-    macro_rules! bail_cancelled {
+    /// Fires `Cancelled` to the listener and returns Err. Only
+    /// valid AFTER `Started` has been emitted — see the contract on
+    /// `ScanProgress`. Pre-Started cancellation paths return Err
+    /// directly without touching the listener.
+    macro_rules! bail_cancelled_after_started {
         () => {{
             if let Some(l) = listener {
                 l.on_progress(ScanProgress::Cancelled);
@@ -447,10 +458,11 @@ fn scan_vault(
         }};
     }
 
-    // Bail before opening a write transaction so a pre-cancelled token
-    // doesn't pay SQLite's open-tx cost.
+    // Pre-Started cancel check: no listener calls yet because the
+    // stream hasn't started. Same for a Cancel from count_files
+    // below.
     if cancel.is_cancelled() {
-        bail_cancelled!();
+        return Err(VaultError::Cancelled);
     }
 
     // Pre-pass: count the files we'll visit so the listener can show
@@ -458,25 +470,24 @@ fn scan_vault(
     // event. The FS may change between this count and the main scan
     // — that's allowed by the contract (the spec calls out best-
     // effort totals).
-    let total_files = match count_files(provider, cancel) {
-        Ok(n) => n,
-        Err(VaultError::Cancelled) => bail_cancelled!(),
-        Err(e) => return Err(e),
-    };
-
-    if let Some(l) = listener {
-        l.on_progress(ScanProgress::Started { total_files });
-    }
+    let total_files = count_files(provider, cancel)?;
 
     let mut report = ScanReport::default();
     let now = now_ms();
+    // Open the transaction *before* emitting Started so a tx-open
+    // failure can't leave listeners stuck waiting for a terminal
+    // event. If conn.transaction() fails here, the listener has
+    // observed nothing and the error flows through the Result.
     let tx = conn.transaction()?;
+    if let Some(l) = listener {
+        l.on_progress(ScanProgress::Started { total_files });
+    }
     let mut indexed_count: u64 = 0;
 
     let mut stack: Vec<String> = vec![String::new()];
     while let Some(dir) = stack.pop() {
         if cancel.is_cancelled() {
-            bail_cancelled!();
+            bail_cancelled_after_started!();
         }
 
         let entries = match provider.list_dir(&dir) {
@@ -492,7 +503,7 @@ fn scan_vault(
             // middle of a flat directory of many large files doesn't
             // wait for the whole directory to finish hashing.
             if cancel.is_cancelled() {
-                bail_cancelled!();
+                bail_cancelled_after_started!();
             }
 
             // Skip hidden files/directories. `.yana` (our cache) and
@@ -548,7 +559,19 @@ fn scan_vault(
         }
     }
 
-    tx.commit()?;
+    // Commit can still fail (disk full, file corruption). If it
+    // does, the listener has already seen `Started` and N
+    // `FileIndexed`s — fire `Failed` before propagating the error
+    // so the stream's terminal-event contract holds.
+    if let Err(e) = tx.commit() {
+        let message = e.to_string();
+        if let Some(l) = listener {
+            l.on_progress(ScanProgress::Failed {
+                message: message.clone(),
+            });
+        }
+        return Err(VaultError::from(e));
+    }
     if let Some(l) = listener {
         l.on_progress(ScanProgress::Finished {
             report: report.clone(),
@@ -2024,7 +2047,12 @@ mod tests {
     }
 
     #[test]
-    fn scan_progress_emits_cancelled_when_pre_cancelled() {
+    fn scan_progress_pre_started_cancel_emits_no_events() {
+        // A token that's already cancelled at scan_initial entry
+        // means the stream never starts — listener observes no
+        // events at all, just the Err(Cancelled) return value.
+        // This is the deliberate "Started gates the contract" shape
+        // documented on ScanProgress.
         let (_tmp, session) = make_vault(|p| {
             p.write_file("a.md", b"# a").unwrap();
         });
@@ -2038,12 +2066,10 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, VaultError::Cancelled));
-
-        let events = listener.snapshot();
-        // Pre-cancellation fires before any work — listener sees
-        // exactly one Cancelled event and no Started.
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], ScanProgress::Cancelled));
+        assert!(
+            listener.snapshot().is_empty(),
+            "pre-Started cancel must not emit any listener events"
+        );
     }
 
     #[test]
