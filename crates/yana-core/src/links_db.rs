@@ -256,13 +256,19 @@ pub(crate) fn backlinks_for(
         |row| row.get::<_, i64>(0),
     )? as u64;
 
-    let next_cursor = if rows.len() > limit as usize {
-        rows.get(limit as usize)
+    // Cursor derives from the LAST returned item (not the lookahead
+    // row at index `limit`). The next page's WHERE clause is
+    // `path > ? OR (path = ? AND ordinal > ?)` — exclusive of the
+    // cursor's row — so encoding the lookahead row would skip it.
+    let has_more = rows.len() > limit as usize;
+    let items: Vec<Backlink> = rows.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_more {
+        items
+            .last()
             .map(|row| encode_backlink_cursor(&row.source_path, row.ordinal))
     } else {
         None
     };
-    let items: Vec<Backlink> = rows.into_iter().take(limit as usize).collect();
     Ok(Page {
         items,
         next_cursor,
@@ -315,13 +321,17 @@ pub(crate) fn unresolved_links(
         |row| row.get::<_, i64>(0),
     )? as u64;
 
-    let next_cursor = if rows.len() > limit as usize {
-        rows.get(limit as usize)
+    // Cursor derives from the LAST returned item, not the lookahead
+    // row — see backlinks_for for the off-by-one rationale.
+    let has_more = rows.len() > limit as usize;
+    let items: Vec<UnresolvedLink> = rows.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_more {
+        items
+            .last()
             .map(|row| encode_backlink_cursor(&row.source_path, row.ordinal))
     } else {
         None
     };
-    let items: Vec<UnresolvedLink> = rows.into_iter().take(limit as usize).collect();
     Ok(Page {
         items,
         next_cursor,

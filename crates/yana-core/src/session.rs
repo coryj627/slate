@@ -2461,6 +2461,54 @@ mod tests {
     }
 
     #[test]
+    fn backlinks_pagination_round_trips_without_gaps_or_duplicates() {
+        // Regression for the Codoki callout on PR 78: an earlier
+        // implementation derived next_cursor from the lookahead row,
+        // which skipped one item per page boundary. With the fix the
+        // union of paged items must equal the full set.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/target.md", b"# Target").unwrap();
+            for i in 0..7 {
+                p.write_file(
+                    &format!("notes/src{:02}.md", i),
+                    format!("see [[target]] now {i}").as_bytes(),
+                )
+                .unwrap();
+            }
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let limit: u32 = 3;
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let paging = match &cursor {
+                Some(c) => Paging::after(c.clone(), limit),
+                None => Paging::first(limit),
+            };
+            let page = session.backlinks("notes/target.md", paging).unwrap();
+            for backlink in &page.items {
+                seen.push(backlink.source_path.clone());
+            }
+            if let Some(next) = page.next_cursor {
+                cursor = Some(next);
+            } else {
+                break;
+            }
+        }
+        let mut expected: Vec<String> = (0..7).map(|i| format!("notes/src{:02}.md", i)).collect();
+        expected.sort();
+        let mut seen_sorted = seen.clone();
+        seen_sorted.sort();
+        assert_eq!(seen_sorted, expected, "paging dropped/duplicated rows");
+        // No duplicates check (above-sorted equality already enforces
+        // count + identity, but the explicit assertion makes the
+        // intent obvious).
+        let unique: std::collections::HashSet<_> = seen.iter().collect();
+        assert_eq!(unique.len(), seen.len(), "duplicate rows across pages");
+    }
+
+    #[test]
     fn link_anchor_passes_through_to_outgoing() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file("notes/source.md", b"see [[Alpha#Intro]]")
