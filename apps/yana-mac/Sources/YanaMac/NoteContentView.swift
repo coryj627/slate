@@ -140,10 +140,18 @@ struct NoteContentView: View {
     /// string, which is fine because the heading-rotor experience only
     /// needs *the* heading to be a navigable element — the body just
     /// needs to be in the right scroll position.
+    ///
+    /// Plain `VStack` (not `LazyVStack`): on macOS, `LazyVStack` is
+    /// backed by `NSCollectionView`, which the AX bridge exposes as
+    /// a list/collection. VoiceOver then announces the note content
+    /// container as "list" — wrong for a prose document. `VStack`
+    /// maps to `AXGroup`. Note content is small enough (handful of
+    /// sections per file) that eager layout is fine — `Text` only
+    /// rasterizes the visible portion of the ScrollView anyway.
     @ViewBuilder
     private func sectionedContent(_ text: String, headings: [Heading]) -> some View {
         let sections = sliceIntoSections(text: text, headings: headings)
-        LazyVStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(sections, id: \.anchorId) { section in
                 sectionView(section)
             }
