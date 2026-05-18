@@ -91,6 +91,18 @@ pub(crate) fn properties_for_file(
 /// `value` (case-insensitive). For list and tag_list properties,
 /// each element is searched independently via SQLite's
 /// `json_each` — matching any element counts as a hit on the file.
+///
+/// Matching semantics for atomic kinds:
+///   - text / date / datetime / wikilink: case-insensitive string
+///     equality against the unwrapped value.
+///   - number: numeric equality via SQLite's coercion (so `"42"` and
+///     `42` both match the stored `42`).
+///   - boolean: matches `"true"` / `"false"` against the stored JSON
+///     literal (also tolerates `"1"` / `"0"` because the JSON-extract
+///     branch coerces booleans to integers).
+///
+/// Non-finite floats are stored as JSON strings (NaN/Inf aren't legal
+/// JSON numbers); they're searchable via their string form.
 pub(crate) fn files_with_property(
     conn: &Connection,
     key: &str,
@@ -101,10 +113,15 @@ pub(crate) fn files_with_property(
     let after_path = paging.cursor.clone();
     let target = value.to_lowercase();
 
-    // The same file can match multiple times if it has more than one
-    // matching list element under the same key. DISTINCT keeps the
-    // result set deduped at the file level so paging stays
-    // predictable.
+    // Two OR branches against atomic value_text:
+    //   1. `lower(json_extract(value_text, '$')) = target` — unwraps
+    //      JSON strings/numbers/dates so "foo" matches `"foo"`.
+    //      Doesn't work for booleans because json_extract coerces
+    //      `true` / `false` to integer 1 / 0.
+    //   2. `lower(value_text) = target` — matches the raw stored
+    //      JSON literal. Catches the boolean case (value_text =
+    //      `true`) and is also a safe fallback if json_extract ever
+    //      surprises us with a new edge case.
     let sql = "SELECT DISTINCT files.path, files.name, files.mtime_ms,
                               files.size_bytes, files.is_markdown
                FROM files
@@ -114,7 +131,10 @@ pub(crate) fn files_with_property(
                WHERE p.key = ?1
                  AND (
                      (p.value_kind NOT IN ('list', 'tag_list')
-                      AND lower(IFNULL(json_extract(p.value_text, '$'), p.value_text)) = ?2)
+                      AND (
+                          lower(IFNULL(json_extract(p.value_text, '$'), p.value_text)) = ?2
+                          OR lower(p.value_text) = ?2
+                      ))
                      OR (p.value_kind IN ('list', 'tag_list')
                          AND lower(elem.value) = ?2)
                  )
@@ -144,7 +164,10 @@ pub(crate) fn files_with_property(
          WHERE p.key = ?1
            AND (
                (p.value_kind NOT IN ('list', 'tag_list')
-                AND lower(IFNULL(json_extract(p.value_text, '$'), p.value_text)) = ?2)
+                AND (
+                    lower(IFNULL(json_extract(p.value_text, '$'), p.value_text)) = ?2
+                    OR lower(p.value_text) = ?2
+                ))
                OR (p.value_kind IN ('list', 'tag_list')
                    AND lower(elem.value) = ?2)
            )",

@@ -2659,6 +2659,104 @@ mod tests {
     }
 
     #[test]
+    fn files_with_property_matches_boolean_value() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/published.md", b"---\npublished: true\n---\nbody")
+                .unwrap();
+            p.write_file("notes/draft.md", b"---\npublished: false\n---\nbody")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .files_with_property("published", "true", Paging::first(100))
+            .unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/published.md"]
+        );
+        let page = session
+            .files_with_property("published", "false", Paging::first(100))
+            .unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/draft.md"]
+        );
+    }
+
+    #[test]
+    fn files_with_property_matches_numeric_value() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/p1.md", b"---\npriority: 1\n---\n")
+                .unwrap();
+            p.write_file("notes/p2.md", b"---\npriority: 2\n---\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .files_with_property("priority", "1", Paging::first(100))
+            .unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/p1.md"]
+        );
+    }
+
+    #[test]
+    fn files_with_property_pagination_dedupes_multi_match_files() {
+        // Regression for the Codoki PR-82 callout: a single file
+        // with multiple list-element matches under the same key must
+        // be counted exactly once across the paged results, with
+        // cursor-driven pagination yielding every file once with no
+        // duplicates.
+        let (_tmp, session) = make_vault(|p| {
+            for letter in ["a", "b", "c", "d", "e"] {
+                p.write_file(
+                    &format!("notes/{}.md", letter),
+                    // Same tag appears twice in the list so each
+                    // file produces two json_each rows; DISTINCT
+                    // must collapse them.
+                    b"---\ntags:\n  - common\n  - common-alias\n  - common\n---\n",
+                )
+                .unwrap();
+            }
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let paging = match &cursor {
+                Some(c) => Paging::after(c.clone(), 2),
+                None => Paging::first(2),
+            };
+            let page = session
+                .files_with_property("tags", "common", paging)
+                .unwrap();
+            for f in &page.items {
+                seen.push(f.path.clone());
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let expected: Vec<String> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|s| format!("notes/{}.md", s))
+            .collect();
+        assert_eq!(seen, expected, "paging dropped or duplicated rows");
+    }
+
+    #[test]
     fn files_without_frontmatter_have_empty_properties() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file("notes/plain.md", b"# heading only\n").unwrap();
