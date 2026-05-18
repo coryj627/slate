@@ -11,12 +11,20 @@ struct MainSplitView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
+        // Each column gets its own .accessibilityLabel so VoiceOver
+        // announces meaningful names when the user navigates between
+        // panes (Cmd+Opt+arrow on macOS) instead of falling back to the
+        // mangled NSHostingView type names that the Accessibility
+        // Inspector flagged with "Element has no description".
         NavigationSplitView {
             FileListSidebar()
+                .accessibilityLabel("Files sidebar")
         } content: {
             NoteContentView()
+                .accessibilityLabel("Note content pane")
         } detail: {
             OutlineSidebar()
+                .accessibilityLabel("Outline sidebar")
         }
         .navigationTitle(vaultTitle)
         .toolbar {
