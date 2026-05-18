@@ -166,6 +166,91 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isScanning)
     }
 
+    func testSelectingAFileLoadsItsContent() async throws {
+        let vault = tempDir.appendingPathComponent("read-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# Hello, vault\n\nSome body text.".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("hello.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "hello.md"
+        await state.noteLoadTask?.value
+
+        XCTAssertEqual(state.currentNoteText, "# Hello, vault\n\nSome body text.")
+        XCTAssertNil(state.noteLoadError)
+        XCTAssertFalse(state.isLoadingNote)
+    }
+
+    func testSelectingNilClearsCurrentNoteText() async throws {
+        let vault = tempDir.appendingPathComponent("clear-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        XCTAssertNotNil(state.currentNoteText)
+
+        // Deselecting clears the content immediately (the observer
+        // runs synchronously inside the @Published .sink).
+        state.selectedFilePath = nil
+        XCTAssertNil(state.currentNoteText)
+        XCTAssertNil(state.noteLoadError)
+    }
+
+    func testInvalidUtf8NoteSurfacesAsNoteLoadError() async throws {
+        let vault = tempDir.appendingPathComponent("utf8-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        // Valid heading followed by an invalid UTF-8 continuation
+        // byte. The strict-decode read_text path returns InvalidUtf8;
+        // AppState's note load translates that into a user-readable
+        // string on `noteLoadError`.
+        var bytes: [UInt8] = Array("# heading\n".utf8)
+        bytes.append(0xFF)
+        let data = Data(bytes)
+        try data.write(to: vault.appendingPathComponent("bad.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "bad.md"
+        await state.noteLoadTask?.value
+
+        XCTAssertNil(state.currentNoteText)
+        XCTAssertNotNil(state.noteLoadError)
+        XCTAssertTrue(
+            state.noteLoadError?.contains("UTF-8") == true,
+            "expected UTF-8 in error message, got \(String(describing: state.noteLoadError))"
+        )
+    }
+
+    func testCloseVaultClearsNoteState() async throws {
+        let vault = tempDir.appendingPathComponent("note-close-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        XCTAssertNotNil(state.currentNoteText)
+
+        state.closeVault()
+
+        XCTAssertNil(state.currentNoteText)
+        XCTAssertNil(state.noteLoadError)
+        XCTAssertFalse(state.isLoadingNote)
+    }
+
     func testRemoveRecentDropsEntryAndPersists() throws {
         let keeper = RecentVault(path: "/tmp/keep", displayName: "keep", lastOpenedMs: 1)
         let goner = RecentVault(path: "/tmp/gone", displayName: "gone", lastOpenedMs: 2)
