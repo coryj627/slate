@@ -68,6 +68,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "links: per-file outgoing links",
         sql: include_str!("../migrations/004_links.sql"),
     },
+    Migration {
+        description: "properties: per-file frontmatter properties",
+        sql: include_str!("../migrations/005_properties.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with YANA's standard PRAGMAs.

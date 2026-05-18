@@ -223,6 +223,21 @@ impl VaultSession {
         let page = self.inner.list_unresolved_links(paging.into())?;
         Ok(page.into())
     }
+
+    /// Paged list of files whose frontmatter contains property `key`
+    /// with a value matching `value` (case-insensitive). For list /
+    /// tag_list properties, each element is searched independently.
+    pub fn files_with_property(
+        &self,
+        key: String,
+        value: String,
+        paging: Paging,
+    ) -> Result<FileSummaryPage, VaultError> {
+        let page = self
+            .inner
+            .files_with_property(&key, &value, paging.into())?;
+        Ok(page.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -301,6 +316,93 @@ pub struct FileSummary {
     pub is_markdown: bool,
 }
 
+/// One frontmatter property as exposed across the FFI boundary.
+///
+/// `kind` is one of `"text"`, `"number"`, `"boolean"`, `"date"`,
+/// `"datetime"`, `"wikilink"`, `"list"`, `"tag_list"`. `value_json`
+/// is the JSON-encoded value the storage layer round-trips through
+/// SQLite — atomic kinds get the literal form (`"foo"`, `42`, `true`,
+/// `"2024-01-02"`), list / tag_list get JSON arrays. The Swift /
+/// Kotlin side decodes via the platform's JSON parser, which keeps
+/// the FFI surface trivially-derived and avoids re-implementing
+/// recursive enums across uniffi.
+#[derive(uniffi::Record)]
+pub struct Property {
+    pub key: String,
+    pub kind: String,
+    pub value_json: String,
+}
+
+impl From<core::Property> for Property {
+    fn from(p: core::Property) -> Self {
+        let (kind, value_json) = encode_property(&p.value);
+        Self {
+            key: p.key,
+            kind: kind.to_string(),
+            value_json,
+        }
+    }
+}
+
+/// FFI-side encoder. Mirrors the SQLite encoding in
+/// `properties_db::serialize_value` so a property loaded from the
+/// DB and a property freshly parsed at boundary-crossing time
+/// produce identical wire-format strings.
+fn encode_property(value: &core::PropertyValue) -> (&'static str, String) {
+    use core::PropertyValue;
+    use serde_json::Value as J;
+    let v: J = match value {
+        PropertyValue::Text(s) => J::String(s.clone()),
+        PropertyValue::Integer(i) => J::from(*i),
+        PropertyValue::Float(f) => {
+            if f.is_finite() {
+                J::from(*f)
+            } else {
+                J::String(f.to_string())
+            }
+        }
+        PropertyValue::Boolean(b) => J::Bool(*b),
+        PropertyValue::Date(s) | PropertyValue::Datetime(s) | PropertyValue::Wikilink(s) => {
+            J::String(s.clone())
+        }
+        PropertyValue::List(items) => J::Array(items.iter().map(encode_inner).collect()),
+        PropertyValue::TagList(tags) => J::Array(tags.iter().cloned().map(J::String).collect()),
+    };
+    let kind = match value {
+        PropertyValue::Text(_) => "text",
+        PropertyValue::Integer(_) | PropertyValue::Float(_) => "number",
+        PropertyValue::Boolean(_) => "boolean",
+        PropertyValue::Date(_) => "date",
+        PropertyValue::Datetime(_) => "datetime",
+        PropertyValue::Wikilink(_) => "wikilink",
+        PropertyValue::List(_) => "list",
+        PropertyValue::TagList(_) => "tag_list",
+    };
+    (kind, v.to_string())
+}
+
+fn encode_inner(value: &core::PropertyValue) -> serde_json::Value {
+    use core::PropertyValue;
+    use serde_json::Value as J;
+    match value {
+        PropertyValue::Text(s) => J::String(s.clone()),
+        PropertyValue::Integer(i) => J::from(*i),
+        PropertyValue::Float(f) => {
+            if f.is_finite() {
+                J::from(*f)
+            } else {
+                J::String(f.to_string())
+            }
+        }
+        PropertyValue::Boolean(b) => J::Bool(*b),
+        PropertyValue::Date(s) | PropertyValue::Datetime(s) | PropertyValue::Wikilink(s) => {
+            J::String(s.clone())
+        }
+        PropertyValue::List(items) => J::Array(items.iter().map(encode_inner).collect()),
+        PropertyValue::TagList(tags) => J::Array(tags.iter().cloned().map(J::String).collect()),
+    }
+}
+
 /// Full per-file metadata returned by `get_file_metadata`.
 #[derive(uniffi::Record)]
 pub struct FileMetadata {
@@ -311,6 +413,7 @@ pub struct FileMetadata {
     pub is_markdown: bool,
     pub content_hash: String,
     pub headings: Vec<Heading>,
+    pub properties: Vec<Property>,
 }
 
 impl From<core::FileMetadata> for FileMetadata {
@@ -323,6 +426,7 @@ impl From<core::FileMetadata> for FileMetadata {
             is_markdown: m.is_markdown,
             content_hash: m.content_hash,
             headings: m.headings.into_iter().map(Into::into).collect(),
+            properties: m.properties.into_iter().map(Into::into).collect(),
         }
     }
 }

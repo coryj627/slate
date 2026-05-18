@@ -119,9 +119,14 @@ pub struct FileSummary {
 // --- Metadata type ---
 
 /// Full per-file metadata: the summary fields plus parsed structure
-/// (headings today; properties and links join the type as later
-/// milestones land).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// (headings + frontmatter properties; links join the type as a
+/// later milestone if needed).
+///
+/// Manual `PartialEq` (rather than derived) because
+/// `crate::PropertyValue::Float` contains an `f64`, and `f64`
+/// doesn't implement `Eq`. PartialEq is enough for the test paths
+/// that consume FileMetadata.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileMetadata {
     pub path: String,
     pub name: String,
@@ -130,6 +135,7 @@ pub struct FileMetadata {
     pub is_markdown: bool,
     pub content_hash: String,
     pub headings: Vec<crate::Heading>,
+    pub properties: Vec<crate::Property>,
 }
 
 // --- Paging ---
@@ -460,6 +466,20 @@ impl VaultSession {
     ) -> Result<Page<crate::UnresolvedLink>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::links_db::unresolved_links(&conn, paging)
+    }
+
+    /// Paged list of files whose frontmatter contains property `key`
+    /// with a value matching `value` (case-insensitive). For list /
+    /// tag_list properties, each element is searched independently —
+    /// matching any element counts as a hit on the file.
+    pub fn files_with_property(
+        &self,
+        key: &str,
+        value: &str,
+        paging: Paging,
+    ) -> Result<Page<FileSummary>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::properties_db::files_with_property(&conn, key, value, paging)
     }
 
     /// Accessor for the underlying config. Useful for hosts that want to
@@ -817,6 +837,9 @@ fn index_file(
         // link whose target hasn't been indexed yet is written with
         // target_path = NULL and re-resolved by the post-scan pass.
         crate::links_db::replace_links_for_file(tx, file_id, path, &text, vault_index)?;
+        // Frontmatter properties: same transaction so headings,
+        // links, and properties commit atomically with the file row.
+        crate::properties_db::replace_properties_for_file(tx, file_id, &text)?;
     }
 
     report.files_indexed += 1;
@@ -907,6 +930,12 @@ fn get_file_metadata_impl(
         .collect();
     let headings = headings?;
 
+    // Frontmatter properties are loaded after headings so a stale or
+    // empty properties table (e.g. pre-migration-005 rows) doesn't
+    // hold up the metadata read; same-transaction guarantees on the
+    // write path mean both arrays always reflect the same parse.
+    let properties = crate::properties_db::properties_for_file(conn, file_id)?;
+
     Ok(Some(FileMetadata {
         path,
         name,
@@ -915,6 +944,7 @@ fn get_file_metadata_impl(
         is_markdown: is_markdown != 0,
         content_hash,
         headings,
+        properties,
     }))
 }
 
@@ -2527,5 +2557,117 @@ mod tests {
             outgoing[0].target_anchor.as_ref().map(|(_, v)| v.as_str()),
             Some("Intro")
         );
+    }
+
+    // --- Properties table integration (closes #54) ---
+
+    #[test]
+    fn get_file_metadata_returns_properties_in_document_order() {
+        let body = "---\ntitle: My Note\ntags:\n  - alpha\n  - beta\npublished: true\n---\n# body";
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/note.md", body.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let md = session.get_file_metadata("notes/note.md").unwrap().unwrap();
+        let keys: Vec<&str> = md.properties.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, vec!["title", "tags", "published"]);
+    }
+
+    #[test]
+    fn files_with_property_matches_atomic_value_case_insensitively() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/match.md", b"---\nauthor: Alice\n---\nbody")
+                .unwrap();
+            p.write_file("notes/other.md", b"---\nauthor: Bob\n---\nbody")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .files_with_property("author", "alice", Paging::first(100))
+            .unwrap();
+        let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["notes/match.md"]);
+        assert_eq!(page.total_filtered, 1);
+    }
+
+    #[test]
+    fn files_with_property_matches_inside_tag_list() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/a.md", b"---\ntags:\n  - alpha\n  - beta\n---\n")
+                .unwrap();
+            p.write_file("notes/b.md", b"---\ntags:\n  - gamma\n---\n")
+                .unwrap();
+            p.write_file("notes/c.md", b"---\ntags:\n  - beta\n---\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .files_with_property("tags", "beta", Paging::first(100))
+            .unwrap();
+        let mut paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["notes/a.md", "notes/c.md"]);
+    }
+
+    #[test]
+    fn rescan_with_changed_frontmatter_rewrites_properties() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("notes/note.md", b"---\nstatus: draft\n---\nbody")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let md = session.get_file_metadata("notes/note.md").unwrap().unwrap();
+        assert_eq!(md.properties[0].key, "status");
+
+        // Change the property + body so the scanner picks it up via
+        // the content-hash fast-path miss.
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file(
+                "notes/note.md",
+                b"---\nstatus: published\n---\nbody changed",
+            )
+            .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let md = session.get_file_metadata("notes/note.md").unwrap().unwrap();
+        assert_eq!(md.properties.len(), 1);
+        // Value changed from draft → published. We don't care about
+        // the exact internal representation, just that the new value
+        // is reflected.
+        match &md.properties[0].value {
+            crate::PropertyValue::Text(s) => assert_eq!(s, "published"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fast_path_does_not_rewrite_properties() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/note.md", b"---\ntitle: Stable\n---\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let before = session.get_file_metadata("notes/note.md").unwrap().unwrap();
+        assert_eq!(before.properties.len(), 1);
+
+        // Second scan with no file changes: fast path skips per-file
+        // work, so the properties row stays exactly as it was.
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let after = session.get_file_metadata("notes/note.md").unwrap().unwrap();
+        assert_eq!(after.properties, before.properties);
+    }
+
+    #[test]
+    fn files_without_frontmatter_have_empty_properties() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/plain.md", b"# heading only\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let md = session
+            .get_file_metadata("notes/plain.md")
+            .unwrap()
+            .unwrap();
+        assert!(md.properties.is_empty());
     }
 }
