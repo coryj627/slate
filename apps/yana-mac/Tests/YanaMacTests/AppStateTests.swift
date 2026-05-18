@@ -573,6 +573,35 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isLoadingLinks)
     }
 
+    func testRapidSelectionToggleDoesNotLeaveSpinnerOff() async throws {
+        // Regression for the Codoki callout on PR 79: an older
+        // `defer { isLoadingLinks = false }` would fire when a
+        // cancelled task exited, clearing the flag while a newer
+        // task was still in flight (causing spinner flicker).
+        let vault = tempDir.appendingPathComponent("rapid-toggle")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("# B".utf8).write(to: vault.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        // Switch to b before A's load finishes. The previous task
+        // gets cancelled and its early-return path must NOT clear
+        // isLoadingLinks, because B's task has set it true.
+        state.selectedFilePath = "b.md"
+
+        // Drain both task handles. Older may have completed by the
+        // time we look (cancelled returns immediately); the newer
+        // is the one we care about.
+        await state.linksLoadTask?.value
+        // After the latest task completes for path b, flag is false.
+        XCTAssertFalse(state.isLoadingLinks)
+        XCTAssertEqual(state.selectedFilePath, "b.md")
+    }
+
     func testUnresolvedLinkAppearsInOutgoingList() async throws {
         let vault = tempDir.appendingPathComponent("dangling")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)

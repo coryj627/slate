@@ -388,7 +388,6 @@ final class AppState: ObservableObject {
     func loadCurrentNote(path: String) async {
         guard let session = currentSession else { return }
         isLoadingNote = true
-        defer { isLoadingNote = false }
 
         let result: Result<(String, [Heading]), VaultError> = await Task.detached(priority: .userInitiated) {
             do {
@@ -407,9 +406,10 @@ final class AppState: ObservableObject {
             }
         }.value
 
-        // Drop the result if the user has already moved on (closed
-        // the vault, selected a different note). Without this the
-        // pane could flash stale content for ~100 ms after a switch.
+        // Don't touch `isLoadingNote` if the user has already moved
+        // on. Same reasoning as `loadCurrentLinks`: the newer task
+        // already set the flag, and clearing it here would flicker
+        // the loading state off briefly.
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
@@ -422,6 +422,7 @@ final class AppState: ObservableObject {
             currentNoteHeadings = []
             noteLoadError = humanReadable(error)
         }
+        isLoadingNote = false
     }
 
     /// Load the inbound (backlinks) and outgoing-links lists for the
@@ -437,7 +438,6 @@ final class AppState: ObservableObject {
     func loadCurrentLinks(path: String) async {
         guard let session = currentSession else { return }
         isLoadingLinks = true
-        defer { isLoadingLinks = false }
 
         let result: Result<([Backlink], [OutgoingLink]), VaultError> =
             await Task.detached(priority: .userInitiated) {
@@ -456,8 +456,11 @@ final class AppState: ObservableObject {
             }
             .value
 
-        // Drop the result if the user has already moved on. Same
-        // pattern as loadCurrentNote.
+        // Don't touch `isLoadingLinks` if the user has already moved
+        // on: a newer task is in flight and has already re-set the
+        // flag to `true`, so clearing it here would flicker the
+        // spinner off mid-load. The newer task owns the flag's
+        // lifecycle from this point on.
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
@@ -470,6 +473,7 @@ final class AppState: ObservableObject {
             currentOutgoingLinks = []
             linksLoadError = humanReadable(error)
         }
+        isLoadingLinks = false
     }
 
     // MARK: - Scan progress
