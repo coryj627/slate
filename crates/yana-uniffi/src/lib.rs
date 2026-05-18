@@ -179,6 +179,23 @@ impl VaultSession {
     pub fn read_text(&self, path: String) -> Result<String, VaultError> {
         Ok(self.inner.read_text(&path)?)
     }
+
+    /// Walk + index the vault while emitting incremental progress
+    /// events to the supplied listener. The listener always sees
+    /// `Started`, one `FileIndexed` per file, and exactly one
+    /// terminal event (`Finished` or `Cancelled`).
+    pub fn scan_initial_with_progress(
+        &self,
+        cancel: Arc<CancelToken>,
+        listener: Arc<dyn ScanProgressListener>,
+    ) -> Result<ScanReport, VaultError> {
+        let adapter: Arc<dyn core::ScanProgressListener> =
+            Arc::new(ScanProgressListenerAdapter { foreign: listener });
+        let report = self
+            .inner
+            .scan_initial_with_progress(&cancel.inner, Some(adapter))?;
+        Ok(report.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -311,6 +328,78 @@ impl From<core::Page<core::FileSummary>> for FileSummaryPage {
             next_cursor: p.next_cursor,
             total_filtered: p.total_filtered,
         }
+    }
+}
+
+/// Incremental scan progress events emitted to a `ScanProgressListener`.
+///
+/// Mirrors `yana_core::ScanProgress`. Listeners always observe
+/// `Started` first, one `FileIndexed` per visited file, and exactly
+/// one terminal event (`Finished` or `Cancelled`).
+#[derive(uniffi::Enum)]
+pub enum ScanProgress {
+    Started {
+        total_files: u64,
+    },
+    FileIndexed {
+        path: String,
+        indexed: u64,
+        total: u64,
+    },
+    Finished {
+        report: ScanReport,
+    },
+    Cancelled,
+    Failed {
+        message: String,
+    },
+}
+
+impl From<core::ScanProgress> for ScanProgress {
+    fn from(p: core::ScanProgress) -> Self {
+        match p {
+            core::ScanProgress::Started { total_files } => ScanProgress::Started { total_files },
+            core::ScanProgress::FileIndexed {
+                path,
+                indexed,
+                total,
+            } => ScanProgress::FileIndexed {
+                path,
+                indexed,
+                total,
+            },
+            core::ScanProgress::Finished { report } => ScanProgress::Finished {
+                report: report.into(),
+            },
+            core::ScanProgress::Cancelled => ScanProgress::Cancelled,
+            core::ScanProgress::Failed { message } => ScanProgress::Failed { message },
+        }
+    }
+}
+
+/// Foreign-implementable listener for scan progress events.
+///
+/// On the Swift side this becomes a `protocol ScanProgressListener`
+/// the host can implement on a class. Methods are invoked from the
+/// scanner's thread; implementations must be cheap and non-blocking
+/// (marshal back to the main actor asynchronously rather than block
+/// inside `onProgress`).
+#[uniffi::export(with_foreign)]
+pub trait ScanProgressListener: Send + Sync {
+    fn on_progress(&self, event: ScanProgress);
+}
+
+/// Bridges core::ScanProgressListener calls (in Rust) into the
+/// foreign-implemented uniffi ScanProgressListener (which the Swift
+/// app provides). Each event is converted from the core enum to the
+/// FFI enum before forwarding.
+struct ScanProgressListenerAdapter {
+    foreign: Arc<dyn ScanProgressListener>,
+}
+
+impl core::ScanProgressListener for ScanProgressListenerAdapter {
+    fn on_progress(&self, event: core::ScanProgress) {
+        self.foreign.on_progress(event.into());
     }
 }
 

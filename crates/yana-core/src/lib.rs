@@ -11,8 +11,8 @@ pub mod session;
 pub mod vault;
 
 pub use session::{
-    CancelToken, FileFilter, FileMetadata, FileSummary, Page, Paging, ScanReport, SessionConfig,
-    VaultSession,
+    CancelToken, FileFilter, FileMetadata, FileSummary, Page, Paging, ScanProgress,
+    ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
     content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,

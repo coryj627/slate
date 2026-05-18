@@ -212,6 +212,62 @@ pub struct ScanReport {
     pub errors: Vec<String>,
 }
 
+// --- Scan progress events ---
+
+/// Listener for incremental scan progress. Implemented by the host UI
+/// (or any caller that wants to react to scan events).
+///
+/// Callbacks are invoked from the thread running `scan_initial`,
+/// which holds the session's SQLite connection lock for the duration
+/// of the scan. Implementations must be cheap and non-blocking; UI
+/// hosts should marshal back to their main thread asynchronously
+/// rather than block inside `on_progress`.
+pub trait ScanProgressListener: Send + Sync {
+    fn on_progress(&self, event: ScanProgress);
+}
+
+/// Incremental events emitted during a scan.
+///
+/// Once `Started` fires, the listener is guaranteed exactly one
+/// terminal event:
+/// - `Finished { report }` on success.
+/// - `Cancelled` if cancellation fires after `Started`.
+/// - `Failed { message }` on any non-cancellation error after
+///   `Started` (typically a SQLite commit failure).
+///
+/// Errors that happen *before* `Started` (e.g. a pre-cancel, or the
+/// initial `conn.transaction()` failing) return through the caller's
+/// `Result` without emitting any listener event, since the stream
+/// hadn't actually started.
+#[derive(Debug, Clone)]
+pub enum ScanProgress {
+    /// Scan is about to begin. `total_files` is the count of file-
+    /// typed entries the scanner enumerated in a pre-pass. The
+    /// filesystem can change between this pre-pass and the main
+    /// scan, so the value is best-effort.
+    Started { total_files: u64 },
+    /// One file has been visited (either re-hashed via the slow path
+    /// or short-circuited via the fast path). `indexed` is the
+    /// running count; `total` is the same `total_files` from the
+    /// initial `Started` event.
+    FileIndexed {
+        path: String,
+        indexed: u64,
+        total: u64,
+    },
+    /// Scan completed normally. `report` is the same value the
+    /// caller will see returned from `scan_initial`.
+    Finished { report: ScanReport },
+    /// Scan was cancelled after `Started`. Caller's `scan_initial`
+    /// returns `Err(VaultError::Cancelled)`.
+    Cancelled,
+    /// Scan aborted after `Started` for a non-cancellation reason —
+    /// almost always a SQLite commit failure. `message` is a
+    /// human-readable summary; the same underlying error is also
+    /// returned through the caller's `Result`.
+    Failed { message: String },
+}
+
 // --- The session ---
 
 /// A live vault session.
@@ -283,12 +339,31 @@ impl VaultSession {
     /// report and continues. A cancellation request aborts the scan
     /// mid-transaction; nothing partially-applied lands in the database.
     pub fn scan_initial(&self, cancel: &CancelToken) -> Result<ScanReport, VaultError> {
+        self.scan_initial_with_progress(cancel, None)
+    }
+
+    /// Same as `scan_initial` but with optional progress events.
+    ///
+    /// Pass `Some(listener)` and the scanner will emit a `Started`
+    /// event with the pre-scan file count, one `FileIndexed` event
+    /// per file (both fast and slow path), and exactly one terminal
+    /// `Finished` or `Cancelled` event. The listener is always
+    /// called from the scanner's thread; UI hosts should marshal
+    /// back to their main actor asynchronously inside `on_progress`
+    /// rather than block (the session's SQLite lock is held for the
+    /// scan's duration).
+    pub fn scan_initial_with_progress(
+        &self,
+        cancel: &CancelToken,
+        listener: Option<Arc<dyn ScanProgressListener>>,
+    ) -> Result<ScanReport, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
         scan_vault(
             self.provider.as_ref(),
             &mut conn,
             self.config.parser_version,
             cancel,
+            listener.as_deref(),
         )
     }
 
@@ -368,21 +443,51 @@ fn scan_vault(
     conn: &mut Connection,
     parser_version: u32,
     cancel: &CancelToken,
+    listener: Option<&dyn ScanProgressListener>,
 ) -> Result<ScanReport, VaultError> {
-    let mut report = ScanReport::default();
-    let now = now_ms();
+    /// Fires `Cancelled` to the listener and returns Err. Only
+    /// valid AFTER `Started` has been emitted — see the contract on
+    /// `ScanProgress`. Pre-Started cancellation paths return Err
+    /// directly without touching the listener.
+    macro_rules! bail_cancelled_after_started {
+        () => {{
+            if let Some(l) = listener {
+                l.on_progress(ScanProgress::Cancelled);
+            }
+            return Err(VaultError::Cancelled);
+        }};
+    }
 
-    // Bail before opening a write transaction so a pre-cancelled token
-    // doesn't pay SQLite's open-tx cost.
+    // Pre-Started cancel check: no listener calls yet because the
+    // stream hasn't started. Same for a Cancel from count_files
+    // below.
     if cancel.is_cancelled() {
         return Err(VaultError::Cancelled);
     }
+
+    // Pre-pass: count the files we'll visit so the listener can show
+    // "indexed N of M" progress from the very first FileIndexed
+    // event. The FS may change between this count and the main scan
+    // — that's allowed by the contract (the spec calls out best-
+    // effort totals).
+    let total_files = count_files(provider, cancel)?;
+
+    let mut report = ScanReport::default();
+    let now = now_ms();
+    // Open the transaction *before* emitting Started so a tx-open
+    // failure can't leave listeners stuck waiting for a terminal
+    // event. If conn.transaction() fails here, the listener has
+    // observed nothing and the error flows through the Result.
     let tx = conn.transaction()?;
+    if let Some(l) = listener {
+        l.on_progress(ScanProgress::Started { total_files });
+    }
+    let mut indexed_count: u64 = 0;
 
     let mut stack: Vec<String> = vec![String::new()];
     while let Some(dir) = stack.pop() {
         if cancel.is_cancelled() {
-            return Err(VaultError::Cancelled);
+            bail_cancelled_after_started!();
         }
 
         let entries = match provider.list_dir(&dir) {
@@ -398,7 +503,7 @@ fn scan_vault(
             // middle of a flat directory of many large files doesn't
             // wait for the whole directory to finish hashing.
             if cancel.is_cancelled() {
-                return Err(VaultError::Cancelled);
+                bail_cancelled_after_started!();
             }
 
             // Skip hidden files/directories. `.yana` (our cache) and
@@ -432,6 +537,14 @@ fn scan_vault(
                     ) {
                         report.errors.push(format!("{path}: {e}"));
                     }
+                    indexed_count += 1;
+                    if let Some(l) = listener {
+                        l.on_progress(ScanProgress::FileIndexed {
+                            path: path.clone(),
+                            indexed: indexed_count,
+                            total: total_files,
+                        });
+                    }
                 }
                 EntryKind::Symlink => {
                     // Symlinks are skipped entirely. Following them risks
@@ -446,8 +559,64 @@ fn scan_vault(
         }
     }
 
-    tx.commit()?;
+    // Commit can still fail (disk full, file corruption). If it
+    // does, the listener has already seen `Started` and N
+    // `FileIndexed`s — fire `Failed` before propagating the error
+    // so the stream's terminal-event contract holds.
+    if let Err(e) = tx.commit() {
+        let message = e.to_string();
+        if let Some(l) = listener {
+            l.on_progress(ScanProgress::Failed {
+                message: message.clone(),
+            });
+        }
+        return Err(VaultError::from(e));
+    }
+    if let Some(l) = listener {
+        l.on_progress(ScanProgress::Finished {
+            report: report.clone(),
+        });
+    }
     Ok(report)
+}
+
+/// Pre-scan pass: walk the vault and count file-typed entries.
+///
+/// Mirrors `scan_vault`'s traversal rules — dot-prefixed entries are
+/// skipped (so `.yana/`, `.obsidian/` don't inflate the total) and
+/// symlinks are not counted since the main scan won't index them.
+/// Honors the cancel token so a user who clicks Cancel before the
+/// scanner starts doesn't pay the count cost either.
+fn count_files(provider: &dyn VaultProvider, cancel: &CancelToken) -> Result<u64, VaultError> {
+    let mut total: u64 = 0;
+    let mut stack: Vec<String> = vec![String::new()];
+    while let Some(dir) = stack.pop() {
+        if cancel.is_cancelled() {
+            return Err(VaultError::Cancelled);
+        }
+        let entries = match provider.list_dir(&dir) {
+            Ok(e) => e,
+            // Match scan_vault's tolerant behavior — a per-directory
+            // error during counting shouldn't blow up the scan.
+            Err(_) => continue,
+        };
+        for entry in entries {
+            if entry.name.starts_with('.') {
+                continue;
+            }
+            let path = if dir.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{}/{}", dir, entry.name)
+            };
+            match entry.kind {
+                EntryKind::Directory => stack.push(path),
+                EntryKind::File => total += 1,
+                EntryKind::Symlink => {}
+            }
+        }
+    }
+    Ok(total)
 }
 
 fn index_file(
@@ -1801,6 +1970,170 @@ mod tests {
             }
             other => panic!("expected FileTooLarge from over-cap signal, got {other:?}"),
         }
+    }
+
+    /// Collecting listener that records every event the scanner
+    /// emits, in order. Used by the progress-listener tests below.
+    struct RecordingListener {
+        events: std::sync::Mutex<Vec<ScanProgress>>,
+    }
+
+    impl RecordingListener {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                events: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn snapshot(&self) -> Vec<ScanProgress> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl ScanProgressListener for RecordingListener {
+        fn on_progress(&self, event: ScanProgress) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    #[test]
+    fn scan_progress_emits_started_one_per_file_and_finished() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"# a").unwrap();
+            p.write_file("notes/b.md", b"# b").unwrap();
+            p.write_file("notes/c.md", b"# c").unwrap();
+        });
+
+        let listener = RecordingListener::new();
+        let report = session
+            .scan_initial_with_progress(
+                &CancelToken::new(),
+                Some(listener.clone() as Arc<dyn ScanProgressListener>),
+            )
+            .unwrap();
+        assert_eq!(report.files_indexed, 3);
+
+        let events = listener.snapshot();
+        // First: Started with total=3.
+        match &events[0] {
+            ScanProgress::Started { total_files } => assert_eq!(*total_files, 3),
+            other => panic!("expected Started first, got {other:?}"),
+        }
+        // Last: Finished.
+        match events.last().unwrap() {
+            ScanProgress::Finished { report: r } => {
+                assert_eq!(r.files_indexed, 3);
+            }
+            other => panic!("expected Finished last, got {other:?}"),
+        }
+        // Middle: exactly 3 FileIndexed in order with monotonic counter.
+        let file_events: Vec<(u64, u64, &str)> = events[1..events.len() - 1]
+            .iter()
+            .map(|e| match e {
+                ScanProgress::FileIndexed {
+                    path,
+                    indexed,
+                    total,
+                } => (*indexed, *total, path.as_str()),
+                _ => panic!("unexpected non-FileIndexed event in middle: {e:?}"),
+            })
+            .collect();
+        assert_eq!(file_events.len(), 3);
+        assert_eq!(file_events[0].0, 1);
+        assert_eq!(file_events[2].0, 3);
+        for (_, t, _) in &file_events {
+            assert_eq!(*t, 3);
+        }
+    }
+
+    #[test]
+    fn scan_progress_pre_started_cancel_emits_no_events() {
+        // A token that's already cancelled at scan_initial entry
+        // means the stream never starts — listener observes no
+        // events at all, just the Err(Cancelled) return value.
+        // This is the deliberate "Started gates the contract" shape
+        // documented on ScanProgress.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"# a").unwrap();
+        });
+        let listener = RecordingListener::new();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let err = session
+            .scan_initial_with_progress(
+                &cancel,
+                Some(listener.clone() as Arc<dyn ScanProgressListener>),
+            )
+            .unwrap_err();
+        assert!(matches!(err, VaultError::Cancelled));
+        assert!(
+            listener.snapshot().is_empty(),
+            "pre-Started cancel must not emit any listener events"
+        );
+    }
+
+    #[test]
+    fn scan_progress_emits_cancelled_when_cancelled_mid_scan() {
+        // Uses the existing CancellingProvider to trigger cancel
+        // from inside list_dir while the main scan is in flight.
+        // Listener should still see Started + (some FileIndexed)? +
+        // Cancelled, with no Finished event ever firing.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("a/one.md", b"a").unwrap();
+        provider.write_file("a/two.md", b"a").unwrap();
+        provider.write_file("b/three.md", b"b").unwrap();
+
+        let cancel = CancelToken::new();
+        // First list_dir call inside scan_vault is the root (because
+        // count_files runs first and exhausts its own walk). After
+        // count_files the main scan also does list_dir; cancel on
+        // the first scan-side list_dir call. count_files does N
+        // list_dir calls; we need to count past those.
+        //
+        // For 3 files spread across 2 subdirs, count_files does 3
+        // list_dirs (root, a/, b/). Then scan does root again (call
+        // 4). Trigger on call 4 so cancel fires mid-scan but after
+        // Started has been emitted.
+        let cancelling = Arc::new(CancellingProvider::new(provider, cancel.clone(), 4));
+        let cache_dir = tmp.path().join(".yana");
+        let config = SessionConfig::new(cache_dir);
+        let session = VaultSession::open(cancelling, config).unwrap();
+
+        let listener = RecordingListener::new();
+        let err = session
+            .scan_initial_with_progress(
+                &cancel,
+                Some(listener.clone() as Arc<dyn ScanProgressListener>),
+            )
+            .unwrap_err();
+        assert!(matches!(err, VaultError::Cancelled));
+
+        let events = listener.snapshot();
+        // Started fires once before count completes.
+        assert!(matches!(events.first(), Some(ScanProgress::Started { .. })));
+        // Terminal event is Cancelled, never Finished.
+        assert!(matches!(events.last(), Some(ScanProgress::Cancelled)));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ScanProgress::Finished { .. })),
+            "Finished must NOT fire on a cancelled scan, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn scan_initial_without_listener_is_unchanged() {
+        // The no-listener path is the original scan_initial contract:
+        // returns the report, doesn't call anything (no listener
+        // implementation needed). Smoke-test that the new overload
+        // didn't accidentally regress the listener-less case.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"# a").unwrap();
+            p.write_file("b.md", b"# b").unwrap();
+        });
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(report.files_indexed, 2);
     }
 
     #[test]
