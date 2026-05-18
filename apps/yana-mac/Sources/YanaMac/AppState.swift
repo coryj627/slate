@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// Top-level app state.
@@ -30,9 +31,22 @@ final class AppState: ObservableObject {
     /// Surfaced when scanning or listing fails. Independent of
     /// `lastError` (which guards the open path).
     @Published var scanError: String?
-    /// Path of the file currently selected in the sidebar, if any. Not
-    /// wired to a content view yet — that lands in Milestone B.
+    /// Path of the file currently selected in the sidebar, if any.
+    /// `NoteContentView` reads the corresponding bytes via
+    /// `currentNoteText`; AppState watches this property and kicks
+    /// off the load whenever it changes.
     @Published var selectedFilePath: String?
+
+    /// UTF-8 text of the currently-selected note, once it's been
+    /// loaded. Nil while no note is selected or while loading is
+    /// in flight.
+    @Published private(set) var currentNoteText: String?
+    /// True while the selected note's content is being read from disk.
+    @Published private(set) var isLoadingNote: Bool = false
+    /// Surfaced when reading the selected note fails. Independent of
+    /// `lastError` (open path) and `scanError` (indexing path) so the
+    /// UI alerts don't cross-fire.
+    @Published var noteLoadError: String?
 
     /// Handle on the in-flight scan + list task kicked off by
     /// `openVault`. Exposed (internal, not Published) so tests can
@@ -40,6 +54,11 @@ final class AppState: ObservableObject {
     /// post-scan state.
     private(set) var scanTask: Task<Void, Never>?
 
+    /// Handle on the in-flight note-load task. Same shape as
+    /// `scanTask` so tests can await deterministically.
+    private(set) var noteLoadTask: Task<Void, Never>?
+
+    private var subscriptions: Set<AnyCancellable> = []
     private let recentsStore: RecentVaultsStore
 
     init(recentsStore: RecentVaultsStore? = nil) {
@@ -57,6 +76,35 @@ final class AppState: ObservableObject {
             self.recentsStore = RecentVaultsStore(fileURL: fallback)
         }
         self.recentVaults = self.recentsStore.load()
+
+        // Watch `selectedFilePath` and (re)trigger note loading on
+        // every change. Combine's removeDuplicates avoids reloading
+        // when the same path is rebound (e.g. by SwiftUI list
+        // diffing). The closure runs on the main actor since the
+        // class is @MainActor.
+        $selectedFilePath
+            .removeDuplicates()
+            .sink { [weak self] path in
+                self?.handleSelectionChange(to: path)
+            }
+            .store(in: &subscriptions)
+    }
+
+    /// Internal hook from the selectedFilePath subscription. Cancels
+    /// any in-flight note load and kicks off a fresh one — or clears
+    /// content if `path` is nil.
+    private func handleSelectionChange(to path: String?) {
+        noteLoadTask?.cancel()
+        noteLoadTask = nil
+        currentNoteText = nil
+        noteLoadError = nil
+        guard let path else {
+            isLoadingNote = false
+            return
+        }
+        noteLoadTask = Task { [weak self] in
+            await self?.loadCurrentNote(path: path)
+        }
     }
 
     var isVaultOpen: Bool { currentSession != nil }
@@ -121,12 +169,17 @@ final class AppState: ObservableObject {
     func closeVault() {
         scanTask?.cancel()
         scanTask = nil
+        noteLoadTask?.cancel()
+        noteLoadTask = nil
         currentSession = nil
         currentVaultURL = nil
         files = []
         scanError = nil
         selectedFilePath = nil
+        currentNoteText = nil
+        noteLoadError = nil
         isScanning = false
+        isLoadingNote = false
     }
 
     /// Drop a recent-vaults entry by path. Used by the welcome screen
@@ -213,6 +266,40 @@ final class AppState: ObservableObject {
         } catch {
             guard !Task.isCancelled else { return }
             scanError = error.localizedDescription
+        }
+    }
+
+    /// Read the selected note's bytes off the main actor and publish
+    /// the UTF-8 string. Surfaces InvalidUtf8 / FileTooLarge / IO via
+    /// `noteLoadError`. Honors task cancellation so a fast click-
+    /// through doesn't leave a stale string in `currentNoteText`.
+    func loadCurrentNote(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingNote = true
+        defer { isLoadingNote = false }
+
+        let result: Result<String, VaultError> = await Task.detached(priority: .userInitiated) {
+            do {
+                return .success(try session.readText(path: path))
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }.value
+
+        // Drop the result if the user has already moved on (closed
+        // the vault, selected a different note). Without this the
+        // pane could flash stale content for ~100 ms after a switch.
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+
+        switch result {
+        case .success(let text):
+            currentNoteText = text
+            noteLoadError = nil
+        case .failure(let error):
+            currentNoteText = nil
+            noteLoadError = humanReadable(error)
         }
     }
 
