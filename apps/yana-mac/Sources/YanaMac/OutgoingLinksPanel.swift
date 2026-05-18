@@ -65,25 +65,47 @@ struct OutgoingLinksPanel: View {
     }
 
     private func row(for link: OutgoingLink) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(displayTarget(for: link))
-                    .font(.callout)
-                    .foregroundStyle(linkColor(for: link))
-                badge(for: link)
+        Button {
+            appState.openLink(link)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(displayTarget(for: link))
+                        .font(.callout)
+                        .foregroundStyle(linkColor(for: link))
+                        // Strikethrough on unresolved: visual axis
+                        // complements the accessibility-label "Unresolved
+                        // link:" prefix so the state is unmistakable for
+                        // both sighted and screen-reader users (the
+                        // acceptance criteria require both).
+                        .strikethrough(link.isUnresolved, color: .orange)
+                    badge(for: link)
+                }
+                if !link.snippet.isEmpty {
+                    Text(link.snippet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
-            if !link.snippet.isEmpty {
-                Text(link.snippet)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel(for: link))
+        .accessibilityHint(accessibilityHint(for: link))
         .help(link.targetRaw)
+    }
+
+    private func accessibilityHint(for link: OutgoingLink) -> String {
+        if link.isExternal {
+            return "Opens in the default browser."
+        }
+        if link.isUnresolved {
+            return "Cannot open. Target file is not in the vault."
+        }
+        return "Opens the linked note."
     }
 
     @ViewBuilder

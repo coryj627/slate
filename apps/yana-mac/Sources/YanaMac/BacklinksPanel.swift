@@ -63,21 +63,27 @@ struct BacklinksPanel: View {
     }
 
     private func row(for backlink: Backlink) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(filename(for: backlink.sourcePath))
-                .foregroundStyle(.primary)
-                .font(.callout)
-            Text(backlink.snippet)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
+        Button {
+            appState.openBacklink(backlink)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(filename(for: backlink.sourcePath))
+                    .foregroundStyle(.primary)
+                    .font(.callout)
+                Text(backlink.snippet)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
         .accessibilityLabel(
             "Backlink from \(filename(for: backlink.sourcePath)), context: \(backlink.snippet)"
         )
+        .accessibilityHint("Opens the source note.")
         .help(backlink.sourcePath)
     }
 

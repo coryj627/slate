@@ -622,6 +622,122 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(link.targetRaw, "Missing")
     }
 
+    // MARK: - Link activation (#52)
+
+    private func makeOutgoing(
+        targetPath: String? = nil,
+        targetRaw: String,
+        isExternal: Bool = false,
+        isUnresolved: Bool = false
+    ) -> OutgoingLink {
+        OutgoingLink(
+            targetPath: targetPath,
+            targetRaw: targetRaw,
+            targetAnchor: nil,
+            kind: isExternal ? "markdown" : "wikilink",
+            isEmbed: false,
+            isExternal: isExternal,
+            isUnresolved: isUnresolved,
+            snippet: "",
+            ordinal: 0
+        )
+    }
+
+    func testOpenResolvedLinkNavigatesToTarget() throws {
+        let state = try makeAppState()
+        let link = makeOutgoing(targetPath: "notes/foo.md", targetRaw: "foo")
+        state.openLink(link)
+        XCTAssertEqual(state.selectedFilePath, "notes/foo.md")
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .openedInternal("notes/foo.md")
+        )
+    }
+
+    func testOpenUnresolvedLinkDoesNotNavigate() throws {
+        let state = try makeAppState()
+        let link = makeOutgoing(targetRaw: "Missing", isUnresolved: true)
+        state.openLink(link)
+        XCTAssertNil(state.selectedFilePath)
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .unresolved("Missing")
+        )
+    }
+
+    func testOpenExternalLinkDoesNotChangeSelection() throws {
+        // We can't reliably assert NSWorkspace.open() succeeded in a
+        // headless test (no LaunchServices), so the test asserts on
+        // the outcome enum which routes through either `openedExternal`
+        // or `externalOpenFailed`. Either way, selectedFilePath stays
+        // untouched.
+        let state = try makeAppState()
+        let link = makeOutgoing(targetRaw: "https://example.com", isExternal: true)
+        state.openLink(link)
+        XCTAssertNil(state.selectedFilePath)
+        switch state.lastActivatedLinkOutcome {
+        case .openedExternal, .externalOpenFailed:
+            break
+        case let other:
+            XCTFail("expected external outcome, got \(String(describing: other))")
+        }
+    }
+
+    func testOpenExternalLinkRejectsDisallowedSchemes() throws {
+        // file://, javascript:, custom schemes — none should reach
+        // NSWorkspace.open even though the link parser flagged them
+        // as external. Restricting to http/https/mailto keeps a typo
+        // from handing control to whatever app is registered for
+        // a stray scheme.
+        let state = try makeAppState()
+        for raw in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "yana-internal:something",
+        ] {
+            let link = makeOutgoing(targetRaw: raw, isExternal: true)
+            state.openLink(link)
+            XCTAssertEqual(
+                state.lastActivatedLinkOutcome,
+                .externalOpenFailed(raw),
+                "expected \(raw) to be rejected"
+            )
+            XCTAssertNil(state.selectedFilePath)
+        }
+    }
+
+    func testOpenLinkDefensiveGuardFallsThroughToUnresolved() throws {
+        // Codoki suggestion: exercise the "shouldn't happen" branch
+        // where the link is neither external nor unresolved but
+        // somehow has a nil target_path. Treat as unresolved so the
+        // user gets feedback instead of silence.
+        let state = try makeAppState()
+        let link = makeOutgoing(targetPath: nil, targetRaw: "weird")
+        state.openLink(link)
+        XCTAssertNil(state.selectedFilePath)
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .unresolved("weird")
+        )
+    }
+
+    func testOpenBacklinkNavigatesToSourcePath() throws {
+        let state = try makeAppState()
+        let backlink = Backlink(
+            sourcePath: "notes/who-links.md",
+            snippet: "see [[here]]",
+            ordinal: 0,
+            kind: "wikilink",
+            isEmbed: false
+        )
+        state.openBacklink(backlink)
+        XCTAssertEqual(state.selectedFilePath, "notes/who-links.md")
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .openedInternal("notes/who-links.md")
+        )
+    }
+
     func testRequestScrollToHeadingPublishesAnchor() throws {
         let state = try makeAppState()
 

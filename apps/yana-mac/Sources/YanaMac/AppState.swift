@@ -1,5 +1,16 @@
+import AppKit
 import Combine
 import Foundation
+
+/// Outcome of a single link-activation call. Mirrors the branches in
+/// `AppState.openLink(_:)` so tests can assert routing without
+/// observing AppKit side effects.
+enum LinkActivationOutcome: Equatable {
+    case openedInternal(String)
+    case unresolved(String)
+    case openedExternal(String)
+    case externalOpenFailed(String)
+}
 
 /// Top-level app state.
 ///
@@ -56,6 +67,12 @@ final class AppState: ObservableObject {
     /// `lastError` (open path) and `scanError` (indexing path) so the
     /// UI alerts don't cross-fire.
     @Published var noteLoadError: String?
+
+    /// Last outcome from `openLink` / `openBacklink`. Exposed for
+    /// tests so they can verify activation routing without observing
+    /// AppKit side effects (NSWorkspace open, accessibility
+    /// announcements). UI doesn't read this.
+    private(set) var lastActivatedLinkOutcome: LinkActivationOutcome?
 
     /// Inbound links to the currently-selected note. Updated whenever
     /// `selectedFilePath` changes. Empty while no note is selected or
@@ -179,6 +196,96 @@ final class AppState: ObservableObject {
     /// `onReceive(scrollAnchorRequest)`.
     func requestScrollToHeading(anchor: String) {
         scrollAnchorRequest.send(anchor)
+    }
+
+    /// Activate an outgoing-link row from the OutgoingLinksPanel.
+    ///
+    /// - Resolved internal: navigate to the target and announce the
+    ///   filename. (The subsequent "Showing <filename>" announcement
+    ///   from `NoteContentView.onAppear` rounds out the audio
+    ///   feedback once the content has actually loaded.)
+    /// - Unresolved internal: don't navigate; announce that we
+    ///   couldn't open it so a screen-reader user doesn't think the
+    ///   click was a no-op.
+    /// - External: hand off to NSWorkspace; announce that the browser
+    ///   was invoked.
+    ///
+    /// The branch chosen is also reflected in `lastActivatedLinkOutcome`
+    /// so tests can verify behaviour without observing UIKit/AppKit
+    /// side effects.
+    func openLink(_ link: OutgoingLink) {
+        if link.isExternal {
+            // Allowlist the schemes we hand to LaunchServices. The
+            // link parser flags `file:`, `javascript:`, and custom
+            // schemes as external too, but blindly passing them to
+            // NSWorkspace.open would let a typo in a markdown link
+            // hand control of the user's machine to whatever app
+            // happens to be registered for that scheme. http/https
+            // (web pages) and mailto (compose new email) are the
+            // schemes a notes app's "external link" feature is
+            // expected to handle.
+            guard let url = URL(string: link.targetRaw),
+                let scheme = url.scheme?.lowercased(),
+                ["http", "https", "mailto"].contains(scheme)
+            else {
+                postAccessibilityAnnouncement(
+                    "Cannot open external link \(link.targetRaw). "
+                        + "Only web and mail links are supported."
+                )
+                lastActivatedLinkOutcome = .externalOpenFailed(link.targetRaw)
+                return
+            }
+            if NSWorkspace.shared.open(url) {
+                postAccessibilityAnnouncement(
+                    "Opened external link in default browser."
+                )
+                lastActivatedLinkOutcome = .openedExternal(link.targetRaw)
+            } else {
+                postAccessibilityAnnouncement(
+                    "Could not open external link \(link.targetRaw)."
+                )
+                lastActivatedLinkOutcome = .externalOpenFailed(link.targetRaw)
+            }
+            return
+        }
+        if link.isUnresolved {
+            postAccessibilityAnnouncement(
+                "\(link.targetRaw) is unresolved. Cannot open."
+            )
+            lastActivatedLinkOutcome = .unresolved(link.targetRaw)
+            return
+        }
+        guard let path = link.targetPath else {
+            // Defensive: a non-external, non-unresolved row should
+            // always carry a target_path. Treat the impossible case
+            // as unresolved so the user gets feedback instead of
+            // silence.
+            postAccessibilityAnnouncement(
+                "\(link.targetRaw) is unresolved. Cannot open."
+            )
+            lastActivatedLinkOutcome = .unresolved(link.targetRaw)
+            return
+        }
+        navigate(to: path, kind: "Opened")
+    }
+
+    /// Activate a backlink row from the BacklinksPanel — navigates
+    /// to the source file that linked here. Backlinks are always
+    /// resolved (the query joins on resolved target_path), so this
+    /// is the simple `navigate(to:)` path.
+    func openBacklink(_ backlink: Backlink) {
+        navigate(to: backlink.sourcePath, kind: "Opened backlink to")
+    }
+
+    /// Shared post-activation step: update `selectedFilePath` (which
+    /// the file-list selection binding + the note-load observer both
+    /// pick up) and post an immediate audio confirmation so the user
+    /// hears that the click worked before the content load finishes.
+    private func navigate(to path: String, kind: String) {
+        selectedFilePath = path
+        let filename = (path as NSString).lastPathComponent
+        postAccessibilityAnnouncement("\(kind) \(filename).")
+        lastActivatedLinkOutcome = .openedInternal(path)
     }
 
     var isVaultOpen: Bool { currentSession != nil }
