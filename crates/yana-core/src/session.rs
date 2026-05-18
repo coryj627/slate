@@ -301,6 +301,49 @@ impl VaultSession {
         get_file_metadata_impl(&conn, path)
     }
 
+    /// Read a vault file's contents as UTF-8 text.
+    ///
+    /// - Refuses to read files larger than
+    ///   `SessionConfig::large_file_refuse_bytes` and returns
+    ///   `VaultError::FileTooLarge { path, size }` without ever
+    ///   touching the file's bytes.
+    /// - Returns `VaultError::InvalidUtf8 { path }` if the contents
+    ///   aren't valid UTF-8. Unlike the scanner's heading parse —
+    ///   which uses lossy decode to preserve as much structure as
+    ///   possible — the editor / reader path needs to be honest
+    ///   about decode failures so we don't silently substitute
+    ///   replacement characters into a file the user is about to
+    ///   look at.
+    /// - Path validation (no absolute, no `..`, no Windows prefix)
+    ///   is inherited from `FsVaultProvider::read_file`.
+    pub fn read_text(&self, path: &str) -> Result<String, VaultError> {
+        let limit = self.config.large_file_refuse_bytes;
+        let stat = self.provider.stat(path)?;
+        if stat.size_bytes > limit {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: stat.size_bytes,
+            });
+        }
+        // `read_file_with_cap` allocates at most `limit + 1` bytes
+        // even if the file grows between stat and read — that's the
+        // TOCTOU-safe ceiling. If the returned buffer hits the +1
+        // sentinel, the file exceeded the threshold; we report
+        // FileTooLarge but the actual size on disk is unknown to us
+        // here (we deliberately stopped reading), so we surface
+        // `limit + 1` as a lower bound rather than lying.
+        let bytes = self.provider.read_file_with_cap(path, limit)?;
+        if (bytes.len() as u64) > limit {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: bytes.len() as u64,
+            });
+        }
+        String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
+            path: path.to_string(),
+        })
+    }
+
     /// Page through the indexed files.
     pub fn list_files(
         &self,
@@ -1640,6 +1683,182 @@ mod tests {
         let md = session.get_file_metadata("a.md").unwrap().unwrap();
         let texts: Vec<&str> = md.headings.iter().map(|h| h.text.as_str()).collect();
         assert_eq!(texts, vec!["Heading survives", "Also here"]);
+    }
+
+    #[test]
+    fn read_text_round_trips_utf8_content() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/hello.md", "# Hello, vault! 🦀\n".as_bytes())
+                .unwrap();
+        });
+        let text = session.read_text("notes/hello.md").unwrap();
+        assert_eq!(text, "# Hello, vault! 🦀\n");
+    }
+
+    #[test]
+    fn read_text_rejects_invalid_utf8_typed() {
+        // 0xFF can't start a valid UTF-8 sequence. read_text must
+        // surface this as InvalidUtf8 rather than silently producing
+        // replacement characters — the editor / reader path is
+        // user-facing and shouldn't lie about file contents.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("bad.md", &[b'#', b' ', 0xFF, b'\n']).unwrap();
+        });
+        match session.read_text("bad.md") {
+            Err(VaultError::InvalidUtf8 { path }) => assert_eq!(path, "bad.md"),
+            other => panic!("expected InvalidUtf8 for bad.md, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_text_rejects_absolute_paths() {
+        // Provider-level path validation is reused — read_text must
+        // not accept absolutes / parent traversal / Windows prefixes.
+        let (_tmp, session) = make_vault(|_| {});
+        match session.read_text("/etc/passwd") {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_text_refuses_files_grown_after_stat_toctou() {
+        // Provider that lies: stat() reports 1 byte, but
+        // read_file_with_cap() returns more bytes than the cap.
+        // Reproduces the TOCTOU window where a file grows between
+        // the size pre-check and the read. The session must refuse
+        // via the over-cap signal without buffering arbitrarily-
+        // large bytes — `read_file_with_cap` allocates at most
+        // `cap + 1` regardless of the file's true size on disk.
+        struct GrowingProvider {
+            inner: FsVaultProvider,
+        }
+        impl crate::VaultProvider for GrowingProvider {
+            fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+                self.inner.list_dir(relative)
+            }
+            fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+                self.inner.read_file(relative)
+            }
+            fn read_file_with_cap(
+                &self,
+                relative: &str,
+                max_bytes: u64,
+            ) -> Result<Vec<u8>, VaultError> {
+                // Simulate the grown file: return exactly the
+                // over-cap sentinel length. The real (`inner`)
+                // read_file_with_cap would do this naturally if the
+                // file grew past max_bytes; we synthesize it here so
+                // the test doesn't have to race the filesystem.
+                let _ = self.inner.read_file_with_cap(relative, max_bytes)?;
+                Ok(vec![b'x'; (max_bytes + 1) as usize])
+            }
+            fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+                self.inner.write_file(relative, contents)
+            }
+            fn delete(&self, relative: &str) -> Result<(), VaultError> {
+                self.inner.delete(relative)
+            }
+            fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+                self.inner.rename(from, to)
+            }
+            fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+                // Lie about the size: report 1 byte.
+                let mut stat = self.inner.stat(relative)?;
+                stat.size_bytes = 1;
+                Ok(stat)
+            }
+            fn watch(
+                &self,
+                sink: Arc<dyn crate::FileEventSink>,
+            ) -> Result<Option<crate::WatchHandle>, VaultError> {
+                self.inner.watch(sink)
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let real = FsVaultProvider::new(tmp.path().to_path_buf());
+        real.write_file("a.md", b"tiny").unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 100;
+        let session = VaultSession::open(
+            Arc::new(GrowingProvider {
+                inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+            }),
+            config,
+        )
+        .unwrap();
+
+        match session.read_text("a.md") {
+            Err(VaultError::FileTooLarge { path, size }) => {
+                assert_eq!(path, "a.md");
+                // size is the sentinel length we synthesized: cap + 1.
+                assert!(
+                    size > 100,
+                    "size should exceed the configured cap, got {size}"
+                );
+            }
+            other => panic!("expected FileTooLarge from over-cap signal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_text_at_exact_limit_succeeds() {
+        // Boundary: a file whose size equals `large_file_refuse_bytes`
+        // is *within* the limit and must succeed. The `>` comparison
+        // makes this the on-boundary case.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        // 10 bytes of valid ASCII.
+        provider.write_file("edge.md", b"0123456789").unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 10;
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+
+        assert_eq!(session.read_text("edge.md").unwrap(), "0123456789");
+    }
+
+    #[test]
+    fn read_file_with_cap_returns_at_most_cap_plus_one_on_real_provider() {
+        // Sanity check on the FsVaultProvider override: a file
+        // genuinely larger than the cap must produce a buffer with
+        // exactly `cap + 1` bytes (the over-cap sentinel), not the
+        // file's full size. This is the heart of the OOM guard.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        let payload = vec![b'a'; 5_000];
+        provider.write_file("big.md", &payload).unwrap();
+
+        let cap = 100u64;
+        let bytes = provider.read_file_with_cap("big.md", cap).unwrap();
+        assert_eq!(bytes.len() as u64, cap + 1);
+    }
+
+    #[test]
+    fn read_text_refuses_files_over_large_file_threshold() {
+        // Custom SessionConfig with a small refuse threshold so we
+        // can write a tiny file that still trips it. Default
+        // `large_file_refuse_bytes` is 50 MB which would make this
+        // test prohibitive.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file("big.md", b"more than ten bytes please")
+            .unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 10;
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+
+        match session.read_text("big.md") {
+            Err(VaultError::FileTooLarge { path, size }) => {
+                assert_eq!(path, "big.md");
+                assert!(size > 10, "size should be the actual file size, got {size}");
+            }
+            other => panic!("expected FileTooLarge, got {other:?}"),
+        }
     }
 
     #[test]

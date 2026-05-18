@@ -240,6 +240,10 @@ final class AppState: ObservableObject {
             return "Invalid path \(path): \(reason)"
         case .Cancelled:
             return "Operation cancelled."
+        case .InvalidUtf8(let path):
+            return "File at \(path) is not valid UTF-8."
+        case .FileTooLarge(let path, let size):
+            return "File at \(path) is \(size) bytes — larger than this build's refuse threshold."
         }
     }
 }
