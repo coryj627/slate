@@ -503,6 +503,96 @@ final class AppStateTests: XCTestCase {
         XCTAssertGreaterThan(countA, 0)
     }
 
+    // MARK: - Backlinks / outgoing links (#51)
+
+    func testSelectingANoteLoadsBacklinksAndOutgoingLinks() async throws {
+        let vault = tempDir.appendingPathComponent("links-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Target".utf8).write(to: vault.appendingPathComponent("Target.md"))
+        try Data("see [[Target]] and [external](https://example.com)".utf8)
+            .write(to: vault.appendingPathComponent("source.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        // Select the source: should have one outgoing wikilink + one
+        // external, and zero backlinks.
+        state.selectedFilePath = "source.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentBacklinks.count, 0)
+        XCTAssertEqual(state.currentOutgoingLinks.count, 2)
+        XCTAssertEqual(state.currentOutgoingLinks[0].targetRaw, "Target")
+        XCTAssertFalse(state.currentOutgoingLinks[0].isExternal)
+        XCTAssertTrue(state.currentOutgoingLinks[1].isExternal)
+
+        // Select the target: should have one backlink and zero outgoing.
+        state.selectedFilePath = "Target.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentBacklinks.count, 1)
+        XCTAssertEqual(state.currentBacklinks[0].sourcePath, "source.md")
+        XCTAssertEqual(state.currentOutgoingLinks.count, 0)
+    }
+
+    func testDeselectingClearsLinkPanels() async throws {
+        let vault = tempDir.appendingPathComponent("clear-links")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("see [[A]]".utf8).write(to: vault.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentBacklinks.count, 1)
+
+        state.selectedFilePath = nil
+        // The Combine sink clears synchronously; no need to await.
+        XCTAssertEqual(state.currentBacklinks, [])
+        XCTAssertEqual(state.currentOutgoingLinks, [])
+    }
+
+    func testCloseVaultClearsLinkPanels() async throws {
+        let vault = tempDir.appendingPathComponent("close-links")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("see [[A]]".utf8).write(to: vault.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentBacklinks.count, 1)
+
+        state.closeVault()
+        XCTAssertEqual(state.currentBacklinks, [])
+        XCTAssertEqual(state.currentOutgoingLinks, [])
+        XCTAssertFalse(state.isLoadingLinks)
+    }
+
+    func testUnresolvedLinkAppearsInOutgoingList() async throws {
+        let vault = tempDir.appendingPathComponent("dangling")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("hello [[Missing]] bye".utf8)
+            .write(to: vault.appendingPathComponent("source.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "source.md"
+        await state.linksLoadTask?.value
+
+        XCTAssertEqual(state.currentOutgoingLinks.count, 1)
+        let link = state.currentOutgoingLinks[0]
+        XCTAssertTrue(link.isUnresolved)
+        XCTAssertFalse(link.isExternal)
+        XCTAssertNil(link.targetPath)
+        XCTAssertEqual(link.targetRaw, "Missing")
+    }
+
     func testRequestScrollToHeadingPublishesAnchor() throws {
         let state = try makeAppState()
 

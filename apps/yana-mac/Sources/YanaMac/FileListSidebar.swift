@@ -31,6 +31,19 @@ struct FileListSidebar: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Link panels live below the file list inside the same
+            // sidebar column. They self-hide when no note is
+            // selected (returning EmptyView), so they don't push the
+            // file list around in the empty case.
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    BacklinksPanel()
+                    OutgoingLinksPanel()
+                }
+            }
+            .frame(maxHeight: 320)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")
