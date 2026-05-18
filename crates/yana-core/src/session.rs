@@ -1804,6 +1804,23 @@ mod tests {
     }
 
     #[test]
+    fn read_text_at_exact_limit_succeeds() {
+        // Boundary: a file whose size equals `large_file_refuse_bytes`
+        // is *within* the limit and must succeed. The `>` comparison
+        // makes this the on-boundary case.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        // 10 bytes of valid ASCII.
+        provider.write_file("edge.md", b"0123456789").unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 10;
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+
+        assert_eq!(session.read_text("edge.md").unwrap(), "0123456789");
+    }
+
+    #[test]
     fn read_file_with_cap_returns_at_most_cap_plus_one_on_real_provider() {
         // Sanity check on the FsVaultProvider override: a file
         // genuinely larger than the cap must produce a buffer with
