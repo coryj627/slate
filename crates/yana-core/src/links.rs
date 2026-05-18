@@ -545,6 +545,20 @@ mod tests {
     }
 
     #[test]
+    fn markdown_alpha_leading_scheme_filename_is_external() {
+        // Locks in the deliberate trade-off: `notes:2024.md` looks
+        // syntactically like a URL with scheme `notes`, so we treat
+        // it as external. POSIX allows this as a filename but it's
+        // ambiguous; users who want a vault-relative link should
+        // write `notes/2024.md` or `./notes:2024.md`. Documenting
+        // the behavior here so future refactors don't silently flip
+        // the classification.
+        let links = extract_links("[file](notes:2024.md)");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_external);
+    }
+
+    #[test]
     fn escaped_embed_prefix_does_not_set_embed_flag() {
         // `\!` escapes the bang, so what follows is a plain wikilink,
         // not an embed — and the span shouldn't include the escaped
