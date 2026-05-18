@@ -683,6 +683,44 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    func testOpenExternalLinkRejectsDisallowedSchemes() throws {
+        // file://, javascript:, custom schemes — none should reach
+        // NSWorkspace.open even though the link parser flagged them
+        // as external. Restricting to http/https/mailto keeps a typo
+        // from handing control to whatever app is registered for
+        // a stray scheme.
+        let state = try makeAppState()
+        for raw in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "yana-internal:something",
+        ] {
+            let link = makeOutgoing(targetRaw: raw, isExternal: true)
+            state.openLink(link)
+            XCTAssertEqual(
+                state.lastActivatedLinkOutcome,
+                .externalOpenFailed(raw),
+                "expected \(raw) to be rejected"
+            )
+            XCTAssertNil(state.selectedFilePath)
+        }
+    }
+
+    func testOpenLinkDefensiveGuardFallsThroughToUnresolved() throws {
+        // Codoki suggestion: exercise the "shouldn't happen" branch
+        // where the link is neither external nor unresolved but
+        // somehow has a nil target_path. Treat as unresolved so the
+        // user gets feedback instead of silence.
+        let state = try makeAppState()
+        let link = makeOutgoing(targetPath: nil, targetRaw: "weird")
+        state.openLink(link)
+        XCTAssertNil(state.selectedFilePath)
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .unresolved("weird")
+        )
+    }
+
     func testOpenBacklinkNavigatesToSourcePath() throws {
         let state = try makeAppState()
         let backlink = Backlink(

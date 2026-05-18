@@ -215,13 +215,27 @@ final class AppState: ObservableObject {
     /// side effects.
     func openLink(_ link: OutgoingLink) {
         if link.isExternal {
-            let opened: Bool
-            if let url = URL(string: link.targetRaw) {
-                opened = NSWorkspace.shared.open(url)
-            } else {
-                opened = false
+            // Allowlist the schemes we hand to LaunchServices. The
+            // link parser flags `file:`, `javascript:`, and custom
+            // schemes as external too, but blindly passing them to
+            // NSWorkspace.open would let a typo in a markdown link
+            // hand control of the user's machine to whatever app
+            // happens to be registered for that scheme. http/https
+            // (web pages) and mailto (compose new email) are the
+            // schemes a notes app's "external link" feature is
+            // expected to handle.
+            guard let url = URL(string: link.targetRaw),
+                let scheme = url.scheme?.lowercased(),
+                ["http", "https", "mailto"].contains(scheme)
+            else {
+                postAccessibilityAnnouncement(
+                    "Cannot open external link \(link.targetRaw). "
+                        + "Only web and mail links are supported."
+                )
+                lastActivatedLinkOutcome = .externalOpenFailed(link.targetRaw)
+                return
             }
-            if opened {
+            if NSWorkspace.shared.open(url) {
                 postAccessibilityAnnouncement(
                     "Opened external link in default browser."
                 )
