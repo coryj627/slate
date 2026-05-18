@@ -224,5 +224,11 @@ if [[ "$RUN" == "1" ]]; then
     # with the window server / AX system. The bare binary path
     # ($ABS_BINARY) works for non-AX UI testing but is invisible to
     # VoiceOver — use the bundle for any screen-reader work.
-    open "$APP_BUNDLE"
+    #
+    # `-n` forces a fresh process even if another YanaMac.app (e.g.
+    # an older build from a different path, or a still-running prior
+    # `--run`) is already registered with LaunchServices under the
+    # same bundle ID. Without it `open` would just activate the
+    # existing instance and you'd test stale code.
+    open -n "$APP_BUNDLE"
 fi
