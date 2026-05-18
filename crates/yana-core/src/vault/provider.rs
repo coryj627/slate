@@ -22,6 +22,24 @@ pub trait VaultProvider: Send + Sync {
     /// Read a vault file's bytes.
     fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError>;
 
+    /// Read up to `max_bytes + 1` of a vault file's bytes.
+    ///
+    /// Returning more than `max_bytes` is the contract that signals
+    /// "the file is larger than this cap." Callers check
+    /// `returned.len() > max_bytes` to detect over-cap and avoid
+    /// allocating arbitrary amounts of memory for a refuse-threshold
+    /// check.
+    ///
+    /// Default implementation falls back to `read_file`, which is
+    /// **not** memory-bounded. Providers that can do a true
+    /// streaming read (filesystem-backed ones especially) should
+    /// override this so the `read_text` refuse path is safe under
+    /// TOCTOU growth.
+    fn read_file_with_cap(&self, relative: &str, max_bytes: u64) -> Result<Vec<u8>, VaultError> {
+        let _ = max_bytes;
+        self.read_file(relative)
+    }
+
     /// Write a vault file. Implementations should be atomic where
     /// possible (write to a temp file, then rename).
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError>;

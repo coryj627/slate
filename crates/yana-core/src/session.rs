@@ -325,12 +325,14 @@ impl VaultSession {
                 size: stat.size_bytes,
             });
         }
-        let bytes = self.provider.read_file(path)?;
-        // Post-read TOCTOU guard: the file can grow between stat and
-        // read. Without this check we'd buffer the actual size (which
-        // could be arbitrarily large) before returning. The first
-        // size_bytes check still matters — it lets us refuse a known-
-        // large file without doing the read at all.
+        // `read_file_with_cap` allocates at most `limit + 1` bytes
+        // even if the file grows between stat and read — that's the
+        // TOCTOU-safe ceiling. If the returned buffer hits the +1
+        // sentinel, the file exceeded the threshold; we report
+        // FileTooLarge but the actual size on disk is unknown to us
+        // here (we deliberately stopped reading), so we surface
+        // `limit + 1` as a lower bound rather than lying.
+        let bytes = self.provider.read_file_with_cap(path, limit)?;
         if (bytes.len() as u64) > limit {
             return Err(VaultError::FileTooLarge {
                 path: path.to_string(),
@@ -1721,10 +1723,13 @@ mod tests {
 
     #[test]
     fn read_text_refuses_files_grown_after_stat_toctou() {
-        // Provider that lies: stat() reports a tiny size, but
-        // read_file() returns a large payload. Reproduces the TOCTOU
-        // window where a file grows between the size pre-check and
-        // the actual read.
+        // Provider that lies: stat() reports 1 byte, but
+        // read_file_with_cap() returns more bytes than the cap.
+        // Reproduces the TOCTOU window where a file grows between
+        // the size pre-check and the read. The session must refuse
+        // via the over-cap signal without buffering arbitrarily-
+        // large bytes — `read_file_with_cap` allocates at most
+        // `cap + 1` regardless of the file's true size on disk.
         struct GrowingProvider {
             inner: FsVaultProvider,
         }
@@ -1733,10 +1738,20 @@ mod tests {
                 self.inner.list_dir(relative)
             }
             fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
-                // Pretend the file grew between stat and read.
-                let mut bytes = self.inner.read_file(relative)?;
-                bytes.resize(1_000, b'x');
-                Ok(bytes)
+                self.inner.read_file(relative)
+            }
+            fn read_file_with_cap(
+                &self,
+                relative: &str,
+                max_bytes: u64,
+            ) -> Result<Vec<u8>, VaultError> {
+                // Simulate the grown file: return exactly the
+                // over-cap sentinel length. The real (`inner`)
+                // read_file_with_cap would do this naturally if the
+                // file grew past max_bytes; we synthesize it here so
+                // the test doesn't have to race the filesystem.
+                let _ = self.inner.read_file_with_cap(relative, max_bytes)?;
+                Ok(vec![b'x'; (max_bytes + 1) as usize])
             }
             fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
                 self.inner.write_file(relative, contents)
@@ -1778,13 +1793,30 @@ mod tests {
         match session.read_text("a.md") {
             Err(VaultError::FileTooLarge { path, size }) => {
                 assert_eq!(path, "a.md");
-                assert_eq!(
-                    size, 1_000,
-                    "size should reflect the actual read length, not the lying stat"
+                // size is the sentinel length we synthesized: cap + 1.
+                assert!(
+                    size > 100,
+                    "size should exceed the configured cap, got {size}"
                 );
             }
-            other => panic!("expected FileTooLarge from post-read guard, got {other:?}"),
+            other => panic!("expected FileTooLarge from over-cap signal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_file_with_cap_returns_at_most_cap_plus_one_on_real_provider() {
+        // Sanity check on the FsVaultProvider override: a file
+        // genuinely larger than the cap must produce a buffer with
+        // exactly `cap + 1` bytes (the over-cap sentinel), not the
+        // file's full size. This is the heart of the OOM guard.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        let payload = vec![b'a'; 5_000];
+        provider.write_file("big.md", &payload).unwrap();
+
+        let cap = 100u64;
+        let bytes = provider.read_file_with_cap("big.md", cap).unwrap();
+        assert_eq!(bytes.len() as u64, cap + 1);
     }
 
     #[test]
