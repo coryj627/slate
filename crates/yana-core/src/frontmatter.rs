@@ -136,21 +136,15 @@ pub fn frontmatter_range(source: &str) -> Option<Range<usize>> {
 
 /// Returns the source slice past the opening `---` line if and only
 /// if the file starts with one (no leading whitespace allowed).
+///
+/// Only `---\n` and `---\r\n` openings count. A bare `---` at EOF
+/// isn't a valid frontmatter opening (no body to follow), so we
+/// reject it here rather than treat it as a degenerate empty block.
 fn strip_opening_delimiter(source: &str) -> Option<&str> {
-    // Accept three forms: `---\n`, `---\r\n`, and `---` at end of
-    // file. The last is degenerate (no body, no close) but we still
-    // recognize the opening so the caller's None handling is
-    // explicit.
     if let Some(rest) = source.strip_prefix("---\r\n") {
         return Some(rest);
     }
-    if let Some(rest) = source.strip_prefix("---\n") {
-        return Some(rest);
-    }
-    // `---` followed by EOF or a non-newline char doesn't count as a
-    // delimiter — that's either a body line that happens to start
-    // with three dashes or a doc with no actual frontmatter.
-    None
+    source.strip_prefix("---\n")
 }
 
 /// Parse the frontmatter block out of `source` and return typed
@@ -268,7 +262,18 @@ fn walk_value(
 fn classify_leaf(key: &str, value: &Yaml) -> Option<PropertyValue> {
     match value {
         Yaml::Integer(i) => Some(PropertyValue::Integer(*i)),
-        Yaml::Real(s) => s.parse::<f64>().ok().map(PropertyValue::Float),
+        // yaml-rust2 marks scalars as Real when they look numeric but
+        // aren't integers. Most of those parse cleanly as f64
+        // (`3.14`, `1e-3`, etc.), but `.nan` / `.inf` / `-.inf` and
+        // numerically-suspect forms can fail. Falling back to Text
+        // keeps the property visible to the user instead of
+        // surfacing an unsupported-type warning — Codoki's PR 81
+        // callout.
+        Yaml::Real(s) => Some(
+            s.parse::<f64>()
+                .map(PropertyValue::Float)
+                .unwrap_or_else(|_| PropertyValue::Text(s.clone())),
+        ),
         Yaml::Boolean(b) => Some(PropertyValue::Boolean(*b)),
         Yaml::String(s) => Some(classify_string(key, s)),
         // BadValue is yaml-rust2's "couldn't parse this scalar"
@@ -741,6 +746,42 @@ mod tests {
     }
 
     // --- Range detection ---
+
+    #[test]
+    fn yaml_real_edge_values_fall_back_to_text() {
+        // Codoki callout on PR 81: yaml-rust2 marks `.nan` / `.inf` /
+        // `-.inf` as `Real` scalars that may not round-trip through
+        // f64.parse cleanly. We treat them as Text so the property
+        // stays visible rather than getting silently dropped behind
+        // a warning.
+        let p = props("---\nnan_val: .nan\ninf_val: .inf\nneg_inf: -.inf\n---\n");
+        // We don't care whether yaml-rust2 routes these through
+        // Real or Text — only that they end up in the props vec
+        // with a known value, not as a warning.
+        for key in ["nan_val", "inf_val", "neg_inf"] {
+            assert!(
+                find(&p, key).is_some(),
+                "expected {key} to be classified, got nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_real_with_exponent_parses_as_float() {
+        let p = props("---\nscientific: 1e-3\n---\n");
+        match find(&p, "scientific") {
+            Some(PropertyValue::Float(f)) => assert!((f - 0.001).abs() < 1e-12),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_triple_dash_at_eof_is_not_a_frontmatter_opening() {
+        // Documents the explicit rejection: `---` without a trailing
+        // newline isn't a usable opening (no body can follow it).
+        assert!(frontmatter_range("---").is_none());
+        assert!(frontmatter_range("---abc").is_none());
+    }
 
     #[test]
     fn frontmatter_range_returns_yaml_byte_range() {
