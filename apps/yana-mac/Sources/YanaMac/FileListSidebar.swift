@@ -13,16 +13,24 @@ struct FileListSidebar: View {
     @State private var didAnnounceCount = false
 
     var body: some View {
-        Group {
-            if appState.isScanning && appState.files.isEmpty {
-                scanningState
-            } else if let error = appState.scanError {
-                errorState(error)
-            } else if appState.files.isEmpty {
-                emptyState
-            } else {
-                fileList
+        VStack(spacing: 0) {
+            // Thin progress strip that mirrors the scanner's
+            // FileIndexed events. The `@ViewBuilder` renders
+            // EmptyView when there's no scanProgress, which collapses
+            // to no rendered output.
+            progressBar
+            Group {
+                if appState.isScanning && appState.files.isEmpty {
+                    scanningState
+                } else if let error = appState.scanError {
+                    errorState(error)
+                } else if appState.files.isEmpty {
+                    emptyState
+                } else {
+                    fileList
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")
@@ -86,6 +94,71 @@ struct FileListSidebar: View {
             row(for: file)
         }
         .listStyle(.sidebar)
+    }
+
+    /// Determinate progress strip rendered above the file list while a
+    /// scan is in flight. Returns nil between scans (or once the scan
+    /// terminates) so it stays hidden by default.
+    ///
+    /// We render the bar for `FileIndexed` events; `Started` reports 0
+    /// indexed which gives an empty bar (still useful — it lets the
+    /// user see the scan kicked off before the first file lands).
+    /// `Finished` / `Cancelled` / `Failed` clear `scanProgress` on the
+    /// AppState side so this returns nil and the strip disappears.
+    @ViewBuilder private var progressBar: some View {
+        switch appState.scanProgress {
+        case .started(let total):
+            scanStrip(
+                label: total == 1
+                    ? "Scanning vault — 1 file to index."
+                    : "Scanning vault — \(total) files to index.",
+                progress: total == 0 ? nil : 0,
+                total: total
+            )
+        case .fileIndexed(_, let indexed, let total):
+            scanStrip(
+                label: total == 0
+                    ? "Indexed \(indexed) files."
+                    : "Indexed \(indexed) of \(total) files.",
+                progress: total == 0 ? nil : Double(indexed) / Double(total),
+                total: total
+            )
+        case .finished, .cancelled, .failed, .none:
+            EmptyView()
+        case .some:
+            // Defensive: future enum variants stay hidden rather than
+            // showing a stale strip.
+            EmptyView()
+        }
+    }
+
+    private func scanStrip(label: String, progress: Double?, total: UInt64) -> some View {
+        // Indeterminate (`progress == nil`) when we don't yet know the
+        // denominator — Started{totalFiles: 0} or a FileIndexed with
+        // total == 0. The label still tells the user what's happening.
+        HStack(spacing: 8) {
+            if let progress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                // WCAG 1.4.4: no lineLimit(1) — let Dynamic Type wrap.
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        // Combine into one accessible element so VoiceOver reads
+        // "<label>" instead of separately announcing the bar.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+        .accessibilityValue(
+            progress.map { String(Int($0 * 100)) + " percent" } ?? "Scanning"
+        )
     }
 
     private func row(for file: FileSummary) -> some View {

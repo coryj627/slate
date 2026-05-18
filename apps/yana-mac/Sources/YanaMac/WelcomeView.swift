@@ -168,12 +168,17 @@ struct WelcomeView: View {
 /// `NSAccessibility.post` with `.announcementRequested`. Posting against
 /// `NSApp` rather than a specific window lets the announcement fire even
 /// before the main window has been keyed.
+///
+/// In a unit-test runner there's no `NSApp` (no run loop, no app
+/// shared instance) — calling through anyway crashes with an
+/// implicitly-unwrapped optional. Guard explicitly so `AppState`
+/// tests that drive scan-progress events can run without crashing.
 func postAccessibilityAnnouncement(_ message: String) {
+    guard let element: Any = NSApp?.mainWindow ?? NSApp else { return }
     let userInfo: [NSAccessibility.NotificationUserInfoKey: Any] = [
         .announcement: message,
         .priority: NSAccessibilityPriorityLevel.medium.rawValue,
     ]
-    let element: Any = NSApp.mainWindow ?? (NSApp as Any)
     NSAccessibility.post(
         element: element,
         notification: .announcementRequested,

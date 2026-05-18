@@ -28,6 +28,11 @@ final class AppState: ObservableObject {
     /// True while the initial scan + file load is in progress for the
     /// current vault. Sidebar uses this to show a progress indicator.
     @Published private(set) var isScanning: Bool = false
+    /// Latest progress event from the scanner. Updated unconditionally
+    /// for every `Started`/`FileIndexed`/`Finished` so the sidebar's
+    /// progress bar can stay current; cleared back to `nil` on
+    /// terminal events (Finished/Cancelled/Failed) so the bar hides.
+    @Published private(set) var scanProgress: ScanProgress?
     /// Surfaced when scanning or listing fails. Independent of
     /// `lastError` (which guards the open path).
     @Published var scanError: String?
@@ -68,6 +73,25 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight note-load task. Same shape as
     /// `scanTask` so tests can await deterministically.
     private(set) var noteLoadTask: Task<Void, Never>?
+
+    /// Total announcements fired since the most recent vault was
+    /// opened. Internal so the test target can verify the rate-guard
+    /// keeps things <= 3/s; the UI never reads it.
+    private(set) var scanAnnouncementCount: Int = 0
+    /// Most recent message passed to `postAccessibilityAnnouncement`.
+    /// Same role as `scanAnnouncementCount` — for tests only.
+    private(set) var scanAnnouncementLastMessage: String?
+
+    /// Time source for rate-limiting scan announcements. Injectable so
+    /// tests can advance simulated time without sleeping.
+    var scanClock: () -> Date = { Date() }
+    /// Minimum gap between throttled scan announcements. The
+    /// acceptance criteria say "no more than ~3 per second" so 350 ms
+    /// gives us 2–3 announcements per real-world second with a little
+    /// headroom for the synchronous overhead of posting through
+    /// AppKit's accessibility bus.
+    private let scanAnnouncementMinInterval: TimeInterval = 0.350
+    private var scanAnnouncementLastFiredAt: Date = .distantPast
 
     private var subscriptions: Set<AnyCancellable> = []
     private let recentsStore: RecentVaultsStore
@@ -139,6 +163,10 @@ final class AppState: ObservableObject {
             files = []
             scanError = nil
             selectedFilePath = nil
+            scanProgress = nil
+            scanAnnouncementCount = 0
+            scanAnnouncementLastMessage = nil
+            scanAnnouncementLastFiredAt = .distantPast
             recordOpened(url: url)
             scanTask?.cancel()
             scanTask = Task { [weak self] in
@@ -200,6 +228,7 @@ final class AppState: ObservableObject {
         noteLoadError = nil
         isScanning = false
         isLoadingNote = false
+        scanProgress = nil
     }
 
     /// Drop a recent-vaults entry by path. Used by the welcome screen
@@ -240,6 +269,16 @@ final class AppState: ObservableObject {
         defer { isScanning = false }
 
         let cancel = CancelToken()
+        // Adapter bridges scanner-thread `onProgress` callbacks back
+        // to the main actor where AppState can publish them. Holding a
+        // strong reference here is enough to keep the FFI handle live
+        // for the duration of the scan; uniffi releases it when the
+        // last Swift reference goes away.
+        let adapter = ScanProgressAdapter { [weak self] event in
+            Task { @MainActor in
+                self?.handleScanProgress(event)
+            }
+        }
 
         do {
             let loaded: [FileSummary] = try await withTaskCancellationHandler {
@@ -248,7 +287,10 @@ final class AppState: ObservableObject {
                 // dispatching off the main actor keeps the UI responsive
                 // on multi-thousand-file vaults.
                 return try await Task.detached(priority: .userInitiated) {
-                    _ = try session.scanInitial(cancel: cancel)
+                    _ = try session.scanInitialWithProgress(
+                        cancel: cancel,
+                        listener: adapter
+                    )
                     var all: [FileSummary] = []
                     var cursor: String? = nil
                     repeat {
@@ -337,6 +379,69 @@ final class AppState: ObservableObject {
             currentNoteHeadings = []
             noteLoadError = humanReadable(error)
         }
+    }
+
+    // MARK: - Scan progress
+
+    /// Main-actor entry point for scanner events. Called by
+    /// `ScanProgressAdapter` after marshaling from the scanner thread.
+    /// `internal` so XCTest can drive synthetic event streams against
+    /// it without spinning up a real scan.
+    func handleScanProgress(_ event: ScanProgress) {
+        scanProgress = event
+        switch event {
+        case .started(let totalFiles):
+            // Forced announcement: the user wants to know a scan
+            // started even if they just opened the vault and we
+            // haven't accumulated 350 ms of cooldown yet.
+            announceScan(
+                message: "Scanning vault. "
+                    + "\(totalFiles) \(totalFiles == 1 ? "file" : "files") to index.",
+                force: true
+            )
+        case .fileIndexed(_, let indexed, let total):
+            // Rate-limited: at most ~3 per second per the acceptance
+            // criteria, so VoiceOver flow stays polite even on a
+            // 50k-file vault.
+            announceScan(
+                message: "Indexed \(indexed) of \(total) files.",
+                force: false
+            )
+        case .finished(let report):
+            announceScan(
+                message: "Scan complete. "
+                    + "\(report.filesIndexed) "
+                    + (report.filesIndexed == 1 ? "file" : "files")
+                    + " indexed.",
+                force: true
+            )
+            // Clear so the progress bar hides; loadFiles' post-scan
+            // populate runs next and updates `files`.
+            scanProgress = nil
+        case .cancelled, .failed:
+            // No "finished" announcement. Failed is surfaced via
+            // `scanError` (the existing path); cancelled is silent
+            // because closeVault / next-vault flow is already
+            // visible.
+            scanProgress = nil
+        }
+    }
+
+    /// Post a VoiceOver announcement subject to the rate guard. When
+    /// `force` is true the announcement always fires (used for
+    /// Started/Finished). Otherwise it only fires if the clock has
+    /// advanced past the configured min-interval since the last fire.
+    private func announceScan(message: String, force: Bool) {
+        let now = scanClock()
+        if !force,
+            now.timeIntervalSince(scanAnnouncementLastFiredAt) < scanAnnouncementMinInterval
+        {
+            return
+        }
+        scanAnnouncementLastFiredAt = now
+        scanAnnouncementCount += 1
+        scanAnnouncementLastMessage = message
+        postAccessibilityAnnouncement(message)
     }
 
     // MARK: - Private
