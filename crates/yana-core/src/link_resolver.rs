@@ -121,11 +121,16 @@ pub fn resolve_link(
         return ResolvedLink::External;
     }
 
-    // Normalize the input: strip a leading `./` so `./notes/foo.md`
-    // resolves the same as `notes/foo.md`. Multiple `../` is out of
-    // scope at this layer — wiki/markdown links pointing at parent
-    // directories of the vault aren't supported by the indexer.
-    let normalized = trimmed.strip_prefix("./").unwrap_or(trimmed);
+    // Normalize the input: strip a leading `./` or `/` so
+    // `./notes/foo.md` and `/notes/foo.md` both resolve the same as
+    // `notes/foo.md`. Obsidian renders a leading `/` as vault-rooted;
+    // we match that. Multiple `../` is out of scope at this layer —
+    // wiki/markdown links pointing at parent directories of the vault
+    // aren't supported by the indexer.
+    let normalized = trimmed
+        .strip_prefix("./")
+        .or_else(|| trimmed.strip_prefix('/'))
+        .unwrap_or(trimmed);
     // Folder-qualified path: contains `/`. Try exact (literal),
     // then add each Markdown extension if the input has no extension.
     if normalized.contains('/') {
@@ -233,12 +238,17 @@ fn tiebreak<'a>(candidates: &[&'a str], source_path: &str) -> &'a str {
 /// Distance between two locations measured by directory components.
 /// Common prefix counts as 0; everything that differs adds 1 per
 /// side. Files in the same directory have distance 0.
+///
+/// Comparison is case-insensitive to stay consistent with the rest
+/// of the resolver — otherwise a vault on a case-insensitive
+/// filesystem (HFS+, default APFS) could rank `Notes/foo.md` and
+/// `notes/foo.md` as different directories and break the tiebreak.
 fn directory_distance(source_dirs: &[&str], target_path: &str) -> usize {
     let target_dirs = dir_components(target_path);
     let common = source_dirs
         .iter()
         .zip(target_dirs.iter())
-        .take_while(|(a, b)| a == b)
+        .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
         .count();
     (source_dirs.len() - common) + (target_dirs.len() - common)
 }
@@ -451,5 +461,32 @@ mod tests {
         let index = idx(&["notes/foo.md"]);
         let r = resolve_link("", None, "notes/index.md", &index);
         assert!(matches!(r, ResolvedLink::Unresolved { .. }), "got {:?}", r);
+    }
+
+    #[test]
+    fn leading_slash_is_normalized_to_vault_root() {
+        // Obsidian treats `/notes/foo.md` as vault-relative from the
+        // root; we match that by stripping the leading slash before
+        // resolving.
+        let index = idx(&["notes/foo.md"]);
+        let r = resolve_link("/notes/foo.md", None, "elsewhere/source.md", &index);
+        assert_eq!(resolved_path(&r), "notes/foo.md");
+    }
+
+    #[test]
+    fn leading_slash_with_implied_extension() {
+        let index = idx(&["notes/foo.md"]);
+        let r = resolve_link("/notes/foo", None, "elsewhere/source.md", &index);
+        assert_eq!(resolved_path(&r), "notes/foo.md");
+    }
+
+    #[test]
+    fn tiebreak_directory_comparison_is_case_insensitive() {
+        // Case-insensitive filesystems (HFS+, default APFS) can record
+        // mixed casing for the same directory; the resolver should
+        // treat `Notes` and `notes` as the same parent for distance.
+        let index = idx(&["Notes/foo.md", "archive/foo.md"]);
+        let r = resolve_link("foo", None, "notes/journal/today.md", &index);
+        assert_eq!(resolved_path(&r), "Notes/foo.md");
     }
 }
