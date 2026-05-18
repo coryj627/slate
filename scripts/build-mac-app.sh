@@ -21,13 +21,22 @@ fi
 
 RUN=0
 SKIP_A11Y_CHECK=0
+BUNDLE=0
 for arg in "$@"; do
     case "$arg" in
-        --run) RUN=1 ;;
+        --run) RUN=1; BUNDLE=1 ;;
+        --bundle) BUNDLE=1 ;;
         --skip-a11y-check) SKIP_A11Y_CHECK=1 ;;
         --help|-h)
-            echo "usage: $0 [--run] [--skip-a11y-check]"
-            echo "  --run               Launch the app after building."
+            echo "usage: $0 [--run] [--bundle] [--skip-a11y-check]"
+            echo "  --run               Build, wrap in .app bundle, and launch."
+            echo "                      Implies --bundle."
+            echo "  --bundle            Wrap the SwiftPM binary in a YanaMac.app"
+            echo "                      bundle so macOS Accessibility (VoiceOver)"
+            echo "                      can introspect it. SwiftPM-built bare"
+            echo "                      executables aren't registered with"
+            echo "                      LaunchServices, so VoiceOver can't reach"
+            echo "                      their AX tree when launched from a shell."
             echo "  --skip-a11y-check   Don't run a11y-check after swift build."
             echo "                      Useful for CI jobs that only care about"
             echo "                      build/test pass and leave a11y to its"
@@ -76,6 +85,110 @@ echo "Built: $ABS_BINARY"
 echo "Run with:"
 echo "  DYLD_LIBRARY_PATH=\"$WORKSPACE_ROOT/$TARGET_DIR\" $ABS_BINARY"
 
+APP_BUNDLE="$WORKSPACE_ROOT/$APP_DIR/.build/$PROFILE/YanaMac.app"
+if [[ "$BUNDLE" == "1" ]]; then
+    # Wrap the SwiftPM binary in a minimal .app bundle so the AX bridge
+    # works. Without an Info.plist + LaunchServices registration, VoiceOver
+    # can see the window but can't navigate the AX tree — observed when
+    # launching the bare binary from a shell.
+    echo
+    echo "==> Wrapping binary in $APP_BUNDLE"
+    rm -rf "$APP_BUNDLE"
+    mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Frameworks"
+
+    cp -f "$ABS_BINARY" "$APP_BUNDLE/Contents/MacOS/YanaMac"
+    # The binary links against the dylib at its build path (with `deps/`).
+    # We mirror that exact path inside the bundle for the rewrite below,
+    # using `target/$PROFILE/libyana_uniffi.dylib` as the source — both
+    # copies have the same content; we don't depend on `deps/` existing
+    # in the bundle.
+    cp -f "$WORKSPACE_ROOT/$TARGET_DIR/libyana_uniffi.dylib" \
+        "$APP_BUNDLE/Contents/Frameworks/libyana_uniffi.dylib"
+
+    # The binary's recorded reference points at the absolute deps/ path.
+    # Read it back from the binary itself rather than reconstructing —
+    # APFS's case-insensitive matching means `pwd` and the recorded
+    # path can differ in case (e.g. /Users/coryj/Dev/... vs
+    # /Users/coryj/dev/...), and `install_name_tool -change` does
+    # exact-string matching.
+    OLD_DYLIB_PATH=$(otool -L "$APP_BUNDLE/Contents/MacOS/YanaMac" \
+        | awk '/libyana_uniffi\.dylib/{print $1; exit}')
+    if [[ -z "$OLD_DYLIB_PATH" ]]; then
+        echo "error: could not find libyana_uniffi.dylib reference in binary" >&2
+        exit 1
+    fi
+    install_name_tool -change "$OLD_DYLIB_PATH" \
+        "@executable_path/../Frameworks/libyana_uniffi.dylib" \
+        "$APP_BUNDLE/Contents/MacOS/YanaMac"
+    # The dylib's own LC_ID_DYLIB still points at the absolute deps/
+    # path. Rewriting it lets any future tools that re-resolve via
+    # install_name see the bundle-relative one.
+    install_name_tool -id \
+        "@executable_path/../Frameworks/libyana_uniffi.dylib" \
+        "$APP_BUNDLE/Contents/Frameworks/libyana_uniffi.dylib"
+
+    cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>YANA</string>
+    <key>CFBundleExecutable</key>
+    <string>YanaMac</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.startingblind.yana.dev</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>YANA</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.1</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+</dict>
+</plist>
+PLIST
+
+    # `install_name_tool` invalidates the ad-hoc signature SwiftPM
+    # gave the binary; re-sign so Gatekeeper / hardened-runtime don't
+    # refuse to launch and AX permissions don't get confused. Ad-hoc
+    # signing ("-") is fine for local dev; CI / distribution would
+    # need a real identity.
+    codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libyana_uniffi.dylib"
+    codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/YanaMac"
+    codesign --force --sign - "$APP_BUNDLE"
+
+    # Re-register with LaunchServices so the AX system sees the new
+    # bundle right away (Spotlight/LS sometimes caches the previous
+    # location otherwise). Non-fatal: a missing lsregister just means
+    # the user has to open Finder once before VoiceOver picks it up.
+    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+    if [[ -x "$LSREGISTER" ]]; then
+        "$LSREGISTER" -f "$APP_BUNDLE" >/dev/null 2>&1 || true
+    fi
+
+    echo
+    echo "App bundle: $APP_BUNDLE"
+    echo "Launch with VoiceOver-friendly AX wiring:"
+    echo "  open \"$APP_BUNDLE\""
+fi
+
 # Best-effort SwiftUI accessibility check using
 # cvs-health/ios-swiftui-accessibility-techniques' a11y-check. CI runs
 # the canonical version of this; locally we surface findings inline so
@@ -106,6 +219,10 @@ fi
 
 if [[ "$RUN" == "1" ]]; then
     echo
-    echo "==> Launching YanaMac"
-    DYLD_LIBRARY_PATH="$WORKSPACE_ROOT/$TARGET_DIR" "$ABS_BINARY"
+    echo "==> Launching YanaMac (.app bundle)"
+    # `open` hands off to LaunchServices, which registers the bundle
+    # with the window server / AX system. The bare binary path
+    # ($ABS_BINARY) works for non-AX UI testing but is invisible to
+    # VoiceOver — use the bundle for any screen-reader work.
+    open "$APP_BUNDLE"
 fi
