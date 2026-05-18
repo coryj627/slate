@@ -215,15 +215,32 @@ where
 /// fragment-only / `//host` references) as external. Bare relative
 /// paths fall through as internal so #49 can resolve them against
 /// the vault index.
+///
+/// "External" here means "not a note-to-note link" — URLs, mailto,
+/// tel, and in-document fragments (`#intro`) all qualify, because
+/// none of them should produce backlinks against another vault file.
 fn looks_external(url: &str) -> bool {
+    // In-document anchors (`#section`) aren't note-to-note links.
+    if url.starts_with('#') {
+        return true;
+    }
+    // Protocol-relative URLs.
     if url.starts_with("//") {
         return true;
     }
     if let Some(colon_idx) = url.find(':') {
         let scheme = &url[..colon_idx];
-        if !scheme.is_empty() && scheme.chars().all(|c| {
-            c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.'
-        }) {
+        // Require scheme length >= 2 so Windows drive letters
+        // (`C:\notes\foo.md`, `D:/projects/...`) stay internal rather
+        // than getting matched by the alphanumeric-scheme rule. RFC
+        // 3986 allows 1-char schemes in theory but none are in real
+        // use; this gives us cross-platform path safety without
+        // sacrificing any URL coverage.
+        if scheme.len() >= 2
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
             return true;
         }
     }
@@ -237,14 +254,16 @@ fn scan_wikilinks(source: &str, code_ranges: &[(usize, usize)]) -> Vec<ParsedLin
     let mut links = Vec::new();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-            if !is_escaped_at(bytes, i) && !in_any_range(i, code_ranges) {
-                if let Some(parsed) = try_parse_wikilink(source, bytes, i) {
-                    let span_end = parsed.span_end;
-                    links.push(parsed);
-                    i = span_end;
-                    continue;
-                }
+        if bytes[i] == b'['
+            && bytes[i + 1] == b'['
+            && !is_escaped_at(bytes, i)
+            && !in_any_range(i, code_ranges)
+        {
+            if let Some(parsed) = try_parse_wikilink(source, bytes, i) {
+                let span_end = parsed.span_end;
+                links.push(parsed);
+                i = span_end;
+                continue;
             }
         }
         i += 1;
@@ -287,9 +306,8 @@ fn try_parse_wikilink(source: &str, bytes: &[u8], start: usize) -> Option<Parsed
             let span_end = i + 2;
             // Embed prefix: an UNESCAPED `!` immediately before the
             // opening `[[`.
-            let is_embed = start > 0
-                && bytes[start - 1] == b'!'
-                && !is_escaped_at(bytes, start - 1);
+            let is_embed =
+                start > 0 && bytes[start - 1] == b'!' && !is_escaped_at(bytes, start - 1);
             let span_start = if is_embed { start - 1 } else { start };
 
             let body = &source[body_start..body_end];
@@ -384,7 +402,10 @@ mod tests {
         assert!(link.anchor.is_none());
         assert!(!link.is_embed);
         assert!(!link.is_external);
-        assert_eq!(&"see [[Alpha]] for context"[link.span_start..link.span_end], "[[Alpha]]");
+        assert_eq!(
+            &"see [[Alpha]] for context"[link.span_start..link.span_end],
+            "[[Alpha]]"
+        );
     }
 
     #[test]
@@ -487,6 +508,41 @@ mod tests {
         let links = extract_links("ping me: [you](mailto:me@example.com)");
         assert_eq!(links.len(), 1);
         assert!(links[0].is_external);
+    }
+
+    #[test]
+    fn markdown_fragment_only_is_external() {
+        // `#intro` is an in-document anchor, not a vault file. The
+        // backlinks table doesn't want a phantom edge from a note to
+        // itself.
+        let links = extract_links("jump to [intro](#intro)");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_external);
+        assert_eq!(target(&links[0]), "#intro");
+    }
+
+    #[test]
+    fn markdown_windows_drive_letter_is_internal() {
+        // `C:\foo\bar.md` is a filesystem path, not a URL scheme.
+        // looks_external requires scheme length >= 2 so single-letter
+        // drive references stay internal for #49's resolver.
+        let links = extract_links("[file](C:\\notes\\intro.md)");
+        assert_eq!(links.len(), 1);
+        assert!(!links[0].is_external, "got {:?}", links[0]);
+    }
+
+    #[test]
+    fn escaped_embed_prefix_does_not_set_embed_flag() {
+        // `\!` escapes the bang, so what follows is a plain wikilink,
+        // not an embed — and the span shouldn't include the escaped
+        // bang either.
+        let source = r"\![[Alpha]]";
+        let links = extract_links(source);
+        assert_eq!(links.len(), 1);
+        assert!(!links[0].is_embed);
+        // span starts at the `[` after the escaped `\!`, not at the
+        // `\` or `!`.
+        assert_eq!(&source[links[0].span_start..links[0].span_end], "[[Alpha]]");
     }
 
     #[test]
