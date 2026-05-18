@@ -57,6 +57,22 @@ final class AppState: ObservableObject {
     /// UI alerts don't cross-fire.
     @Published var noteLoadError: String?
 
+    /// Inbound links to the currently-selected note. Updated whenever
+    /// `selectedFilePath` changes. Empty while no note is selected or
+    /// while the query is still in flight.
+    @Published private(set) var currentBacklinks: [Backlink] = []
+    /// Outgoing links from the currently-selected note — resolved,
+    /// unresolved, and external in document order. Same lifecycle as
+    /// `currentBacklinks`.
+    @Published private(set) var currentOutgoingLinks: [OutgoingLink] = []
+    /// True while a backlinks/outgoing fetch is in flight. The panels
+    /// use this to decide whether to show a `ProgressView`.
+    @Published private(set) var isLoadingLinks: Bool = false
+    /// Surfaced when the link queries fail (rare — would mean SQLite
+    /// itself errored). Independent of `noteLoadError` so the panels'
+    /// alert state doesn't cross-fire with the content pane's.
+    @Published var linksLoadError: String?
+
     /// One-shot channel for "scroll the content pane to this heading
     /// anchor." `OutlineSidebar` sends; `NoteContentView` subscribes
     /// via `.onReceive`. PassthroughSubject (not @Published) so
@@ -73,6 +89,12 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight note-load task. Same shape as
     /// `scanTask` so tests can await deterministically.
     private(set) var noteLoadTask: Task<Void, Never>?
+
+    /// Handle on the in-flight links-fetch task. Held separately from
+    /// `noteLoadTask` so the panels can stay responsive while the
+    /// note content loads, and so tests can await each path
+    /// independently.
+    private(set) var linksLoadTask: Task<Void, Never>?
 
     /// Total announcements fired since the most recent vault was
     /// opened. Internal so the test target can verify the rate-guard
@@ -131,15 +153,24 @@ final class AppState: ObservableObject {
     private func handleSelectionChange(to path: String?) {
         noteLoadTask?.cancel()
         noteLoadTask = nil
+        linksLoadTask?.cancel()
+        linksLoadTask = nil
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
+        currentBacklinks = []
+        currentOutgoingLinks = []
+        linksLoadError = nil
         guard let path else {
             isLoadingNote = false
+            isLoadingLinks = false
             return
         }
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
+        }
+        linksLoadTask = Task { [weak self] in
+            await self?.loadCurrentLinks(path: path)
         }
     }
 
@@ -218,6 +249,8 @@ final class AppState: ObservableObject {
         scanTask = nil
         noteLoadTask?.cancel()
         noteLoadTask = nil
+        linksLoadTask?.cancel()
+        linksLoadTask = nil
         currentSession = nil
         currentVaultURL = nil
         files = []
@@ -226,8 +259,12 @@ final class AppState: ObservableObject {
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
+        currentBacklinks = []
+        currentOutgoingLinks = []
+        linksLoadError = nil
         isScanning = false
         isLoadingNote = false
+        isLoadingLinks = false
         scanProgress = nil
     }
 
@@ -351,7 +388,6 @@ final class AppState: ObservableObject {
     func loadCurrentNote(path: String) async {
         guard let session = currentSession else { return }
         isLoadingNote = true
-        defer { isLoadingNote = false }
 
         let result: Result<(String, [Heading]), VaultError> = await Task.detached(priority: .userInitiated) {
             do {
@@ -370,9 +406,10 @@ final class AppState: ObservableObject {
             }
         }.value
 
-        // Drop the result if the user has already moved on (closed
-        // the vault, selected a different note). Without this the
-        // pane could flash stale content for ~100 ms after a switch.
+        // Don't touch `isLoadingNote` if the user has already moved
+        // on. Same reasoning as `loadCurrentLinks`: the newer task
+        // already set the flag, and clearing it here would flicker
+        // the loading state off briefly.
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
@@ -385,6 +422,58 @@ final class AppState: ObservableObject {
             currentNoteHeadings = []
             noteLoadError = humanReadable(error)
         }
+        isLoadingNote = false
+    }
+
+    /// Load the inbound (backlinks) and outgoing-links lists for the
+    /// currently-selected note off the main actor. Both queries hit
+    /// the same SQLite mutex so we run them in one detached task to
+    /// keep the lock-contention picture predictable.
+    ///
+    /// The backlinks query is bounded with a generous page size
+    /// (200) because the sidebar panel doesn't yet paginate — that
+    /// lands when we wire link activation in #C5. Vaults with more
+    /// than 200 inbound links to a single note are vanishingly rare
+    /// in V1 territory and will get a "+ more" affordance later.
+    func loadCurrentLinks(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingLinks = true
+
+        let result: Result<([Backlink], [OutgoingLink]), VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    let backlinksPage = try session.backlinks(
+                        path: path,
+                        paging: Paging(cursor: nil, limit: 200)
+                    )
+                    let outgoing = try session.outgoingLinks(path: path)
+                    return .success((backlinksPage.items, outgoing))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+
+        // Don't touch `isLoadingLinks` if the user has already moved
+        // on: a newer task is in flight and has already re-set the
+        // flag to `true`, so clearing it here would flicker the
+        // spinner off mid-load. The newer task owns the flag's
+        // lifecycle from this point on.
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+
+        switch result {
+        case .success(let (backlinks, outgoing)):
+            currentBacklinks = backlinks
+            currentOutgoingLinks = outgoing
+            linksLoadError = nil
+        case .failure(let error):
+            currentBacklinks = []
+            currentOutgoingLinks = []
+            linksLoadError = humanReadable(error)
+        }
+        isLoadingLinks = false
     }
 
     // MARK: - Scan progress
