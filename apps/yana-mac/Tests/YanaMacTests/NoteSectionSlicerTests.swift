@@ -225,5 +225,25 @@ final class NoteSectionSlicerTests: XCTestCase {
         XCTAssertEqual(sections.count, 2)
         XCTAssertEqual(sections[0].anchorId, "title")
         XCTAssertEqual(sections[1].anchorId, "sub")
+        // Bodies must be CR-free too — otherwise the renderer would
+        // display stray control characters where a Mac-Classic source
+        // had paragraph breaks.
+        XCTAssertFalse(sections[0].body.contains("\r"))
+        XCTAssertFalse(sections[1].body.contains("\r"))
+    }
+
+    func testSliceNormalizesMixedLineEndings() {
+        // Real-world Markdown can mix line endings when content is
+        // pasted between platforms — a CRLF heading followed by an
+        // LF heading must still produce two sections.
+        let text = "# Alpha\r\nintro line\n## Beta\rbody\n### Gamma\r\ntail"
+        let headings = [h(1, "Alpha", ordinal: 0, anchorId: "alpha"),
+                        h(2, "Beta", ordinal: 1, anchorId: "beta"),
+                        h(3, "Gamma", ordinal: 2, anchorId: "gamma")]
+        let sections = sliceIntoSections(text: text, headings: headings)
+        XCTAssertEqual(sections.map(\.anchorId), ["alpha", "beta", "gamma"])
+        for section in sections {
+            XCTAssertFalse(section.body.contains("\r"), "section \(section.anchorId) leaked \\r")
+        }
     }
 }
