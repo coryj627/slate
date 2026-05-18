@@ -348,6 +348,161 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.currentNoteHeadings, [])
     }
 
+    // MARK: - Scan progress
+
+    private func makeReport(filesIndexed: UInt64 = 0) -> ScanReport {
+        ScanReport(
+            filesSeen: filesIndexed,
+            filesIndexed: filesIndexed,
+            filesSkipped: 0,
+            bytesProcessed: 0,
+            errors: []
+        )
+    }
+
+    func testStartedEventAlwaysAnnouncesAndPublishesProgress() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 42))
+
+        if case .started(let total)? = state.scanProgress {
+            XCTAssertEqual(total, 42)
+        } else {
+            XCTFail("expected scanProgress to be .started, got \(String(describing: state.scanProgress))")
+        }
+        XCTAssertEqual(state.scanAnnouncementCount, 1)
+        XCTAssertEqual(
+            state.scanAnnouncementLastMessage,
+            "Scanning vault. 42 files to index."
+        )
+    }
+
+    func testFileIndexedRespectsRateGuard() throws {
+        let state = try makeAppState()
+        // Pin the clock so the rate guard is deterministic.
+        var now = Date(timeIntervalSinceReferenceDate: 0)
+        state.scanClock = { now }
+
+        state.handleScanProgress(.started(totalFiles: 10))
+        // One announcement for Started.
+        XCTAssertEqual(state.scanAnnouncementCount, 1)
+
+        // Fire 10 FileIndexed events at +50ms each: 500ms of simulated
+        // time. The rate guard is 350ms, so we should see at most two
+        // additional announcements (at 350 and 700 ms of accumulated
+        // gap, but capped by the 10 events spread across 500ms — only
+        // one extra fire is possible inside that window).
+        for i in 1...10 {
+            now = now.addingTimeInterval(0.050)
+            state.handleScanProgress(
+                .fileIndexed(path: "n\(i).md", indexed: UInt64(i), total: 10)
+            )
+        }
+        // Started + one rate-limited FileIndexed fire inside 500ms.
+        XCTAssertLessThanOrEqual(state.scanAnnouncementCount, 3)
+        XCTAssertGreaterThanOrEqual(state.scanAnnouncementCount, 2)
+    }
+
+    func testRateGuardAllowsThreePerSecondNotMore() throws {
+        let state = try makeAppState()
+        var now = Date(timeIntervalSinceReferenceDate: 0)
+        state.scanClock = { now }
+
+        // 30 events evenly spread over one second of simulated time.
+        // 1 / 0.030s spacing = ~33 events; the 350ms guard should
+        // allow ~3 fires over that second (plus one initial for
+        // Started). Acceptance criteria caps at ~3/s — assert <= 4
+        // counting Started.
+        state.handleScanProgress(.started(totalFiles: 30))
+        for i in 1...30 {
+            now = now.addingTimeInterval(1.0 / 30.0)
+            state.handleScanProgress(
+                .fileIndexed(path: "n\(i).md", indexed: UInt64(i), total: 30)
+            )
+        }
+        XCTAssertLessThanOrEqual(
+            state.scanAnnouncementCount, 4,
+            "rate guard must keep total announcements per simulated second to <= 3 + Started"
+        )
+    }
+
+    func testFinishedAnnouncesAndClearsProgress() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 5))
+        state.handleScanProgress(.finished(report: makeReport(filesIndexed: 5)))
+
+        // Finished must clear scanProgress so the sidebar progress bar
+        // disappears even though the file list will repopulate next.
+        XCTAssertNil(state.scanProgress)
+        XCTAssertEqual(
+            state.scanAnnouncementLastMessage,
+            "Scan complete. 5 files indexed."
+        )
+    }
+
+    func testCancelledClearsProgressWithoutAnnouncing() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 5))
+        let countAfterStarted = state.scanAnnouncementCount
+
+        state.handleScanProgress(.cancelled)
+
+        // No additional announcement — closeVault/next-vault flow is
+        // already visible, screen-reader users don't need another
+        // interruption.
+        XCTAssertEqual(state.scanAnnouncementCount, countAfterStarted)
+        XCTAssertNil(state.scanProgress)
+    }
+
+    func testFailedClearsProgressWithoutAnnouncing() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 5))
+        let countAfterStarted = state.scanAnnouncementCount
+
+        state.handleScanProgress(.failed(message: "disk gone"))
+
+        // Failures surface through scanError (the existing path); the
+        // accessibility live region stays quiet so we don't double-fire.
+        XCTAssertEqual(state.scanAnnouncementCount, countAfterStarted)
+        XCTAssertNil(state.scanProgress)
+    }
+
+    func testCloseVaultClearsScanProgress() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 10))
+        XCTAssertNotNil(state.scanProgress)
+
+        state.closeVault()
+        XCTAssertNil(state.scanProgress)
+    }
+
+    func testStartedFromSecondVaultGetsItsOwnAnnouncement() async throws {
+        // Bug class: counters persisting across vaults could cause
+        // the second vault's Started to be suppressed (e.g. if we
+        // reused the rate guard's last-fired timestamp). openVault
+        // resets the bookkeeping; this test pins it.
+        let vaultA = tempDir.appendingPathComponent("a")
+        try FileManager.default.createDirectory(at: vaultA, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vaultA.appendingPathComponent("a.md"))
+        let vaultB = tempDir.appendingPathComponent("b")
+        try FileManager.default.createDirectory(at: vaultB, withIntermediateDirectories: true)
+        try Data("# B".utf8).write(to: vaultB.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vaultA)
+        await state.scanTask?.value
+        let countA = state.scanAnnouncementCount
+
+        state.openVault(at: vaultB)
+        // openVault resets scanAnnouncementCount; assert that explicitly.
+        XCTAssertEqual(
+            state.scanAnnouncementCount, 0,
+            "openVault must reset the per-vault announcement counter"
+        )
+        await state.scanTask?.value
+        XCTAssertGreaterThan(state.scanAnnouncementCount, 0)
+        XCTAssertGreaterThan(countA, 0)
+    }
+
     func testRequestScrollToHeadingPublishesAnchor() throws {
         let state = try makeAppState()
 
