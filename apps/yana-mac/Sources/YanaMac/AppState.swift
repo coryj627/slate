@@ -274,8 +274,14 @@ final class AppState: ObservableObject {
         // strong reference here is enough to keep the FFI handle live
         // for the duration of the scan; uniffi releases it when the
         // last Swift reference goes away.
+        // The Task closure needs its own explicit `[weak self]` so
+        // strict-concurrency mode (Swift 6 / sendability checks) can
+        // verify the capture is sendable across the @Sendable boundary
+        // — without it, the implicit re-capture of `self?` from the
+        // outer closure trips a "reference to captured var 'self' in
+        // concurrently-executing code" diagnostic on the CI toolchain.
         let adapter = ScanProgressAdapter { [weak self] event in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.handleScanProgress(event)
             }
         }
