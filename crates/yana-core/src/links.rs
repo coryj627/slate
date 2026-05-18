@@ -230,18 +230,20 @@ fn looks_external(url: &str) -> bool {
     }
     if let Some(colon_idx) = url.find(':') {
         let scheme = &url[..colon_idx];
-        // Require scheme length >= 2 so Windows drive letters
-        // (`C:\notes\foo.md`, `D:/projects/...`) stay internal rather
-        // than getting matched by the alphanumeric-scheme rule. RFC
-        // 3986 allows 1-char schemes in theory but none are in real
-        // use; this gives us cross-platform path safety without
-        // sacrificing any URL coverage.
-        if scheme.len() >= 2
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
-        {
-            return true;
+        // RFC 3986: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+        // We also require length >= 2 so Windows drive letters
+        // (`C:\notes\foo.md`, `D:/projects/...`) stay internal. The
+        // ALPHA-first rule additionally rules out filenames whose
+        // pre-colon segment is digit-leading like `2024:report.md`.
+        let mut scheme_chars = scheme.chars();
+        if let Some(first) = scheme_chars.next() {
+            if scheme.len() >= 2
+                && first.is_ascii_alphabetic()
+                && scheme_chars
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+            {
+                return true;
+            }
         }
     }
     false
@@ -527,6 +529,17 @@ mod tests {
         // looks_external requires scheme length >= 2 so single-letter
         // drive references stay internal for #49's resolver.
         let links = extract_links("[file](C:\\notes\\intro.md)");
+        assert_eq!(links.len(), 1);
+        assert!(!links[0].is_external, "got {:?}", links[0]);
+    }
+
+    #[test]
+    fn markdown_numeric_leading_filename_with_colon_is_internal() {
+        // `2024:report.md` is a valid POSIX filename. RFC 3986 says
+        // scheme must start with ALPHA, so the digit-leading segment
+        // before the colon doesn't count as a scheme and the link
+        // stays internal for #49's resolver.
+        let links = extract_links("[file](2024:report.md)");
         assert_eq!(links.len(), 1);
         assert!(!links[0].is_external, "got {:?}", links[0]);
     }
