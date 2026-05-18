@@ -162,8 +162,17 @@ struct FileListSidebar: View {
     }
 
     private func row(for file: FileSummary) -> some View {
+        // Explicit `.primary` / `.secondary` so the text colors don't
+        // fall back to whatever inherited container style happens to
+        // be in scope. Xcode's Accessibility Inspector reported
+        // contrast failures on these rows with foreground and
+        // background colors nearly identical (#100F16 vs #101016) —
+        // most likely the inspector sampling antialiased edges on a
+        // dark sidebar bg, but pinning the foreground style makes
+        // the intent unambiguous either way.
         VStack(alignment: .leading, spacing: 2) {
             Text(file.name)
+                .foregroundStyle(.primary)
             Text("Modified \(relativeDate(for: file.mtimeMs))")
                 .font(.caption)
                 .foregroundStyle(.secondary)

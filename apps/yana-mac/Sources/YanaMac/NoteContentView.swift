@@ -158,7 +158,6 @@ struct NoteContentView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .textSelection(.enabled)
         .accessibilityLabel(accessibilityLabelForContent)
     }
 
@@ -174,8 +173,19 @@ struct NoteContentView: View {
                     .accessibilityHeading(headingLevel(for: heading.level))
             }
             if !section.body.isEmpty {
+                // `.textSelection` is on the body Text only (not the
+                // wrapping VStack or the outer container). When applied
+                // to a container, SwiftUI on macOS wraps the *whole*
+                // descendant chain in one NSTextView, which both (a)
+                // makes the section heading uncombinable as its own AX
+                // header element, and (b) was observed to stall
+                // VoiceOver reading after ~5 lines of body content
+                // because the AX tree fragmentation breaks continuous
+                // navigation. Per-body selection keeps the AX tree
+                // intact while still letting users copy prose.
                 Text(section.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
