@@ -196,6 +196,33 @@ impl VaultSession {
             .scan_initial_with_progress(&cancel.inner, Some(adapter))?;
         Ok(report.into())
     }
+
+    /// All outgoing links from `path` in document order, including
+    /// resolved (internal-and-found), unresolved (internal-and-missing),
+    /// and external links. UI uses `kind` + `is_external` +
+    /// `is_unresolved` to render each in its own style.
+    pub fn outgoing_links(&self, path: String) -> Result<Vec<OutgoingLink>, VaultError> {
+        Ok(self
+            .inner
+            .outgoing_links(&path)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Paged inbound-link query: every file that links TO `path`,
+    /// with a cached ±60-char snippet. External links never appear
+    /// here.
+    pub fn backlinks(&self, path: String, paging: Paging) -> Result<BacklinkPage, VaultError> {
+        let page = self.inner.backlinks(&path, paging.into())?;
+        Ok(page.into())
+    }
+
+    /// Paged vault-wide audit of unresolved internal links.
+    pub fn list_unresolved_links(&self, paging: Paging) -> Result<UnresolvedLinkPage, VaultError> {
+        let page = self.inner.list_unresolved_links(paging.into())?;
+        Ok(page.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -323,6 +350,127 @@ pub struct FileSummaryPage {
 
 impl From<core::Page<core::FileSummary>> for FileSummaryPage {
     fn from(p: core::Page<core::FileSummary>) -> Self {
+        Self {
+            items: p.items.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
+            total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// Anchor suffix on a wikilink target as exposed across FFI.
+///
+/// Kept simple (kind + text) so foreign callers don't have to model a
+/// tagged-union — the kind string is one of `"heading"` or `"block"`.
+#[derive(uniffi::Record)]
+pub struct LinkAnchor {
+    pub kind: String,
+    pub text: String,
+}
+
+/// Single outgoing link from a source file, as returned by
+/// `outgoing_links`.
+#[derive(uniffi::Record)]
+pub struct OutgoingLink {
+    pub target_path: Option<String>,
+    pub target_raw: String,
+    pub target_anchor: Option<LinkAnchor>,
+    pub kind: String,
+    pub is_embed: bool,
+    pub is_external: bool,
+    pub is_unresolved: bool,
+    pub snippet: String,
+    pub ordinal: u32,
+}
+
+impl From<core::OutgoingLink> for OutgoingLink {
+    fn from(l: core::OutgoingLink) -> Self {
+        Self {
+            target_path: l.target_path,
+            target_raw: l.target_raw,
+            target_anchor: l
+                .target_anchor
+                .map(|(kind, text)| LinkAnchor { kind, text }),
+            kind: l.kind,
+            is_embed: l.is_embed,
+            is_external: l.is_external,
+            is_unresolved: l.is_unresolved,
+            snippet: l.snippet,
+            ordinal: l.ordinal,
+        }
+    }
+}
+
+/// One backlink — a file that links TO the queried path.
+#[derive(uniffi::Record)]
+pub struct Backlink {
+    pub source_path: String,
+    pub snippet: String,
+    pub ordinal: u32,
+    pub kind: String,
+    pub is_embed: bool,
+}
+
+impl From<core::Backlink> for Backlink {
+    fn from(b: core::Backlink) -> Self {
+        Self {
+            source_path: b.source_path,
+            snippet: b.snippet,
+            ordinal: b.ordinal,
+            kind: b.kind,
+            is_embed: b.is_embed,
+        }
+    }
+}
+
+/// Paged backlinks result.
+#[derive(uniffi::Record)]
+pub struct BacklinkPage {
+    pub items: Vec<Backlink>,
+    pub next_cursor: Option<String>,
+    pub total_filtered: u64,
+}
+
+impl From<core::Page<core::Backlink>> for BacklinkPage {
+    fn from(p: core::Page<core::Backlink>) -> Self {
+        Self {
+            items: p.items.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
+            total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// One row in the vault-wide unresolved-links audit.
+#[derive(uniffi::Record)]
+pub struct UnresolvedLink {
+    pub source_path: String,
+    pub target_raw: String,
+    pub ordinal: u32,
+    pub snippet: String,
+}
+
+impl From<core::UnresolvedLink> for UnresolvedLink {
+    fn from(u: core::UnresolvedLink) -> Self {
+        Self {
+            source_path: u.source_path,
+            target_raw: u.target_raw,
+            ordinal: u.ordinal,
+            snippet: u.snippet,
+        }
+    }
+}
+
+/// Paged unresolved-link audit result.
+#[derive(uniffi::Record)]
+pub struct UnresolvedLinkPage {
+    pub items: Vec<UnresolvedLink>,
+    pub next_cursor: Option<String>,
+    pub total_filtered: u64,
+}
+
+impl From<core::Page<core::UnresolvedLink>> for UnresolvedLinkPage {
+    fn from(p: core::Page<core::UnresolvedLink>) -> Self {
         Self {
             items: p.items.into_iter().map(Into::into).collect(),
             next_cursor: p.next_cursor,
