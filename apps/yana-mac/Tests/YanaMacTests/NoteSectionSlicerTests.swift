@@ -195,4 +195,35 @@ final class NoteSectionSlicerTests: XCTestCase {
         let sections = sliceIntoSections(text: "", headings: [])
         XCTAssertEqual(sections, [])
     }
+
+    func testSliceNormalizesCRLFLineEndings() {
+        // Codoki callout on PR 70: a Windows-saved vault file with
+        // CRLF endings would feed each line into the parser with a
+        // trailing `\r`, so `# Title\r` wouldn't match the scanner's
+        // canonical "Title" and the whole note would render as one
+        // un-anchored block.
+        let text = "# Title ##\r\ncontent\r\n## Sub\r\nmore"
+        let headings = [h(1, "Title", ordinal: 0, anchorId: "title"),
+                        h(2, "Sub", ordinal: 1, anchorId: "sub")]
+        let sections = sliceIntoSections(text: text, headings: headings)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertEqual(sections[0].anchorId, "title")
+        XCTAssertEqual(sections[1].anchorId, "sub")
+        // Body should also be CR-free so it renders cleanly.
+        XCTAssertFalse(sections[0].body.contains("\r"))
+        XCTAssertFalse(sections[1].body.contains("\r"))
+    }
+
+    func testSliceNormalizesBareCRLineEndings() {
+        // Legacy classic-Mac files use bare \r. CommonMark §2.3 treats
+        // these the same as \n, and pulldown_cmark normalizes them on
+        // the Rust side; the Swift slicer must too.
+        let text = "# Title\rcontent\r## Sub\rmore"
+        let headings = [h(1, "Title", ordinal: 0, anchorId: "title"),
+                        h(2, "Sub", ordinal: 1, anchorId: "sub")]
+        let sections = sliceIntoSections(text: text, headings: headings)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertEqual(sections[0].anchorId, "title")
+        XCTAssertEqual(sections[1].anchorId, "sub")
+    }
 }
