@@ -22,6 +22,11 @@ tempfile = "3"
 blake3 = "1"
 trash = "5"
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+# yaml-rust2 is the actively-maintained successor to yaml-rust; serde_yaml
+# is officially deprecated as of 0.9.34. yaml-rust2 exposes the raw Yaml
+# enum which is what we want for type inference (we don't deserialize
+# into known shapes — we walk the parsed tree to classify leaves).
+yaml-rust2 = "0.11"
 
 [profile.dev]
 # Faster incremental builds during development.

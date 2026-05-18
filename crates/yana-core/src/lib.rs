@@ -7,12 +7,16 @@
 //! pre-existing heading extraction used by the FFI smoke tests.
 
 pub mod db;
+pub mod frontmatter;
 pub mod link_resolver;
 pub mod links;
 pub mod links_db;
 pub mod session;
 pub mod vault;
 
+pub use frontmatter::{
+    extract_frontmatter, frontmatter_range, Property, PropertyParseWarning, PropertyValue,
+};
 pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultIndex};
 pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
