@@ -7,8 +7,11 @@
 //! pre-existing heading extraction used by the FFI smoke tests.
 
 pub mod db;
+pub mod links;
 pub mod session;
 pub mod vault;
+
+pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 
 pub use session::{
     CancelToken, FileFilter, FileMetadata, FileSummary, Page, Paging, ScanProgress,
