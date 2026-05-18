@@ -41,12 +41,23 @@ final class AppState: ObservableObject {
     /// loaded. Nil while no note is selected or while loading is
     /// in flight.
     @Published private(set) var currentNoteText: String?
+    /// Parsed Markdown headings of the currently-selected note, in
+    /// document order. Empty while no note is selected (or when the
+    /// note has no `#` headings).
+    @Published private(set) var currentNoteHeadings: [Heading] = []
     /// True while the selected note's content is being read from disk.
     @Published private(set) var isLoadingNote: Bool = false
     /// Surfaced when reading the selected note fails. Independent of
     /// `lastError` (open path) and `scanError` (indexing path) so the
     /// UI alerts don't cross-fire.
     @Published var noteLoadError: String?
+
+    /// One-shot channel for "scroll the content pane to this heading
+    /// anchor." `OutlineSidebar` sends; `NoteContentView` subscribes
+    /// via `.onReceive`. PassthroughSubject (not @Published) so
+    /// repeated clicks on the same heading re-trigger the scroll
+    /// without needing a counter.
+    let scrollAnchorRequest = PassthroughSubject<String, Never>()
 
     /// Handle on the in-flight scan + list task kicked off by
     /// `openVault`. Exposed (internal, not Published) so tests can
@@ -97,6 +108,7 @@ final class AppState: ObservableObject {
         noteLoadTask?.cancel()
         noteLoadTask = nil
         currentNoteText = nil
+        currentNoteHeadings = []
         noteLoadError = nil
         guard let path else {
             isLoadingNote = false
@@ -105,6 +117,13 @@ final class AppState: ObservableObject {
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
+    }
+
+    /// Ask the content pane to scroll to the given heading anchor.
+    /// Sent by `OutlineSidebar` rows; `NoteContentView` subscribes via
+    /// `onReceive(scrollAnchorRequest)`.
+    func requestScrollToHeading(anchor: String) {
+        scrollAnchorRequest.send(anchor)
     }
 
     var isVaultOpen: Bool { currentSession != nil }
@@ -177,6 +196,7 @@ final class AppState: ObservableObject {
         scanError = nil
         selectedFilePath = nil
         currentNoteText = nil
+        currentNoteHeadings = []
         noteLoadError = nil
         isScanning = false
         isLoadingNote = false
@@ -269,18 +289,32 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Read the selected note's bytes off the main actor and publish
-    /// the UTF-8 string. Surfaces InvalidUtf8 / FileTooLarge / IO via
-    /// `noteLoadError`. Honors task cancellation so a fast click-
-    /// through doesn't leave a stale string in `currentNoteText`.
+    /// Read the selected note's bytes + indexed headings off the main
+    /// actor and publish both. Surfaces InvalidUtf8 / FileTooLarge / IO
+    /// via `noteLoadError`. Honors task cancellation so a fast click-
+    /// through doesn't leave a stale string in `currentNoteText` or a
+    /// stale outline.
+    ///
+    /// Both calls go in the same detached task: `read_text` and
+    /// `get_file_metadata` each take the same SQLite mutex on the Rust
+    /// side, so serializing them at the call site keeps the lock-
+    /// contention picture predictable and ensures the text + outline
+    /// we publish are from the same observation.
     func loadCurrentNote(path: String) async {
         guard let session = currentSession else { return }
         isLoadingNote = true
         defer { isLoadingNote = false }
 
-        let result: Result<String, VaultError> = await Task.detached(priority: .userInitiated) {
+        let result: Result<(String, [Heading]), VaultError> = await Task.detached(priority: .userInitiated) {
             do {
-                return .success(try session.readText(path: path))
+                let text = try session.readText(path: path)
+                // get_file_metadata returns nil when the path isn't in
+                // the index yet (race: file showed up between scan and
+                // selection). Empty headings is the right fallback —
+                // the outline pane shows its "no headings" empty state
+                // and the user still sees the content.
+                let metadata = try session.getFileMetadata(path: path)
+                return .success((text, metadata?.headings ?? []))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -294,11 +328,13 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
-        case .success(let text):
+        case .success(let (text, headings)):
             currentNoteText = text
+            currentNoteHeadings = headings
             noteLoadError = nil
         case .failure(let error):
             currentNoteText = nil
+            currentNoteHeadings = []
             noteLoadError = humanReadable(error)
         }
     }
