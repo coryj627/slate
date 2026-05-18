@@ -7,10 +7,12 @@
 //! pre-existing heading extraction used by the FFI smoke tests.
 
 pub mod db;
+pub mod link_resolver;
 pub mod links;
 pub mod session;
 pub mod vault;
 
+pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultIndex};
 pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 
 pub use session::{

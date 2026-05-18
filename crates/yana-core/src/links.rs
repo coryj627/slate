@@ -211,6 +211,14 @@ where
     out
 }
 
+/// `pub(crate)` alias so the link resolver (#49) can short-circuit
+/// to `External` without reimplementing the same heuristic. Kept
+/// out of the public API because the rule is an implementation
+/// detail of the link layer, not a stable contract.
+pub(crate) fn looks_external_for_resolver(url: &str) -> bool {
+    looks_external(url)
+}
+
 /// Heuristic: treat URLs with a scheme (or `mailto:` / `tel:` /
 /// fragment-only / `//host` references) as external. Bare relative
 /// paths fall through as internal so #49 can resolve them against
