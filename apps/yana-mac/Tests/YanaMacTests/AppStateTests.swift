@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 
 @testable import YanaMac
@@ -247,8 +248,120 @@ final class AppStateTests: XCTestCase {
         state.closeVault()
 
         XCTAssertNil(state.currentNoteText)
+        XCTAssertEqual(state.currentNoteHeadings, [])
         XCTAssertNil(state.noteLoadError)
         XCTAssertFalse(state.isLoadingNote)
+    }
+
+    func testSelectingANoteLoadsItsHeadingsInDocumentOrder() async throws {
+        let vault = tempDir.appendingPathComponent("outline-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let body = """
+            # Top
+            intro
+
+            ## Section one
+
+            body of one
+
+            ### Sub of one
+
+            ## Section two
+
+            tail
+            """
+        try Data(body.utf8).write(to: vault.appendingPathComponent("outline.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "outline.md"
+        await state.noteLoadTask?.value
+
+        // Heading rotor / OutlineSidebar both rely on this list being
+        // in scanner order (== document order) with the right levels.
+        XCTAssertEqual(state.currentNoteHeadings.map(\.text), [
+            "Top", "Section one", "Sub of one", "Section two"
+        ])
+        XCTAssertEqual(state.currentNoteHeadings.map(\.level), [1, 2, 3, 2])
+        // Anchor IDs come from the Rust slugifier and must be unique
+        // within the file so SwiftUI's `.id(_)` scrolling doesn't pick
+        // the wrong target.
+        let anchors = state.currentNoteHeadings.map(\.anchorId)
+        XCTAssertEqual(Set(anchors).count, anchors.count, "anchor IDs must be unique within a file")
+    }
+
+    func testSelectingANoteWithoutHeadingsLeavesOutlineEmpty() async throws {
+        let vault = tempDir.appendingPathComponent("plain-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("plain body, no headings here.".utf8)
+            .write(to: vault.appendingPathComponent("plain.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "plain.md"
+        await state.noteLoadTask?.value
+
+        XCTAssertNotNil(state.currentNoteText)
+        XCTAssertEqual(state.currentNoteHeadings, [], "headingless note must produce an empty outline")
+    }
+
+    func testSwitchingBetweenNotesReplacesHeadingList() async throws {
+        let vault = tempDir.appendingPathComponent("switch-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Alpha only".utf8).write(to: vault.appendingPathComponent("alpha.md"))
+        try Data("# Beta\n## Beta two".utf8).write(to: vault.appendingPathComponent("beta.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "alpha.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.currentNoteHeadings.map(\.text), ["Alpha only"])
+
+        state.selectedFilePath = "beta.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.currentNoteHeadings.map(\.text), ["Beta", "Beta two"])
+    }
+
+    func testDeselectingClearsHeadingList() async throws {
+        let vault = tempDir.appendingPathComponent("deselect-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A\n## B".utf8).write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.currentNoteHeadings.count, 2)
+
+        // Same Combine sink that clears currentNoteText must also
+        // clear the heading list — otherwise the outline pane shows
+        // stale rows pointing at a note that's no longer loaded.
+        state.selectedFilePath = nil
+        XCTAssertEqual(state.currentNoteHeadings, [])
+    }
+
+    func testRequestScrollToHeadingPublishesAnchor() throws {
+        let state = try makeAppState()
+
+        var received: [String] = []
+        let sub = state.scrollAnchorRequest.sink { received.append($0) }
+        defer { sub.cancel() }
+
+        state.requestScrollToHeading(anchor: "section-one")
+        state.requestScrollToHeading(anchor: "section-one")
+
+        // Two emits for two calls, including repeat: PassthroughSubject
+        // (not @Published) so the content pane re-scrolls on the same
+        // heading without needing a counter.
+        XCTAssertEqual(received, ["section-one", "section-one"])
     }
 
     func testRemoveRecentDropsEntryAndPersists() throws {

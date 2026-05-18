@@ -10,12 +10,19 @@ import SwiftUI
 /// have content pipelines for math / Mermaid / code highlighting
 /// (those land in V1.x per `docs/plans/05` §6).
 ///
-/// Heading-rotor navigation here is wired by issue #46 (`OutlineSidebar`);
-/// this view just needs to make the text a navigable region.
+/// When the parsed-heading list is non-empty, the content is split
+/// into one section per heading with stable anchors (`.id(heading
+/// .anchorId)`) so `OutlineSidebar` row taps can scroll-to via a
+/// `ScrollViewReader`. Each section header carries `.isHeader` so
+/// VoiceOver's heading rotor (VO+H) walks them in document order.
 struct NoteContentView: View {
     @EnvironmentObject private var appState: AppState
 
     @State private var announcedFilePath: String?
+    /// Respect the system "Reduce motion" setting (WCAG 2.3.1). When
+    /// true, scroll-to-anchor jumps instantly instead of animating —
+    /// vestibular-sensitive users see no movement.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -84,18 +91,111 @@ struct NoteContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    @ViewBuilder
     private func contentState(_ text: String) -> some View {
-        ScrollView {
-            // `Text` is selectable, line-wraps, respects Dynamic
-            // Type, and uses the system font by default. For now we
-            // surface the raw Markdown source — that's what
-            // VoiceOver users want while we don't have richer
-            // content pipelines.
-            Text(text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .textSelection(.enabled)
-                .accessibilityLabel(accessibilityLabelForContent)
+        let headings = appState.currentNoteHeadings
+        ScrollViewReader { proxy in
+            ScrollView {
+                if headings.isEmpty {
+                    plainContent(text)
+                } else {
+                    sectionedContent(text, headings: headings)
+                }
+            }
+            .onReceive(appState.scrollAnchorRequest) { anchor in
+                // Anchor on `.top` so the heading lands just under the
+                // toolbar instead of being scrolled past. When reduce-
+                // motion is on, skip the animation entirely (WCAG 2.3.1).
+                if reduceMotion {
+                    proxy.scrollTo(anchor, anchor: .top)
+                } else {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Single `Text` view fallback when the note has no `#` headings.
+    /// The whole pane is still selectable and Dynamic-Type-aware; we
+    /// just skip the sectioning work since there are no anchors to wire
+    /// up.
+    private func plainContent(_ text: String) -> some View {
+        Text(text)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .textSelection(.enabled)
+            .accessibilityLabel(accessibilityLabelForContent)
+    }
+
+    /// Split `text` into one block per heading using `Heading.ordinal`
+    /// to mark boundaries. Each block is rendered as a header row +
+    /// body row, with `.id(anchor_id)` on the wrapping VStack so
+    /// `ScrollViewReader.scrollTo` can target it.
+    ///
+    /// Why slice on byte offsets in Swift: the Rust scanner records
+    /// heading text and ordinal, but not the byte ranges of the body
+    /// underneath each heading. We do the slicing here on the source
+    /// string, which is fine because the heading-rotor experience only
+    /// needs *the* heading to be a navigable element — the body just
+    /// needs to be in the right scroll position.
+    @ViewBuilder
+    private func sectionedContent(_ text: String, headings: [Heading]) -> some View {
+        let sections = sliceIntoSections(text: text, headings: headings)
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(sections, id: \.anchorId) { section in
+                sectionView(section)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .textSelection(.enabled)
+        .accessibilityLabel(accessibilityLabelForContent)
+    }
+
+    private func sectionView(_ section: NoteSection) -> some View {
+        // VStack groups the heading line with its body so .id() on the
+        // group anchors scrolling to the heading itself, not just the
+        // body underneath.
+        VStack(alignment: .leading, spacing: 4) {
+            if let heading = section.heading {
+                Text(heading.text)
+                    .font(headingFont(for: heading.level))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHeading(headingLevel(for: heading.level))
+            }
+            if !section.body.isEmpty {
+                Text(section.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 8)
+        .id(section.anchorId)
+    }
+
+    private func headingFont(for level: UInt8) -> Font {
+        switch level {
+        case 1: return .title
+        case 2: return .title2
+        case 3: return .title3
+        case 4: return .headline
+        case 5: return .subheadline
+        default: return .body
+        }
+    }
+
+    private func headingLevel(for level: UInt8) -> AccessibilityHeadingLevel {
+        // SwiftUI's AccessibilityHeadingLevel caps at h6; clamp anything
+        // beyond (which shouldn't happen since Markdown stops at # # # # # #).
+        switch level {
+        case 1: return .h1
+        case 2: return .h2
+        case 3: return .h3
+        case 4: return .h4
+        case 5: return .h5
+        default: return .h6
         }
     }
 
@@ -136,4 +236,5 @@ struct NoteContentView: View {
         announcedFilePath = path
         postAccessibilityAnnouncement("Showing \(displayName).")
     }
+
 }

@@ -2,17 +2,21 @@ import SwiftUI
 
 /// Split view shown once a vault is open.
 ///
-/// Sidebar carries the accessible file list (#11); detail pane is
-/// `NoteContentView` (#45), which loads the selected note's raw
-/// Markdown source. Outline panel + heading rotor land in #46.
+/// Three-column layout: file list (#11) | note content (#45) | outline (#46).
+/// `NavigationSplitView` with the `(sidebar, content, detail)` initializer
+/// gives us system-styled column dividers, keyboard navigation between
+/// columns (Cmd+1/2/3 via the System menu), and per-column collapse/
+/// resize behaviour for free on macOS.
 struct MainSplitView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
         NavigationSplitView {
             FileListSidebar()
-        } detail: {
+        } content: {
             NoteContentView()
+        } detail: {
+            OutlineSidebar()
         }
         .navigationTitle(vaultTitle)
         .toolbar {
