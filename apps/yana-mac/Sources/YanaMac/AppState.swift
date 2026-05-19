@@ -74,6 +74,14 @@ final class AppState: ObservableObject {
     /// announcements). UI doesn't read this.
     private(set) var lastActivatedLinkOutcome: LinkActivationOutcome?
 
+    /// Frontmatter properties of the currently-selected note, in
+    /// document order. Empty while no note is selected, while the
+    /// fetch is still in flight, or when the note has no frontmatter.
+    /// Loaded by `loadCurrentLinks(path:)` (which already runs a
+    /// `get_file_metadata` under the SQLite mutex) so we don't pay
+    /// for two trips through the lock per selection.
+    @Published private(set) var currentNoteProperties: [Property] = []
+
     /// Inbound links to the currently-selected note. Updated whenever
     /// `selectedFilePath` changes. Empty while no note is selected or
     /// while the query is still in flight.
@@ -177,6 +185,7 @@ final class AppState: ObservableObject {
         noteLoadError = nil
         currentBacklinks = []
         currentOutgoingLinks = []
+        currentNoteProperties = []
         linksLoadError = nil
         guard let path else {
             isLoadingNote = false
@@ -368,6 +377,7 @@ final class AppState: ObservableObject {
         noteLoadError = nil
         currentBacklinks = []
         currentOutgoingLinks = []
+        currentNoteProperties = []
         linksLoadError = nil
         isScanning = false
         isLoadingNote = false
@@ -546,7 +556,12 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         isLoadingLinks = true
 
-        let result: Result<([Backlink], [OutgoingLink]), VaultError> =
+        // Pull links + properties in one detached task so they share
+        // the SQLite mutex and we don't pay for two trips through
+        // the lock per selection. `get_file_metadata` returns the
+        // properties directly; backlinks/outgoing land via their
+        // dedicated calls.
+        let result: Result<([Backlink], [OutgoingLink], [Property]), VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
                     let backlinksPage = try session.backlinks(
@@ -554,7 +569,8 @@ final class AppState: ObservableObject {
                         paging: Paging(cursor: nil, limit: 200)
                     )
                     let outgoing = try session.outgoingLinks(path: path)
-                    return .success((backlinksPage.items, outgoing))
+                    let properties = try session.getFileMetadata(path: path)?.properties ?? []
+                    return .success((backlinksPage.items, outgoing, properties))
                 } catch let error as VaultError {
                     return .failure(error)
                 } catch {
@@ -571,13 +587,15 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
-        case .success(let (backlinks, outgoing)):
+        case .success(let (backlinks, outgoing, properties)):
             currentBacklinks = backlinks
             currentOutgoingLinks = outgoing
+            currentNoteProperties = properties
             linksLoadError = nil
         case .failure(let error):
             currentBacklinks = []
             currentOutgoingLinks = []
+            currentNoteProperties = []
             linksLoadError = humanReadable(error)
         }
         isLoadingLinks = false

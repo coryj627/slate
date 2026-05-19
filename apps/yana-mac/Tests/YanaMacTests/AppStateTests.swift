@@ -622,6 +622,139 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(link.targetRaw, "Missing")
     }
 
+    // MARK: - Frontmatter properties (#55)
+
+    func testSelectingANoteLoadsItsProperties() async throws {
+        let vault = tempDir.appendingPathComponent("props-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let body = """
+            ---
+            title: My Note
+            tags:
+              - alpha
+              - beta
+            published: true
+            ---
+            # body
+            """
+        try Data(body.utf8).write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.linksLoadTask?.value
+
+        let keys = state.currentNoteProperties.map(\.key)
+        XCTAssertEqual(keys, ["title", "tags", "published"])
+    }
+
+    func testDeselectingClearsProperties() async throws {
+        let vault = tempDir.appendingPathComponent("clear-props")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("---\ntitle: Stable\n---\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteProperties.count, 1)
+
+        state.selectedFilePath = nil
+        XCTAssertEqual(state.currentNoteProperties, [])
+    }
+
+    func testCloseVaultClearsProperties() async throws {
+        let vault = tempDir.appendingPathComponent("close-props")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("---\ntitle: x\n---\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteProperties.count, 1)
+
+        state.closeVault()
+        XCTAssertEqual(state.currentNoteProperties, [])
+    }
+
+    func testNotesWithoutFrontmatterHaveEmptyProperties() async throws {
+        let vault = tempDir.appendingPathComponent("plain-props")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Just a heading\n\nno frontmatter here.".utf8)
+            .write(to: vault.appendingPathComponent("plain.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "plain.md"
+        await state.linksLoadTask?.value
+
+        XCTAssertTrue(state.currentNoteProperties.isEmpty)
+    }
+
+    func testPropertyValueDisplayDecodesAtomicKindsWithTypeCues() throws {
+        // Cover every kind once so VoiceOver label cues stay in sync
+        // with the FFI JSON shape if either side moves.
+        let cases: [(String, String, String)] = [
+            ("text", "\"hello\"", "Property name: hello"),
+            ("number", "42", "Property age, number: 42"),
+            ("boolean", "true", "Property published, boolean: true"),
+            ("date", "\"2024-01-02\"", "Property created, date:"),
+            ("wikilink", "\"Alpha\"", "Property related, link to Alpha"),
+        ]
+        let keys = ["name", "age", "published", "created", "related"]
+        for (i, (kind, json, expectedPrefix)) in cases.enumerated() {
+            let display = PropertyValueDisplay.decode(kind: kind, valueJson: json)
+            let label = display.accessibilityLabel(for: keys[i])
+            XCTAssertTrue(
+                label.hasPrefix(expectedPrefix),
+                "kind=\(kind) label=\(label) expected to start with \(expectedPrefix)"
+            )
+        }
+    }
+
+    func testPropertyValueDisplayDecodesLists() throws {
+        let display = PropertyValueDisplay.decode(
+            kind: "list",
+            valueJson: "[\"alpha\",\"beta\",\"gamma\"]"
+        )
+        XCTAssertEqual(display.listCount, 3)
+        XCTAssertEqual(display.visibleText, "alpha, beta, gamma")
+        let label = display.accessibilityLabel(for: "authors")
+        XCTAssertEqual(label, "Property authors, list of 3: alpha, beta, gamma")
+    }
+
+    func testPropertyValueDisplayDecodesTagListsWithHashPrefix() throws {
+        let display = PropertyValueDisplay.decode(
+            kind: "tag_list",
+            valueJson: "[\"alpha\",\"beta\"]"
+        )
+        XCTAssertEqual(display.listCount, 2)
+        XCTAssertEqual(display.visibleText, "#alpha, #beta")
+        let label = display.accessibilityLabel(for: "tags")
+        XCTAssertEqual(label, "Property tags, tag list of 2: #alpha, #beta")
+    }
+
+    func testPropertyValueDisplayMalformedJsonFallsBackToRaw() throws {
+        // Defense in depth: if the FFI ever hands us malformed JSON
+        // (corrupt DB row, future kind we don't recognize), the row
+        // stays visible with the raw JSON shown instead of crashing
+        // or dropping silently.
+        let display = PropertyValueDisplay.decode(kind: "text", valueJson: "not-json")
+        XCTAssertEqual(display.visibleText, "not-json")
+        let display2 = PropertyValueDisplay.decode(
+            kind: "future_unknown_kind",
+            valueJson: "anything"
+        )
+        XCTAssertEqual(display2.visibleText, "anything")
+    }
+
     // MARK: - Link activation (#52)
 
     private func makeOutgoing(
