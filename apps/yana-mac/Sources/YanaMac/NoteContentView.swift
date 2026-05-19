@@ -184,10 +184,12 @@ struct NoteContentView: View {
     }
 
     private func sectionView(_ section: NoteSection) -> some View {
-        // VStack groups the heading line with its per-line body Texts
-        // so .id() on the group anchors scrolling to the heading
-        // itself, while per-line anchors below let search-result
-        // activation (#59) scroll to a specific source-line.
+        // VStack groups the heading line with the section body. The
+        // heading row carries its own `line-N` anchor; the body is
+        // one coalesced Text overlaid with an invisible
+        // `LineAnchorColumn` for per-line scroll targets — see the
+        // comment on `bodyContent` below for why we no longer
+        // render per-line Text views.
         VStack(alignment: .leading, spacing: 4) {
             if let heading = section.heading {
                 Text(heading.text)
@@ -201,38 +203,63 @@ struct NoteContentView: View {
                     .id("line-\(section.startLineInFile)")
             }
             if !section.body.isEmpty {
-                // Per-line rendering: each source line becomes its
-                // own Text + `.id("line-N")` anchor. The earlier
-                // single-Text approach was simpler for selection-
-                // across-lines but couldn't anchor a scroll to a
-                // specific line — #59 needs per-line precision.
-                //
-                // `.textSelection` is still on each Text individually
-                // (not on the container) so each line stays
-                // selectable; we lose the ability to select a
-                // multi-line range in one drag, which we'll revisit
-                // if testers complain. Continuous-read flow stays
-                // intact because each Text is its own AX element.
-                let bodyLines = section.body.components(separatedBy: "\n")
-                ForEach(Array(bodyLines.enumerated()), id: \.offset) { i, line in
-                    let absoluteLine = section.bodyStartLineInFile + i
-                    Text(line.isEmpty ? " " : line)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .id("line-\(absoluteLine)")
-                        // Blank source lines stay in the layout tree
-                        // so the line-anchor math holds, but skip the
-                        // AX tree entirely — otherwise VoiceOver's
-                        // continuous-read says "space" or pauses on
-                        // each paragraph separator, doubling key
-                        // presses on a typical Markdown note.
-                        .accessibilityHidden(line.isEmpty)
-                }
+                bodyContent(section)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 8)
         .id(section.anchorId)
+    }
+
+    /// Section body: one coalesced `Text` + an invisible
+    /// `LineAnchorColumn` overlay providing per-line scroll
+    /// anchors.
+    ///
+    /// PR 59 introduced a per-line shape — one Text per source line
+    /// with `.id("line-N")` — so search-result activation could
+    /// scroll to a specific 1-based line. At 10k-line notes that
+    /// materialized 10k Text views in a plain VStack: each carried
+    /// `.textSelection(.enabled)`, a frame modifier, and an AX
+    /// element. SwiftUI laid out every child to compute the VStack
+    /// intrinsic size, ballooning first-paint cost (~100–300 ms),
+    /// inflating the AX tree, and slowing the rotor traversal
+    /// (#92 item 2).
+    ///
+    /// The new shape:
+    ///   - **One Text** per section body, `.textSelection(.enabled)`
+    ///     applied at the leaf so VoiceOver continuous-read flows
+    ///     across the section (matches memory note
+    ///     `feedback_swiftui_textselection_ax`).
+    ///   - **LineAnchorColumn** overlaid invisibly: one
+    ///     `Color.clear` per source line at the body font's line
+    ///     height, each carrying `.id("line-N")` and
+    ///     accessibility-hidden so the AX tree only sees the
+    ///     coalesced body Text. The scroll target is
+    ///     approximate when a source line wraps to multiple visual
+    ///     lines (the anchor is one nominal line tall regardless),
+    ///     which is fine: the snippet in the search overlay tells
+    ///     the user what to find, and the landing position is
+    ///     within a few visual lines of the match.
+    @ViewBuilder
+    private func bodyContent(_ section: NoteSection) -> some View {
+        // Count newlines + 1 rather than `components(separatedBy:)`,
+        // which allocates `[String]` per render. The UTF-8 view is
+        // O(n) but allocates nothing — for a 10k-line section the
+        // difference shows up in body diffs on every Dynamic Type
+        // change or selection toggle.
+        let newlineCount = section.body.utf8.reduce(0) { acc, byte in
+            byte == 0x0A ? acc + 1 : acc
+        }
+        let bodyLineCount = newlineCount + 1
+        ZStack(alignment: .topLeading) {
+            Text(section.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            LineAnchorColumn(
+                lineCount: bodyLineCount,
+                firstLineNumber: section.bodyStartLineInFile
+            )
+        }
     }
 
     private func headingFont(for level: UInt8) -> Font {
@@ -297,4 +324,41 @@ struct NoteContentView: View {
         postAccessibilityAnnouncement("Showing \(displayName).")
     }
 
+}
+
+/// Invisible column of `Color.clear` rows, one per source line,
+/// each tagged with `.id("line-N")` so `ScrollViewReader.scrollTo`
+/// has a target. Sits behind the coalesced body Text in a ZStack;
+/// the anchors are accessibility-hidden so VoiceOver walks the
+/// body as one element.
+///
+/// Each row is `lineHeight` tall, scaled via `@ScaledMetric` so
+/// Dynamic Type sizes shift the anchor column in lockstep with
+/// the body Text. The 17pt default matches the macOS `.body`
+/// font's natural line height; it's a best-fit, not an exact
+/// measurement of the rendered Text's per-line baseline. A
+/// source line that wraps to multiple visual lines (e.g. a 200-
+/// char line in a narrow pane) ends up with a 1-line-tall anchor
+/// behind a multi-line-tall visible run, so the scroll-to-line
+/// position is approximate in that case — within a few visual
+/// lines, which is fine: the snippet in the search overlay
+/// tells the user what they were looking for, and they read
+/// from there.
+private struct LineAnchorColumn: View {
+    let lineCount: Int
+    let firstLineNumber: Int
+
+    @ScaledMetric(relativeTo: .body) private var lineHeight: CGFloat = 17
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<lineCount, id: \.self) { i in
+                Color.clear
+                    .frame(height: lineHeight)
+                    .id("line-\(firstLineNumber + i)")
+                    .accessibilityHidden(true)
+            }
+        }
+        .allowsHitTesting(false)
+    }
 }
