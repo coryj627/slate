@@ -5,6 +5,20 @@
 //! shape that matches `docs/plans/05` §8.4 so #58's UI and the
 //! future Bases / query-engine layer can both consume it without
 //! adapter shims.
+//!
+//! ## Line numbers — deferred to the UI
+//!
+//! `QueryHit` deliberately does NOT carry a `line_number`. The
+//! previous shape selected `files.body_text` for every hit just so
+//! the Rust side could scan it for a query-token offset and emit a
+//! 1-based line — for a 10MB note matching a broad term, that was
+//! ~10MB pulled through SQLite plus a `to_lowercase()` allocation
+//! per row (#92 item 1). The body never needed to make the trip:
+//! the line is only consumed by the UI at result-activation time
+//! (scroll target + post-activation announcement), and the UI
+//! loads the note body anyway when the user opens the hit. The
+//! Swift side now derives the line from its loaded note text at
+//! click time, using the same first-token-occurrence heuristic.
 
 use rusqlite::Connection;
 
@@ -35,16 +49,12 @@ pub enum SearchScope {
 /// Manual `PartialEq` (no `Eq`) because `score` is an `f64` and
 /// f64 doesn't implement `Eq`. Test paths compare via `assert_eq`
 /// on the derived PartialEq.
+///
+/// No `line_number` field — see the module-level docs for why the
+/// line is derived UI-side at activation time instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryHit {
     pub path: String,
-    /// 1-based line number where the hit begins. Best-effort:
-    /// computed by finding the first occurrence of any of the
-    /// query's whitespace-split tokens inside `body_text`. Falls
-    /// back to 1 when no token can be located (e.g. complex
-    /// phrase queries with stemming where FTS5 matched but the
-    /// raw tokens don't appear literally).
-    pub line_number: u32,
     /// FTS5 `snippet()` output: ±60 chars around the match with
     /// `\u{0002}` / `\u{0003}` (ASCII STX/ETX) wrapping the
     /// matched tokens. The UI replaces these with attributed-
@@ -125,7 +135,7 @@ pub fn full_text_search(
             prefix.push('/');
             prefix.push('%');
             (
-                "SELECT files.path, files.body_text,
+                "SELECT files.path,
                         snippet(files_fts, 0, ?2, ?3, '…', 12) AS sn,
                         bm25(files_fts) AS score
                  FROM files_fts
@@ -137,7 +147,7 @@ pub fn full_text_search(
             )
         }
         SearchScope::Vault => (
-            "SELECT files.path, files.body_text,
+            "SELECT files.path,
                     snippet(files_fts, 0, ?2, ?3, '…', 12) AS sn,
                     bm25(files_fts) AS score
              FROM files_fts
@@ -151,7 +161,6 @@ pub fn full_text_search(
     };
 
     let mut stmt = conn.prepare_cached(sql)?;
-    let query_tokens = tokenize_query_for_line_lookup(trimmed);
 
     let mut rows = Vec::new();
     // Map FTS5 query-syntax errors to a dedicated `InvalidQuery`
@@ -189,13 +198,10 @@ pub fn full_text_search(
             return Err(VaultError::Cancelled);
         }
         let path: String = row.get(0)?;
-        let body_text: String = row.get(1)?;
-        let snippet: String = row.get(2)?;
-        let score: f64 = row.get(3)?;
-        let line_number = find_first_token_line(&body_text, &query_tokens);
+        let snippet: String = row.get(1)?;
+        let score: f64 = row.get(2)?;
         rows.push(QueryHit {
             path,
-            line_number,
             snippet,
             score,
         });
@@ -257,72 +263,9 @@ fn escape_like(s: &str) -> String {
     out
 }
 
-/// Strip FTS5 query syntax to leave bare lookup tokens we can search
-/// for inside `body_text` to derive a line number. This is a coarse
-/// approximation — we drop quotes, operators (`AND`/`OR`/`NOT`/`+`/
-/// `-`), and column filters, then split on whitespace.
-fn tokenize_query_for_line_lookup(query: &str) -> Vec<String> {
-    query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|tok| !tok.is_empty())
-        .map(|tok| tok.to_lowercase())
-        .filter(|tok| !matches!(tok.as_str(), "and" | "or" | "not"))
-        .collect()
-}
-
-/// Return the 1-based line number of the first occurrence (in
-/// `body_text`) of any token from `tokens`. Falls back to 1 when no
-/// token can be found — FTS5 may have matched through stemming or
-/// punctuation collapse and the raw tokens needn't appear literally.
-///
-/// We count newlines in the lowercased body, not the original.
-/// Unicode lowercasing can change byte length (`İ` 2→3 bytes,
-/// `ẞ` 3→2 bytes), so a byte offset from `body_lower.find(...)`
-/// isn't a valid index into the original `body_text` — slicing
-/// would panic on a non-boundary. Counting newlines in
-/// `body_lower` itself avoids the cross-string slice entirely;
-/// the line count comes out the same because `to_lowercase()`
-/// preserves `\n` characters verbatim.
-fn find_first_token_line(body_text: &str, tokens: &[String]) -> u32 {
-    let body_lower = body_text.to_lowercase();
-    let mut earliest: Option<usize> = None;
-    for tok in tokens {
-        if let Some(pos) = body_lower.find(tok.as_str()) {
-            earliest = match earliest {
-                None => Some(pos),
-                Some(prev) => Some(prev.min(pos)),
-            };
-        }
-    }
-    match earliest {
-        Some(pos) => body_lower[..pos].bytes().filter(|b| *b == b'\n').count() as u32 + 1,
-        None => 1,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tokenize_strips_operators_and_punctuation() {
-        let toks = tokenize_query_for_line_lookup("foo AND \"bar baz\" OR -quux");
-        assert_eq!(toks, vec!["foo", "bar", "baz", "quux"]);
-    }
-
-    #[test]
-    fn find_first_token_line_returns_first_match_line() {
-        let body = "line one\nline two with foo\nline three\nfoo again";
-        let line = find_first_token_line(body, &["foo".to_string()]);
-        assert_eq!(line, 2);
-    }
-
-    #[test]
-    fn find_first_token_line_falls_back_to_one_when_token_missing() {
-        let body = "this body has nothing matching";
-        let line = find_first_token_line(body, &["absent".to_string()]);
-        assert_eq!(line, 1);
-    }
 
     #[test]
     fn escape_like_handles_percent_underscore_backslash() {
@@ -333,29 +276,5 @@ mod tests {
             escape_like(r"path\with\backslash"),
             r"path\\with\\backslash"
         );
-    }
-
-    #[test]
-    fn find_first_token_line_handles_unicode_lowercasing_length_change() {
-        // Regression for the audit-#88 UTF-8 boundary panic. `İ`
-        // (U+0130) lowercases to two characters (`i` + U+0307
-        // combining dot above), so the lowered string is 1 byte
-        // longer than the original. If we slice `body_text` with
-        // an offset derived from `body_lower.find(...)`, we land
-        // on a non-boundary mid-multi-byte-char and Rust panics.
-        let body = "İstanbul intro\nİstanbul again\nmatch on line 3";
-        let line = find_first_token_line(body, &["match".to_string()]);
-        // Either 2 or 3 depending on lowercase semantics; the
-        // invariant we care about is "doesn't panic, returns a
-        // sensible line number".
-        assert!(line == 3 || line == 2, "got {line}");
-    }
-
-    #[test]
-    fn find_first_token_line_picks_earliest_across_multiple_tokens() {
-        let body = "alpha bravo\ncharlie delta\necho";
-        let line = find_first_token_line(body, &["delta".to_string(), "alpha".to_string()]);
-        // alpha is earlier than delta, so line 1.
-        assert_eq!(line, 1);
     }
 }
