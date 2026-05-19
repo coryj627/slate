@@ -969,6 +969,8 @@ final class AppState: ObservableObject {
             return "File at \(path) is \(size) bytes — larger than this build's refuse threshold."
         case .InvalidQuery(let message):
             return "Search query is invalid: \(message)"
+        case .Unsupported(let feature):
+            return "\(feature) is not implemented yet."
         }
     }
 }
@@ -991,11 +993,29 @@ final class AppState: ObservableObject {
 /// is 2→3 bytes).
 func firstTokenLineNumber(in body: String, query: String) -> Int {
     let bodyLower = body.lowercased()
-    let tokens = query
-        .lowercased()
+    // Strip FTS5 column-filter prefixes before tokenizing. Today the
+    // only indexed column is `body_text`; a user typing
+    // `body_text:foo` means "find `foo` inside body_text", so the
+    // `body_text:` part shouldn't seed tokens for the line scan. If
+    // more columns ever land in the FTS5 schema, add their names
+    // here.
+    let preprocessed = query.lowercased()
+        .replacingOccurrences(of: "body_text:", with: " ")
+    // FTS5 keywords that would otherwise sneak through the split and
+    // pollute the line lookup if they happen to appear as bare words
+    // in prose (#93 item 5). Pure-numeric tokens are also dropped:
+    // numbers appearing inside composite FTS5 constructs
+    // (`NEAR(a b, 5)`, `LIMIT 10`) aren't semantically meaningful to
+    // a body-line scan.
+    let fts5Keywords: Set<String> = ["and", "or", "not", "near"]
+    let tokens = preprocessed
         .split { !$0.isLetter && !$0.isNumber }
         .map(String.init)
-        .filter { !$0.isEmpty && !["and", "or", "not"].contains($0) }
+        .filter { tok in
+            !tok.isEmpty
+                && !fts5Keywords.contains(tok)
+                && !tok.allSatisfy(\.isNumber)
+        }
     var earliest: String.Index? = nil
     for tok in tokens {
         if let range = bodyLower.range(of: tok) {

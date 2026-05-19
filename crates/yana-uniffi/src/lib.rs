@@ -71,6 +71,13 @@ pub enum VaultError {
     /// cache (which arrives as `Db`).
     #[error("invalid search query: {message}")]
     InvalidQuery { message: String },
+
+    /// Distinct from `Cancelled` so retry logic can stop looping
+    /// and so logs separate "user pressed Esc" from "feature not
+    /// landed yet" (#93 item 2). Used today for the reserved
+    /// `SearchScope::File` and `SearchScope::Tag` paths.
+    #[error("operation not supported yet: {feature}")]
+    Unsupported { feature: String },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -92,6 +99,7 @@ impl From<core::VaultError> for VaultError {
                 VaultError::FileTooLarge { path, size }
             }
             core::VaultError::InvalidQuery { message } => VaultError::InvalidQuery { message },
+            core::VaultError::Unsupported { feature } => VaultError::Unsupported { feature },
         }
     }
 }

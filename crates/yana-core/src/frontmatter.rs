@@ -155,16 +155,26 @@ pub fn frontmatter_range(source: &str) -> Option<Range<usize>> {
 }
 
 /// Returns the source slice past the opening `---` line if and only
-/// if the file starts with one (no leading whitespace allowed).
+/// if the file starts with one (no leading whitespace allowed before
+/// the dashes — byte 0 must be `-`).
 ///
-/// Only `---\n` and `---\r\n` openings count. A bare `---` at EOF
-/// isn't a valid frontmatter opening (no body to follow), so we
-/// reject it here rather than treat it as a degenerate empty block.
+/// The dashes must be followed by EOL, with optional trailing
+/// whitespace tolerated on the line. The closing delimiter already
+/// accepts the same shape via `trailing.trim().is_empty()`; symmetry
+/// matters because files authored with `--- \n` at byte 0 previously
+/// looked like "no frontmatter at all" while the same trailing-space
+/// pattern on the closing delimiter was accepted (#93 item 4).
+///
+/// A bare `---` at EOF still isn't a valid opening (no body can
+/// follow), so a missing newline returns `None`.
 fn strip_opening_delimiter(source: &str) -> Option<&str> {
-    if let Some(rest) = source.strip_prefix("---\r\n") {
-        return Some(rest);
+    let after_dashes = source.strip_prefix("---")?;
+    let line_end = after_dashes.find('\n')?;
+    let trailing = &after_dashes[..line_end];
+    if !trailing.chars().all(char::is_whitespace) {
+        return None;
     }
-    source.strip_prefix("---\n")
+    Some(&after_dashes[line_end + 1..])
 }
 
 /// Parse the frontmatter block out of `source` and return typed
@@ -933,6 +943,41 @@ mod tests {
             Some(PropertyValue::Float(f)) => assert!((f - 0.001).abs() < 1e-12),
             other => panic!("expected Float, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn opening_delimiter_tolerates_trailing_whitespace() {
+        // #93 item 4: the opening delimiter parse was strict
+        // (`---\n` / `---\r\n` only) while the closing parse
+        // accepted any-whitespace-then-newline via
+        // `trailing.trim().is_empty()`. A file with `--- \n` at
+        // byte 0 looked like "no frontmatter" while the same
+        // trailing-space pattern on the close was accepted.
+        // Both sides now share the same tolerance.
+        let (p, _) = extract_frontmatter("--- \nkey: value\n---\n");
+        assert_eq!(
+            find(&p, "key"),
+            Some(PropertyValue::Text("value".to_string()))
+        );
+        let (p, _) = extract_frontmatter("---\t\nkey: value\n---\n");
+        assert_eq!(
+            find(&p, "key"),
+            Some(PropertyValue::Text("value".to_string()))
+        );
+        let (p, _) = extract_frontmatter("--- \r\nkey: value\r\n---\r\n");
+        assert_eq!(
+            find(&p, "key"),
+            Some(PropertyValue::Text("value".to_string()))
+        );
+    }
+
+    #[test]
+    fn opening_delimiter_rejects_non_whitespace_trailing_chars() {
+        // The tolerance is for whitespace only — `---xyz\n` is still
+        // a regular markdown line, not a frontmatter opening.
+        let (p, w) = extract_frontmatter("---xyz\nkey: value\n---\n");
+        assert!(p.is_empty());
+        assert!(w.is_empty());
     }
 
     #[test]

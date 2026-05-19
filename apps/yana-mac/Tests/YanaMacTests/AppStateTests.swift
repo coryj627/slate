@@ -1103,6 +1103,41 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(firstTokenLineNumber(in: body, query: "missing"), 1)
     }
 
+    func testFirstTokenLineNumberStripsBodyTextColumnPrefix() {
+        // PR 103 Codoki follow-up: the docstring claimed
+        // column-name prefixes (`body_text:`) were filtered, but
+        // the original implementation only handled FTS5 keywords.
+        // Now the column prefix is stripped before tokenization so
+        // `body_text:foo` reduces to just `foo` for the line scan.
+        let body = "body and text are common words\nbut foo lives here"
+        // Without the strip, "body" would match on line 1; with the
+        // strip, only "foo" survives and the lookup hits line 2.
+        XCTAssertEqual(
+            firstTokenLineNumber(in: body, query: "body_text:foo"),
+            2
+        )
+    }
+
+    func testFirstTokenLineNumberSkipsFts5KeywordsAndNumericTokens() {
+        // #93 item 5: bare FTS5 keywords (`NEAR`, `AND`, `OR`,
+        // `NOT`) and column-name prefixes like `body_text:`
+        // shouldn't sneak into the body-line lookup if they
+        // happen to appear as prose words. Same for purely
+        // numeric tokens that came from FTS5 syntax (e.g. the
+        // distance argument inside `NEAR(a b, 5)`).
+        let body = "line one\nNEAR is a real word here\nactual match"
+        // "NEAR" alone in the query → all tokens are dropped → line 1.
+        XCTAssertEqual(firstTokenLineNumber(in: body, query: "NEAR"), 1)
+        // `NEAR(actual b, 5)` → "near" and "5" filtered; "actual" + "b" survive.
+        // "actual" lands on line 3.
+        XCTAssertEqual(
+            firstTokenLineNumber(in: body, query: "NEAR(actual b, 5)"),
+            3
+        )
+        // Pure-numeric query → fallback to line 1.
+        XCTAssertEqual(firstTokenLineNumber(in: body, query: "42"), 1)
+    }
+
     func testFirstTokenLineNumberSurvivesUnicodeLowercasing() {
         // Regression mirror of the Rust-side audit-#88 case: `İ`
         // (U+0130) lowercases to 2 codepoints so the lowered body
