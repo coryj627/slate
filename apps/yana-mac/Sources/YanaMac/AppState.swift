@@ -931,6 +931,8 @@ final class AppState: ObservableObject {
             return "File at \(path) is not valid UTF-8."
         case .FileTooLarge(let path, let size):
             return "File at \(path) is \(size) bytes — larger than this build's refuse threshold."
+        case .InvalidQuery(let message):
+            return "Search query is invalid: \(message)"
         }
     }
 }

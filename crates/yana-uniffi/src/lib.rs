@@ -64,6 +64,13 @@ pub enum VaultError {
 
     #[error("file at {path:?} is {size} bytes, larger than the configured refuse threshold")]
     FileTooLarge { path: String, size: u64 },
+
+    /// User-supplied query string didn't parse as FTS5 syntax.
+    /// Surfaced by `full_text_search` so the UI can render a
+    /// "bad query" message without conflating it with a corrupt
+    /// cache (which arrives as `Db`).
+    #[error("invalid search query: {message}")]
+    InvalidQuery { message: String },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -84,6 +91,7 @@ impl From<core::VaultError> for VaultError {
             core::VaultError::FileTooLarge { path, size } => {
                 VaultError::FileTooLarge { path, size }
             }
+            core::VaultError::InvalidQuery { message } => VaultError::InvalidQuery { message },
         }
     }
 }

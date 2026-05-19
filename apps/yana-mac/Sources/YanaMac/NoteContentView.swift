@@ -220,6 +220,13 @@ struct NoteContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                         .id("line-\(absoluteLine)")
+                        // Blank source lines stay in the layout tree
+                        // so the line-anchor math holds, but skip the
+                        // AX tree entirely — otherwise VoiceOver's
+                        // continuous-read says "space" or pauses on
+                        // each paragraph separator, doubling key
+                        // presses on a typical Markdown note.
+                        .accessibilityHidden(line.isEmpty)
                 }
             }
         }
