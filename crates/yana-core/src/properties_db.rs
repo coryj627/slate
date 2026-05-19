@@ -39,19 +39,110 @@ pub(crate) fn replace_properties_for_file(
         "DELETE FROM properties WHERE file_id = ?1",
         params![file_id],
     )?;
+    tx.execute(
+        "DELETE FROM properties_list_values WHERE file_id = ?1",
+        params![file_id],
+    )?;
     let (props, _warnings) = extract_frontmatter(markdown_source);
     if props.is_empty() {
         return Ok(());
     }
-    let mut stmt = tx.prepare_cached(
-        "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+    let mut prop_stmt = tx.prepare_cached(
+        "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text, value_text_norm)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    let mut list_stmt = tx.prepare_cached(
+        "INSERT INTO properties_list_values (file_id, key, value_norm)
+         VALUES (?1, ?2, ?3)",
     )?;
     for (ordinal, prop) in props.into_iter().enumerate() {
         let (kind, value_text) = serialize_value(&prop.value);
-        stmt.execute(params![file_id, ordinal as i64, prop.key, kind, value_text,])?;
+        let value_text_norm = normalize_atomic_value(&prop.value);
+        prop_stmt.execute(params![
+            file_id,
+            ordinal as i64,
+            prop.key,
+            kind,
+            value_text,
+            value_text_norm,
+        ])?;
+        // Expand list / tag_list into the side table so
+        // files_with_property can hit a direct (key, value_norm)
+        // index instead of LEFT JOIN json_each. Empty lists
+        // produce no side rows.
+        for element_norm in list_elements_norm(&prop.value) {
+            list_stmt.execute(params![file_id, prop.key, element_norm])?;
+        }
     }
     Ok(())
+}
+
+/// Pre-lowercased, JSON-unwrapped form of an atomic `PropertyValue`.
+/// Returns an empty string for list / tag_list (they're matched via
+/// `properties_list_values` instead). The caller writes the result
+/// into the `value_text_norm` column so the partial composite index
+/// `idx_properties_key_norm` can serve case-insensitive equality
+/// lookups directly (#92 item 3).
+fn normalize_atomic_value(value: &PropertyValue) -> String {
+    match value {
+        PropertyValue::Text(s)
+        | PropertyValue::Date(s)
+        | PropertyValue::Datetime(s)
+        | PropertyValue::Wikilink(s) => s.to_lowercase(),
+        PropertyValue::Integer(i) => i.to_string(),
+        PropertyValue::Float(f) => {
+            // Match the JSON serialisation: finite floats render as
+            // their JSON form, non-finite as the Rust string form
+            // (NaN/Inf). The string form is already lowercase.
+            if f.is_finite() {
+                let json = JsonValue::from(*f).to_string();
+                json.to_lowercase()
+            } else {
+                f.to_string()
+            }
+        }
+        PropertyValue::Boolean(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        PropertyValue::List(_) | PropertyValue::TagList(_) => String::new(),
+    }
+}
+
+/// Pre-lowercased string form of every element of a list / tag_list,
+/// for population of `properties_list_values`. Returns an empty vec
+/// for atomic kinds (they go through the `properties.value_text_norm`
+/// path).
+fn list_elements_norm(value: &PropertyValue) -> Vec<String> {
+    match value {
+        PropertyValue::List(items) => items
+            .iter()
+            .map(|item| match item {
+                PropertyValue::Text(s)
+                | PropertyValue::Date(s)
+                | PropertyValue::Datetime(s)
+                | PropertyValue::Wikilink(s) => s.to_lowercase(),
+                PropertyValue::Integer(i) => i.to_string(),
+                PropertyValue::Float(f) => {
+                    if f.is_finite() {
+                        JsonValue::from(*f).to_string().to_lowercase()
+                    } else {
+                        f.to_string()
+                    }
+                }
+                PropertyValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+                // Nested lists / tag-lists shouldn't occur (the parser
+                // flattens to text), but be safe: skip them.
+                _ => String::new(),
+            })
+            .filter(|s| !s.is_empty())
+            .collect(),
+        PropertyValue::TagList(tags) => tags.iter().map(|t| t.to_lowercase()).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Fetch every property row for a file in document order. Used by
@@ -113,67 +204,94 @@ pub(crate) fn files_with_property(
     let after_path = paging.cursor.clone();
     let target = value.to_lowercase();
 
-    // Two OR branches against atomic value_text:
-    //   1. `lower(json_extract(value_text, '$')) = target` — unwraps
-    //      JSON strings/numbers/dates so "foo" matches `"foo"`.
-    //      Doesn't work for booleans because json_extract coerces
-    //      `true` / `false` to integer 1 / 0.
-    //   2. `lower(value_text) = target` — matches the raw stored
-    //      JSON literal. Catches the boolean case (value_text =
-    //      `true`) and is also a safe fallback if json_extract ever
-    //      surprises us with a new edge case.
-    let sql = "SELECT DISTINCT files.path, files.name, files.mtime_ms,
-                              files.size_bytes, files.is_markdown
-               FROM files
-               JOIN properties p ON p.file_id = files.id
-               LEFT JOIN json_each(p.value_text) elem
-                 ON p.value_kind IN ('list', 'tag_list')
-               WHERE p.key = ?1
-                 AND (
-                     (p.value_kind NOT IN ('list', 'tag_list')
-                      AND (
-                          lower(IFNULL(json_extract(p.value_text, '$'), p.value_text)) = ?2
-                          OR lower(p.value_text) = ?2
-                      ))
-                     OR (p.value_kind IN ('list', 'tag_list')
-                         AND lower(elem.value) = ?2)
-                 )
-                 AND (?3 IS NULL OR files.path > ?3)
-               ORDER BY files.path ASC
-               LIMIT ?4";
+    // Two index-backed paths into one CTE so the JOIN logic runs
+    // once and both the row fetch and the COUNT(*) window function
+    // share the materialized matches. Previous shape ran two
+    // separate queries (one for rows, one for COUNT(DISTINCT)) each
+    // doing the same expensive `LEFT JOIN json_each` (#92 item 3).
+    //
+    //   - Atomic branch: hits `idx_properties_key_norm` (partial,
+    //     covers `key + value_text_norm` for non-list rows).
+    //   - List branch: hits `idx_properties_list_lookup` against
+    //     the `properties_list_values` side table.
+    //
+    // UNION (not UNION ALL) dedupes file_ids when a vault has
+    // multiple matching property rows on the same file.
+    let sql = "
+        WITH matches AS (
+            SELECT files.id, files.path, files.name, files.mtime_ms,
+                   files.size_bytes, files.is_markdown
+            FROM files
+            JOIN properties p ON p.file_id = files.id
+            WHERE p.key = ?1
+              AND p.value_kind NOT IN ('list', 'tag_list')
+              AND p.value_text_norm = ?2
+            UNION
+            SELECT files.id, files.path, files.name, files.mtime_ms,
+                   files.size_bytes, files.is_markdown
+            FROM files
+            JOIN properties_list_values plv ON plv.file_id = files.id
+            WHERE plv.key = ?1 AND plv.value_norm = ?2
+        )
+        SELECT path, name, mtime_ms, size_bytes, is_markdown,
+               (SELECT COUNT(*) FROM matches) AS total_filtered
+        FROM matches
+        WHERE (?3 IS NULL OR path > ?3)
+        ORDER BY path ASC
+        LIMIT ?4
+    ";
     let mut stmt = conn.prepare_cached(sql)?;
+
+    let mut total_filtered: u64 = 0;
     let rows: Vec<FileSummary> = stmt
         .query_map(params![key, target, after_path, limit as i64 + 1], |row| {
-            Ok(FileSummary {
+            let summary = FileSummary {
                 path: row.get::<_, String>(0)?,
                 name: row.get::<_, String>(1)?,
                 mtime_ms: row.get::<_, i64>(2)?,
                 size_bytes: row.get::<_, i64>(3)? as u64,
                 is_markdown: row.get::<_, i64>(4)? != 0,
-            })
+            };
+            // The (SELECT COUNT(*) FROM matches) subquery returns
+            // the same total on every row — pick up the first
+            // value we see and ignore subsequent reads.
+            let count: i64 = row.get(5)?;
+            total_filtered = count as u64;
+            Ok(summary)
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Total-filtered is the same DISTINCT count without pagination.
-    let total_filtered: u64 = conn.query_row(
-        "SELECT COUNT(DISTINCT files.id)
-         FROM files
-         JOIN properties p ON p.file_id = files.id
-         LEFT JOIN json_each(p.value_text) elem
-           ON p.value_kind IN ('list', 'tag_list')
-         WHERE p.key = ?1
-           AND (
-               (p.value_kind NOT IN ('list', 'tag_list')
-                AND (
-                    lower(IFNULL(json_extract(p.value_text, '$'), p.value_text)) = ?2
-                    OR lower(p.value_text) = ?2
-                ))
-               OR (p.value_kind IN ('list', 'tag_list')
-                   AND lower(elem.value) = ?2)
-           )",
-        params![key, target],
-        |row| row.get::<_, i64>(0),
-    )? as u64;
+    // When there were no matching rows the SELECT yielded zero
+    // rows, so `total_filtered` was never assigned by the closure.
+    // 0 is correct in that case — no matches means total is 0.
+    //
+    // Edge case: paging cursor lands past the last match. The
+    // count subquery wouldn't fire (no outer rows), so we'd report
+    // total_filtered=0 even though earlier pages had matches.
+    // Resolve by re-running just the COUNT branch if the row
+    // fetch was empty AND a cursor was provided.
+    if rows.is_empty() && after_path.is_some() {
+        total_filtered = conn.query_row(
+            "
+            WITH matches AS (
+                SELECT files.id
+                FROM files
+                JOIN properties p ON p.file_id = files.id
+                WHERE p.key = ?1
+                  AND p.value_kind NOT IN ('list', 'tag_list')
+                  AND p.value_text_norm = ?2
+                UNION
+                SELECT files.id
+                FROM files
+                JOIN properties_list_values plv ON plv.file_id = files.id
+                WHERE plv.key = ?1 AND plv.value_norm = ?2
+            )
+            SELECT COUNT(*) FROM matches
+            ",
+            params![key, target],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+    }
 
     let has_more = rows.len() > limit as usize;
     let items: Vec<FileSummary> = rows.into_iter().take(limit as usize).collect();
@@ -395,5 +513,72 @@ mod tests {
         // The text should parse as JSON and yield a string value.
         let v: JsonValue = serde_json::from_str(&text).unwrap();
         assert!(v.is_string());
+    }
+
+    // --- value_text_norm + properties_list_values normalisation (#92 item 3) ---
+
+    #[test]
+    fn normalize_atomic_lowercases_text() {
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Text("Hello World".to_string())),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn normalize_atomic_integer_renders_as_decimal() {
+        assert_eq!(normalize_atomic_value(&PropertyValue::Integer(42)), "42");
+    }
+
+    #[test]
+    fn normalize_atomic_boolean_renders_as_true_false() {
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Boolean(true)),
+            "true"
+        );
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Boolean(false)),
+            "false"
+        );
+    }
+
+    #[test]
+    fn normalize_atomic_list_kinds_return_empty() {
+        // list / tag_list go through properties_list_values, not
+        // value_text_norm. Anything non-empty here would corrupt the
+        // partial-index covering condition.
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::List(vec![PropertyValue::Text(
+                "a".to_string()
+            )])),
+            ""
+        );
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::TagList(vec!["x".to_string()])),
+            ""
+        );
+    }
+
+    #[test]
+    fn list_elements_norm_lowercases_each_element() {
+        let v = PropertyValue::List(vec![
+            PropertyValue::Text("Alpha".to_string()),
+            PropertyValue::Text("BETA".to_string()),
+        ]);
+        assert_eq!(list_elements_norm(&v), vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn list_elements_norm_handles_tag_list() {
+        let v = PropertyValue::TagList(vec!["Science".to_string(), "Math".to_string()]);
+        assert_eq!(list_elements_norm(&v), vec!["science", "math"]);
+    }
+
+    #[test]
+    fn list_elements_norm_atomic_returns_empty() {
+        assert_eq!(
+            list_elements_norm(&PropertyValue::Text("x".to_string())),
+            Vec::<String>::new()
+        );
     }
 }
