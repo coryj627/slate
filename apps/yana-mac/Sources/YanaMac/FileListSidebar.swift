@@ -32,18 +32,23 @@ struct FileListSidebar: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Link panels live below the file list inside the same
-            // sidebar column. They self-hide when no note is
+            // Per-note panels live below the file list inside the
+            // same sidebar column. They self-hide when no note is
             // selected (returning EmptyView), so they don't push the
-            // file list around in the empty case.
+            // file list around in the empty case. Order matches the
+            // mental model of "what does this note say about itself
+            // / link to / get linked from": properties → outgoing →
+            // backlinks. (Outline lives in the third NavigationSplit
+            // column, not here.)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    BacklinksPanel()
+                    PropertiesPanel()
                     OutgoingLinksPanel()
+                    BacklinksPanel()
                 }
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 400)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")
