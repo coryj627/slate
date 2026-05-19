@@ -38,7 +38,12 @@ ALTER TABLE properties ADD COLUMN value_text_norm TEXT NOT NULL DEFAULT '';
 -- the JSON-unwrap path for every other atomic kind.
 UPDATE properties
 SET value_text_norm = CASE value_kind
-    WHEN 'boolean' THEN value_text
+    -- Boolean value_text is produced by `serialize_value` as the
+    -- JSON literal `true` / `false` (already lowercase) so `lower()`
+    -- is a no-op here in practice; keeping it defensive against
+    -- dirty data in case a hand-written migration ever lands a row
+    -- with `True` / `FALSE` (Codoki PR 100 follow-up).
+    WHEN 'boolean' THEN lower(value_text)
     ELSE lower(IFNULL(json_extract(value_text, '$'), value_text))
 END
 WHERE value_kind NOT IN ('list', 'tag_list');
