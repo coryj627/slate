@@ -76,6 +76,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "fts5: full-text search index over body_text",
         sql: include_str!("../migrations/006_fts5.sql"),
     },
+    Migration {
+        description: "properties: value_text_norm + list-element side table",
+        sql: include_str!("../migrations/007_properties_value_norm.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with YANA's standard PRAGMAs.
