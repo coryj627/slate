@@ -237,17 +237,23 @@ fn walk_value(
     props: &mut Vec<Property>,
     warnings: &mut Vec<PropertyParseWarning>,
 ) {
-    if depth > MAX_WALK_DEPTH {
-        warnings.push(PropertyParseWarning {
-            key_path: Some(key.to_string()),
-            message: format!(
-                "nesting exceeds the maximum depth of {MAX_WALK_DEPTH}; deeper keys are skipped"
-            ),
-        });
-        return;
-    }
     match value {
         Yaml::Hash(map) => {
+            // Boundary guard sits on the parent (this Hash), not on
+            // each child. Recursing into N children at depth+1 and
+            // letting each one trip its own guard would emit N
+            // warnings for a wide map at the cap — Codoki PR 95
+            // callout. Emit one warning for the boundary key and
+            // don't iterate.
+            if depth >= MAX_WALK_DEPTH {
+                warnings.push(PropertyParseWarning {
+                    key_path: Some(key.to_string()),
+                    message: format!(
+                        "nesting exceeds the maximum depth of {MAX_WALK_DEPTH}; deeper keys are skipped"
+                    ),
+                });
+                return;
+            }
             for (k, v) in map {
                 let sub_key = yaml_key_to_string(k);
                 let full_key = format!("{key}.{sub_key}");
@@ -820,11 +826,52 @@ mod tests {
         source.push_str("leaf: deep\n");
         source.push_str("---\n");
         let (_props, warnings) = extract_frontmatter(&source);
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.message.contains("nesting exceeds")),
-            "expected a depth-overflow warning, got {warnings:?}"
+        let nesting: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.message.contains("nesting exceeds"))
+            .collect();
+        assert_eq!(
+            nesting.len(),
+            1,
+            "expected exactly one nesting-depth warning, got {nesting:?}"
+        );
+    }
+
+    #[test]
+    fn wide_map_at_depth_boundary_emits_one_warning_not_per_child() {
+        // Regression for Codoki PR 95 medium: with the old guard
+        // (top-level `depth > MAX_WALK_DEPTH` after the recursive
+        // call), a wide map sitting AT the boundary would recurse
+        // into each child at depth+1 and emit one warning per
+        // child — flooding the warnings list for a fan-out shape.
+        // The boundary guard now lives on the parent Hash and
+        // emits exactly one warning regardless of fan-out.
+        //
+        // Build a chain of MAX_WALK_DEPTH+1 nested maps so the
+        // deepest Hash lands at depth=MAX_WALK_DEPTH (=32), where
+        // the new guard fires.
+        let chain = MAX_WALK_DEPTH + 1;
+        let mut source = String::from("---\n");
+        for i in 0..chain {
+            source.push_str(&"  ".repeat(i));
+            source.push_str(&format!("k{i}:\n"));
+        }
+        // 10 wide children under the deepest Hash. Each would
+        // have tripped its own warning under the old guard.
+        for j in 0..10 {
+            source.push_str(&"  ".repeat(chain));
+            source.push_str(&format!("w{j}: x\n"));
+        }
+        source.push_str("---\n");
+        let (_props, warnings) = extract_frontmatter(&source);
+        let nesting: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.message.contains("nesting exceeds"))
+            .collect();
+        assert_eq!(
+            nesting.len(),
+            1,
+            "wide map at the boundary must emit one warning, not one per child; got {nesting:?}"
         );
     }
 
