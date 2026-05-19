@@ -82,10 +82,14 @@ struct OutgoingLinksPanel: View {
                     badge(for: link)
                 }
                 if !link.snippet.isEmpty {
+                    // No lineLimit: snippet is a context excerpt from
+                    // the note body — readable content, not chrome.
+                    // The prior `.lineLimit(2)` truncated at large
+                    // Dynamic Type sizes below the WCAG 1.4.4
+                    // threshold.
                     Text(link.snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

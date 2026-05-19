@@ -82,10 +82,15 @@ private struct PropertyRow: View {
             Text(property.key)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.primary)
+            // No lineLimit: property values are user-authored data
+            // (a sentence-long description, a long list, a wikilink
+            // path, etc.). At large Dynamic Type sizes the previous
+            // `.lineLimit(3)` truncated below the WCAG 1.4.4 threshold
+            // for sighted users (`.help()` tooltip helps mouse users
+            // but not keyboard-only ones). Let it wrap.
             Text(display.visibleText)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .lineLimit(3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
