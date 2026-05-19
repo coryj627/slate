@@ -29,6 +29,17 @@ struct MainSplitView: View {
         .navigationTitle(vaultTitle)
         .toolbar {
             ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.toggleSearchOverlay()
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .accessibilityHint(
+                    "Opens the search overlay. Cmd+F to toggle, Esc to close."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
                 Button("Close Vault") {
                     appState.closeVault()
                     postAccessibilityAnnouncement(
@@ -38,6 +49,15 @@ struct MainSplitView: View {
                 .accessibilityHint(
                     "Returns to the welcome screen. The vault on disk is not modified."
                 )
+            }
+        }
+        .overlay(alignment: .top) {
+            if appState.isSearchOpen {
+                SearchOverlay()
+                    // Transition stays subtle; honors Reduce Motion
+                    // through SwiftUI's automatic crossfade fallback
+                    // when the user has it enabled.
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .onAppear {

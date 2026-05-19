@@ -2,6 +2,24 @@ import AppKit
 import Combine
 import Foundation
 
+/// Search-overlay state machine. Lives on `AppState`, drives the
+/// `SearchOverlay` view's mode (idle/searching/results/error) and
+/// the VoiceOver announcements that go with each transition.
+enum SearchState: Equatable {
+    /// No query in flight and no results to show. The initial state
+    /// when the overlay first opens.
+    case idle
+    /// A query is in flight. UI shows a "Searching…" placeholder
+    /// (announced through the polite live region).
+    case searching
+    /// Latest search returned `rows` with a pre-rendered audio
+    /// summary string (`"Search returned N results"`).
+    case results(rows: [QueryHit], summary: String)
+    /// SQLite or FFI error — surfaced through the same panel slot
+    /// as results so the user notices.
+    case error(String)
+}
+
 /// Outcome of a single link-activation call. Mirrors the branches in
 /// `AppState.openLink(_:)` so tests can assert routing without
 /// observing AppKit side effects.
@@ -98,12 +116,39 @@ final class AppState: ObservableObject {
     /// alert state doesn't cross-fire with the content pane's.
     @Published var linksLoadError: String?
 
+    /// True while the search overlay is visible. Cmd+F toggles;
+    /// Esc clears.
+    @Published var isSearchOpen: Bool = false
+    /// Live search query — bound to the overlay's TextField. Every
+    /// edit feeds the debouncer; the actual search fires ~150 ms
+    /// after the user stops typing.
+    @Published var searchQuery: String = ""
+    /// Current state of the search overlay's results panel.
+    @Published private(set) var searchState: SearchState = .idle
+    /// Pre-rendered audio summary for the live region. Mirrors
+    /// `searchState`'s results.summary so the SwiftUI .onChange
+    /// observer can fire a polite announcement.
+    @Published private(set) var searchSummary: String = ""
+
     /// One-shot channel for "scroll the content pane to this heading
     /// anchor." `OutlineSidebar` sends; `NoteContentView` subscribes
     /// via `.onReceive`. PassthroughSubject (not @Published) so
     /// repeated clicks on the same heading re-trigger the scroll
     /// without needing a counter.
     let scrollAnchorRequest = PassthroughSubject<String, Never>()
+
+    /// Live wire for the search-text debouncer. Every keystroke
+    /// pushes the latest query string; the Combine pipeline waits
+    /// 150 ms of inactivity before kicking off
+    /// `runSearch(query:)`. Cancellation of any in-flight search
+    /// happens at the head of each run so we don't pile up
+    /// background queries.
+    private let searchQuerySubject = PassthroughSubject<String, Never>()
+    /// Handle on the in-flight search task. Exposed (internal) so
+    /// tests can `await state.searchTask?.value` to deterministically
+    /// observe the post-search state.
+    private(set) var searchTask: Task<Void, Never>?
+    private var searchCancelToken: CancelToken?
 
     /// Handle on the in-flight scan + list task kicked off by
     /// `openVault`. Exposed (internal, not Published) so tests can
@@ -170,6 +215,124 @@ final class AppState: ObservableObject {
                 self?.handleSelectionChange(to: path)
             }
             .store(in: &subscriptions)
+
+        // Search query debouncer. 150 ms matches the acceptance
+        // criteria and is short enough that typing feels live but
+        // long enough that fast typists don't fire one query per
+        // keystroke.
+        searchQuerySubject
+            .debounce(for: .milliseconds(150), scheduler: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { [weak self] query in
+                self?.runSearch(query: query)
+            }
+            .store(in: &subscriptions)
+
+        // Push the initial empty query so a fresh AppState starts
+        // in the `idle` state without an immediate fire.
+    }
+
+    /// Push the current `searchQuery` through the debouncer. Called
+    /// from the SwiftUI TextField's `.onChange` so the UI doesn't
+    /// have to know about the subject.
+    func bumpSearchQuery() {
+        searchQuerySubject.send(searchQuery)
+    }
+
+    /// Toggle the search overlay open / closed. When opening, the
+    /// query is preserved so re-opening with a previous query lands
+    /// the user back at the same results. When closing, we cancel
+    /// the in-flight query so the worker doesn't keep churning
+    /// after the user has moved on.
+    func toggleSearchOverlay() {
+        if isSearchOpen {
+            closeSearchOverlay()
+        } else {
+            isSearchOpen = true
+        }
+    }
+
+    /// Close the overlay and cancel any in-flight search. Keep
+    /// `searchQuery` so a Cmd+F → Esc → Cmd+F round trip lands
+    /// back where the user was.
+    func closeSearchOverlay() {
+        isSearchOpen = false
+        cancelInFlightSearch()
+        searchState = .idle
+        searchSummary = ""
+    }
+
+    /// Cancel any currently-running search task. Safe to call when
+    /// nothing's in flight.
+    private func cancelInFlightSearch() {
+        searchCancelToken?.cancel()
+        searchCancelToken = nil
+        searchTask?.cancel()
+        searchTask = nil
+    }
+
+    /// Kick off a fresh search. Called from the debouncer; callers
+    /// shouldn't invoke directly.
+    private func runSearch(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            cancelInFlightSearch()
+            searchState = .idle
+            searchSummary = ""
+            return
+        }
+        guard let session = currentSession else {
+            // No vault open → surface a benign placeholder rather
+            // than an error toast.
+            searchState = .idle
+            return
+        }
+        // Tear down the previous query before starting a new one.
+        cancelInFlightSearch()
+        searchState = .searching
+        let cancel = CancelToken()
+        searchCancelToken = cancel
+        searchTask = Task { [weak self] in
+            let outcome: Result<QueryResultSet, VaultError> =
+                await Task.detached(priority: .userInitiated) {
+                    do {
+                        let rs = try session.fullTextSearch(
+                            query: trimmed,
+                            scope: .vault,
+                            cancel: cancel
+                        )
+                        return .success(rs)
+                    } catch let error as VaultError {
+                        return .failure(error)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
+                }
+                .value
+
+            // Drop late results: another query may have taken over
+            // while this one was in flight; tossing the result keeps
+            // the overlay's panel coherent with the latest typed
+            // query.
+            guard let self else { return }
+            if Task.isCancelled || self.searchCancelToken !== cancel {
+                return
+            }
+            switch outcome {
+            case .success(let rs):
+                self.searchState = .results(rows: rs.rows, summary: rs.summary)
+                self.searchSummary = rs.summary
+            case .failure(let error):
+                if case .Cancelled = error {
+                    // Cancellation is a normal user action — keep
+                    // whatever the panel was showing before.
+                    return
+                }
+                let message = self.humanReadable(error)
+                self.searchState = .error(message)
+                self.searchSummary = "Search error: \(message)"
+            }
+        }
     }
 
     /// Internal hook from the selectedFilePath subscription. Cancels
@@ -367,6 +530,8 @@ final class AppState: ObservableObject {
         noteLoadTask = nil
         linksLoadTask?.cancel()
         linksLoadTask = nil
+        closeSearchOverlay()
+        searchQuery = ""
         currentSession = nil
         currentVaultURL = nil
         files = []

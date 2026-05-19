@@ -793,6 +793,140 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(display2.visibleText, "anything")
     }
 
+    // MARK: - Search overlay (#58)
+
+    /// Drain the debouncer + the in-flight search task so tests
+    /// observe a settled state.
+    private func awaitSearch(_ state: AppState) async {
+        // The debounce fires on DispatchQueue.main after 150 ms.
+        // Sleep slightly longer than that so the runner kicks off.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await state.searchTask?.value
+    }
+
+    func testSearchIsIdleByDefault() throws {
+        let state = try makeAppState()
+        XCTAssertEqual(state.searchState, .idle)
+        XCTAssertFalse(state.isSearchOpen)
+    }
+
+    func testToggleSearchOverlayOpensAndClosesIt() throws {
+        let state = try makeAppState()
+        state.toggleSearchOverlay()
+        XCTAssertTrue(state.isSearchOpen)
+        state.toggleSearchOverlay()
+        XCTAssertFalse(state.isSearchOpen)
+        XCTAssertEqual(state.searchState, .idle)
+    }
+
+    func testEmptyQueryStaysIdle() async throws {
+        let vault = tempDir.appendingPathComponent("search-empty")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("hello world".utf8).write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.searchQuery = ""
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+        XCTAssertEqual(state.searchState, .idle)
+    }
+
+    func testQueryTransitionsThroughResults() async throws {
+        let vault = tempDir.appendingPathComponent("search-results")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("hello uniqueoverlaytoken world".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.searchQuery = "uniqueoverlaytoken"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+
+        switch state.searchState {
+        case .results(let rows, let summary):
+            XCTAssertEqual(rows.count, 1)
+            XCTAssertEqual(rows[0].path, "note.md")
+            XCTAssertEqual(summary, "Search returned 1 result.")
+        case let other:
+            XCTFail("expected results, got \(String(describing: other))")
+        }
+        XCTAssertEqual(state.searchSummary, "Search returned 1 result.")
+    }
+
+    func testQueryWithNoHitsReturnsEmptyResults() async throws {
+        let vault = tempDir.appendingPathComponent("search-empty-results")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("hello world".utf8).write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.searchQuery = "absenttokenxyz"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+
+        switch state.searchState {
+        case .results(let rows, let summary):
+            XCTAssertTrue(rows.isEmpty)
+            XCTAssertEqual(summary, "Search returned no results.")
+        case let other:
+            XCTFail("expected empty results, got \(String(describing: other))")
+        }
+    }
+
+    func testCloseSearchOverlayResetsState() async throws {
+        let vault = tempDir.appendingPathComponent("search-close")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("hello searchtokenone".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.toggleSearchOverlay()
+        state.searchQuery = "searchtokenone"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+
+        if case .results = state.searchState {
+            // good
+        } else {
+            XCTFail("expected results before close, got \(String(describing: state.searchState))")
+        }
+
+        state.closeSearchOverlay()
+        XCTAssertFalse(state.isSearchOpen)
+        XCTAssertEqual(state.searchState, .idle)
+        XCTAssertEqual(state.searchSummary, "")
+    }
+
+    func testCloseVaultClearsSearchState() async throws {
+        let vault = tempDir.appendingPathComponent("search-vault-close")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("searchablecontentx".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.searchQuery = "searchablecontentx"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+
+        state.closeVault()
+        XCTAssertFalse(state.isSearchOpen)
+        XCTAssertEqual(state.searchState, .idle)
+        XCTAssertEqual(state.searchQuery, "")
+    }
+
     // MARK: - Link activation (#52)
 
     private func makeOutgoing(
