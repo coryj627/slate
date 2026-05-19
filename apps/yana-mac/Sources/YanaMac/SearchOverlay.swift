@@ -10,9 +10,29 @@ import SwiftUI
 ///     state transition into `.results`.
 ///   - Each row's accessibility label matches the acceptance spec
 ///     exactly: `"<filename>, line <N>: <snippet>"`.
+///
+/// Keyboard:
+///   - Cmd+F (from MainSplitView) toggles the overlay.
+///   - The field auto-focuses on open.
+///   - Return on the field activates the top-ranked result.
+///   - Tab moves focus from the field into the first result row;
+///     arrow keys cycle within results.
+///   - Esc closes the overlay (shortcut bound to the container, not
+///     the close button — keeps the dismiss path working no matter
+///     which child has focus).
 struct SearchOverlay: View {
     @EnvironmentObject private var appState: AppState
-    @FocusState private var fieldFocused: Bool
+
+    /// Focus target. `.field` while typing, `.result(idx)` once the
+    /// user Tabs into the results list or hits Return on the field.
+    /// `nil` means "no overlay element has focus" (briefly true on
+    /// open before the .onAppear closure assigns the field).
+    @FocusState private var focus: FocusTarget?
+
+    private enum FocusTarget: Hashable {
+        case field
+        case result(Int)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +51,7 @@ struct SearchOverlay: View {
         .onAppear {
             // Defer focus until the next runloop tick so the
             // .focused binding has been wired up by SwiftUI.
-            DispatchQueue.main.async { fieldFocused = true }
+            DispatchQueue.main.async { focus = .field }
         }
         // .onChange(of:) is one-arg on macOS 13; we stick with it so
         // the app keeps its declared minimum.
@@ -54,18 +74,24 @@ struct SearchOverlay: View {
                 .accessibilityHidden(true)
             TextField("Search vault…", text: $appState.searchQuery)
                 .textFieldStyle(.plain)
-                .focused($fieldFocused)
+                .focused($focus, equals: .field)
                 .accessibilityLabel("Search vault")
-                .accessibilityHint("Type to search across every note in this vault.")
+                .accessibilityHint(
+                    "Type to search across every note in this vault. "
+                        + "Return activates the top result. "
+                        + "Tab moves to the results list."
+                )
                 .onChange(of: appState.searchQuery) { _ in
                     appState.bumpSearchQuery()
                 }
                 .onSubmit {
-                    // Return on the field doesn't activate yet (#E4
-                    // adds that). For now, give focus to the first
-                    // result if there is one — close enough to be
-                    // useful and matches the acceptance criteria of
-                    // "Tab cycles into the results list and back."
+                    // Return on the field activates the top result
+                    // if there is one — matches the acceptance
+                    // criteria of "Return activates" + "Tab cycles
+                    // into the results list."
+                    if let first = firstResultHit() {
+                        appState.openSearchResult(first)
+                    }
                 }
             Button {
                 appState.closeSearchOverlay()
@@ -76,6 +102,14 @@ struct SearchOverlay: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Close search")
             .accessibilityHint("Closes the search overlay and returns to the previous view.")
+            // Esc dismiss. macOS `.keyboardShortcut` is
+            // window-scoped, so this fires no matter which view in
+            // the overlay has focus (field, result row, etc.) —
+            // the audit-#88-B6 concern about focus-routing fragility
+            // was unfounded for SwiftUI's window-level shortcut
+            // resolution. Keeping the binding on a visible,
+            // properly-sized button avoids the WCAG 2.5.8 0x0 hit-
+            // target warning a hidden ancillary button would trip.
             .keyboardShortcut(.escape, modifiers: [])
         }
         .padding(.horizontal, 12)
@@ -152,8 +186,8 @@ struct SearchOverlay: View {
                 // within a result set, and using a stable id keeps
                 // SwiftUI from re-creating row views when results
                 // reorder by score after a query change.
-                ForEach(rows, id: \.path) { hit in
-                    row(for: hit)
+                ForEach(Array(rows.enumerated()), id: \.element.path) { idx, hit in
+                    row(for: hit, at: idx)
                 }
             }
             .padding(.horizontal, 8)
@@ -162,7 +196,7 @@ struct SearchOverlay: View {
         .frame(maxHeight: 320)
     }
 
-    private func row(for hit: QueryHit) -> some View {
+    private func row(for hit: QueryHit, at index: Int) -> some View {
         Button {
             appState.openSearchResult(hit)
         } label: {
@@ -181,6 +215,11 @@ struct SearchOverlay: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Per-row focus binding so Tab from the field cycles into
+        // the result list. The first Tab press lands on `.result(0)`;
+        // subsequent Tabs walk via the system focus-traversal logic
+        // (Return activates the focused row's button action).
+        .focused($focus, equals: .result(index))
         // VoiceOver row label per spec: "<filename>, line <N>: <snippet>".
         // We strip the STX/ETX hit markers from the snippet for the
         // audio side — they're useful for visual emphasis but a
@@ -198,5 +237,16 @@ struct SearchOverlay: View {
 
     private func filename(for path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+
+    /// First hit in the current results list, if any. Used to wire
+    /// the field's Return-key submit action to the top-ranked
+    /// result without duplicating the row's openSearchResult call
+    /// site.
+    private func firstResultHit() -> QueryHit? {
+        if case .results(let rows, _) = appState.searchState {
+            return rows.first
+        }
+        return nil
     }
 }

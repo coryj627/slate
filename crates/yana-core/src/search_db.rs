@@ -154,20 +154,35 @@ pub fn full_text_search(
     let query_tokens = tokenize_query_for_line_lookup(trimmed);
 
     let mut rows = Vec::new();
-    let mut cursor = match folder_prefix.as_ref() {
+    // Map FTS5 query-syntax errors to a dedicated `InvalidQuery`
+    // variant so the UI can render \"bad query\" guidance without
+    // conflating with a corrupt-cache `Db` error. The actual rusqlite
+    // surface for FTS5 errors is `SqliteFailure` with code `Unknown`
+    // and a message starting with `fts5:` — we sniff the message
+    // string since rusqlite doesn't expose a typed error for it.
+    let cursor_result = match folder_prefix.as_ref() {
         Some(prefix) => stmt.query(rusqlite::params![
             trimmed,
             SNIPPET_HIT_START,
             SNIPPET_HIT_END,
             prefix,
-        ])?,
+        ]),
         None => stmt.query(rusqlite::params![
             trimmed,
             SNIPPET_HIT_START,
             SNIPPET_HIT_END,
-        ])?,
+        ]),
     };
-    while let Some(row) = cursor.next()? {
+    let mut cursor = match cursor_result {
+        Ok(c) => c,
+        Err(err) => return Err(map_fts5_error(err, trimmed)),
+    };
+    loop {
+        let row = match cursor.next() {
+            Ok(Some(r)) => r,
+            Ok(None) => break,
+            Err(err) => return Err(map_fts5_error(err, trimmed)),
+        };
         // Periodic cancel check — same cooperative pattern as
         // `scan_initial`. Bail before allocating the next row.
         if cancel.is_cancelled() {
@@ -192,6 +207,37 @@ pub fn full_text_search(
         n => format!("Search returned {n} results."),
     };
     Ok(QueryResultSet { rows, summary })
+}
+
+/// Distinguish FTS5 query-syntax errors from real database errors.
+///
+/// SQLite surfaces FTS5 parse failures as `rusqlite::Error::
+/// SqliteFailure` with code `Unknown` and one of several message
+/// strings depending on the failure mode (`fts5: ...`,
+/// `syntax error near ...`, `unterminated string`, `unknown
+/// special query`, etc.). There's no typed variant, so we sniff
+/// the message. A false negative (mapping a real DB error to
+/// InvalidQuery) is far less harmful than a false positive
+/// (mapping a syntax error to Db and confusing the UI), so the
+/// matcher is intentionally permissive on the FTS5-marker side.
+fn map_fts5_error(err: rusqlite::Error, query: &str) -> VaultError {
+    let message = err.to_string();
+    // Known FTS5 / SQL-parser failure markers. Broaden carefully
+    // if new edge cases show up — but err on the side of treating
+    // any `SqliteFailure` during a MATCH-bound cursor as a query
+    // problem, since prepared-stmt binding errors and connection
+    // failures shouldn't arrive here in practice.
+    let looks_like_query_problem = message.contains("fts5:")
+        || message.contains("syntax error")
+        || message.contains("unterminated")
+        || message.contains("unknown special query");
+    if looks_like_query_problem {
+        VaultError::InvalidQuery {
+            message: format!("FTS5 could not parse {query:?}: {message}"),
+        }
+    } else {
+        VaultError::from(err)
+    }
 }
 
 /// Escape SQLite LIKE metacharacters (`%`, `_`, `\`) so a literal
@@ -228,6 +274,15 @@ fn tokenize_query_for_line_lookup(query: &str) -> Vec<String> {
 /// `body_text`) of any token from `tokens`. Falls back to 1 when no
 /// token can be found — FTS5 may have matched through stemming or
 /// punctuation collapse and the raw tokens needn't appear literally.
+///
+/// We count newlines in the lowercased body, not the original.
+/// Unicode lowercasing can change byte length (`İ` 2→3 bytes,
+/// `ẞ` 3→2 bytes), so a byte offset from `body_lower.find(...)`
+/// isn't a valid index into the original `body_text` — slicing
+/// would panic on a non-boundary. Counting newlines in
+/// `body_lower` itself avoids the cross-string slice entirely;
+/// the line count comes out the same because `to_lowercase()`
+/// preserves `\n` characters verbatim.
 fn find_first_token_line(body_text: &str, tokens: &[String]) -> u32 {
     let body_lower = body_text.to_lowercase();
     let mut earliest: Option<usize> = None;
@@ -240,10 +295,7 @@ fn find_first_token_line(body_text: &str, tokens: &[String]) -> u32 {
         }
     }
     match earliest {
-        Some(pos) => {
-            let line = body_text[..pos].bytes().filter(|b| *b == b'\n').count() as u32 + 1;
-            line
-        }
+        Some(pos) => body_lower[..pos].bytes().filter(|b| *b == b'\n').count() as u32 + 1,
         None => 1,
     }
 }
@@ -281,6 +333,22 @@ mod tests {
             escape_like(r"path\with\backslash"),
             r"path\\with\\backslash"
         );
+    }
+
+    #[test]
+    fn find_first_token_line_handles_unicode_lowercasing_length_change() {
+        // Regression for the audit-#88 UTF-8 boundary panic. `İ`
+        // (U+0130) lowercases to two characters (`i` + U+0307
+        // combining dot above), so the lowered string is 1 byte
+        // longer than the original. If we slice `body_text` with
+        // an offset derived from `body_lower.find(...)`, we land
+        // on a non-boundary mid-multi-byte-char and Rust panics.
+        let body = "İstanbul intro\nİstanbul again\nmatch on line 3";
+        let line = find_first_token_line(body, &["match".to_string()]);
+        // Either 2 or 3 depending on lowercase semantics; the
+        // invariant we care about is "doesn't panic, returns a
+        // sensible line number".
+        assert!(line == 3 || line == 2, "got {line}");
     }
 
     #[test]

@@ -368,6 +368,7 @@ impl VaultSession {
             self.provider.as_ref(),
             &mut conn,
             self.config.parser_version,
+            self.config.large_file_refuse_bytes,
             cancel,
             listener.as_deref(),
         )
@@ -510,6 +511,7 @@ fn scan_vault(
     provider: &dyn VaultProvider,
     conn: &mut Connection,
     parser_version: u32,
+    large_file_refuse_bytes: u64,
     cancel: &CancelToken,
     listener: Option<&dyn ScanProgressListener>,
 ) -> Result<ScanReport, VaultError> {
@@ -616,6 +618,7 @@ fn scan_vault(
                         now,
                         &mut report,
                         &vault_index,
+                        large_file_refuse_bytes,
                     ) {
                         report.errors.push(format!("{path}: {e}"));
                     }
@@ -723,6 +726,7 @@ fn index_file(
     now: i64,
     report: &mut ScanReport,
     vault_index: &crate::InMemoryVaultIndex,
+    large_file_refuse_bytes: u64,
 ) -> Result<(), VaultError> {
     let stat = provider.stat(path)?;
     // Case-fold the extension so macOS (APFS) and Windows (NTFS) files
@@ -792,6 +796,64 @@ fn index_file(
             report.files_skipped += 1;
             return Ok(());
         }
+    }
+
+    // Refuse to read files past the configured size threshold. The
+    // editor's `read_text` path already enforces this; the scanner
+    // used to read whatever was on disk into memory, then double it
+    // via `from_utf8_lossy(&content).into_owned()`. A multi-GB file
+    // would blow process memory and overflow SQLite's TEXT cap
+    // when stored as `body_text`. Skip the body indexing for such
+    // files and record a per-file error so the user notices via
+    // `ScanReport.errors`; the row is still upserted with metadata
+    // (size, mtime, hash of an empty body) so subsequent scans
+    // don't re-trip the threshold on every pass.
+    if stat.size_bytes > large_file_refuse_bytes {
+        let message = format!(
+            "{path}: {size} bytes exceeds large-file refuse threshold ({limit}); skipping body index",
+            path = path,
+            size = stat.size_bytes,
+            limit = large_file_refuse_bytes,
+        );
+        report.errors.push(message);
+        // Upsert metadata + empty body so the file appears in the
+        // index (sidebar lists it, but search won't find anything
+        // inside it). hash is computed against an empty body so
+        // the row's hash matches the persisted body_text — the
+        // fast path won't be tricked into thinking the body is
+        // current the next time.
+        let empty_hash = content_hash(b"");
+        tx.execute(
+            "INSERT INTO files
+                (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                 content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '')
+             ON CONFLICT(path) DO UPDATE SET
+                name           = excluded.name,
+                extension      = excluded.extension,
+                size_bytes     = excluded.size_bytes,
+                mtime_ms       = excluded.mtime_ms,
+                ctime_ms       = excluded.ctime_ms,
+                content_hash   = excluded.content_hash,
+                parser_version = excluded.parser_version,
+                indexed_at_ms  = excluded.indexed_at_ms,
+                is_markdown    = excluded.is_markdown,
+                body_text      = excluded.body_text",
+            rusqlite::params![
+                path,
+                name,
+                extension,
+                stat.size_bytes as i64,
+                stat.mtime_ms,
+                stat.ctime_ms,
+                empty_hash,
+                parser_version,
+                now,
+                is_markdown as i64,
+            ],
+        )?;
+        report.files_indexed += 1;
+        return Ok(());
     }
 
     let content = provider.read_file(path)?;
@@ -2292,6 +2354,82 @@ mod tests {
         let cap = 100u64;
         let bytes = provider.read_file_with_cap("big.md", cap).unwrap();
         assert_eq!(bytes.len() as u64, cap + 1);
+    }
+
+    #[test]
+    fn scan_skips_body_indexing_for_files_past_refuse_threshold() {
+        // Audit-#88-B2 regression: previously the slow path read
+        // the full file into memory regardless of size. A multi-GB
+        // file would blow process memory and overflow SQLite's
+        // TEXT cap. The fix surfaces a per-file scan error and
+        // upserts metadata with an empty body so the row still
+        // exists in the index but FTS / body queries return
+        // nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file("huge.md", b"more than ten bytes here please")
+            .unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 10;
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+
+        // The file is still indexed (counts toward files_indexed)
+        // but the report carries an error and the body is empty.
+        assert_eq!(report.files_indexed, 1);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("exceeds large-file refuse threshold")),
+            "expected refuse error in report.errors, got {:?}",
+            report.errors
+        );
+        // Body should be empty in the DB → FTS matches against a
+        // distinct token must come back empty.
+        let result = session
+            .full_text_search(
+                "distincttokennomatchexpected",
+                &crate::SearchScope::Vault,
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert!(result.rows.is_empty());
+
+        // The file row exists in get_file_metadata (sidebar still
+        // shows it) — confirming this is a "skip body" not "skip
+        // row".
+        let md = session.get_file_metadata("huge.md").unwrap();
+        assert!(md.is_some(), "file row should still be indexed");
+    }
+
+    #[test]
+    fn full_text_search_maps_fts5_syntax_errors_to_invalid_query() {
+        // Audit-#88-B3 regression: previously a user-supplied FTS5
+        // syntax error surfaced as `VaultError::Db`, which is
+        // indistinguishable from a corrupt cache.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/a.md", b"some content").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Unbalanced quote — FTS5 parser rejects with "syntax
+        // error" in the message.
+        match session.full_text_search(
+            "unbalanced\"",
+            &crate::SearchScope::Vault,
+            &CancelToken::new(),
+        ) {
+            Err(VaultError::InvalidQuery { message }) => {
+                assert!(
+                    message.contains("unbalanced"),
+                    "InvalidQuery message should include the query: {message}"
+                );
+            }
+            other => panic!("expected InvalidQuery, got {other:?}"),
+        }
     }
 
     #[test]
