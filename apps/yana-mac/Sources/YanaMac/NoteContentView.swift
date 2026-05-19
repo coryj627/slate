@@ -242,7 +242,15 @@ struct NoteContentView: View {
     ///     within a few visual lines of the match.
     @ViewBuilder
     private func bodyContent(_ section: NoteSection) -> some View {
-        let bodyLineCount = section.body.components(separatedBy: "\n").count
+        // Count newlines + 1 rather than `components(separatedBy:)`,
+        // which allocates `[String]` per render. The UTF-8 view is
+        // O(n) but allocates nothing — for a 10k-line section the
+        // difference shows up in body diffs on every Dynamic Type
+        // change or selection toggle.
+        let newlineCount = section.body.utf8.reduce(0) { acc, byte in
+            byte == 0x0A ? acc + 1 : acc
+        }
+        let bodyLineCount = newlineCount + 1
         ZStack(alignment: .topLeading) {
             Text(section.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
