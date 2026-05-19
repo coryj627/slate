@@ -52,9 +52,19 @@ struct PropertiesPanel: View {
 }
 
 /// Single property row. Split into its own view so the panel can
-/// keep type-specific formatting + activation logic localized.
+/// keep type-specific formatting localized.
+///
+/// Wikilink rows render as static text rather than buttons. The
+/// previous shape wrapped wikilink rows in a `Button` with hint
+/// "Opens the linked note." but the activation path hard-coded
+/// `isUnresolved: true`, so every press announced "<target> is
+/// unresolved. Cannot open." — the hint was a promise the UI
+/// couldn't keep (WCAG 2.5.3 label-in-name concern, #90). Until a
+/// real wikilink resolver lands for frontmatter values, we drop
+/// the button and let the type-cued accessibility label
+/// ("Property X, link to Y") tell the user what the row is
+/// without overpromising activation.
 private struct PropertyRow: View {
-    @EnvironmentObject private var appState: AppState
     let property: Property
 
     var body: some View {
@@ -62,24 +72,9 @@ private struct PropertyRow: View {
             kind: property.kind,
             valueJson: property.valueJson
         )
-        if let wikilinkTarget = display.wikilinkTarget {
-            // Wikilink-typed properties route through the same
-            // openLink handler the OutgoingLinksPanel uses (#C5)
-            // so resolved-or-unresolved treatment stays consistent.
-            Button {
-                appState.openLink(makeOutgoingLink(target: wikilinkTarget))
-            } label: {
-                rowContent(display: display)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+        rowContent(display: display)
+            .accessibilityElement(children: .combine)
             .accessibilityLabel(display.accessibilityLabel(for: property.key))
-            .accessibilityHint("Opens the linked note.")
-        } else {
-            rowContent(display: display)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(display.accessibilityLabel(for: property.key))
-        }
     }
 
     private func rowContent(display: PropertyValueDisplay) -> some View {
@@ -95,34 +90,6 @@ private struct PropertyRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
         .help(display.tooltip)
-    }
-
-    /// Build an OutgoingLink view-model for `AppState.openLink` so
-    /// wikilink properties activate through the same resolved /
-    /// unresolved code path the OutgoingLinksPanel uses. We don't
-    /// have the resolved target here — pass `nil` and `isUnresolved`
-    /// true so the call falls through openLink's unresolved branch
-    /// when needed; if the link IS resolved in the vault index, the
-    /// session-level resolver will route it correctly on the next
-    /// scan-tick refresh of `currentOutgoingLinks`.
-    ///
-    /// V1 trade-off: until #54-properties get a resolved-target
-    /// follow-up, wikilink properties activate by handing the raw
-    /// target to openLink as an unresolved internal link. The
-    /// announcement says "<target> is unresolved. Cannot open." —
-    /// honest about what we know.
-    private func makeOutgoingLink(target: String) -> OutgoingLink {
-        OutgoingLink(
-            targetPath: nil,
-            targetRaw: target,
-            targetAnchor: nil,
-            kind: "wikilink",
-            isEmbed: false,
-            isExternal: false,
-            isUnresolved: true,
-            snippet: "",
-            ordinal: 0
-        )
     }
 }
 

@@ -360,15 +360,31 @@ final class AppState: ObservableObject {
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
-        currentBacklinks = []
-        currentOutgoingLinks = []
-        currentNoteProperties = []
         linksLoadError = nil
         guard let path else {
+            // Full clear when nothing is selected. Safe here because
+            // there's no destination note to attribute stale content
+            // to — and `closeVault` / explicit deselect callers expect
+            // the panels to drop their contents synchronously.
+            currentBacklinks = []
+            currentOutgoingLinks = []
+            currentNoteProperties = []
             isLoadingNote = false
             isLoadingLinks = false
             return
         }
+        // Note-to-note transitions: leave `currentBacklinks`,
+        // `currentOutgoingLinks`, and `currentNoteProperties` holding
+        // the previous selection's values until the new load resolves.
+        // The previous shape cleared them synchronously, which made
+        // the PropertiesPanel render `EmptyView` for the duration of
+        // the load — a visible flicker for sighted users and a
+        // disappear/reappear of the "Properties, N items" rotor item
+        // for VoiceOver on every selection change (#90). The
+        // race-cancel guard in `loadCurrentLinks` (selectedFilePath ==
+        // path) ensures the newer task's writes win, so the user only
+        // sees stale content for the duration of the IO — typically
+        // a few milliseconds.
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
