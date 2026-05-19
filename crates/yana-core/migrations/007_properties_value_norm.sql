@@ -28,12 +28,19 @@
 
 ALTER TABLE properties ADD COLUMN value_text_norm TEXT NOT NULL DEFAULT '';
 
--- Backfill atomic rows: lower(unwrapped_json OR raw value_text).
--- Mirrors the OR fallback in the old WHERE clause so atomic
--- booleans (where `json_extract(true)` coerces to integer 1 and
--- doesn't match `"true"`) still resolve via the raw-text branch.
+-- Backfill atomic rows. Boolean rows need a carve-out: their
+-- stored `value_text` is already `true` / `false` (the JSON
+-- literal, lowercase), but `json_extract` coerces JSON booleans to
+-- SQLite integers 1 / 0, so the generic `json_extract → lower`
+-- path would land "1" / "0" in `value_text_norm` and silently
+-- break boolean lookups against rows that existed before the
+-- migration. The CASE keeps booleans on their raw text and runs
+-- the JSON-unwrap path for every other atomic kind.
 UPDATE properties
-SET value_text_norm = lower(IFNULL(json_extract(value_text, '$'), value_text))
+SET value_text_norm = CASE value_kind
+    WHEN 'boolean' THEN value_text
+    ELSE lower(IFNULL(json_extract(value_text, '$'), value_text))
+END
 WHERE value_kind NOT IN ('list', 'tag_list');
 
 -- Partial composite index for atomic lookups. List / tag_list

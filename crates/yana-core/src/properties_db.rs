@@ -93,12 +93,14 @@ fn normalize_atomic_value(value: &PropertyValue) -> String {
         PropertyValue::Float(f) => {
             // Match the JSON serialisation: finite floats render as
             // their JSON form, non-finite as the Rust string form
-            // (NaN/Inf). The string form is already lowercase.
+            // (`NaN`, `inf`, `-inf`). Both branches lowercase — a
+            // user typing `nan` in a `files_with_property` query
+            // wouldn't match a stored `NaN` otherwise (Codoki PR
+            // 100 callout).
             if f.is_finite() {
-                let json = JsonValue::from(*f).to_string();
-                json.to_lowercase()
+                JsonValue::from(*f).to_string().to_lowercase()
             } else {
-                f.to_string()
+                f.to_string().to_lowercase()
             }
         }
         PropertyValue::Boolean(b) => {
@@ -130,7 +132,7 @@ fn list_elements_norm(value: &PropertyValue) -> Vec<String> {
                     if f.is_finite() {
                         JsonValue::from(*f).to_string().to_lowercase()
                     } else {
-                        f.to_string()
+                        f.to_string().to_lowercase()
                     }
                 }
                 PropertyValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
@@ -580,5 +582,109 @@ mod tests {
             list_elements_norm(&PropertyValue::Text("x".to_string())),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn normalize_atomic_finite_float() {
+        // Match the JSON form (no trailing zeros, no leading `+`) so
+        // a user typing `1.5` in a query hits stored `1.5`.
+        assert_eq!(normalize_atomic_value(&PropertyValue::Float(1.5)), "1.5");
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Float(1.0e-3)),
+            "0.001"
+        );
+    }
+
+    #[test]
+    fn normalize_atomic_non_finite_float_is_lowercase() {
+        // Codoki PR 100: prior shape returned `NaN` / `inf` /
+        // `-inf` from `f.to_string()`; case-mismatching against
+        // `target.to_lowercase()` in the query path meant users
+        // typing `nan` got no results.
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Float(f64::NAN)),
+            "nan"
+        );
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Float(f64::INFINITY)),
+            "inf"
+        );
+        assert_eq!(
+            normalize_atomic_value(&PropertyValue::Float(f64::NEG_INFINITY)),
+            "-inf"
+        );
+    }
+
+    #[test]
+    fn list_elements_norm_non_finite_float_is_lowercase() {
+        let v = PropertyValue::List(vec![
+            PropertyValue::Float(f64::NAN),
+            PropertyValue::Float(f64::INFINITY),
+        ]);
+        assert_eq!(list_elements_norm(&v), vec!["nan", "inf"]);
+    }
+
+    #[test]
+    fn migration_007_backfills_boolean_value_text_norm_to_true_false() {
+        // Codoki PR 100 (high): the generic
+        // `lower(IFNULL(json_extract(value_text, '$'), value_text))`
+        // landed `"1"` / `"0"` in value_text_norm for boolean rows
+        // because json_extract coerces JSON booleans to SQLite
+        // ints. A boolean carve-out in the CASE keeps them on the
+        // raw value_text (`true` / `false`). This test stands up
+        // the pre-migration shape, runs the migration SQL, and
+        // asserts the post-migration normalisation.
+        use rusqlite::Connection;
+        let conn = Connection::open_in_memory().unwrap();
+        // Minimal pre-migration shape — files + properties + the
+        // index migration 007 drops. Migrations 1–6 do more than
+        // this, but only `files` and `properties` are touched by
+        // migration 007's UPDATE/INSERT.
+        conn.execute_batch(
+            "CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                path TEXT,
+                name TEXT,
+                mtime_ms INTEGER,
+                size_bytes INTEGER,
+                is_markdown INTEGER
+            );
+            CREATE TABLE properties (
+                file_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value_kind TEXT NOT NULL,
+                value_text TEXT NOT NULL,
+                PRIMARY KEY (file_id, ordinal)
+            );
+            CREATE INDEX idx_properties_key_value ON properties(key, value_text);
+            INSERT INTO files (id, path, name, mtime_ms, size_bytes, is_markdown)
+            VALUES (1, 'a.md', 'a.md', 0, 0, 1);
+            INSERT INTO properties (file_id, ordinal, key, value_kind, value_text) VALUES
+                (1, 0, 'published', 'boolean', 'true'),
+                (1, 1, 'draft', 'boolean', 'false'),
+                (1, 2, 'title', 'text', '\"Hello\"'),
+                (1, 3, 'count', 'number', '42');",
+        )
+        .unwrap();
+
+        let migration_sql = include_str!("../migrations/007_properties_value_norm.sql");
+        conn.execute_batch(migration_sql).unwrap();
+
+        let row = |key: &str| -> String {
+            conn.query_row(
+                "SELECT value_text_norm FROM properties WHERE key = ?1",
+                rusqlite::params![key],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(row("published"), "true");
+        assert_eq!(row("draft"), "false");
+        // Non-boolean atomic kinds keep going through the
+        // json_extract path: text rows shed their quote wrap, number
+        // rows pass through.
+        assert_eq!(row("title"), "hello");
+        assert_eq!(row("count"), "42");
     }
 }
