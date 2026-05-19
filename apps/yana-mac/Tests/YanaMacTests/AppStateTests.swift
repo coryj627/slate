@@ -944,6 +944,34 @@ final class AppStateTests: XCTestCase {
         )
     }
 
+    /// Waits for the next emission on `lineScrollRequest`. Used in
+    /// place of `Task.sleep` so the assertion synchronizes on the
+    /// actual subject signal rather than a wall-clock guess — much
+    /// less flaky under CI load.
+    private func waitForLineScroll(
+        _ state: AppState,
+        timeout: TimeInterval = 1.0
+    ) async -> Int? {
+        await withCheckedContinuation { cont in
+            var resumed = false
+            var sub: AnyCancellable?
+            sub = state.lineScrollRequest.sink { line in
+                if !resumed {
+                    resumed = true
+                    sub?.cancel()
+                    cont.resume(returning: line)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                if !resumed {
+                    resumed = true
+                    sub?.cancel()
+                    cont.resume(returning: nil)
+                }
+            }
+        }
+    }
+
     func testOpenSearchResultSelectsPathAndClosesOverlay() async throws {
         let vault = tempDir.appendingPathComponent("openresult-select")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
@@ -963,10 +991,9 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isSearchOpen)
         XCTAssertEqual(state.selectedFilePath, "a.md")
 
-        // Wait for the post-load scroll dispatch to land.
-        await state.noteLoadTask?.value
-        try? await Task.sleep(nanoseconds: 50_000_000)
-
+        // Synchronize on the actual subject emission.
+        let scrolledLine = await waitForLineScroll(state)
+        XCTAssertEqual(scrolledLine, 3)
         XCTAssertEqual(state.lastActivatedSearchResultPath, "a.md")
         XCTAssertEqual(state.lastActivatedSearchResultLine, 3)
     }
@@ -981,20 +1008,17 @@ final class AppStateTests: XCTestCase {
         state.openVault(at: vault)
         await state.scanTask?.value
 
-        var lines: [Int] = []
-        let sub = state.lineScrollRequest.sink { lines.append($0) }
-        defer { sub.cancel() }
-
         state.openSearchResult(makeHit(path: "note.md", line: 2))
-        await state.noteLoadTask?.value
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(lines, [2])
+        let scrolledLine = await waitForLineScroll(state)
+        XCTAssertEqual(scrolledLine, 2)
     }
 
     func testOpenSearchResultIgnoresScrollIfSelectionChangedMidLoad() async throws {
         // If the user switches files between activating a result
         // and the load finishing, the scroll request must not land
-        // on the wrong file's per-line anchors.
+        // on the wrong file's per-line anchors. We assert on a
+        // negative outcome: the waiter times out without seeing an
+        // emission.
         let vault = tempDir.appendingPathComponent("openresult-race")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
@@ -1004,20 +1028,17 @@ final class AppStateTests: XCTestCase {
         state.openVault(at: vault)
         await state.scanTask?.value
 
-        var lines: [Int] = []
-        let sub = state.lineScrollRequest.sink { lines.append($0) }
-        defer { sub.cancel() }
-
         state.openSearchResult(makeHit(path: "a.md", line: 5))
         // Yank the selection elsewhere before the post-load task
         // runs.
         state.selectedFilePath = "b.md"
-        await state.noteLoadTask?.value
-        try? await Task.sleep(nanoseconds: 80_000_000)
 
-        XCTAssertTrue(
-            lines.isEmpty,
-            "scroll request should be suppressed when selection changed mid-load; got \(lines)"
+        // Short timeout — if the suppression worked, we expect nil;
+        // if it didn't, the emission will arrive well within 500 ms.
+        let scrolledLine = await waitForLineScroll(state, timeout: 0.5)
+        XCTAssertNil(
+            scrolledLine,
+            "scroll request should be suppressed when selection changed mid-load; got \(String(describing: scrolledLine))"
         )
     }
 

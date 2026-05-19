@@ -120,7 +120,14 @@ struct NoteContentView: View {
                 // get id `"line-N"`; this routes the request through
                 // the same proxy + reduce-motion gate as the heading
                 // anchor path.
-                let anchor = "line-\(line)"
+                //
+                // Clamp to >= 1: defensive against the FFI ever
+                // returning 0 or a negative line (line numbers in
+                // the search result are u32 today, but treating
+                // unsigned-zero as line 1 keeps the scroll
+                // predictable rather than landing on a non-existent
+                // `line-0` anchor.
+                let anchor = "line-\(max(1, line))"
                 if reduceMotion {
                     proxy.scrollTo(anchor, anchor: .top)
                 } else {
