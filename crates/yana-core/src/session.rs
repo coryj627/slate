@@ -782,11 +782,26 @@ fn index_file(
     let content = provider.read_file(path)?;
     let hash = content_hash(&content);
 
+    // Cache the markdown body in `files.body_text` so the FTS5
+    // external-content trigger can index it. Non-markdown files
+    // get the empty string — we don't index binary blobs, and
+    // gating the body decode behind `is_markdown` keeps the cost
+    // off the path for image / PDF / etc. files.
+    //
+    // Lossy decode matches the headings / links / properties path:
+    // a single stray non-UTF-8 byte shouldn't wipe the file's
+    // entire FTS row.
+    let body_text: String = if is_markdown {
+        String::from_utf8_lossy(&content).into_owned()
+    } else {
+        String::new()
+    };
+
     tx.execute(
         "INSERT INTO files
             (path, name, extension, size_bytes, mtime_ms, ctime_ms,
-             content_hash, parser_version, indexed_at_ms, is_markdown)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(path) DO UPDATE SET
             name           = excluded.name,
             extension      = excluded.extension,
@@ -796,7 +811,8 @@ fn index_file(
             content_hash   = excluded.content_hash,
             parser_version = excluded.parser_version,
             indexed_at_ms  = excluded.indexed_at_ms,
-            is_markdown    = excluded.is_markdown",
+            is_markdown    = excluded.is_markdown,
+            body_text      = excluded.body_text",
         rusqlite::params![
             path,
             name,
@@ -808,6 +824,7 @@ fn index_file(
             parser_version,
             now,
             is_markdown as i64,
+            body_text,
         ],
     )?;
 
@@ -825,21 +842,18 @@ fn index_file(
             rusqlite::params![path],
             |row| row.get(0),
         )?;
-        // Lossy decode: a single stray non-UTF-8 byte shouldn't wipe
-        // a file's entire heading list. The replacement-char that
-        // from_utf8_lossy substitutes is rendered to pulldown-cmark
-        // as a regular character, so headings on otherwise-good lines
-        // still parse.
-        let text = String::from_utf8_lossy(&content);
-        replace_headings(tx, file_id, &text)?;
+        // Reuse the already-decoded `body_text` so we don't pay the
+        // utf8_lossy cost twice (once for FTS, once for parsers).
+        let text = body_text.as_str();
+        replace_headings(tx, file_id, text)?;
         // Links land in the same transaction as headings so a file's
         // outgoing-link snapshot stays consistent with its body. Any
         // link whose target hasn't been indexed yet is written with
         // target_path = NULL and re-resolved by the post-scan pass.
-        crate::links_db::replace_links_for_file(tx, file_id, path, &text, vault_index)?;
+        crate::links_db::replace_links_for_file(tx, file_id, path, text, vault_index)?;
         // Frontmatter properties: same transaction so headings,
         // links, and properties commit atomically with the file row.
-        crate::properties_db::replace_properties_for_file(tx, file_id, &text)?;
+        crate::properties_db::replace_properties_for_file(tx, file_id, text)?;
     }
 
     report.files_indexed += 1;
@@ -2767,5 +2781,122 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(md.properties.is_empty());
+    }
+
+    // --- FTS5 sync (closes #56) ---
+
+    /// Count rows in `files_fts` that match `term` (FTS5 MATCH). The
+    /// match is verbatim — we're testing sync, not the search API.
+    fn fts_match_count(session: &VaultSession, term: &str) -> i64 {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM files_fts WHERE files_fts MATCH ?1",
+            rusqlite::params![term],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+    }
+
+    fn raw_count(session: &VaultSession, sql: &str) -> i64 {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(sql, rusqlite::params![], |row| row.get::<_, i64>(0))
+            .unwrap()
+    }
+
+    // FTS5 MATCH treats `-` as boolean NOT, so test tokens use
+    // alphanumeric-only single words to avoid parser surprises.
+
+    #[test]
+    fn slow_path_insert_populates_fts() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/alpha.md", b"hello world uniquetokenalpha")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(fts_match_count(&session, "uniquetokenalpha"), 1);
+        assert_eq!(fts_match_count(&session, "hello"), 1);
+        assert_eq!(fts_match_count(&session, "totallyabsenttokenxyz"), 0);
+    }
+
+    #[test]
+    fn slow_path_update_replaces_fts_tokens() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("notes/n.md", b"oldmarkertext").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(fts_match_count(&session, "oldmarkertext"), 1);
+
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("notes/n.md", b"newmarkertext").unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        assert_eq!(
+            fts_match_count(&session, "oldmarkertext"),
+            0,
+            "stale token survived a content change"
+        );
+        assert_eq!(fts_match_count(&session, "newmarkertext"), 1);
+    }
+
+    #[test]
+    fn delete_from_files_removes_fts_row() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/drop.md", b"droppablecontenttoken")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(fts_match_count(&session, "droppablecontenttoken"), 1);
+
+        // Simulate the future stale-row sweep by deleting directly.
+        {
+            let conn = session.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM files WHERE path = ?1",
+                rusqlite::params!["notes/drop.md"],
+            )
+            .unwrap();
+        }
+        assert_eq!(fts_match_count(&session, "droppablecontenttoken"), 0);
+    }
+
+    #[test]
+    fn fast_path_does_not_touch_fts_index() {
+        // Drives the AFTER UPDATE OF body_text trigger discipline:
+        // a rescan with no on-disk changes must skip the body decode
+        // AND the FTS rewrite. Probe: FTS row count must match the
+        // markdown file count both before and after the second scan
+        // — an over-eager trigger would either drop or duplicate.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/stable.md", b"stablecontentmarker")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let before = fts_match_count(&session, "stablecontentmarker");
+        assert_eq!(before, 1);
+
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let after = fts_match_count(&session, "stablecontentmarker");
+        assert_eq!(after, before);
+
+        let fts_rows = raw_count(&session, "SELECT COUNT(*) FROM files_fts");
+        let md_files = raw_count(&session, "SELECT COUNT(*) FROM files WHERE is_markdown = 1");
+        assert_eq!(
+            fts_rows, md_files,
+            "FTS row count drifted from markdown file count"
+        );
+    }
+
+    #[test]
+    fn non_markdown_files_have_empty_fts_body() {
+        // We deliberately skip body decode for non-markdown files —
+        // they shouldn't appear in keyword searches over text.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/note.md", b"searchableprose").unwrap();
+            p.write_file("notes/img.png", b"binarynotsearchable")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(fts_match_count(&session, "searchableprose"), 1);
+        assert_eq!(fts_match_count(&session, "binarynotsearchable"), 0);
     }
 }
