@@ -929,6 +929,98 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.searchQuery, "")
     }
 
+    // MARK: - Search result activation (#59)
+
+    private func makeHit(
+        path: String,
+        line: UInt32,
+        snippet: String = ""
+    ) -> QueryHit {
+        QueryHit(
+            path: path,
+            lineNumber: line,
+            snippet: snippet,
+            score: 0.0
+        )
+    }
+
+    func testOpenSearchResultSelectsPathAndClosesOverlay() async throws {
+        let vault = tempDir.appendingPathComponent("openresult-select")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Hello\nline one\nmatchedline\nline three".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.toggleSearchOverlay()
+        XCTAssertTrue(state.isSearchOpen)
+
+        let hit = makeHit(path: "a.md", line: 3, snippet: "\u{2}matchedline\u{3}")
+        state.openSearchResult(hit)
+
+        // Activation: overlay closes synchronously, selection moves.
+        XCTAssertFalse(state.isSearchOpen)
+        XCTAssertEqual(state.selectedFilePath, "a.md")
+
+        // Wait for the post-load scroll dispatch to land.
+        await state.noteLoadTask?.value
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(state.lastActivatedSearchResultPath, "a.md")
+        XCTAssertEqual(state.lastActivatedSearchResultLine, 3)
+    }
+
+    func testOpenSearchResultEmitsLineScrollRequest() async throws {
+        let vault = tempDir.appendingPathComponent("openresult-scroll")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("alpha\nbeta\ngamma".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        var lines: [Int] = []
+        let sub = state.lineScrollRequest.sink { lines.append($0) }
+        defer { sub.cancel() }
+
+        state.openSearchResult(makeHit(path: "note.md", line: 2))
+        await state.noteLoadTask?.value
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(lines, [2])
+    }
+
+    func testOpenSearchResultIgnoresScrollIfSelectionChangedMidLoad() async throws {
+        // If the user switches files between activating a result
+        // and the load finishing, the scroll request must not land
+        // on the wrong file's per-line anchors.
+        let vault = tempDir.appendingPathComponent("openresult-race")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# A".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("# B".utf8).write(to: vault.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        var lines: [Int] = []
+        let sub = state.lineScrollRequest.sink { lines.append($0) }
+        defer { sub.cancel() }
+
+        state.openSearchResult(makeHit(path: "a.md", line: 5))
+        // Yank the selection elsewhere before the post-load task
+        // runs.
+        state.selectedFilePath = "b.md"
+        await state.noteLoadTask?.value
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        XCTAssertTrue(
+            lines.isEmpty,
+            "scroll request should be suppressed when selection changed mid-load; got \(lines)"
+        )
+    }
+
     // MARK: - Link activation (#52)
 
     private func makeOutgoing(

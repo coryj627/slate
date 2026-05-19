@@ -2,10 +2,23 @@ import Foundation
 
 /// One heading-bounded chunk of a note's source. `.heading` is nil for
 /// the preamble block before the first `#`.
+///
+/// `startLineInFile` is the 1-based line number of the first line of
+/// the section in the original (post-CRLF-normalized) source. For a
+/// section with a heading, that's the heading line; for the preamble,
+/// it's line 1. `bodyStartLineInFile` is the line of the first body
+/// line (heading line + 1 for sections with a heading; same as
+/// `startLineInFile` for the preamble).
+///
+/// Used by `NoteContentView` to wire `.id("line-N")` anchors so the
+/// search-result open-handler (#59) can scroll to the matched line
+/// via `ScrollViewReader`.
 struct NoteSection: Equatable {
     var heading: Heading?
     var anchorId: String
     var body: String
+    var startLineInFile: Int
+    var bodyStartLineInFile: Int
 }
 
 /// Walk `text` line-by-line and split at ATX headings that line up
@@ -34,29 +47,52 @@ func sliceIntoSections(text: String, headings: [Heading]) -> [NoteSection] {
         .replacingOccurrences(of: "\r", with: "\n")
     let lines = normalized.components(separatedBy: "\n")
     var sections: [NoteSection] = []
-    var current = NoteSection(heading: nil, anchorId: "__preamble", body: "")
+    var current = NoteSection(
+        heading: nil,
+        anchorId: "__preamble",
+        body: "",
+        startLineInFile: 1,
+        bodyStartLineInFile: 1
+    )
     var bodyBuf: [String] = []
+    var bodyStart = 1
     var headingIdx = 0
 
-    for line in lines {
+    // SwiftUI iterators don't give us a 1-based index on `for line in
+    // lines`, so we walk by index and track the absolute line number
+    // alongside.
+    for (idx, line) in lines.enumerated() {
+        let lineNumber = idx + 1
         if headingIdx < headings.count,
             let parsed = parseAtxHeading(line),
             parsed.level == headings[headingIdx].level,
             parsed.text == headings[headingIdx].text
         {
             current.body = bodyBuf.joined(separator: "\n")
+            current.bodyStartLineInFile = bodyStart
             if current.heading != nil || !current.body.isEmpty {
                 sections.append(current)
             }
             let h = headings[headingIdx]
-            current = NoteSection(heading: h, anchorId: h.anchorId, body: "")
+            current = NoteSection(
+                heading: h,
+                anchorId: h.anchorId,
+                body: "",
+                startLineInFile: lineNumber,
+                bodyStartLineInFile: lineNumber + 1
+            )
             bodyBuf = []
+            bodyStart = lineNumber + 1
             headingIdx += 1
         } else {
+            if bodyBuf.isEmpty {
+                bodyStart = lineNumber
+            }
             bodyBuf.append(line)
         }
     }
     current.body = bodyBuf.joined(separator: "\n")
+    current.bodyStartLineInFile = bodyStart
     if current.heading != nil || !current.body.isEmpty {
         sections.append(current)
     }
