@@ -482,6 +482,21 @@ impl VaultSession {
         crate::properties_db::files_with_property(&conn, key, value, paging)
     }
 
+    /// Run a full-text search across the vault. `scope` lets callers
+    /// narrow to a folder; `cancel` cooperates the same way it does
+    /// for `scan_initial` — the result-collection loop checks the
+    /// token between rows. Reserved scopes (`File`, `Tag`) return
+    /// `VaultError::Cancelled` for now.
+    pub fn full_text_search(
+        &self,
+        query: &str,
+        scope: &crate::SearchScope,
+        cancel: &CancelToken,
+    ) -> Result<crate::QueryResultSet, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::search_db::full_text_search(&conn, query, scope, cancel)
+    }
+
     /// Accessor for the underlying config. Useful for hosts that want to
     /// surface the cache directory location.
     pub fn config(&self) -> &SessionConfig {
@@ -2943,6 +2958,161 @@ mod tests {
             0,
             "FTS row should be removed when is_markdown flips to 0"
         );
+    }
+
+    // --- full_text_search (closes #57) ---
+
+    #[test]
+    fn full_text_search_finds_plain_term() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/alpha.md", b"hello uniquetokenalpha world")
+                .unwrap();
+            p.write_file("notes/beta.md", b"unrelated content").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let result = session
+            .full_text_search(
+                "uniquetokenalpha",
+                &crate::SearchScope::Vault,
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].path, "notes/alpha.md");
+        assert!(result.rows[0].snippet.contains("uniquetokenalpha"));
+        assert!(result.rows[0].snippet.contains(crate::SNIPPET_HIT_START));
+        assert_eq!(result.summary, "Search returned 1 result.");
+    }
+
+    #[test]
+    fn full_text_search_finds_phrase_match() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "notes/phrase.md",
+                b"foreground task: write integration tests today",
+            )
+            .unwrap();
+            p.write_file("notes/wrong-order.md", b"tests write today integration")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        // FTS5 phrase queries use double quotes.
+        let result = session
+            .full_text_search(
+                "\"write integration tests\"",
+                &crate::SearchScope::Vault,
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].path, "notes/phrase.md");
+    }
+
+    #[test]
+    fn full_text_search_scope_folder_filters_results() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/inside.md", b"sharedtoken in notes")
+                .unwrap();
+            p.write_file("archive/outside.md", b"sharedtoken in archive")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let vault_all = session
+            .full_text_search(
+                "sharedtoken",
+                &crate::SearchScope::Vault,
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(vault_all.rows.len(), 2);
+
+        let notes_only = session
+            .full_text_search(
+                "sharedtoken",
+                &crate::SearchScope::Folder("notes".to_string()),
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(notes_only.rows.len(), 1);
+        assert_eq!(notes_only.rows[0].path, "notes/inside.md");
+
+        let archive_only = session
+            .full_text_search(
+                "sharedtoken",
+                &crate::SearchScope::Folder("archive".to_string()),
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(archive_only.rows.len(), 1);
+        assert_eq!(archive_only.rows[0].path, "archive/outside.md");
+    }
+
+    #[test]
+    fn full_text_search_pre_cancelled_returns_immediately() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/anything.md", b"contenttoken").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        match session.full_text_search("contenttoken", &crate::SearchScope::Vault, &cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_text_search_reserved_scopes_return_cancelled() {
+        let (_tmp, session) = make_vault(|_| {});
+        let cancel = CancelToken::new();
+        match session.full_text_search(
+            "anything",
+            &crate::SearchScope::File("notes/x.md".to_string()),
+            &cancel,
+        ) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled for File scope, got {other:?}"),
+        }
+        match session.full_text_search(
+            "anything",
+            &crate::SearchScope::Tag("project".to_string()),
+            &cancel,
+        ) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("expected Cancelled for Tag scope, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_text_search_line_number_points_at_match() {
+        let (_tmp, session) = make_vault(|p| {
+            let body = b"line one\nline two\nline three has thetargettoken in it\nline four";
+            p.write_file("notes/multi.md", body).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let result = session
+            .full_text_search(
+                "thetargettoken",
+                &crate::SearchScope::Vault,
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].line_number, 3);
+    }
+
+    #[test]
+    fn full_text_search_empty_query_returns_empty_set() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/a.md", b"content").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let result = session
+            .full_text_search("   ", &crate::SearchScope::Vault, &CancelToken::new())
+            .unwrap();
+        assert!(result.rows.is_empty());
+        assert_eq!(result.summary, "Search returned no results.");
     }
 
     #[test]

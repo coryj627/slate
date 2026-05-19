@@ -238,6 +238,20 @@ impl VaultSession {
             .files_with_property(&key, &value, paging.into())?;
         Ok(page.into())
     }
+
+    /// Full-text search. Cancellable via the supplied `cancel`
+    /// token. Reserved scopes (`File`, `Tag`) return
+    /// `VaultError::Cancelled` until those code paths land.
+    pub fn full_text_search(
+        &self,
+        query: String,
+        scope: SearchScope,
+        cancel: Arc<CancelToken>,
+    ) -> Result<QueryResultSet, VaultError> {
+        let scope: core::SearchScope = scope.into();
+        let result = self.inner.full_text_search(&query, &scope, &cancel.inner)?;
+        Ok(result.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -579,6 +593,67 @@ impl From<core::Page<core::UnresolvedLink>> for UnresolvedLinkPage {
             items: p.items.into_iter().map(Into::into).collect(),
             next_cursor: p.next_cursor,
             total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// Scope of a `full_text_search` call. `File` and `Tag` are
+/// reserved for later milestones; today they return
+/// `VaultError::Cancelled`.
+#[derive(uniffi::Enum)]
+pub enum SearchScope {
+    Vault,
+    Folder { path: String },
+    File { path: String },
+    Tag { name: String },
+}
+
+impl From<SearchScope> for core::SearchScope {
+    fn from(s: SearchScope) -> Self {
+        match s {
+            SearchScope::Vault => core::SearchScope::Vault,
+            SearchScope::Folder { path } => core::SearchScope::Folder(path),
+            SearchScope::File { path } => core::SearchScope::File(path),
+            SearchScope::Tag { name } => core::SearchScope::Tag(name),
+        }
+    }
+}
+
+/// One full-text-search hit.
+#[derive(uniffi::Record)]
+pub struct QueryHit {
+    pub path: String,
+    pub line_number: u32,
+    /// Snippet of ±60 chars around the match. STX (`\u{0002}`) and
+    /// ETX (`\u{0003}`) wrap the matched tokens — the host UI
+    /// replaces those with attributed-string emphasis.
+    pub snippet: String,
+    pub score: f64,
+}
+
+impl From<core::QueryHit> for QueryHit {
+    fn from(h: core::QueryHit) -> Self {
+        Self {
+            path: h.path,
+            line_number: h.line_number,
+            snippet: h.snippet,
+            score: h.score,
+        }
+    }
+}
+
+/// Result set returned by `full_text_search`.
+#[derive(uniffi::Record)]
+pub struct QueryResultSet {
+    pub rows: Vec<QueryHit>,
+    pub summary: String,
+}
+
+impl From<core::QueryResultSet> for QueryResultSet {
+    fn from(r: core::QueryResultSet) -> Self {
+        Self {
+            rows: r.rows.into_iter().map(Into::into).collect(),
+            summary: r.summary,
         }
     }
 }
