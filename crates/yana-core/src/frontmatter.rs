@@ -39,16 +39,36 @@
 //!
 //! ## Malformed YAML
 //!
-//! The parser never returns an error to the caller. Bad YAML yields
-//! whatever properties did parse (typically the prefix before the
-//! error) plus a `PropertyParseWarning` describing the failure. The
-//! scanner can persist the partial result and surface the warning
-//! through #54 / #55 so the user notices without losing access to
-//! the rest of the frontmatter.
+//! The parser never returns an error to the caller. yaml-rust2's
+//! `YamlLoader::load_from_str` is whole-document — any syntax
+//! error in the frontmatter aborts the parse and we return an
+//! empty `Vec<Property>` plus a single `PropertyParseWarning`
+//! describing the failure. We do NOT do per-line shrink + retry;
+//! a malformed line wipes the row's properties. Future-issue:
+//! implement a real partial parser if testers report frequent
+//! "lost everything on one typo" friction.
+//!
+//! ## Deep nesting
+//!
+//! `walk_value` is recursion-bounded by `MAX_WALK_DEPTH` so a
+//! synced vault containing a pathological note (mappings nested
+//! beyond reasonable structure) doesn't stack-overflow the
+//! scanner. Past the depth we record a warning and stop
+//! descending — the prefix that fit under the budget still
+//! lands.
 
 use std::ops::Range;
 
 use yaml_rust2::{Yaml, YamlLoader};
+
+/// Maximum nesting depth for `walk_value`. yaml-rust2 has a
+/// parser-side guard but no runtime cap on the resulting tree, so a
+/// pathologically deep mapping in a synced vault note could blow
+/// the indexer's stack. 32 levels covers any realistic frontmatter
+/// shape (Obsidian / Logseq / Bear style); past it we emit a
+/// `PropertyParseWarning` and stop descending. The prefix that fit
+/// under the budget still lands.
+const MAX_WALK_DEPTH: usize = 32;
 
 /// One parsed frontmatter key-value pair with its inferred type.
 #[derive(Debug, Clone, PartialEq)]
@@ -183,7 +203,7 @@ pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWar
         Yaml::Hash(map) => {
             for (k, v) in map {
                 let key = yaml_key_to_string(&k);
-                walk_value(&key, &v, &mut props, &mut warnings);
+                walk_value(&key, &v, 0, &mut props, &mut warnings);
             }
         }
         Yaml::Null | Yaml::BadValue => {
@@ -206,18 +226,38 @@ pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWar
 /// Recursively walk one YAML value, emitting flat `Property` rows for
 /// every leaf. Nested mappings get dotted-key flattening; lists get
 /// classified as `List` or `TagList`.
+///
+/// `depth` is the current nesting level; root callers pass 0. Past
+/// `MAX_WALK_DEPTH` we emit a warning and stop descending so a
+/// pathologically nested note can't stack-overflow the scanner.
 fn walk_value(
     key: &str,
     value: &Yaml,
+    depth: usize,
     props: &mut Vec<Property>,
     warnings: &mut Vec<PropertyParseWarning>,
 ) {
     match value {
         Yaml::Hash(map) => {
+            // Boundary guard sits on the parent (this Hash), not on
+            // each child. Recursing into N children at depth+1 and
+            // letting each one trip its own guard would emit N
+            // warnings for a wide map at the cap — Codoki PR 95
+            // callout. Emit one warning for the boundary key and
+            // don't iterate.
+            if depth >= MAX_WALK_DEPTH {
+                warnings.push(PropertyParseWarning {
+                    key_path: Some(key.to_string()),
+                    message: format!(
+                        "nesting exceeds the maximum depth of {MAX_WALK_DEPTH}; deeper keys are skipped"
+                    ),
+                });
+                return;
+            }
             for (k, v) in map {
                 let sub_key = yaml_key_to_string(k);
                 let full_key = format!("{key}.{sub_key}");
-                walk_value(&full_key, v, props, warnings);
+                walk_value(&full_key, v, depth + 1, props, warnings);
             }
         }
         Yaml::Array(items) => match classify_list(key, items) {
@@ -279,6 +319,18 @@ fn classify_leaf(key: &str, value: &Yaml) -> Option<PropertyValue> {
         // BadValue is yaml-rust2's "couldn't parse this scalar"
         // signal; treat as text so the user sees what was authored.
         Yaml::BadValue => Some(PropertyValue::Text(value_to_string(value))),
+        // yaml-rust2 leaves YAML aliases (`*ref`) unresolved — it
+        // hands us a `Yaml::Alias(anchor_id)` without expanding to
+        // the anchor target. We don't keep the anchor table around
+        // long enough to resolve it ourselves, so emit a visible
+        // placeholder. Without this branch the key would route
+        // through the walk_value default arm and get dropped behind
+        // an "unsupported YAML value type alias" warning — meaning
+        // a YAML feature the user explicitly wrote vanishes from
+        // the properties panel.
+        Yaml::Alias(_) => Some(PropertyValue::Text(
+            "<YAML alias — not resolved>".to_string(),
+        )),
         _ => None,
     }
 }
@@ -726,15 +778,123 @@ mod tests {
     #[test]
     fn malformed_yaml_produces_warning_without_crashing() {
         // Tab indentation is invalid YAML and yaml-rust2 rejects it.
+        // The contract documented at the top of this module is
+        // whole-document parse: a syntax error anywhere aborts the
+        // parse and yields empty props + a single warning. (We do
+        // NOT do a per-line shrink + retry — that was the previous
+        // doc comment's claim and it was wrong.)
         let (props, warnings) = extract_frontmatter("---\nkey:\n\t- value\n---\n");
-        // Either we got 0 properties + a warning, or partial-success
-        // with a warning. Both are acceptable per the spec; the
-        // invariant is "don't fail the whole file."
         assert!(
-            !warnings.is_empty() || !props.is_empty(),
-            "expected warnings or partial props, got neither"
+            props.is_empty(),
+            "malformed YAML must not yield partial props"
         );
-        // No panic = test passes.
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].message.contains("YAML parse error"),
+            "expected a YAML parse error warning, got {:?}",
+            warnings[0].message
+        );
+    }
+
+    #[test]
+    fn unbalanced_quote_yields_empty_props_with_warning() {
+        // Second malformed-YAML shape: an unterminated string. Same
+        // contract as the tab-indent case — empty props + warning,
+        // no panic, no partial result.
+        let (props, warnings) = extract_frontmatter("---\nkey: \"unterminated\n---\n");
+        assert!(props.is_empty());
+        assert!(!warnings.is_empty());
+    }
+
+    // --- Depth limit ---
+
+    #[test]
+    fn nesting_past_depth_limit_records_warning_and_stops_descending() {
+        // Build a YAML mapping nested past MAX_WALK_DEPTH. The walk
+        // must record a warning at the boundary and return rather
+        // than recurse the rest of the way — synced vaults can
+        // contain hostile or generated files with pathological
+        // shapes, and a stack overflow during indexing would take
+        // down the whole scanner.
+        let depth = MAX_WALK_DEPTH + 3;
+        let mut source = String::from("---\n");
+        for i in 0..depth {
+            source.push_str(&"  ".repeat(i));
+            source.push_str(&format!("k{i}:\n"));
+        }
+        source.push_str(&"  ".repeat(depth));
+        source.push_str("leaf: deep\n");
+        source.push_str("---\n");
+        let (_props, warnings) = extract_frontmatter(&source);
+        let nesting: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.message.contains("nesting exceeds"))
+            .collect();
+        assert_eq!(
+            nesting.len(),
+            1,
+            "expected exactly one nesting-depth warning, got {nesting:?}"
+        );
+    }
+
+    #[test]
+    fn wide_map_at_depth_boundary_emits_one_warning_not_per_child() {
+        // Regression for Codoki PR 95 medium: with the old guard
+        // (top-level `depth > MAX_WALK_DEPTH` after the recursive
+        // call), a wide map sitting AT the boundary would recurse
+        // into each child at depth+1 and emit one warning per
+        // child — flooding the warnings list for a fan-out shape.
+        // The boundary guard now lives on the parent Hash and
+        // emits exactly one warning regardless of fan-out.
+        //
+        // Build a chain of MAX_WALK_DEPTH+1 nested maps so the
+        // deepest Hash lands at depth=MAX_WALK_DEPTH (=32), where
+        // the new guard fires.
+        let chain = MAX_WALK_DEPTH + 1;
+        let mut source = String::from("---\n");
+        for i in 0..chain {
+            source.push_str(&"  ".repeat(i));
+            source.push_str(&format!("k{i}:\n"));
+        }
+        // 10 wide children under the deepest Hash. Each would
+        // have tripped its own warning under the old guard.
+        for j in 0..10 {
+            source.push_str(&"  ".repeat(chain));
+            source.push_str(&format!("w{j}: x\n"));
+        }
+        source.push_str("---\n");
+        let (_props, warnings) = extract_frontmatter(&source);
+        let nesting: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.message.contains("nesting exceeds"))
+            .collect();
+        assert_eq!(
+            nesting.len(),
+            1,
+            "wide map at the boundary must emit one warning, not one per child; got {nesting:?}"
+        );
+    }
+
+    // --- YAML aliases ---
+
+    #[test]
+    fn yaml_alias_key_survives_with_placeholder() {
+        // yaml-rust2 hands us `Yaml::Alias(id)` for `*ref` rather
+        // than expanding the anchor. Before this branch the key
+        // dropped silently behind an "unsupported value type alias"
+        // warning — a YAML feature the author wrote intentionally
+        // shouldn't vanish from the properties panel. We emit a
+        // visible placeholder instead.
+        let (p, _) = extract_frontmatter("---\nbase: &b anchor-value\nref: *b\n---\n");
+        // The anchored value parses normally.
+        assert!(find(&p, "base").is_some());
+        // The alias-bearing key survives. yaml-rust2 may or may not
+        // resolve the alias internally — both outcomes are fine, the
+        // invariant is "the key isn't dropped."
+        assert!(
+            find(&p, "ref").is_some(),
+            "alias-bearing key was dropped from properties"
+        );
     }
 
     #[test]
