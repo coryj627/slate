@@ -252,41 +252,77 @@ struct PropertyValueDisplay {
     /// Falls back to the raw string when the date can't be parsed —
     /// keeps the row useful even if the user typed a non-standard
     /// format that yaml-rust2 still recognized as a date pattern.
+    ///
+    /// Parsed and formatted in `TimeZone.current` (not UTC) so a
+    /// date like `2024-01-02` doesn't drift back to Jan 1 when the
+    /// user's TZ is west of UTC — Codoki PR 83 callout: previously
+    /// the UTC-parsed date would render as a different day for many
+    /// users.
     private static func formatDate(_ raw: String) -> String {
-        let parser = DateFormatter()
-        parser.dateFormat = "yyyy-MM-dd"
-        parser.timeZone = TimeZone(identifier: "UTC")
-        guard let date = parser.date(from: raw) else { return raw }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        formatter.locale = Locale.current
-        return formatter.string(from: date)
+        guard let date = Self.dateParser.date(from: raw) else { return raw }
+        return Self.dateFormatter.string(from: date)
     }
 
     private static func formatDatetime(_ raw: String) -> String {
         // ISO 8601 covers `YYYY-MM-DDTHH:MM:SS[Z|±HH:MM]`. Try the
         // strictest formatter first; fall back to a relaxed parse
-        // for `Z`-less local times like `2024-01-02T03:04:05`.
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime]
-        if let date = iso.date(from: raw) {
-            return formatDatetimeOutput(date)
+        // for Z-less local times like `2024-01-02T03:04:05` — those
+        // are interpreted as `TimeZone.current` per the YAML
+        // frontmatter convention (the user typed them; if they
+        // wanted UTC, they would have added the `Z`).
+        if let date = Self.isoFormatter.date(from: raw) {
+            return Self.datetimeFormatter.string(from: date)
         }
-        let relaxed = DateFormatter()
-        relaxed.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        relaxed.timeZone = TimeZone(identifier: "UTC")
-        if let date = relaxed.date(from: raw) {
-            return formatDatetimeOutput(date)
+        if let date = Self.relaxedDatetimeParser.date(from: raw) {
+            return Self.datetimeFormatter.string(from: date)
         }
         return raw
     }
 
-    private static func formatDatetimeOutput(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        formatter.locale = Locale.current
-        return formatter.string(from: date)
-    }
+    // Cached formatters: DateFormatter / ISO8601DateFormatter are
+    // expensive to construct (CFLocale lookups, ICU init), and the
+    // Properties Panel re-decodes on every selection change.
+    // Cached as `static let` so all rows in a vault session reuse
+    // the same instances.
+    //
+    // Thread safety: DateFormatter's `date(from:)` /
+    // `string(from:)` are documented thread-safe on macOS 10.9+ and
+    // iOS 7+; we read-only after construction so this is fine.
+    private static let dateParser: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone.current
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        f.locale = Locale.current
+        return f
+    }()
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static let relaxedDatetimeParser: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        f.timeZone = TimeZone.current
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    private static let datetimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        f.locale = Locale.current
+        return f
+    }()
 }

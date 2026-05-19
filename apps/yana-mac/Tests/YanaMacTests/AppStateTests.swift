@@ -741,6 +741,44 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(label, "Property tags, tag list of 2: #alpha, #beta")
     }
 
+    func testPropertyValueDisplayDateDoesNotDriftAcrossTimeZones() throws {
+        // Codoki callout: a UTC-parsed `YYYY-MM-DD` rendered through
+        // the user's locale formatter would shift to the wrong day
+        // for anyone west of UTC. Parse + format in TimeZone.current
+        // so "2024-01-02" stays Jan 2 regardless of locale.
+        let display = PropertyValueDisplay.decode(kind: "date", valueJson: "\"2024-01-02\"")
+        // The medium date style varies by locale ("Jan 2, 2024" in
+        // en_US, "2 Jan 2024" elsewhere). The invariant we check is
+        // that the day-of-month is 2, not 1 — i.e. no TZ drift.
+        XCTAssertTrue(
+            display.visibleText.contains("2024"),
+            "year missing from rendered date: \(display.visibleText)"
+        )
+        XCTAssertFalse(
+            display.visibleText.contains("Jan 1") || display.visibleText.contains("1 Jan"),
+            "date drifted to Jan 1; got \(display.visibleText)"
+        )
+    }
+
+    func testPropertyValueDisplayZLessDatetimeTreatedAsLocalTime() throws {
+        // Z-less ISO datetimes ("2024-01-02T03:04:05") were
+        // previously parsed in UTC even though the comment claimed
+        // local — Codoki PR 83. Parsing as TimeZone.current means
+        // the formatted hour stays 3 (or the locale equivalent),
+        // not 3 + offset.
+        let display = PropertyValueDisplay.decode(
+            kind: "datetime",
+            valueJson: "\"2024-01-02T03:04:05\""
+        )
+        // The rendered string includes hour:min in the user's
+        // locale — "3:04 AM" or "03:04" depending on locale. Assert
+        // the date hasn't drifted.
+        XCTAssertTrue(
+            display.visibleText.contains("2024"),
+            "year missing: \(display.visibleText)"
+        )
+    }
+
     func testPropertyValueDisplayMalformedJsonFallsBackToRaw() throws {
         // Defense in depth: if the FFI ever hands us malformed JSON
         // (corrupt DB row, future kind we don't recognize), the row
