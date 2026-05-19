@@ -42,26 +42,40 @@ CREATE VIRTUAL TABLE files_fts USING fts5(
     tokenize='unicode61'
 );
 
--- AFTER INSERT: when a new files row lands, mirror its body_text
--- into the FTS index. Triggered by the scanner's slow-path
--- `INSERT INTO files (…) VALUES (…)`.
-CREATE TRIGGER files_ai_fts AFTER INSERT ON files BEGIN
+-- AFTER INSERT (markdown only): mirror new row's body_text into
+-- the FTS index. Non-markdown files don't appear in keyword
+-- searches over text, so creating empty FTS rows for them would
+-- just bloat the index.
+CREATE TRIGGER files_ai_fts AFTER INSERT ON files
+WHEN new.is_markdown = 1
+BEGIN
     INSERT INTO files_fts(rowid, body_text) VALUES (new.id, new.body_text);
 END;
 
 -- AFTER UPDATE OF body_text: scoped to that column so the fast
--- path (which only touches indexed_at_ms / ctime_ms) doesn't
--- trigger an FTS rewrite.
-CREATE TRIGGER files_au_fts AFTER UPDATE OF body_text ON files BEGIN
+-- path (indexed_at_ms / ctime_ms only) doesn't trigger an FTS
+-- rewrite. Delete + insert each gated on the relevant
+-- is_markdown side so we handle every transition cleanly:
+--   md  → md  (content changed) → delete + insert
+--   md  → non (file got renamed off .md) → delete only
+--   non → md  (.txt renamed to .md) → insert only
+--   non → non → trigger body is a no-op
+CREATE TRIGGER files_au_fts AFTER UPDATE OF body_text ON files
+WHEN old.is_markdown = 1 OR new.is_markdown = 1
+BEGIN
     INSERT INTO files_fts(files_fts, rowid, body_text)
-        VALUES ('delete', old.id, old.body_text);
-    INSERT INTO files_fts(rowid, body_text) VALUES (new.id, new.body_text);
+        SELECT 'delete', old.id, old.body_text WHERE old.is_markdown = 1;
+    INSERT INTO files_fts(rowid, body_text)
+        SELECT new.id, new.body_text WHERE new.is_markdown = 1;
 END;
 
--- AFTER DELETE: ensures a future stale-row sweep doesn't leak FTS
--- tokens. (V1 doesn't sweep yet; landing the trigger now keeps the
--- sweep landing later from needing a separate migration.)
-CREATE TRIGGER files_ad_fts AFTER DELETE ON files BEGIN
+-- AFTER DELETE (markdown only): drop the FTS row so a future
+-- stale-row sweep doesn't leak tokens. Non-markdown files never
+-- got an FTS row inserted, so deleting one would be a no-op at
+-- best and an FTS5 internal-error at worst.
+CREATE TRIGGER files_ad_fts AFTER DELETE ON files
+WHEN old.is_markdown = 1
+BEGIN
     INSERT INTO files_fts(files_fts, rowid, body_text)
         VALUES ('delete', old.id, old.body_text);
 END;

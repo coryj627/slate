@@ -2797,14 +2797,14 @@ mod tests {
         .unwrap()
     }
 
-    fn raw_count(session: &VaultSession, sql: &str) -> i64 {
-        let conn = session.conn.lock().unwrap();
-        conn.query_row(sql, rusqlite::params![], |row| row.get::<_, i64>(0))
-            .unwrap()
-    }
-
     // FTS5 MATCH treats `-` as boolean NOT, so test tokens use
     // alphanumeric-only single words to avoid parser surprises.
+    //
+    // We use MATCH-based functional checks rather than
+    // `COUNT(*) FROM files_fts` because external-content FTS5
+    // tables return rows from the content table on a bare SELECT,
+    // not the indexed-row count — that count would include
+    // non-indexed file rows and lie about the invariant.
 
     #[test]
     fn slow_path_insert_populates_fts() {
@@ -2863,9 +2863,11 @@ mod tests {
     fn fast_path_does_not_touch_fts_index() {
         // Drives the AFTER UPDATE OF body_text trigger discipline:
         // a rescan with no on-disk changes must skip the body decode
-        // AND the FTS rewrite. Probe: FTS row count must match the
-        // markdown file count both before and after the second scan
-        // — an over-eager trigger would either drop or duplicate.
+        // AND the FTS rewrite. The check is functional rather than
+        // structural — we assert the token is searchable before AND
+        // after, and that no duplicate result rows show up (an
+        // over-eager trigger would re-insert the same body and
+        // produce two MATCHing rows for one file).
         let (_tmp, session) = make_vault(|p| {
             p.write_file("notes/stable.md", b"stablecontentmarker")
                 .unwrap();
@@ -2876,14 +2878,8 @@ mod tests {
 
         session.scan_initial(&CancelToken::new()).unwrap();
         let after = fts_match_count(&session, "stablecontentmarker");
+        assert_eq!(after, 1, "fast path duplicated the FTS row");
         assert_eq!(after, before);
-
-        let fts_rows = raw_count(&session, "SELECT COUNT(*) FROM files_fts");
-        let md_files = raw_count(&session, "SELECT COUNT(*) FROM files WHERE is_markdown = 1");
-        assert_eq!(
-            fts_rows, md_files,
-            "FTS row count drifted from markdown file count"
-        );
     }
 
     #[test]
@@ -2898,5 +2894,79 @@ mod tests {
         session.scan_initial(&CancelToken::new()).unwrap();
         assert_eq!(fts_match_count(&session, "searchableprose"), 1);
         assert_eq!(fts_match_count(&session, "binarynotsearchable"), 0);
+    }
+
+    #[test]
+    fn fts_indexes_only_markdown_bodies() {
+        // Codoki PR-84 invariant rendered functionally: distinct
+        // tokens in markdown files match, distinct tokens in
+        // non-markdown files do not. (We can't use
+        // `COUNT(*) FROM files_fts` because external-content FTS5
+        // returns content-table rows from a bare SELECT, not the
+        // indexed-row count.)
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/a.md", b"alphacontent").unwrap();
+            p.write_file("notes/b.md", b"betacontent").unwrap();
+            p.write_file("notes/c.png", b"binarygammacontent").unwrap();
+            p.write_file("notes/d.txt", b"plaindeltacontent").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(fts_match_count(&session, "alphacontent"), 1);
+        assert_eq!(fts_match_count(&session, "betacontent"), 1);
+        assert_eq!(fts_match_count(&session, "binarygammacontent"), 0);
+        assert_eq!(fts_match_count(&session, "plaindeltacontent"), 0);
+    }
+
+    #[test]
+    fn flipping_is_markdown_to_zero_removes_fts_row() {
+        // Exercises the AFTER UPDATE OF body_text trigger's
+        // is_markdown-gated branches. Simulates an external rename
+        // where notes/swap.md becomes a non-markdown file under the
+        // same path: is_markdown flips 1 → 0, body_text empties,
+        // and the FTS row must come out.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/swap.md", b"transitiontoken").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(fts_match_count(&session, "transitiontoken"), 1);
+
+        {
+            let conn = session.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE files SET is_markdown = 0, body_text = '' WHERE path = ?1",
+                rusqlite::params!["notes/swap.md"],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            fts_match_count(&session, "transitiontoken"),
+            0,
+            "FTS row should be removed when is_markdown flips to 0"
+        );
+    }
+
+    #[test]
+    fn flipping_is_markdown_to_one_adds_fts_row() {
+        // Inverse transition: a previously non-markdown file (no
+        // FTS row) becomes markdown with body content. The trigger
+        // must insert.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/binary.png", b"originalbinaryjunk")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        // The non-markdown body never made it into FTS in the first
+        // place — its tokens shouldn't match.
+        assert_eq!(fts_match_count(&session, "originalbinaryjunk"), 0);
+
+        {
+            let conn = session.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE files SET is_markdown = 1, body_text = 'newlysearchabletext' WHERE path = ?1",
+                rusqlite::params!["notes/binary.png"],
+            )
+            .unwrap();
+        }
+        assert_eq!(fts_match_count(&session, "newlysearchabletext"), 1);
     }
 }
