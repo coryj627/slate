@@ -83,6 +83,46 @@ final class NoteSectionSlicerTests: XCTestCase {
 
     // MARK: - sliceIntoSections
 
+    func testSliceTracksAbsoluteLineNumbers() {
+        // Per-line scroll targets in NoteContentView need each
+        // section to know where it starts in the source — bodyStart
+        // for the body lines, startLine for the heading line itself.
+        let text = """
+            # Top
+            intro line
+            another intro line
+
+            ## Section
+            body of section
+            """
+        let headings = [
+            Heading(level: 1, text: "Top", ordinal: 0, anchorId: "top"),
+            Heading(level: 2, text: "Section", ordinal: 1, anchorId: "section"),
+        ]
+        let sections = sliceIntoSections(text: text, headings: headings)
+        XCTAssertEqual(sections.count, 2)
+        // First section: heading on line 1, body on lines 2–4.
+        XCTAssertEqual(sections[0].startLineInFile, 1)
+        XCTAssertEqual(sections[0].bodyStartLineInFile, 2)
+        // Second section: heading on line 5, body on line 6.
+        XCTAssertEqual(sections[1].startLineInFile, 5)
+        XCTAssertEqual(sections[1].bodyStartLineInFile, 6)
+    }
+
+    func testSlicePreambleStartsAtLineOne() {
+        let text = "preamble line one\npreamble line two\n# Real\nbody"
+        let headings = [
+            Heading(level: 1, text: "Real", ordinal: 0, anchorId: "real"),
+        ]
+        let sections = sliceIntoSections(text: text, headings: headings)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertNil(sections[0].heading)
+        XCTAssertEqual(sections[0].startLineInFile, 1)
+        XCTAssertEqual(sections[0].bodyStartLineInFile, 1)
+        XCTAssertEqual(sections[1].startLineInFile, 3)
+        XCTAssertEqual(sections[1].bodyStartLineInFile, 4)
+    }
+
     func testSliceProducesOneSectionPerHeading() {
         let text = """
             # Top

@@ -92,6 +92,12 @@ final class AppState: ObservableObject {
     /// announcements). UI doesn't read this.
     private(set) var lastActivatedLinkOutcome: LinkActivationOutcome?
 
+    /// Last line scrolled to via `openSearchResult`. Same role as
+    /// `lastActivatedLinkOutcome` — verifiable in tests without
+    /// observing AppKit side effects.
+    private(set) var lastActivatedSearchResultLine: Int?
+    private(set) var lastActivatedSearchResultPath: String?
+
     /// Frontmatter properties of the currently-selected note, in
     /// document order. Empty while no note is selected, while the
     /// fetch is still in flight, or when the note has no frontmatter.
@@ -136,6 +142,11 @@ final class AppState: ObservableObject {
     /// repeated clicks on the same heading re-trigger the scroll
     /// without needing a counter.
     let scrollAnchorRequest = PassthroughSubject<String, Never>()
+
+    /// One-shot channel for "scroll to line N." Search-result
+    /// activation (#59) sends a 1-based line number; the content
+    /// pane's `.onReceive` resolves to the `line-<N>` anchor.
+    let lineScrollRequest = PassthroughSubject<Int, Never>()
 
     /// Live wire for the search-text debouncer. Every keystroke
     /// pushes the latest query string; the Combine pipeline waits
@@ -371,6 +382,66 @@ final class AppState: ObservableObject {
     /// `onReceive(scrollAnchorRequest)`.
     func requestScrollToHeading(anchor: String) {
         scrollAnchorRequest.send(anchor)
+    }
+
+    /// Activate a search result row from `SearchOverlay`.
+    ///
+    /// 1. Set `selectedFilePath` (which kicks off the regular note-
+    ///    load observer).
+    /// 2. Close the overlay so the content area gets focus.
+    /// 3. Await the in-flight note-load so the per-line anchors are
+    ///    in the rendered tree before we ask `ScrollViewReader` to
+    ///    target one.
+    /// 4. Send the line-scroll request.
+    /// 5. Post a polite announcement with filename + line +
+    ///    snippet — matches the acceptance criteria's
+    ///    `"Opened <filename>, line N: <snippet>"`.
+    ///
+    /// If the path is the SAME file already open, we skip the
+    /// selection assignment (the load observer wouldn't re-trigger
+    /// the load anyway because of `.removeDuplicates()`) but still
+    /// scroll and announce.
+    func openSearchResult(_ hit: QueryHit) {
+        let cleanSnippet = hit.snippet
+            .replacingOccurrences(of: "\u{2}", with: "")
+            .replacingOccurrences(of: "\u{3}", with: "")
+        let filename = (hit.path as NSString).lastPathComponent
+
+        // Close the overlay first so focus moves cleanly back to
+        // the content area before the file load completes.
+        closeSearchOverlay()
+
+        let wasAlreadyOpen = selectedFilePath == hit.path
+        if !wasAlreadyOpen {
+            selectedFilePath = hit.path
+        }
+
+        // Capture the line ahead of the await — `openSearchResult`
+        // is @MainActor; the .send is too.
+        let line = Int(hit.lineNumber)
+
+        Task { @MainActor [weak self] in
+            // Wait for any in-flight note load to finish so the
+            // per-line anchors exist in the rendered tree before
+            // we ask `ScrollViewReader.scrollTo` to target one.
+            // For the same-file case the task is already nil and
+            // this await returns immediately.
+            if let task = self?.noteLoadTask {
+                await task.value
+            }
+            guard let self else { return }
+            // A subsequent selection change (the user moved to a
+            // different file while we were waiting) cancels this
+            // scroll — sending into the subject would land on the
+            // wrong file's anchors.
+            guard self.selectedFilePath == hit.path else { return }
+            self.lineScrollRequest.send(line)
+            postAccessibilityAnnouncement(
+                "Opened \(filename), line \(line): \(cleanSnippet)"
+            )
+            self.lastActivatedSearchResultLine = line
+            self.lastActivatedSearchResultPath = hit.path
+        }
     }
 
     /// Activate an outgoing-link row from the OutgoingLinksPanel.

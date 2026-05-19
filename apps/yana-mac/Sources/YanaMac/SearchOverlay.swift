@@ -163,12 +163,8 @@ struct SearchOverlay: View {
     }
 
     private func row(for hit: QueryHit) -> some View {
-        // Inert button for now — #E4 wires activation. We use a
-        // button anyway so keyboard focus + return semantics are in
-        // place and the activation handler just needs to swap the
-        // action.
         Button {
-            // #E4 — open file at line_number.
+            appState.openSearchResult(hit)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(filename(for: hit.path))

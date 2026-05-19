@@ -114,6 +114,28 @@ struct NoteContentView: View {
                     }
                 }
             }
+            .onReceive(appState.lineScrollRequest) { line in
+                // Search-result activation (#59) requests a scroll to
+                // a specific 1-based line number. Per-line anchors
+                // get id `"line-N"`; this routes the request through
+                // the same proxy + reduce-motion gate as the heading
+                // anchor path.
+                //
+                // Clamp to >= 1: defensive against the FFI ever
+                // returning 0 or a negative line (line numbers in
+                // the search result are u32 today, but treating
+                // unsigned-zero as line 1 keeps the scroll
+                // predictable rather than landing on a non-existent
+                // `line-0` anchor.
+                let anchor = "line-\(max(1, line))"
+                if reduceMotion {
+                    proxy.scrollTo(anchor, anchor: .top)
+                } else {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
+            }
         }
     }
 
@@ -162,30 +184,43 @@ struct NoteContentView: View {
     }
 
     private func sectionView(_ section: NoteSection) -> some View {
-        // VStack groups the heading line with its body so .id() on the
-        // group anchors scrolling to the heading itself, not just the
-        // body underneath.
+        // VStack groups the heading line with its per-line body Texts
+        // so .id() on the group anchors scrolling to the heading
+        // itself, while per-line anchors below let search-result
+        // activation (#59) scroll to a specific source-line.
         VStack(alignment: .leading, spacing: 4) {
             if let heading = section.heading {
                 Text(heading.text)
                     .font(headingFont(for: heading.level))
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityHeading(headingLevel(for: heading.level))
+                    // Heading line is also a navigable scroll target.
+                    // Per-line scroll requests can land on a heading
+                    // when the matched body line happens to be the
+                    // heading itself.
+                    .id("line-\(section.startLineInFile)")
             }
             if !section.body.isEmpty {
-                // `.textSelection` is on the body Text only (not the
-                // wrapping VStack or the outer container). When applied
-                // to a container, SwiftUI on macOS wraps the *whole*
-                // descendant chain in one NSTextView, which both (a)
-                // makes the section heading uncombinable as its own AX
-                // header element, and (b) was observed to stall
-                // VoiceOver reading after ~5 lines of body content
-                // because the AX tree fragmentation breaks continuous
-                // navigation. Per-body selection keeps the AX tree
-                // intact while still letting users copy prose.
-                Text(section.body)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                // Per-line rendering: each source line becomes its
+                // own Text + `.id("line-N")` anchor. The earlier
+                // single-Text approach was simpler for selection-
+                // across-lines but couldn't anchor a scroll to a
+                // specific line — #59 needs per-line precision.
+                //
+                // `.textSelection` is still on each Text individually
+                // (not on the container) so each line stays
+                // selectable; we lose the ability to select a
+                // multi-line range in one drag, which we'll revisit
+                // if testers complain. Continuous-read flow stays
+                // intact because each Text is its own AX element.
+                let bodyLines = section.body.components(separatedBy: "\n")
+                ForEach(Array(bodyLines.enumerated()), id: \.offset) { i, line in
+                    let absoluteLine = section.bodyStartLineInFile + i
+                    Text(line.isEmpty ? " " : line)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .id("line-\(absoluteLine)")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
