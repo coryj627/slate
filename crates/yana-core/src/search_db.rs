@@ -115,13 +115,13 @@ pub fn full_text_search(
     // `idx_files_path` index.
     let (sql, folder_prefix) = match scope {
         SearchScope::Folder(folder) => {
-            // Folder pattern: `folder/%` for the path-prefix
-            // match. We don't escape SQL LIKE metas (`%`, `_`) in
-            // the folder string — pathological folder names with
-            // those characters are vanishingly rare in real
-            // vaults, and the failure mode is over-matching, not
-            // crashing.
-            let mut prefix = folder.trim_matches('/').to_string();
+            // Folder pattern: `folder/%` for the path-prefix match.
+            // Escape SQLite LIKE metacharacters (`%`, `_`, `\`) in
+            // the folder name so a vault with a directory named
+            // `sales_q1` doesn't over-match `sales-q1` etc. The `\`
+            // ESCAPE clause in the SQL below makes the escape
+            // explicit.
+            let mut prefix = escape_like(folder.trim_matches('/'));
             prefix.push('/');
             prefix.push('%');
             (
@@ -131,7 +131,7 @@ pub fn full_text_search(
                  FROM files_fts
                  JOIN files ON files.id = files_fts.rowid
                  WHERE files_fts MATCH ?1
-                   AND files.path LIKE ?4
+                   AND files.path LIKE ?4 ESCAPE '\\'
                  ORDER BY score ASC",
                 Some(prefix),
             )
@@ -194,6 +194,23 @@ pub fn full_text_search(
     Ok(QueryResultSet { rows, summary })
 }
 
+/// Escape SQLite LIKE metacharacters (`%`, `_`, `\`) so a literal
+/// folder name compares as a path prefix, not a glob. Paired with
+/// `LIKE ? ESCAPE '\'` in the SQL above.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Strip FTS5 query syntax to leave bare lookup tokens we can search
 /// for inside `body_text` to derive a line number. This is a coarse
 /// approximation — we drop quotes, operators (`AND`/`OR`/`NOT`/`+`/
@@ -253,6 +270,17 @@ mod tests {
         let body = "this body has nothing matching";
         let line = find_first_token_line(body, &["absent".to_string()]);
         assert_eq!(line, 1);
+    }
+
+    #[test]
+    fn escape_like_handles_percent_underscore_backslash() {
+        assert_eq!(escape_like("plain"), "plain");
+        assert_eq!(escape_like("sales_q1"), "sales\\_q1");
+        assert_eq!(escape_like("100%"), "100\\%");
+        assert_eq!(
+            escape_like(r"path\with\backslash"),
+            r"path\\with\\backslash"
+        );
     }
 
     #[test]

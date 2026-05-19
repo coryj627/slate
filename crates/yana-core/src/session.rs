@@ -3049,6 +3049,30 @@ mod tests {
     }
 
     #[test]
+    fn full_text_search_folder_scope_escapes_like_meta_chars() {
+        // Codoki PR-85 callout: a folder name with `_` must compare
+        // literally, not as a LIKE wildcard. `sales_q1` and
+        // `salesXq1` overlap under un-escaped LIKE matching; the
+        // escape must keep them distinct.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("sales_q1/note.md", b"underscoretoken")
+                .unwrap();
+            p.write_file("salesXq1/note.md", b"underscoretoken")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let result = session
+            .full_text_search(
+                "underscoretoken",
+                &crate::SearchScope::Folder("sales_q1".to_string()),
+                &CancelToken::new(),
+            )
+            .unwrap();
+        let paths: Vec<&str> = result.rows.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, vec!["sales_q1/note.md"]);
+    }
+
+    #[test]
     fn full_text_search_pre_cancelled_returns_immediately() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file("notes/anything.md", b"contenttoken").unwrap();
