@@ -683,6 +683,47 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.currentNoteProperties, [])
     }
 
+    func testSwitchingNotesKeepsPreviousPropertiesUntilLoadCompletes() async throws {
+        // Regression for #90 PropertiesPanel flicker. Previously
+        // `handleSelectionChange` cleared `currentNoteProperties = []`
+        // synchronously on every selection change, so the panel
+        // rendered EmptyView for the duration of the load — a visible
+        // disappear/reappear of the "Properties, N items" rotor item
+        // for VoiceOver. The new behaviour leaves the previous note's
+        // properties in place until the new load resolves, eliminating
+        // the transient empty state.
+        let vault = tempDir.appendingPathComponent("switch-props")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("---\ntitle: A\n---\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+        try Data("---\ntitle: B\nauthor: someone\n---\n".utf8)
+            .write(to: vault.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        // Establish A's properties as the "previous selection."
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteProperties.map(\.key), ["title"])
+
+        // Switch to B. handleSelectionChange runs synchronously inside
+        // the @Published sink — at this point the new load task is
+        // scheduled but not yet awaited. Properties must still equal
+        // A's value, not a transient empty array.
+        state.selectedFilePath = "b.md"
+        XCTAssertEqual(
+            state.currentNoteProperties.map(\.key),
+            ["title"],
+            "properties were cleared synchronously on selection change — flicker regression"
+        )
+
+        // Once the new load finishes, properties reflect B's frontmatter.
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteProperties.map(\.key), ["title", "author"])
+    }
+
     func testNotesWithoutFrontmatterHaveEmptyProperties() async throws {
         let vault = tempDir.appendingPathComponent("plain-props")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
