@@ -799,8 +799,10 @@ final class AppStateTests: XCTestCase {
     /// observe a settled state.
     private func awaitSearch(_ state: AppState) async {
         // The debounce fires on DispatchQueue.main after 150 ms.
-        // Sleep slightly longer than that so the runner kicks off.
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        // Wait ~400 ms (Codoki PR-86 suggestion) so the CI runner's
+        // slower main-queue scheduling doesn't race the assertion
+        // before the debounced sink has had a chance to fire.
+        try? await Task.sleep(nanoseconds: 400_000_000)
         await state.searchTask?.value
     }
 

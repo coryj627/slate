@@ -147,7 +147,12 @@ struct SearchOverlay: View {
     private func resultsList(_ rows: [QueryHit]) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, hit in
+                // Stable id on `.path` rather than offset — FTS5
+                // returns one hit per file, so paths are unique
+                // within a result set, and using a stable id keeps
+                // SwiftUI from re-creating row views when results
+                // reorder by score after a query change.
+                ForEach(rows, id: \.path) { hit in
                     row(for: hit)
                 }
             }

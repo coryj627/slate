@@ -227,9 +227,6 @@ final class AppState: ObservableObject {
                 self?.runSearch(query: query)
             }
             .store(in: &subscriptions)
-
-        // Push the initial empty query so a fresh AppState starts
-        // in the `idle` state without an immediate fire.
     }
 
     /// Push the current `searchQuery` through the debouncer. Called
@@ -292,7 +289,13 @@ final class AppState: ObservableObject {
         searchState = .searching
         let cancel = CancelToken()
         searchCancelToken = cancel
-        searchTask = Task { [weak self] in
+        // Explicit `@MainActor` on the Task body so the
+        // post-await @Published writes are guaranteed to run on
+        // the main thread (Codoki PR 86 callout). Without this the
+        // awaiting Task could resume on whatever cooperative-pool
+        // thread the inner detached task ran on, and SwiftUI
+        // throws a runtime warning when @Published changes off-main.
+        searchTask = Task { @MainActor [weak self] in
             let outcome: Result<QueryResultSet, VaultError> =
                 await Task.detached(priority: .userInitiated) {
                     do {
