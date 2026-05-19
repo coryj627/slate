@@ -181,9 +181,29 @@ pub(crate) fn properties_for_file(
 }
 
 /// Paged list of files that have property `key` whose value matches
-/// `value` (case-insensitive). For list and tag_list properties,
-/// each element is searched independently via SQLite's
-/// `json_each` — matching any element counts as a hit on the file.
+/// `value` (case-insensitive, **Unicode-aware on the runtime side**).
+///
+/// ## Case-folding scope
+///
+/// Both the `target` derived from the caller's `value` argument and
+/// the stored `value_text_norm` column are produced by Rust's
+/// `String::to_lowercase()`, which folds the full Unicode range
+/// (`É`→`é`, `Ä`→`ä`, etc.). The previous shape ran SQL's `lower()`
+/// at query time, which is ASCII-only by default and would silently
+/// not match `café` against stored `CAFÉ`.
+///
+/// Caveat: rows persisted by the **migration 007 backfill** went
+/// through SQL `lower()` (the migration runs before any Rust code
+/// touches the row). Any vault that already had non-ASCII property
+/// values when upgrading to schema 7 carries those rows with
+/// partially-folded `value_text_norm` until the scanner re-writes
+/// them on the next slow-path pass. A re-scan corrects this
+/// automatically; documenting here so future debug sessions see
+/// the constraint (#93 item 1).
+///
+/// For list and tag_list properties, each element is searched
+/// independently against the `properties_list_values` side table.
+/// Matching any element counts as a hit on the file.
 ///
 /// Matching semantics for atomic kinds:
 ///   - text / date / datetime / wikilink: case-insensitive string
@@ -219,6 +239,13 @@ pub(crate) fn files_with_property(
     //
     // UNION (not UNION ALL) dedupes file_ids when a vault has
     // multiple matching property rows on the same file.
+    // `COLLATE BINARY` on both the cursor comparison and the
+    // ORDER BY pins the paging contract to byte-wise ordering
+    // independent of any future schema change that adds
+    // `COLLATE NOCASE` (or similar) to `files.path`. Without an
+    // explicit collation here the cursor advance would silently
+    // start dropping or duplicating rows whenever the default
+    // changed (#93 item 6).
     let sql = "
         WITH matches AS (
             SELECT files.id, files.path, files.name, files.mtime_ms,
@@ -238,8 +265,8 @@ pub(crate) fn files_with_property(
         SELECT path, name, mtime_ms, size_bytes, is_markdown,
                (SELECT COUNT(*) FROM matches) AS total_filtered
         FROM matches
-        WHERE (?3 IS NULL OR path > ?3)
-        ORDER BY path ASC
+        WHERE (?3 IS NULL OR path > ?3 COLLATE BINARY)
+        ORDER BY path COLLATE BINARY ASC
         LIMIT ?4
     ";
     let mut stmt = conn.prepare_cached(sql)?;

@@ -98,13 +98,20 @@ pub fn full_text_search(
         return Err(VaultError::Cancelled);
     }
 
-    // Reserved scopes — surface an explicit cancelled error rather
-    // than silently returning empty results so the UI can render
-    // "not supported yet" guidance from the same error path it
-    // already handles.
+    // Reserved scopes — surface `Unsupported` (not `Cancelled`) so
+    // a caller with retry-on-cancel logic doesn't loop forever and
+    // so log lines for "feature not landed yet" don't conflate with
+    // "user pressed Esc" (#93 item 2).
     match scope {
-        SearchScope::File(_) | SearchScope::Tag(_) => {
-            return Err(VaultError::Cancelled);
+        SearchScope::File(_) => {
+            return Err(VaultError::Unsupported {
+                feature: "search scope: File".to_string(),
+            });
+        }
+        SearchScope::Tag(_) => {
+            return Err(VaultError::Unsupported {
+                feature: "search scope: Tag".to_string(),
+            });
         }
         _ => {}
     }

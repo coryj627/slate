@@ -69,6 +69,13 @@ pub enum VaultError {
     /// cache (which would surface as `Db`).
     #[error("invalid search query: {message}")]
     InvalidQuery { message: String },
+
+    /// Caller invoked a code path that isn't implemented in this
+    /// build. Distinct from `Cancelled` so retry logic can stop
+    /// looping and so logs don't conflate "user pressed Esc" with
+    /// "feature not landed yet" (#93 item 2).
+    #[error("operation not supported yet: {feature}")]
+    Unsupported { feature: String },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so

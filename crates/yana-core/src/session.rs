@@ -763,6 +763,23 @@ fn count_files(provider: &dyn VaultProvider, cancel: &CancelToken) -> Result<u64
 }
 
 #[allow(clippy::too_many_arguments)] // shared scanner state; bundling adds friction
+/// # FTS5 trigger invariant (#93 item 3)
+///
+/// The `files_fts` external-content index is maintained by triggers
+/// in migration 006 that fire on `INSERT`, `UPDATE OF body_text`,
+/// and `DELETE` of `files`. The `UPDATE` form is deliberately
+/// scoped to `body_text` — gating on the column keeps the fast
+/// path (`UPDATE files SET indexed_at_ms = ?, ctime_ms = ?`) from
+/// re-tokenizing every unchanged file on every scan tick.
+///
+/// **Invariant.** Any UPDATE that toggles `is_markdown` MUST also
+/// update `body_text`, otherwise the FTS row goes stale silently
+/// (md → non leaves the old row; non → md leaves none). Today
+/// every code path that reclassifies a file also re-reads its
+/// body, so the invariant holds — but a future extension
+/// reclassification, rename-without-reread, or migration backfill
+/// would break it. If you add such a path, also update `body_text`
+/// in the same statement (set to `""` for non-markdown).
 fn index_file(
     tx: &rusqlite::Transaction,
     provider: &dyn VaultProvider,
@@ -3271,7 +3288,11 @@ mod tests {
     }
 
     #[test]
-    fn full_text_search_reserved_scopes_return_cancelled() {
+    fn full_text_search_reserved_scopes_return_unsupported() {
+        // #93 item 2: File / Tag scopes used to return `Cancelled`
+        // as a placeholder. That confused any retry-on-cancel
+        // caller and made logs lie about why the call failed.
+        // They now return `Unsupported { feature: ... }`.
         let (_tmp, session) = make_vault(|_| {});
         let cancel = CancelToken::new();
         match session.full_text_search(
@@ -3279,16 +3300,26 @@ mod tests {
             &crate::SearchScope::File("notes/x.md".to_string()),
             &cancel,
         ) {
-            Err(VaultError::Cancelled) => {}
-            other => panic!("expected Cancelled for File scope, got {other:?}"),
+            Err(VaultError::Unsupported { feature }) => {
+                assert!(
+                    feature.contains("File"),
+                    "expected feature label to identify File, got {feature:?}"
+                );
+            }
+            other => panic!("expected Unsupported for File scope, got {other:?}"),
         }
         match session.full_text_search(
             "anything",
             &crate::SearchScope::Tag("project".to_string()),
             &cancel,
         ) {
-            Err(VaultError::Cancelled) => {}
-            other => panic!("expected Cancelled for Tag scope, got {other:?}"),
+            Err(VaultError::Unsupported { feature }) => {
+                assert!(
+                    feature.contains("Tag"),
+                    "expected feature label to identify Tag, got {feature:?}"
+                );
+            }
+            other => panic!("expected Unsupported for Tag scope, got {other:?}"),
         }
     }
 
