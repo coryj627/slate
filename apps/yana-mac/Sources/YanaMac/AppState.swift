@@ -422,6 +422,12 @@ final class AppState: ObservableObject {
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
         let filename = (hit.path as NSString).lastPathComponent
+        // Capture the query that produced this hit ahead of the
+        // await — by the time the load resolves the user may have
+        // edited the field, but the line we want to scroll to is
+        // the one matching the query that was active when they
+        // pressed Return on this row.
+        let queryForLineLookup = searchQuery
 
         // Close the overlay first so focus moves cleanly back to
         // the content area before the file load completes.
@@ -431,10 +437,6 @@ final class AppState: ObservableObject {
         if !wasAlreadyOpen {
             selectedFilePath = hit.path
         }
-
-        // Capture the line ahead of the await — `openSearchResult`
-        // is @MainActor; the .send is too.
-        let line = Int(hit.lineNumber)
 
         Task { @MainActor [weak self] in
             // Wait for any in-flight note load to finish so the
@@ -451,6 +453,15 @@ final class AppState: ObservableObject {
             // scroll — sending into the subject would land on the
             // wrong file's anchors.
             guard self.selectedFilePath == hit.path else { return }
+            // Derive the line UI-side from the loaded body. Up
+            // through PR 94 this came back on the QueryHit, but
+            // computing it Rust-side meant pulling `body_text`
+            // through SQLite for every hit (#92 item 1). The body
+            // is loaded anyway by the time we get here, so we
+            // tokenize the original query and scan for the first
+            // match — same heuristic the Rust side used.
+            let body = self.currentNoteText ?? ""
+            let line = firstTokenLineNumber(in: body, query: queryForLineLookup)
             self.lineScrollRequest.send(line)
             postAccessibilityAnnouncement(
                 "Opened \(filename), line \(line): \(cleanSnippet)"
@@ -950,5 +961,48 @@ final class AppState: ObservableObject {
         case .InvalidQuery(let message):
             return "Search query is invalid: \(message)"
         }
+    }
+}
+
+/// 1-based line number of the first occurrence (in `body`) of any
+/// alphanumeric token from `query`. Falls back to 1 when no token
+/// can be found — FTS5 may have matched through stemming, so the
+/// raw tokens needn't appear literally in the note.
+///
+/// Lives at file scope (not on AppState) so it has no implicit
+/// MainActor isolation — pure string crunching, the caller can
+/// invoke it from any actor context.
+///
+/// Mirrors the Rust-side heuristic that lived in
+/// `search_db::find_first_token_line` before #92 item 1 moved
+/// line derivation out of `full_text_search`. Lowercases the body
+/// once and counts newlines in the lowercased prefix — avoids a
+/// cross-string slice that would panic on non-boundary indices
+/// when Unicode lowercasing changes byte length (`İ` → `i` + U+0307
+/// is 2→3 bytes).
+func firstTokenLineNumber(in body: String, query: String) -> Int {
+    let bodyLower = body.lowercased()
+    let tokens = query
+        .lowercased()
+        .split { !$0.isLetter && !$0.isNumber }
+        .map(String.init)
+        .filter { !$0.isEmpty && !["and", "or", "not"].contains($0) }
+    var earliest: String.Index? = nil
+    for tok in tokens {
+        if let range = bodyLower.range(of: tok) {
+            switch earliest {
+            case .none:
+                earliest = range.lowerBound
+            case .some(let prev):
+                earliest = min(prev, range.lowerBound)
+            }
+        }
+    }
+    guard let earliest else { return 1 }
+    // Count newlines in the prefix using UTF-8 view so we don't
+    // pay for an O(n) String.distance over the prefix.
+    let prefix = bodyLower[..<earliest]
+    return prefix.utf8.reduce(1) { acc, byte in
+        byte == 0x0A ? acc + 1 : acc
     }
 }

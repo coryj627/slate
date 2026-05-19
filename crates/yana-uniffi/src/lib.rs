@@ -628,10 +628,14 @@ impl From<SearchScope> for core::SearchScope {
 }
 
 /// One full-text-search hit.
+///
+/// No `line_number` field — the line is derived UI-side at result-
+/// activation time so we don't pull `body_text` through SQLite for
+/// every hit at search time. See `yana_core::search_db` module
+/// docs (#92 item 1).
 #[derive(uniffi::Record)]
 pub struct QueryHit {
     pub path: String,
-    pub line_number: u32,
     /// Snippet of ±60 chars around the match. STX (`\u{0002}`) and
     /// ETX (`\u{0003}`) wrap the matched tokens — the host UI
     /// replaces those with attributed-string emphasis.
@@ -643,7 +647,6 @@ impl From<core::QueryHit> for QueryHit {
     fn from(h: core::QueryHit) -> Self {
         Self {
             path: h.path,
-            line_number: h.line_number,
             snippet: h.snippet,
             score: h.score,
         }

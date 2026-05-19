@@ -8,8 +8,13 @@ import SwiftUI
 ///   - Field announces "Search vault." on focus.
 ///   - Result count fires through the polite live region on every
 ///     state transition into `.results`.
-///   - Each row's accessibility label matches the acceptance spec
-///     exactly: `"<filename>, line <N>: <snippet>"`.
+///   - Each row's accessibility label is `"<filename>: <snippet>"`.
+///     The line number was dropped from the row label in #92 item
+///     1 — full_text_search no longer fetches body_text per hit, so
+///     the line is derived at result-activation time (the
+///     post-activation announcement still says
+///     "Opened <filename>, line N: <snippet>" using the loaded
+///     note's body).
 ///
 /// Keyboard:
 ///   - Cmd+F (from MainSplitView) toggles the overlay.
@@ -239,7 +244,7 @@ struct SearchOverlay: View {
         let cleanSnippet = hit.snippet
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
-        return "\(filename(for: hit.path)), line \(hit.lineNumber): \(cleanSnippet)"
+        return "\(filename(for: hit.path)): \(cleanSnippet)"
     }
 
     private func filename(for path: String) -> String {

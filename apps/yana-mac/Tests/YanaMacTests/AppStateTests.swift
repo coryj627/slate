@@ -974,12 +974,10 @@ final class AppStateTests: XCTestCase {
 
     private func makeHit(
         path: String,
-        line: UInt32,
         snippet: String = ""
     ) -> QueryHit {
         QueryHit(
             path: path,
-            lineNumber: line,
             snippet: snippet,
             score: 0.0
         )
@@ -1014,6 +1012,10 @@ final class AppStateTests: XCTestCase {
     }
 
     func testOpenSearchResultSelectsPathAndClosesOverlay() async throws {
+        // The line scrolled to is now derived UI-side at activation
+        // time from the loaded body + current `searchQuery` (#92
+        // item 1). Seed the query so the lookup finds the expected
+        // line.
         let vault = tempDir.appendingPathComponent("openresult-select")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         try Data("# Hello\nline one\nmatchedline\nline three".utf8)
@@ -1024,15 +1026,17 @@ final class AppStateTests: XCTestCase {
         await state.scanTask?.value
         state.toggleSearchOverlay()
         XCTAssertTrue(state.isSearchOpen)
+        state.searchQuery = "matchedline"
 
-        let hit = makeHit(path: "a.md", line: 3, snippet: "\u{2}matchedline\u{3}")
+        let hit = makeHit(path: "a.md", snippet: "\u{2}matchedline\u{3}")
         state.openSearchResult(hit)
 
         // Activation: overlay closes synchronously, selection moves.
         XCTAssertFalse(state.isSearchOpen)
         XCTAssertEqual(state.selectedFilePath, "a.md")
 
-        // Synchronize on the actual subject emission.
+        // Synchronize on the actual subject emission. The body
+        // matches `matchedline` on line 3.
         let scrolledLine = await waitForLineScroll(state)
         XCTAssertEqual(scrolledLine, 3)
         XCTAssertEqual(state.lastActivatedSearchResultPath, "a.md")
@@ -1048,8 +1052,9 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.openVault(at: vault)
         await state.scanTask?.value
+        state.searchQuery = "beta"
 
-        state.openSearchResult(makeHit(path: "note.md", line: 2))
+        state.openSearchResult(makeHit(path: "note.md"))
         let scrolledLine = await waitForLineScroll(state)
         XCTAssertEqual(scrolledLine, 2)
     }
@@ -1068,8 +1073,9 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.openVault(at: vault)
         await state.scanTask?.value
+        state.searchQuery = "A"
 
-        state.openSearchResult(makeHit(path: "a.md", line: 5))
+        state.openSearchResult(makeHit(path: "a.md"))
         // Yank the selection elsewhere before the post-load task
         // runs.
         state.selectedFilePath = "b.md"
@@ -1081,6 +1087,31 @@ final class AppStateTests: XCTestCase {
             scrolledLine,
             "scroll request should be suppressed when selection changed mid-load; got \(String(describing: scrolledLine))"
         )
+    }
+
+    func testFirstTokenLineNumberFindsEarliestMatch() {
+        // Direct unit coverage for the UI-side line lookup. Mirrors
+        // the shape of the Rust-side tests that used to live in
+        // `search_db::find_first_token_line` before #92 item 1.
+        let body = "alpha\nbravo\ncharlie\ndelta"
+        XCTAssertEqual(firstTokenLineNumber(in: body, query: "charlie"), 3)
+        // Multi-token query: earliest match wins.
+        XCTAssertEqual(firstTokenLineNumber(in: body, query: "delta alpha"), 1)
+        // Operators are stripped; remaining tokens drive the lookup.
+        XCTAssertEqual(firstTokenLineNumber(in: body, query: "AND bravo NOT"), 2)
+        // No match → fallback to line 1.
+        XCTAssertEqual(firstTokenLineNumber(in: body, query: "missing"), 1)
+    }
+
+    func testFirstTokenLineNumberSurvivesUnicodeLowercasing() {
+        // Regression mirror of the Rust-side audit-#88 case: `İ`
+        // (U+0130) lowercases to 2 codepoints so the lowered body
+        // is 1 UTF-8 byte longer than the original. We count
+        // newlines in the lowered string itself rather than slicing
+        // the original — must not crash.
+        let body = "İstanbul intro\nİstanbul again\nmatch on line 3"
+        let line = firstTokenLineNumber(in: body, query: "match")
+        XCTAssertTrue(line == 2 || line == 3, "got \(line)")
     }
 
     // MARK: - Link activation (#52)

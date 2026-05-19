@@ -3247,7 +3247,14 @@ mod tests {
     }
 
     #[test]
-    fn full_text_search_line_number_points_at_match() {
+    fn full_text_search_returns_the_matching_file_with_snippet() {
+        // Previous shape asserted on `line_number`, but #92 item 1
+        // moved line derivation out of full_text_search (it pulled
+        // body_text per hit just to compute the line). The
+        // user-visible contract for this test is still meaningful:
+        // a vault containing one note with a rare token, queried
+        // for that token, returns exactly that one hit with a
+        // non-empty snippet.
         let (_tmp, session) = make_vault(|p| {
             let body = b"line one\nline two\nline three has thetargettoken in it\nline four";
             p.write_file("notes/multi.md", body).unwrap();
@@ -3261,7 +3268,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].line_number, 3);
+        assert_eq!(result.rows[0].path, "notes/multi.md");
+        assert!(!result.rows[0].snippet.is_empty());
     }
 
     #[test]
