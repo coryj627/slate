@@ -437,15 +437,24 @@ final class AppState: ObservableObject {
         if !wasAlreadyOpen {
             selectedFilePath = hit.path
         }
+        // Snapshot the in-flight load up front so the Task closure
+        // doesn't have to reach back through `self?.` before its
+        // strong-unwrap guard — that pre-guard `self?` access was
+        // tripping Codoki's weak-self lint on PR 98 even though the
+        // post-await `guard let self` correctly shadow-unwraps. The
+        // Task reference outlives `self` cleanly if AppState
+        // dealloc's during scheduling; we just await whatever load
+        // was pending.
+        let pendingLoad = noteLoadTask
 
         Task { @MainActor [weak self] in
             // Wait for any in-flight note load to finish so the
             // per-line anchors exist in the rendered tree before
             // we ask `ScrollViewReader.scrollTo` to target one.
-            // For the same-file case the task is already nil and
-            // this await returns immediately.
-            if let task = self?.noteLoadTask {
-                await task.value
+            // For the same-file case the snapshot is nil and this
+            // await is skipped.
+            if let pendingLoad {
+                await pendingLoad.value
             }
             guard let self else { return }
             // A subsequent selection change (the user moved to a
