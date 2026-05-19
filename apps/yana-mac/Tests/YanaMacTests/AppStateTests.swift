@@ -1103,6 +1103,21 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(firstTokenLineNumber(in: body, query: "missing"), 1)
     }
 
+    func testFirstTokenLineNumberStripsBodyTextColumnPrefix() {
+        // PR 103 Codoki follow-up: the docstring claimed
+        // column-name prefixes (`body_text:`) were filtered, but
+        // the original implementation only handled FTS5 keywords.
+        // Now the column prefix is stripped before tokenization so
+        // `body_text:foo` reduces to just `foo` for the line scan.
+        let body = "body and text are common words\nbut foo lives here"
+        // Without the strip, "body" would match on line 1; with the
+        // strip, only "foo" survives and the lookup hits line 2.
+        XCTAssertEqual(
+            firstTokenLineNumber(in: body, query: "body_text:foo"),
+            2
+        )
+    }
+
     func testFirstTokenLineNumberSkipsFts5KeywordsAndNumericTokens() {
         // #93 item 5: bare FTS5 keywords (`NEAR`, `AND`, `OR`,
         // `NOT`) and column-name prefixes like `body_text:`

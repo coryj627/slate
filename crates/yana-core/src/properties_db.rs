@@ -265,7 +265,7 @@ pub(crate) fn files_with_property(
         SELECT path, name, mtime_ms, size_bytes, is_markdown,
                (SELECT COUNT(*) FROM matches) AS total_filtered
         FROM matches
-        WHERE (?3 IS NULL OR path > ?3 COLLATE BINARY)
+        WHERE (?3 IS NULL OR path COLLATE BINARY > ?3 COLLATE BINARY)
         ORDER BY path COLLATE BINARY ASC
         LIMIT ?4
     ";
