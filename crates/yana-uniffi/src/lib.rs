@@ -226,6 +226,22 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    /// Bundle of backlinks + outgoing links + properties for `path`,
+    /// fetched under a single mutex acquisition. The host UI's note-
+    /// load handler should prefer this over three separate calls
+    /// (#92 item 4) — same total work, one contiguous lock-hold
+    /// instead of three races against the scanner transaction.
+    pub fn note_load_bundle(
+        &self,
+        path: String,
+        backlinks_paging: Paging,
+    ) -> Result<NoteLoadBundle, VaultError> {
+        let bundle = self
+            .inner
+            .note_load_bundle(&path, backlinks_paging.into())?;
+        Ok(bundle.into())
+    }
+
     /// Paged vault-wide audit of unresolved internal links.
     pub fn list_unresolved_links(&self, paging: Paging) -> Result<UnresolvedLinkPage, VaultError> {
         let page = self.inner.list_unresolved_links(paging.into())?;
@@ -563,6 +579,26 @@ impl From<core::Page<core::Backlink>> for BacklinkPage {
             items: p.items.into_iter().map(Into::into).collect(),
             next_cursor: p.next_cursor,
             total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// Combined backlinks + outgoing-links + properties bundle for a
+/// single note, fetched under one mutex acquisition by
+/// `VaultSession::note_load_bundle` (#92 item 4).
+#[derive(uniffi::Record)]
+pub struct NoteLoadBundle {
+    pub backlinks: BacklinkPage,
+    pub outgoing_links: Vec<OutgoingLink>,
+    pub properties: Vec<Property>,
+}
+
+impl From<core::NoteLoadBundle> for NoteLoadBundle {
+    fn from(b: core::NoteLoadBundle) -> Self {
+        Self {
+            backlinks: b.backlinks.into(),
+            outgoing_links: b.outgoing_links.into_iter().map(Into::into).collect(),
+            properties: b.properties.into_iter().map(Into::into).collect(),
         }
     }
 }

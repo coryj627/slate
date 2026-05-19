@@ -28,7 +28,7 @@ pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 
 pub use session::{
-    CancelToken, FileFilter, FileMetadata, FileSummary, Page, Paging, ScanProgress,
+    CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging, ScanProgress,
     ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{

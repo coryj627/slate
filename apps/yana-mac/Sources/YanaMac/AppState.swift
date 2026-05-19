@@ -831,21 +831,21 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         isLoadingLinks = true
 
-        // Pull links + properties in one detached task so they share
-        // the SQLite mutex and we don't pay for two trips through
-        // the lock per selection. `get_file_metadata` returns the
-        // properties directly; backlinks/outgoing land via their
-        // dedicated calls.
+        // Pull links + properties under a single mutex acquisition.
+        // Previously this called `backlinks`, `outgoingLinks`, and
+        // `getFileMetadata` in sequence — three independent lock
+        // grabs that each raced the scanner's transaction-long lock
+        // hold (#92 item 4). The new `noteLoadBundle` API holds the
+        // mutex for one contiguous slice while it runs all three
+        // queries.
         let result: Result<([Backlink], [OutgoingLink], [Property]), VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
-                    let backlinksPage = try session.backlinks(
+                    let bundle = try session.noteLoadBundle(
                         path: path,
-                        paging: Paging(cursor: nil, limit: 200)
+                        backlinksPaging: Paging(cursor: nil, limit: 200)
                     )
-                    let outgoing = try session.outgoingLinks(path: path)
-                    let properties = try session.getFileMetadata(path: path)?.properties ?? []
-                    return .success((backlinksPage.items, outgoing, properties))
+                    return .success((bundle.backlinks.items, bundle.outgoingLinks, bundle.properties))
                 } catch let error as VaultError {
                     return .failure(error)
                 } catch {

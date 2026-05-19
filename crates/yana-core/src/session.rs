@@ -138,6 +138,21 @@ pub struct FileMetadata {
     pub properties: Vec<crate::Property>,
 }
 
+/// Bundle returned by [`VaultSession::note_load_bundle`]: every
+/// datum the UI needs to render a note's side panels in one trip
+/// through the connection mutex (#92 item 4).
+///
+/// No `PartialEq` derive — `Vec<Property>` contains
+/// `PropertyValue::Float(f64)` which isn't `Eq`-able; the existing
+/// individual-component types already carry the appropriate
+/// PartialEq impls for test paths that need them.
+#[derive(Debug, Clone)]
+pub struct NoteLoadBundle {
+    pub backlinks: Page<crate::Backlink>,
+    pub outgoing_links: Vec<crate::OutgoingLink>,
+    pub properties: Vec<crate::Property>,
+}
+
 // --- Paging ---
 
 /// Caller-supplied paging request. Use `Paging::first(n)` for the first
@@ -457,6 +472,37 @@ impl VaultSession {
     ) -> Result<Page<crate::Backlink>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::links_db::backlinks_for(&conn, path, paging)
+    }
+
+    /// Combined fetch of every datum the UI needs to render a note's
+    /// side panels: backlinks, outgoing links, and properties — under
+    /// a single mutex acquisition.
+    ///
+    /// Same total work as calling `backlinks`, `outgoing_links`, and
+    /// `get_file_metadata` in sequence, but the lock is held for one
+    /// contiguous slice instead of three races. The scanner holds
+    /// the lock for the full duration of a slow-path transaction
+    /// (see `Session::scan_initial`), so on a 10k-file initial scan
+    /// every selection-change in the UI previously stalled three
+    /// times waiting for the scanner transaction to commit. Now it
+    /// stalls once. (#92 item 4.)
+    pub fn note_load_bundle(
+        &self,
+        path: &str,
+        backlinks_paging: Paging,
+    ) -> Result<NoteLoadBundle, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let backlinks = crate::links_db::backlinks_for(&conn, path, backlinks_paging)?;
+        let outgoing_links = crate::links_db::outgoing_links_for(&conn, path)?;
+        let properties = match get_file_metadata_impl(&conn, path)? {
+            Some(meta) => meta.properties,
+            None => Vec::new(),
+        };
+        Ok(NoteLoadBundle {
+            backlinks,
+            outgoing_links,
+            properties,
+        })
     }
 
     /// Paged audit of every unresolved internal link in the vault.
@@ -3270,6 +3316,58 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].path, "notes/multi.md");
         assert!(!result.rows[0].snippet.is_empty());
+    }
+
+    #[test]
+    fn note_load_bundle_returns_backlinks_outgoing_and_properties_in_one_call() {
+        // Three vaults' worth of state in a single bundle:
+        //   - notes/target.md is linked to from notes/src.md (one backlink)
+        //   - notes/target.md links out to notes/other.md (one outgoing)
+        //   - notes/target.md has frontmatter (one property)
+        // Verifies all three components arrive populated under a
+        // single mutex acquisition (#92 item 4).
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "notes/target.md",
+                b"---\ntitle: Target\n---\nbody mentions [[other]]\n",
+            )
+            .unwrap();
+            p.write_file("notes/src.md", b"see [[target]] for context\n")
+                .unwrap();
+            p.write_file("notes/other.md", b"placeholder\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let bundle = session
+            .note_load_bundle("notes/target.md", Paging::first(50))
+            .unwrap();
+
+        assert_eq!(bundle.backlinks.items.len(), 1);
+        assert_eq!(bundle.backlinks.items[0].source_path, "notes/src.md");
+        assert_eq!(bundle.outgoing_links.len(), 1);
+        assert_eq!(bundle.outgoing_links[0].target_raw, "other");
+        assert_eq!(bundle.properties.len(), 1);
+        assert_eq!(bundle.properties[0].key, "title");
+    }
+
+    #[test]
+    fn note_load_bundle_returns_empty_arrays_for_unknown_path() {
+        // The previous shape's three separate calls each independently
+        // tolerated unknown paths (empty backlinks page, empty outgoing
+        // vec, None metadata → empty properties). The combined call
+        // must preserve that contract.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/a.md", b"body\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let bundle = session
+            .note_load_bundle("notes/missing.md", Paging::first(50))
+            .unwrap();
+
+        assert!(bundle.backlinks.items.is_empty());
+        assert!(bundle.outgoing_links.is_empty());
+        assert!(bundle.properties.is_empty());
     }
 
     #[test]
