@@ -12,8 +12,13 @@ pub mod link_resolver;
 pub mod links;
 pub mod links_db;
 pub mod properties_db;
+pub mod search_db;
 pub mod session;
 pub mod vault;
+
+pub use search_db::{
+    full_text_search, QueryHit, QueryResultSet, SearchScope, SNIPPET_HIT_END, SNIPPET_HIT_START,
+};
 
 pub use frontmatter::{
     extract_frontmatter, frontmatter_range, Property, PropertyParseWarning, PropertyValue,
