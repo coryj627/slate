@@ -72,6 +72,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "properties: per-file frontmatter properties",
         sql: include_str!("../migrations/005_properties.sql"),
     },
+    Migration {
+        description: "fts5: full-text search index over body_text",
+        sql: include_str!("../migrations/006_fts5.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with YANA's standard PRAGMAs.
