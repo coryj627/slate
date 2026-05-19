@@ -53,13 +53,16 @@ struct SearchOverlay: View {
             // .focused binding has been wired up by SwiftUI.
             DispatchQueue.main.async { focus = .field }
         }
-        // .onChange(of:) is one-arg on macOS 13; we stick with it so
-        // the app keeps its declared minimum.
-        .onChange(of: appState.searchSummary) { summary in
-            // Polite live region. The state-machine guarantees this
-            // only changes when results actually arrive (or on an
-            // error transition), so the announcement is meaningful
-            // every time it fires.
+        // Polite live region — but only when the summary string
+        // actually differs from the last announcement. Subscribing to
+        // the publisher with `removeDuplicates()` (rather than
+        // `.onChange(of:)`) dedupes re-assignments of an identical
+        // string at the source. Fast typing produces
+        // `searching → results → searching → results` cycles where
+        // the same "Search returned N results" string can land
+        // multiple times; without dedup VoiceOver re-announces on
+        // every keystroke past the 150ms debounce (#91 item 1).
+        .onReceive(appState.$searchSummary.removeDuplicates()) { summary in
             if !summary.isEmpty {
                 postAccessibilityAnnouncement(summary)
             }
@@ -204,11 +207,15 @@ struct SearchOverlay: View {
                 Text(filename(for: hit.path))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
+                // No lineLimit: at large Dynamic Type the snippet was
+                // truncating below the threshold WCAG 1.4.4 needs for
+                // sighted users (the `.help()` tooltip helps mouse
+                // users but not keyboard-only ones). Let it wrap; the
+                // panel's scroll view absorbs the height.
                 Text(hit.snippet.replacingOccurrences(of: "\u{2}", with: "")
                     .replacingOccurrences(of: "\u{3}", with: ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)

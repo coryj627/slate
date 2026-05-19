@@ -70,10 +70,14 @@ struct BacklinksPanel: View {
                 Text(filename(for: backlink.sourcePath))
                     .foregroundStyle(.primary)
                     .font(.callout)
+                // No lineLimit: the snippet is a context excerpt
+                // from the source note's body — content the user
+                // wants to read, not chrome to constrain. At large
+                // Dynamic Type the prior `.lineLimit(3)` truncated
+                // below the WCAG 1.4.4 threshold. Let it wrap.
                 Text(backlink.snippet)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 2)
