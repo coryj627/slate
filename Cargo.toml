@@ -22,6 +22,9 @@ tempfile = "3"
 blake3 = "1"
 trash = "5"
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+# proptest drives the links round-trip integration test
+# (`tests/links_roundtrip.rs`). Used only in dev/test builds.
+proptest = { version = "1", default-features = false, features = ["std"] }
 # yaml-rust2 is the actively-maintained successor to yaml-rust; serde_yaml
 # is officially deprecated as of 0.9.34. yaml-rust2 exposes the raw Yaml
 # enum which is what we want for type inference (we don't deserialize
