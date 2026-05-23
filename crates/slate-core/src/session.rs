@@ -1118,6 +1118,17 @@ fn index_file(
                 is_markdown as i64,
             ],
         )?;
+        // A file that grew past the refuse threshold may have been
+        // indexed earlier with full derivatives. Drop those rows so
+        // backlinks / outgoing links / frontmatter properties /
+        // headings panels don't continue surfacing data pointing
+        // into a body we no longer index.
+        let file_id: i64 = tx.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| row.get(0),
+        )?;
+        purge_markdown_derivatives(tx, file_id, path, vault_index)?;
         report.files_indexed += 1;
         return Ok(());
     }
@@ -1171,13 +1182,14 @@ fn index_file(
         ],
     )?;
 
-    // For Markdown files, parse + persist headings on the slow path.
-    // The fast path (mtime+size+ctime match) never reaches here, so
-    // unchanged files don't churn the headings table. Non-Markdown
-    // files have no headings worth indexing — pulldown-cmark would
-    // happily parse them but it's noise.
+    // For Markdown files, parse + persist headings, links, and
+    // frontmatter properties in the same transaction as the files
+    // upsert above. The fast path (mtime+size+ctime match) never
+    // reaches here, so unchanged files don't churn the derivative
+    // tables. Non-Markdown files have no headings / outgoing links /
+    // frontmatter properties worth indexing.
     if is_markdown {
-        // Need the file_id for the foreign key. INSERT … ON CONFLICT
+        // Need the file_id for the foreign keys. INSERT … ON CONFLICT
         // DO UPDATE doesn't expose the row id directly, so query it
         // back — cheap given we just touched the row.
         let file_id: i64 = tx.query_row(
@@ -1187,16 +1199,7 @@ fn index_file(
         )?;
         // Reuse the already-decoded `body_text` so we don't pay the
         // utf8_lossy cost twice (once for FTS, once for parsers).
-        let text = body_text.as_str();
-        replace_headings(tx, file_id, text)?;
-        // Links land in the same transaction as headings so a file's
-        // outgoing-link snapshot stays consistent with its body. Any
-        // link whose target hasn't been indexed yet is written with
-        // target_path = NULL and re-resolved by the post-scan pass.
-        crate::links_db::replace_links_for_file(tx, file_id, path, text, vault_index)?;
-        // Frontmatter properties: same transaction so headings,
-        // links, and properties commit atomically with the file row.
-        crate::properties_db::replace_properties_for_file(tx, file_id, text)?;
+        index_markdown_derivatives(tx, file_id, path, body_text.as_str(), vault_index)?;
     }
 
     report.files_indexed += 1;
@@ -1235,6 +1238,44 @@ fn replace_headings(
             heading.anchor_id,
         ])?;
     }
+    Ok(())
+}
+
+/// Run the markdown-only indexing pipeline for one file: headings →
+/// outgoing links → frontmatter properties. Each step is a
+/// DELETE-then-INSERT for the file's rows in its table, so calling
+/// this re-indexes from scratch even if previous rows existed.
+fn index_markdown_derivatives(
+    tx: &rusqlite::Transaction,
+    file_id: i64,
+    path: &str,
+    body_text: &str,
+    vault_index: &crate::InMemoryVaultIndex,
+) -> Result<(), VaultError> {
+    replace_headings(tx, file_id, body_text)?;
+    crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
+    crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
+    Ok(())
+}
+
+/// Drop any cached headings, links, and properties rows for
+/// `file_id`. Used when a file transitions into the large-file
+/// branch (no body indexing) so previously-indexed derivatives from
+/// when the same file was under the threshold don't linger as stale
+/// rows in the sidebar / backlinks panel / properties query.
+///
+/// Each underlying `replace_*` function DELETEs first and skips its
+/// INSERT loop when the source body is empty, so passing `""` is
+/// the canonical "purge but leave the files row" idiom.
+fn purge_markdown_derivatives(
+    tx: &rusqlite::Transaction,
+    file_id: i64,
+    path: &str,
+    vault_index: &crate::InMemoryVaultIndex,
+) -> Result<(), VaultError> {
+    replace_headings(tx, file_id, "")?;
+    crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
+    crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
     Ok(())
 }
 
@@ -1433,6 +1474,11 @@ fn validate_save_path(path: &str) -> Result<(), VaultError> {
 /// conflict-detection path. A missing file returns `("", 0)` so the
 /// caller can compare against an empty `expected_content_hash` (the
 /// "save as new file" idiom).
+///
+/// The hash itself comes from [`crate::vault::content_hash`] (blake3,
+/// lowercase hex, 64 chars). The returned tuple is `(hash, mtime_ms)`
+/// — save uses both: the hash to detect "someone else wrote the same
+/// path", the mtime to update the `files` row when the body matches.
 ///
 /// Bounded by the same `large_file_refuse_bytes` cap as `read_text`:
 /// if the file genuinely exceeds the threshold we surface
@@ -2771,6 +2817,89 @@ mod tests {
         // row".
         let md = session.get_file_metadata("huge.md").unwrap();
         assert!(md.is_some(), "file row should still be indexed");
+    }
+
+    #[test]
+    fn file_growing_past_refuse_threshold_purges_derivatives() {
+        // Regression: if a file is indexed once under the large-file
+        // refuse threshold (so its headings, outgoing links, and
+        // frontmatter properties are persisted) and then grows past
+        // the threshold, the next scan must drop those derivative
+        // rows. Otherwise the sidebar / backlinks panel / properties
+        // query keep surfacing stale data that points into a body we
+        // no longer index.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        // Link target so the outgoing link resolves on the first scan.
+        provider.write_file("target.md", b"# target").unwrap();
+        // Small source file with one heading, one outgoing link, and
+        // one frontmatter property. Total is well under the 300-byte
+        // cap configured below.
+        let small_body = "---\ntag: important\n---\n# H1\nSee [[target]]\n";
+        provider
+            .write_file("src.md", small_body.as_bytes())
+            .unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".slate"));
+        config.large_file_refuse_bytes = 300;
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+
+        // First scan: file is under the cap → full markdown indexing.
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let md_before = session.get_file_metadata("src.md").unwrap().unwrap();
+        assert!(
+            !md_before.headings.is_empty(),
+            "headings should be indexed: {:?}",
+            md_before.headings
+        );
+        assert!(
+            !md_before.properties.is_empty(),
+            "frontmatter properties should be indexed: {:?}",
+            md_before.properties
+        );
+        let outgoing_before = session.outgoing_links("src.md").unwrap();
+        assert!(
+            !outgoing_before.is_empty(),
+            "outgoing link should be indexed: {outgoing_before:?}"
+        );
+
+        // Grow the file past the cap. Use the FsVaultProvider directly
+        // so we don't have to thread the session's provider out.
+        let big_provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        let big_body = "x".repeat(500);
+        big_provider
+            .write_file("src.md", big_body.as_bytes())
+            .unwrap();
+
+        // Second scan: file is now over the cap → large-file branch.
+        let report = session.scan_initial(&CancelToken::new()).unwrap();
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("exceeds large-file refuse threshold")),
+            "expected refuse error in report.errors, got {:?}",
+            report.errors
+        );
+
+        // The file row should still exist (sidebar visibility) ...
+        let md_after = session.get_file_metadata("src.md").unwrap().unwrap();
+        // ... but every derivative table should be empty for it.
+        assert!(
+            md_after.headings.is_empty(),
+            "stale heading rows must be purged when file crosses the refuse threshold, got {:?}",
+            md_after.headings
+        );
+        assert!(
+            md_after.properties.is_empty(),
+            "stale property rows must be purged, got {:?}",
+            md_after.properties
+        );
+        let outgoing_after = session.outgoing_links("src.md").unwrap();
+        assert!(
+            outgoing_after.is_empty(),
+            "stale outgoing link rows must be purged, got {outgoing_after:?}"
+        );
     }
 
     #[test]
