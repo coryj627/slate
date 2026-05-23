@@ -62,6 +62,10 @@ pub struct SessionConfig {
     pub large_file_warn_bytes: u64,
     pub large_file_confirm_bytes: u64,
     pub large_file_refuse_bytes: u64,
+    /// Tag written into each op-log entry's `user_actor_id` field. For
+    /// the single-user V1.F build this defaults to `"local"`; multi-
+    /// device sync (V2) will plumb a real per-device identifier here.
+    pub user_actor_id: String,
 }
 
 impl SessionConfig {
@@ -79,6 +83,7 @@ impl SessionConfig {
             large_file_warn_bytes: 5 * 1024 * 1024,
             large_file_confirm_bytes: 10 * 1024 * 1024,
             large_file_refuse_bytes: 50 * 1024 * 1024,
+            user_actor_id: "local".to_string(),
         }
     }
 
@@ -151,6 +156,18 @@ pub struct NoteLoadBundle {
     pub backlinks: Page<crate::Backlink>,
     pub outgoing_links: Vec<crate::OutgoingLink>,
     pub properties: Vec<crate::Property>,
+}
+
+// --- Save report ---
+
+/// Result of a successful `save_text`. Carries the post-save state the
+/// editor needs to track unsaved-changes and feed back into the next
+/// conflict-detected save.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveReport {
+    pub new_content_hash: String,
+    pub new_size_bytes: u64,
+    pub new_mtime_ms: i64,
 }
 
 // --- Paging ---
@@ -439,6 +456,192 @@ impl VaultSession {
         String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
             path: path.to_string(),
         })
+    }
+
+    /// Save UTF-8 text to a vault-relative path, refresh the index,
+    /// and append a `WholeFileReplace` entry to that file's op-log.
+    ///
+    /// `expected_content_hash`:
+    /// - `None` → save unconditionally. Used by callers that don't
+    ///   track the on-disk hash (CLI, scripted writers).
+    /// - `Some(h)` → before writing, stat + hash the file currently
+    ///   on disk. If it doesn't match `h`, return
+    ///   `VaultError::WriteConflict` and leave the file untouched.
+    ///   This is the path the Mac editor uses to detect external
+    ///   changes between read and save.
+    ///
+    /// On success the index reflects the new state in one atomic
+    /// transaction (`files` row + `headings` + `links` + `properties`
+    /// rows replaced together; FTS5 rebuilt by the migration-006
+    /// trigger on the `body_text` update) so consumers never observe
+    /// a half-updated index. The op-log append happens after the
+    /// SQLite commit and is best-effort: a failed append logs a
+    /// warning but does not fail the save — the user's text is on
+    /// disk and indexed either way.
+    pub fn save_text(
+        &self,
+        path: &str,
+        contents: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        validate_save_path(path)?;
+
+        let new_size = contents.len() as u64;
+        if new_size > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: new_size,
+            });
+        }
+
+        // Hold the connection lock for the entire save. This both
+        // serializes the SQLite work and gives the op-log append a
+        // process-wide critical section, so two concurrent saves to
+        // the same file_id can never tear a frame.
+        let mut conn = self.conn.lock().expect("session connection mutex");
+
+        let hash_before = if let Some(expected) = expected_content_hash {
+            let (current_hash, current_mtime_ms) = compute_disk_hash(
+                self.provider.as_ref(),
+                path,
+                self.config.large_file_refuse_bytes,
+            )?;
+            if current_hash != expected {
+                return Err(VaultError::WriteConflict {
+                    current_content_hash: current_hash,
+                    expected_content_hash: expected.to_string(),
+                    current_mtime_ms,
+                });
+            }
+            current_hash
+        } else {
+            // No conflict check: the op-log still wants a
+            // `hash_before` field for future undo / merge UI, but we
+            // don't want to re-read the file just for that. The cached
+            // hash from the previous index pass is good enough.
+            conn.query_row(
+                "SELECT content_hash FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_default()
+        };
+
+        // Atomic write happens before the index update so that a
+        // subsequent SQLite failure leaves the file on disk in a
+        // consistent state. Worst case: the file is newer than the
+        // index, and the next scan picks it up via mtime/size/ctime.
+        self.provider.write_file(path, contents.as_bytes())?;
+
+        let new_stat = self.provider.stat(path)?;
+        let new_hash = crate::vault::content_hash(contents.as_bytes());
+
+        let now = now_ms();
+        let (name, extension, is_markdown) = classify_path(path);
+
+        // Body text for FTS5: only markdown gets indexed; everything
+        // else stores "" so the trigger on `body_text` makes the
+        // file_fts row consistent (or absent, via is_markdown gating
+        // in the migration-006 triggers).
+        let body_text: &str = if is_markdown { contents } else { "" };
+
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO files
+                (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                 content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(path) DO UPDATE SET
+                name           = excluded.name,
+                extension      = excluded.extension,
+                size_bytes     = excluded.size_bytes,
+                mtime_ms       = excluded.mtime_ms,
+                ctime_ms       = excluded.ctime_ms,
+                content_hash   = excluded.content_hash,
+                parser_version = excluded.parser_version,
+                indexed_at_ms  = excluded.indexed_at_ms,
+                is_markdown    = excluded.is_markdown,
+                body_text      = excluded.body_text",
+            rusqlite::params![
+                path,
+                name,
+                extension,
+                new_stat.size_bytes as i64,
+                new_stat.mtime_ms,
+                new_stat.ctime_ms,
+                new_hash,
+                self.config.parser_version,
+                now,
+                is_markdown as i64,
+                body_text,
+            ],
+        )?;
+        let file_id: i64 = tx.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| row.get(0),
+        )?;
+        if is_markdown {
+            // Build a fresh path index from SQLite so link
+            // resolution sees every currently-known file (including
+            // any rows the upsert above just added). This is one
+            // O(N) query per save — N is the indexed-file count,
+            // which is bounded by the vault size. Acceptable for
+            // V1.F; can become an incrementally-maintained snapshot
+            // if save_text ever shows up in profiles.
+            let vault_index = crate::InMemoryVaultIndex::new(
+                tx.prepare("SELECT path FROM files")?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            replace_headings(&tx, file_id, contents)?;
+            crate::links_db::replace_links_for_file(&tx, file_id, path, contents, &vault_index)?;
+            crate::properties_db::replace_properties_for_file(&tx, file_id, contents)?;
+        }
+        tx.commit()?;
+
+        // Op-log append: best-effort. A logging-disk hiccup must not
+        // throw away the user's just-saved text.
+        let entry = crate::oplog::OpLogEntry {
+            timestamp_ms: now,
+            user_actor_id: self.config.user_actor_id.clone(),
+            op_kind: crate::oplog::OpKind::WholeFileReplace,
+            content_hash_before: hash_before,
+            content_hash_after: new_hash.clone(),
+            payload_bytes: contents.as_bytes().to_vec(),
+        };
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
+            eprintln!("warning: oplog append failed for file_id={file_id} at {path:?}: {e}");
+        }
+
+        Ok(SaveReport {
+            new_content_hash: new_hash,
+            new_size_bytes: new_stat.size_bytes,
+            new_mtime_ms: new_stat.mtime_ms,
+        })
+    }
+
+    /// Read every well-formed op-log entry recorded for `path`.
+    ///
+    /// Returns `Ok(Vec::new())` if the path isn't indexed yet or has
+    /// never been saved through `save_text`. A torn trailing entry
+    /// (e.g. crash mid-append) is silently dropped; the returned
+    /// vector is the well-formed prefix.
+    pub fn read_oplog(&self, path: &str) -> Result<Vec<crate::oplog::OpLogEntry>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        drop(conn);
+        let Some(file_id) = file_id else {
+            return Ok(Vec::new());
+        };
+        crate::oplog::read_oplog(&self.config.cache_dir, file_id).map_err(VaultError::Io)
     }
 
     /// Page through the indexed files.
@@ -1179,6 +1382,108 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+// --- Internal: save_text helpers ---
+
+/// Reject `save_text` paths that can't refer to a real vault file —
+/// empties, lone `.`, absolutes, `..`. The provider's
+/// `resolve_for_mutation` enforces the same rules at write time, but
+/// rejecting up-front means a `save_text("", b"x", Some(hash))` call
+/// fails as `InvalidPath` rather than tripping a read-side IO error
+/// during the conflict check.
+fn validate_save_path(path: &str) -> Result<(), VaultError> {
+    use std::path::{Component, Path};
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return Err(VaultError::InvalidPath {
+            path: path.to_string(),
+            reason: "absolute paths are not allowed; vault-relative only".into(),
+        });
+    }
+    let mut has_normal = false;
+    for component in p.components() {
+        match component {
+            Component::Normal(_) => has_normal = true,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(VaultError::InvalidPath {
+                    path: path.to_string(),
+                    reason: "parent-directory references (..) are not allowed".into(),
+                });
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(VaultError::InvalidPath {
+                    path: path.to_string(),
+                    reason: "absolute paths and platform prefixes are not allowed".into(),
+                });
+            }
+        }
+    }
+    if !has_normal {
+        return Err(VaultError::InvalidPath {
+            path: path.to_string(),
+            reason: "save requires a non-empty vault-relative path".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Stat + hash a file currently on disk. Used by `save_text`'s
+/// conflict-detection path. A missing file returns `("", 0)` so the
+/// caller can compare against an empty `expected_content_hash` (the
+/// "save as new file" idiom).
+///
+/// Bounded by the same `large_file_refuse_bytes` cap as `read_text`:
+/// if the file genuinely exceeds the threshold we surface
+/// `FileTooLarge` and abort rather than allocating arbitrarily large
+/// buffers to compute a hash we're about to compare.
+fn compute_disk_hash(
+    provider: &dyn crate::VaultProvider,
+    path: &str,
+    limit: u64,
+) -> Result<(String, i64), VaultError> {
+    use std::io;
+    let stat = match provider.stat(path) {
+        Ok(s) => s,
+        Err(VaultError::Io(io_err)) if io_err.kind() == io::ErrorKind::NotFound => {
+            return Ok((String::new(), 0));
+        }
+        Err(e) => return Err(e),
+    };
+    if stat.size_bytes > limit {
+        return Err(VaultError::FileTooLarge {
+            path: path.to_string(),
+            size: stat.size_bytes,
+        });
+    }
+    let bytes = provider.read_file_with_cap(path, limit)?;
+    if (bytes.len() as u64) > limit {
+        return Err(VaultError::FileTooLarge {
+            path: path.to_string(),
+            size: bytes.len() as u64,
+        });
+    }
+    Ok((crate::vault::content_hash(&bytes), stat.mtime_ms))
+}
+
+/// Pull `(name, extension, is_markdown)` from a vault-relative path
+/// using the same rules as the scanner. Kept in one place so save
+/// and scan can't drift on what counts as a Markdown file.
+fn classify_path(path: &str) -> (String, Option<String>, bool) {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string());
+    let extension = std::path::Path::new(&name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let is_markdown = matches!(
+        extension.as_deref(),
+        Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
+    );
+    (name, extension, is_markdown)
 }
 
 #[cfg(test)]
@@ -3437,5 +3742,446 @@ mod tests {
             .unwrap();
         }
         assert_eq!(fts_match_count(&session, "newlysearchabletext"), 1);
+    }
+
+    // ----- save_text + read_oplog -----
+
+    #[test]
+    fn save_text_round_trips_content_through_read_text() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"old contents").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let report = session
+            .save_text("note.md", "# Brand new\n\nBody.\n", None)
+            .unwrap();
+        assert!(!report.new_content_hash.is_empty());
+        assert_eq!(
+            report.new_size_bytes as usize,
+            "# Brand new\n\nBody.\n".len()
+        );
+        assert!(report.new_mtime_ms > 0);
+
+        let back = session.read_text("note.md").unwrap();
+        assert_eq!(back, "# Brand new\n\nBody.\n");
+    }
+
+    #[test]
+    fn save_text_updates_content_hash_in_index() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"v1").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let before = session
+            .get_file_metadata("note.md")
+            .unwrap()
+            .unwrap()
+            .content_hash;
+
+        session.save_text("note.md", "v2 contents", None).unwrap();
+
+        let after = session
+            .get_file_metadata("note.md")
+            .unwrap()
+            .unwrap()
+            .content_hash;
+        assert_ne!(before, after, "save must refresh the cached content hash");
+        assert_eq!(after, crate::vault::content_hash(b"v2 contents"));
+    }
+
+    #[test]
+    fn save_text_replaces_headings_in_index() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"# Old heading\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let before = session
+            .get_file_metadata("note.md")
+            .unwrap()
+            .unwrap()
+            .headings;
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].text, "Old heading");
+
+        session
+            .save_text("note.md", "# New heading\n\n## Sub\n\n### Deeper\n", None)
+            .unwrap();
+
+        let after = session
+            .get_file_metadata("note.md")
+            .unwrap()
+            .unwrap()
+            .headings;
+        let texts: Vec<&str> = after.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, vec!["New heading", "Sub", "Deeper"]);
+    }
+
+    #[test]
+    fn save_text_creates_files_row_for_brand_new_path() {
+        // No scan_initial, no pre-existing row: save_text should
+        // insert one rather than failing.
+        let (_tmp, session) = make_vault(|_| {});
+
+        let report = session
+            .save_text("brand-new.md", "# Hello\n", None)
+            .unwrap();
+        assert!(!report.new_content_hash.is_empty());
+
+        let md = session.get_file_metadata("brand-new.md").unwrap().unwrap();
+        assert!(md.is_markdown);
+        assert_eq!(md.headings.len(), 1);
+        assert_eq!(md.headings[0].text, "Hello");
+    }
+
+    #[test]
+    fn save_text_rejects_empty_path_even_with_expected_hash() {
+        // The conflict-check path stats the file first, which would
+        // otherwise return an IO error on the vault root. Validation
+        // up-front makes empty-path saves uniformly InvalidPath.
+        let (_tmp, session) = make_vault(|_| {});
+        for expected in [None, Some("")] {
+            match session.save_text("", "x", expected) {
+                Err(VaultError::InvalidPath { .. }) => {}
+                other => panic!("expected InvalidPath for empty path, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn save_text_rejects_dot_path() {
+        let (_tmp, session) = make_vault(|_| {});
+        match session.save_text(".", "x", None) {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath for '.', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_text_rejects_parent_traversal() {
+        let (_tmp, session) = make_vault(|_| {});
+        match session.save_text("../escape.md", "x", None) {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath for '..', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_text_rejects_absolute_path() {
+        let (_tmp, session) = make_vault(|_| {});
+        match session.save_text("/etc/passwd", "x", None) {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath for absolute path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_text_refuses_oversize_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = SessionConfig::new(tmp.path().join(".yana"));
+        config.large_file_refuse_bytes = 16;
+        let provider = Arc::new(FsVaultProvider::new(tmp.path().to_path_buf()));
+        let session = VaultSession::open(provider, config).unwrap();
+
+        let big = "x".repeat(32);
+        match session.save_text("big.md", &big, None) {
+            Err(VaultError::FileTooLarge { path, size }) => {
+                assert_eq!(path, "big.md");
+                assert_eq!(size, 32);
+            }
+            other => panic!("expected FileTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_text_with_no_expected_hash_saves_unconditionally() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"v1").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        session.save_text("note.md", "v2", None).unwrap();
+        assert_eq!(session.read_text("note.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn save_text_with_matching_expected_hash_proceeds() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"v1").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let on_disk_hash = crate::vault::content_hash(b"v1");
+        session
+            .save_text("note.md", "v2", Some(&on_disk_hash))
+            .unwrap();
+        assert_eq!(session.read_text("note.md").unwrap(), "v2");
+    }
+
+    #[test]
+    fn save_text_returns_write_conflict_on_stale_expected_hash() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"v1").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Simulate an external writer that changed the file behind our
+        // back: rewrite v1 → external between the (caller-supplied)
+        // expected hash and the save call.
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider.write_file("note.md", b"external write").unwrap();
+
+        // Caller still thinks the file holds "v1".
+        let stale = crate::vault::content_hash(b"v1");
+        let current_disk = crate::vault::content_hash(b"external write");
+        match session.save_text("note.md", "my version", Some(&stale)) {
+            Err(VaultError::WriteConflict {
+                current_content_hash,
+                expected_content_hash,
+                current_mtime_ms,
+            }) => {
+                assert_eq!(current_content_hash, current_disk);
+                assert_eq!(expected_content_hash, stale);
+                assert!(current_mtime_ms > 0);
+            }
+            other => panic!("expected WriteConflict, got {other:?}"),
+        }
+
+        // File on disk is unchanged.
+        assert_eq!(session.read_text("note.md").unwrap(), "external write");
+    }
+
+    #[test]
+    fn save_text_with_empty_expected_hash_creates_new_file() {
+        // "I expect this file to NOT exist yet" → expected_hash="".
+        // Should succeed and create the file.
+        let (_tmp, session) = make_vault(|_| {});
+        let report = session.save_text("new.md", "# Hello\n", Some("")).unwrap();
+        assert!(!report.new_content_hash.is_empty());
+        assert_eq!(session.read_text("new.md").unwrap(), "# Hello\n");
+    }
+
+    #[test]
+    fn save_text_with_expected_hash_against_missing_file_conflicts() {
+        // Caller claims the file holds a known hash, but it doesn't
+        // exist on disk → conflict (current_hash = "").
+        let (_tmp, session) = make_vault(|_| {});
+        let stale = crate::vault::content_hash(b"v1");
+        match session.save_text("ghost.md", "v2", Some(&stale)) {
+            Err(VaultError::WriteConflict {
+                current_content_hash,
+                expected_content_hash,
+                current_mtime_ms,
+            }) => {
+                assert_eq!(current_content_hash, "");
+                assert_eq!(expected_content_hash, stale);
+                assert_eq!(current_mtime_ms, 0);
+            }
+            other => panic!("expected WriteConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_oplog_records_one_entry_per_save() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"v0").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        session.save_text("note.md", "v1", None).unwrap();
+        session.save_text("note.md", "v2", None).unwrap();
+        session.save_text("note.md", "v3", None).unwrap();
+
+        let entries = session.read_oplog("note.md").unwrap();
+        assert_eq!(entries.len(), 3);
+        let payloads: Vec<&[u8]> = entries.iter().map(|e| e.payload_bytes.as_slice()).collect();
+        assert_eq!(payloads, vec![b"v1" as &[u8], b"v2", b"v3"]);
+    }
+
+    #[test]
+    fn oplog_entry_carries_hashes_and_actor_id() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"before").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let hash_before = crate::vault::content_hash(b"before");
+
+        session.save_text("note.md", "after", None).unwrap();
+
+        let entries = session.read_oplog("note.md").unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.user_actor_id, "local");
+        assert!(matches!(entry.op_kind, crate::OpKind::WholeFileReplace));
+        assert_eq!(entry.content_hash_before, hash_before);
+        assert_eq!(
+            entry.content_hash_after,
+            crate::vault::content_hash(b"after")
+        );
+        assert_eq!(entry.payload_bytes, b"after");
+        assert!(entry.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn read_oplog_returns_empty_for_path_not_in_index() {
+        let (_tmp, session) = make_vault(|_| {});
+        let entries = session.read_oplog("never-saved.md").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn save_report_fields_match_post_save_state() {
+        let (_tmp, session) = make_vault(|_| {});
+        let report = session
+            .save_text("note.md", "exactly twelve", None)
+            .unwrap();
+        assert_eq!(report.new_size_bytes, "exactly twelve".len() as u64);
+        assert_eq!(
+            report.new_content_hash,
+            crate::vault::content_hash(b"exactly twelve")
+        );
+
+        let md = session.get_file_metadata("note.md").unwrap().unwrap();
+        assert_eq!(md.mtime_ms, report.new_mtime_ms);
+        assert_eq!(md.size_bytes, report.new_size_bytes);
+        assert_eq!(md.content_hash, report.new_content_hash);
+    }
+
+    #[test]
+    fn save_text_refreshes_links_and_properties_and_fts_in_one_transaction() {
+        // Acceptance from #60: "Replace headings, properties, links
+        // rows for that file in the same transaction so consumers
+        // never observe a half-updated index." Verifies all four
+        // tables (files, headings, links, properties) plus FTS5
+        // reflect the new content after a single save_text call.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("target.md", b"# Target\n").unwrap();
+            p.write_file("note.md", b"# Old\n\n[[target]]\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Sanity: pre-save state.
+        assert_eq!(fts_match_count(&session, "rewritten"), 0);
+
+        session
+            .save_text(
+                "note.md",
+                // Frontmatter is intentionally separated from the
+                // first ATX heading by a blank line so pulldown-cmark
+                // doesn't fold the closing `---` into a setext header
+                // — that pre-parse interaction lives in the
+                // frontmatter-stripping work-stream, not save_text.
+                "---\ntags:\n  - rewritten\n  - edited\nstatus: published\n---\n\n# Rewritten\n\nNew body mentions [[target]] twice and links to [[ghost]].\n",
+                None,
+            )
+            .unwrap();
+
+        // FTS5 picks up the new body.
+        assert!(
+            fts_match_count(&session, "rewritten") >= 1,
+            "FTS row must reflect the new body_text"
+        );
+
+        // Headings replaced. The old "Old" heading must be gone and
+        // the new "Rewritten" heading must be present; we don't
+        // assert exact-list equality because the frontmatter parse
+        // can interact with heading detection in ways unrelated to
+        // save_text's contract.
+        let md = session.get_file_metadata("note.md").unwrap().unwrap();
+        let heading_texts: Vec<String> = md.headings.iter().map(|h| h.text.clone()).collect();
+        assert!(
+            heading_texts.iter().any(|t| t == "Rewritten"),
+            "expected 'Rewritten' in {heading_texts:?}"
+        );
+        assert!(
+            !heading_texts.iter().any(|t| t == "Old"),
+            "stale 'Old' heading should be gone, got {heading_texts:?}"
+        );
+
+        // Properties refreshed.
+        let conn = session.conn.lock().unwrap();
+        let prop_keys: Vec<String> = conn
+            .prepare(
+                "SELECT key FROM properties p
+                 JOIN files f ON f.id = p.file_id
+                 WHERE f.path = ?1
+                 ORDER BY key",
+            )
+            .unwrap()
+            .query_map(rusqlite::params!["note.md"], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(prop_keys.contains(&"tags".to_string()));
+        assert!(prop_keys.contains(&"status".to_string()));
+
+        // Links refreshed. The new body links to "target" (resolves)
+        // and "ghost" (unresolved); the old single link is gone.
+        let link_targets: Vec<Option<String>> = conn
+            .prepare(
+                "SELECT target_path FROM links l
+                 JOIN files f ON f.id = l.source_file_id
+                 WHERE f.path = ?1
+                 ORDER BY ordinal",
+            )
+            .unwrap()
+            .query_map(rusqlite::params!["note.md"], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(link_targets.len(), 2, "one [[target]] + one [[ghost]]");
+        // target.md is indexed → resolves; ghost.md doesn't exist → NULL.
+        let resolved_count = link_targets.iter().filter(|t| t.is_some()).count();
+        let unresolved_count = link_targets.iter().filter(|t| t.is_none()).count();
+        assert_eq!(resolved_count, 1);
+        assert_eq!(unresolved_count, 1);
+    }
+
+    #[test]
+    fn concurrent_saves_do_not_tear_oplog_entries() {
+        // Two threads each issuing many saves against the same file.
+        // The session's connection mutex serializes the SQL + op-log
+        // append, so the final op-log should contain exactly the
+        // expected number of well-formed entries with no torn frames.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("hot.md", b"seed").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let session = Arc::new(session);
+
+        const SAVES_PER_THREAD: usize = 50;
+        let s1 = Arc::clone(&session);
+        let s2 = Arc::clone(&session);
+        let t1 = std::thread::spawn(move || {
+            for i in 0..SAVES_PER_THREAD {
+                s1.save_text("hot.md", &format!("thread-1 iter-{i}"), None)
+                    .unwrap();
+            }
+        });
+        let t2 = std::thread::spawn(move || {
+            for i in 0..SAVES_PER_THREAD {
+                s2.save_text("hot.md", &format!("thread-2 iter-{i}"), None)
+                    .unwrap();
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let entries = session.read_oplog("hot.md").unwrap();
+        assert_eq!(
+            entries.len(),
+            SAVES_PER_THREAD * 2,
+            "every save must produce exactly one intact op-log entry"
+        );
+        for entry in &entries {
+            assert!(matches!(entry.op_kind, crate::OpKind::WholeFileReplace));
+            assert!(!entry.content_hash_after.is_empty());
+            // Payload string starts with "thread-1 " or "thread-2 ".
+            let payload = std::str::from_utf8(&entry.payload_bytes).unwrap();
+            assert!(
+                payload.starts_with("thread-1 ") || payload.starts_with("thread-2 "),
+                "unexpected payload {payload:?}"
+            );
+        }
     }
 }

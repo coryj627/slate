@@ -11,6 +11,7 @@ pub mod frontmatter;
 pub mod link_resolver;
 pub mod links;
 pub mod links_db;
+pub mod oplog;
 pub mod properties_db;
 pub mod search_db;
 pub mod session;
@@ -26,10 +27,11 @@ pub use frontmatter::{
 pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultIndex};
 pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
+pub use oplog::{OpKind, OpLogEntry};
 
 pub use session::{
-    CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging, ScanProgress,
-    ScanProgressListener, ScanReport, SessionConfig, VaultSession,
+    CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging, SaveReport,
+    ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
     content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,
@@ -76,6 +78,21 @@ pub enum VaultError {
     /// "feature not landed yet" (#93 item 2).
     #[error("operation not supported yet: {feature}")]
     Unsupported { feature: String },
+
+    /// Returned from `save_text` when an `expected_content_hash` was
+    /// supplied and the on-disk file no longer matches it — i.e. an
+    /// external writer changed the file between the editor's read
+    /// and the editor's save. The current state is surfaced so the
+    /// UI can offer "Keep mine / Reload from disk" without re-reading.
+    #[error(
+        "write conflict: file has been modified since it was read \
+         (expected hash {expected_content_hash:?}, current hash {current_content_hash:?})"
+    )]
+    WriteConflict {
+        current_content_hash: String,
+        expected_content_hash: String,
+        current_mtime_ms: i64,
+    },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so
