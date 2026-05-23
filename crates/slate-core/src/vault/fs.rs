@@ -34,9 +34,10 @@ impl FsVaultProvider {
         Self { root }
     }
 
-    /// Read the file at `relative` and return its blake3 hex digest.
-    /// Convenience for the indexer; not part of the `VaultProvider`
-    /// trait so it can stay desktop-specific.
+    /// Read the file at `relative` and return its canonical content
+    /// hash (see [`content_hash`] for the contract). Convenience for
+    /// the indexer; not part of the `VaultProvider` trait so it can
+    /// stay desktop-specific.
     pub fn content_hash_for(&self, relative: &str) -> Result<String, VaultError> {
         let bytes = self.read_file(relative)?;
         Ok(content_hash(&bytes))
@@ -72,8 +73,19 @@ impl FsVaultProvider {
     }
 }
 
-/// Compute the blake3 hex digest of a byte slice. Used for vault file
-/// content-hash columns, cache-keying, and conflict detection.
+/// Compute the canonical content hash of a byte slice.
+///
+/// **Contract** (relied on across modules — change this and audit
+/// every call site):
+/// - Algorithm: blake3.
+/// - Output: lowercase hex, exactly 64 characters (256 bits).
+/// - Deterministic and length-preserving across runs and platforms.
+///
+/// Used for the `files.content_hash` column, save-flow conflict
+/// detection, and the op-log [`crate::oplog::body_checksum`] which
+/// truncates the leading 8 hex chars to a `u32`. The hex-string
+/// contract is what lets `body_checksum` skip a re-hash and just
+/// parse nibbles directly.
 pub fn content_hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }

@@ -61,6 +61,15 @@ brew install --HEAD cvs-health/ios-swiftui-accessibility-techniques/a11y-check
 
 Bootstrap simplicity. SwiftPM with a single `executableTarget` + `@main App` gives a real SwiftUI window without `.xcodeproj` bookkeeping. When the project needs proper distribution — code signing, sandbox entitlements, `.app` bundle metadata, Info.plist — it'll graduate to an Xcode project alongside this one (or replacing it).
 
+## Consuming the FFI from Swift
+
+This app calls into the Rust core through the types defined in [`crates/slate-uniffi`](../../crates/slate-uniffi/README.md#ffi-surface) — see that README for the full surface. A few types deserve special attention on the Mac side because they drive UI patterns:
+
+- **`CancelToken`** — pass into long-running calls (scans, full-text search). Hold a clone on the `AppState` actor so the UI can cancel without re-entering the call.
+- **`ScanProgressListener`** — Swift callback trait. Implement it (`ScanProgressAdapter` does) to update the scan strip / progress UI as files index.
+- **`SaveReport`** — returned by `save_text`. Carries the new `content_hash` and op-log id; surface conflicts (`VaultError::WriteConflict`) via the save-conflict resolver UI.
+- **`VaultError`** — surfaces as `throws` on every Swift call. Map known variants (`Cancelled`, `FileTooLarge`, `WriteConflict`) explicitly; fall back to a generic accessible alert for the rest.
+
 ## Why two Sources directories
 
 `Sources/slate_uniffiFFI/` is a `systemLibrary` target that exposes the uniffi-generated C header to Swift via a `module.modulemap`. `Sources/SlateMac/` is the SwiftUI executable target that imports `slate_uniffiFFI`. SwiftPM requires this split because the C header can't live in the same target as Swift sources.

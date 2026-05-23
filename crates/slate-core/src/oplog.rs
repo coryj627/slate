@@ -342,10 +342,14 @@ fn push_u16_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
 
 fn body_checksum(body: &[u8]) -> u32 {
     let hash = content_hash(body);
-    // content_hash returns blake3 hex (64 chars). Take the first 8 hex
-    // characters → 4 bytes → u32 LE. Cheap, no extra dependency, and
-    // collisions on a 32-bit window are still vanishingly unlikely for
-    // detecting accidental truncation.
+    // Take the first 8 hex characters → 4 bytes → u32 LE. Cheap, no
+    // extra dependency, and collisions on a 32-bit window are still
+    // vanishingly unlikely for detecting accidental truncation.
+    //
+    // Relies on `content_hash`'s contract (see `vault::fs::content_hash`):
+    // lowercase blake3 hex, exactly 64 characters. If that contract
+    // ever changes, this slice + the lowercase-only `hex_nibble`
+    // fallback below need to be revisited.
     let head = &hash.as_bytes()[..8];
     let mut nibbles = [0u8; 4];
     for (i, pair) in head.chunks_exact(2).enumerate() {
@@ -359,7 +363,7 @@ fn hex_nibble(c: u8) -> u8 {
         b'0'..=b'9' => c - b'0',
         b'a'..=b'f' => c - b'a' + 10,
         b'A'..=b'F' => c - b'A' + 10,
-        _ => 0, // content_hash always yields lowercase hex; this branch is unreachable
+        _ => 0, // `content_hash` always yields lowercase hex (see its docstring); this branch is unreachable
     }
 }
 
