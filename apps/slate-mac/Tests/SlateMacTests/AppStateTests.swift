@@ -25,12 +25,20 @@ final class AppStateTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    private func makeAppState(seedEntries: [RecentVault] = []) throws -> AppState {
+    private func makeAppState(
+        seedEntries: [RecentVault] = [],
+        externalOpener: @escaping (URL) -> Bool = { _ in true }
+    ) throws -> AppState {
         let store = RecentVaultsStore(fileURL: storeFile)
         if !seedEntries.isEmpty {
             try store.save(seedEntries)
         }
-        return AppState(recentsStore: store)
+        // Default test opener swallows the URL and reports success so
+        // `state.openLink(externalLink)` can exercise the "opened"
+        // branch without spawning the developer's default browser.
+        // Tests that care which URL was passed inject a recording
+        // closure of their own.
+        return AppState(recentsStore: store, externalOpener: externalOpener)
     }
 
     func testInitLoadsExistingRecentsFromStore() throws {
@@ -1204,21 +1212,42 @@ final class AppStateTests: XCTestCase {
     }
 
     func testOpenExternalLinkDoesNotChangeSelection() throws {
-        // We can't reliably assert NSWorkspace.open() succeeded in a
-        // headless test (no LaunchServices), so the test asserts on
-        // the outcome enum which routes through either `openedExternal`
-        // or `externalOpenFailed`. Either way, selectedFilePath stays
-        // untouched.
-        let state = try makeAppState()
+        // The default test opener swallows the URL and reports
+        // success, so this asserts the full happy path: the URL
+        // reaches the opener with the bytes the user clicked,
+        // selectedFilePath stays untouched, and the outcome enum
+        // records `.openedExternal`. Previously this test relied on
+        // calling `NSWorkspace.shared.open` directly, which actually
+        // launched the user's default browser on every local
+        // `swift test` run.
+        var opened: [URL] = []
+        let state = try makeAppState(externalOpener: { url in
+            opened.append(url)
+            return true
+        })
         let link = makeOutgoing(targetRaw: "https://example.com", isExternal: true)
         state.openLink(link)
         XCTAssertNil(state.selectedFilePath)
-        switch state.lastActivatedLinkOutcome {
-        case .openedExternal, .externalOpenFailed:
-            break
-        case let other:
-            XCTFail("expected external outcome, got \(String(describing: other))")
-        }
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com"])
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .openedExternal("https://example.com")
+        )
+    }
+
+    func testOpenExternalLinkRecordsFailureWhenOpenerReturnsFalse() throws {
+        // The opener returning false models LaunchServices declining
+        // (no handler registered, sandbox refusal, etc.). The outcome
+        // enum should switch to `.externalOpenFailed` so the UI can
+        // surface the right announcement to VoiceOver.
+        let state = try makeAppState(externalOpener: { _ in false })
+        let link = makeOutgoing(targetRaw: "https://example.com", isExternal: true)
+        state.openLink(link)
+        XCTAssertNil(state.selectedFilePath)
+        XCTAssertEqual(
+            state.lastActivatedLinkOutcome,
+            .externalOpenFailed("https://example.com")
+        )
     }
 
     func testOpenExternalLinkRejectsDisallowedSchemes() throws {
