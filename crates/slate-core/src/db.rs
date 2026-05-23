@@ -80,6 +80,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "properties: value_text_norm + list-element side table",
         sql: include_str!("../migrations/007_properties_value_norm.sql"),
     },
+    Migration {
+        description: "tasks: per-file Markdown task items",
+        sql: include_str!("../migrations/008_tasks.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

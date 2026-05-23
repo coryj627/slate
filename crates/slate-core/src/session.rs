@@ -613,6 +613,7 @@ impl VaultSession {
             replace_headings(&tx, file_id, contents)?;
             crate::links_db::replace_links_for_file(&tx, file_id, path, contents, &vault_index)?;
             crate::properties_db::replace_properties_for_file(&tx, file_id, contents)?;
+            crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
         }
         tx.commit()?;
 
@@ -745,6 +746,85 @@ impl VaultSession {
     ) -> Result<Page<FileSummary>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::properties_db::files_with_property(&conn, key, value, paging)
+    }
+
+    /// Every task parsed from `path`, in document order. Returns an
+    /// empty vec when the file isn't indexed yet or has no tasks.
+    pub fn tasks_for_file(&self, path: &str) -> Result<Vec<crate::TaskItem>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::tasks_db::tasks_for_file(&conn, path)
+    }
+
+    /// Replace one character — the `[X]` status — on a single task
+    /// line, atomically. Routes through `save_text` so the same
+    /// content-hash conflict detection, atomic temp+rename write,
+    /// index refresh, and op-log append all fire as for a normal
+    /// editor save.
+    ///
+    /// `ordinal` is the 0-based task-in-document index returned by
+    /// `tasks_for_file` / `tasks_in_vault`. Stable across saves for
+    /// a given parser version: the same source text yields the same
+    /// ordinals, so the caller's stored ordinal stays valid for as
+    /// long as the file hasn't been externally edited in a way that
+    /// shifts the task layout.
+    ///
+    /// Errors:
+    ///   - `InvalidArgument` when `ordinal` is out of range or the
+    ///     task line can't be located (parser drift; the file is
+    ///     left untouched).
+    ///   - `WriteConflict` (via `save_text`) when
+    ///     `expected_content_hash = Some(h)` and the file's current
+    ///     hash on disk doesn't match.
+    pub fn toggle_task_status(
+        &self,
+        path: &str,
+        ordinal: u32,
+        new_status_char: char,
+        expected_content_hash: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        validate_save_path(path)?;
+
+        let contents = self.read_text(path)?;
+        let tasks = crate::extract_tasks(&contents);
+        let task = tasks.iter().find(|t| t.ordinal == ordinal).ok_or_else(|| {
+            VaultError::InvalidArgument {
+                message: format!("no task at ordinal {ordinal} in {path:?}"),
+            }
+        })?;
+
+        let bracket_idx = find_status_char_byte_offset(&contents, task.byte_offset as usize)
+            .ok_or_else(|| VaultError::InvalidArgument {
+                message: format!(
+                    "could not locate `[X]` brackets at ordinal {ordinal} in {path:?}"
+                ),
+            })?;
+
+        // Replace exactly the status character — preserve indentation,
+        // bullet, post-bracket spacing, task text, and metadata
+        // markers byte-for-byte.
+        let mut new_contents = String::with_capacity(contents.len() + 4);
+        new_contents.push_str(&contents[..bracket_idx]);
+        new_contents.push(new_status_char);
+        let old_char = contents[bracket_idx..]
+            .chars()
+            .next()
+            .expect("status char position was just confirmed in find_status_char_byte_offset");
+        new_contents.push_str(&contents[bracket_idx + old_char.len_utf8()..]);
+
+        self.save_text(path, &new_contents, expected_content_hash)
+    }
+
+    /// Paged vault-wide task query. Results are ordered
+    /// `(due_ms ASC NULLS LAST, priority DESC NULLS LAST,
+    /// file path, ordinal ASC)` — overdue/today/soon first, then
+    /// prioritised, then alphabetically.
+    pub fn tasks_in_vault(
+        &self,
+        filter: crate::TaskFilter,
+        paging: Paging,
+    ) -> Result<Page<crate::TaskWithLocation>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::tasks_db::tasks_in_vault(&conn, filter, paging)
     }
 
     /// Run a full-text search across the vault. `scope` lets callers
@@ -1376,6 +1456,7 @@ fn index_markdown_derivatives(
     replace_headings(tx, file_id, body_text)?;
     crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
+    crate::tasks_db::replace_tasks_for_file(tx, file_id, body_text)?;
     Ok(())
 }
 
@@ -1388,6 +1469,44 @@ fn index_markdown_derivatives(
 /// Each underlying `replace_*` function DELETEs first and skips its
 /// INSERT loop when the source body is empty, so passing `""` is
 /// the canonical "purge but leave the files row" idiom.
+/// Given the start byte offset of a task's line in `source`, return
+/// the byte offset of the status character (the `X` between `[` and
+/// `]`). Mirrors the prefix-matching shape of
+/// `crate::tasks::parse_task_line`: skip leading whitespace, bullet,
+/// post-bullet whitespace, then `[`. Returns `None` only when the
+/// line doesn't actually match the task shape — which shouldn't
+/// happen if the caller derived `line_start` from a parsed
+/// `TaskItem`, but the option keeps `toggle_task_status` honest
+/// against an unexpected parser drift.
+fn find_status_char_byte_offset(source: &str, line_start: usize) -> Option<usize> {
+    if line_start > source.len() {
+        return None;
+    }
+    let tail = &source[line_start..];
+    let line_end = tail.find('\n').unwrap_or(tail.len());
+    let line = &tail[..line_end];
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i >= bytes.len() || !matches!(bytes[i], b'-' | b'*' | b'+') {
+        return None;
+    }
+    i += 1;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b'[' {
+        return None;
+    }
+    i += 1;
+    if i >= bytes.len() {
+        return None;
+    }
+    Some(line_start + i)
+}
+
 fn purge_markdown_derivatives(
     tx: &rusqlite::Transaction,
     file_id: i64,
@@ -1397,6 +1516,7 @@ fn purge_markdown_derivatives(
     replace_headings(tx, file_id, "")?;
     crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
+    crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
     Ok(())
 }
 
@@ -1656,6 +1776,7 @@ fn classify_path(path: &str) -> (String, Option<String>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
     use std::sync::atomic::AtomicU32;
 
     fn make_vault(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
@@ -4588,5 +4709,452 @@ mod tests {
             Err(VaultError::InvalidPath { .. }) => {}
             other => panic!("expected InvalidPath, got {other:?}"),
         }
+    }
+
+    // --- Tasks table integration (Milestone G) ---
+
+    /// Snapshot every task row for a path. Comparing whole snapshots
+    /// makes "table didn't churn" tests trivial.
+    type TaskSnapshotRow = (u32, char, bool, String, Option<i64>, Option<i32>);
+    fn tasks_snapshot(session: &VaultSession, path: &str) -> Vec<TaskSnapshotRow> {
+        session
+            .tasks_for_file(path)
+            .unwrap()
+            .into_iter()
+            .map(|t| {
+                (
+                    t.ordinal,
+                    t.status_char,
+                    t.completed,
+                    t.text,
+                    t.due_ms,
+                    t.priority,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_populates_tasks_table_from_markdown_body() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "notes/todos.md",
+                b"# To do\n\n- [ ] open\n- [x] done\n- [/] doing\n",
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let tasks = session.tasks_for_file("notes/todos.md").unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].status_char, ' ');
+        assert_eq!(tasks[1].status_char, 'x');
+        assert!(tasks[1].completed);
+        assert_eq!(tasks[2].status_char, '/');
+        assert!(!tasks[2].completed);
+    }
+
+    #[test]
+    fn save_text_rewrites_tasks_table_on_edit() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("notes/n.md", b"- [ ] a\n- [ ] b\n- [ ] c\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(session.tasks_for_file("notes/n.md").unwrap().len(), 3);
+
+        // Toggle b → done and drop c entirely.
+        session
+            .save_text("notes/n.md", "- [ ] a\n- [x] b\n", None)
+            .unwrap();
+        let after = session.tasks_for_file("notes/n.md").unwrap();
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0].status_char, ' ');
+        assert_eq!(after[1].status_char, 'x');
+        assert_eq!(after[1].text, "b");
+    }
+
+    #[test]
+    fn fast_path_rescan_does_not_touch_tasks_table() {
+        // Mirror of `fast_path_does_not_rewrite_links` — an unchanged
+        // file must not churn the tasks rows. We capture a snapshot,
+        // rescan, snapshot again, and compare for byte-level identity.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "notes/t.md",
+                "- [ ] alpha 📅 2026-06-01 ⏫\n- [x] beta\n".as_bytes(),
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let before = tasks_snapshot(&session, "notes/t.md");
+        assert_eq!(before.len(), 2);
+
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let after = tasks_snapshot(&session, "notes/t.md");
+        assert_eq!(after, before, "fast path must not touch tasks");
+    }
+
+    #[test]
+    fn scan_picks_up_added_and_removed_tasks_on_content_change() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("notes/n.md", b"- [ ] one\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(session.tasks_for_file("notes/n.md").unwrap().len(), 1);
+
+        // Add two tasks; rescan picks them up.
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file("notes/n.md", b"- [ ] one\n- [ ] two\n- [ ] three\n")
+            .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(session.tasks_for_file("notes/n.md").unwrap().len(), 3);
+
+        // Remove all tasks; rescan drops the rows.
+        provider.write_file("notes/n.md", b"plain text\n").unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert!(session.tasks_for_file("notes/n.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tasks_in_vault_empty_filter_returns_every_task_in_sort_order() {
+        // Sort order is (due ASC NULLS LAST, priority DESC NULLS LAST,
+        // path ASC, ordinal ASC). Build a vault that exercises every
+        // axis so the ordering is unambiguous.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", "- [ ] no metadata\n- [ ] high pri 🔼\n".as_bytes())
+                .unwrap();
+            p.write_file(
+                "b.md",
+                "- [ ] due tomorrow 📅 2026-05-24 🔽\n- [ ] due tomorrow no pri 📅 2026-05-24\n"
+                    .as_bytes(),
+            )
+            .unwrap();
+            p.write_file("c.md", "- [ ] due today 📅 2026-05-23\n".as_bytes())
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .tasks_in_vault(crate::TaskFilter::default(), Paging::first(100))
+            .unwrap();
+        let order: Vec<&str> = page.items.iter().map(|r| r.task.text.as_str()).collect();
+        assert_eq!(
+            order,
+            vec![
+                // Due today first.
+                "due today",
+                // Both due tomorrow — priority DESC NULLS LAST means
+                // a populated priority (-1 here) outranks NULL even
+                // when -1 is the lowest "real" priority.
+                "due tomorrow",
+                "due tomorrow no pri",
+                // No due date — sort last; high-pri before no-pri.
+                "high pri",
+                "no metadata",
+            ]
+        );
+        assert_eq!(page.total_filtered, 5);
+        assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn tasks_in_vault_completed_filter_excludes_done_tasks() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"- [ ] open\n- [x] done\n- [/] doing\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    completed: Some(false),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        let texts: Vec<&str> = page.items.iter().map(|r| r.task.text.as_str()).collect();
+        // Only the unchecked + in-progress tasks survive (done is
+        // status_char `x` → completed=true).
+        assert_eq!(texts, vec!["open", "doing"]);
+    }
+
+    #[test]
+    fn tasks_in_vault_due_window_inclusive_lower_exclusive_upper() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "a.md",
+                "- [ ] just before 📅 2026-05-22\n- [ ] from 📅 2026-05-23\n- [ ] to 📅 2026-05-24\n- [ ] after 📅 2026-05-25\n"
+                    .as_bytes(),
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let from = NaiveDate::from_ymd_opt(2026, 5, 23)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let to = NaiveDate::from_ymd_opt(2026, 5, 24)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let page = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    due_from_ms: Some(from),
+                    due_to_ms: Some(to),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        let texts: Vec<&str> = page.items.iter().map(|r| r.task.text.as_str()).collect();
+        // [from, to) → from-date matches, to-date excluded.
+        assert_eq!(texts, vec!["from"]);
+    }
+
+    #[test]
+    fn tasks_in_vault_paging_round_trips() {
+        let (_tmp, session) = make_vault(|p| {
+            let mut body = String::new();
+            for i in 0..7 {
+                body.push_str(&format!("- [ ] task {i:02}\n"));
+            }
+            p.write_file("a.md", body.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let limit = 3;
+        let mut cursor: Option<String> = None;
+        let mut seen: Vec<String> = Vec::new();
+        loop {
+            let paging = match &cursor {
+                Some(c) => Paging::after(c.clone(), limit),
+                None => Paging::first(limit),
+            };
+            let page = session
+                .tasks_in_vault(crate::TaskFilter::default(), paging)
+                .unwrap();
+            assert_eq!(page.total_filtered, 7);
+            for row in &page.items {
+                seen.push(row.task.text.clone());
+            }
+            if let Some(c) = page.next_cursor {
+                cursor = Some(c);
+            } else {
+                break;
+            }
+        }
+        let expected: Vec<String> = (0..7).map(|i| format!("task {i:02}")).collect();
+        assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn tasks_in_vault_priority_at_least_filter() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "a.md",
+                "- [ ] no pri\n- [ ] low 🔽\n- [ ] high 🔼\n- [ ] highest ⏫\n".as_bytes(),
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let page = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    priority_at_least: Some(1),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        let texts: Vec<&str> = page.items.iter().map(|r| r.task.text.as_str()).collect();
+        assert_eq!(texts, vec!["highest", "high"]);
+    }
+
+    // --- toggle_task_status (Milestone G #112) ---
+
+    #[test]
+    fn toggle_task_status_changes_only_the_status_character() {
+        let body = "- [ ] task one\n- [ ] task two 📅 2026-06-01 ⏫\n";
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("n.md", body.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        session
+            .toggle_task_status("n.md", 1, 'x', None)
+            .expect("toggle succeeds");
+
+        // Re-read the file from disk to confirm everything outside
+        // the bracket is preserved byte-for-byte.
+        let on_disk = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(on_disk, "- [ ] task one\n- [x] task two 📅 2026-06-01 ⏫\n");
+
+        // Index reflects the new state, including completed=true.
+        let tasks = session.tasks_for_file("n.md").unwrap();
+        assert_eq!(tasks[1].status_char, 'x');
+        assert!(tasks[1].completed);
+        // Metadata still on the task.
+        assert!(tasks[1].due_ms.is_some());
+        assert_eq!(tasks[1].priority, Some(2));
+    }
+
+    #[test]
+    fn toggle_task_status_preserves_indentation_for_nested_tasks() {
+        let body = "- [ ] parent\n  - [ ] child\n    - [ ] grandchild\n";
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("n.md", body.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        session
+            .toggle_task_status("n.md", 2, 'x', None)
+            .expect("toggle grandchild");
+        let on_disk = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(
+            on_disk,
+            "- [ ] parent\n  - [ ] child\n    - [x] grandchild\n"
+        );
+    }
+
+    #[test]
+    fn toggle_task_status_supports_custom_status_chars() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("n.md", b"- [ ] thing\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        session
+            .toggle_task_status("n.md", 0, '/', None)
+            .expect("toggle to in-progress");
+        let on_disk = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(on_disk, "- [/] thing\n");
+    }
+
+    #[test]
+    fn toggle_task_status_returns_invalid_argument_for_out_of_range_ordinal() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("n.md", b"- [ ] only one task\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let result = session.toggle_task_status("n.md", 99, 'x', None);
+        match result {
+            Err(VaultError::InvalidArgument { message }) => {
+                assert!(message.contains("ordinal 99"), "got: {message}");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        // File untouched.
+        let on_disk = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(on_disk, "- [ ] only one task\n");
+    }
+
+    #[test]
+    fn toggle_task_status_returns_write_conflict_when_hash_stale() {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("n.md", b"- [ ] thing\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        // Pretend the editor read at a state that no longer exists.
+        let stale_hash = crate::content_hash(b"something else entirely\n");
+        let result = session.toggle_task_status("n.md", 0, 'x', Some(&stale_hash));
+        match result {
+            Err(VaultError::WriteConflict { .. }) => {}
+            other => panic!("expected WriteConflict, got {other:?}"),
+        }
+        // File untouched.
+        let on_disk = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(on_disk, "- [ ] thing\n");
+    }
+
+    #[test]
+    fn toggle_task_status_appends_oplog_entry() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("n.md", b"- [ ] thing\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert!(session.read_oplog("n.md").unwrap().is_empty());
+
+        session.toggle_task_status("n.md", 0, 'x', None).unwrap();
+
+        let entries = session.read_oplog("n.md").unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "toggle should append exactly one op-log entry"
+        );
+        assert_eq!(entries[0].op_kind, crate::OpKind::WholeFileReplace);
+    }
+
+    #[test]
+    fn toggle_task_status_serializes_with_concurrent_save() {
+        // Concurrent toggle + editor save on the same file must
+        // serialize through the session mutex so the op-log records
+        // exactly two entries in well-defined order. The actual
+        // outcome (which save lands first) is racy; we assert
+        // invariants that hold either way.
+        use std::sync::Arc as StdArc;
+        use std::thread;
+
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("n.md", b"- [ ] thing\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let session = StdArc::new(session);
+
+        let s1 = StdArc::clone(&session);
+        let s2 = StdArc::clone(&session);
+        let t1 = thread::spawn(move || s1.toggle_task_status("n.md", 0, 'x', None));
+        let t2 = thread::spawn(move || s2.save_text("n.md", "- [ ] thing edited\n", None));
+        t1.join().unwrap().expect("toggle ok");
+        t2.join().unwrap().expect("save ok");
+
+        let entries = session.read_oplog("n.md").unwrap();
+        assert_eq!(entries.len(), 2, "both saves should land an op-log entry");
+        // Hashes should chain — second entry's content_hash_before
+        // equals first's content_hash_after.
+        assert_eq!(
+            entries[1].content_hash_before, entries[0].content_hash_after,
+            "op-log entries should chain through the mutex"
+        );
+    }
+
+    #[test]
+    fn tasks_table_purged_when_file_exceeds_large_file_threshold() {
+        // A file that grows past the large-file refuse threshold gets
+        // its derivative rows purged. The tasks table must follow the
+        // same discipline as headings / links / properties, otherwise
+        // stale task rows would keep showing up in the panel for a
+        // file the scanner no longer indexes.
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file("notes/n.md", b"- [ ] task\n- [ ] other\n")
+            .unwrap();
+
+        let mut config = SessionConfig::new(tmp.path().join(".slate"));
+        // Tiny threshold so the second write trips it.
+        config.large_file_refuse_bytes = 50;
+        let session = VaultSession::open(
+            Arc::new(FsVaultProvider::new(tmp.path().to_path_buf())),
+            config,
+        )
+        .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert!(!session.tasks_for_file("notes/n.md").unwrap().is_empty());
+
+        // Grow the file past the refuse threshold.
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        provider
+            .write_file("notes/n.md", vec![b'a'; 200].as_slice())
+            .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert!(
+            session.tasks_for_file("notes/n.md").unwrap().is_empty(),
+            "large-file purge must drop task rows"
+        );
     }
 }

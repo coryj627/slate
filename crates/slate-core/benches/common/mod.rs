@@ -167,3 +167,68 @@ fn target_size_for(seed: usize) -> usize {
         _ => 50_000 + (seed % 150_000),   // ~10% large
     }
 }
+
+// =====================================================================
+// Tasks fixture (Milestone G #115)
+// =====================================================================
+
+/// Build a vault with `file_count` Markdown files, each carrying
+/// `tasks_per_file` task lines. Used by the Tasks-milestone bench to
+/// drive the scan + query path on a realistic-but-deterministic
+/// workload. Returns the owning `TempDir`.
+///
+/// Each file mixes a short note body with a `## Tasks` block; the
+/// tasks vary across the four shape axes the Tasks panel exercises:
+/// open/done/in-progress, with and without due dates, with and
+/// without priorities, with and without recurrences.
+pub fn generate_tasks_vault(file_count: usize, tasks_per_file: usize) -> TempDir {
+    let tmp = tempfile::tempdir().expect("create tempdir for tasks vault");
+    let subdir_count = (file_count / 100).clamp(1, 50);
+    let mut last_dir: Option<PathBuf> = None;
+    for i in 0..file_count {
+        let subdir = format!("notes/{:03}", i % subdir_count);
+        let dir = tmp.path().join(&subdir);
+        if last_dir.as_deref() != Some(dir.as_path()) {
+            fs::create_dir_all(&dir).expect("create subdir");
+            last_dir = Some(dir.clone());
+        }
+        let path = dir.join(format!("note-{i:08}.md"));
+        fs::write(&path, synthetic_note_with_tasks(i, tasks_per_file)).expect("write tasks note");
+    }
+    tmp
+}
+
+fn synthetic_note_with_tasks(seed: usize, tasks_per_file: usize) -> String {
+    // Mix of open / done / in-progress so the `completed` filter has
+    // realistic selectivity. Roughly 50% open, 40% done, 10% in
+    // progress matches the rough population of a working tasks
+    // backlog without trying to be precise about it.
+    const STATUSES: &[char] = &[' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', '/'];
+
+    let mut out = String::with_capacity(tasks_per_file * 48);
+    out.push_str(&format!("# Note {seed}\n\n"));
+    out.push_str("Background paragraph for context.\n\n## Tasks\n\n");
+    for j in 0..tasks_per_file {
+        let status = STATUSES[(seed + j) % STATUSES.len()];
+        let mut line = format!("- [{status}] task {seed}-{j}");
+        // ~50% carry a due date; spread across a 60-day window so
+        // the due-window filter has work to do.
+        if (seed + j).is_multiple_of(2) {
+            let day = ((seed + j) % 30) + 1; // 1..=30
+            line.push_str(&format!(" 📅 2026-06-{day:02}"));
+        }
+        // ~25% carry a priority.
+        match (seed + j) % 8 {
+            0 => line.push_str(" ⏫"),
+            3 => line.push_str(" 🔼"),
+            _ => {}
+        }
+        // ~10% carry a recurrence.
+        if (seed + j).is_multiple_of(10) {
+            line.push_str(" 🔁 every week");
+        }
+        line.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
