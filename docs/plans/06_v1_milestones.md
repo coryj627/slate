@@ -1,8 +1,10 @@
-# 06 — V1 Milestone Decomposition (months 0–3: read+edit Mac alpha)
+# 06 — V1 Milestone Decomposition (read+edit Mac alpha)
 
-**Strategic goal of this phase:** at the end of 12–16 weeks, the 4 committed AT-user testers have a Mac app they can use against their own existing Obsidian vaults, with their own screen readers, to do all four primary read-and-write workflows — **find a note, read its content, follow its links, and edit it**. The phase ships six progressively-richer builds (one per ~2-week milestone), not one big drop at the end.
+**Status (2026-05-23):** ✅ All six milestones (A–F) shipped. The alpha build covers the four primary read-and-write workflows — find a note, read its content, follow its links, and edit it — and is ready for the AT-user tester cohort. Per-milestone close dates are in the status table below. Issue tracking continues per the conventions section at the bottom.
 
-**Honest pacing line:** 12 weeks is optimistic, 14–16 weeks is realistic. Don't promise testers an exact end date; promise the next build.
+**Strategic goal of this phase:** the 4 committed AT-user testers have a Mac app they can use against their own existing Obsidian vaults, with their own screen readers, to do all four primary read-and-write workflows. The phase shipped six progressively-richer builds, not one big drop at the end.
+
+**Pacing note for future phases:** the original plan budgeted 12–16 weeks; A–F closed in 6 calendar days (2026-05-17 → 2026-05-23). The 2-week-per-milestone cadence remains the right *commitment* shape for tester comms — don't promise an end date, promise the next build — even when execution runs faster.
 
 ## Where to find the live plan
 
@@ -11,11 +13,11 @@ Per-milestone goals, scope, schema, tests, and acceptance criteria live on **Git
 | Milestone | GitHub | Status |
 |---|---|---|
 | A — Vault + file list | [milestone 1](https://github.com/coryj627/YANA/milestone/1) | ✅ Shipped (2026-05-17) |
-| B — Read + heading nav | [milestone 2](https://github.com/coryj627/YANA/milestone/2) | In progress |
-| C — Backlinks + outgoing links | [milestone 3](https://github.com/coryj627/YANA/milestone/3) | Planned |
-| D — Frontmatter properties | [milestone 4](https://github.com/coryj627/YANA/milestone/4) | Planned |
-| E — Full-text search | [milestone 5](https://github.com/coryj627/YANA/milestone/5) | Planned |
-| F — Editing | [milestone 6](https://github.com/coryj627/YANA/milestone/6) | Planned |
+| B — Read + heading nav | [milestone 2](https://github.com/coryj627/YANA/milestone/2) | ✅ Shipped (2026-05-18) |
+| C — Backlinks + outgoing links | [milestone 3](https://github.com/coryj627/YANA/milestone/3) | ✅ Shipped (2026-05-18) |
+| D — Frontmatter properties | [milestone 4](https://github.com/coryj627/YANA/milestone/4) | ✅ Shipped (2026-05-19) |
+| E — Full-text search | [milestone 5](https://github.com/coryj627/YANA/milestone/5) | ✅ Shipped (2026-05-19) |
+| F — Editing | [milestone 6](https://github.com/coryj627/YANA/milestone/6) | ✅ Shipped (2026-05-23) — backend [#105](https://github.com/coryj627/YANA/pull/105), UI [#106](https://github.com/coryj627/YANA/pull/106) |
 
 Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migrations, tests, accessibility checkpoints, tester-feedback questions, and definition of done. Individual issues link back to their milestone.
 
