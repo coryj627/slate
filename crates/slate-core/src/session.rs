@@ -4877,6 +4877,97 @@ mod tests {
         // Only the unchecked + in-progress tasks survive (done is
         // status_char `x` → completed=true).
         assert_eq!(texts, vec!["open", "doing"]);
+        // total_filtered must match the filtered row count — not the
+        // global count. Regression for the COUNT(*) subquery alias
+        // bug (Codoki PR 134, High): with `t2`/`f2` aliases the
+        // subquery's `WHERE t.completed = ?` resolved to the outer
+        // `t`, turning the count into a correlated boolean and
+        // returning the wrong total under any filter.
+        assert_eq!(page.total_filtered, 2);
+    }
+
+    #[test]
+    fn tasks_in_vault_total_filtered_under_filters_matches_actual_count() {
+        // Direct regression for the COUNT(*) subquery alias bug.
+        // Build a vault where the global count and the
+        // per-filter count differ on every filter axis, so an alias
+        // slip on any one of them shows up here.
+        let (_tmp, session) = make_vault(|p| {
+            // 5 total tasks: 3 open / 2 done, 2 due in window / 3 out,
+            // 1 highest priority / 1 high / 3 with no priority.
+            p.write_file(
+                "a.md",
+                "- [ ] in window high pri 📅 2026-06-01 🔼\n\
+                 - [x] in window done 📅 2026-06-02\n\
+                 - [ ] out of window 📅 2026-07-01\n\
+                 - [ ] no due\n\
+                 - [x] no due done ⏫\n"
+                    .as_bytes(),
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let only_open = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    completed: Some(false),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        assert_eq!(only_open.items.len(), 3);
+        assert_eq!(only_open.total_filtered, 3);
+
+        let only_done = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    completed: Some(true),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        assert_eq!(only_done.items.len(), 2);
+        assert_eq!(only_done.total_filtered, 2);
+
+        let from = NaiveDate::from_ymd_opt(2026, 6, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let to = NaiveDate::from_ymd_opt(2026, 6, 30)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let june_due = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    due_from_ms: Some(from),
+                    due_to_ms: Some(to),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        assert_eq!(june_due.items.len(), 2);
+        assert_eq!(june_due.total_filtered, 2);
+
+        let high_or_better = session
+            .tasks_in_vault(
+                crate::TaskFilter {
+                    priority_at_least: Some(1),
+                    ..crate::TaskFilter::default()
+                },
+                Paging::first(100),
+            )
+            .unwrap();
+        assert_eq!(high_or_better.items.len(), 2);
+        assert_eq!(high_or_better.total_filtered, 2);
     }
 
     #[test]

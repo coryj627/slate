@@ -151,8 +151,13 @@ pub(crate) fn tasks_in_vault(
         //     in i64 without overflow. (`-i64::MIN` overflows;
         //     `-(i32::MIN as i64)` is `i32::MAX + 1`, well within
         //     range.)
+        // `COLLATE BINARY` on f.path matches the ORDER BY collation so
+        // the cursor advance is byte-precise even if SQLite's default
+        // collation for the column changes in a future migration
+        // (mirrors the same defence in `files_with_property`, Codoki
+        // PR 134 follow-up).
         where_parts.push(
-            "(IFNULL(t.due_ms, ?), -IFNULL(t.priority, ?), f.path, t.ordinal) > (?, ?, ?, ?)"
+            "(IFNULL(t.due_ms, ?), -IFNULL(t.priority, ?), f.path COLLATE BINARY, t.ordinal) > (?, ?, ? COLLATE BINARY, ?)"
                 .to_string(),
         );
         params_dyn.push(Box::new(i64::MAX));
@@ -169,12 +174,21 @@ pub(crate) fn tasks_in_vault(
         format!("WHERE {}", where_parts.join(" AND "))
     };
 
+    // The COUNT(*) subquery uses the SAME `t` / `f` aliases as the
+    // outer query so its inner `WHERE t.completed = ?` etc. resolve
+    // to the inner tasks / files rows — not the outer ones. With
+    // distinct aliases (`t2`/`f2`) the subquery's WHERE would silently
+    // become correlated to the outer row, producing wildly wrong
+    // totals when any filter is active (Codoki PR 134, High).
+    // SQL scoping shadows the outer aliases inside the subquery so
+    // this is unambiguous; the `count_where` snippet binds against
+    // these inner aliases.
     let sql = format!(
         "SELECT f.path, f.name,
                 t.ordinal, t.text, t.status_char, t.completed,
                 t.due_ms, t.scheduled_ms, t.priority, t.recurrence,
                 t.line, t.byte_offset,
-                (SELECT COUNT(*) FROM tasks t2 JOIN files f2 ON f2.id = t2.file_id {count_where}) AS total_filtered
+                (SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id {count_where}) AS total_filtered
          FROM tasks t
          JOIN files f ON f.id = t.file_id
          {where_clause}

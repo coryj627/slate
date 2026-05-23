@@ -114,9 +114,11 @@ fn strip_one_trailing_newline(s: &str) -> &str {
 // --- Task-line shape ---
 
 /// Returns `Some((status_char, body))` if `line` matches the task
-/// pattern `^\s*[-*+] \[(.)\] .*$`. The body is what follows the
-/// `] ` separator — still untrimmed so metadata splitting can see
-/// the exact bytes.
+/// pattern `^\s*[-*+] \[(.)\](?: .*)?$`. The trailing space after
+/// `]` is required when text follows but tolerated as missing when
+/// the line ends right after `]` — i.e. `- [x]` with no body parses
+/// as a task with empty text. The body is what follows the `]`,
+/// still untrimmed so metadata splitting can see the exact bytes.
 fn parse_task_line(line: &str) -> Option<(char, &str)> {
     // Skip leading whitespace. We accept any horizontal whitespace
     // (spaces, tabs) so nested list-item tasks indented under their

@@ -1761,6 +1761,8 @@ final class AppState: ObservableObject {
             return "Search query is invalid: \(message)"
         case .Unsupported(let feature):
             return "\(feature) is not implemented yet."
+        case .InvalidArgument(let message):
+            return "Invalid argument: \(message)"
         case .WriteConflict:
             // The editor's save-flow handles this case directly with
             // a "Keep mine / Reload from disk" affordance (issue #64);
