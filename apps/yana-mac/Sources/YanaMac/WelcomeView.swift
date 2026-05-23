@@ -173,11 +173,14 @@ struct WelcomeView: View {
 /// shared instance) — calling through anyway crashes with an
 /// implicitly-unwrapped optional. Guard explicitly so `AppState`
 /// tests that drive scan-progress events can run without crashing.
-func postAccessibilityAnnouncement(_ message: String) {
+func postAccessibilityAnnouncement(
+    _ message: String,
+    priority: NSAccessibilityPriorityLevel = .medium
+) {
     guard let element: Any = NSApp?.mainWindow ?? NSApp else { return }
     let userInfo: [NSAccessibility.NotificationUserInfoKey: Any] = [
         .announcement: message,
-        .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+        .priority: priority.rawValue,
     ]
     NSAccessibility.post(
         element: element,

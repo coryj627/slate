@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
 
 /// Search-overlay state machine. Lives on `AppState`, drives the
 /// `SearchOverlay` view's mode (idle/searching/results/error) and
@@ -28,6 +29,31 @@ enum LinkActivationOutcome: Equatable {
     case unresolved(String)
     case openedExternal(String)
     case externalOpenFailed(String)
+}
+
+/// Per-incident snapshot for the conflict-resolution alert.
+///
+/// Populated by `saveCurrentNote` when the backend returns
+/// `WriteConflict`. Carries everything the resolution actions need:
+/// the bytes the user tried to save (so "Keep mine" can re-issue the
+/// save), the on-disk hash the alert reports, and the original
+/// `expectedContentHash` (kept for telemetry — testers can confirm
+/// the conflict was caught because the file moved, not because the
+/// editor's hash tracking was wrong).
+struct SaveConflict: Equatable {
+    let path: String
+    let attemptedContents: String
+    let currentContentHash: String
+    let expectedContentHash: String
+    let currentMtimeMs: Int64
+}
+
+/// Destination the user asked to navigate to while the editor was
+/// dirty. Held in `AppState.pendingNavigation` until the user
+/// responds to the "Save changes?" alert.
+enum PendingNavigation: Equatable {
+    case closeVault
+    case selectFile(String?)
 }
 
 /// Top-level app state.
@@ -71,10 +97,51 @@ final class AppState: ObservableObject {
     /// off the load whenever it changes.
     @Published var selectedFilePath: String?
 
-    /// UTF-8 text of the currently-selected note, once it's been
-    /// loaded. Nil while no note is selected or while loading is
-    /// in flight.
-    @Published private(set) var currentNoteText: String?
+    /// UTF-8 text of the currently-selected note. Nil while no note
+    /// is selected or while loading is in flight. Writable so the
+    /// editor's two-way `Binding<String>` can update the buffer
+    /// directly via `updateEditorText(_:)`.
+    @Published var currentNoteText: String?
+    /// The last-saved (or freshly-loaded) version of the current
+    /// note. `hasUnsavedChanges` is derived from
+    /// `currentNoteText != savedBaselineText`. Stored separately so
+    /// the editor can compare without losing the live buffer.
+    @Published private(set) var savedBaselineText: String?
+    /// blake3 hex digest of the file's content at the moment we
+    /// loaded it (or last saved it). Used as
+    /// `expectedContentHash` in `saveCurrentNote` so an external
+    /// writer is caught via `WriteConflict`.
+    @Published private(set) var currentNoteContentHash: String?
+    /// Path of the note whose text+hash we last successfully loaded.
+    /// Distinct from `selectedFilePath`: the latter reflects the
+    /// user's UI intent (and the file-list selection), while
+    /// `loadedFilePath` is what's actually in `currentNoteText`. The
+    /// two diverge while a dirty save-changes prompt is open.
+    @Published private(set) var loadedFilePath: String?
+    /// True when the editor buffer differs from the on-disk
+    /// baseline. Drives the toolbar indicator, Cmd+S enablement,
+    /// and the save-or-discard prompts triggered by navigation
+    /// while dirty.
+    @Published private(set) var hasUnsavedChanges: Bool = false
+    /// Populated when `saveCurrentNote` returns `WriteConflict`.
+    /// Drives the "Keep mine / Reload from disk / Cancel" alert in
+    /// `MainSplitView`.
+    @Published var currentSaveConflict: SaveConflict?
+    /// Set when the user requests navigation (close-vault, switch
+    /// file) while `hasUnsavedChanges == true`. Drives the
+    /// "Save changes?" prompt. Nil otherwise.
+    @Published var pendingNavigation: PendingNavigation?
+    /// Surfaced when `saveCurrentNote` fails with anything other
+    /// than `WriteConflict` (which goes through `currentSaveConflict`
+    /// instead). Independent of `noteLoadError` so a load alert
+    /// doesn't shadow a save alert.
+    @Published var saveError: String?
+    /// True while a save is in flight. Disables Cmd+S to keep the
+    /// user from queuing overlapping saves.
+    @Published private(set) var isSaving: Bool = false
+    /// Handle on the in-flight save task. Exposed (internal) so
+    /// tests can `await state.saveTask?.value`.
+    private(set) var saveTask: Task<Void, Never>?
     /// Parsed Markdown headings of the currently-selected note, in
     /// document order. Empty while no note is selected (or when the
     /// note has no `#` headings).
@@ -353,11 +420,54 @@ final class AppState: ObservableObject {
     /// any in-flight note load and kicks off a fresh one — or clears
     /// content if `path` is nil.
     private func handleSelectionChange(to path: String?) {
+        // Same file re-selected → no-op. This guard matters
+        // because the dirty-state rollback below writes
+        // `selectedFilePath = loadedFilePath` to re-highlight the
+        // unsaved file in the sidebar, which re-triggers this
+        // subscription with `path == loadedFilePath`. Without the
+        // guard, the rollback would clear and reload the file the
+        // user is still editing, blowing away the dirty buffer
+        // we're trying to preserve.
+        if let loaded = loadedFilePath, path == loaded {
+            return
+        }
+        // Dirty-state gate (issue #63): switching files while the
+        // editor has unsaved changes must not silently drop the
+        // user's edits. Park the requested destination in
+        // `pendingNavigation` and let the "Save changes?" alert
+        // route the actual transition.
+        if hasUnsavedChanges, path != loadedFilePath {
+            pendingNavigation = .selectFile(path)
+            // Roll the selection back so the file list re-highlights
+            // the dirty file while the alert is up. The async hop is
+            // required because we're inside the `$selectedFilePath`
+            // willSet/sink chain: a synchronous write here would be
+            // overwritten by the outer assignment once the willSet
+            // returns. Dispatching to the next main-loop tick lets
+            // the outer write finish, then our rollback takes
+            // effect; the same-file guard at the top of this method
+            // short-circuits the re-entry triggered by the rollback.
+            if let loaded = loadedFilePath {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    if self.selectedFilePath != loaded {
+                        self.selectedFilePath = loaded
+                    }
+                }
+            }
+            return
+        }
         noteLoadTask?.cancel()
         noteLoadTask = nil
         linksLoadTask?.cancel()
         linksLoadTask = nil
         currentNoteText = nil
+        savedBaselineText = nil
+        currentNoteContentHash = nil
+        loadedFilePath = nil
+        hasUnsavedChanges = false
+        currentSaveConflict = nil
+        saveError = nil
         currentNoteHeadings = []
         noteLoadError = nil
         linksLoadError = nil
@@ -781,16 +891,28 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         isLoadingNote = true
 
-        let result: Result<(String, [Heading]), VaultError> = await Task.detached(priority: .userInitiated) {
+        // Capture (text, headings, contentHash) in one detached
+        // task. The hash comes from `get_file_metadata.contentHash`
+        // — that's the same hash the scanner cached, so it matches
+        // what's on disk right now (modulo external writes between
+        // the scan and this load, which `read_text` would have
+        // surfaced as an error or stale-content situation). The
+        // save-flow uses this hash as `expected_content_hash` so a
+        // mid-edit external write is caught as `WriteConflict`.
+        let result: Result<(String, [Heading], String?), VaultError> = await Task.detached(priority: .userInitiated) {
             do {
                 let text = try session.readText(path: path)
                 // get_file_metadata returns nil when the path isn't in
                 // the index yet (race: file showed up between scan and
                 // selection). Empty headings is the right fallback —
                 // the outline pane shows its "no headings" empty state
-                // and the user still sees the content.
+                // and the user still sees the content. A nil hash is
+                // fine too: subsequent saves will pass nil as
+                // expected_content_hash, which means "save
+                // unconditionally" — the right behavior when we
+                // don't have a known baseline.
                 let metadata = try session.getFileMetadata(path: path)
-                return .success((text, metadata?.headings ?? []))
+                return .success((text, metadata?.headings ?? [], metadata?.contentHash))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -805,12 +927,20 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
-        case .success(let (text, headings)):
+        case .success(let (text, headings, contentHash)):
             currentNoteText = text
+            savedBaselineText = text
+            currentNoteContentHash = contentHash
+            loadedFilePath = path
+            hasUnsavedChanges = false
             currentNoteHeadings = headings
             noteLoadError = nil
         case .failure(let error):
             currentNoteText = nil
+            savedBaselineText = nil
+            currentNoteContentHash = nil
+            loadedFilePath = nil
+            hasUnsavedChanges = false
             currentNoteHeadings = []
             noteLoadError = humanReadable(error)
         }
@@ -874,6 +1004,306 @@ final class AppState: ObservableObject {
             linksLoadError = humanReadable(error)
         }
         isLoadingLinks = false
+    }
+
+    // MARK: - Save flow
+
+    /// Editor's two-way binding writes new buffer contents through
+    /// this method. Keeps `currentNoteText` as the live buffer and
+    /// recomputes `hasUnsavedChanges` against `savedBaselineText` so
+    /// the dirty indicator and the dirty-gate stay in sync.
+    ///
+    /// Calling this with the same string the editor already holds
+    /// is a no-op (the equality check below) — SwiftUI sometimes
+    /// re-applies bindings during view updates, and we don't want
+    /// that to spuriously flip the dirty flag.
+    func updateEditorText(_ newText: String) {
+        if currentNoteText == newText { return }
+        currentNoteText = newText
+        hasUnsavedChanges = (newText != (savedBaselineText ?? ""))
+    }
+
+    /// SwiftUI `Binding<String>` for the editor view. Wraps the
+    /// `currentNoteText` getter and routes writes through
+    /// `updateEditorText` so the dirty-state bookkeeping happens
+    /// exactly once per buffer change, regardless of how many
+    /// times SwiftUI re-applies the binding during a render pass.
+    func noteTextBinding() -> Binding<String> {
+        Binding(
+            get: { self.currentNoteText ?? "" },
+            set: { self.updateEditorText($0) }
+        )
+    }
+
+    /// Save the current editor buffer back to the file under
+    /// `loadedFilePath`, refresh the cached hash + headings, and
+    /// announce success or surface a conflict. Cmd+S calls this.
+    ///
+    /// Re-entrancy: a save already in flight is a no-op so the
+    /// user can't queue overlapping `save_text` calls by spamming
+    /// Cmd+S. The Rust side's session mutex would serialize them
+    /// anyway, but this also keeps the UI flag (`isSaving`)
+    /// coherent.
+    ///
+    /// Returns through `saveTask` so tests can `await` to
+    /// deterministically observe the post-save state.
+    @discardableResult
+    func saveCurrentNote() -> Task<Void, Never>? {
+        guard !isSaving else { return nil }
+        guard let session = currentSession,
+            let path = loadedFilePath,
+            let contents = currentNoteText
+        else { return nil }
+        isSaving = true
+        saveError = nil
+        let expected = currentNoteContentHash
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performSave(
+                session: session,
+                path: path,
+                contents: contents,
+                expectedHash: expected
+            )
+            return
+        }
+        saveTask = task
+        return task
+    }
+
+    /// Inner save body. Split out so it can be reused by
+    /// `resolveSaveConflictKeepMine` (which re-saves with the
+    /// current on-disk hash so the user's bytes win).
+    private func performSave(
+        session: VaultSession,
+        path: String,
+        contents: String,
+        expectedHash: String?
+    ) async {
+        // Detached so the SQLite-mutex-holding `save_text` doesn't
+        // pin the main actor while disk IO + tree rewrites run.
+        let outcome: Result<SaveReport, VaultError> = await Task.detached(priority: .userInitiated) {
+            do {
+                let report = try session.saveText(
+                    path: path,
+                    contents: contents,
+                    expectedContentHash: expectedHash
+                )
+                return .success(report)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }.value
+
+        // The user could have switched files (or closed the vault)
+        // while we were saving. Drop the result in that case
+        // rather than mutating state for a file the user has
+        // already moved on from.
+        guard loadedFilePath == path else {
+            isSaving = false
+            return
+        }
+
+        switch outcome {
+        case .success(let report):
+            currentNoteContentHash = report.newContentHash
+            savedBaselineText = contents
+            hasUnsavedChanges = false
+            // Refresh headings so the outline matches the just-
+            // saved buffer. Same shape as `loadCurrentNote` —
+            // a metadata fetch, no need to re-read text. The
+            // links/properties panels still get refreshed by the
+            // existing `loadCurrentLinks` path when the user next
+            // switches selection; refreshing them here would
+            // double-spin the SQLite mutex for marginal benefit.
+            refreshHeadingsAfterSave(session: session, path: path)
+            postAccessibilityAnnouncement(
+                "Saved \(filename(of: path)).",
+                priority: .medium
+            )
+        case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
+            currentSaveConflict = SaveConflict(
+                path: path,
+                attemptedContents: contents,
+                currentContentHash: currentHash,
+                expectedContentHash: expected,
+                currentMtimeMs: currentMtimeMs
+            )
+            // Polite announcement: surface the conflict state
+            // without yanking focus away from whatever the user
+            // is currently doing in the editor. The alert itself
+            // is modal and will steal focus when SwiftUI presents
+            // it.
+            postAccessibilityAnnouncement(
+                "Save blocked. \(filename(of: path)) was modified externally. Resolve in the dialog.",
+                priority: .medium
+            )
+        case .failure(let error):
+            saveError = humanReadable(error)
+        }
+        isSaving = false
+    }
+
+    /// Re-run the save with `expected_content_hash` set to the
+    /// hash we just observed on disk. The user explicitly chose to
+    /// overwrite the external version; resetting `expected` to
+    /// `current` removes the conflict guard so the second save
+    /// goes through.
+    @discardableResult
+    func resolveSaveConflictKeepMine() -> Task<Void, Never>? {
+        guard let conflict = currentSaveConflict,
+            let session = currentSession,
+            loadedFilePath == conflict.path
+        else {
+            currentSaveConflict = nil
+            return nil
+        }
+        // Clear the conflict so the alert dismisses immediately
+        // — the in-flight task takes over from here.
+        currentSaveConflict = nil
+        isSaving = true
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performSave(
+                session: session,
+                path: conflict.path,
+                contents: conflict.attemptedContents,
+                expectedHash: conflict.currentContentHash
+            )
+            return
+        }
+        saveTask = task
+        return task
+    }
+
+    /// Discard the in-editor buffer for the conflicted file and
+    /// reload the current on-disk version. Equivalent to "let the
+    /// external write win." Clears the conflict either way so the
+    /// alert can dismiss.
+    @discardableResult
+    func resolveSaveConflictReloadFromDisk() -> Task<Void, Never>? {
+        guard let conflict = currentSaveConflict else { return nil }
+        currentSaveConflict = nil
+        hasUnsavedChanges = false
+        // Same path the conflict came from — kick `loadCurrentNote`
+        // to refresh text + hash + headings together. If the user
+        // has since navigated away, the load's `selectedFilePath
+        // == path` guard will drop the result.
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.loadCurrentNote(path: conflict.path)
+            return
+        }
+        noteLoadTask = task
+        return task
+    }
+
+    /// Dismiss the conflict alert without writing or reloading.
+    /// The buffer stays as the user left it; `hasUnsavedChanges`
+    /// stays true so the indicator and dirty-gate remain active.
+    func resolveSaveConflictCancel() {
+        currentSaveConflict = nil
+    }
+
+    /// "Save changes?" prompt: Save → run the save, then continue
+    /// with the pending navigation if the save succeeds. A
+    /// `WriteConflict` short-circuits the navigation so the user
+    /// gets the conflict alert in place of the navigation step.
+    @discardableResult
+    func resolvePendingNavigationSave() -> Task<Void, Never>? {
+        guard let pending = pendingNavigation else { return nil }
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.saveAndPerformNavigation(pending)
+            return
+        }
+        return task
+    }
+
+    private func saveAndPerformNavigation(_ pending: PendingNavigation) async {
+        await saveCurrentNote()?.value
+        // Save can complete in one of three states; only proceed
+        // with the navigation when the save genuinely succeeded
+        // (hasUnsavedChanges cleared, no conflict, no error).
+        guard !hasUnsavedChanges,
+            currentSaveConflict == nil,
+            saveError == nil
+        else {
+            return
+        }
+        applyPendingNavigation(pending)
+    }
+
+    /// "Save changes?" prompt: Discard → drop the dirty flag and
+    /// continue with the pending navigation.
+    func resolvePendingNavigationDiscard() {
+        guard let pending = pendingNavigation else { return }
+        hasUnsavedChanges = false
+        // Restore the editor buffer to the baseline so a subsequent
+        // load doesn't have a stale dirty buffer hanging around in
+        // memory (the load will overwrite anyway, but matching
+        // baseline keeps the dirty flag honest in the interim).
+        currentNoteText = savedBaselineText
+        applyPendingNavigation(pending)
+    }
+
+    /// "Save changes?" prompt: Cancel → clear the pending
+    /// navigation without saving. The dirty buffer stays.
+    func resolvePendingNavigationCancel() {
+        pendingNavigation = nil
+    }
+
+    /// Common tail for the Save / Discard branches: clear the
+    /// pending state and actually perform the requested
+    /// navigation.
+    private func applyPendingNavigation(_ pending: PendingNavigation) {
+        pendingNavigation = nil
+        switch pending {
+        case .closeVault:
+            closeVault()
+        case .selectFile(let path):
+            // Setting selectedFilePath re-triggers the
+            // handleSelectionChange subscription. At this point
+            // `hasUnsavedChanges` is false (Save cleared it; Discard
+            // cleared it), so the dirty gate falls through and the
+            // load proceeds normally.
+            selectedFilePath = path
+        }
+    }
+
+    /// Refresh headings for the just-saved note without
+    /// re-reading its text. `save_text` already updates the
+    /// `headings` table inside its transaction, so a single
+    /// metadata fetch is enough. Failures are non-fatal: the
+    /// outline shows the old list until the next reload.
+    private func refreshHeadingsAfterSave(session: VaultSession, path: String) {
+        Task { [weak self] in
+            // Off-actor metadata fetch — getFileMetadata grabs the
+            // SQLite mutex, so we don't want to pin the main actor
+            // for its duration. The post-await re-grab of `self`
+            // keeps the Sendable check happy under the Swift 6
+            // language mode.
+            let headings: [Heading]? = await Task.detached(priority: .userInitiated) {
+                (try? session.getFileMetadata(path: path))?.headings
+            }.value
+            guard let self else { return }
+            guard self.loadedFilePath == path else { return }
+            self.currentNoteHeadings = headings ?? []
+        }
+    }
+
+    /// Closes the vault when the editor is clean; routes through
+    /// the "Save changes?" alert when it's dirty. The toolbar
+    /// "Close Vault" button calls this instead of `closeVault()`
+    /// directly so the dirty path can't be bypassed.
+    func attemptCloseVault() {
+        if hasUnsavedChanges {
+            pendingNavigation = .closeVault
+        } else {
+            closeVault()
+        }
+    }
+
+    private func filename(of path: String) -> String {
+        (path as NSString).lastPathComponent
     }
 
     // MARK: - Scan progress
