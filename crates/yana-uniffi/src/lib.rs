@@ -78,6 +78,20 @@ pub enum VaultError {
     /// `SearchScope::File` and `SearchScope::Tag` paths.
     #[error("operation not supported yet: {feature}")]
     Unsupported { feature: String },
+
+    /// Save failed because the on-disk file no longer matches the
+    /// `expected_content_hash` the caller supplied. Surfaces the
+    /// current state so the host can drive a "Keep mine / Reload
+    /// from disk" resolution UI.
+    #[error(
+        "write conflict: file has been modified since it was read \
+         (expected hash {expected_content_hash:?}, current hash {current_content_hash:?})"
+    )]
+    WriteConflict {
+        current_content_hash: String,
+        expected_content_hash: String,
+        current_mtime_ms: i64,
+    },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -100,6 +114,15 @@ impl From<core::VaultError> for VaultError {
             }
             core::VaultError::InvalidQuery { message } => VaultError::InvalidQuery { message },
             core::VaultError::Unsupported { feature } => VaultError::Unsupported { feature },
+            core::VaultError::WriteConflict {
+                current_content_hash,
+                expected_content_hash,
+                current_mtime_ms,
+            } => VaultError::WriteConflict {
+                current_content_hash,
+                expected_content_hash,
+                current_mtime_ms,
+            },
         }
     }
 }
@@ -194,6 +217,41 @@ impl VaultSession {
     /// silently substituting replacement characters.
     pub fn read_text(&self, path: String) -> Result<String, VaultError> {
         Ok(self.inner.read_text(&path)?)
+    }
+
+    /// Save UTF-8 text to a vault path, refresh the index, and append
+    /// a `WholeFileReplace` entry to the file's op-log.
+    ///
+    /// Pass `expected_content_hash = Some(hash)` to detect external
+    /// changes between read and save: if the on-disk file no longer
+    /// matches `hash`, the call returns `WriteConflict` and leaves the
+    /// file untouched so the UI can drive a "Keep mine / Reload from
+    /// disk" resolution. Pass `None` for an unconditional save (the
+    /// CLI path).
+    pub fn save_text(
+        &self,
+        path: String,
+        contents: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let report = self
+            .inner
+            .save_text(&path, &contents, expected_content_hash.as_deref())?;
+        Ok(report.into())
+    }
+
+    /// Return every well-formed op-log entry recorded for `path`.
+    ///
+    /// Empty result if the path isn't indexed yet or has never been
+    /// saved. A torn trailing entry is silently dropped and the
+    /// well-formed prefix is returned.
+    pub fn read_oplog(&self, path: String) -> Result<Vec<OpLogEntry>, VaultError> {
+        Ok(self
+            .inner
+            .read_oplog(&path)?
+            .into_iter()
+            .map(OpLogEntry::from)
+            .collect())
     }
 
     /// Walk + index the vault while emitting incremental progress
@@ -785,6 +843,64 @@ impl core::ScanProgressListener for ScanProgressListenerAdapter {
     }
 }
 
+/// Result of a successful `save_text`. Mirrors
+/// `yana_core::SaveReport`.
+#[derive(Debug, uniffi::Record)]
+pub struct SaveReport {
+    pub new_content_hash: String,
+    pub new_size_bytes: u64,
+    pub new_mtime_ms: i64,
+}
+
+impl From<core::SaveReport> for SaveReport {
+    fn from(r: core::SaveReport) -> Self {
+        Self {
+            new_content_hash: r.new_content_hash,
+            new_size_bytes: r.new_size_bytes,
+            new_mtime_ms: r.new_mtime_ms,
+        }
+    }
+}
+
+/// Kind of operation recorded in an op-log entry. V1.F only ships
+/// `WholeFileReplace`.
+#[derive(Debug, uniffi::Enum)]
+pub enum OpKind {
+    WholeFileReplace,
+}
+
+impl From<core::OpKind> for OpKind {
+    fn from(k: core::OpKind) -> Self {
+        match k {
+            core::OpKind::WholeFileReplace => OpKind::WholeFileReplace,
+        }
+    }
+}
+
+/// One recorded op-log entry. Mirrors `yana_core::OpLogEntry`.
+#[derive(Debug, uniffi::Record)]
+pub struct OpLogEntry {
+    pub timestamp_ms: i64,
+    pub user_actor_id: String,
+    pub op_kind: OpKind,
+    pub content_hash_before: String,
+    pub content_hash_after: String,
+    pub payload_bytes: Vec<u8>,
+}
+
+impl From<core::OpLogEntry> for OpLogEntry {
+    fn from(e: core::OpLogEntry) -> Self {
+        Self {
+            timestamp_ms: e.timestamp_ms,
+            user_actor_id: e.user_actor_id,
+            op_kind: e.op_kind.into(),
+            content_hash_before: e.content_hash_before,
+            content_hash_after: e.content_hash_after,
+            payload_bytes: e.payload_bytes,
+        }
+    }
+}
+
 /// Summary of a scan operation.
 #[derive(uniffi::Record)]
 pub struct ScanReport {
@@ -871,5 +987,67 @@ mod tests {
             Err(other) => panic!("expected Cancelled, got error {other:?}"),
             Ok(_) => panic!("expected Cancelled, scan returned Ok"),
         }
+    }
+
+    #[test]
+    fn save_text_returns_save_report_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+
+        let report = session
+            .save_text("note.md".into(), "# Hi\n".into(), None)
+            .expect("save_text should succeed");
+        assert_eq!(report.new_size_bytes, "# Hi\n".len() as u64);
+        assert!(!report.new_content_hash.is_empty());
+        assert!(report.new_mtime_ms > 0);
+    }
+
+    #[test]
+    fn write_conflict_round_trips_through_ffi() {
+        // Mac UI calls save_text with an expected hash; another writer
+        // changed the file underneath; FFI must surface the typed
+        // WriteConflict so the host can drive a resolution UI.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session
+            .save_text("note.md".into(), "v1".into(), None)
+            .unwrap();
+        // External write directly to disk, behind the session's back.
+        std::fs::write(tmp.path().join("note.md"), b"external").unwrap();
+
+        let stale = yana_core::content_hash(b"v1");
+        match session.save_text("note.md".into(), "v2".into(), Some(stale.clone())) {
+            Err(VaultError::WriteConflict {
+                current_content_hash,
+                expected_content_hash,
+                current_mtime_ms,
+            }) => {
+                assert_eq!(current_content_hash, yana_core::content_hash(b"external"));
+                assert_eq!(expected_content_hash, stale);
+                assert!(current_mtime_ms > 0);
+            }
+            other => panic!("expected WriteConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_oplog_round_trips_entries_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session
+            .save_text("note.md".into(), "v1".into(), None)
+            .unwrap();
+        session
+            .save_text("note.md".into(), "v2".into(), None)
+            .unwrap();
+
+        let entries = session.read_oplog("note.md".into()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0].op_kind, OpKind::WholeFileReplace));
+        assert_eq!(entries[0].payload_bytes, b"v1");
+        assert_eq!(entries[1].payload_bytes, b"v2");
     }
 }
