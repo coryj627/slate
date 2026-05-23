@@ -987,9 +987,20 @@ final class AppStateTests: XCTestCase {
     /// place of `Task.sleep` so the assertion synchronizes on the
     /// actual subject signal rather than a wall-clock guess — much
     /// less flaky under CI load.
+    ///
+    /// The 5-second default is the ceiling, not the expected wait:
+    /// the positive-assertion path resumes immediately when the
+    /// signal arrives, so a healthy run pays milliseconds. Only
+    /// failure paths pay the full timeout. The previous 1-second
+    /// default occasionally tripped on heavily-loaded `macos-14`
+    /// GitHub runners where the upstream `noteLoadTask` await
+    /// outran the window even though the production code was
+    /// fine (caught on PR #128 CI). Negative-assertion call sites
+    /// (where we *want* to see no emission) pass an explicit
+    /// shorter timeout so they don't inherit the new ceiling.
     private func waitForLineScroll(
         _ state: AppState,
-        timeout: TimeInterval = 1.0
+        timeout: TimeInterval = 5.0
     ) async -> Int? {
         await withCheckedContinuation { cont in
             var resumed = false
