@@ -120,7 +120,7 @@ fn synthetic_markdown(seed: usize) -> String {
     let target_size = target_size_for(seed);
     let mut out = String::with_capacity(target_size + 256);
 
-    if seed % 5 == 0 {
+    if seed.is_multiple_of(5) {
         out.push_str("---\n");
         out.push_str(&format!("title: Note {seed}\n"));
         out.push_str(&format!("tags: [bench, file-{}]\n", seed % 7));
@@ -138,7 +138,7 @@ fn synthetic_markdown(seed: usize) -> String {
                 out.push_str(&format!("## Section {sub_idx}\n\n"));
                 sub_idx += 1;
             }
-            1 if !code_block_written && seed % 10 == 0 => {
+            1 if !code_block_written && seed.is_multiple_of(10) => {
                 out.push_str("```rust\nfn hello() {\n    println!(\"world\");\n}\n```\n\n");
                 code_block_written = true;
             }

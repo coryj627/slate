@@ -129,36 +129,50 @@ pub fn append_entry(cache_dir: &Path, file_id: i64, entry: &OpLogEntry) -> io::R
     fs::create_dir_all(&dir)?;
     let path = oplog_path(cache_dir, file_id);
 
-    // First-write race (PR #105 Codoki feedback). The naive shape —
-    // open(append|create), then check len==0, then write the header —
-    // lets two writers both observe an empty file and both append the
-    // 8-byte header, leaving the file with a duplicate header where
-    // the reader expects an entry's `body_len`. `read_oplog` would
-    // then interpret "YOLG" as a u32 (~1.2 GiB), trip the plausibility
-    // check, and discard every subsequent entry.
+    // First-write race (PR #105 Codoki feedback, refined here).
     //
-    // `create_new(true)` is the OS-atomic test-and-create primitive:
-    // exactly one caller wins the create and is responsible for the
-    // header; everyone else gets `AlreadyExists` and opens the file
-    // in pure-append mode without touching the prefix. Within a
-    // single process the session mutex already serializes appends, so
-    // this guard is for cross-process safety today and future-proofs
-    // multi-process scenarios.
-    let (mut file, is_new_file) = match OpenOptions::new().append(true).create_new(true).open(&path)
-    {
-        Ok(mut f) => {
-            let mut header = [0u8; HEADER_LEN];
-            header[0..4].copy_from_slice(&MAGIC);
-            header[4] = FORMAT_VERSION;
-            // bytes 5..8 are reserved and already zero.
-            f.write_all(&header)?;
-            (f, true)
-        }
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            (OpenOptions::new().append(true).open(&path)?, false)
-        }
-        Err(e) => return Err(e),
-    };
+    // The earlier `create_new(true)` shape is *almost* race-free: only
+    // one caller wins the create. But the dirent becomes visible to
+    // every other thread *immediately* — before the create-winner has
+    // written the 8-byte header. A loser arriving in that window
+    // opens the file in pure-append mode and writes its entry body
+    // ahead of the header, leaving the file with the loser's
+    // `body_len` u32 where MAGIC should be. `read_oplog` then
+    // rejects the file with "bad magic" and every previously committed
+    // entry is unrecoverable.
+    //
+    // Fix: hold an OS-level exclusive lock across "decide whether
+    // to write the header" *and* "write our entry." Whoever gets the
+    // lock first sees the empty file and writes the header before
+    // appending. Subsequent lock-holders see a non-empty file with a
+    // valid header already in place and just append. The lock uses
+    // OFD locks on Linux (per fd, cross-thread-safe) and `LockFileEx`
+    // on Windows — `File::lock` papers over the platform difference.
+    // Lock is released when `file` is dropped at the end of this
+    // function.
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    file.lock()?;
+
+    let len = file.metadata()?.len();
+    let is_new_file = len == 0;
+    if !is_new_file && (len as usize) < HEADER_LEN {
+        // A previous writer crashed between create and header write
+        // (only reachable from pre-fix data, or from a different
+        // writer that doesn't take the lock). Surface it as a hard
+        // error rather than producing a tail-only entry that
+        // `read_oplog` will reject anyway.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("oplog {path:?}: torn header (size {len})"),
+        ));
+    }
+    if is_new_file {
+        let mut header = [0u8; HEADER_LEN];
+        header[0..4].copy_from_slice(&MAGIC);
+        header[4] = FORMAT_VERSION;
+        // bytes 5..8 are reserved and already zero.
+        file.write_all(&header)?;
+    }
 
     let body = serialize_body(entry);
     let body_len = body.len() as u32;
@@ -168,7 +182,9 @@ pub fn append_entry(cache_dir: &Path, file_id: i64, entry: &OpLogEntry) -> io::R
     // single syscall. Under O_APPEND, the kernel is responsible for
     // making each write append atomically; using one write() (rather
     // than several) keeps individual entries from interleaving with
-    // concurrent writers up to the OS's atomic-append guarantee.
+    // concurrent writers up to the OS's atomic-append guarantee. The
+    // exclusive lock above is the load-bearing serializer; this
+    // single-syscall pattern is belt-and-braces.
     let mut framed = Vec::with_capacity(4 + body.len() + 4);
     framed.extend_from_slice(&body_len.to_le_bytes());
     framed.extend_from_slice(&body);
@@ -665,55 +681,82 @@ mod tests {
 
     #[test]
     fn concurrent_first_appends_write_a_single_header() {
-        // Codoki-flagged race regression: two threads race to be the
-        // first append on a brand-new file_id. The naive
-        // "open-append, check len, write header if 0" pattern lets
-        // both win, leaving a duplicate 8-byte header where the
-        // reader expects the next entry's body_len. With
-        // `create_new` only one thread wins the creation and writes
-        // the header; the other falls through to plain append. Both
-        // entries must round-trip cleanly afterward.
+        // Race regression: N threads race to be the first append on a
+        // brand-new file_id. The earlier `create_new`-only shape was
+        // *almost* right — only one thread won the create — but the
+        // dirent became visible to other threads before the create-
+        // winner had written the 8-byte header. A loser arriving in
+        // that window opened the file in pure-append mode and wrote
+        // its body bytes ahead of the header, leaving the file with
+        // the loser's `body_len` u32 where MAGIC should be.
+        // `read_oplog` then rejected the whole file with "bad magic".
         //
-        // Provoking the race deterministically in a unit test is
-        // best-effort — a barrier nudges both threads into the
-        // critical region at the same time, but the actual interleave
-        // is up to the scheduler. Even a single observed pass shows
-        // the OS-level create_new gate is doing its job (the naive
-        // pattern produced a flaky double-header on this same shape
-        // before the fix).
+        // The fix takes an OS-level exclusive lock (`File::lock`)
+        // across the "is the header in place?" check *and* the
+        // entry append, so whichever thread gets the lock first
+        // observes an empty file and writes the header before
+        // releasing. With the lock, this test is deterministic; with
+        // the pre-fix code it was flaky under `cargo test --workspace`
+        // (~10% reproduction rate on macOS) and visibly broken under
+        // higher thread counts.
+        //
+        // We use eight threads (rather than two) because a brief race
+        // window with two threads might never get hit by the scheduler
+        // on a cold cache; eight makes it overwhelmingly likely that
+        // *something* lands in the window if the lock is missing.
         use std::sync::Barrier;
+        const THREADS: usize = 8;
         let tmp = tempfile::tempdir().unwrap();
         let tmp_path = tmp.path().to_path_buf();
-        let entry_a = entry(b"thread-a");
-        let entry_b = entry(b"thread-b");
 
-        let barrier = Arc::new(Barrier::new(2));
-        let p1 = tmp_path.clone();
-        let p2 = tmp_path.clone();
-        let b1 = Arc::clone(&barrier);
-        let b2 = Arc::clone(&barrier);
-
-        let t1 = std::thread::spawn(move || {
-            b1.wait();
-            append_entry(&p1, 42, &entry_a).unwrap();
-        });
-        let t2 = std::thread::spawn(move || {
-            b2.wait();
-            append_entry(&p2, 42, &entry_b).unwrap();
-        });
-        t1.join().unwrap();
-        t2.join().unwrap();
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let p = tmp_path.clone();
+                let b = Arc::clone(&barrier);
+                let payload = format!("thread-{i}").into_bytes();
+                std::thread::spawn(move || {
+                    b.wait();
+                    append_entry(&p, 42, &entry(&payload)).unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
 
         let entries = read_oplog(&tmp_path, 42).unwrap();
-        // Both threads' entries must be present and intact. If a
-        // double header had landed, the second one would be
-        // interpreted as `body_len = "YOLG" as u32` ≈ 1.2 GiB,
-        // tripping MAX_PLAUSIBLE_BODY_LEN and zeroing the count.
+        // Every thread's entry must be present and intact. If a
+        // torn header had landed, the next byte would be interpreted
+        // as a body_len u32 = "YOLG" ≈ 1.2 GiB, tripping
+        // MAX_PLAUSIBLE_BODY_LEN — `read_oplog` would either return a
+        // hard error or zero entries depending on where the cracking
+        // happened.
         assert_eq!(
             entries.len(),
-            2,
-            "both entries should survive the race; got {entries:?}"
+            THREADS,
+            "every entry should survive the race; got {entries:?}"
         );
+    }
+
+    #[test]
+    fn append_rejects_file_with_torn_header() {
+        // Legacy / sabotaged on-disk state: a file exists with
+        // fewer than HEADER_LEN bytes (i.e. a writer that didn't
+        // take our lock crashed mid-header). The next appender must
+        // refuse to write rather than produce a tail-only entry
+        // that `read_oplog` will reject anyway.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("oplog");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = oplog_path(tmp.path(), 7);
+        // Write 4 bytes (less than HEADER_LEN = 8) to simulate a
+        // torn header.
+        std::fs::write(&path, b"YOLG").unwrap();
+
+        let err = append_entry(tmp.path(), 7, &entry(b"after-torn-header")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("torn header"));
     }
 
     use std::sync::Arc;
