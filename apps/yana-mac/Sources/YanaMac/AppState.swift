@@ -971,6 +971,12 @@ final class AppState: ObservableObject {
             return "Search query is invalid: \(message)"
         case .Unsupported(let feature):
             return "\(feature) is not implemented yet."
+        case .WriteConflict:
+            // The editor's save-flow handles this case directly with
+            // a "Keep mine / Reload from disk" affordance (issue #64);
+            // surfacing it through the generic humanReadable path is
+            // a last-resort fallback for non-editor callers.
+            return "This file was modified by another writer since you opened it. Reload to see the latest version."
         }
     }
 }

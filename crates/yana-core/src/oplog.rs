@@ -144,17 +144,18 @@ pub fn append_entry(cache_dir: &Path, file_id: i64, entry: &OpLogEntry) -> io::R
     // single process the session mutex already serializes appends, so
     // this guard is for cross-process safety today and future-proofs
     // multi-process scenarios.
-    let mut file = match OpenOptions::new().append(true).create_new(true).open(&path) {
+    let (mut file, is_new_file) = match OpenOptions::new().append(true).create_new(true).open(&path)
+    {
         Ok(mut f) => {
             let mut header = [0u8; HEADER_LEN];
             header[0..4].copy_from_slice(&MAGIC);
             header[4] = FORMAT_VERSION;
             // bytes 5..8 are reserved and already zero.
             f.write_all(&header)?;
-            f
+            (f, true)
         }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            OpenOptions::new().append(true).open(&path)?
+            (OpenOptions::new().append(true).open(&path)?, false)
         }
         Err(e) => return Err(e),
     };
@@ -174,6 +175,38 @@ pub fn append_entry(cache_dir: &Path, file_id: i64, entry: &OpLogEntry) -> io::R
     framed.extend_from_slice(&checksum.to_le_bytes());
     file.write_all(&framed)?;
     file.sync_data()?;
+    // First-append dirent durability (PR #105 Codoki feedback).
+    // `sync_data` flushes the file's content blocks but does NOT
+    // guarantee the directory entry pointing at our newly-created
+    // inode is on disk. Without this extra step, a power loss right
+    // after the first append could leave the parent directory in a
+    // state where our file doesn't exist — losing the user's first
+    // save despite our own fsync. Gating to `is_new_file` keeps the
+    // cost off subsequent appends, which only need their data
+    // pages flushed (the dirent is already durable from this first
+    // pass).
+    if is_new_file {
+        let _ = fsync_dir(&dir);
+    }
+    Ok(())
+}
+
+/// Best-effort directory fsync. On Unix, opening the directory as a
+/// file and calling `sync_all` makes the directory's metadata
+/// (including just-added dirents) durable. On non-Unix targets the
+/// equivalent semantics don't apply (NTFS commits dirents via its
+/// filesystem journal; sandboxed iOS doesn't expose a directory fsync
+/// anyway), so we no-op there. Errors are returned via the call site,
+/// which currently ignores them — a failed dir-sync still leaves the
+/// data durable; the worst case is the file disappears on power loss
+/// before the next save_text re-creates it.
+#[cfg(unix)]
+fn fsync_dir(dir: &Path) -> io::Result<()> {
+    fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn fsync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -572,6 +605,28 @@ mod tests {
         let err = read_oplog(tmp.path(), 3).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("bad magic"));
+    }
+
+    #[test]
+    fn truncated_header_is_a_hard_error() {
+        // Simulate a crash between create-new and the 8-byte header
+        // write: the file exists but contains fewer than HEADER_LEN
+        // bytes. `read_oplog` can't trust any of it (the magic
+        // hasn't even fully landed) so it must surface InvalidData
+        // rather than silently treating the prefix as the start of
+        // an entry. Codoki PR-105 suggestion locking this in.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = oplog_path(tmp.path(), 13);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // 4 bytes — half a header.
+        std::fs::write(&path, MAGIC).unwrap();
+
+        let err = read_oplog(tmp.path(), 13).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("truncated header"),
+            "expected truncated-header diagnostic, got {err}"
+        );
     }
 
     #[test]
