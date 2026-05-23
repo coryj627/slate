@@ -265,8 +265,17 @@ final class AppState: ObservableObject {
 
     private var subscriptions: Set<AnyCancellable> = []
     private let recentsStore: RecentVaultsStore
+    /// Hand-off for external URLs (http/https/mailto links the user
+    /// clicked in a note's outgoing-links panel). Production wires
+    /// this to `NSWorkspace.shared.open`; tests inject a no-op so
+    /// `XCTest` runs don't actually spawn the user's default browser
+    /// every time the suite touches an external-link code path.
+    private let externalOpener: (URL) -> Bool
 
-    init(recentsStore: RecentVaultsStore? = nil) {
+    init(
+        recentsStore: RecentVaultsStore? = nil,
+        externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
         // Support location can't be set up. Better degraded than crash
@@ -280,6 +289,7 @@ final class AppState: ObservableObject {
                 .appendingPathComponent("slate-recent-vaults-fallback.json")
             self.recentsStore = RecentVaultsStore(fileURL: fallback)
         }
+        self.externalOpener = externalOpener
         self.recentVaults = self.recentsStore.load()
 
         // Watch `selectedFilePath` and (re)trigger note loading on
@@ -627,7 +637,7 @@ final class AppState: ObservableObject {
                 lastActivatedLinkOutcome = .externalOpenFailed(link.targetRaw)
                 return
             }
-            if NSWorkspace.shared.open(url) {
+            if externalOpener(url) {
                 postAccessibilityAnnouncement(
                     "Opened external link in default browser."
                 )
