@@ -1,0 +1,4 @@
+# UniFFI-generated Swift bindings — regenerated on every build, carries no architectural signal.
+# See docs/plans/05_locked_architecture_decisions.md for the FFI boundary contract.
+apps/slate-mac/Sources/SlateMac/slate_uniffi.swift
+apps/slate-mac/Sources/slate_uniffiFFI/
