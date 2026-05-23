@@ -110,7 +110,8 @@ struct NoteContentView: View {
             accessibilityLabel: accessibilityLabelForContent,
             onSave: { [appState] in appState.saveCurrentNote() },
             scrollAnchorRequest: appState.scrollAnchorRequest.eraseToAnyPublisher(),
-            lineScrollRequest: appState.lineScrollRequest.eraseToAnyPublisher()
+            lineScrollRequest: appState.lineScrollRequest.eraseToAnyPublisher(),
+            cursorByteOffsetRequest: appState.cursorByteOffsetRequest.eraseToAnyPublisher()
         )
         .onAppear { _ = text }
     }

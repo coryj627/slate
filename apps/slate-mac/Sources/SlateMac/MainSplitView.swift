@@ -91,6 +91,17 @@ struct MainSplitView: View {
                 )
             }
             ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.openTemplatePicker()
+                } label: {
+                    Label("New from Template", systemImage: "doc.badge.plus")
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .accessibilityHint(
+                    "Opens the template picker. Cmd+Shift+N. Esc closes."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
                 Button("Close Vault") {
                     // Route through attemptCloseVault so the
                     // "Save changes?" prompt fires when the editor
@@ -203,11 +214,35 @@ struct MainSplitView: View {
                 "Save changes to \(name)?"
             )
         }
+        .sheet(isPresented: $appState.isTemplatePickerOpen) {
+            TemplatePicker()
+                .environmentObject(appState)
+        }
+        .sheet(isPresented: templateFlowSheetPresented) {
+            TemplatePromptSheet()
+                .environmentObject(appState)
+        }
         .onAppear {
             postAccessibilityAnnouncement(
                 "Vault \(vaultTitle) opened. Scanning files for the sidebar."
             )
         }
+    }
+
+    /// Binding driving the `TemplatePromptSheet` sheet. True
+    /// whenever `pendingTemplateFlow` is in a non-idle state
+    /// (either prompts or name step). The setter resets the flow
+    /// when SwiftUI fires a dismissal from outside (e.g. a swipe-
+    /// down on iPad — defensive against future platform parity).
+    private var templateFlowSheetPresented: Binding<Bool> {
+        Binding(
+            get: { appState.pendingTemplateFlow != .idle },
+            set: { presented in
+                if !presented {
+                    appState.cancelTemplateFlow()
+                }
+            }
+        )
     }
 
     private var writeConflictPresented: Binding<Bool> {
