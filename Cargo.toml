@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/yana-core",
-    "crates/yana-uniffi",
+    "crates/slate-core",
+    "crates/slate-uniffi",
 ]
 
 [workspace.package]
@@ -10,7 +10,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT"
 authors = ["Cory Joseph <cj@startingblind.com>"]
-repository = "https://github.com/coryj627/YANA"
+repository = "https://github.com/coryj627/slate"
 rust-version = "1.75"
 
 [workspace.dependencies]

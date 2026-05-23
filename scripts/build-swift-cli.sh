@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and run the Swift smoke-test CLI for yana-uniffi.
+# Build and run the Swift smoke-test CLI for slate-uniffi.
 #
 # Validates Rust -> uniffi-rs -> Swift end-to-end on Mac.
 # Run from anywhere; cd's to the workspace root.
@@ -18,7 +18,7 @@ fi
 TARGET_DIR="target/$PROFILE"
 GENERATED_DIR="target/generated/swift"
 SWIFT_OUT_DIR="target/swift-cli"
-SWIFT_OUT="$SWIFT_OUT_DIR/yana-swift-cli"
+SWIFT_OUT="$SWIFT_OUT_DIR/slate-swift-cli"
 
 # Source rustup environment if cargo isn't already on PATH.
 if ! command -v cargo >/dev/null 2>&1; then
@@ -28,14 +28,14 @@ if ! command -v cargo >/dev/null 2>&1; then
     fi
 fi
 
-echo "==> Building yana-uniffi ($PROFILE)"
-cargo build -p yana-uniffi $CARGO_PROFILE_FLAG
+echo "==> Building slate-uniffi ($PROFILE)"
+cargo build -p slate-uniffi $CARGO_PROFILE_FLAG
 
 echo "==> Generating Swift bindings"
 mkdir -p "$GENERATED_DIR"
-cargo run -p yana-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
+cargo run -p slate-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
     generate \
-    --library "$TARGET_DIR/libyana_uniffi.dylib" \
+    --library "$TARGET_DIR/libslate_uniffi.dylib" \
     --language swift \
     --out-dir "$GENERATED_DIR"
 
@@ -45,11 +45,11 @@ swiftc \
     -emit-executable \
     -o "$SWIFT_OUT" \
     -L "$TARGET_DIR" \
-    -lyana_uniffi \
+    -lslate_uniffi \
     -I "$GENERATED_DIR" \
-    -import-objc-header "$GENERATED_DIR/yana_uniffiFFI.h" \
-    "$GENERATED_DIR/yana_uniffi.swift" \
+    -import-objc-header "$GENERATED_DIR/slate_uniffiFFI.h" \
+    "$GENERATED_DIR/slate_uniffi.swift" \
     examples/swift-cli/main.swift
 
-echo "==> Running yana-swift-cli"
+echo "==> Running slate-swift-cli"
 DYLD_LIBRARY_PATH="$WORKSPACE_ROOT/$TARGET_DIR" "$SWIFT_OUT" "$@"

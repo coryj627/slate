@@ -1,8 +1,8 @@
 # Swift tests for the Mac app.
 #
-# Runs the YanaMac XCTest target on every PR that touches the app's
+# Runs the SlateMac XCTest target on every PR that touches the app's
 # Swift sources or the Rust crates the app links against. The test
-# target imports YanaMac which depends on the yana_uniffi dylib, so we
+# target imports SlateMac which depends on the slate_uniffi dylib, so we
 # need cargo build + uniffi-bindgen before `swift test`.
 
 name: Swift Tests
@@ -10,18 +10,18 @@ name: Swift Tests
 on:
   pull_request:
     paths:
-      - 'apps/yana-mac/**'
-      - 'crates/yana-uniffi/**'
-      - 'crates/yana-core/**'
+      - 'apps/slate-mac/**'
+      - 'crates/slate-uniffi/**'
+      - 'crates/slate-core/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/swift-tests.yml'
   push:
     branches: [main]
     paths:
-      - 'apps/yana-mac/**'
-      - 'crates/yana-uniffi/**'
-      - 'crates/yana-core/**'
+      - 'apps/slate-mac/**'
+      - 'crates/slate-uniffi/**'
+      - 'crates/slate-core/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/swift-tests.yml'
@@ -44,16 +44,16 @@ jobs:
 
       - name: Cache Rust build
         # Caches target/ and ~/.cargo/registry keyed off Cargo.lock so a
-        # cold cargo build for yana-uniffi stays under a minute instead
+        # cold cargo build for slate-uniffi stays under a minute instead
         # of compiling the whole crate graph from scratch every run.
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
-      - name: Build yana-uniffi + generate Swift bindings + swift build
+      - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:
-        #   cargo build -p yana-uniffi
+        #   cargo build -p slate-uniffi
         #   uniffi-bindgen generate (Swift)
-        #   stage bindings into apps/yana-mac/Sources/
-        #   swift build inside apps/yana-mac/
+        #   stage bindings into apps/slate-mac/Sources/
+        #   swift build inside apps/slate-mac/
         # `--skip-a11y-check` keeps a11y enforcement isolated to the
         # dedicated Accessibility Check workflow; a regression there
         # shouldn't also break this run.
@@ -61,5 +61,5 @@ jobs:
 
       - name: Run swift test
         run: |
-          cd apps/yana-mac
+          cd apps/slate-mac
           DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug" swift test

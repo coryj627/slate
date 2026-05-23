@@ -13,7 +13,7 @@
 5. **Per-platform UI patterns** — what's native, what wraps native, what falls back.
 6. **Content-type pipelines** — Markdown, Math, Mermaid, with multi-representation outputs.
 7. **Editor data model and sync direction** — rope + persistent operation log; V1 sync detection-only, V2 LiveSync-compatible CouchDB target; accessible conflict resolution as a deliberate V2 differentiator.
-8. **Search, queries, and Bases** — `.base` YAML primary, Dataview DQL parseable, YANA AST as engine target; SQLite-backed with formula layer; accessible query builder; accessible data grid per platform.
+8. **Search, queries, and Bases** — `.base` YAML primary, Dataview DQL parseable, Slate AST as engine target; SQLite-backed with formula layer; accessible query builder; accessible data grid per platform.
 9. **Performance and scaling** — SQLite as index not source-of-truth; six baked-in V1 design constraints; concrete benchmark targets at release gate.
 10. **Extensibility model and Obsidian migration path** — three tiers (config V1, CLI/API V1.x, WASM V2); plugins never draw UI; decentralized distribution; documented Obsidian migration path as a deliverable.
 11. **WebView exception rule** — the one narrow case and its three constraints.
@@ -79,7 +79,7 @@ Reasons:
 - **FFI is a first-class story.** `uniffi-rs` generates idiomatic Swift / Kotlin bindings; `csbindgen` generates idiomatic C#. Both sides feel like normal native code.
 - **Memory safety matters in the surface area** — Markdown parsing, file I/O, network sync, crypto for future LiveSync compatibility. Rust's compiler eliminates a class of bugs that would be catastrophic in C++.
 - **No runtime overhead.** Compiles to a platform-native `.dylib` / `.dll` / `.so` without dragging a garbage collector or interpreter along.
-- **Ecosystem is ready** for every dependency YANA needs (parsing, SQLite, file watching, encryption, HTTP).
+- **Ecosystem is ready** for every dependency Slate needs (parsing, SQLite, file watching, encryption, HTTP).
 - **Learned once, applied everywhere.** Whatever you learn for Rust on the backend works the same on Windows, macOS, iOS, and Android.
 
 ### 2.2 Per-platform UI
@@ -563,7 +563,7 @@ Per-platform visual rendering:
 - **Windows:** SVG via SharpVectors (XAML conversion) or as image.
 - **Android:** AndroidSVG (preferred) or WebView fallback for diagrams AndroidSVG can't display.
 
-**Accessibility-first feature unique to YANA:** the structured-description output is generated alongside the visual. Mermaid's own SVG output is acknowledged as "wholly inaccessible to screen readers" by the maintainers (see [mermaid-js#5632](https://github.com/mermaid-js/mermaid/issues/5632), [#2395](https://github.com/mermaid-js/mermaid/issues/2395)). YANA always exposes the structured description in the a11y tree alongside the SVG.
+**Accessibility-first feature unique to Slate:** the structured-description output is generated alongside the visual. Mermaid's own SVG output is acknowledged as "wholly inaccessible to screen readers" by the maintainers (see [mermaid-js#5632](https://github.com/mermaid-js/mermaid/issues/5632), [#2395](https://github.com/mermaid-js/mermaid/issues/2395)). Slate always exposes the structured description in the a11y tree alongside the SVG.
 
 Future work: contribute the structured-description feature back to `mermaid-rs-renderer` as an upstream accessibility PR.
 
@@ -592,7 +592,7 @@ Rejected alternatives: LSP-based highlighting (too heavy for short snippets), pe
 
 R and Julia included for scientific and academic users — both have stable tree-sitter grammars and meaningful adoption in statistics and scientific computing. Total compiled-in grammar size estimated at ~5–10 MB. Anything outside this set falls through to syntect's TextMate grammars.
 
-**V1.x:** WASM-based grammar loading at runtime via [`wasmtime`](https://github.com/bytecodealliance/wasmtime) (in the Rust backend, separate from the WebView exception rule). Would let users add languages without rebuilding YANA.
+**V1.x:** WASM-based grammar loading at runtime via [`wasmtime`](https://github.com/bytecodealliance/wasmtime) (in the Rust backend, separate from the WebView exception rule). Would let users add languages without rebuilding Slate.
 
 #### Visual tokens (for highlighting)
 
@@ -627,7 +627,7 @@ Token kinds are **semantic, not literal colors**. The UI maps kinds to visual pr
 
 #### Semantic spans (for AT — the differentiator)
 
-Tree-sitter's parse tree contains structural information (function definitions, imports, type annotations, etc.) that today is used only for visual highlighting in editors. YANA maps tree-sitter node kinds to a stable `SemanticKind` enum and exposes the spans to the platform's accessibility tree. This enables AT navigation commands and structural announcements that no other PKM currently provides.
+Tree-sitter's parse tree contains structural information (function definitions, imports, type annotations, etc.) that today is used only for visual highlighting in editors. Slate maps tree-sitter node kinds to a stable `SemanticKind` enum and exposes the spans to the platform's accessibility tree. This enables AT navigation commands and structural announcements that no other PKM currently provides.
 
 ```rust
 pub struct SemanticSpan {
@@ -755,7 +755,7 @@ V1 supports:
 - BibTeX / BibLaTeX (`.bib`)
 - CSL-JSON (`.json` conforming to the CSL JSON schema)
 
-User configures bibliography sources and CSL styles via `.yana/prefs.json`:
+User configures bibliography sources and CSL styles via `.slate/prefs.json`:
 
 ```json
 {
@@ -775,7 +775,7 @@ Multiple bibliography sources permitted; entries merged by citation key. CSL sty
 
 | Phase | Integration |
 |---|---|
-| **V1** | File-based: user exports from Zotero (via Better BibTeX or built-in) to `.bib` or CSL-JSON in the vault. YANA reads on open and re-reads on file change. |
+| **V1** | File-based: user exports from Zotero (via Better BibTeX or built-in) to `.bib` or CSL-JSON in the vault. Slate reads on open and re-reads on file change. |
 | **V1.x** | Better BibTeX auto-export file watching: "Bibliography updated" notifications when BBT writes to its configured auto-export path. |
 | **V2** | Direct Zotero local API (port 23119, available when Better BibTeX is installed) for live autocomplete, full entry display, PDF attachment lookup. Optional; file-based path always works. |
 | **Deferred** | Direct Zotero SQLite read; Zotero Web API for cloud-only libraries. |
@@ -933,7 +933,7 @@ Decided 2026-05-17.
 
 **In-memory representation:** a [rope](https://en.wikipedia.org/wiki/Rope_(data_structure)) data structure for the document text. Crate choices: [`ropey`](https://crates.io/crates/ropey) (mature, widely used) or [`crop`](https://crates.io/crates/crop) (newer, similar API). Edits are insert/delete/replace operations on the rope.
 
-**Persistent operation log:** every edit operation is also written to a per-file operation log at `.yana/oplog/<file>.oplog`. The log captures both low-level text operations and higher-level semantic operations (property changes, heading inserts, list-item moves, etc.). The log is **not user-visible in V1** — it's internal infrastructure enabling:
+**Persistent operation log:** every edit operation is also written to a per-file operation log at `.slate/oplog/<file>.oplog`. The log captures both low-level text operations and higher-level semantic operations (property changes, heading inserts, list-item moves, etc.). The log is **not user-visible in V1** — it's internal infrastructure enabling:
 
 - Robust undo/redo across editor sessions.
 - V1.x change-tracking features ("what did I change since I last opened this note?").
@@ -957,7 +957,7 @@ The earlier-stated LiveSync target is reaffirmed under the new stack. CouchDB cl
 
 ### 7.3 Accessible conflict resolution as a deliberate V2 differentiator
 
-The standard conflict UX in PKM tools is "show two versions side-by-side." For sighted users it's bad; for AT users it's unusable. YANA's V2 conflict resolution feature is a deliberate differentiator, made possible by Option B's operation log.
+The standard conflict UX in PKM tools is "show two versions side-by-side." For sighted users it's bad; for AT users it's unusable. Slate's V2 conflict resolution feature is a deliberate differentiator, made possible by Option B's operation log.
 
 **The pattern:**
 
@@ -1124,7 +1124,7 @@ impl VaultSession {
 
 The operation log will grow over time. Strategy:
 
-- **Append-only files** at `.yana/oplog/<file>.oplog` — one log file per content file.
+- **Append-only files** at `.slate/oplog/<file>.oplog` — one log file per content file.
 - **Binary format** with length-prefixed records for fast tail reads and resumable appends.
 - **Compaction policy:** when a file's op log exceeds N entries (initial: 10,000) or M bytes (initial: 5 MB), the log is compacted into a snapshot + recent ops. Old ops past a retention window (initial: 90 days) are discarded.
 - **Compaction is incremental** — happens in background, never blocks the editor.
@@ -1143,16 +1143,16 @@ vault-root/
 ├── attachment.png
 ├── .obsidian/                  # preserved unchanged, Obsidian-compatible
 │   └── ... (preserved)
-└── .yana/                      # YANA-specific state (local-only by default)
+└── .slate/                      # Slate-specific state (local-only by default)
     ├── cache.sqlite            # metadata index cache
     ├── oplog/                  # per-file operation logs
     │   ├── note-1.md.oplog
     │   └── ...
     ├── conflicts/              # pending conflicts awaiting resolution
-    └── prefs.json              # YANA vault-specific prefs
+    └── prefs.json              # Slate vault-specific prefs
 ```
 
-Default sync-ignore patterns when the V2 sync writer ships: `.yana/cache.sqlite`, `.yana/conflicts/`, `.yana/oplog/`. The `.yana/prefs.json` may or may not sync depending on user preference (default: local-only, with an opt-in to sync prefs).
+Default sync-ignore patterns when the V2 sync writer ships: `.slate/cache.sqlite`, `.slate/conflicts/`, `.slate/oplog/`. The `.slate/prefs.json` may or may not sync depending on user preference (default: local-only, with an opt-in to sync prefs).
 
 ---
 
@@ -1166,14 +1166,14 @@ Decided 2026-05-17.
 |---|---|---|
 | **`.base` YAML** | First-class, round-trippable with Obsidian | Vault compatibility; user-authored Bases files |
 | **Dataview DQL** | Parsed but not authored | Migration path for users with existing Dataview queries |
-| **YANA query AST** | The actual engine target | What the accessible query builder produces |
+| **Slate query AST** | The actual engine target | What the accessible query builder produces |
 
-All three compile to the same `YanaQuery` AST. Round-trip fidelity for `.base` is a hard requirement (open in YANA, save, open in Obsidian → no loss). **DataviewJS (the JavaScript variant) is not supported and never will be** — it requires a JS runtime YANA doesn't have. Users with DataviewJS code rewrite as YANA queries or V2 WASM plugins. This fits the Obsidian migration commitment in Section 10.
+All three compile to the same `SlateQuery` AST. Round-trip fidelity for `.base` is a hard requirement (open in Slate, save, open in Obsidian → no loss). **DataviewJS (the JavaScript variant) is not supported and never will be** — it requires a JS runtime Slate doesn't have. Users with DataviewJS code rewrite as Slate queries or V2 WASM plugins. This fits the Obsidian migration commitment in Section 10.
 
 ### 8.2 Query AST
 
 ```rust
-pub struct YanaQuery {
+pub struct SlateQuery {
     pub source: QuerySource,
     pub filters: Vec<FilterCondition>,
     pub formulas: HashMap<String, Formula>,
@@ -1217,7 +1217,7 @@ pub enum ViewSpec {
     │
     │ parse
     ▼
-YanaQuery AST
+SlateQuery AST
     │
     │ plan (which tables, joins, indexes)
     ▼
@@ -1250,7 +1250,7 @@ CREATE TABLE saved_queries (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
   description     TEXT,
-  query_json      TEXT NOT NULL,        -- YanaQuery AST serialized
+  query_json      TEXT NOT NULL,        -- SlateQuery AST serialized
   source_syntax   INTEGER NOT NULL,     -- 0=builder, 1=.base, 2=DQL
   created_at_ms   INTEGER NOT NULL,
   modified_at_ms  INTEGER NOT NULL
@@ -1299,13 +1299,13 @@ Two AT-relevant fields worth noting:
 
 Per the original roadmap §6, V1 ships **table** and **list**. **Cards** in V1.x. **Map view** deferred to V2+.
 
-Map view accessibility caveat: a geographic map of notes does not translate well to AT. If/when YANA ships map view, the AT representation is a structured list ("Notes by location: Paris — 3; London — 5; ..."), not a synthesized map description. Sighted users get the map; AT users get the list. Both exposed; user picks.
+Map view accessibility caveat: a geographic map of notes does not translate well to AT. If/when Slate ships map view, the AT representation is a structured list ("Notes by location: Paris — 3; London — 5; ..."), not a synthesized map description. Sighted users get the map; AT users get the list. Both exposed; user picks.
 
 ### 8.6 Accessible query builder
 
 The genuinely hard design problem. Today most users write `.base` YAML by hand or use Obsidian's visual builder; for AT users both are bad UX.
 
-YANA's approach: **structural, condition-by-condition**, each piece independently editable, with live preview and audio summaries.
+Slate's approach: **structural, condition-by-condition**, each piece independently editable, with live preview and audio summaries.
 
 UX shape:
 
@@ -1316,7 +1316,7 @@ UX shape:
 5. **Live preview pane** — separate accessible region. Updates as builder changes. Audio summary updates: "Query returns 23 notes. First result: 'Project Roadmap', modified yesterday."
 6. **Save as `.base` file** — when satisfied, the query AST serializes to `.base` YAML for vault compatibility.
 
-The builder produces the same `YanaQuery` AST that `.base` parsing and DQL parsing produce. All three paths are fully interchangeable.
+The builder produces the same `SlateQuery` AST that `.base` parsing and DQL parsing produce. All three paths are fully interchangeable.
 
 ### 8.7 Accessible data grid (per platform)
 
@@ -1373,7 +1373,7 @@ pub struct SavedQuery {
     pub id: QueryId,
     pub name: String,
     pub description: Option<String>,
-    pub query: YanaQuery,
+    pub query: SlateQuery,
     pub source_syntax: QuerySyntax,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
@@ -1386,19 +1386,19 @@ Saved queries appear in:
 
 - Command palette ("Run query: Active projects").
 - A "Queries" sidebar section.
-- **Embeddable in notes** via a `yana-query:` directive (V1.x) — similar to Dataview's `dataview:` block, but YANA's renders to the accessible data grid, not visual-only HTML.
+- **Embeddable in notes** via a `slate-query:` directive (V1.x) — similar to Dataview's `dataview:` block, but Slate's renders to the accessible data grid, not visual-only HTML.
 
 ### 8.11 New API surface
 
 ```rust
 impl VaultSession {
     fn create_query_builder(&self) -> QueryBuilder;
-    fn execute_query(&self, query: &YanaQuery, cancel: &CancelToken)
+    fn execute_query(&self, query: &SlateQuery, cancel: &CancelToken)
         -> Result<QueryResultSet, VaultError>;
-    fn save_as_base_file(&self, query: &YanaQuery, path: &str) -> Result<(), VaultError>;
-    fn parse_base_file(&self, path: &str) -> Result<YanaQuery, VaultError>;
-    fn parse_dql(&self, dql_source: &str) -> Result<YanaQuery, VaultError>;
-    fn save_query(&self, name: &str, query: YanaQuery) -> Result<QueryId, VaultError>;
+    fn save_as_base_file(&self, query: &SlateQuery, path: &str) -> Result<(), VaultError>;
+    fn parse_base_file(&self, path: &str) -> Result<SlateQuery, VaultError>;
+    fn parse_dql(&self, dql_source: &str) -> Result<SlateQuery, VaultError>;
+    fn save_query(&self, name: &str, query: SlateQuery) -> Result<QueryId, VaultError>;
     fn list_saved_queries(&self) -> Result<Vec<SavedQuerySummary>, VaultError>;
     fn full_text_search(&self, query: &str, scope: Option<QuerySource>, cancel: &CancelToken)
         -> Result<QueryResultSet, VaultError>;
@@ -1413,7 +1413,7 @@ Decided 2026-05-17.
 
 ### 9.1 Vault scale targets
 
-| Vault size | Use case | YANA target |
+| Vault size | Use case | Slate target |
 |---|---|---|
 | 1k–5k notes | Power user | Trivial |
 | 10k–20k notes | Heavy user, researcher | Comfortable on all platforms (V1 sweet spot) |
@@ -1442,11 +1442,11 @@ A load-bearing scaling property: SQLite holds **derived metadata, not user conte
 | FTS5 full-text index | Attachments / binary files |
 | Saved queries and parsed Bases files | `.base` files |
 | Specialized blocks (parsed math, mermaid, code) | CSL style files, themes, prefs |
-| | Operation logs (`.yana/oplog/`, append-only binary) |
+| | Operation logs (`.slate/oplog/`, append-only binary) |
 
-**If the SQLite database is deleted, YANA rebuilds it from vault content on next open.** The cache is regenerable; nothing user-authored lives only in SQLite.
+**If the SQLite database is deleted, Slate rebuilds it from vault content on next open.** The cache is regenerable; nothing user-authored lives only in SQLite.
 
-This separation is what makes vault sync feasible (only `.md` files and explicit YANA state need to sync, not the index) and what bounds memory growth (the index can be dropped and rebuilt without data loss).
+This separation is what makes vault sync feasible (only `.md` files and explicit Slate state need to sync, not the index) and what bounds memory growth (the index can be dropped and rebuilt without data loss).
 
 ### 9.3 Six V1 design constraints (baked into the API)
 
@@ -1519,7 +1519,7 @@ Where this design would actually break, not just slow down:
 |---|---|---|
 | >500k files in one vault | Index management overhead dominates | Sharded indexes, per-folder databases (V2+, only if real demand) |
 | >50 MB individual Markdown file | Native text views struggle | "Split the file" is the right answer, not "make the editor faster" |
-| >10 GB cumulative op log without compaction | `.yana/` directory bloats; potentially exceeds filesystem quotas | Compaction must work; monitoring needed; failure is a user-visible error |
+| >10 GB cumulative op log without compaction | `.slate/` directory bloats; potentially exceeds filesystem quotas | Compaction must work; monitoring needed; failure is a user-visible error |
 | Real-time multi-user concurrent edit | SQLite single-writer model doesn't fit | Different database entirely (CRDT-aware). Explicitly not a V1 or V2 target |
 | Cross-vault queries spanning multiple databases | Each vault has its own SQLite database; cross-vault joins are infeasible | Re-architecture would be needed. Not a V1 or V2 target |
 
@@ -1546,17 +1546,17 @@ Decided 2026-05-17.
 
 ### 8.1 Three-tier extensibility model
 
-YANA's extensibility is structured as three distinct tiers with different security and capability profiles. Each tier has clear boundaries and is permanent — these are not nested or layered, they're separate paths suited to different needs.
+Slate's extensibility is structured as three distinct tiers with different security and capability profiles. Each tier has clear boundaries and is permanent — these are not nested or layered, they're separate paths suited to different needs.
 
 | Tier | Mechanism | Ships in | What it can do | What it cannot do |
 |---|---|---|---|---|
 | 1 | Configuration-based extensions | V1 | Customize visual style, automate text expansion, define templates and saved queries, supply CSL styles, bind keyboard shortcuts | Run code; access vault programmatically |
-| 2 | External CLI + local HTTP API | V1 (CLI) / V1.x (API) | Anything from outside YANA's process; integrations, automation, batch operations | Affect in-app accessibility or interactive flows (it's out-of-process) |
+| 2 | External CLI + local HTTP API | V1 (CLI) / V1.x (API) | Anything from outside Slate's process; integrations, automation, batch operations | Affect in-app accessibility or interactive flows (it's out-of-process) |
 | 3 | In-process WASM plugin sandbox | V2 | Read/write vault, transform content, register commands, subscribe to events, make network requests — all under capability grants | Draw UI directly; manipulate the a11y tree; run code on the UI thread |
 
 ### 8.2 Tier 1: Configuration-based extensions (V1)
 
-Declarative configuration files in the vault or `.yana/`. No code execution.
+Declarative configuration files in the vault or `.slate/`. No code execution.
 
 - **Themes** — token-kind to visual property (color, weight, italic, underline) mapping. JSON/TOML format. (See also Section 6.4 "Theme model.")
 - **Snippets** — text expansion. Pure text replacement (e.g., `;todo` → `- [ ] `).
@@ -1570,20 +1570,20 @@ Declarative configuration files in the vault or `.yana/`. No code execution.
 
 ### 8.3 Tier 2: External CLI and local HTTP API
 
-YANA exposes itself to the outside world via two mechanisms:
+Slate exposes itself to the outside world via two mechanisms:
 
-- **CLI tool** (`yana`) **ships in V1.** Thin wrapper around the Rust backend: open, read, write, list, search, query, render. Pipeable. Foundation for shell scripting, automation, batch operations.
+- **CLI tool** (`slate`) **ships in V1.** Thin wrapper around the Rust backend: open, read, write, list, search, query, render. Pipeable. Foundation for shell scripting, automation, batch operations.
 - **Local HTTP API** **ships in V1.x.** Bound to localhost, authenticated by per-request token, exposes the same surface as the CLI plus events.
 
 **Properties:** out-of-process, no a11y impact, no in-app security model needed (separate processes), language-agnostic. Covers automation, integrations, and "I want to write a Python script to bulk-edit my vault" workflows.
 
 ### 8.4 Tier 3: In-process WASM plugin sandbox (V2)
 
-Plugins compile to WebAssembly. YANA runs them inside [`wasmtime`](https://github.com/bytecodealliance/wasmtime) with capability-based security.
+Plugins compile to WebAssembly. Slate runs them inside [`wasmtime`](https://github.com/bytecodealliance/wasmtime) with capability-based security.
 
 - **Language-agnostic.** Plugins written in Rust, AssemblyScript, C, Go, Zig, or any language with a WASM target.
 - **Capability-based security.** Each plugin manifests what it needs: `vault.read`, `vault.write`, `network`, `filesystem`. User explicitly grants each capability at install time. Revocable.
-- **No direct UI access.** This is the load-bearing accessibility decision (see Section 8.5). Plugins cannot draw UI elements. They produce structured content (Markdown, JSON, structured data) that YANA's native UI renders accessibly.
+- **No direct UI access.** This is the load-bearing accessibility decision (see Section 8.5). Plugins cannot draw UI elements. They produce structured content (Markdown, JSON, structured data) that Slate's native UI renders accessibly.
 - **What plugins register:** commands (integrated into the native command palette), event handlers (file changes, on-save, etc.), content transformers, content generators.
 
 #### Plugin manifest format
@@ -1605,7 +1605,7 @@ filesystem = false
 wasm = "main.wasm"
 
 [commands]
-"yana.weekly-review.generate" = "Generate weekly review note"
+"slate.weekly-review.generate" = "Generate weekly review note"
 
 [events]
 on_save = false
@@ -1619,14 +1619,14 @@ on_open = false
 What plugins *can* do:
 - Read vault content.
 - Transform Markdown.
-- Produce new content (which YANA's native UI renders).
+- Produce new content (which Slate's native UI renders).
 - Register commands (which integrate with the native command palette, accessible by keyboard / voice / screen reader as first-class commands).
 - Subscribe to vault and editor events.
 - Make network requests (with explicit user permission).
 
 What plugins *cannot* do:
 - Draw custom widgets or position views.
-- Override accessibility annotations on any YANA-rendered content.
+- Override accessibility annotations on any Slate-rendered content.
 - Block the main thread.
 - Manipulate the a11y tree.
 - Cancel built-in accessibility commands.
@@ -1638,16 +1638,16 @@ This is the same shape as "content plugins" in some other ecosystems but made ex
 Some plugin use cases want visual extensibility (custom graph rendering, custom timeline, Kanban variant). Two answers:
 
 1. **Most are covered by Bases / Graph / built-in custom views.** Bases is a query → results model with multiple renderers (table, list, cards, map); these are native. That covers most "I want a different view of this data" needs.
-2. **For genuinely novel visualizations,** V3+ extension point: plugins register a **"render kind"** — a structured content type. YANA's native UI maps it to a native rendering primitive (e.g., a Gantt chart built into YANA renders the structured rows the plugin produces). The plugin doesn't draw pixels.
+2. **For genuinely novel visualizations,** V3+ extension point: plugins register a **"render kind"** — a structured content type. Slate's native UI maps it to a native rendering primitive (e.g., a Gantt chart built into Slate renders the structured rows the plugin produces). The plugin doesn't draw pixels.
 
 This is restrictive but is the only way to keep accessibility intact across third-party extensions.
 
 ### 8.6 Rejected alternatives (and why)
 
-- **Third-party JavaScript plugins (the Obsidian model).** The whole reason YANA isn't on webview is to avoid JS-induced accessibility regressions. JS plugins also assume DOM/CodeMirror/Electron capabilities they wouldn't have in YANA.
+- **Third-party JavaScript plugins (the Obsidian model).** The whole reason Slate isn't on webview is to avoid JS-induced accessibility regressions. JS plugins also assume DOM/CodeMirror/Electron capabilities they wouldn't have in Slate.
 - **Lua scripting sandbox** ([`mlua`](https://github.com/mlua-rs/mlua)). Fine technology, but the user audience (academic, AT users) isn't Lua-native; the academic ecosystem is Python-dominant. WASM supports plugins written in any language including Python (via Pyodide). WASM's capability model is also more rigorous than embedded Lua sandboxing.
 - **QuickJS / V8 JS embedding.** Same arguments against Lua, plus the JS ecosystem expectations (DOM, Node modules) don't match.
-- **Native dylib plugins.** Effectively impossible on iOS App Store distribution; crash-not-isolated from YANA; no real security model; code-signing nightmare.
+- **Native dylib plugins.** Effectively impossible on iOS App Store distribution; crash-not-isolated from Slate; no real security model; code-signing nightmare.
 
 ### 8.7 Distribution model
 
@@ -1656,44 +1656,44 @@ Decentralized. No central marketplace.
 - Plugins are signed bundles installed by URL or file.
 - Each install displays the plugin's capability manifest; user grants explicit capabilities.
 - Capabilities are revocable from settings.
-- No YANA-side marketplace curation, review, or hosting.
+- No Slate-side marketplace curation, review, or hosting.
 
 This avoids the marketplace-curation burden, the trust/liability of being a plugin distributor, and the slippery slope into App-Store-style review processes. The cost is discoverability, which is solved by:
 
-- A community-maintained registry (separate repo, community-maintained, not gatekept by YANA).
+- A community-maintained registry (separate repo, community-maintained, not gatekept by Slate).
 - Convention: plugins live in GitHub repos with a standard manifest; users install by pasting URLs.
 
 ### 8.8 Obsidian plugin migration path
 
-YANA will not pretend to be Obsidian-plugin-compatible. It IS Obsidian-vault-compatible at the data level. The migration path is a documented commitment — a real deliverable, not aspiration.
+Slate will not pretend to be Obsidian-plugin-compatible. It IS Obsidian-vault-compatible at the data level. The migration path is a documented commitment — a real deliverable, not aspiration.
 
 #### Three deliverables, three phases
 
-##### V1: "What YANA covers natively, and what happens to your existing vault data"
+##### V1: "What Slate covers natively, and what happens to your existing vault data"
 
-The most important and least code-heavy deliverable. For each Obsidian plugin whose function YANA covers natively:
+The most important and least code-heavy deliverable. For each Obsidian plugin whose function Slate covers natively:
 
 - The Obsidian plugin and what it does.
-- The YANA native equivalent.
-- What happens to existing vault data when opened in YANA — what syntax is recognized, what metadata is preserved, what's silently ignored, what's lost.
-- Migration steps if any are needed (e.g., "Templater scripts using JavaScript need to be rewritten as YANA templates with safe substitution, or as V2 WASM plugins").
+- The Slate native equivalent.
+- What happens to existing vault data when opened in Slate — what syntax is recognized, what metadata is preserved, what's silently ignored, what's lost.
+- Migration steps if any are needed (e.g., "Templater scripts using JavaScript need to be rewritten as Slate templates with safe substitution, or as V2 WASM plugins").
 
-Covers the ~10–20 plugins that account for most Obsidian usage: Dataview → Bases; Tasks → native; Kanban → native; Templater → native templates; QuickAdd → native capture; Calendar / Periodic Notes → native; Citations plugins → native (see Section 6.5); LiveSync → V2 native sync; theme plugins → YANA theme system; sync plugins → not needed (detection in V1, native sync in V2).
+Covers the ~10–20 plugins that account for most Obsidian usage: Dataview → Bases; Tasks → native; Kanban → native; Templater → native templates; QuickAdd → native capture; Calendar / Periodic Notes → native; Citations plugins → native (see Section 6.5); LiveSync → V2 native sync; theme plugins → Slate theme system; sync plugins → not needed (detection in V1, native sync in V2).
 
 This is drafted *during* development, not at the end. As each native built-in lands, its migration section is written.
 
-##### V1.x: "What YANA cannot and will not port, and why"
+##### V1.x: "What Slate cannot and will not port, and why"
 
 A documented, honest list of architectural incompatibilities. Important for trust — we're straight with users about what won't work, rather than letting them discover it plugin by plugin.
 
 Categories:
 
-- **Editor extensions (CodeMirror-based).** YANA uses native text views per platform; CodeMirror plugins don't apply. Examples: code-block customizers, editor syntax highlighters, vim/emacs-style extensions.
-- **DOM-based custom views.** YANA has no DOM. Examples: graph customization plugins, custom HTML rendering plugins.
-- **CSS injection / `styles.css` plugins.** YANA themes are structured (token-kind to visual property), not CSS. Most theme plugins.
+- **Editor extensions (CodeMirror-based).** Slate uses native text views per platform; CodeMirror plugins don't apply. Examples: code-block customizers, editor syntax highlighters, vim/emacs-style extensions.
+- **DOM-based custom views.** Slate has no DOM. Examples: graph customization plugins, custom HTML rendering plugins.
+- **CSS injection / `styles.css` plugins.** Slate themes are structured (token-kind to visual property), not CSS. Most theme plugins.
 - **Plugins requiring direct UI access.** A11y constraint (Section 8.5). Examples: floating panels, custom modals, status bar manipulation.
 - **Mobile-only plugins.** Plugins relying on Obsidian's specific mobile APIs.
-- **Plugins using Node.js / Electron APIs.** YANA isn't Node/Electron.
+- **Plugins using Node.js / Electron APIs.** Slate isn't Node/Electron.
 
 For each: the reason, and what (if anything) replaces the capability through other means.
 
@@ -1701,24 +1701,24 @@ For each: the reason, and what (if anything) replaces the capability through oth
 
 When the WASM plugin API ships:
 
-- **API mapping reference.** Side-by-side: Obsidian's `app.vault.read(file)` ↔ YANA's `vault_session.read_text(path)`. Obsidian's `metadataCache.getCache(file)` ↔ YANA's `get_file_metadata(path)`. Plus the inverse: "Obsidian APIs without a YANA equivalent" with explanations.
-- **Conceptual model differences.** Plugin lifecycle, event model, capability model, UI model — where YANA diverges and why.
-- **Migration cookbook.** Pattern-by-pattern. "If your Obsidian plugin listens for `file-open` events and modifies the active editor, in YANA you'd register a `vault.on_open` handler that emits a content transformation." Real code examples.
+- **API mapping reference.** Side-by-side: Obsidian's `app.vault.read(file)` ↔ Slate's `vault_session.read_text(path)`. Obsidian's `metadataCache.getCache(file)` ↔ Slate's `get_file_metadata(path)`. Plus the inverse: "Obsidian APIs without a Slate equivalent" with explanations.
+- **Conceptual model differences.** Plugin lifecycle, event model, capability model, UI model — where Slate diverges and why.
+- **Migration cookbook.** Pattern-by-pattern. "If your Obsidian plugin listens for `file-open` events and modifies the active editor, in Slate you'd register a `vault.on_open` handler that emits a content transformation." Real code examples.
 - **Per-plugin conversion guides.** For the top ~25 Obsidian plugins worth porting (the ones whose function isn't already covered natively): specific guides on what conversion looks like.
 
 #### Community contribution model
 
-Not "YANA team writes everything."
+Not "Slate team writes everything."
 
-- **YANA team writes:** the API mapping reference, the conceptual differences doc, ~5–10 reference plugin conversions, the contribution process itself.
-- **Community contributes:** specific plugin conversions, additional cookbook patterns, edge cases YANA team hadn't seen.
-- **Repository structure:** migration docs live in `docs/migration/` in the YANA repo. A separate `yana-plugin-conversions` community repository hosts converted plugins, each with the original Obsidian plugin link, the converted YANA WASM plugin source, conversion notes, and what didn't survive the port.
+- **Slate team writes:** the API mapping reference, the conceptual differences doc, ~5–10 reference plugin conversions, the contribution process itself.
+- **Community contributes:** specific plugin conversions, additional cookbook patterns, edge cases Slate team hadn't seen.
+- **Repository structure:** migration docs live in `docs/migration/` in the Slate repo. A separate `slate-plugin-conversions` community repository hosts converted plugins, each with the original Obsidian plugin link, the converted Slate WASM plugin source, conversion notes, and what didn't survive the port.
 
 #### Public framing
 
 The honest message:
 
-> YANA is not Obsidian-compatible at the plugin level and never will be. It IS Obsidian-vault-compatible at the data level, and for the most popular plugins, we provide documented migration paths — either to YANA's native equivalents (Dataview, Tasks, Kanban, Templates, Citations, etc.) or, in V2+, to a sandboxed WASM plugin model with capability-based security. Plugins requiring direct UI manipulation, CodeMirror, DOM access, or Electron APIs are not portable, by design, because YANA's accessibility model depends on the UI layer being native.
+> Slate is not Obsidian-compatible at the plugin level and never will be. It IS Obsidian-vault-compatible at the data level, and for the most popular plugins, we provide documented migration paths — either to Slate's native equivalents (Dataview, Tasks, Kanban, Templates, Citations, etc.) or, in V2+, to a sandboxed WASM plugin model with capability-based security. Plugins requiring direct UI manipulation, CodeMirror, DOM access, or Electron APIs are not portable, by design, because Slate's accessibility model depends on the UI layer being native.
 
 This recruits the plugin-author community as collaborators (here's what we'll do, here's what we won't, here's how you contribute) rather than treating them as a problem to be solved.
 
@@ -1731,7 +1731,7 @@ docs/
     ├── covered-by-native.md            # V1 deliverable
     ├── vault-data-migration.md         # what's preserved/lost when opening
     ├── not-portable.md                 # V1.x deliverable; honest non-list
-    ├── api-mapping.md                  # V2 deliverable; Obsidian ↔ YANA APIs
+    ├── api-mapping.md                  # V2 deliverable; Obsidian ↔ Slate APIs
     ├── conceptual-differences.md       # V2; lifecycle, events, capabilities, UI
     ├── cookbook.md                     # V2; pattern-by-pattern
     └── plugins/                        # V2; per-plugin guides

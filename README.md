@@ -1,4 +1,4 @@
-# YANA
+# Slate
 
 **An accessibility-first knowledge workspace.** Reads existing Obsidian-style Markdown vaults. Built for blind, keyboard-only, and voice-control users from day one — not as an afterthought.
 
@@ -6,7 +6,7 @@
 
 ## What this is
 
-YANA is a long-running effort to build a personal knowledge management app that is accessibility-first by design. The defining decisions are documented at length in [`docs/plans/05_locked_architecture_decisions.md`](docs/plans/05_locked_architecture_decisions.md). The short version:
+Slate is a long-running effort to build a personal knowledge management app that is accessibility-first by design. The defining decisions are documented at length in [`docs/plans/05_locked_architecture_decisions.md`](docs/plans/05_locked_architecture_decisions.md). The short version:
 
 - **Native UI per platform**, not webview-based. Mac first, then Windows, then iOS, then Android. Linux deferred. SwiftUI + AppKit (`NSTextView`) on Apple, WPF + AvalonEdit on Windows, Jetpack Compose + `EditText` on Android.
 - **Shared Rust backend** providing the parser, metadata index, query engine, and FFI surface. `uniffi-rs` for Apple + Android bindings; `csbindgen` for Windows.
@@ -23,12 +23,12 @@ The full justification — including a red-team review of the original Flutter-b
 ## Repository layout
 
 ```
-yana/
+slate/
 ├── crates/
-│   ├── yana-core/        Pure-Rust API. Vault, parser, metadata index (in progress).
-│   └── yana-uniffi/      FFI wrapper exposing yana-core to Swift + Kotlin via uniffi-rs.
+│   ├── slate-core/        Pure-Rust API. Vault, parser, metadata index (in progress).
+│   └── slate-uniffi/      FFI wrapper exposing slate-core to Swift + Kotlin via uniffi-rs.
 ├── apps/
-│   └── yana-mac/         SwiftUI smoke-test for Mac. Loads the Rust core via uniffi.
+│   └── slate-mac/         SwiftUI smoke-test for Mac. Loads the Rust core via uniffi.
 ├── examples/
 │   └── swift-cli/        Swift command-line smoke-test for the FFI.
 ├── scripts/
@@ -74,4 +74,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Don't try to use this yet
 
-The codebase right now is design documentation plus a small bootstrap of the technical foundation. The architectural pack is locked at the level needed to start implementation; the implementation itself is at hour zero. **Don't try to use YANA as your notes app yet.** When a usable alpha is ready for AT-user testing, it will be announced through the project's issue tracker and discussions.
+The codebase right now is design documentation plus a small bootstrap of the technical foundation. The architectural pack is locked at the level needed to start implementation; the implementation itself is at hour zero. **Don't try to use Slate as your notes app yet.** When a usable alpha is ready for AT-user testing, it will be announced through the project's issue tracker and discussions.

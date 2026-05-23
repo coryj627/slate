@@ -119,8 +119,8 @@ target/
 **/*.rs.bk
 *.pdb
 
-# YANA per-vault cache directories (created by VaultSession at <vault>/.yana/)
-**/.yana/
+# Slate per-vault cache directories (created by VaultSession at <vault>/.slate/)
+**/.slate/
 
 # Swift / SwiftPM
 .build/
@@ -130,8 +130,8 @@ target/
 DerivedData/
 
 # uniffi-rs generated bindings staged into Swift packages by build scripts
-apps/yana-mac/Sources/YanaMac/yana_uniffi.swift
-apps/yana-mac/Sources/yana_uniffiFFI/yana_uniffiFFI.h
+apps/slate-mac/Sources/SlateMac/slate_uniffi.swift
+apps/slate-mac/Sources/slate_uniffiFFI/slate_uniffiFFI.h
 
 # a11y-check (cvs-health/ios-swiftui-accessibility-techniques) writes a
 # local score-trend file next to the scanned sources. The fresh-on-each-run

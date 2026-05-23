@@ -1,4 +1,4 @@
-# YANA project commands.
+# Slate project commands.
 #
 # Thin wrapper around scripts/ and standard cargo invocations.
 # Assumes `cargo` is on PATH (install via rustup; the rustup
@@ -9,7 +9,7 @@
 .PHONY: help check test fmt fmt-check clippy bench-check ci swift-cli mac-app mac-app-run bench clean
 
 help:
-	@echo "YANA — common commands"
+	@echo "Slate — common commands"
 	@echo
 	@echo "  make check         cargo check --workspace"
 	@echo "  make test          cargo test --workspace (8 tests as of this writing)"
@@ -55,13 +55,13 @@ mac-app:
 mac-app-run:
 	./scripts/build-mac-app.sh --run
 
-# Criterion suite for yana-core. Full run is ~15–20 min on a modern
+# Criterion suite for slate-core. Full run is ~15–20 min on a modern
 # laptop because the 50k-file cold scan dominates. Pass extra args
 # through with BENCH_ARGS, e.g.:
 #   make bench BENCH_ARGS='--bench scan_bench first_open_and_scan/1000'
 bench:
-	cargo bench -p yana-core --bench scan_bench -- $(BENCH_ARGS)
+	cargo bench -p slate-core --bench scan_bench -- $(BENCH_ARGS)
 
 clean:
 	cargo clean
-	rm -rf apps/yana-mac/.build apps/yana-mac/.swiftpm target/generated target/swift-cli
+	rm -rf apps/slate-mac/.build apps/slate-mac/.swiftpm target/generated target/swift-cli

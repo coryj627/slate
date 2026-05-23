@@ -1,0 +1,26 @@
+[package]
+name = "slate-uniffi"
+description = "uniffi-rs FFI bindings for slate-core (Swift, Kotlin)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "slate_uniffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+slate-core = { path = "../slate-core" }
+uniffi = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

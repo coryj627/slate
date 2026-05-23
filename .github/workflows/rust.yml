@@ -1,4 +1,4 @@
-# Rust CI for yana-core + yana-uniffi.
+# Rust CI for slate-core + slate-uniffi.
 #
 # Mirrors what `make ci` runs locally, plus a bench-compile step so
 # benchmark code can't silently rot. Runs on macos-14 (matching the
