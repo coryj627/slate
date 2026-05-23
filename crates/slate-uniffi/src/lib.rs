@@ -342,6 +342,41 @@ impl VaultSession {
         let result = self.inner.full_text_search(&query, &scope, &cancel.inner)?;
         Ok(result.into())
     }
+
+    /// Enumerate templates under the vault's templates folder
+    /// (defaults to `Templates/`, configurable via `SessionConfig`).
+    ///
+    /// Returns an empty list — never an error — when the vault has no
+    /// templates folder configured, or when the folder vanished after
+    /// session open. Only `.md` files are included; results are sorted
+    /// alphabetically by name (case-insensitive).
+    pub fn list_templates(&self) -> Result<Vec<TemplateSummary>, VaultError> {
+        Ok(self
+            .inner
+            .list_templates()?
+            .into_iter()
+            .map(TemplateSummary::from)
+            .collect())
+    }
+
+    /// Render the template at `template_path` against `context`. The
+    /// host reads `body` and parks the editor's cursor at
+    /// `cursor_byte_offset` if it's `Some(_)`.
+    ///
+    /// Variable allowlist (per `docs/plans/05` §8.2): `{{date}}`,
+    /// `{{date:FMT}}`, `{{time}}`, `{{time:FMT}}`, `{{title}}`,
+    /// `{{vault}}`, `{{cursor}}`, `{{prompt:Label}}`. Anything else
+    /// (including unknown chrono format specifiers) survives verbatim
+    /// in the output, so a typo can never blow up the create-from-
+    /// template flow.
+    pub fn render_template(
+        &self,
+        template_path: String,
+        context: TemplateContext,
+    ) -> Result<RenderedTemplate, VaultError> {
+        let rendered = self.inner.render_template(&template_path, context.into())?;
+        Ok(rendered.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -923,6 +958,138 @@ impl From<core::ScanReport> for ScanReport {
     }
 }
 
+// =====================================================================
+// Templates FFI surface (Milestone H)
+// =====================================================================
+
+use std::collections::HashMap;
+
+/// Row in the template picker — what `list_templates` returns.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TemplateSummary {
+    /// Vault-relative path, e.g. `"Templates/Daily.md"`.
+    pub path: String,
+    /// File stem, e.g. `"Daily"`.
+    pub name: String,
+    /// Picker subtitle: frontmatter `description:`, else first non-blank
+    /// non-frontmatter line, trimmed and truncated to 120 chars. `nil`
+    /// when neither source produced any text.
+    pub description: Option<String>,
+}
+
+impl From<core::TemplateSummary> for TemplateSummary {
+    fn from(t: core::TemplateSummary) -> Self {
+        Self {
+            path: t.path,
+            name: t.name,
+            description: t.description,
+        }
+    }
+}
+
+/// A single prompt extracted from a template by
+/// `extract_template_metadata`. The picker labels its text field with
+/// `label` and uses `key` to stuff the user's response back into
+/// `TemplateContext::prompt_values`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TemplatePrompt {
+    pub key: String,
+    pub label: String,
+}
+
+impl From<core::TemplatePrompt> for TemplatePrompt {
+    fn from(p: core::TemplatePrompt) -> Self {
+        Self {
+            key: p.key,
+            label: p.label,
+        }
+    }
+}
+
+/// Everything the UI needs to know up front about a template, before
+/// it starts rendering. V1.H ships with `prompts` only; the struct
+/// shape leaves room for additive fields without breaking foreign
+/// callers.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TemplateMetadata {
+    pub prompts: Vec<TemplatePrompt>,
+}
+
+impl From<core::TemplateMetadata> for TemplateMetadata {
+    fn from(m: core::TemplateMetadata) -> Self {
+        Self {
+            prompts: m.prompts.into_iter().map(TemplatePrompt::from).collect(),
+        }
+    }
+}
+
+/// Variable values supplied to `render_template`. Construct one per
+/// render call. `prompt_values` is keyed by [`TemplatePrompt::key`],
+/// not the raw label — the same dedup logic
+/// `extract_template_metadata` ran is what produced those keys.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TemplateContext {
+    /// Reference time (Unix epoch millis) used for `{{date}}` /
+    /// `{{time}}` and their `:FMT` variants. Always interpreted as UTC.
+    pub now_ms: i64,
+    /// Substituted for `{{title}}` — the new note's title.
+    pub title: String,
+    /// Substituted for `{{vault}}` — the vault root's basename.
+    pub vault_name: String,
+    /// Prompt responses keyed by [`TemplatePrompt::key`]. A missing key
+    /// leaves the corresponding `{{prompt:Label}}` marker literal.
+    pub prompt_values: HashMap<String, String>,
+}
+
+impl From<TemplateContext> for core::TemplateContext {
+    fn from(c: TemplateContext) -> Self {
+        Self {
+            now_ms: c.now_ms,
+            title: c.title,
+            vault_name: c.vault_name,
+            prompt_values: c.prompt_values,
+        }
+    }
+}
+
+/// Result of rendering a template.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RenderedTemplate {
+    /// Rendered template body, with allowlisted variables substituted
+    /// and `{{cursor}}` markers stripped (their byte position is
+    /// captured in `cursor_byte_offset`).
+    pub body: String,
+    /// Byte offset inside `body` where the editor should park the
+    /// cursor. `nil` when the template carried no `{{cursor}}` marker.
+    /// Indexed in bytes so the host can scan with byte-precise APIs;
+    /// the offset always falls on a UTF-8 char boundary.
+    pub cursor_byte_offset: Option<u64>,
+}
+
+impl From<core::RenderedTemplate> for RenderedTemplate {
+    fn from(r: core::RenderedTemplate) -> Self {
+        Self {
+            body: r.body,
+            cursor_byte_offset: r.cursor_byte_offset.map(|n| n as u64),
+        }
+    }
+}
+
+/// Extract prompt metadata from a template source.
+///
+/// The Mac UI's create-from-template flow is: read the template source
+/// (via [`VaultSession::read_text`]), call this to learn which
+/// `{{prompt:Label}}` markers to ask the user about, collect the
+/// responses, then call [`VaultSession::render_template`] with a
+/// [`TemplateContext`] carrying those responses keyed by
+/// [`TemplatePrompt::key`].
+///
+/// Exposed as `extractTemplateMetadata(source:)` in Swift.
+#[uniffi::export]
+pub fn extract_template_metadata(source: String) -> TemplateMetadata {
+    core::extract_template_metadata(&source).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1049,5 +1216,65 @@ mod tests {
         assert!(matches!(entries[0].op_kind, OpKind::WholeFileReplace));
         assert_eq!(entries[0].payload_bytes, b"v1");
         assert_eq!(entries[1].payload_bytes, b"v2");
+    }
+
+    #[test]
+    fn extract_template_metadata_round_trips_through_ffi() {
+        let meta = extract_template_metadata(
+            "# {{title}}\n\nTopic: {{prompt:Topic}}\nAgain: {{prompt:Topic}}\n".to_string(),
+        );
+        assert_eq!(meta.prompts.len(), 1);
+        assert_eq!(meta.prompts[0].key, "topic");
+        assert_eq!(meta.prompts[0].label, "Topic");
+    }
+
+    #[test]
+    fn list_templates_and_render_template_round_trip_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join("Templates")).unwrap();
+        // Note: no frontmatter on the template body itself — the
+        // create-from-template flow renders the source verbatim, so
+        // anything in the template (frontmatter included) lands in
+        // the new note. The picker's description comes from the
+        // separate `description:` lookup the picker test below covers.
+        std::fs::write(
+            tmp.path().join("Templates/Meeting.md"),
+            b"# Meeting: {{prompt:Topic}}\n\n{{cursor}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("Templates/Daily.md"),
+            b"---\ndescription: Daily-note layout\n---\n",
+        )
+        .unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+
+        let templates = session.list_templates().expect("list_templates");
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].path, "Templates/Daily.md");
+        assert_eq!(templates[0].name, "Daily");
+        assert_eq!(
+            templates[0].description.as_deref(),
+            Some("Daily-note layout")
+        );
+        assert_eq!(templates[1].name, "Meeting");
+
+        let mut prompt_values = HashMap::new();
+        prompt_values.insert("topic".to_string(), "Q1 sync".to_string());
+        let ctx = TemplateContext {
+            now_ms: 1_700_000_000_000,
+            title: "ignored".into(),
+            vault_name: "MyVault".into(),
+            prompt_values,
+        };
+        let rendered = session
+            .render_template("Templates/Meeting.md".into(), ctx)
+            .expect("render");
+        assert_eq!(rendered.body, "# Meeting: Q1 sync\n\n\n");
+        assert_eq!(
+            rendered.cursor_byte_offset,
+            Some("# Meeting: Q1 sync\n\n".len() as u64)
+        );
     }
 }
