@@ -11,7 +11,11 @@ edition = "2021"
 license = "MIT"
 authors = ["Cory Joseph <cj@startingblind.com>"]
 repository = "https://github.com/coryj627/slate"
-rust-version = "1.75"
+# 1.89 picks up stable `std::fs::File::lock`, which the oplog's first-
+# write serializer relies on (see `oplog::append_entry`). The project
+# already pins `stable` via `rust-toolchain.toml`, so this is a
+# documentation bump, not a behavior change for anyone using `rustup`.
+rust-version = "1.89"
 
 [workspace.dependencies]
 pulldown-cmark = { version = "0.10", default-features = false }
