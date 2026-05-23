@@ -66,6 +66,15 @@ pub struct SessionConfig {
     /// the single-user V1.F build this defaults to `"local"`; multi-
     /// device sync (V2) will plumb a real per-device identifier here.
     pub user_actor_id: String,
+    /// Vault-relative directory the templates picker enumerates.
+    ///
+    /// `None` means the vault has no templates and `list_templates`
+    /// returns `Ok(Vec::new())` without touching the filesystem. The
+    /// Obsidian convention is `Templates/`; [`VaultSession::from_filesystem`]
+    /// auto-detects it on session open. Callers can override with any
+    /// vault-relative path (e.g. `"Notes/Templates"`) to honor a
+    /// non-conventional vault layout.
+    pub templates_dir: Option<String>,
 }
 
 impl SessionConfig {
@@ -84,6 +93,7 @@ impl SessionConfig {
             large_file_confirm_bytes: 10 * 1024 * 1024,
             large_file_refuse_bytes: 50 * 1024 * 1024,
             user_actor_id: "local".to_string(),
+            templates_dir: None,
         }
     }
 
@@ -355,7 +365,12 @@ impl VaultSession {
             });
         }
         let cache_dir = root.join(".slate");
-        let config = SessionConfig::new(cache_dir);
+        let mut config = SessionConfig::new(cache_dir);
+        // Obsidian-convention auto-detect. Callers wanting a different
+        // layout can mutate `templates_dir` and call `open` directly.
+        if root.join("Templates").is_dir() {
+            config.templates_dir = Some("Templates".to_string());
+        }
         let provider = Arc::new(FsVaultProvider::new(root));
         Self::open(provider, config)
     }
@@ -745,6 +760,112 @@ impl VaultSession {
     ) -> Result<crate::QueryResultSet, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::search_db::full_text_search(&conn, query, scope, cancel)
+    }
+
+    /// Enumerate templates under [`SessionConfig::templates_dir`].
+    ///
+    /// Returns `Ok(Vec::new())` — never an error — for any of:
+    ///
+    /// - `templates_dir` is `None` (the vault has no templates folder
+    ///   configured, e.g. a freshly-opened vault that never had a
+    ///   `Templates/` directory).
+    /// - `templates_dir` points at a path that no longer exists or
+    ///   isn't a directory (vault changed under us between opens).
+    ///
+    /// Only `.md` files are returned. `.DS_Store`, `.gitkeep`, README
+    /// images, etc. are silently filtered out. Results are sorted by
+    /// `name` (case-insensitive) so the picker UI doesn't need its
+    /// own sort.
+    ///
+    /// One disk read per template (to extract the description). For
+    /// the V1 tester scope (`Templates/` folders contain a handful of
+    /// files), this is fine; if vaults ever ship hundreds of templates
+    /// we'd want a description column in the index.
+    pub fn list_templates(&self) -> Result<Vec<crate::TemplateSummary>, VaultError> {
+        let Some(dir) = self.config.templates_dir.as_deref() else {
+            return Ok(Vec::new());
+        };
+
+        let entries = match self.provider.list_dir(dir) {
+            Ok(entries) => entries,
+            // Treat "directory disappeared since `from_filesystem` saw
+            // it" as "no templates" rather than an error — the picker
+            // UI is meant to be benign on a vault with no templates.
+            // Anything that isn't a NotFound (permission denied, IO
+            // error, etc.) is real and propagates.
+            Err(VaultError::Io(io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(e),
+        };
+
+        let limit = self.config.large_file_refuse_bytes;
+        let mut out: Vec<crate::TemplateSummary> = Vec::new();
+        for entry in entries {
+            if !matches!(
+                entry.kind,
+                crate::EntryKind::File | crate::EntryKind::Symlink
+            ) {
+                continue;
+            }
+            if !entry.name.to_ascii_lowercase().ends_with(".md") {
+                continue;
+            }
+            let rel = format!("{dir}/{name}", name = entry.name);
+            // Read with the same cap the editor uses so a stray multi-
+            // gigabyte file in Templates/ doesn't OOM the picker.
+            let bytes = match self.provider.read_file_with_cap(&rel, limit) {
+                Ok(b) => b,
+                // A template that was deleted between list_dir and
+                // read shouldn't fail the entire enumeration.
+                Err(VaultError::Io(io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            if (bytes.len() as u64) > limit {
+                // Skip oversized files rather than aborting the picker.
+                continue;
+            }
+            let source = match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(_) => continue, // non-UTF-8 templates aren't useful here
+            };
+            let name = std::path::Path::new(&entry.name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| entry.name.clone());
+            let description = crate::templates::description_from_source(&source);
+            out.push(crate::TemplateSummary {
+                path: rel,
+                name,
+                description,
+            });
+        }
+
+        out.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(out)
+    }
+
+    /// Render the template at `template_path` against `context`.
+    ///
+    /// `template_path` is vault-relative; reads use the same size cap
+    /// as `read_text`, so a runaway template can't OOM the picker.
+    /// The template source itself never crosses the FFI boundary — the
+    /// host only sees the [`RenderedTemplate`] body and the cursor
+    /// offset, which keeps the FFI surface narrow.
+    pub fn render_template(
+        &self,
+        template_path: &str,
+        context: crate::TemplateContext,
+    ) -> Result<crate::RenderedTemplate, VaultError> {
+        let source = self.read_text(template_path)?;
+        Ok(crate::render_template_source(&source, &context))
     }
 
     /// Accessor for the underlying config. Useful for hosts that want to
@@ -4311,6 +4432,161 @@ mod tests {
                 payload.starts_with("thread-1 ") || payload.starts_with("thread-2 "),
                 "unexpected payload {payload:?}"
             );
+        }
+    }
+
+    // -------- list_templates / render_template --------
+
+    /// Build a vault rooted at a fresh tempdir, with `setup` invoked
+    /// **before** session open so callers can stage the `Templates/`
+    /// directory the `from_filesystem` auto-detect looks for. Returns
+    /// the tempdir handle alongside the session so the test scope owns
+    /// the on-disk lifetime.
+    fn make_templates_vault(
+        setup: impl FnOnce(&std::path::Path),
+    ) -> (tempfile::TempDir, VaultSession) {
+        let tmp = tempfile::tempdir().unwrap();
+        setup(tmp.path());
+        let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+        (tmp, session)
+    }
+
+    #[test]
+    fn templates_dir_autodetected_when_templates_folder_exists() {
+        let (_tmp, session) = make_templates_vault(|root| {
+            std::fs::create_dir(root.join("Templates")).unwrap();
+        });
+        assert_eq!(session.config.templates_dir.as_deref(), Some("Templates"));
+    }
+
+    #[test]
+    fn templates_dir_stays_none_when_no_templates_folder() {
+        let (_tmp, session) = make_vault(|_| {});
+        assert_eq!(session.config.templates_dir, None);
+    }
+
+    #[test]
+    fn list_templates_returns_empty_when_templates_dir_is_none() {
+        let (_tmp, session) = make_vault(|_| {});
+        assert_eq!(session.list_templates().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn list_templates_returns_alphabetical_md_files() {
+        let (_tmp, session) = make_templates_vault(|root| {
+            let dir = root.join("Templates");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("Zeta.md"), b"# Z").unwrap();
+            std::fs::write(dir.join("Alpha.md"), b"# A").unwrap();
+            std::fs::write(dir.join("Middle.md"), b"# M").unwrap();
+        });
+        let names: Vec<String> = session
+            .list_templates()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, vec!["Alpha", "Middle", "Zeta"]);
+    }
+
+    #[test]
+    fn list_templates_filters_out_non_markdown_files() {
+        let (_tmp, session) = make_templates_vault(|root| {
+            let dir = root.join("Templates");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("Daily.md"), b"# Daily").unwrap();
+            // Garbage that the filter must skip.
+            std::fs::write(dir.join(".DS_Store"), b"junk").unwrap();
+            std::fs::write(dir.join("README"), b"no ext").unwrap();
+            std::fs::write(dir.join("banner.png"), b"\x89PNG").unwrap();
+            std::fs::create_dir(dir.join("subdir")).unwrap();
+        });
+        let names: Vec<String> = session
+            .list_templates()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, vec!["Daily"]);
+    }
+
+    #[test]
+    fn list_templates_uses_frontmatter_description_first() {
+        let (_tmp, session) = make_templates_vault(|root| {
+            let dir = root.join("Templates");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("Daily.md"),
+                b"---\ndescription: My daily note layout\n---\n# {{title}}\n",
+            )
+            .unwrap();
+        });
+        let summary = session.list_templates().unwrap().pop().unwrap();
+        assert_eq!(summary.path, "Templates/Daily.md");
+        assert_eq!(summary.name, "Daily");
+        assert_eq!(summary.description.as_deref(), Some("My daily note layout"));
+    }
+
+    #[test]
+    fn list_templates_falls_back_to_first_nonblank_line_for_description() {
+        let (_tmp, session) = make_templates_vault(|root| {
+            let dir = root.join("Templates");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("Scratch.md"),
+                b"\n\nQuick scratch note\nMore body\n",
+            )
+            .unwrap();
+        });
+        let summary = session.list_templates().unwrap().pop().unwrap();
+        assert_eq!(summary.description.as_deref(), Some("Quick scratch note"));
+    }
+
+    #[test]
+    fn list_templates_returns_empty_when_dir_disappeared_after_open() {
+        let (tmp, session) = make_templates_vault(|root| {
+            std::fs::create_dir(root.join("Templates")).unwrap();
+        });
+        // Auto-detection captured "Templates" at open time.
+        assert_eq!(session.config.templates_dir.as_deref(), Some("Templates"));
+        // Now delete it under the running session — list_templates should
+        // degrade to "no templates" rather than surface a NotFound error
+        // to the picker.
+        std::fs::remove_dir_all(tmp.path().join("Templates")).unwrap();
+        assert_eq!(session.list_templates().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn render_template_substitutes_via_disk_read() {
+        let (_tmp, session) = make_templates_vault(|root| {
+            let dir = root.join("Templates");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("Meeting.md"),
+                b"# Meeting: {{prompt:Topic}}\n\n{{cursor}}\n",
+            )
+            .unwrap();
+        });
+        let ctx = crate::TemplateContext::new(1_700_000_000_000, "ignored", "MyVault")
+            .with_prompt("topic", "Quarterly review");
+        let rendered = session
+            .render_template("Templates/Meeting.md", ctx)
+            .unwrap();
+        assert_eq!(rendered.body, "# Meeting: Quarterly review\n\n\n");
+        // {{cursor}} lands right after the two blank lines (`\n\n`)
+        // following the heading text.
+        let offset = rendered.cursor_byte_offset.expect("cursor offset");
+        let prefix = "# Meeting: Quarterly review\n\n";
+        assert_eq!(offset, prefix.len());
+    }
+
+    #[test]
+    fn render_template_rejects_path_outside_vault() {
+        let (_tmp, session) = make_vault(|_| {});
+        let ctx = crate::TemplateContext::new(0, "t", "v");
+        match session.render_template("../escape.md", ctx) {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath, got {other:?}"),
         }
     }
 }

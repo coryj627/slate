@@ -15,6 +15,7 @@ pub mod oplog;
 pub mod properties_db;
 pub mod search_db;
 pub mod session;
+pub mod templates;
 pub mod vault;
 
 pub use search_db::{
@@ -28,6 +29,10 @@ pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultInd
 pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{OpKind, OpLogEntry};
+pub use templates::{
+    extract_template_metadata, render_template_source, RenderedTemplate, TemplateContext,
+    TemplateMetadata, TemplatePrompt, TemplateSummary,
+};
 
 pub use session::{
     CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging, SaveReport,

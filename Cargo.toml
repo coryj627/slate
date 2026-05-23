@@ -34,6 +34,12 @@ yaml-rust2 = "0.11"
 # properties table. Used for both write (serialize) and read
 # (deserialize using the row's value_kind tag to pick the variant).
 serde_json = "1"
+# chrono powers `{{date}}` / `{{time}}` / `{{date:FMT}}` / `{{time:FMT}}`
+# substitution in the templates engine. `default-features = false`
+# drops the system-clock plumbing (`Utc::now`, `Local`) — templates
+# get the timestamp from the caller (`TemplateContext::now_ms`), so
+# pulling in the OS timezone database would be dead weight.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [profile.dev]
 # Faster incremental builds during development.
