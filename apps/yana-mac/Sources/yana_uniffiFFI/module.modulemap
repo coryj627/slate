@@ -1,4 +1,0 @@
-module yana_uniffiFFI {
-    header "yana_uniffiFFI.h"
-    export *
-}

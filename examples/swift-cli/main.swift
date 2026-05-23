@@ -1,4 +1,4 @@
-// Swift smoke-test client for yana-uniffi.
+// Swift smoke-test client for slate-uniffi.
 //
 // Three modes:
 //   (no args)        — Parse an embedded Markdown sample and print headings.
@@ -9,7 +9,7 @@
 import Foundation
 
 let sample = """
-# Hello, YANA
+# Hello, Slate
 
 A paragraph.
 

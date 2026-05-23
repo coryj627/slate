@@ -12,12 +12,12 @@ Per-milestone goals, scope, schema, tests, and acceptance criteria live on **Git
 
 | Milestone | GitHub | Status |
 |---|---|---|
-| A — Vault + file list | [milestone 1](https://github.com/coryj627/YANA/milestone/1) | ✅ Shipped (2026-05-17) |
-| B — Read + heading nav | [milestone 2](https://github.com/coryj627/YANA/milestone/2) | ✅ Shipped (2026-05-18) |
-| C — Backlinks + outgoing links | [milestone 3](https://github.com/coryj627/YANA/milestone/3) | ✅ Shipped (2026-05-18) |
-| D — Frontmatter properties | [milestone 4](https://github.com/coryj627/YANA/milestone/4) | ✅ Shipped (2026-05-19) |
-| E — Full-text search | [milestone 5](https://github.com/coryj627/YANA/milestone/5) | ✅ Shipped (2026-05-19) |
-| F — Editing | [milestone 6](https://github.com/coryj627/YANA/milestone/6) | ✅ Shipped (2026-05-23) — backend [#105](https://github.com/coryj627/YANA/pull/105), UI [#106](https://github.com/coryj627/YANA/pull/106) |
+| A — Vault + file list | [milestone 1](https://github.com/coryj627/slate/milestone/1) | ✅ Shipped (2026-05-17) |
+| B — Read + heading nav | [milestone 2](https://github.com/coryj627/slate/milestone/2) | ✅ Shipped (2026-05-18) |
+| C — Backlinks + outgoing links | [milestone 3](https://github.com/coryj627/slate/milestone/3) | ✅ Shipped (2026-05-18) |
+| D — Frontmatter properties | [milestone 4](https://github.com/coryj627/slate/milestone/4) | ✅ Shipped (2026-05-19) |
+| E — Full-text search | [milestone 5](https://github.com/coryj627/slate/milestone/5) | ✅ Shipped (2026-05-19) |
+| F — Editing | [milestone 6](https://github.com/coryj627/slate/milestone/6) | ✅ Shipped (2026-05-23) — backend [#105](https://github.com/coryj627/slate/pull/105), UI [#106](https://github.com/coryj627/slate/pull/106) |
 
 Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migrations, tests, accessibility checkpoints, tester-feedback questions, and definition of done. Individual issues link back to their milestone.
 
@@ -35,7 +35,7 @@ Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migra
 ## Cross-cutting concerns
 
 - **Op log infrastructure** starts in Milestone F at coarse granularity (one entry per save). Fine-grained per-edit operations come in V1.x. Compaction policy from `05_locked_architecture_decisions.md` §7.5 is implemented but rarely triggered at this scale.
-- **Performance benchmarks** start in Milestone A and run at the close of every milestone. The harness lives in `crates/yana-core/benches/`; baselines are recorded in `BENCHMARKS.md` at the workspace root. By end of F, the V1-release-gate targets from `05` §9.5 must be measurable on the benchmark suite (not the actual release gate yet — that's months 3+).
+- **Performance benchmarks** start in Milestone A and run at the close of every milestone. The harness lives in `crates/slate-core/benches/`; baselines are recorded in `BENCHMARKS.md` at the workspace root. By end of F, the V1-release-gate targets from `05` §9.5 must be measurable on the benchmark suite (not the actual release gate yet — that's months 3+).
 - **Mobile-friendly API discipline.** Even though only Mac ships in this phase, the Rust API stays paged + opaque-handle-based + cooperatively-cancellable per the locked decisions. No "load whole vault" shortcuts.
 - **No sync writer.** All milestones produce an app that's read+edit on local files only. Sync detection (warn if `.obsidian/plugins/obsidian-livesync/` is present, or iCloud Drive markers) ships separately and not in this phase.
 - **Tester compensation.** If testers spend real time on builds, they get paid per project principle (`feedback_oss_a11y_contribution.md`). Build it into the budget thinking now, not at first invoice.
@@ -76,5 +76,5 @@ Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migra
 - `05_locked_architecture_decisions.md` — locked stack, API surfaces, schema. This phase implements §4 (API), §6 (content pipelines, partially), §7 (data model, partially), §9 (performance constraints in full).
 - `01_detailed_roadmap.md` — phase model. This document is the concrete decomposition of "Phase 1: Accessible vault MVP" in `01` §3.
 - `03_phase_1_plan.md` — earlier Phase 1 plan from the Flutter era. Most of this is superseded by `05` and this doc; some workstream sequencing ideas still apply.
-- `.claude/projects/-Users-coryj-Dev-yana/memory/project_testers.md` — context on the tester cohort (4 committed AT users, compensated per project principle).
+- `.claude/projects/-Users-coryj-Dev-slate/memory/project_testers.md` — context on the tester cohort (4 committed AT users, compensated per project principle).
 - `BENCHMARKS.md` — V1 baseline + how-to-run for the criterion harness.

@@ -1,0 +1,4 @@
+module slate_uniffiFFI {
+    header "slate_uniffiFFI.h"
+    export *
+}

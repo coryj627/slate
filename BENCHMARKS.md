@@ -1,6 +1,6 @@
-# YANA Benchmarks
+# Slate Benchmarks
 
-YANA's performance harness lives in `crates/yana-core/benches/scan_bench.rs` and uses [`criterion`](https://crates.io/crates/criterion). The suite covers the Milestone A hot paths against synthetic vaults at three scales (1k / 10k / 50k Markdown files).
+Slate's performance harness lives in `crates/slate-core/benches/scan_bench.rs` and uses [`criterion`](https://crates.io/crates/criterion). The suite covers the Milestone A hot paths against synthetic vaults at three scales (1k / 10k / 50k Markdown files).
 
 ## How to run
 
@@ -11,7 +11,7 @@ make bench
 Or directly:
 
 ```sh
-cargo bench -p yana-core --bench scan_bench
+cargo bench -p slate-core --bench scan_bench
 ```
 
 To run a subset (criterion filters by group/benchmark name as a regex):
@@ -27,7 +27,7 @@ Full-suite walltime is roughly **10–15 minutes** on a modern Apple Silicon lap
 
 | Benchmark group | What each iteration does | Sample size |
 |---|---|---|
-| `first_open_and_scan` | `fs::remove_dir_all(.yana)` (setup, excluded) → `VaultSession::from_filesystem` → `scan_initial`. Each measurement is a true cold start. | 10 |
+| `first_open_and_scan` | `fs::remove_dir_all(.slate)` (setup, excluded) → `VaultSession::from_filesystem` → `scan_initial`. Each measurement is a true cold start. | 10 |
 | `reopen_with_cache` | Cache primed once outside the loop. Each iteration re-opens + re-scans (scanner upserts on path, so this is the steady-state warm re-open). | 20 |
 | `list_files_paged` | Cache primed once. Each iteration pages through `list_files` 1 000 rows at a time until exhausted. | 20 |
 
@@ -66,18 +66,18 @@ Criterion writes HTML reports (with violin plots, distribution histograms, and r
 To **save** a run as a named baseline you can compare against later:
 
 ```sh
-cargo bench -p yana-core --bench scan_bench -- --save-baseline v1-pre-tester
+cargo bench -p slate-core --bench scan_bench -- --save-baseline v1-pre-tester
 ```
 
 To **compare** a current run against a saved baseline:
 
 ```sh
-cargo bench -p yana-core --bench scan_bench -- --baseline v1-pre-tester
+cargo bench -p slate-core --bench scan_bench -- --baseline v1-pre-tester
 ```
 
 ## V1 baseline — 2026-05-17
 
-Recorded against the synthetic fixture in `crates/yana-core/benches/common/mod.rs`. File-size distribution: ~60 % small (0.5–2 KB), ~30 % medium (5–20 KB), ~10 % large (50–200 KB), with frontmatter on ~20 % of files and occasional code blocks. Files are spread across up to 50 subdirectories.
+Recorded against the synthetic fixture in `crates/slate-core/benches/common/mod.rs`. File-size distribution: ~60 % small (0.5–2 KB), ~30 % medium (5–20 KB), ~10 % large (50–200 KB), with frontmatter on ~20 % of files and occasional code blocks. Files are spread across up to 50 subdirectories.
 
 **Machine.** Apple M5 Pro (18 cores), 48 GB RAM, Apple Fabric SSD, macOS 26.5 (25F71). **Toolchain.** rustc 1.95.0 (59807616e 2026-04-14), release profile.
 

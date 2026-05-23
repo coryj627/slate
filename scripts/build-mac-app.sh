@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build and optionally run the YanaMac SwiftUI smoke-test app.
+# Build and optionally run the SlateMac SwiftUI smoke-test app.
 #
 # Pipeline:
-#   1. cargo build -p yana-uniffi
+#   1. cargo build -p slate-uniffi
 #   2. uniffi-bindgen generate (Swift)
-#   3. copy generated headers + Swift into apps/yana-mac/Sources/
-#   4. swift build inside apps/yana-mac/
+#   3. copy generated headers + Swift into apps/slate-mac/Sources/
+#   4. swift build inside apps/slate-mac/
 #   5. (optional, with --run) launch the resulting binary
 
 set -euo pipefail
@@ -31,7 +31,7 @@ for arg in "$@"; do
             echo "usage: $0 [--run] [--bundle] [--skip-a11y-check]"
             echo "  --run               Build, wrap in .app bundle, and launch."
             echo "                      Implies --bundle."
-            echo "  --bundle            Wrap the SwiftPM binary in a YanaMac.app"
+            echo "  --bundle            Wrap the SwiftPM binary in a SlateMac.app"
             echo "                      bundle so macOS Accessibility (VoiceOver)"
             echo "                      can introspect it. SwiftPM-built bare"
             echo "                      executables aren't registered with"
@@ -48,7 +48,7 @@ done
 
 TARGET_DIR="target/$PROFILE"
 GENERATED_DIR="target/generated/swift"
-APP_DIR="apps/yana-mac"
+APP_DIR="apps/slate-mac"
 
 # Source rustup environment if cargo isn't already on PATH.
 if ! command -v cargo >/dev/null 2>&1; then
@@ -58,26 +58,26 @@ if ! command -v cargo >/dev/null 2>&1; then
     fi
 fi
 
-echo "==> Building yana-uniffi ($PROFILE)"
-cargo build -p yana-uniffi $CARGO_PROFILE_FLAG
+echo "==> Building slate-uniffi ($PROFILE)"
+cargo build -p slate-uniffi $CARGO_PROFILE_FLAG
 
 echo "==> Generating Swift bindings"
 mkdir -p "$GENERATED_DIR"
-cargo run -p yana-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
+cargo run -p slate-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
     generate \
-    --library "$TARGET_DIR/libyana_uniffi.dylib" \
+    --library "$TARGET_DIR/libslate_uniffi.dylib" \
     --language swift \
     --out-dir "$GENERATED_DIR"
 
 echo "==> Staging generated bindings into $APP_DIR"
-cp "$GENERATED_DIR/yana_uniffi.swift"  "$APP_DIR/Sources/YanaMac/yana_uniffi.swift"
-cp "$GENERATED_DIR/yana_uniffiFFI.h"   "$APP_DIR/Sources/yana_uniffiFFI/yana_uniffiFFI.h"
+cp "$GENERATED_DIR/slate_uniffi.swift"  "$APP_DIR/Sources/SlateMac/slate_uniffi.swift"
+cp "$GENERATED_DIR/slate_uniffiFFI.h"   "$APP_DIR/Sources/slate_uniffiFFI/slate_uniffiFFI.h"
 
 echo "==> swift build ($APP_DIR)"
 cd "$APP_DIR"
 swift build
 
-BINARY=".build/$PROFILE/YanaMac"
+BINARY=".build/$PROFILE/SlateMac"
 ABS_BINARY="$WORKSPACE_ROOT/$APP_DIR/$BINARY"
 
 echo
@@ -85,7 +85,7 @@ echo "Built: $ABS_BINARY"
 echo "Run with:"
 echo "  DYLD_LIBRARY_PATH=\"$WORKSPACE_ROOT/$TARGET_DIR\" $ABS_BINARY"
 
-APP_BUNDLE="$WORKSPACE_ROOT/$APP_DIR/.build/$PROFILE/YanaMac.app"
+APP_BUNDLE="$WORKSPACE_ROOT/$APP_DIR/.build/$PROFILE/SlateMac.app"
 if [[ "$BUNDLE" == "1" ]]; then
     # Wrap the SwiftPM binary in a minimal .app bundle so the AX bridge
     # works. Without an Info.plist + LaunchServices registration, VoiceOver
@@ -96,14 +96,14 @@ if [[ "$BUNDLE" == "1" ]]; then
     rm -rf "$APP_BUNDLE"
     mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Frameworks"
 
-    cp -f "$ABS_BINARY" "$APP_BUNDLE/Contents/MacOS/YanaMac"
+    cp -f "$ABS_BINARY" "$APP_BUNDLE/Contents/MacOS/SlateMac"
     # The binary links against the dylib at its build path (with `deps/`).
     # We mirror that exact path inside the bundle for the rewrite below,
-    # using `target/$PROFILE/libyana_uniffi.dylib` as the source — both
+    # using `target/$PROFILE/libslate_uniffi.dylib` as the source — both
     # copies have the same content; we don't depend on `deps/` existing
     # in the bundle.
-    cp -f "$WORKSPACE_ROOT/$TARGET_DIR/libyana_uniffi.dylib" \
-        "$APP_BUNDLE/Contents/Frameworks/libyana_uniffi.dylib"
+    cp -f "$WORKSPACE_ROOT/$TARGET_DIR/libslate_uniffi.dylib" \
+        "$APP_BUNDLE/Contents/Frameworks/libslate_uniffi.dylib"
 
     # The binary's recorded reference points at the absolute deps/ path.
     # Read it back from the binary itself rather than reconstructing —
@@ -111,21 +111,21 @@ if [[ "$BUNDLE" == "1" ]]; then
     # path can differ in case (e.g. /Users/coryj/Dev/... vs
     # /Users/coryj/dev/...), and `install_name_tool -change` does
     # exact-string matching.
-    OLD_DYLIB_PATH=$(otool -L "$APP_BUNDLE/Contents/MacOS/YanaMac" \
-        | awk '/libyana_uniffi\.dylib/{print $1; exit}')
+    OLD_DYLIB_PATH=$(otool -L "$APP_BUNDLE/Contents/MacOS/SlateMac" \
+        | awk '/libslate_uniffi\.dylib/{print $1; exit}')
     if [[ -z "$OLD_DYLIB_PATH" ]]; then
-        echo "error: could not find libyana_uniffi.dylib reference in binary" >&2
+        echo "error: could not find libslate_uniffi.dylib reference in binary" >&2
         exit 1
     fi
     install_name_tool -change "$OLD_DYLIB_PATH" \
-        "@executable_path/../Frameworks/libyana_uniffi.dylib" \
-        "$APP_BUNDLE/Contents/MacOS/YanaMac"
+        "@executable_path/../Frameworks/libslate_uniffi.dylib" \
+        "$APP_BUNDLE/Contents/MacOS/SlateMac"
     # The dylib's own LC_ID_DYLIB still points at the absolute deps/
     # path. Rewriting it lets any future tools that re-resolve via
     # install_name see the bundle-relative one.
     install_name_tool -id \
-        "@executable_path/../Frameworks/libyana_uniffi.dylib" \
-        "$APP_BUNDLE/Contents/Frameworks/libyana_uniffi.dylib"
+        "@executable_path/../Frameworks/libslate_uniffi.dylib" \
+        "$APP_BUNDLE/Contents/Frameworks/libslate_uniffi.dylib"
 
     cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -136,15 +136,15 @@ if [[ "$BUNDLE" == "1" ]]; then
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>YANA</string>
+    <string>Slate</string>
     <key>CFBundleExecutable</key>
-    <string>YanaMac</string>
+    <string>SlateMac</string>
     <key>CFBundleIdentifier</key>
-    <string>com.startingblind.yana.dev</string>
+    <string>com.startingblind.slate.dev</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>YANA</string>
+    <string>Slate</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -170,8 +170,8 @@ PLIST
     # refuse to launch and AX permissions don't get confused. Ad-hoc
     # signing ("-") is fine for local dev; CI / distribution would
     # need a real identity.
-    codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libyana_uniffi.dylib"
-    codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/YanaMac"
+    codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libslate_uniffi.dylib"
+    codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/SlateMac"
     codesign --force --sign - "$APP_BUNDLE"
 
     # Re-register with LaunchServices so the AX system sees the new
@@ -202,8 +202,8 @@ if [[ "$SKIP_A11Y_CHECK" == "1" ]]; then
     echo "==> Skipping a11y-check (--skip-a11y-check)."
 elif command -v a11y-check >/dev/null 2>&1; then
     echo
-    echo "==> Running a11y-check on apps/yana-mac/Sources/YanaMac"
-    if ! a11y-check apps/yana-mac/Sources/YanaMac --only error; then
+    echo "==> Running a11y-check on apps/slate-mac/Sources/SlateMac"
+    if ! a11y-check apps/slate-mac/Sources/SlateMac --only error; then
         echo
         echo "a11y-check reported errors above. CI will fail until they're fixed." >&2
         exit 1
@@ -219,13 +219,13 @@ fi
 
 if [[ "$RUN" == "1" ]]; then
     echo
-    echo "==> Launching YanaMac (.app bundle)"
+    echo "==> Launching SlateMac (.app bundle)"
     # `open` hands off to LaunchServices, which registers the bundle
     # with the window server / AX system. The bare binary path
     # ($ABS_BINARY) works for non-AX UI testing but is invisible to
     # VoiceOver — use the bundle for any screen-reader work.
     #
-    # `-n` forces a fresh process even if another YanaMac.app (e.g.
+    # `-n` forces a fresh process even if another SlateMac.app (e.g.
     # an older build from a different path, or a still-running prior
     # `--run`) is already registered with LaunchServices under the
     # same bundle ID. Without it `open` would just activate the

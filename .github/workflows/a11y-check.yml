@@ -13,12 +13,12 @@ name: Accessibility Check
 on:
   pull_request:
     paths:
-      - 'apps/yana-mac/**/*.swift'
+      - 'apps/slate-mac/**/*.swift'
       - '.github/workflows/a11y-check.yml'
   push:
     branches: [main]
     paths:
-      - 'apps/yana-mac/**/*.swift'
+      - 'apps/slate-mac/**/*.swift'
       - '.github/workflows/a11y-check.yml'
 
 permissions:
@@ -31,7 +31,7 @@ env:
   # commit. Bump deliberately when you want newer rules; cache key
   # includes this SHA so changing it invalidates the cache.
   A11Y_CHECK_REF: bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8
-  A11Y_PATHS: "apps/yana-mac/Sources/YanaMac"
+  A11Y_PATHS: "apps/slate-mac/Sources/SlateMac"
   # Score floor on the 0–100 a11y-check scale. Must be a non-empty
   # numeric string — the enforcement step validates this and fails
   # loudly on malformed/missing values rather than silently weakening
@@ -53,7 +53,7 @@ jobs:
       pull-requests: write
       actions: read
     steps:
-      - name: Checkout YANA
+      - name: Checkout Slate
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Restore cached a11y-check binary
