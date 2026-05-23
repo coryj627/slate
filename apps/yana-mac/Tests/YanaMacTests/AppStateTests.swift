@@ -1295,4 +1295,233 @@ final class AppStateTests: XCTestCase {
         let reload = RecentVaultsStore(fileURL: storeFile).load()
         XCTAssertEqual(reload, [keeper])
     }
+
+    // MARK: - Save flow (#63 + #64)
+
+    /// Build a vault with a single editable note and drive the full
+    /// open → scan → select → load path so subsequent save tests
+    /// start from a known-good `currentNoteText` + hash baseline.
+    private func makeAppStateWithLoadedNote(
+        initialContent: String = "# Hello\n\nSome body.\n"
+    ) async throws -> (AppState, URL, String) {
+        let vault = tempDir.appendingPathComponent("save-vault-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let notePath = "note.md"
+        try Data(initialContent.utf8).write(to: vault.appendingPathComponent(notePath))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = notePath
+        await state.noteLoadTask?.value
+        return (state, vault, notePath)
+    }
+
+    func testLoadCapturesHashAndBaseline() async throws {
+        let (state, _, notePath) = try await makeAppStateWithLoadedNote()
+        XCTAssertEqual(state.loadedFilePath, notePath)
+        XCTAssertEqual(state.savedBaselineText, "# Hello\n\nSome body.\n")
+        XCTAssertNotNil(state.currentNoteContentHash)
+        XCTAssertFalse(state.hasUnsavedChanges)
+    }
+
+    func testUpdateEditorTextFlipsDirtyAndBackToClean() async throws {
+        let (state, _, _) = try await makeAppStateWithLoadedNote()
+        // Typing a character: dirty.
+        state.updateEditorText("# Hello\n\nSome body.\nmore")
+        XCTAssertTrue(state.hasUnsavedChanges)
+        // Editor reverts to the baseline (e.g. user backspaces):
+        // dirty flips off without a save.
+        state.updateEditorText("# Hello\n\nSome body.\n")
+        XCTAssertFalse(state.hasUnsavedChanges)
+    }
+
+    func testSaveCurrentNoteUpdatesHashAndClearsDirty() async throws {
+        let (state, vault, notePath) = try await makeAppStateWithLoadedNote()
+        let originalHash = state.currentNoteContentHash
+        let newBody = "# Hello\n\nNew body line.\n"
+        state.updateEditorText(newBody)
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        await state.saveCurrentNote()?.value
+
+        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertNotEqual(state.currentNoteContentHash, originalHash)
+        XCTAssertEqual(state.savedBaselineText, newBody)
+        // On-disk file actually changed.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent(notePath),
+            encoding: .utf8
+        )
+        XCTAssertEqual(onDisk, newBody)
+    }
+
+    func testSaveCurrentNoteSurfacesWriteConflictWhenFileChangedExternally()
+        async throws
+    {
+        let (state, vault, notePath) = try await makeAppStateWithLoadedNote()
+        // External writer changes the file behind the editor's back.
+        let externalBody = "externally changed\n"
+        try Data(externalBody.utf8).write(
+            to: vault.appendingPathComponent(notePath)
+        )
+
+        state.updateEditorText("# Hello\n\nMy local edit.\n")
+        await state.saveCurrentNote()?.value
+
+        XCTAssertNotNil(
+            state.currentSaveConflict,
+            "external write must surface a WriteConflict, not a silent save"
+        )
+        XCTAssertTrue(state.hasUnsavedChanges, "buffer stays dirty until resolved")
+        // Disk still holds the external writer's version.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent(notePath),
+            encoding: .utf8
+        )
+        XCTAssertEqual(onDisk, externalBody)
+    }
+
+    func testResolveSaveConflictKeepMineOverwritesExternalChange() async throws {
+        let (state, vault, notePath) = try await makeAppStateWithLoadedNote()
+        try Data("external\n".utf8).write(
+            to: vault.appendingPathComponent(notePath)
+        )
+        let mine = "# Hello\n\nMy version wins.\n"
+        state.updateEditorText(mine)
+        await state.saveCurrentNote()?.value
+        XCTAssertNotNil(state.currentSaveConflict)
+
+        await state.resolveSaveConflictKeepMine()?.value
+
+        XCTAssertNil(state.currentSaveConflict)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent(notePath),
+            encoding: .utf8
+        )
+        XCTAssertEqual(onDisk, mine)
+    }
+
+    func testResolveSaveConflictReloadFromDiskDiscardsLocalEdits() async throws {
+        let (state, vault, notePath) = try await makeAppStateWithLoadedNote()
+        let externalBody = "external winner\n"
+        try Data(externalBody.utf8).write(
+            to: vault.appendingPathComponent(notePath)
+        )
+        state.updateEditorText("# Hello\n\nLocal version we're about to drop.\n")
+        await state.saveCurrentNote()?.value
+        XCTAssertNotNil(state.currentSaveConflict)
+
+        await state.resolveSaveConflictReloadFromDisk()?.value
+
+        XCTAssertNil(state.currentSaveConflict)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertEqual(state.currentNoteText, externalBody)
+        XCTAssertEqual(state.savedBaselineText, externalBody)
+    }
+
+    func testResolveSaveConflictCancelLeavesBufferDirty() async throws {
+        let (state, vault, notePath) = try await makeAppStateWithLoadedNote()
+        try Data("external\n".utf8).write(
+            to: vault.appendingPathComponent(notePath)
+        )
+        let local = "# Hello\n\nLocal version, unresolved.\n"
+        state.updateEditorText(local)
+        await state.saveCurrentNote()?.value
+        XCTAssertNotNil(state.currentSaveConflict)
+
+        state.resolveSaveConflictCancel()
+
+        XCTAssertNil(state.currentSaveConflict)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.currentNoteText, local)
+        // Disk untouched.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent(notePath),
+            encoding: .utf8
+        )
+        XCTAssertEqual(onDisk, "external\n")
+    }
+
+    func testSelectingDifferentFileWhileDirtyArmsPendingNavigation()
+        async throws
+    {
+        let (state, vault, _) = try await makeAppStateWithLoadedNote()
+        // Add a second file so there's somewhere to navigate to.
+        try Data("# Second\n".utf8).write(
+            to: vault.appendingPathComponent("two.md")
+        )
+        // Re-scan so listFiles sees the new file. The simplest
+        // re-scan path here is to ask AppState to reload.
+        await state.loadFiles()
+
+        state.updateEditorText("dirty edit\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        // Request the file switch via the same property the
+        // sidebar's List selection binds to.
+        state.selectedFilePath = "two.md"
+
+        // pendingNavigation is set synchronously; rollback runs on
+        // the next runloop tick (see the willSet/sink re-entry
+        // notes in AppState.handleSelectionChange).
+        XCTAssertEqual(state.pendingNavigation, .selectFile("two.md"))
+        XCTAssertEqual(
+            state.loadedFilePath, "note.md",
+            "loaded file must not have changed while the prompt is up"
+        )
+
+        // Let the queued rollback run.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // The sidebar selection should now reflect the rolled-back
+        // value so the file list visually re-highlights the dirty
+        // file.
+        XCTAssertEqual(state.selectedFilePath, "note.md")
+    }
+
+    func testResolvePendingNavigationDiscardCompletesTheSwitch() async throws {
+        let (state, vault, _) = try await makeAppStateWithLoadedNote()
+        try Data("# Second\n".utf8).write(
+            to: vault.appendingPathComponent("two.md")
+        )
+        await state.loadFiles()
+
+        state.updateEditorText("dirty\n")
+        state.selectedFilePath = "two.md"
+        XCTAssertEqual(state.pendingNavigation, .selectFile("two.md"))
+        // Let the rollback finish so we can observe the discard
+        // path landing on the new file rather than racing with the
+        // queued runloop-hop write.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        state.resolvePendingNavigationDiscard()
+        await state.noteLoadTask?.value
+
+        XCTAssertNil(state.pendingNavigation)
+        XCTAssertEqual(state.loadedFilePath, "two.md")
+        XCTAssertEqual(state.currentNoteText, "# Second\n")
+        XCTAssertFalse(state.hasUnsavedChanges)
+    }
+
+    func testAttemptCloseVaultWhileDirtyArmsPendingNavigation() async throws {
+        let (state, _, _) = try await makeAppStateWithLoadedNote()
+        state.updateEditorText("dirty\n")
+
+        state.attemptCloseVault()
+
+        XCTAssertEqual(state.pendingNavigation, .closeVault)
+        XCTAssertTrue(state.isVaultOpen, "vault stays open until user resolves")
+    }
+
+    func testAttemptCloseVaultWhenCleanClosesImmediately() async throws {
+        let (state, _, _) = try await makeAppStateWithLoadedNote()
+
+        state.attemptCloseVault()
+
+        XCTAssertNil(state.pendingNavigation)
+        XCTAssertFalse(state.isVaultOpen)
+    }
 }
