@@ -48,6 +48,12 @@ struct NoteEditorView: NSViewRepresentable {
     let scrollAnchorRequest: AnyPublisher<String, Never>
     /// Stream of scroll-to-line requests (1-based line number).
     let lineScrollRequest: AnyPublisher<Int, Never>
+    /// Stream of "park the cursor at this UTF-8 byte offset"
+    /// requests. Fed by the create-from-template flow when the
+    /// rendered template carried a `{{cursor}}` marker (Milestone
+    /// H). The coordinator converts the byte offset to UTF-16
+    /// before talking to `NSTextView`.
+    let cursorByteOffsetRequest: AnyPublisher<Int, Never>
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -125,7 +131,8 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.attach(textView: textView)
         context.coordinator.subscribe(
             scrollAnchorRequest: scrollAnchorRequest,
-            lineScrollRequest: lineScrollRequest
+            lineScrollRequest: lineScrollRequest,
+            cursorByteOffsetRequest: cursorByteOffsetRequest
         )
         return scrollView
     }
@@ -177,7 +184,8 @@ struct NoteEditorView: NSViewRepresentable {
 
         func subscribe(
             scrollAnchorRequest: AnyPublisher<String, Never>,
-            lineScrollRequest: AnyPublisher<Int, Never>
+            lineScrollRequest: AnyPublisher<Int, Never>,
+            cursorByteOffsetRequest: AnyPublisher<Int, Never>
         ) {
             // Cancel and re-subscribe on every makeNSView pass so a
             // recycled coordinator doesn't accumulate duplicate
@@ -191,6 +199,11 @@ struct NoteEditorView: NSViewRepresentable {
             lineScrollRequest
                 .sink { [weak self] line in
                     self?.scrollToLine(line)
+                }
+                .store(in: &subscriptions)
+            cursorByteOffsetRequest
+                .sink { [weak self] offset in
+                    self?.placeCursorAtByteOffset(offset)
                 }
                 .store(in: &subscriptions)
         }
@@ -232,6 +245,38 @@ struct NoteEditorView: NSViewRepresentable {
             guard range.location != NSNotFound else { return }
             textView.scrollRangeToVisible(range)
             textView.setSelectedRange(NSRange(location: range.location, length: 0))
+        }
+
+        /// Park the caret at the byte offset (UTF-8) supplied by the
+        /// create-from-template flow's `RenderedTemplate.cursor_byte_offset`.
+        /// `NSTextView.selectedRange` is UTF-16-indexed, so we convert
+        /// the byte offset to a UTF-16 distance from the start of the
+        /// buffer before talking to AppKit.
+        ///
+        /// Defensively clamps to the buffer's byte length: a template
+        /// whose `{{cursor}}` offset somehow landed past EOF (e.g. a
+        /// shrinking edit between render and load) parks the caret at
+        /// the end of the buffer rather than crashing.
+        private func placeCursorAtByteOffset(_ offset: Int) {
+            guard let textView else { return }
+            let source = textView.string
+            let bytes = source.utf8
+            let safeByteOffset = max(0, min(offset, bytes.count))
+            let byteIdx = bytes.index(bytes.startIndex, offsetBy: safeByteOffset)
+            // A scalar boundary may not coincide with the byte
+            // offset under pathological inputs (the render path's
+            // contract is to land on a UTF-8 boundary, but be
+            // generous on the consumer side). Fall back to the end
+            // of the buffer if conversion fails.
+            let strIdx = byteIdx.samePosition(in: source) ?? source.endIndex
+            let utf16Idx = strIdx.samePosition(in: source.utf16) ?? source.utf16.endIndex
+            let location = source.utf16.distance(
+                from: source.utf16.startIndex,
+                to: utf16Idx
+            )
+            let range = NSRange(location: location, length: 0)
+            textView.scrollRangeToVisible(range)
+            textView.setSelectedRange(range)
         }
 
         private func scrollToLine(_ line: Int) {

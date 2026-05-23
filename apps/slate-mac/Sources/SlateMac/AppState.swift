@@ -56,6 +56,24 @@ enum PendingNavigation: Equatable {
     case selectFile(String?)
 }
 
+/// State machine driving the create-from-template flow (Milestone H).
+///
+/// `idle` is the resting state. `needsPrompts` is set after
+/// `selectTemplate` against a template that declared at least one
+/// `{{prompt:Label}}` marker — the prompt sheet renders one
+/// `TextField` per entry, in declaration order, and `Submit`
+/// transitions to `needsName(...)` carrying the user's responses.
+/// `needsName` is set for prompt-less templates (skipping straight
+/// from picker → name sheet) and for any template after its prompts
+/// resolve. Submitting the name sheet returns the flow to `idle`
+/// via `submitTemplateNoteName`; any sheet's Cancel button calls
+/// `cancelTemplateFlow` to do the same.
+enum PendingTemplateFlow: Equatable {
+    case idle
+    case needsPrompts(TemplateSummary, [TemplatePrompt])
+    case needsName(TemplateSummary, [String: String])
+}
+
 /// Top-level app state.
 ///
 /// Owns the currently-open `VaultSession` (or none, on the welcome
@@ -203,6 +221,35 @@ final class AppState: ObservableObject {
     /// observer can fire a polite announcement.
     @Published private(set) var searchSummary: String = ""
 
+    // MARK: Template flow (Milestone H)
+
+    /// Snapshot of every template under the vault's templates folder
+    /// (default `Templates/`) — populated by `openTemplatePicker` and
+    /// re-fetched on every reopen so changes the user made on disk
+    /// since last invocation show up.
+    @Published private(set) var availableTemplates: [TemplateSummary] = []
+    /// `true` while the `TemplatePicker` sheet should be presented.
+    /// SwiftUI binding target; the picker sets this back to `false`
+    /// from its close button + Esc keybinding.
+    @Published var isTemplatePickerOpen: Bool = false
+    /// State machine for the create-from-template flow. `.idle` when
+    /// no flow is active; `.needsPrompts` while the prompt sheet is
+    /// up; `.needsName` while the new-note name sheet is up. Driven
+    /// by `selectTemplate` / `submitTemplatePrompts` /
+    /// `submitTemplateNoteName` / `cancelTemplateFlow`.
+    @Published var pendingTemplateFlow: PendingTemplateFlow = .idle
+    /// Inline validation error surfaced by the new-note name sheet
+    /// (empty / `.` / `..` / absolute paths, render/save failures).
+    /// `nil` when the field is in a valid state.
+    @Published var templateNoteNameError: String?
+
+    /// One-shot channel for "park the editor cursor at byte offset N
+    /// of the freshly-loaded note." Used by the create-from-template
+    /// flow to honor a rendered template's `{{cursor}}` marker.
+    /// Indexed in UTF-8 bytes — `NoteEditorView`'s coordinator
+    /// converts to UTF-16 before talking to `NSTextView`.
+    let cursorByteOffsetRequest = PassthroughSubject<Int, Never>()
+
     /// One-shot channel for "scroll the content pane to this heading
     /// anchor." `OutlineSidebar` sends; `NoteContentView` subscribes
     /// via `.onReceive`. PassthroughSubject (not @Published) so
@@ -244,6 +291,15 @@ final class AppState: ObservableObject {
     /// independently.
     private(set) var linksLoadTask: Task<Void, Never>?
 
+    /// Handle on the most recent template-flow task — opens the
+    /// picker (`openTemplatePicker`), reads source for prompt
+    /// extraction (`selectTemplate`), or runs the render+save
+    /// (`submitTemplateNoteName`). Exposed so tests can await
+    /// deterministically on each step of the flow.
+    private(set) var templatePickerTask: Task<Void, Never>?
+    private(set) var templateSelectionTask: Task<Void, Never>?
+    private(set) var templateCreateTask: Task<Void, Never>?
+
     /// Total announcements fired since the most recent vault was
     /// opened. Internal so the test target can verify the rate-guard
     /// keeps things <= 3/s; the UI never reads it.
@@ -251,6 +307,14 @@ final class AppState: ObservableObject {
     /// Most recent message passed to `postAccessibilityAnnouncement`.
     /// Same role as `scanAnnouncementCount` — for tests only.
     private(set) var scanAnnouncementLastMessage: String?
+
+    /// Most recent message passed through the template-flow
+    /// announcement helper (`announceTemplate`). Same role as
+    /// `scanAnnouncementLastMessage` — exposed so tests can verify
+    /// the polite live region fired without coupling to AppKit's
+    /// `NSAccessibility.post` (which is a no-op under the XCTest
+    /// runner anyway).
+    private(set) var templateAnnouncementLastMessage: String?
 
     /// Time source for rate-limiting scan announcements. Injectable so
     /// tests can advance simulated time without sleeping.
@@ -1377,6 +1441,292 @@ final class AppState: ObservableObject {
         scanAnnouncementCount += 1
         scanAnnouncementLastMessage = message
         postAccessibilityAnnouncement(message)
+    }
+
+    // MARK: - Templates (Milestone H)
+
+    /// Re-fetch templates and open the picker sheet. Always
+    /// succeeds: an empty `Templates/` folder, a non-existent one,
+    /// or a `listTemplates` failure all surface as "no templates"
+    /// rather than an error path — the picker is meant to be benign
+    /// on a vault with no templates configured.
+    ///
+    /// Announces the result count through the polite live region
+    /// so VoiceOver users know whether the picker has content
+    /// before they start arrow-navigating. The empty-state
+    /// announcement explicitly tells the user where to put their
+    /// templates.
+    @discardableResult
+    func openTemplatePicker() -> Task<Void, Never> {
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performOpenTemplatePicker()
+        }
+        templatePickerTask = task
+        return task
+    }
+
+    private func performOpenTemplatePicker() async {
+        guard let session = currentSession else {
+            availableTemplates = []
+            isTemplatePickerOpen = true
+            announceTemplate(
+                "Template picker opened. No vault loaded; cannot list templates."
+            )
+            return
+        }
+        let summaries: [TemplateSummary] = await Task.detached(
+            priority: .userInitiated
+        ) {
+            (try? session.listTemplates()) ?? []
+        }.value
+        availableTemplates = summaries
+        isTemplatePickerOpen = true
+        announceTemplate(templatePickerOpenAnnouncement(summaries.count))
+    }
+
+    /// Compose the open-picker announcement. Pulled out so the
+    /// empty-state copy stays in sync with the non-empty case and
+    /// so unit tests can hit it without standing up a real vault.
+    private func templatePickerOpenAnnouncement(_ count: Int) -> String {
+        switch count {
+        case 0:
+            let vaultLabel = currentVaultURL?.lastPathComponent ?? "this vault"
+            return "Template picker opened. No templates found. "
+                + "Create one in \(vaultLabel)/Templates/."
+        case 1:
+            return "Template picker opened. 1 template available."
+        default:
+            return "Template picker opened. \(count) templates available."
+        }
+    }
+
+    /// User chose a template row in the picker. Pulls the source off
+    /// disk to extract prompt metadata; routes to the prompt sheet
+    /// if there are prompts, otherwise straight to the name sheet.
+    /// On read failure (template deleted between list and select)
+    /// cancels the flow rather than blocking on an error sheet.
+    @discardableResult
+    func selectTemplate(_ summary: TemplateSummary) -> Task<Void, Never> {
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performSelectTemplate(summary)
+        }
+        templateSelectionTask = task
+        return task
+    }
+
+    private func performSelectTemplate(_ summary: TemplateSummary) async {
+        guard let session = currentSession else {
+            cancelTemplateFlow()
+            return
+        }
+        let sourceResult: String? = await Task.detached(
+            priority: .userInitiated
+        ) {
+            try? session.readText(path: summary.path)
+        }.value
+        guard let source = sourceResult else {
+            cancelTemplateFlow()
+            return
+        }
+        let metadata = extractTemplateMetadata(source: source)
+        isTemplatePickerOpen = false
+        if metadata.prompts.isEmpty {
+            pendingTemplateFlow = .needsName(summary, [:])
+        } else {
+            pendingTemplateFlow = .needsPrompts(summary, metadata.prompts)
+        }
+    }
+
+    /// Hand-off from the prompt sheet's Submit button. Stuffs the
+    /// user's responses into the flow and advances to the name
+    /// sheet. No-op when the flow isn't currently waiting on prompts
+    /// (e.g. a late callback from a sheet that already dismissed).
+    func submitTemplatePrompts(_ values: [String: String]) {
+        guard case .needsPrompts(let template, _) = pendingTemplateFlow else {
+            return
+        }
+        pendingTemplateFlow = .needsName(template, values)
+    }
+
+    /// Final step. Renders the template, atomically writes the new
+    /// note, selects it in the editor, and parks the cursor at the
+    /// template's `{{cursor}}` byte offset (if any).
+    ///
+    /// Path validation rejects empty / `.` / `..` / absolute paths
+    /// up front so the user sees the error inline instead of as a
+    /// late `save_text` failure. Cancel from any earlier sheet
+    /// leaves no file on disk; this method only fires on the user's
+    /// explicit Submit.
+    @discardableResult
+    func submitTemplateNoteName(_ relativePath: String) -> Task<Void, Never>? {
+        guard case .needsName(let template, let promptValues) = pendingTemplateFlow
+        else { return nil }
+        guard let session = currentSession,
+            let vaultURL = currentVaultURL
+        else {
+            cancelTemplateFlow()
+            return nil
+        }
+
+        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let problem = validateTemplateNoteName(trimmed) {
+            templateNoteNameError = problem
+            return nil
+        }
+
+        // Append `.md` if the user omitted it. The picker's "default
+        // name" already includes it, but a paste from elsewhere
+        // might not — adding it here keeps every created template
+        // note Markdown-shaped.
+        let normalized = trimmed.hasSuffix(".md") ? trimmed : "\(trimmed).md"
+        // `title` for the rendered template is the file stem of the
+        // new note, not the template's own name. Matches how
+        // `{{title}}` is documented to behave in §8.2.
+        let titleStem = ((normalized as NSString).lastPathComponent as NSString)
+            .deletingPathExtension
+        let context = TemplateContext(
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000),
+            title: titleStem,
+            vaultName: vaultURL.lastPathComponent,
+            promptValues: promptValues
+        )
+
+        templateNoteNameError = nil
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performCreateNoteFromTemplate(
+                session: session,
+                template: template,
+                context: context,
+                relativePath: normalized
+            )
+        }
+        templateCreateTask = task
+        return task
+    }
+
+    private func performCreateNoteFromTemplate(
+        session: VaultSession,
+        template: TemplateSummary,
+        context: TemplateContext,
+        relativePath: String
+    ) async {
+        // Render + save off the main actor so the SQLite mutex and
+        // file write don't pin the UI thread. Match the
+        // `performSave` shape so the threading story stays uniform
+        // across editor-save and template-create paths.
+        let outcome: Result<RenderedTemplate, VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
+            do {
+                let rendered = try session.renderTemplate(
+                    templatePath: template.path,
+                    context: context
+                )
+                _ = try session.saveText(
+                    path: relativePath,
+                    contents: rendered.body,
+                    expectedContentHash: nil
+                )
+                return .success(rendered)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }.value
+
+        switch outcome {
+        case .success(let rendered):
+            pendingTemplateFlow = .idle
+            templateNoteNameError = nil
+            announceTemplate(
+                "Created \(filename(of: relativePath)) from \(template.name)."
+            )
+            // Open the new file. SwiftUI propagates the binding
+            // change → `handleSelectionChange` kicks off a fresh
+            // note load. After the load resolves, we send the
+            // cursor request so `NoteEditorView`'s coordinator can
+            // park the caret at `{{cursor}}`.
+            selectedFilePath = relativePath
+            // Refresh the file list so the new note appears in
+            // the sidebar without waiting for the next external
+            // event. Same shape `save_text` doesn't do because
+            // it only changes existing files; create-from-template
+            // adds a new row.
+            await loadFiles()
+            if let offset = rendered.cursorByteOffset {
+                let pendingLoad = noteLoadTask
+                Task { @MainActor [weak self] in
+                    if let pendingLoad {
+                        await pendingLoad.value
+                    }
+                    guard let self,
+                        self.selectedFilePath == relativePath
+                    else { return }
+                    self.cursorByteOffsetRequest.send(Int(offset))
+                }
+            }
+        case .failure(let error):
+            templateNoteNameError = humanReadable(error)
+        }
+    }
+
+    /// Reset the create-from-template flow back to idle. Called by
+    /// every sheet's Cancel button and by the failure paths above.
+    /// Idempotent — safe to call from any state.
+    func cancelTemplateFlow() {
+        pendingTemplateFlow = .idle
+        isTemplatePickerOpen = false
+        templateNoteNameError = nil
+    }
+
+    /// Reject the new-note name early so the user sees a useful
+    /// inline error rather than a `save_text` `InvalidPath` failure
+    /// that arrives after the render finishes. Mirrors the rules in
+    /// `validate_save_path` in `slate-core`.
+    private func validateTemplateNoteName(_ candidate: String) -> String? {
+        if candidate.isEmpty {
+            return "Note name cannot be empty."
+        }
+        if candidate == "." || candidate == ".." {
+            return "Note name cannot be `.` or `..`."
+        }
+        if candidate.hasPrefix("/") {
+            return "Note name must be vault-relative, not absolute."
+        }
+        // Any segment equal to `..` is a path traversal. Block both
+        // `../foo.md` and `foo/../bar.md`.
+        for segment in candidate.split(separator: "/", omittingEmptySubsequences: false) {
+            if segment == ".." {
+                return "Note name cannot contain `..` segments."
+            }
+        }
+        return nil
+    }
+
+    /// Convenience: the new-note name field's default value for a
+    /// freshly-selected template. Templates whose name starts with
+    /// `Daily` get a date suffix so the user can confirm-Enter on
+    /// the daily-note flow without typing; everything else
+    /// pre-fills with the template's own name.
+    func defaultNewNoteName(for template: TemplateSummary) -> String {
+        if template.name.lowercased().hasPrefix("daily") {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "yyyy-MM-dd"
+            return "\(template.name)-\(formatter.string(from: Date())).md"
+        }
+        return "\(template.name).md"
+    }
+
+    /// Post a polite announcement through AppKit's accessibility
+    /// bus and capture it for the test target. Same shape as
+    /// `announceScan` but without the per-second rate guard —
+    /// template events are user-driven and never rapid-fire.
+    private func announceTemplate(_ message: String) {
+        templateAnnouncementLastMessage = message
+        postAccessibilityAnnouncement(message, priority: .medium)
     }
 
     // MARK: - Private

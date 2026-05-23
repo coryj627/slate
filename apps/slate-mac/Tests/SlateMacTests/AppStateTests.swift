@@ -1564,4 +1564,328 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(state.pendingNavigation)
         XCTAssertFalse(state.isVaultOpen)
     }
+
+    // MARK: - Milestone H: create-from-template flow
+
+    /// Sets up a vault with the supplied templates under
+    /// `Templates/`, opens the AppState against it, and waits for
+    /// the initial scan to finish. Returns the AppState plus the
+    /// vault URL so the test can re-read on-disk files afterward.
+    private func makeTemplatesVault(
+        templates: [(name: String, body: String)]
+    ) async throws -> (state: AppState, vault: URL) {
+        let vault = tempDir.appendingPathComponent("templates-vault-\(UUID().uuidString)")
+        let templatesDir = vault.appendingPathComponent("Templates")
+        try FileManager.default.createDirectory(
+            at: templatesDir,
+            withIntermediateDirectories: true
+        )
+        for template in templates {
+            try Data(template.body.utf8).write(
+                to: templatesDir.appendingPathComponent(template.name)
+            )
+        }
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return (state, vault)
+    }
+
+    /// Subscribe to `cursorByteOffsetRequest` for the duration of
+    /// the test closure and return every value the publisher emitted.
+    /// Mirrors the `waitForLineScroll` pattern but doesn't need a
+    /// timeout: the template-flow tests can `await` each step
+    /// deterministically.
+    private func collectCursorOffsets(
+        from state: AppState
+    ) -> (subscription: AnyCancellable, captured: () -> [Int]) {
+        var captured: [Int] = []
+        let sub = state.cursorByteOffsetRequest.sink { offset in
+            captured.append(offset)
+        }
+        return (sub, { captured })
+    }
+
+    func testOpenTemplatePickerPopulatesAndAnnounces() async throws {
+        let (state, _) = try await makeTemplatesVault(templates: [
+            ("Alpha.md", "# {{title}}\n"),
+            ("Daily.md", "---\ndescription: Daily standup\n---\n"),
+        ])
+
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+
+        XCTAssertTrue(state.isTemplatePickerOpen)
+        XCTAssertEqual(
+            state.availableTemplates.map(\.name),
+            ["Alpha", "Daily"]
+        )
+        XCTAssertEqual(
+            state.templateAnnouncementLastMessage,
+            "Template picker opened. 2 templates available."
+        )
+    }
+
+    func testOpenTemplatePickerAnnouncesEmptyState() async throws {
+        let (state, vault) = try await makeTemplatesVault(templates: [])
+
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+
+        XCTAssertTrue(state.isTemplatePickerOpen)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+        let expected = "Template picker opened. No templates found. "
+            + "Create one in \(vault.lastPathComponent)/Templates/."
+        XCTAssertEqual(state.templateAnnouncementLastMessage, expected)
+    }
+
+    func testSelectTemplateWithPromptsRoutesToNeedsPrompts() async throws {
+        let (state, _) = try await makeTemplatesVault(templates: [
+            (
+                "Meeting.md",
+                "# Meeting: {{prompt:Topic}}\n\nAttendees: {{prompt:Attendees}}\n"
+            ),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        switch state.pendingTemplateFlow {
+        case .needsPrompts(let template, let prompts):
+            XCTAssertEqual(template.path, summary.path)
+            XCTAssertEqual(prompts.map(\.label), ["Topic", "Attendees"])
+            XCTAssertEqual(prompts.map(\.key), ["topic", "attendees"])
+        default:
+            XCTFail("expected .needsPrompts, got \(state.pendingTemplateFlow)")
+        }
+    }
+
+    func testSelectTemplateWithoutPromptsSkipsToNeedsName() async throws {
+        let (state, _) = try await makeTemplatesVault(templates: [
+            ("Scratch.md", "# {{title}}\n\n{{cursor}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        switch state.pendingTemplateFlow {
+        case .needsName(let template, let values):
+            XCTAssertEqual(template.path, summary.path)
+            XCTAssertTrue(values.isEmpty)
+        default:
+            XCTFail("expected .needsName, got \(state.pendingTemplateFlow)")
+        }
+    }
+
+    func testCreateFromStaticTemplateWritesFileAndSendsCursor() async throws {
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Scratch.md", "# {{title}}\n\n{{cursor}}\n"),
+        ])
+        let (sub, captured) = collectCursorOffsets(from: state)
+        defer { sub.cancel() }
+
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        state.submitTemplateNoteName("scratch-1.md")
+        await state.templateCreateTask?.value
+
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        XCTAssertNil(state.templateNoteNameError)
+        XCTAssertEqual(
+            state.templateAnnouncementLastMessage,
+            "Created scratch-1.md from Scratch."
+        )
+
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("scratch-1.md"),
+            encoding: .utf8
+        )
+        // `{{title}}` resolves to the file stem, `{{cursor}}` is
+        // stripped to empty and its offset is captured separately.
+        XCTAssertEqual(onDisk, "# scratch-1\n\n\n")
+        XCTAssertEqual(state.selectedFilePath, "scratch-1.md")
+
+        // Wait for the post-load cursor request to land.
+        await state.noteLoadTask?.value
+        // Give the queued Task a runloop tick to run.
+        await Task.yield()
+        // The cursor offset matches the byte index of `{{cursor}}`'s
+        // substitution in the rendered body: "# scratch-1\n\n" = 13
+        // bytes, so the offset is 13.
+        XCTAssertEqual(captured(), [13])
+    }
+
+    func testCreateFromPromptedTemplateStuffsPromptsIntoRightSlots() async throws {
+        let body = "# Meeting: {{prompt:Topic}}\n\n"
+            + "Attendees: {{prompt:Attendees}}\n\n{{cursor}}\n"
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Meeting.md", body),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        state.submitTemplatePrompts([
+            "topic": "Quarterly review",
+            "attendees": "Cory, Pat",
+        ])
+        // The transition is synchronous; advance to .needsName
+        // without an await.
+        switch state.pendingTemplateFlow {
+        case .needsName(_, let values):
+            XCTAssertEqual(values["topic"], "Quarterly review")
+            XCTAssertEqual(values["attendees"], "Cory, Pat")
+        default:
+            XCTFail("expected .needsName after submitPrompts, got \(state.pendingTemplateFlow)")
+        }
+
+        state.submitTemplateNoteName("Q2-review.md")
+        await state.templateCreateTask?.value
+
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("Q2-review.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            onDisk,
+            "# Meeting: Quarterly review\n\nAttendees: Cory, Pat\n\n\n"
+        )
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        XCTAssertEqual(
+            state.templateAnnouncementLastMessage,
+            "Created Q2-review.md from Meeting."
+        )
+    }
+
+    func testCreateFromTemplateRendersDateVariable() async throws {
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Daily.md", "# {{date:%Y-%m-%d}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        // Use the default name to also cover the Daily-date suffix
+        // path.
+        let defaultName = state.defaultNewNoteName(for: summary)
+        state.submitTemplateNoteName(defaultName)
+        await state.templateCreateTask?.value
+
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent(defaultName),
+            encoding: .utf8
+        )
+        // Today's date in UTC, matching the chrono `%Y-%m-%d`
+        // formatter the render engine uses.
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: Date())
+        XCTAssertEqual(onDisk, "# \(today)\n")
+        XCTAssertTrue(
+            defaultName.hasPrefix("Daily-"),
+            "defaultNewNoteName should suffix Daily templates with a date; got \(defaultName)"
+        )
+    }
+
+    func testCancelFromPromptSheetResetsFlowAndWritesNoFile() async throws {
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Meeting.md", "# {{prompt:Topic}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        guard case .needsPrompts = state.pendingTemplateFlow else {
+            return XCTFail("expected to land on prompt step, got \(state.pendingTemplateFlow)")
+        }
+
+        state.cancelTemplateFlow()
+
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        // Make sure no spurious file was created under the vault root
+        // or under Templates/.
+        let vaultContents = try FileManager.default.contentsOfDirectory(
+            at: vault,
+            includingPropertiesForKeys: nil
+        )
+        let rootFileNames = vaultContents.map(\.lastPathComponent).sorted()
+        XCTAssertEqual(rootFileNames, [".slate", "Templates"])
+    }
+
+    func testCancelFromNameSheetResetsFlowAndWritesNoFile() async throws {
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Scratch.md", "# {{title}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        guard case .needsName = state.pendingTemplateFlow else {
+            return XCTFail("expected to land on name step, got \(state.pendingTemplateFlow)")
+        }
+
+        state.cancelTemplateFlow()
+
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        let vaultContents = try FileManager.default.contentsOfDirectory(
+            at: vault,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(
+            vaultContents.map(\.lastPathComponent).sorted(),
+            [".slate", "Templates"]
+        )
+    }
+
+    func testSubmitTemplateNoteNameRejectsEmpty() async throws {
+        let (state, _) = try await makeTemplatesVault(templates: [
+            ("Scratch.md", "# {{title}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        state.submitTemplateNoteName("   ")
+        XCTAssertNotNil(state.templateNoteNameError)
+        XCTAssertNotEqual(state.pendingTemplateFlow, .idle)
+    }
+
+    func testSubmitTemplateNoteNameRejectsParentTraversal() async throws {
+        let (state, _) = try await makeTemplatesVault(templates: [
+            ("Scratch.md", "# {{title}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        state.submitTemplateNoteName("../escape.md")
+        XCTAssertNotNil(state.templateNoteNameError)
+        XCTAssertNotEqual(state.pendingTemplateFlow, .idle)
+    }
 }
