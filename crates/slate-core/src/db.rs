@@ -84,6 +84,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "tasks: per-file Markdown task items",
         sql: include_str!("../migrations/008_tasks.sql"),
     },
+    Migration {
+        description: "tasks: partial index on priority",
+        sql: include_str!("../migrations/009_tasks_priority_index.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

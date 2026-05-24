@@ -5085,6 +5085,108 @@ mod tests {
     }
 
     #[test]
+    fn priority_at_least_filter_uses_idx_tasks_priority_not_table_scan() {
+        // Regression for #139 (red-team M1). Before migration 009,
+        // `tasks_in_vault` with `priority_at_least = Some(_)`
+        // produced an `EXPLAIN QUERY PLAN` of `SCAN tasks` —
+        // sequential table scan on every page. After the partial
+        // index lands, the planner switches to `SEARCH … USING
+        // INDEX idx_tasks_priority`.
+        //
+        // Populating ~500 prioritised rows + ANALYZE so the planner
+        // has real cardinality estimates instead of the empty-table
+        // defaults that would mask the plan choice.
+        let (_tmp, session) = make_vault(|p| {
+            let mut body = String::with_capacity(20_000);
+            for i in 0..500 {
+                let marker = match i % 4 {
+                    0 => "⏫",
+                    1 => "🔼",
+                    2 => "🔽",
+                    _ => "⏬",
+                };
+                body.push_str(&format!("- [ ] task {i} {marker}\n"));
+            }
+            // Plus some no-priority tasks so the partial index
+            // actually skips rows (proving its value).
+            for i in 0..200 {
+                body.push_str(&format!("- [ ] no-pri {i}\n"));
+            }
+            p.write_file("bulk.md", body.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let conn = session.conn.lock().unwrap();
+        conn.execute("ANALYZE", []).unwrap();
+
+        // Replicates the WHERE + ORDER BY shape `tasks_db::tasks_in_vault`
+        // produces for a `priority_at_least` filter. The planner
+        // picks the index based on WHERE + cardinality; LIMIT is
+        // included for parity with the real path.
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT f.path, t.ordinal
+                 FROM tasks t
+                 JOIN files f ON f.id = t.file_id
+                 WHERE t.priority IS NOT NULL AND t.priority >= ?
+                 ORDER BY IFNULL(t.due_ms, ?) ASC,
+                          IFNULL(t.priority, ?) DESC,
+                          f.path COLLATE BINARY ASC,
+                          t.ordinal ASC
+                 LIMIT ?",
+            )
+            .unwrap()
+            .query_map(
+                rusqlite::params![1i64, i64::MAX, i32::MIN as i64, 200i64],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let plan_text = plan.join("\n");
+
+        assert!(
+            plan_text.contains("idx_tasks_priority"),
+            "priority filter should use idx_tasks_priority; plan:\n{plan_text}",
+        );
+        // Defensive check: regardless of how SQLite phrases the
+        // optimizer output in future versions, no line should
+        // start with a bare full-table SCAN of `t`. The plan may
+        // include "USE TEMP B-TREE FOR ORDER BY" — that's the
+        // sort step, separately tracked as red-team M2.
+        for line in plan_text.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !(trimmed.starts_with("SCAN t ") || trimmed == "SCAN t"),
+                "expected no full SCAN of tasks; got line: {line:?}\nfull plan:\n{plan_text}",
+            );
+        }
+    }
+
+    #[test]
+    fn idx_tasks_priority_exists_after_migration_009() {
+        // Belt-and-braces: even if a future planner change masks the
+        // EXPLAIN-based test above, the index itself must remain in
+        // `sqlite_master`. Migration 009 is append-only / forward-
+        // only per the project's migration policy.
+        let (_tmp, session) = make_vault(|_| {});
+        let conn = session.conn.lock().unwrap();
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_tasks_priority'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            exists, 1,
+            "idx_tasks_priority must exist after migration 009"
+        );
+    }
+
+    #[test]
     fn tasks_in_vault_priority_at_least_filter() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file(
