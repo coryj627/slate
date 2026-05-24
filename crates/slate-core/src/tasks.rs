@@ -328,7 +328,37 @@ fn excluded_byte_ranges(source: &str) -> Vec<(usize, usize)> {
         }
     }
     ranges.sort_by_key(|r| r.0);
-    ranges
+    coalesce_ranges(ranges)
+}
+
+/// Merge overlapping or adjacent ranges. Behaviour-preserving for
+/// `byte_in_excluded_range` (any byte that was in some range still
+/// is) but trims the per-line membership-check cost on documents
+/// where pulldown-cmark and the frontmatter-range helper produce
+/// adjacent or nested ranges — e.g. a fenced code block immediately
+/// followed by an HTML block, or any case where multiple emitters
+/// touch the same span (Codoki PR #141 Medium).
+///
+/// Assumes `ranges` is already sorted by start. Returns a new vec
+/// because the merge mutates in-place into an output buffer rather
+/// than working over the input.
+fn coalesce_ranges(ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match out.last_mut() {
+            // Adjacent (`start == prev_end`) or overlapping
+            // (`start < prev_end`) merges into the previous range.
+            // Treat `start == prev_end` as adjacent so two
+            // back-to-back blocks collapse to one.
+            Some(prev) if start <= prev.1 => {
+                if end > prev.1 {
+                    prev.1 = end;
+                }
+            }
+            _ => out.push((start, end)),
+        }
+    }
+    out
 }
 
 fn byte_in_excluded_range(byte: usize, ranges: &[(usize, usize)]) -> bool {
@@ -480,6 +510,60 @@ mod tests {
         let tasks = extract_tasks(src);
         assert_eq!(tasks.len(), 1, "got: {tasks:?}");
         assert_eq!(tasks[0].text, "active task");
+    }
+
+    // --- Range coalescing (Codoki PR #141 Medium follow-up) ---
+
+    #[test]
+    fn coalesce_ranges_merges_overlapping_runs() {
+        // Three overlapping ranges collapse to one, two disjoint
+        // ranges stay separate.
+        let merged = coalesce_ranges(vec![(0, 5), (3, 7), (6, 10), (20, 25)]);
+        assert_eq!(merged, vec![(0, 10), (20, 25)]);
+    }
+
+    #[test]
+    fn coalesce_ranges_merges_adjacent_ranges() {
+        // (0..5) and (5..10) share the boundary at 5; collapse to
+        // one. Catches the "two back-to-back blocks" case Codoki
+        // flagged.
+        let merged = coalesce_ranges(vec![(0, 5), (5, 10)]);
+        assert_eq!(merged, vec![(0, 10)]);
+    }
+
+    #[test]
+    fn coalesce_ranges_leaves_disjoint_ranges_alone() {
+        let merged = coalesce_ranges(vec![(0, 5), (10, 15), (20, 25)]);
+        assert_eq!(merged, vec![(0, 5), (10, 15), (20, 25)]);
+    }
+
+    #[test]
+    fn coalesce_ranges_handles_nested_range_inside_larger() {
+        // (0..100) fully contains (10..20); the merge should keep
+        // the outer extent.
+        let merged = coalesce_ranges(vec![(0, 100), (10, 20)]);
+        assert_eq!(merged, vec![(0, 100)]);
+    }
+
+    #[test]
+    fn coalesce_ranges_handles_empty_input() {
+        let merged: Vec<(usize, usize)> = coalesce_ranges(vec![]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn excluded_ranges_with_adjacent_html_and_fenced_block_preserve_real_task() {
+        // HTML block + blank line + fenced code block + blank line +
+        // real task. Whether or not the two excluded ranges actually
+        // coalesce (depends on whether pulldown-cmark emits them
+        // back-to-back or with a 1-byte gap on the blank line), the
+        // observable behaviour must be identical: both blocks are
+        // excluded, the real task survives. The coalesce step itself
+        // is covered by the `coalesce_ranges_*` unit tests above.
+        let src = "<div>\n- [ ] in html\n</div>\n\n```\n- [ ] in code\n```\n\n- [ ] real\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1, "got: {tasks:?}");
+        assert_eq!(tasks[0].text, "real");
     }
 
     #[test]
