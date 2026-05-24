@@ -108,11 +108,11 @@ Same machine + toolchain as the 2026-05-17 row. The fixture is `generate_tasks_v
 
 | Benchmark | 1 KB doc | 10 KB doc | 50 KB doc |
 |---|---|---|---|
-| `parser_zero_task_overhead` | 177 ns | 1.65 µs | 8.19 µs |
+| `parser_zero_task_overhead` | 336 ns | 3.00 µs | 14.9 µs |
 
 _Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/criterion/`._
 
-`parser_zero_task_overhead` measures `extract_tasks` on a zero-task document (frontmatter + headings + paragraphs + markdown links — same shape as a typical no-tasks note in a real vault). With the byte-substring prefilter added in #144, the parser short-circuits before pulldown-cmark, so the cost stays in the nanosecond-to-low-microsecond range regardless of doc size. Before the prefilter, the same 50 KB doc cost ~50 µs per call (red-team measurement on PR #134) — ~6× speedup on the worst case, with disproportionate impact on cold-scan latency across vaults dominated by zero-task notes.
+`parser_zero_task_overhead` measures `extract_tasks` on a zero-task document (frontmatter + headings + paragraphs + markdown links — same shape as a typical no-tasks note in a real vault). With the byte-scan prefilter added in #144, the parser short-circuits before pulldown-cmark, so the cost stays in the nanosecond-to-low-microsecond range regardless of doc size. Before the prefilter, the same 50 KB doc cost ~50 µs per call (red-team measurement on PR #134) — ~3.4× speedup on the worst case, with disproportionate impact on cold-scan latency across vaults dominated by zero-task notes. (The initial #148 implementation used `str::contains` and benchmarked ~2× faster, but had a correctness gap on multi-whitespace task lines flagged by Codoki review; the corrected byte-scan version trades SIMD-vectorisation for a no-false-negatives guarantee.)
 
 **Cold scan cost.** Adding the tasks pipeline to the scanner adds roughly the same per-file overhead as the headings / links / properties pipelines — well within the scanner's existing headroom against the V1 first-open gate. The fast-path rescan invariant (no churn on unchanged files) carries over to the tasks table; see the `fast_path_rescan_does_not_touch_tasks_table` integration test.
 

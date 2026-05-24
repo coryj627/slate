@@ -129,24 +129,40 @@ pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
 /// the full pipeline.
 ///
 /// **No false negatives.** Every task line, after optional leading
-/// whitespace, starts with a bullet (`-`, `*`, `+`) followed by at
-/// least one space or tab and then `[`. Looking for that 3-byte
-/// fingerprint anywhere in the source catches every real task; any
-/// task that DOESN'T match would also fail `parse_task_line` and
-/// wasn't going to land as a TaskItem anyway.
+/// whitespace, matches the shape `[-*+][ \t]+\[`. We do one
+/// left-to-right byte walk: on each bullet character, peek forward
+/// over any run of spaces/tabs and check whether the next byte is
+/// `[`. `parse_task_line` accepts 1+ whitespace between the bullet
+/// and the `[` (via `trim_start_matches([' ', '\t'])`), and so do
+/// we — an earlier shape that searched for fixed 3-byte strings
+/// (`"- ["` / `"-\t["`) silently dropped tasks authored with two
+/// or more spaces (Codoki PR #148 High).
 ///
 /// **False positives are tolerated and cheap.** Prose containing
-/// `"- ["`, `"* ["`, or a markdown link list like `"+ [link](url)"`
-/// triggers the full parse, which correctly produces zero tasks.
-/// The slow path is only paid by docs that look like they might
-/// have tasks.
+/// `"- [link](url)"` triggers the full parse, which correctly
+/// produces zero tasks. The slow path is only paid by docs that
+/// look like they might have tasks.
 fn might_contain_task_line(source: &str) -> bool {
-    // Spaces are by far the dominant separator; tab variants are
-    // rare but legal under `parse_task_line` (which calls
-    // `trim_start_matches([' ', '\t'])`), so we check them too —
-    // a false negative would silently drop the user's tasks.
-    const SIGNALS: &[&str] = &["- [", "* [", "+ [", "-\t[", "*\t[", "+\t["];
-    SIGNALS.iter().any(|s| source.contains(s))
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if matches!(bytes[i], b'-' | b'*' | b'+') {
+            // Skip a run of one or more spaces/tabs after the bullet.
+            let mut j = i + 1;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            // `parse_task_line` requires AT LEAST one whitespace
+            // between the bullet and the `[` — `j > i + 1` enforces
+            // that here too. If the next byte is `[`, this looks
+            // like a task line.
+            if j > i + 1 && j < bytes.len() && bytes[j] == b'[' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 fn strip_one_trailing_newline(s: &str) -> &str {
@@ -681,6 +697,33 @@ mod tests {
                    \nMore paragraph content here. No tasks at all.\n\
                    \n```rust\nfn hello() { println!(\"x\"); }\n```\n";
         assert!(extract_tasks(src).is_empty());
+    }
+
+    #[test]
+    fn might_contain_task_line_handles_multiple_spaces_between_bullet_and_bracket() {
+        // Regression for Codoki PR #148 High: `parse_task_line`
+        // accepts 1+ spaces/tabs between the bullet and the `[`
+        // (via `trim_start_matches([' ', '\t'])` on the post-bullet
+        // slice). The prefilter must match the same shape, or it
+        // silently drops these tasks on cold scan.
+        assert!(might_contain_task_line("-  [ ] two spaces"));
+        assert!(might_contain_task_line("-   [ ] three spaces"));
+        assert!(might_contain_task_line("*    [x] four spaces"));
+        assert!(might_contain_task_line("+\t [ ] tab and space"));
+        assert!(might_contain_task_line("-\t\t[ ] two tabs"));
+        assert!(might_contain_task_line("- \t [ ] mixed"));
+    }
+
+    #[test]
+    fn extract_tasks_round_trips_tasks_with_multiple_whitespace_between_bullet_and_bracket() {
+        // Same regression at the full-pipeline level — the fast path
+        // must let these through to `parse_task_line`, which must
+        // then correctly extract them.
+        let src = "-   [ ] three spaces task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "three spaces task");
+        assert_eq!(tasks[0].status_char, ' ');
     }
 
     #[test]
