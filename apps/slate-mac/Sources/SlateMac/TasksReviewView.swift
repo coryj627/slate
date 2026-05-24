@@ -46,10 +46,17 @@ struct TasksReviewView: View {
                 .font(.title2.bold())
                 .accessibilityAddTraits(.isHeader)
             Spacer()
-            Text("\(appState.vaultTasks.count) shown")
+            // WCAG 2.5.3 (label-in-name): the visible text and the AX
+            // label must start with the same string so dictation /
+            // "click on" voice commands match what sighted users
+            // read. We used to render "N shown" with an AX label of
+            // "N tasks shown" — the a11y linter rightly flagged that
+            // the visible text didn't open the accessible name.
+            // Spelling out "tasks shown" in both places keeps the
+            // chip readable and lets dictation work.
+            Text("\(appState.vaultTasks.count) tasks shown")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("\(appState.vaultTasks.count) tasks shown")
         }
     }
 
@@ -109,8 +116,12 @@ struct TasksReviewView: View {
             .accessibilityLabel("Loading tasks.")
         } else if let error = appState.vaultTasksLoadError {
             VStack(alignment: .leading, spacing: 8) {
+                // WCAG 2.4.6 (Headings and Labels): anything rendered
+                // with a headline font has to advertise the heading
+                // trait so VoiceOver rotor-by-heading lands on it.
                 Text("Couldn't load tasks.")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
                 Text(error)
                     .font(.callout)
                     .foregroundStyle(.secondary)

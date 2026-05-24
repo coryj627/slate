@@ -192,14 +192,26 @@ struct TasksPanel: View {
     /// Format a UTC-midnight `due_ms` value as `YYYY-MM-DD`.
     /// Matches the on-disk Tasks-plugin syntax so VoiceOver reads
     /// the same value the user authored.
+    ///
+    /// The formatter is cached because both `TasksPanel` and
+    /// `TasksReviewView` call this in their row builders — a vault
+    /// with several hundred dated tasks would otherwise allocate a
+    /// new `DateFormatter` per row on every redraw. `DateFormatter`
+    /// is documented thread-safe for `string(from:)` reads after
+    /// initialisation, and we only mutate it once inside the
+    /// `static let` initialiser.
     static func formatDueDate(_ ms: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+        return dueDateFormatter.string(from: date)
+    }
+
+    private static let dueDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
-    }
+        return formatter
+    }()
 
     /// Human-readable priority label. Maps the backend's signed
     /// scale (`-2`…`2`) to the Tasks-plugin emoji terminology.
