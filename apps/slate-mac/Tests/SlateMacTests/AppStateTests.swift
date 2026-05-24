@@ -1798,9 +1798,65 @@ final class AppStateTests: XCTestCase {
         formatter.dateFormat = "yyyy-MM-dd"
         let today = formatter.string(from: Date())
         XCTAssertEqual(onDisk, "# \(today)\n")
+        // The space-separated form is the post-#133 shape; multi-word
+        // Daily templates (`Daily Standup`) read more naturally than
+        // the prior `Daily-...` join.
+        XCTAssertEqual(
+            defaultName, "Daily \(today).md",
+            "defaultNewNoteName should join the date with a space; got \(defaultName)"
+        )
+    }
+
+    func testDefaultNewNoteNameForMultiWordDailyTemplateUsesSpaceSeparator() async throws {
+        // Regression for #133. `Daily Standup` (multi-word) previously
+        // produced `Daily Standup-2026-05-23.md` — the dash after a
+        // space reads awkwardly. New shape uses a single space.
+        let (state, _) = try await makeTemplatesVault(templates: [
+            ("Daily Standup.md", "# {{date:%Y-%m-%d}}\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+
+        let defaultName = state.defaultNewNoteName(for: summary)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: Date())
+        XCTAssertEqual(defaultName, "Daily Standup \(today).md")
+    }
+
+    func testSubmitTemplateNoteNameTreatsMdSuffixCaseInsensitively() async throws {
+        // Regression for #133. A user typing `notes.MD` (or pasting
+        // from a system that uppercased the extension) previously
+        // got `notes.MD.md` on disk because the suffix check was
+        // case-sensitive.
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Plain.md", "# stub\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        state.submitTemplateNoteName("notes.MD")
+        await state.templateCreateTask?.value
+
+        // File written as `notes.MD` (preserves the user's casing),
+        // not `notes.MD.md` (which would have been the pre-#133
+        // result).
+        let preserved = vault.appendingPathComponent("notes.MD")
+        let doubled = vault.appendingPathComponent("notes.MD.md")
         XCTAssertTrue(
-            defaultName.hasPrefix("Daily-"),
-            "defaultNewNoteName should suffix Daily templates with a date; got \(defaultName)"
+            FileManager.default.fileExists(atPath: preserved.path),
+            "expected file written as `notes.MD`"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: doubled.path),
+            "must not double-suffix to `notes.MD.md`"
         )
     }
 

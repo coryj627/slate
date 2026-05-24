@@ -1577,8 +1577,10 @@ final class AppState: ObservableObject {
         // Append `.md` if the user omitted it. The picker's "default
         // name" already includes it, but a paste from elsewhere
         // might not — adding it here keeps every created template
-        // note Markdown-shaped.
-        let normalized = trimmed.hasSuffix(".md") ? trimmed : "\(trimmed).md"
+        // note Markdown-shaped. Suffix check is case-insensitive
+        // so `notes.MD` (e.g. pasted from a system that uppercases
+        // extensions) doesn't end up as `notes.MD.md` on disk (#133).
+        let normalized = trimmed.lowercased().hasSuffix(".md") ? trimmed : "\(trimmed).md"
         // `title` for the rendered template is the file stem of the
         // new note, not the template's own name. Matches how
         // `{{title}}` is documented to behave in §8.2.
@@ -1709,13 +1711,20 @@ final class AppState: ObservableObject {
     /// `Daily` get a date suffix so the user can confirm-Enter on
     /// the daily-note flow without typing; everything else
     /// pre-fills with the template's own name.
+    ///
+    /// The date is joined with a **space** rather than a dash so
+    /// multi-word names read naturally: `Daily Standup` becomes
+    /// `Daily Standup 2026-05-23.md`, not the awkward
+    /// `Daily Standup-2026-05-23.md` (#133). A bare `Daily` template
+    /// becomes `Daily 2026-05-23.md`, which is also fine and matches
+    /// the spacing most users would type by hand.
     func defaultNewNoteName(for template: TemplateSummary) -> String {
         if template.name.lowercased().hasPrefix("daily") {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.timeZone = TimeZone(secondsFromGMT: 0)
             formatter.dateFormat = "yyyy-MM-dd"
-            return "\(template.name)-\(formatter.string(from: Date())).md"
+            return "\(template.name) \(formatter.string(from: Date())).md"
         }
         return "\(template.name).md"
     }
