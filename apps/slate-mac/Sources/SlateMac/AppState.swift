@@ -1267,6 +1267,14 @@ final class AppState: ObservableObject {
     func loadCurrentNoteTasks(path: String) async {
         guard let session = currentSession else { return }
         isLoadingTasks = true
+        // #159: clear the spinner on EVERY exit path, including
+        // cancellation and selection-moved-away. The previous
+        // shape only cleared on success/failure, so a cancellation
+        // without a replacement (e.g. selection cleared mid-load)
+        // could leave the spinner stuck. `defer` runs on MainActor
+        // when the function returns from any path, including the
+        // early `guard` below.
+        defer { isLoadingTasks = false }
 
         let result: Result<[TaskItem], VaultError> = await Task.detached(priority: .userInitiated) {
             do {
@@ -1290,7 +1298,6 @@ final class AppState: ObservableObject {
             currentNoteTasks = []
             tasksLoadError = humanReadable(error)
         }
-        isLoadingTasks = false
     }
 
     /// Refresh `currentNoteTasks` after a successful save so the
@@ -1505,6 +1512,13 @@ final class AppState: ObservableObject {
         let filter = taskReviewFilter.toFFIFilter()
         let activeFilter = taskReviewFilter
         isLoadingVaultTasks = true
+        // #159: clear the spinner on EVERY exit path. The primary
+        // stuck case was `closeTasksReview()` mid-load — it cancels
+        // the task but doesn't reset the flag, so the cancelled
+        // path's early `guard` return leaked it true forever.
+        // `defer` runs on MainActor at function exit regardless of
+        // which return arm we hit.
+        defer { isLoadingVaultTasks = false }
 
         let result: Result<[TaskWithLocation], VaultError> = await Task.detached(
             priority: .userInitiated
@@ -1535,7 +1549,6 @@ final class AppState: ObservableObject {
             vaultTasks = []
             vaultTasksLoadError = humanReadable(error)
         }
-        isLoadingVaultTasks = false
     }
 
     /// Toggle a task from the vault-wide review view. Routes
