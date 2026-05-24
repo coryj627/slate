@@ -5187,6 +5187,99 @@ mod tests {
     }
 
     #[test]
+    fn idx_tasks_sort_exists_after_migration_010() {
+        // Companion to `idx_tasks_priority_exists_after_migration_009`:
+        // the expression index must remain in sqlite_master so future
+        // planner changes can't silently mask a missing index.
+        let (_tmp, session) = make_vault(|_| {});
+        let conn = session.conn.lock().unwrap();
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_tasks_sort'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "idx_tasks_sort must exist after migration 010");
+    }
+
+    #[test]
+    fn unfiltered_tasks_in_vault_uses_idx_tasks_sort_not_full_temp_btree() {
+        // Regression for #145 (red-team M2). Before migration 010 the
+        // unfiltered `tasks_in_vault` plan ended in
+        // `USE TEMP B-TREE FOR ORDER BY` — materialise every row,
+        // sort in a temp btree, apply LIMIT. With the expression
+        // index, the planner walks the index in (due, priority)
+        // order and only needs `USE TEMP B-TREE FOR RIGHT PART OF
+        // ORDER BY` to sort within (due, priority) tie-groups by
+        // path. That residual sort is small and bounded by tie-group
+        // size, not total matching rows.
+        //
+        // Populate ~500 prioritised tasks + ANALYZE so the planner
+        // has real stats; otherwise the empty-table defaults can
+        // mask the plan choice.
+        let (_tmp, session) = make_vault(|p| {
+            let mut body = String::with_capacity(20_000);
+            for i in 0..500 {
+                let marker = match i % 4 {
+                    0 => "⏫",
+                    1 => "🔼",
+                    2 => "🔽",
+                    _ => "⏬",
+                };
+                body.push_str(&format!(
+                    "- [ ] task {i} {marker} 📅 2026-06-{:02}\n",
+                    (i % 28) + 1
+                ));
+            }
+            p.write_file("bulk.md", body.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let conn = session.conn.lock().unwrap();
+        conn.execute("ANALYZE", []).unwrap();
+
+        // Replicates the ORDER BY shape `tasks_db::tasks_in_vault`
+        // produces, including the literal IFNULL sentinels that
+        // match the expression-index definition.
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT f.path, t.ordinal
+                 FROM tasks t JOIN files f ON f.id = t.file_id
+                 ORDER BY IFNULL(t.due_ms, 9223372036854775807) ASC,
+                          IFNULL(t.priority, -2147483648) DESC,
+                          f.path COLLATE BINARY ASC,
+                          t.ordinal ASC
+                 LIMIT ?",
+            )
+            .unwrap()
+            .query_map(rusqlite::params![200i64], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let plan_text = plan.join("\n");
+
+        assert!(
+            plan_text.contains("idx_tasks_sort"),
+            "ORDER BY should use idx_tasks_sort; plan:\n{plan_text}",
+        );
+        // The FULL temp-btree variant (no qualifier) means the
+        // entire ORDER BY had to be sorted from scratch — that's
+        // the bug. The "RIGHT PART OF ORDER BY" variant is
+        // acceptable: the index satisfies the leading tiers and
+        // only the trailing path tiebreak sorts in a temp btree
+        // within tie-groups.
+        for line in plan_text.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                trimmed != "USE TEMP B-TREE FOR ORDER BY",
+                "expected idx-driven sort, got full temp btree; plan:\n{plan_text}",
+            );
+        }
+    }
+
+    #[test]
     fn tasks_in_vault_priority_at_least_filter() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file(

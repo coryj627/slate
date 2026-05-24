@@ -88,6 +88,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "tasks: partial index on priority",
         sql: include_str!("../migrations/009_tasks_priority_index.sql"),
     },
+    Migration {
+        description: "tasks: expression index over the sort tuple",
+        sql: include_str!("../migrations/010_tasks_sort_index.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
