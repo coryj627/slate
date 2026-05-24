@@ -58,6 +58,36 @@ pub trait VaultProvider: Send + Sync {
     /// platform doesn't support filesystem events for this vault — the
     /// engine falls back to refresh-on-foreground in that case.
     fn watch(&self, sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError>;
+
+    /// Verify that `relative` does not escape the vault scope once
+    /// symlinks are followed.
+    ///
+    /// The textual checks in `resolve_relative` (rejecting `..` and
+    /// absolute paths) only catch lexical escapes — they're blind to
+    /// a symlink under the vault that *points* outside (e.g.
+    /// `Templates/Pwn.md → /etc/passwd`). Callers that hand
+    /// vault-relative paths to user-discoverable surfaces should
+    /// invoke this before reading.
+    ///
+    /// Returns:
+    ///   - `Ok(())` — the path stays in scope (or scope checks aren't
+    ///     applicable to this provider).
+    ///   - `Err(VaultError::InvalidPath { reason })` — the canonical
+    ///     target escapes the vault.
+    ///   - `Err(VaultError::Io(...))` — couldn't canonicalize (broken
+    ///     symlink, permission denied, etc.). Callers should usually
+    ///     surface this distinct from the InvalidPath case so users
+    ///     can tell "missing file" from "refused for safety."
+    ///
+    /// Default impl returns `Ok(())` — providers that route through
+    /// OS-level security-scoped APIs (iOS, Android) already enforce
+    /// scope and don't need to repeat the check. The default also
+    /// keeps existing test doubles working without forcing every
+    /// mock to implement canonicalization.
+    fn verify_in_vault(&self, relative: &str) -> Result<(), VaultError> {
+        let _ = relative;
+        Ok(())
+    }
 }
 
 /// A single entry in a directory listing.

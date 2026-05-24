@@ -933,6 +933,19 @@ impl VaultSession {
                 continue;
             }
             let rel = format!("{dir}/{name}", name = entry.name);
+            // Reject entries whose canonical target leaves the vault
+            // root. Catches symlinks dropped under `Templates/` that
+            // point at sensitive system files — the textual
+            // `resolve_relative` checks above only catch `..` inside
+            // the string, not symlinks introduced by the filesystem
+            // (#132). Both `InvalidPath` (escape) and `Io` (broken
+            // symlink, permission denied) end the same way here:
+            // silently drop the entry rather than failing the whole
+            // picker. The picker is a benign UI surface and any
+            // single bad template should not blank the list.
+            if self.provider.verify_in_vault(&rel).is_err() {
+                continue;
+            }
             // Read with the same cap the editor uses so a stray multi-
             // gigabyte file in Templates/ doesn't OOM the picker.
             let bytes = match self.provider.read_file_with_cap(&rel, limit) {
@@ -985,6 +998,13 @@ impl VaultSession {
         template_path: &str,
         context: crate::TemplateContext,
     ) -> Result<crate::RenderedTemplate, VaultError> {
+        // Symmetric with `list_templates`: refuse to render a template
+        // whose canonical target escapes the vault. Unlike the picker
+        // path (which silently drops bad entries), here we surface the
+        // error so the host can show a clear "refused for safety"
+        // message rather than rendering whatever the symlink points
+        // at (#132).
+        self.provider.verify_in_vault(template_path)?;
         let source = self.read_text(template_path)?;
         Ok(crate::render_template_source(&source, &context))
     }
@@ -4750,6 +4770,107 @@ mod tests {
             Err(VaultError::InvalidPath { .. }) => {}
             other => panic!("expected InvalidPath, got {other:?}"),
         }
+    }
+
+    // --- Templates symlink-escape defence (#132) ---
+    //
+    // `resolve_relative` rejects lexical escapes (`..`, absolute
+    // paths) but is blind to a symlink under the vault that points
+    // outside. Without `verify_in_vault` the picker would surface
+    // such symlinks as normal templates and `render_template` would
+    // happily inline `/etc/passwd` into a new note. These tests
+    // lock in the canonicalize-and-reject behaviour.
+
+    #[test]
+    fn list_templates_drops_symlinks_pointing_outside_the_vault() {
+        // Sentinel file outside the vault: a symlink dropped under
+        // Templates/ that targets this file must not surface in the
+        // picker.
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.md");
+        std::fs::write(&secret, b"# secret\n\nshould never reach the picker\n").unwrap();
+
+        let (vault_tmp, session) = make_vault(|p| {
+            p.write_file("Templates/Real.md", b"# real template\n")
+                .unwrap();
+        });
+        // Symlink under Templates/ pointing at the outside sentinel.
+        let templates_dir = vault_tmp.path().join("Templates");
+        std::os::unix::fs::symlink(&secret, templates_dir.join("Pwn.md")).unwrap();
+
+        let templates = session.list_templates().unwrap();
+        let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+        // Only the legitimate template surfaces; the escaping symlink
+        // is silently dropped.
+        assert_eq!(names, vec!["Real"]);
+    }
+
+    #[test]
+    fn list_templates_follows_symlinks_pointing_inside_the_vault() {
+        // Symmetric: a symlink under Templates/ whose canonical target
+        // stays in-vault is a legitimate authoring choice and must
+        // continue to work.
+        let (vault_tmp, session) = make_vault(|p| {
+            p.write_file("Templates/Real.md", b"# real template\n")
+                .unwrap();
+            p.write_file("shared/Daily.md", b"# daily\n\nshared content\n")
+                .unwrap();
+        });
+        // Symlink Templates/Daily.md → ../shared/Daily.md (inside vault).
+        let templates_dir = vault_tmp.path().join("Templates");
+        let target = vault_tmp.path().join("shared/Daily.md");
+        std::os::unix::fs::symlink(&target, templates_dir.join("Daily.md")).unwrap();
+
+        let templates = session.list_templates().unwrap();
+        let mut names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        // Both surface — the in-vault symlink is treated as a normal
+        // template.
+        assert_eq!(names, vec!["Daily", "Real"]);
+    }
+
+    #[test]
+    fn render_template_refuses_escaping_symlink_with_invalid_path() {
+        // `render_template` is more emphatic than `list_templates`:
+        // an explicit attempt to render an escaping template gets
+        // an InvalidPath error rather than a silent drop, so the
+        // host can surface "refused for safety" cleanly.
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.md");
+        std::fs::write(&secret, b"SHOULD NEVER RENDER").unwrap();
+
+        let (vault_tmp, session) = make_vault(|p| {
+            p.write_file("Templates/Real.md", b"# real\n").unwrap();
+        });
+        std::os::unix::fs::symlink(&secret, vault_tmp.path().join("Templates/Pwn.md")).unwrap();
+
+        let ctx = crate::TemplateContext::new(0, "t", "v");
+        match session.render_template("Templates/Pwn.md", ctx) {
+            Err(VaultError::InvalidPath { reason, .. }) => {
+                assert!(reason.contains("escapes the vault root"), "got: {reason}");
+            }
+            other => panic!("expected InvalidPath for escaping symlink, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_templates_skips_broken_symlinks_without_error() {
+        // Defensive: a broken symlink under Templates/ (target was
+        // deleted) should still cleanly drop out of the picker without
+        // breaking the enumeration of legitimate templates. Existing
+        // pre-#132 behaviour relied on the read-side NotFound catch;
+        // the new verify_in_vault path triggers first and also raises
+        // an Io error here. Either way, drop silently.
+        let (vault_tmp, session) = make_vault(|p| {
+            p.write_file("Templates/Real.md", b"# real\n").unwrap();
+        });
+        let broken_target = vault_tmp.path().join("Templates/.does-not-exist.md");
+        std::os::unix::fs::symlink(&broken_target, vault_tmp.path().join("Templates/Broken.md"))
+            .unwrap();
+
+        let templates = session.list_templates().unwrap();
+        let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["Real"]);
     }
 
     // --- Tasks table integration (Milestone G) ---

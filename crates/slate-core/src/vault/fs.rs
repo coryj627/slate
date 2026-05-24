@@ -269,6 +269,32 @@ impl VaultProvider for FsVaultProvider {
         // semantics, which works for the tester build.
         Ok(None)
     }
+
+    fn verify_in_vault(&self, relative: &str) -> Result<(), VaultError> {
+        // The textual `resolve` already rejected `..` and absolute
+        // paths. What remains is symlink escape: an entry under the
+        // vault that points OUT (e.g. `Templates/Pwn.md` →
+        // `/etc/passwd`). `fs::canonicalize` resolves the symlink
+        // chain and returns the real on-disk location; we then check
+        // that location is under a canonicalized vault root.
+        //
+        // Both sides are canonicalized so a symlinked vault root
+        // (rare but legal: `~/vaults/current → ~/vaults/2026-q2/`)
+        // doesn't false-flag every entry inside as escaping.
+        let resolved = self.resolve(relative)?;
+        let canonical_target = fs::canonicalize(&resolved)?;
+        let canonical_root = fs::canonicalize(&self.root)?;
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err(VaultError::InvalidPath {
+                path: relative.to_string(),
+                reason: format!(
+                    "canonical target {canonical_target:?} escapes the vault root {canonical_root:?} \
+                     (likely a symlink pointing outside the vault); refusing to read for safety"
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Remove a dangling symlink entry. Pulled out as a helper so the
