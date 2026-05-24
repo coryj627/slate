@@ -49,15 +49,32 @@ struct TasksReviewView: View {
             // WCAG 2.5.3 (label-in-name): the visible text and the AX
             // label must start with the same string so dictation /
             // "click on" voice commands match what sighted users
-            // read. We used to render "N shown" with an AX label of
-            // "N tasks shown" — the a11y linter rightly flagged that
-            // the visible text didn't open the accessible name.
-            // Spelling out "tasks shown" in both places keeps the
-            // chip readable and lets dictation work.
-            Text("\(appState.vaultTasks.count) tasks shown")
+            // read. Both `headerCountText` variants begin with the
+            // visible numeric content so no separate AX label is
+            // needed.
+            //
+            // #160: when the result set is paginated
+            // (`vaultTasksNextCursor != nil`), the count text
+            // changes to "Showing N of M tasks" to signal the
+            // truncation. The "Load more" button below the rows
+            // gives the user a way to access the remaining pages.
+            Text(headerCountText)
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// "N tasks shown" when the result is fully loaded; "Showing N of M
+    /// tasks" when the user can still page forward. Singular handling
+    /// matters because "1 tasks" reads wrong both visually and to
+    /// VoiceOver.
+    private var headerCountText: String {
+        let shown = appState.vaultTasks.count
+        let total = appState.vaultTasksTotalFiltered
+        if appState.vaultTasksNextCursor != nil {
+            return "Showing \(shown) of \(total) tasks"
+        }
+        return shown == 1 ? "1 task shown" : "\(shown) tasks shown"
     }
 
     private var filterChips: some View {
@@ -142,10 +159,63 @@ struct TasksReviewView: View {
                     ForEach(appState.vaultTasks, id: \.self) { row in
                         rowView(for: row)
                     }
+                    // #160: Show the "Load more" affordance when
+                    // the FFI returned a cursor for the next page.
+                    // Lives inside the same ScrollView so the
+                    // button sits below the last visible row and
+                    // VoiceOver rotor-by-control reaches it
+                    // naturally after the rows.
+                    //
+                    // Hidden during the initial load so a filter
+                    // switch that's mid-flight can't trigger
+                    // "Load more" with a stale cursor against the
+                    // new filter (the cursor + total stay at the
+                    // old values until the new load's success
+                    // arm overwrites them).
+                    if appState.vaultTasksNextCursor != nil
+                        && !appState.isLoadingVaultTasks
+                    {
+                        loadMoreRow
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    /// "Load more" button + an in-flight spinner. Disabled while a
+    /// page is fetching so the user can't stack overlapping requests
+    /// (`AppState.loadMoreVaultTasks` also guards re-entrancy, but
+    /// disabling here gives a visible signal).
+    private var loadMoreRow: some View {
+        let loading = appState.isLoadingMoreVaultTasks
+        // Clamp to ≥0 so a transient desync between `vaultTasks.count`
+        // and `vaultTasksTotalFiltered` (e.g. an in-flight toggle
+        // that flipped a row out of the filter) doesn't produce
+        // "-3 remaining" in the a11y announcement (#164 Codoki).
+        let remaining = max(0, Int(appState.vaultTasksTotalFiltered) - appState.vaultTasks.count)
+        return HStack(spacing: 8) {
+            Button {
+                appState.loadMoreVaultTasks()
+            } label: {
+                Text(loading ? "Loading more tasks…" : "Load more tasks")
+            }
+            .disabled(loading)
+            .accessibilityLabel(
+                loading
+                    ? "Loading more tasks"
+                    : "Load more tasks. \(remaining) remaining."
+            )
+            .accessibilityHint(
+                "Fetches the next page of vault tasks matching the active filter."
+            )
+            if loading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Spacer()
+        }
+        .padding(.top, 4)
     }
 
     private var footer: some View {
