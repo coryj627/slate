@@ -133,6 +133,27 @@ Measures `extract_tasks` on a zero-task document (frontmatter + headings + parag
 
 **Vault-wide query cost.** A first-page query (200 rows from 10 000) returns in 1.23 ms — about 5 µs per returned row. The hot path is the `(due_ms ASC NULLS LAST, priority DESC NULLS LAST, file path, ordinal)` sort, which exercises `idx_tasks_completed` and `idx_tasks_due` for filtered variants and a sequential scan + sort for the unfiltered case. Both stay well below interactive-render budget for the TasksReviewView.
 
+## V1 baseline — 2026-05-24 (D + E perf bench extensions, issue #104)
+
+Three new criterion scenarios establishing baselines for hot paths reshaped in PRs #98 / #100 / #102. Each PR landed without before/after measurements; these benches lock in V1 numbers so regressions surface as moved-numbers rather than tester complaints.
+
+| Benchmark | 10 k-file vault |
+|---|---|
+| `full_text_search` (`Vault` scope, common token, all hits) | 251 ms |
+| `files_with_property` (broad tag, first 100) | 939 µs |
+| `note_load_bundle` (hub note, first 100 backlinks) | 9.5 ms |
+
+### What each scenario measures
+
+- **`full_text_search`** queries the FTS5 external-content index added in PR #98. The fixture's `synthetic_markdown` produces paragraphs from a fixed word pool, so any common word hits every file in the vault — exercising the worst-case snippet-generation path (10 000 hits, STX/ETX-wrapped snippets, content-table joins). This is a pessimistic bound; a real-world selective query (small number of hits) would be much faster. The V1 release-gate target of `<100 ms` was scoped to selective queries; the 251 ms here is the full-vault-token shape that #98's redesign was specifically meant to make tractable.
+- **`files_with_property`** queries the partial composite index + `properties_list_values` side table added in PR #100. The fixture's `tags: [bench, file-N]` frontmatter on ~20 % of files gives ~2 000 hits for the broad `bench` tag, paged at 100 rows. The CTE-backed COUNT (#92 item 3) means the row count and the page fetch share one materialised match set instead of two.
+- **`note_load_bundle`** queries the one-acquire-per-bundle shape from PR #102 against a hub note that accumulates ~9 999 backlinks (one from every other file in the linked-graph fixture). The 9.5 ms figure is the throughput baseline; the win is larger under contention from a running scanner, which isn't modelled here yet (see "Deferred" below).
+
+### Deferred
+
+- **NoteContentView first-paint (PR #99)** — SwiftUI layout cost, not Rust-side. Manual Instruments measurement is the right tool when it lands; documenting the protocol in an XCTest is the natural follow-up.
+- **Contention shape for `note_load_bundle`** — needs a tunable mutex-hold primitive on `VaultSession` to make criterion measurements deterministic. The throughput baseline above is the regression target; under contention the bundle's lock-amortization win is strictly larger.
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.

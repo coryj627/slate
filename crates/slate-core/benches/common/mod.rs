@@ -286,6 +286,100 @@ fn synthetic_heavy_tasks_note(seed: usize) -> String {
     out
 }
 
+// =====================================================================
+// Linked-graph fixture (issue #104 — D+E bench extensions)
+// =====================================================================
+
+/// Build a vault of `file_count` Markdown files with a deliberate
+/// wikilink graph so `note_load_bundle` has real backlinks +
+/// outgoing links to fetch. Returns the owning `TempDir`.
+///
+/// Shape:
+/// - **Hub note** at `notes/000/note-00000000.md`. Every other
+///   file links to it via `[[note-00000000]]`, so the hub
+///   accumulates `file_count - 1` backlinks — the realistic
+///   worst case for the bundle query (selection lands on a
+///   heavily-incoming-linked note).
+/// - Each non-hub file emits ~3 outgoing wikilinks to other
+///   notes (one to the hub, two to nearby seeds modulo
+///   `file_count`). Gives `outgoing_links_for` non-trivial
+///   work per call.
+/// - ~20 % of files carry frontmatter with `tags: [bench,
+///   file-N]` (same shape as `generate_vault`), so the
+///   `properties` half of `note_load_bundle` has rows to
+///   hydrate too.
+pub fn generate_linked_vault(file_count: usize) -> TempDir {
+    let tmp = tempfile::tempdir().expect("create tempdir for linked vault");
+    let subdir_count = (file_count / 100).clamp(1, 50);
+    let mut last_dir: Option<PathBuf> = None;
+    for i in 0..file_count {
+        let subdir = format!("notes/{:03}", i % subdir_count);
+        let dir = tmp.path().join(&subdir);
+        if last_dir.as_deref() != Some(dir.as_path()) {
+            fs::create_dir_all(&dir).expect("create subdir");
+            last_dir = Some(dir.clone());
+        }
+        let path = dir.join(format!("note-{i:08}.md"));
+        fs::write(&path, synthetic_linked_note(i, file_count)).expect("write linked note");
+    }
+    tmp
+}
+
+fn synthetic_linked_note(seed: usize, file_count: usize) -> String {
+    let target_size = target_size_for(seed);
+    let mut out = String::with_capacity(target_size + 256);
+
+    if seed.is_multiple_of(5) {
+        out.push_str("---\n");
+        out.push_str(&format!("title: Note {seed}\n"));
+        out.push_str(&format!("tags: [bench, file-{}]\n", seed % 7));
+        out.push_str("---\n\n");
+    }
+
+    out.push_str(&format!("# Note {seed}\n\n"));
+
+    // Wikilink block — placed before the paragraph fill so the
+    // links land in the indexed body even when `target_size`
+    // shrinks. Skip on the hub itself (seed 0) so we don't
+    // self-link; the hub still gets outgoing links to a few
+    // nearby seeds.
+    if seed != 0 {
+        out.push_str("See also [[note-00000000]] for the hub. ");
+    }
+    if file_count > 1 {
+        let a = (seed + 1) % file_count;
+        let b = (seed + 2) % file_count;
+        out.push_str(&format!(
+            "Related: [[note-{a:08}]] and [[note-{b:08}]].\n\n"
+        ));
+    }
+
+    let mut sub_idx: u32 = 1;
+    while out.len() < target_size {
+        let kind = (out.len().wrapping_add(seed)) % 4;
+        match kind {
+            0 => {
+                out.push_str(&format!("## Section {sub_idx}\n\n"));
+                sub_idx += 1;
+            }
+            _ => {
+                let para_len = 200 + (out.len() % 600);
+                let mut para = String::with_capacity(para_len);
+                let mut wi = (out.len().wrapping_add(seed)) % WORDS.len();
+                while para.len() < para_len {
+                    para.push_str(WORDS[wi]);
+                    para.push(' ');
+                    wi = (wi + 7) % WORDS.len();
+                }
+                out.push_str(para.trim_end());
+                out.push_str("\n\n");
+            }
+        }
+    }
+
+    out
+}
+
 /// One task line with deterministic metadata shape. Mix of
 /// open / done / in-progress, ~50% with due date, ~25% with
 /// priority, ~10% with recurrence — same statistical mix the
