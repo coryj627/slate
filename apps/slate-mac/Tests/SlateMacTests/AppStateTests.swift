@@ -2276,4 +2276,268 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(thisWeek.dueFromMs, expectedStart)
         XCTAssertEqual(thisWeek.dueToMs, expectedStart + utcDay * 7)
     }
+
+    // MARK: - Milestone G integration test (#115)
+    //
+    // End-to-end "the milestone shipped" coverage. The atomic
+    // tests above each pin one piece of the contract; this one
+    // walks the whole AppState surface in a single sequence so an
+    // accidental regression in any seam (scanner → tasks_db →
+    // tasks_for_file → toggle → re-query → conflict) surfaces as
+    // a single, obvious failure here even when the targeted unit
+    // tests still pass.
+    //
+    // Closing checkpoint per the issue: a fixture vault with three
+    // notes carrying mixed task states (open / done / due-today /
+    // overdue), per-file currentNoteTasks walk, every
+    // TaskReviewFilter case, a happy-path toggle, then an external
+    // write that surfaces a WriteConflict on the next toggle.
+
+    /// UTC `yyyy-MM-dd` formatter shared across the integration
+    /// test's fixture lines. Cached so the test doesn't pay
+    /// formatter setup cost three times. Locale pinned to POSIX so
+    /// it produces stable digits regardless of the runner's locale.
+    private static let integrationUtcDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    func testMilestoneGEndToEndRoundTrip() async throws {
+        // === Fixture dates ===
+        //
+        // Dates are computed from `Date()` so the filter math
+        // inside `applyTaskReviewFilter` (which also calls
+        // `Date()`) lines up with what the fixture wrote. We use
+        // the same UTC calendar shape the production code uses
+        // (`TaskReviewFilter.utcCalendar`) so today/yesterday/in-3-
+        // days resolve to the same UTC-midnight boundaries the
+        // filter compares against.
+        //
+        // There's a vanishing race if the test runs exactly across
+        // UTC midnight (test computes today as day D, filter
+        // observes day D+1). Practically a sub-millisecond window
+        // out of 86 400 000 ms per day — not worth guarding for a
+        // test that runs in <1s.
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = TimeZone(identifier: "UTC")!
+        let todayUtc = utcCal.startOfDay(for: Date())
+        let yesterdayUtc = utcCal.date(byAdding: .day, value: -1, to: todayUtc)!
+        let in3DaysUtc = utcCal.date(byAdding: .day, value: 3, to: todayUtc)!
+
+        let fmt = Self.integrationUtcDateFormatter
+        let todayStr = fmt.string(from: todayUtc)
+        let yesterdayStr = fmt.string(from: yesterdayUtc)
+        let in3DaysStr = fmt.string(from: in3DaysUtc)
+
+        // === Vault layout ===
+        //
+        // work.md      — 3 tasks: open+overdue, open+due-today, done
+        // future.md    — 2 tasks: open+due-in-3-days, open+no-date
+        // done.md      — 2 tasks: both completed, no dates
+        //
+        // Total: 7 tasks; 5 open, 2 done; 1 overdue, 1 due today,
+        // 1 in this week (+2 days inside the [today, +7) window).
+        let vault = tempDir.appendingPathComponent("milestone-g-integration")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try """
+            # Work
+            - [ ] overdue work 📅 \(yesterdayStr)
+            - [ ] due today 📅 \(todayStr)
+            - [x] already finished
+            """
+            .data(using: .utf8)!
+            .write(to: vault.appendingPathComponent("work.md"))
+        try """
+            # Future
+            - [ ] starts later 📅 \(in3DaysStr)
+            - [ ] no date task
+            """
+            .data(using: .utf8)!
+            .write(to: vault.appendingPathComponent("future.md"))
+        try """
+            # Done
+            - [x] shipped one
+            - [x] shipped two
+            """
+            .data(using: .utf8)!
+            .write(to: vault.appendingPathComponent("done.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        // === Vault-wide count ===
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(
+            state.vaultTasks.count, 7,
+            ".all should land every task across the three files (3 + 2 + 2)"
+        )
+
+        // === Per-file currentNoteTasks walk ===
+        state.selectedFilePath = "work.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+        XCTAssertEqual(state.currentNoteTasks.count, 3, "work.md has 3 tasks")
+        XCTAssertEqual(
+            state.currentNoteTasks.map(\.completed),
+            [false, false, true],
+            "work.md tasks in document order: overdue, due-today, done"
+        )
+        XCTAssertEqual(
+            state.currentNoteTasks.map(\.text),
+            ["overdue work", "due today", "already finished"]
+        )
+
+        state.selectedFilePath = "future.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+        XCTAssertEqual(state.currentNoteTasks.count, 2, "future.md has 2 tasks")
+        XCTAssertNotNil(
+            state.currentNoteTasks[0].dueMs,
+            "first future.md task carries a due date"
+        )
+        XCTAssertNil(
+            state.currentNoteTasks[1].dueMs,
+            "second future.md task has no due date"
+        )
+
+        state.selectedFilePath = "done.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+        XCTAssertEqual(state.currentNoteTasks.count, 2, "done.md has 2 tasks")
+        XCTAssertTrue(
+            state.currentNoteTasks.allSatisfy(\.completed),
+            "done.md tasks are all completed"
+        )
+
+        // === Each TaskReviewFilter case asserts membership ===
+        //
+        // `.all` already asserted above; re-set it to drop any
+        // filter state from previous bodies + drive the re-query
+        // through `applyTaskReviewFilter` (the public mutator).
+        state.applyTaskReviewFilter(.all)
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(state.vaultTasks.count, 7, ".all = every task")
+
+        state.applyTaskReviewFilter(.dueToday)
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(
+            state.vaultTasks.map(\.task.text),
+            ["due today"],
+            ".dueToday should land exactly the today-dated work.md task"
+        )
+
+        state.applyTaskReviewFilter(.overdue)
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(
+            state.vaultTasks.map(\.task.text),
+            ["overdue work"],
+            ".overdue should land the yesterday-dated open task only"
+        )
+
+        state.applyTaskReviewFilter(.thisWeek)
+        await state.vaultTasksLoadTask?.value
+        // .thisWeek = [today, today+7). today task qualifies;
+        // in-3-days qualifies; overdue (yesterday) doesn't; no-
+        // date doesn't; completed don't.
+        XCTAssertEqual(
+            Set(state.vaultTasks.map(\.task.text)),
+            Set(["due today", "starts later"]),
+            ".thisWeek should land today + in-3-days, exclude overdue + no-date + done"
+        )
+
+        state.closeTasksReview()
+
+        // === Toggle a task via toggleCurrentTask, assert round-trip ===
+        state.selectedFilePath = "work.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+
+        let openTodayTask = try XCTUnwrap(
+            state.currentNoteTasks.first(where: { $0.text == "due today" }),
+            "fixture should expose the today-dated task on work.md"
+        )
+        XCTAssertFalse(openTodayTask.completed)
+
+        // Snapshot the post-toggle hash so we can verify the
+        // cache updated after the round-trip lands.
+        let preToggleHash = state.currentNoteContentHash
+        await state.toggleCurrentTask(openTodayTask)?.value
+        // refreshTasksAfterSave + reloadEditorBufferAfterToggle
+        // are fire-and-forget Tasks; yield + brief sleep so they
+        // settle. The unit test for toggle uses the same pattern.
+        await Task.yield()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // On-disk file flipped from `[ ]` to `[x]` on the
+        // today-dated task.
+        let onDiskAfterToggle = try String(
+            contentsOf: vault.appendingPathComponent("work.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            onDiskAfterToggle.contains("- [x] due today"),
+            "toggle should have flipped the today task to done on disk; got: \(onDiskAfterToggle)"
+        )
+        let updatedTask = try XCTUnwrap(
+            state.currentNoteTasks.first(where: { $0.text == "due today" }),
+            "panel should still expose the row after the toggle"
+        )
+        XCTAssertTrue(
+            updatedTask.completed,
+            "panel should reflect the new completed state"
+        )
+        XCTAssertNotEqual(
+            state.currentNoteContentHash,
+            preToggleHash,
+            "content hash should update after the toggle's save"
+        )
+        XCTAssertNil(
+            state.currentSaveConflict,
+            "happy-path toggle should not surface a WriteConflict"
+        )
+
+        // === External write → next toggle surfaces WriteConflict ===
+        //
+        // `currentNoteContentHash` is now the post-toggle hash.
+        // An external editor overwriting work.md invalidates that
+        // hash, so the next toggle's `toggle_task_status` call
+        // (which passes expectedContentHash like the save flow
+        // does) returns WriteConflict — and AppState's
+        // performToggleCurrentTask routes that into
+        // `currentSaveConflict` for the same resolution UI as
+        // editor saves.
+        try "# Overwritten externally\n- [ ] new task\n"
+            .data(using: .utf8)!
+            .write(to: vault.appendingPathComponent("work.md"))
+        // Give the FS write a beat so the next toggle's read sees
+        // the new content (and the new hash). Same 50ms cadence
+        // as the post-toggle settle.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Use the now-stale "overdue work" task — its identity
+        // doesn't matter, the conflict surfaces before mutation.
+        let staleTask = try XCTUnwrap(
+            state.currentNoteTasks.first(where: { $0.text == "overdue work" }),
+            "stale panel should still expose the overdue row"
+        )
+        await state.toggleCurrentTask(staleTask)?.value
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertNotNil(
+            state.currentSaveConflict,
+            "external write should make the next toggle surface a WriteConflict"
+        )
+        XCTAssertEqual(
+            state.currentSaveConflict?.path, "work.md",
+            "the conflict should be attributed to the file that was overwritten"
+        )
+    }
 }
