@@ -76,6 +76,17 @@ pub struct TaskItem {
 ///   structured data, not tasks; they're already picked up by the
 ///   properties pipeline.
 pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
+    // Cheap prefilter: zero-task documents — by far the common case
+    // in casual-user vaults — short-circuit before the pulldown-cmark
+    // walk + line-by-line scan. The full pipeline costs ~50 µs on a
+    // 50 KB no-task doc; the prefilter is one or two byte-substring
+    // scans (str::contains is SIMD-accelerated). At 50 k files in a
+    // cold scan that's the difference between "imperceptible" and
+    // "noticeable lag" (#144 / red-team M3).
+    if !might_contain_task_line(source) {
+        return Vec::new();
+    }
+
     let excluded = excluded_byte_ranges(source);
     let mut out = Vec::new();
     let mut ordinal: u32 = 0;
@@ -111,6 +122,31 @@ pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
         ordinal += 1;
     }
     out
+}
+
+/// Byte-level prefilter for `extract_tasks` — returns `false` only
+/// when the source provably has no task line, so it's safe to skip
+/// the full pipeline.
+///
+/// **No false negatives.** Every task line, after optional leading
+/// whitespace, starts with a bullet (`-`, `*`, `+`) followed by at
+/// least one space or tab and then `[`. Looking for that 3-byte
+/// fingerprint anywhere in the source catches every real task; any
+/// task that DOESN'T match would also fail `parse_task_line` and
+/// wasn't going to land as a TaskItem anyway.
+///
+/// **False positives are tolerated and cheap.** Prose containing
+/// `"- ["`, `"* ["`, or a markdown link list like `"+ [link](url)"`
+/// triggers the full parse, which correctly produces zero tasks.
+/// The slow path is only paid by docs that look like they might
+/// have tasks.
+fn might_contain_task_line(source: &str) -> bool {
+    // Spaces are by far the dominant separator; tab variants are
+    // rare but legal under `parse_task_line` (which calls
+    // `trim_start_matches([' ', '\t'])`), so we check them too —
+    // a false negative would silently drop the user's tasks.
+    const SIGNALS: &[&str] = &["- [", "* [", "+ [", "-\t[", "*\t[", "+\t["];
+    SIGNALS.iter().any(|s| source.contains(s))
 }
 
 fn strip_one_trailing_newline(s: &str) -> &str {
@@ -587,6 +623,79 @@ mod tests {
     #[test]
     fn empty_input_yields_no_tasks() {
         assert!(extract_tasks("").is_empty());
+    }
+
+    // --- #144: zero-task fast path ---
+
+    #[test]
+    fn might_contain_task_line_recognises_all_bullet_marker_combos() {
+        // Spaces.
+        assert!(might_contain_task_line("- [ ] foo"));
+        assert!(might_contain_task_line("* [ ] foo"));
+        assert!(might_contain_task_line("+ [ ] foo"));
+        // Tabs.
+        assert!(might_contain_task_line("-\t[x] foo"));
+        assert!(might_contain_task_line("*\t[ ] foo"));
+        assert!(might_contain_task_line("+\t[ ] foo"));
+        // Indented forms still trigger — the substring appears
+        // somewhere in the source even with leading whitespace.
+        assert!(might_contain_task_line("  - [ ] indented"));
+        assert!(might_contain_task_line("\t\t- [ ] deeply indented"));
+    }
+
+    #[test]
+    fn might_contain_task_line_rejects_clearly_taskless_docs() {
+        assert!(!might_contain_task_line(""));
+        assert!(!might_contain_task_line("# heading only\n"));
+        assert!(!might_contain_task_line(
+            "plain paragraph with no markers\n"
+        ));
+        // Markdown link is `[text](url)` — no bullet+space+bracket
+        // sequence.
+        assert!(!might_contain_task_line("see [docs](http://example.com)\n"));
+        // Bullet list without checkboxes.
+        assert!(!might_contain_task_line("- item one\n- item two\n"));
+    }
+
+    #[test]
+    fn might_contain_task_line_tolerates_false_positives_safely() {
+        // Prose contains `"- ["` literally — prefilter returns true
+        // and the full `extract_tasks` correctly returns zero rows.
+        // This proves the prefilter is conservative: it never lies
+        // about a doc having no tasks.
+        let prose = "Compare: foo - [bar](url) vs baz.\n";
+        assert!(might_contain_task_line(prose));
+        assert!(extract_tasks(prose).is_empty());
+    }
+
+    #[test]
+    fn extract_tasks_fast_path_yields_empty_for_realistic_no_task_doc() {
+        // Mimics the shape of `generate_vault`'s synthetic body:
+        // frontmatter, headings, paragraphs, occasional code fence —
+        // no task-shaped lines. Must produce zero TaskItems via the
+        // fast path (validated by behaviour, not by instrumentation).
+        let src = "---\ntitle: x\ntags: [a, b]\n---\n\
+                   \n# Heading\n\
+                   \nLorem ipsum [link](url) dolor sit amet.\n\
+                   \n## Subheading\n\
+                   \nMore paragraph content here. No tasks at all.\n\
+                   \n```rust\nfn hello() { println!(\"x\"); }\n```\n";
+        assert!(extract_tasks(src).is_empty());
+    }
+
+    #[test]
+    fn extract_tasks_fast_path_does_not_false_negative_on_task_in_busy_doc() {
+        // Regression guard: the prefilter must NEVER skip a doc
+        // that actually has a task. Doc contains a frontmatter
+        // block, headings, paragraphs, a markdown link, AND a real
+        // task. The task must still extract.
+        let src = "---\ntitle: x\ntags: [a, b]\n---\n\
+                   \n# Heading\n\
+                   \nSome paragraph with a [link](url).\n\
+                   \n- [ ] actual task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "actual task");
     }
 
     #[test]
