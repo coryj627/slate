@@ -142,26 +142,30 @@ pub(crate) fn tasks_in_vault(
         // comparison. SQLite supports the `(a, b, ...) > (?, ?, ...)`
         // shape but only for plain ascending; our ordering mixes
         // ascending and descending with explicit NULL placement, so
-        // we encode each axis as a sortable surrogate. `IFNULL` to
-        // sentinel values pushes NULLs to the end of their respective
-        // sort orders. Sentinel choices:
-        //   - due_ms (ASC NULLS LAST):  `i64::MAX`  — never negated.
-        //   - priority (DESC NULLS LAST): `i32::MIN as i64` so that
-        //     negation in the cursor predicate (`-IFNULL(...)`) fits
-        //     in i64 without overflow. (`-i64::MIN` overflows;
-        //     `-(i32::MIN as i64)` is `i32::MAX + 1`, well within
-        //     range.)
-        // `COLLATE BINARY` on f.path matches the ORDER BY collation so
-        // the cursor advance is byte-precise even if SQLite's default
-        // collation for the column changes in a future migration
-        // (mirrors the same defence in `files_with_property`, Codoki
-        // PR 134 follow-up).
+        // we encode each axis as a sortable surrogate via IFNULL.
+        //
+        // The IFNULL sentinels MUST be literals (not parameters)
+        // to match the literal expressions in `idx_tasks_sort`
+        // (migration 010). Otherwise the planner falls back to a
+        // temp-btree sort.
+        //
+        // Sentinel choices:
+        //   - due_ms (ASC NULLS LAST):  i64::MAX  — never negated.
+        //   - priority (DESC NULLS LAST): i32::MIN as i64 so the
+        //     negation trick in the cursor predicate stays inside
+        //     i64 range (`-i64::MIN` overflows; `-(i32::MIN as i64)`
+        //     is `i32::MAX + 1`, safe).
+        //
+        // `COLLATE BINARY` on f.path matches the ORDER BY collation
+        // so the cursor advance is byte-precise even if SQLite's
+        // default collation for the column changes in a future
+        // migration (mirrors the defence in `files_with_property`).
         where_parts.push(
-            "(IFNULL(t.due_ms, ?), -IFNULL(t.priority, ?), f.path COLLATE BINARY, t.ordinal) > (?, ?, ? COLLATE BINARY, ?)"
+            "(IFNULL(t.due_ms, 9223372036854775807), \
+              -IFNULL(t.priority, -2147483648), \
+              f.path COLLATE BINARY, t.ordinal) > (?, ?, ? COLLATE BINARY, ?)"
                 .to_string(),
         );
-        params_dyn.push(Box::new(i64::MAX));
-        params_dyn.push(Box::new(i32::MIN as i64));
         params_dyn.push(Box::new(due_key));
         params_dyn.push(Box::new(-prio_key));
         params_dyn.push(Box::new(path_key));
@@ -183,6 +187,21 @@ pub(crate) fn tasks_in_vault(
     // SQL scoping shadows the outer aliases inside the subquery so
     // this is unambiguous; the `count_where` snippet binds against
     // these inner aliases.
+    // The IFNULL sentinels in the ORDER BY are LITERAL constants
+    // rather than `?` parameters so the expression-index from
+    // migration 010 (`idx_tasks_sort`) can satisfy the sort
+    // directly — SQLite's planner matches expression indexes only
+    // against literal expressions, not parameter-bound ones (#145).
+    // The literals MUST stay in lock-step with the index definition;
+    // changing one without the other silently regresses the plan
+    // back to `USE TEMP B-TREE FOR ORDER BY`.
+    //
+    // Same `t`/`f` aliases as the outer query inside the COUNT(*)
+    // subquery — `tasks t` shadows the outer alias, so the inner
+    // WHERE binds against the inner rows, not the outer row
+    // (Codoki PR #134 High regression fix).
+    const DUE_NULL_SENTINEL: i64 = i64::MAX;
+    const PRIORITY_NULL_SENTINEL: i64 = i32::MIN as i64;
     let sql = format!(
         "SELECT f.path, f.name,
                 t.ordinal, t.text, t.status_char, t.completed,
@@ -192,13 +211,15 @@ pub(crate) fn tasks_in_vault(
          FROM tasks t
          JOIN files f ON f.id = t.file_id
          {where_clause}
-         ORDER BY IFNULL(t.due_ms, ?) ASC,
-                  IFNULL(t.priority, ?) DESC,
+         ORDER BY IFNULL(t.due_ms, {due_sentinel}) ASC,
+                  IFNULL(t.priority, {prio_sentinel}) DESC,
                   f.path COLLATE BINARY ASC,
                   t.ordinal ASC
          LIMIT ?",
         count_where = build_count_where(&filter),
         where_clause = where_clause,
+        due_sentinel = DUE_NULL_SENTINEL,
+        prio_sentinel = PRIORITY_NULL_SENTINEL,
     );
 
     // Build the count-where bindings (same shape as the main WHERE
@@ -221,13 +242,13 @@ pub(crate) fn tasks_in_vault(
     // SQL parameters must be supplied in textual order. The COUNT(*)
     // subquery is positioned BEFORE the outer WHERE in the SQL we
     // built, so its filter parameters bind first. Then the outer
-    // filter parameters. Then the two `IFNULL(...)` sort sentinels.
-    // Then `limit + 1` (paging "+1 trick" for has_more detection).
+    // filter parameters. Then `limit + 1` (paging "+1 trick" for
+    // has_more detection). The IFNULL sort sentinels are now SQL
+    // literals (see the migration-010 commentary above), so they
+    // don't appear in the parameter list.
     let mut bound: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     bound.extend(count_params);
     bound.extend(params_dyn);
-    bound.push(Box::new(i64::MAX));
-    bound.push(Box::new(i32::MIN as i64));
     bound.push(Box::new((limit as i64) + 1));
 
     let mut stmt = conn.prepare_cached(&sql)?;

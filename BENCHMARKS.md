@@ -108,7 +108,7 @@ Same machine + toolchain as the 2026-05-17 row. The fixture is `generate_tasks_v
 | Benchmark | 1 k files (realistic distribution) |
 |---|---|
 | `tasks_cold_scan` | 65.5 ms |
-| `tasks_in_vault_first_page` (200 rows) | 338 µs |
+| `tasks_in_vault_first_page` (200 rows) | 138 µs |
 
 | Benchmark | 1 KB doc | 10 KB doc | 50 KB doc |
 |---|---|---|---|
@@ -121,7 +121,7 @@ _Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/
 The absolute figures differ from the 2026-05-23 row (29.5 ms / 1.23 ms) — that's **not a regression**, it's a fixture change:
 
 - **`tasks_cold_scan` went up** because the realistic fixture has much larger file bodies (frontmatter, headings, multi-paragraph prose, occasional code fences) than the prior synthetic vault. Cold scan time is dominated by file-content reading + blake3 hashing, not parsing. The 65.5 ms figure tracks real-world cold-open latency on a typical user's notes.
-- **`tasks_in_vault_first_page` went down** because the realistic fixture carries roughly ~1100 tasks total (25% × ~2 + 5% × ~12 per file), against ~10 000 in the prior uniform shape. Smaller table = faster first-page query. The 338 µs figure is what the Mac TasksReviewView's initial render actually pays in production.
+- **`tasks_in_vault_first_page` went down** for two reasons. First, the realistic fixture carries roughly ~1100 tasks total (25% × ~2 + 5% × ~12 per file), against ~10 000 in the prior uniform shape. Second, the expression index from migration 010 (#145) lets SQLite walk the (due, priority) sort tiers directly via `idx_tasks_sort` instead of materialising every matching row into a temp btree. Combined, the first-page query dropped from a 1.23 ms full-temp-btree baseline to 138 µs (~9× faster); the residual `USE TEMP B-TREE FOR RIGHT PART OF ORDER BY` step only sorts within (due, priority) tie-groups by path, bounded by tie-group size rather than total rows.
 
 `parser_zero_task_overhead` is unchanged — that's a focused micro-bench on the M3 fast path and doesn't depend on the vault fixture.
 
