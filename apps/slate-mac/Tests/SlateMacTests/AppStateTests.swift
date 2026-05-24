@@ -2010,4 +2010,270 @@ final class AppStateTests: XCTestCase {
         XCTAssertNotNil(state.templateNoteNameError)
         XCTAssertNotEqual(state.pendingTemplateFlow, .idle)
     }
+
+    // MARK: - Tasks panel + review (#113 + #114)
+    //
+    // The backend's `tasksForFile` / `tasksInVault` / `toggleTaskStatus`
+    // surfaces are exercised directly in slate-core's tests; here we
+    // only need to confirm AppState routes correctly:
+    //   - selecting a file populates `currentNoteTasks`
+    //   - toggle calls the FFI with the right ordinal + status char
+    //     and refreshes both `currentNoteTasks` and the editor buffer
+    //   - opening the review surface kicks `loadVaultTasks`
+    //   - filter switches re-query and surface the new filter set
+    //   - row activation populates `selectedFilePath` + sends
+    //     `lineScrollRequest` for cross-file navigation
+
+    func testSelectingNoteWithTasksPopulatesCurrentNoteTasks() async throws {
+        let vault = tempDir.appendingPathComponent("tasks-panel-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] one\n- [x] two\n- [ ] three\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+
+        XCTAssertEqual(state.currentNoteTasks.count, 3)
+        XCTAssertEqual(state.currentNoteTasks.map(\.completed), [false, true, false])
+        XCTAssertEqual(state.currentNoteTasks.map(\.text), ["one", "two", "three"])
+    }
+
+    func testToggleCurrentTaskFlipsStatusAndRefreshesPanel() async throws {
+        let vault = tempDir.appendingPathComponent("toggle-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] open task\n- [ ] another\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+
+        let firstTask = try XCTUnwrap(state.currentNoteTasks.first)
+        XCTAssertFalse(firstTask.completed)
+        await state.toggleCurrentTask(firstTask)?.value
+        // Drop into the next runloop pass so the post-toggle refresh
+        // task (refreshTasksAfterSave) lands.
+        await Task.yield()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // On-disk file flipped from `[ ]` to `[x]`.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("a.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            onDisk.contains("- [x] open task"),
+            "toggle should have written `[x]` to disk; got: \(onDisk)"
+        )
+        // Panel mirrors the new state — first task now completed,
+        // count + ordinal preserved.
+        XCTAssertEqual(state.currentNoteTasks.count, 2)
+        XCTAssertTrue(state.currentNoteTasks[0].completed)
+        XCTAssertFalse(state.currentNoteTasks[1].completed)
+        // Editor buffer also reflects the new on-disk state so the
+        // user's next edit doesn't clobber the toggle.
+        XCTAssertTrue(
+            (state.currentNoteText ?? "").contains("- [x] open task"),
+            "editor buffer should reflect the toggled text"
+        )
+        // No conflict surfaced; cached content hash refreshed.
+        XCTAssertNil(state.currentSaveConflict)
+        XCTAssertNotNil(state.currentNoteContentHash)
+    }
+
+    func testOpenTasksReviewKicksLoadAndFlipsSheetState() async throws {
+        let vault = tempDir.appendingPathComponent("review-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] only task\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        XCTAssertFalse(state.isTasksReviewOpen)
+        state.openTasksReview()
+        XCTAssertTrue(state.isTasksReviewOpen)
+        await state.vaultTasksLoadTask?.value
+
+        XCTAssertEqual(state.vaultTasks.count, 1)
+        XCTAssertEqual(state.vaultTasks.first?.task.text, "only task")
+        XCTAssertEqual(state.taskReviewFilter, .all)
+    }
+
+    func testApplyTaskReviewFilterRequeriesWithNewWindow() async throws {
+        let vault = tempDir.appendingPathComponent("filter-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        // Hand-tune dates against UTC midnight so the filter
+        // windows have deterministic membership: an `overdue`
+        // task (2024-01-01) and a far-future task (2099-12-31).
+        try "- [ ] long overdue 📅 2024-01-01\n- [ ] far future 📅 2099-12-31\n"
+            .data(using: .utf8)!
+            .write(to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(state.vaultTasks.count, 2, "All filter shows both")
+
+        state.applyTaskReviewFilter(.overdue)
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(state.taskReviewFilter, .overdue)
+        let overdueTexts = state.vaultTasks.map(\.task.text)
+        XCTAssertEqual(
+            overdueTexts, ["long overdue"],
+            "Overdue filter should include only the 2024-01-01 task"
+        )
+
+        state.applyTaskReviewFilter(.thisWeek)
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(state.taskReviewFilter, .thisWeek)
+        XCTAssertEqual(
+            state.vaultTasks.count, 0,
+            "This-week filter should exclude both the 2024 and 2099 tasks"
+        )
+    }
+
+    func testOpenTaskRowInEditorSwitchesFileAndRequestsLineScroll() async throws {
+        let vault = tempDir.appendingPathComponent("review-jump-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] task on line 1\n# Heading\n- [ ] task on line 3\n"
+            .data(using: .utf8)!
+            .write(to: vault.appendingPathComponent("b.md"))
+        try "# Other note\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        // Start on a different file so the activation triggers a
+        // selection change.
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+
+        // Subscribe to lineScrollRequest so we can assert the line
+        // number that gets emitted after activation.
+        var received: [Int] = []
+        let cancellable = state.lineScrollRequest.sink { received.append($0) }
+        defer { cancellable.cancel() }
+
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        let row = try XCTUnwrap(state.vaultTasks.first { $0.task.text == "task on line 3" })
+
+        state.openTaskRowInEditor(row)
+
+        // Activation closes the sheet, switches selection, and
+        // schedules the scroll for after the new file's load.
+        XCTAssertFalse(state.isTasksReviewOpen)
+        XCTAssertEqual(state.selectedFilePath, "b.md")
+        await state.noteLoadTask?.value
+        // Yield twice so the awaiting Task that fires the scroll
+        // request lands before we read `received`.
+        await Task.yield()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(
+            received, [3],
+            "Activation should request a scroll to the task's source line (1-based)"
+        )
+    }
+
+    func testToggleVaultTaskUpdatesUnderlyingFileAndReQueries() async throws {
+        let vault = tempDir.appendingPathComponent("toggle-vault-review")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] from review\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+
+        let row = try XCTUnwrap(state.vaultTasks.first)
+        XCTAssertFalse(row.task.completed)
+        await state.toggleVaultTask(row)?.value
+        await state.vaultTasksLoadTask?.value
+
+        // The vault re-query reflects the new state.
+        let updated = try XCTUnwrap(state.vaultTasks.first)
+        XCTAssertTrue(updated.task.completed)
+        // On-disk file changed too.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("a.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(onDisk.contains("- [x] from review"))
+    }
+
+    func testTaskReviewFilterToFFIShapesMatchTheirDocumentedSemantics() {
+        // Unit-level sanity check: the filter cases produce the
+        // expected `completed` + due-window pairs. Pinning these
+        // shapes prevents accidental regressions in the date math
+        // (UTC midnight bounds, [from, to) windows, etc.).
+        let now = ISO8601DateFormatter().date(from: "2026-05-24T12:00:00Z")!
+        let utcDay: Int64 = 86_400_000
+
+        // All — no constraints.
+        let all = TaskReviewFilter.all.toFFIFilter(now: now)
+        XCTAssertNil(all.completed)
+        XCTAssertNil(all.dueFromMs)
+        XCTAssertNil(all.dueToMs)
+
+        // Due today — completed=false, [startOfDay, startOfDay+1day).
+        let dueToday = TaskReviewFilter.dueToday.toFFIFilter(now: now)
+        XCTAssertEqual(dueToday.completed, false)
+        let expectedStart: Int64 = {
+            let iso = ISO8601DateFormatter()
+            return Int64(iso.date(from: "2026-05-24T00:00:00Z")!.timeIntervalSince1970 * 1000)
+        }()
+        XCTAssertEqual(dueToday.dueFromMs, expectedStart)
+        XCTAssertEqual(dueToday.dueToMs, expectedStart + utcDay)
+
+        // Overdue — completed=false, [0, startOfToday).
+        let overdue = TaskReviewFilter.overdue.toFFIFilter(now: now)
+        XCTAssertEqual(overdue.completed, false)
+        XCTAssertEqual(overdue.dueFromMs, 0)
+        XCTAssertEqual(overdue.dueToMs, expectedStart)
+
+        // This week — completed=false, [startOfToday, +7 days).
+        let thisWeek = TaskReviewFilter.thisWeek.toFFIFilter(now: now)
+        XCTAssertEqual(thisWeek.completed, false)
+        XCTAssertEqual(thisWeek.dueFromMs, expectedStart)
+        XCTAssertEqual(thisWeek.dueToMs, expectedStart + utcDay * 7)
+    }
 }

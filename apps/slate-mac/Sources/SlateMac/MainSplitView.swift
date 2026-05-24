@@ -102,6 +102,18 @@ struct MainSplitView: View {
                 )
             }
             ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.openTasksReview()
+                } label: {
+                    Label("Tasks Review", systemImage: "checklist")
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(appState.currentSession == nil)
+                .accessibilityHint(
+                    "Opens the vault-wide tasks review. Cmd+Shift+T. Esc closes."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
                 Button("Close Vault") {
                     // Route through attemptCloseVault so the
                     // "Save changes?" prompt fires when the editor
@@ -220,6 +232,10 @@ struct MainSplitView: View {
         }
         .sheet(isPresented: templateFlowSheetPresented) {
             TemplatePromptSheet()
+                .environmentObject(appState)
+        }
+        .sheet(isPresented: $appState.isTasksReviewOpen) {
+            TasksReviewView()
                 .environmentObject(appState)
         }
         .onAppear {

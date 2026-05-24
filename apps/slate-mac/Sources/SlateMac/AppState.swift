@@ -31,6 +31,101 @@ enum LinkActivationOutcome: Equatable {
     case externalOpenFailed(String)
 }
 
+/// User-facing filter for the vault-wide Tasks Review view (#114).
+/// Maps to the FFI `TaskFilter` via `toFFIFilter` — the UI side
+/// carries the human-named cases (`.all`, `.dueToday`, …) and the
+/// adapter converts them into the date-window + completed-flag
+/// shape the SQLite query expects.
+///
+/// **Timezone note.** The backend parser stores `📅 2026-06-01` as
+/// midnight UTC of that calendar date. Our `.dueToday` / `.overdue`
+/// / `.thisWeek` windows compare against UTC midnight too, so the
+/// filter boundary moves with UTC, not with the user's local
+/// timezone. A user in PST will see "today" tasks change at
+/// 5 PM local (UTC midnight). That's the cost of the parser's
+/// timezone-naive shape and is documented as a V1 limitation; a
+/// follow-up could thread a `TimeZone` through the parser and
+/// filter together.
+enum TaskReviewFilter: Hashable, CaseIterable, Identifiable {
+    /// Every task in the vault, completed or open. The literal
+    /// "show me everything" view.
+    case all
+    /// Open tasks with a due date that falls on today (UTC).
+    case dueToday
+    /// Open tasks whose due date is in the past (UTC) — `due_ms <
+    /// startOfTodayUtc`. Tasks with no due date are excluded.
+    case overdue
+    /// Open tasks due in the next 7 days (UTC), inclusive of today,
+    /// exclusive of the 8th day. Matches the `[from, to)` shape of
+    /// the FFI's `dueFromMs` / `dueToMs` pair.
+    case thisWeek
+
+    var id: Self { self }
+
+    /// Picker chip label. Plain English, no abbreviations — chips
+    /// are read by VoiceOver verbatim.
+    var displayName: String {
+        switch self {
+        case .all: return "All"
+        case .dueToday: return "Due today"
+        case .overdue: return "Overdue"
+        case .thisWeek: return "This week"
+        }
+    }
+
+    /// Resolve to the FFI `TaskFilter` against a reference "now"
+    /// (parameterised so tests can pin the clock without mocking
+    /// `Date()`). UTC throughout — see the timezone note above.
+    func toFFIFilter(now: Date = Date()) -> TaskFilter {
+        let cal = Self.utcCalendar
+        let startOfTodayUtc = cal.startOfDay(for: now)
+        switch self {
+        case .all:
+            return TaskFilter(
+                completed: nil,
+                dueFromMs: nil,
+                dueToMs: nil,
+                priorityAtLeast: nil
+            )
+        case .dueToday:
+            let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: startOfTodayUtc)!
+            return TaskFilter(
+                completed: false,
+                dueFromMs: Int64(startOfTodayUtc.timeIntervalSince1970 * 1000),
+                dueToMs: Int64(startOfTomorrow.timeIntervalSince1970 * 1000),
+                priorityAtLeast: nil
+            )
+        case .overdue:
+            return TaskFilter(
+                completed: false,
+                // Unix epoch start as the lower bound — any due
+                // date qualifies as long as it's before today.
+                dueFromMs: 0,
+                dueToMs: Int64(startOfTodayUtc.timeIntervalSince1970 * 1000),
+                priorityAtLeast: nil
+            )
+        case .thisWeek:
+            let endOfWindow = cal.date(byAdding: .day, value: 7, to: startOfTodayUtc)!
+            return TaskFilter(
+                completed: false,
+                dueFromMs: Int64(startOfTodayUtc.timeIntervalSince1970 * 1000),
+                dueToMs: Int64(endOfWindow.timeIntervalSince1970 * 1000),
+                priorityAtLeast: nil
+            )
+        }
+    }
+
+    /// UTC `Calendar` for `startOfDay` etc. so the filter's
+    /// behaviour is locale-independent. Built once per call site
+    /// rather than statically because `Calendar` isn't `Sendable`
+    /// across actors in Swift 6 strict-concurrency mode.
+    private static var utcCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal
+    }
+}
+
 /// Per-incident snapshot for the conflict-resolution alert.
 ///
 /// Populated by `saveCurrentNote` when the backend returns
@@ -207,6 +302,43 @@ final class AppState: ObservableObject {
     /// alert state doesn't cross-fire with the content pane's.
     @Published var linksLoadError: String?
 
+    // MARK: Tasks (#113 + #114 — Milestone G UI)
+
+    /// Tasks parsed from the currently-selected note, in document
+    /// order. Loaded by `loadCurrentNoteTasks(path:)` after a
+    /// selection change and refreshed by `refreshTasksAfterSave` so
+    /// the panel reflects toggle results and edit-save round-trips.
+    @Published private(set) var currentNoteTasks: [TaskItem] = []
+    /// True while the per-note tasks query is in flight. The
+    /// `TasksPanel` uses this for its `ProgressView` placeholder.
+    @Published private(set) var isLoadingTasks: Bool = false
+    /// Surfaced when the per-note tasks query fails. Independent of
+    /// `linksLoadError` so the two panels' error states don't
+    /// cross-fire.
+    @Published var tasksLoadError: String?
+
+    /// Result rows of the most recent vault-wide tasks query.
+    /// Populated by `loadVaultTasks()` whenever the review surface
+    /// is open AND the filter changes (or the user explicitly
+    /// re-loads).
+    @Published private(set) var vaultTasks: [TaskWithLocation] = []
+    /// True while `loadVaultTasks()` is in flight. The
+    /// `TasksReviewView` uses this to show a loading placeholder.
+    @Published private(set) var isLoadingVaultTasks: Bool = false
+    /// Surfaced when the vault-wide query fails.
+    @Published var vaultTasksLoadError: String?
+    /// Active filter for the review surface. Mutating this kicks
+    /// off a re-query via `applyTaskReviewFilter(_:)` — direct
+    /// writes from the UI go through the setter rather than the
+    /// published binding so we can pair them with the load task.
+    @Published private(set) var taskReviewFilter: TaskReviewFilter = .all
+    /// Whether the `TasksReviewView` sheet is currently presented.
+    /// Cmd+Shift+T toggles this; the sheet's `onDismiss` also flips
+    /// it back to false. Setting this `true` does NOT auto-load —
+    /// `openTasksReview()` is the public entry point that kicks
+    /// the query.
+    @Published var isTasksReviewOpen: Bool = false
+
     /// True while the search overlay is visible. Cmd+F toggles;
     /// Esc clears.
     @Published var isSearchOpen: Bool = false
@@ -290,6 +422,25 @@ final class AppState: ObservableObject {
     /// note content loads, and so tests can await each path
     /// independently.
     private(set) var linksLoadTask: Task<Void, Never>?
+
+    /// Handle on the in-flight per-note tasks fetch. Same shape as
+    /// `linksLoadTask`; held separately so the `TasksPanel` can
+    /// render its loading state on a different timeline from the
+    /// links/properties panels.
+    private(set) var tasksLoadTask: Task<Void, Never>?
+
+    /// Handle on the in-flight vault-wide tasks query. Driven by
+    /// `loadVaultTasks()` (called from `openTasksReview` and
+    /// `applyTaskReviewFilter`). Tests await this to deterministically
+    /// observe filter-switch results.
+    private(set) var vaultTasksLoadTask: Task<Void, Never>?
+
+    /// Handle on the most recent per-task toggle. Toggles serialise
+    /// through the FFI's session mutex anyway, but holding the
+    /// handle here lets tests await the result and surfaces the
+    /// in-flight state if the UI ever wants to show a spinner on
+    /// the toggled row.
+    private(set) var taskToggleTask: Task<Void, Never>?
 
     /// Handle on the most recent template-flow task — opens the
     /// picker (`openTemplatePicker`), reads source for prompt
@@ -535,6 +686,8 @@ final class AppState: ObservableObject {
         noteLoadTask = nil
         linksLoadTask?.cancel()
         linksLoadTask = nil
+        tasksLoadTask?.cancel()
+        tasksLoadTask = nil
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
@@ -545,6 +698,7 @@ final class AppState: ObservableObject {
         currentNoteHeadings = []
         noteLoadError = nil
         linksLoadError = nil
+        tasksLoadError = nil
         guard let path else {
             // Full clear when nothing is selected. Safe here because
             // there's no destination note to attribute stale content
@@ -553,8 +707,10 @@ final class AppState: ObservableObject {
             currentBacklinks = []
             currentOutgoingLinks = []
             currentNoteProperties = []
+            currentNoteTasks = []
             isLoadingNote = false
             isLoadingLinks = false
+            isLoadingTasks = false
             return
         }
         // Note-to-note transitions: leave `currentBacklinks`,
@@ -574,6 +730,9 @@ final class AppState: ObservableObject {
         }
         linksLoadTask = Task { [weak self] in
             await self?.loadCurrentLinks(path: path)
+        }
+        tasksLoadTask = Task { [weak self] in
+            await self?.loadCurrentNoteTasks(path: path)
         }
     }
 
@@ -824,6 +983,12 @@ final class AppState: ObservableObject {
         noteLoadTask = nil
         linksLoadTask?.cancel()
         linksLoadTask = nil
+        tasksLoadTask?.cancel()
+        tasksLoadTask = nil
+        vaultTasksLoadTask?.cancel()
+        vaultTasksLoadTask = nil
+        taskToggleTask?.cancel()
+        taskToggleTask = nil
         closeSearchOverlay()
         searchQuery = ""
         currentSession = nil
@@ -838,9 +1003,17 @@ final class AppState: ObservableObject {
         currentOutgoingLinks = []
         currentNoteProperties = []
         linksLoadError = nil
+        currentNoteTasks = []
+        tasksLoadError = nil
+        vaultTasks = []
+        vaultTasksLoadError = nil
+        taskReviewFilter = .all
+        isTasksReviewOpen = false
         isScanning = false
         isLoadingNote = false
         isLoadingLinks = false
+        isLoadingTasks = false
+        isLoadingVaultTasks = false
         scanProgress = nil
     }
 
@@ -1080,6 +1253,393 @@ final class AppState: ObservableObject {
         isLoadingLinks = false
     }
 
+    // MARK: - Tasks (per-note + vault-wide)
+
+    /// Load the per-note tasks for `path` off the main actor and
+    /// publish them as `currentNoteTasks`. Same lifecycle shape as
+    /// `loadCurrentLinks`: cancellable, dropped on the floor if the
+    /// user has moved on by the time the query returns.
+    ///
+    /// `tasksForFile` returns an empty Vec when the path isn't
+    /// indexed yet (race between selection and scan) — we surface
+    /// that as an empty `currentNoteTasks` rather than an error,
+    /// matching how the panels treat "no rows" elsewhere.
+    func loadCurrentNoteTasks(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingTasks = true
+
+        let result: Result<[TaskItem], VaultError> = await Task.detached(priority: .userInitiated) {
+            do {
+                let tasks = try session.tasksForFile(path: path)
+                return .success(tasks)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }
+        .value
+
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+
+        switch result {
+        case .success(let tasks):
+            currentNoteTasks = tasks
+            tasksLoadError = nil
+        case .failure(let error):
+            currentNoteTasks = []
+            tasksLoadError = humanReadable(error)
+        }
+        isLoadingTasks = false
+    }
+
+    /// Refresh `currentNoteTasks` after a successful save so the
+    /// panel reflects edits to task lines without waiting for the
+    /// next selection change. Mirrors `refreshHeadingsAfterSave`'s
+    /// shape: off-actor query, post-await re-grab of `self`, drop
+    /// the result if the user has navigated away.
+    private func refreshTasksAfterSave(session: VaultSession, path: String) {
+        Task { [weak self] in
+            let tasks: [TaskItem]? = await Task.detached(priority: .userInitiated) {
+                try? session.tasksForFile(path: path)
+            }
+            .value
+            guard let self else { return }
+            guard self.loadedFilePath == path else { return }
+            self.currentNoteTasks = tasks ?? []
+        }
+    }
+
+    /// Flip the status character on a single task in the currently-
+    /// loaded note. Calls `toggleTaskStatus` with the cached
+    /// `currentNoteContentHash` so a mid-edit external write
+    /// surfaces as a `WriteConflict` and routes through the same
+    /// resolution UI the editor uses (#64). Refreshes
+    /// `currentNoteTasks` on success so the panel mirrors the new
+    /// state.
+    ///
+    /// The status toggle is `' '` ↔ `'x'`. Tasks already in a
+    /// non-standard state (e.g. `[/]` in-progress, `[-]`
+    /// cancelled) are normalised to one of those two by the
+    /// completion check — the panel doesn't expose a way to
+    /// author custom status chars (#113 scope).
+    @discardableResult
+    func toggleCurrentTask(_ task: TaskItem) -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        guard let path = loadedFilePath else { return nil }
+        let newChar = task.completed ? " " : "x"
+        let expected = currentNoteContentHash
+        let toggle: Task<Void, Never> = Task { [weak self] in
+            await self?.performToggleCurrentTask(
+                session: session,
+                path: path,
+                ordinal: task.ordinal,
+                newChar: newChar,
+                expectedHash: expected
+            )
+            return
+        }
+        taskToggleTask = toggle
+        return toggle
+    }
+
+    private func performToggleCurrentTask(
+        session: VaultSession,
+        path: String,
+        ordinal: UInt32,
+        newChar: String,
+        expectedHash: String?
+    ) async {
+        let outcome: Result<SaveReport, VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
+            do {
+                let report = try session.toggleTaskStatus(
+                    path: path,
+                    ordinal: ordinal,
+                    newStatusChar: newChar,
+                    expectedContentHash: expectedHash
+                )
+                return .success(report)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }
+        .value
+
+        // User could have switched files between toggle issue and
+        // toggle completion. Drop the result rather than mutating
+        // state attributed to a file that's no longer the active
+        // selection.
+        guard loadedFilePath == path else { return }
+
+        switch outcome {
+        case .success(let report):
+            // The toggle path is a `save_text` under the hood, so
+            // the on-disk file changed and the cached content
+            // hash needs updating to match.
+            currentNoteContentHash = report.newContentHash
+            // If the editor has unsaved buffer changes, the
+            // toggle just clobbered them on disk — but the editor
+            // buffer is the user's authority. Mark dirty so the
+            // next save re-asserts the buffer. With expectedHash
+            // set above, this branch wouldn't have been taken
+            // anyway (the FFI would have returned WriteConflict),
+            // so in practice we reach here with the buffer
+            // already matching disk except for the toggled char.
+            // Re-read the buffer + reflect the toggle so
+            // `savedBaselineText` and `currentNoteText` stay in
+            // sync.
+            refreshTasksAfterSave(session: session, path: path)
+            // Also refresh the editor's view of the file so the
+            // toggled character appears in the rendered text.
+            // Mirrors `loadCurrentNote`'s read-text shape but
+            // doesn't redo the heading/property work.
+            reloadEditorBufferAfterToggle(session: session, path: path)
+        case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
+            // Same surface as the editor save's WriteConflict
+            // path. The attemptedContents is the toggled file
+            // contents — we don't actually have it here because
+            // the FFI did the read + mutate internally, so re-
+            // read from disk before stashing.
+            let attempted = (try? session.readText(path: path)) ?? ""
+            currentSaveConflict = SaveConflict(
+                path: path,
+                attemptedContents: attempted,
+                currentContentHash: currentHash,
+                expectedContentHash: expected,
+                currentMtimeMs: currentMtimeMs
+            )
+            postAccessibilityAnnouncement(
+                "Toggle blocked. \(filename(of: path)) was modified externally. Resolve in the dialog.",
+                priority: .medium
+            )
+        case .failure(let error):
+            tasksLoadError = humanReadable(error)
+        }
+    }
+
+    /// Re-read the on-disk file into the editor's buffer after a
+    /// toggle. Toggle goes through `save_text` so the disk content
+    /// changed; the editor buffer and `savedBaselineText` need to
+    /// follow. Off-actor read so the SQLite-backed code path
+    /// doesn't pin the main actor.
+    private func reloadEditorBufferAfterToggle(session: VaultSession, path: String) {
+        Task { [weak self] in
+            let text: String? = await Task.detached(priority: .userInitiated) {
+                try? session.readText(path: path)
+            }
+            .value
+            guard let self, let text else { return }
+            guard self.loadedFilePath == path else { return }
+            self.currentNoteText = text
+            self.savedBaselineText = text
+            self.hasUnsavedChanges = false
+        }
+    }
+
+    /// Open the vault-wide Tasks Review surface (Cmd+Shift+T or
+    /// toolbar). Kicks off the initial `loadVaultTasks` query and
+    /// posts a polite VoiceOver announcement so screen-reader
+    /// users know the surface opened.
+    func openTasksReview() {
+        guard currentSession != nil else { return }
+        isTasksReviewOpen = true
+        vaultTasksLoadTask = Task { [weak self] in
+            await self?.loadVaultTasks()
+        }
+        postAccessibilityAnnouncement(
+            "Tasks review opened. \(taskReviewFilter.displayName).",
+            priority: .medium
+        )
+    }
+
+    /// Close the review surface. Idempotent; safe to call from the
+    /// sheet's onDismiss without an existence check.
+    func closeTasksReview() {
+        isTasksReviewOpen = false
+        vaultTasksLoadTask?.cancel()
+        vaultTasksLoadTask = nil
+    }
+
+    /// Switch the active filter and re-query. Public setter so
+    /// the UI's `Picker` / chips can call this rather than
+    /// writing the `@Published` directly — pairs the state change
+    /// with the load.
+    func applyTaskReviewFilter(_ filter: TaskReviewFilter) {
+        taskReviewFilter = filter
+        vaultTasksLoadTask?.cancel()
+        vaultTasksLoadTask = Task { [weak self] in
+            await self?.loadVaultTasks()
+        }
+        postAccessibilityAnnouncement(
+            "Filter set to \(filter.displayName).",
+            priority: .medium
+        )
+    }
+
+    /// Run `tasksInVault` against the current filter and publish
+    /// the rows as `vaultTasks`. Mirrors `loadFiles`' shape:
+    /// off-actor query, cancellation-aware, no error surfaced
+    /// when cancelled mid-flight.
+    ///
+    /// Page size of 200 matches the bench scenario in
+    /// `tasks_in_vault_first_page` — the review view doesn't
+    /// paginate yet (V1 scope), so this is effectively the only
+    /// page rendered.
+    func loadVaultTasks() async {
+        guard let session = currentSession else { return }
+        let filter = taskReviewFilter.toFFIFilter()
+        let activeFilter = taskReviewFilter
+        isLoadingVaultTasks = true
+
+        let result: Result<[TaskWithLocation], VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
+            do {
+                let page = try session.tasksInVault(
+                    filter: filter,
+                    paging: Paging(cursor: nil, limit: 200)
+                )
+                return .success(page.items)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }
+        .value
+
+        // If the user changed the filter while we were loading, a
+        // newer task is already in flight; drop this result.
+        guard !Task.isCancelled, taskReviewFilter == activeFilter else { return }
+
+        switch result {
+        case .success(let rows):
+            vaultTasks = rows
+            vaultTasksLoadError = nil
+        case .failure(let error):
+            vaultTasks = []
+            vaultTasksLoadError = humanReadable(error)
+        }
+        isLoadingVaultTasks = false
+    }
+
+    /// Toggle a task from the vault-wide review view. Routes
+    /// through `toggleTaskStatus` with `expectedContentHash: nil`
+    /// — the review surface doesn't track per-row hashes, and the
+    /// user's explicit "I want to toggle this" intent overrides
+    /// the conflict-detection that the editor save flow relies on.
+    /// Re-loads vault tasks on completion so the row reflects its
+    /// new state.
+    ///
+    /// If the toggled task belongs to the currently-loaded note,
+    /// `refreshTasksAfterSave` also fires so the per-note panel
+    /// stays in sync.
+    @discardableResult
+    func toggleVaultTask(_ row: TaskWithLocation) -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        let newChar = row.task.completed ? " " : "x"
+        let path = row.path
+        let ordinal = row.task.ordinal
+        let toggle: Task<Void, Never> = Task { [weak self] in
+            await self?.performToggleVaultTask(
+                session: session,
+                path: path,
+                ordinal: ordinal,
+                newChar: newChar
+            )
+            return
+        }
+        taskToggleTask = toggle
+        return toggle
+    }
+
+    private func performToggleVaultTask(
+        session: VaultSession,
+        path: String,
+        ordinal: UInt32,
+        newChar: String
+    ) async {
+        let outcome: Result<SaveReport, VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
+            do {
+                let report = try session.toggleTaskStatus(
+                    path: path,
+                    ordinal: ordinal,
+                    newStatusChar: newChar,
+                    expectedContentHash: nil
+                )
+                return .success(report)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }
+        .value
+
+        switch outcome {
+        case .success:
+            // Re-query the vault tasks so the row's `completed`
+            // flips visually. Cheaper than mutating the array in
+            // place: filter-window inclusion may have changed
+            // (e.g. completing an overdue task removes it from
+            // the `.overdue` filter result).
+            await loadVaultTasks()
+            // Per-note panel stays in sync if the toggle hit the
+            // currently-loaded file.
+            if loadedFilePath == path {
+                refreshTasksAfterSave(session: session, path: path)
+                reloadEditorBufferAfterToggle(session: session, path: path)
+            }
+        case .failure(let error):
+            vaultTasksLoadError = humanReadable(error)
+        }
+    }
+
+    /// Activate a `TasksReviewView` row: switch the file
+    /// selection (if needed) and scroll the editor to the task's
+    /// line. Closes the review sheet so the user lands on the
+    /// editor. Same selection+scroll pattern as the search-overlay
+    /// activation flow.
+    func openTaskRowInEditor(_ row: TaskWithLocation) {
+        let target = row.path
+        let line = Int(row.task.line)
+        closeTasksReview()
+
+        // If we're already on the file, just scroll.
+        if selectedFilePath == target {
+            lineScrollRequest.send(line)
+            postAccessibilityAnnouncement(
+                "Scrolled to \(filename(of: target)), line \(line).",
+                priority: .medium
+            )
+            return
+        }
+
+        // Otherwise switch selection + scroll once the new file's
+        // load resolves so the per-line anchors exist in the
+        // rendered tree before `ScrollViewReader.scrollTo` runs.
+        selectedFilePath = target
+        let pendingLoad = noteLoadTask
+        Task { @MainActor [weak self] in
+            if let pendingLoad {
+                await pendingLoad.value
+            }
+            guard let self else { return }
+            guard self.selectedFilePath == target else { return }
+            self.lineScrollRequest.send(line)
+            postAccessibilityAnnouncement(
+                "Opened \(filename(of: target)), line \(line).",
+                priority: .medium
+            )
+        }
+    }
+
     // MARK: - Save flow
 
     /// Editor's two-way binding writes new buffer contents through
@@ -1192,6 +1752,7 @@ final class AppState: ObservableObject {
             // switches selection; refreshing them here would
             // double-spin the SQLite mutex for marginal benefit.
             refreshHeadingsAfterSave(session: session, path: path)
+            refreshTasksAfterSave(session: session, path: path)
             postAccessibilityAnnouncement(
                 "Saved \(filename(of: path)).",
                 priority: .medium
