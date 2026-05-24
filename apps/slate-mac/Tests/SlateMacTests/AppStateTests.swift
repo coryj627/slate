@@ -2733,4 +2733,99 @@ final class AppStateTests: XCTestCase {
         )
         XCTAssertTrue(state.hasUnsavedChanges)
     }
+
+    // MARK: - Loading-flag cancellation cleanup (#159)
+    //
+    // The per-note and vault-wide load paths used to leak their
+    // `isLoading…` flag true on cancellation-without-replacement
+    // (e.g. close-review mid-load, deselect mid-load). The flag
+    // is now cleared via `defer` so every exit path returns the
+    // spinner to the inert state.
+
+    func testCloseTasksReviewMidLoadClearsSpinner() async throws {
+        let vault = tempDir.appendingPathComponent("close-spinner-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] task\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.openTasksReview()
+        // Grab the handle BEFORE closeTasksReview nils it out so
+        // we can deterministically await the cancelled task's
+        // settle and observe the post-cancellation flag state.
+        let handle = state.vaultTasksLoadTask
+        state.closeTasksReview()
+        await handle?.value
+
+        XCTAssertFalse(
+            state.isLoadingVaultTasks,
+            "closeTasksReview mid-load must not leave the spinner stuck"
+        )
+    }
+
+    func testRapidFilterSwitchClearsSpinnerBetweenLoads() async throws {
+        let vault = tempDir.appendingPathComponent("rapid-filter-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] task\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.openTasksReview()
+        // Fire three filter switches as fast as the synchronous
+        // mutator allows. Each call cancels the previous task and
+        // schedules a new one. Without the defer-based cleanup,
+        // intermediate cancellations could leak the flag true; the
+        // final await proves the last load's cleanup ran AND that
+        // no intermediate task left the flag stuck.
+        state.applyTaskReviewFilter(.dueToday)
+        state.applyTaskReviewFilter(.overdue)
+        state.applyTaskReviewFilter(.thisWeek)
+        await state.vaultTasksLoadTask?.value
+
+        XCTAssertFalse(
+            state.isLoadingVaultTasks,
+            "after the last filter switch settles, the spinner must clear"
+        )
+    }
+
+    func testNilSelectionMidLoadClearsPerNoteSpinner() async throws {
+        let vault = tempDir.appendingPathComponent("nil-selection-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] task\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        // Grab the in-flight task handle before deselection nils
+        // it out, then deselect to trigger the cancellation path.
+        let handle = state.tasksLoadTask
+        state.selectedFilePath = nil
+        await handle?.value
+
+        XCTAssertFalse(
+            state.isLoadingTasks,
+            "deselecting mid-load must clear the per-note spinner"
+        )
+    }
 }
