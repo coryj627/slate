@@ -514,7 +514,24 @@ impl VaultSession {
         // process-wide critical section, so two concurrent saves to
         // the same file_id can never tear a frame.
         let mut conn = self.conn.lock().expect("session connection mutex");
+        self.save_text_locked(&mut conn, path, contents, expected_content_hash)
+    }
 
+    /// Body of `save_text` minus the path validation, size check, and
+    /// mutex acquisition. Callers must hold the session connection
+    /// mutex (via `conn`) for the duration of this call.
+    ///
+    /// Exists so `toggle_task_status` can hold the mutex across its
+    /// read+parse+rewrite+save sequence — passing a stale-pre-read
+    /// payload to a non-locked `save_text` was the lost-update race
+    /// fixed in #135.
+    fn save_text_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        contents: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
         let hash_before = if let Some(expected) = expected_content_hash {
             let (current_hash, current_mtime_ms) = compute_disk_hash(
                 self.provider.as_ref(),
@@ -784,6 +801,21 @@ impl VaultSession {
     ) -> Result<SaveReport, VaultError> {
         validate_save_path(path)?;
 
+        // Acquire the session mutex BEFORE reading the file so a
+        // concurrent `save_text` on the same path can't slip a write
+        // in between our read and our save. The previous shape (read
+        // outside the lock, save inside) lost the editor's write
+        // every time the saves were close together — see the
+        // `toggle_task_status_does_not_lose_concurrent_save`
+        // regression test for the race the red team reproduced
+        // (#135).
+        //
+        // `read_text` doesn't touch the connection, so it's safe to
+        // call from inside this critical section — only the
+        // `save_text` write path and the index queries care about
+        // the mutex.
+        let mut conn = self.conn.lock().expect("session connection mutex");
+
         let contents = self.read_text(path)?;
         let tasks = crate::extract_tasks(&contents);
         let task = tasks.iter().find(|t| t.ordinal == ordinal).ok_or_else(|| {
@@ -811,7 +843,16 @@ impl VaultSession {
             .expect("status char position was just confirmed in find_status_char_byte_offset");
         new_contents.push_str(&contents[bracket_idx + old_char.len_utf8()..]);
 
-        self.save_text(path, &new_contents, expected_content_hash)
+        // Size check mirrors the one in `save_text` — both call
+        // sites must enforce the refuse threshold.
+        if new_contents.len() as u64 > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: new_contents.len() as u64,
+            });
+        }
+
+        self.save_text_locked(&mut conn, path, &new_contents, expected_content_hash)
     }
 
     /// Paged vault-wide task query. Results are ordered
@@ -5211,6 +5252,68 @@ mod tests {
             entries[1].content_hash_before, entries[0].content_hash_after,
             "op-log entries should chain through the mutex"
         );
+    }
+
+    #[test]
+    fn toggle_task_status_does_not_lose_concurrent_save() {
+        // Regression for #135 (red-team finding C1). The previous
+        // shape of `toggle_task_status` read the file outside the
+        // session mutex, parsed, then called `save_text` which
+        // acquired the mutex inside its own body. A concurrent
+        // `save_text(..., None)` between toggle's read and toggle's
+        // save would land first; toggle then wrote a rebuilt version
+        // of the PRE-save contents, silently overwriting the editor's
+        // edit.
+        //
+        // The earlier `toggle_task_status_serializes_with_concurrent_save`
+        // test caught hash-chain ordering through the op-log but did
+        // not assert the *on-disk content* of both ops survived —
+        // so the bug passed CI for an entire PR cycle. This test
+        // closes that gap: after both ops complete the file must
+        // contain `appended` (the save's distinctive payload),
+        // regardless of which op landed first.
+        //
+        // Run many trials with a barrier to maximize race likelihood —
+        // the red-team probe saw 50/50 corruption under exactly this
+        // shape.
+        use std::sync::{Arc as StdArc, Barrier};
+        use std::thread;
+
+        for trial in 0..20 {
+            let (_tmp, session) = make_vault(|p| {
+                p.write_file("n.md", b"- [ ] thing\n").unwrap();
+            });
+            session.scan_initial(&CancelToken::new()).unwrap();
+            let session = StdArc::new(session);
+            let barrier = StdArc::new(Barrier::new(2));
+
+            let s1 = StdArc::clone(&session);
+            let b1 = StdArc::clone(&barrier);
+            let s2 = StdArc::clone(&session);
+            let b2 = StdArc::clone(&barrier);
+
+            let t1 = thread::spawn(move || {
+                b1.wait();
+                s1.toggle_task_status("n.md", 0, 'x', None)
+            });
+            let t2 = thread::spawn(move || {
+                b2.wait();
+                s2.save_text("n.md", "- [ ] thing\nappended\n", None)
+            });
+            t1.join().unwrap().expect("toggle ok");
+            t2.join().unwrap().expect("save ok");
+
+            let on_disk = session.read_text("n.md").unwrap();
+            // Acceptable final states (both ops survived):
+            //   - save-then-toggle: "- [x] thing\nappended\n"
+            //   - toggle-then-save: "- [ ] thing\nappended\n"
+            // Unacceptable (lost-update bug):
+            //   - "- [x] thing\n"  (toggle's stale read clobbered save)
+            assert!(
+                on_disk.contains("appended"),
+                "trial {trial}: save's `appended` line was lost — final on-disk: {on_disk:?}",
+            );
+        }
     }
 
     #[test]
