@@ -18,7 +18,7 @@ use std::fs;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
-use slate_core::{CancelToken, FileFilter, Paging, TaskFilter, VaultSession};
+use slate_core::{extract_tasks, CancelToken, FileFilter, Paging, TaskFilter, VaultSession};
 
 mod common;
 use common::{generate_tasks_vault, generate_vault};
@@ -189,11 +189,42 @@ fn bench_tasks_scan_and_query(c: &mut Criterion) {
     query.finish();
 }
 
+fn bench_parser_zero_task_overhead(c: &mut Criterion) {
+    // #144 fast-path measurement: how much does `extract_tasks` cost
+    // on a document with zero task lines? Real vaults are dominated
+    // by these — most notes don't contain tasks at all. With the
+    // byte-substring prefilter the cost should drop into the
+    // nanosecond range; without it, every file pays the
+    // pulldown-cmark walk + line scan (~50 µs on 50 KB per the
+    // red-team measurement).
+    let mut group = c.benchmark_group("parser_zero_task_overhead");
+    group.sample_size(100);
+
+    for &kb in &[1usize, 10, 50] {
+        let mut body = String::with_capacity(kb * 1024 + 256);
+        body.push_str("---\ntitle: Test\ntags: [a, b]\n---\n\n# Heading\n\n");
+        while body.len() < kb * 1024 {
+            body.push_str("Lorem ipsum [link](url) dolor sit amet, consectetur adipiscing elit.\n");
+            body.push_str("Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n\n");
+            body.push_str("## Subheading\n\n");
+        }
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{kb}kb")),
+            &kb,
+            |b, _| {
+                b.iter(|| black_box(extract_tasks(black_box(&body))));
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_first_open_and_scan,
     bench_reopen_with_cache,
     bench_list_files_paged,
     bench_tasks_scan_and_query,
+    bench_parser_zero_task_overhead,
 );
 criterion_main!(benches);

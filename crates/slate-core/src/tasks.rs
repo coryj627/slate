@@ -76,6 +76,17 @@ pub struct TaskItem {
 ///   structured data, not tasks; they're already picked up by the
 ///   properties pipeline.
 pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
+    // Cheap prefilter: zero-task documents — by far the common case
+    // in casual-user vaults — short-circuit before the pulldown-cmark
+    // walk + line-by-line scan. The full pipeline costs ~50 µs on a
+    // 50 KB no-task doc; the prefilter is one or two byte-substring
+    // scans (str::contains is SIMD-accelerated). At 50 k files in a
+    // cold scan that's the difference between "imperceptible" and
+    // "noticeable lag" (#144 / red-team M3).
+    if !might_contain_task_line(source) {
+        return Vec::new();
+    }
+
     let excluded = excluded_byte_ranges(source);
     let mut out = Vec::new();
     let mut ordinal: u32 = 0;
@@ -113,6 +124,78 @@ pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
     out
 }
 
+/// Byte-level prefilter for `extract_tasks` — returns `false` only
+/// when the source provably has no task line, so it's safe to skip
+/// the full pipeline.
+///
+/// **No false negatives.** Every task line, after optional leading
+/// whitespace, matches the shape `[-*+][ \t]+\[`. We do one
+/// left-to-right byte walk: on each bullet character, peek forward
+/// over any run of spaces/tabs and check whether the next byte is
+/// `[`. `parse_task_line` accepts 1+ whitespace between the bullet
+/// and the `[` (via `trim_start_matches([' ', '\t'])`), and so do
+/// we — an earlier shape that searched for fixed 3-byte strings
+/// (`"- ["` / `"-\t["`) silently dropped tasks authored with two
+/// or more spaces (Codoki PR #148 High).
+///
+/// **False positives are tolerated and cheap.** Prose containing
+/// `"- [link](url)"` triggers the full parse, which correctly
+/// produces zero tasks. The slow path is only paid by docs that
+/// look like they might have tasks.
+fn might_contain_task_line(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if is_task_bullet_byte(bytes[i]) {
+            // Skip a run of one or more separator bytes after the
+            // bullet (matches `parse_task_line`'s 1+ whitespace
+            // requirement via the shared `TASK_BULLET_SEPARATORS`
+            // const).
+            let mut j = i + 1;
+            while j < bytes.len() && is_task_bullet_separator_byte(bytes[j]) {
+                j += 1;
+            }
+            // `j > i + 1` enforces AT LEAST one separator; the next
+            // byte must be `[` to look like a task line.
+            if j > i + 1 && j < bytes.len() && bytes[j] == b'[' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+// --- Shared task-line invariants ---
+//
+// Both `parse_task_line` (canonical) and `might_contain_task_line`
+// (prefilter) need to agree on what counts as a task-line opener:
+// a bullet character, followed by one or more separators. Defining
+// them here as ASCII constants gives both code paths a single
+// source of truth — earlier drift between a prefilter searching
+// for fixed 3-byte signatures and a parser that accepted variable
+// whitespace was the source of the multi-space false-negative bug
+// (Codoki PR #148 High). The byte conversions are exact because
+// every char in these arrays is ASCII.
+
+/// Bullet characters that open a CommonMark list item.
+const TASK_BULLETS: &[char] = &['-', '*', '+'];
+
+/// Whitespace separators tolerated between the bullet and the `[`.
+/// ASCII space + tab only; matches the parser's
+/// `trim_start_matches([' ', '\t'])` semantics.
+const TASK_BULLET_SEPARATORS: &[char] = &[' ', '\t'];
+
+#[inline]
+fn is_task_bullet_byte(b: u8) -> bool {
+    TASK_BULLETS.iter().any(|&c| c as u8 == b)
+}
+
+#[inline]
+fn is_task_bullet_separator_byte(b: u8) -> bool {
+    TASK_BULLET_SEPARATORS.iter().any(|&c| c as u8 == b)
+}
+
 fn strip_one_trailing_newline(s: &str) -> &str {
     if let Some(stripped) = s.strip_suffix('\n') {
         stripped.strip_suffix('\r').unwrap_or(stripped)
@@ -136,18 +219,18 @@ fn parse_task_line(line: &str) -> Option<(char, &str)> {
     let trimmed = line.trim_start();
     let mut chars = trimmed.char_indices();
     let (_, bullet) = chars.next()?;
-    if !matches!(bullet, '-' | '*' | '+') {
+    if !TASK_BULLETS.contains(&bullet) {
         return None;
     }
     // Require at least one space after the bullet — `-foo` is not a
     // list item in CommonMark, and `-[ ]` is not a task even though
     // some editors render it as one.
     let after_bullet_space = chars.next()?;
-    if after_bullet_space.1 != ' ' && after_bullet_space.1 != '\t' {
+    if !TASK_BULLET_SEPARATORS.contains(&after_bullet_space.1) {
         return None;
     }
     let after_bullet = &trimmed[after_bullet_space.0 + after_bullet_space.1.len_utf8()..];
-    let after_bullet = after_bullet.trim_start_matches([' ', '\t']);
+    let after_bullet = after_bullet.trim_start_matches(TASK_BULLET_SEPARATORS);
 
     // `[X] body` — exactly one char between brackets, then a single
     // space (CommonMark/GFM convention; pulldown-cmark's TaskList
@@ -587,6 +670,170 @@ mod tests {
     #[test]
     fn empty_input_yields_no_tasks() {
         assert!(extract_tasks("").is_empty());
+    }
+
+    // --- #144: zero-task fast path ---
+
+    #[test]
+    fn might_contain_task_line_recognises_all_bullet_marker_combos() {
+        // Spaces.
+        assert!(might_contain_task_line("- [ ] foo"));
+        assert!(might_contain_task_line("* [ ] foo"));
+        assert!(might_contain_task_line("+ [ ] foo"));
+        // Tabs.
+        assert!(might_contain_task_line("-\t[x] foo"));
+        assert!(might_contain_task_line("*\t[ ] foo"));
+        assert!(might_contain_task_line("+\t[ ] foo"));
+        // Indented forms still trigger — the substring appears
+        // somewhere in the source even with leading whitespace.
+        assert!(might_contain_task_line("  - [ ] indented"));
+        assert!(might_contain_task_line("\t\t- [ ] deeply indented"));
+    }
+
+    #[test]
+    fn might_contain_task_line_rejects_clearly_taskless_docs() {
+        assert!(!might_contain_task_line(""));
+        assert!(!might_contain_task_line("# heading only\n"));
+        assert!(!might_contain_task_line(
+            "plain paragraph with no markers\n"
+        ));
+        // Markdown link is `[text](url)` — no bullet+space+bracket
+        // sequence.
+        assert!(!might_contain_task_line("see [docs](http://example.com)\n"));
+        // Bullet list without checkboxes.
+        assert!(!might_contain_task_line("- item one\n- item two\n"));
+    }
+
+    #[test]
+    fn might_contain_task_line_tolerates_false_positives_safely() {
+        // Prose contains `"- ["` literally — prefilter returns true
+        // and the full `extract_tasks` correctly returns zero rows.
+        // This proves the prefilter is conservative: it never lies
+        // about a doc having no tasks.
+        let prose = "Compare: foo - [bar](url) vs baz.\n";
+        assert!(might_contain_task_line(prose));
+        assert!(extract_tasks(prose).is_empty());
+    }
+
+    #[test]
+    fn extract_tasks_fast_path_yields_empty_for_realistic_no_task_doc() {
+        // Mimics the shape of `generate_vault`'s synthetic body:
+        // frontmatter, headings, paragraphs, occasional code fence —
+        // no task-shaped lines. Must produce zero TaskItems via the
+        // fast path (validated by behaviour, not by instrumentation).
+        let src = "---\ntitle: x\ntags: [a, b]\n---\n\
+                   \n# Heading\n\
+                   \nLorem ipsum [link](url) dolor sit amet.\n\
+                   \n## Subheading\n\
+                   \nMore paragraph content here. No tasks at all.\n\
+                   \n```rust\nfn hello() { println!(\"x\"); }\n```\n";
+        assert!(extract_tasks(src).is_empty());
+    }
+
+    #[test]
+    fn might_contain_task_line_handles_multiple_spaces_between_bullet_and_bracket() {
+        // Regression for Codoki PR #148 High: `parse_task_line`
+        // accepts 1+ spaces/tabs between the bullet and the `[`
+        // (via `trim_start_matches([' ', '\t'])` on the post-bullet
+        // slice). The prefilter must match the same shape, or it
+        // silently drops these tasks on cold scan.
+        assert!(might_contain_task_line("-  [ ] two spaces"));
+        assert!(might_contain_task_line("-   [ ] three spaces"));
+        assert!(might_contain_task_line("*    [x] four spaces"));
+        assert!(might_contain_task_line("+\t [ ] tab and space"));
+        assert!(might_contain_task_line("-\t\t[ ] two tabs"));
+        assert!(might_contain_task_line("- \t [ ] mixed"));
+    }
+
+    #[test]
+    fn extract_tasks_round_trips_tasks_with_multiple_whitespace_between_bullet_and_bracket() {
+        // Same regression at the full-pipeline level — the fast path
+        // must let these through to `parse_task_line`, which must
+        // then correctly extract them.
+        let src = "-   [ ] three spaces task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "three spaces task");
+        assert_eq!(tasks[0].status_char, ' ');
+    }
+
+    #[test]
+    fn extract_tasks_handles_leading_indentation_plus_multi_space_combined() {
+        // Codoki PR #148 follow-up: lock in the "optional leading
+        // whitespace + multi-space separator" guarantee. Prior shapes
+        // would have dropped this on the cold-scan fast path.
+        let src = "  -   [ ] indented multi-space\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "indented multi-space");
+        // line/byte_offset land on the source position, not the
+        // post-trim slice.
+        assert_eq!(tasks[0].line, 1);
+        assert_eq!(tasks[0].byte_offset, 0);
+    }
+
+    #[test]
+    fn extract_tasks_slow_path_returns_zero_on_prose_with_link_after_dash() {
+        // Codoki PR #148 follow-up: explicit assertion that a
+        // markdown link inside prose triggers the prefilter as a
+        // false positive (the byte sequence "- [" is present)
+        // BUT the slow path correctly returns zero tasks. This
+        // proves the prefilter is conservative — it never lies
+        // about a doc having no tasks, only about the inverse.
+        let src = "see - [docs](http://example.com) please\n";
+        assert!(
+            might_contain_task_line(src),
+            "prefilter should permit the slow path on this prose"
+        );
+        let tasks = extract_tasks(src);
+        assert!(
+            tasks.is_empty(),
+            "prose with a link must yield zero tasks; got: {tasks:?}"
+        );
+    }
+
+    #[test]
+    fn shared_task_bullet_constants_round_trip_byte_helpers() {
+        // Lock in that the byte helpers and the canonical char
+        // constants stay in sync — if either set ever changes
+        // without the other, this test fails immediately and the
+        // next maintainer sees the drift before it ships.
+        for &c in TASK_BULLETS {
+            assert!(c.is_ascii(), "TASK_BULLETS must be ASCII: {c:?}");
+            assert!(is_task_bullet_byte(c as u8), "byte helper missing: {c:?}");
+        }
+        for &c in TASK_BULLET_SEPARATORS {
+            assert!(c.is_ascii(), "TASK_BULLET_SEPARATORS must be ASCII: {c:?}");
+            assert!(
+                is_task_bullet_separator_byte(c as u8),
+                "byte helper missing: {c:?}"
+            );
+        }
+        // Negative cases — bytes that are NOT bullets or separators.
+        for b in [b'[', b']', b'a', b'\n', b'\r', b'.'] {
+            assert!(!is_task_bullet_byte(b), "{b:?} should not be a bullet");
+        }
+        for b in [b'[', b']', b'a', b'\n', b'\r', b'.'] {
+            assert!(
+                !is_task_bullet_separator_byte(b),
+                "{b:?} should not be a separator"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_tasks_fast_path_does_not_false_negative_on_task_in_busy_doc() {
+        // Regression guard: the prefilter must NEVER skip a doc
+        // that actually has a task. Doc contains a frontmatter
+        // block, headings, paragraphs, a markdown link, AND a real
+        // task. The task must still extract.
+        let src = "---\ntitle: x\ntags: [a, b]\n---\n\
+                   \n# Heading\n\
+                   \nSome paragraph with a [link](url).\n\
+                   \n- [ ] actual task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "actual task");
     }
 
     #[test]
