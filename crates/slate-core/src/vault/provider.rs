@@ -59,34 +59,47 @@ pub trait VaultProvider: Send + Sync {
     /// engine falls back to refresh-on-foreground in that case.
     fn watch(&self, sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError>;
 
-    /// Verify that `relative` does not escape the vault scope once
-    /// symlinks are followed.
+    /// Atomically check + read a vault file: canonicalize-and-
+    /// verify-in-scope as one indivisible step with the open that
+    /// produces the bytes.
     ///
-    /// The textual checks in `resolve_relative` (rejecting `..` and
-    /// absolute paths) only catch lexical escapes — they're blind to
-    /// a symlink under the vault that *points* outside (e.g.
-    /// `Templates/Pwn.md → /etc/passwd`). Callers that hand
-    /// vault-relative paths to user-discoverable surfaces should
-    /// invoke this before reading.
+    /// Why this is one method, not separate verify + read:
+    ///
+    /// A naïve `verify(path); read(path);` pair has a TOCTOU race —
+    /// between the verify (which says "the canonical target sits
+    /// inside the vault root") and the subsequent open of the same
+    /// vault-relative path, an attacker with filesystem write
+    /// access can swap a symlink so the open follows OUT of the
+    /// vault even though verify said it was safe (Codoki PR #153
+    /// Medium). Doing both in one method, and opening the
+    /// **canonical resolved path** rather than re-resolving the
+    /// relative path through the kernel, closes that window: by
+    /// the time we have a canonical absolute path with no symlink
+    /// components left, `File::open` opens that exact inode and
+    /// can't be redirected.
     ///
     /// Returns:
-    ///   - `Ok(())` — the path stays in scope (or scope checks aren't
-    ///     applicable to this provider).
-    ///   - `Err(VaultError::InvalidPath { reason })` — the canonical
-    ///     target escapes the vault.
-    ///   - `Err(VaultError::Io(...))` — couldn't canonicalize (broken
-    ///     symlink, permission denied, etc.). Callers should usually
-    ///     surface this distinct from the InvalidPath case so users
-    ///     can tell "missing file" from "refused for safety."
+    ///   - `Ok(bytes)` — bytes read from the verified canonical
+    ///     target. As with `read_file_with_cap`, returning more
+    ///     than `max_bytes` is the "exceeded cap" sentinel.
+    ///   - `Err(VaultError::InvalidPath { reason })` — the
+    ///     canonical target sits outside the vault scope (a
+    ///     symlink under the vault pointing out).
+    ///   - `Err(VaultError::Io(...))` — couldn't canonicalize or
+    ///     open (broken symlink, permission denied, etc.).
     ///
-    /// Default impl returns `Ok(())` — providers that route through
-    /// OS-level security-scoped APIs (iOS, Android) already enforce
-    /// scope and don't need to repeat the check. The default also
-    /// keeps existing test doubles working without forcing every
-    /// mock to implement canonicalization.
-    fn verify_in_vault(&self, relative: &str) -> Result<(), VaultError> {
-        let _ = relative;
-        Ok(())
+    /// Default impl forwards to `read_file_with_cap` — providers
+    /// that route through OS-level security-scoped APIs (iOS,
+    /// Android) already enforce scope and don't need the
+    /// canonical-path dance. The default also keeps existing test
+    /// doubles working without forcing every mock to implement
+    /// canonicalization.
+    fn read_in_vault_with_cap(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        self.read_file_with_cap(relative, max_bytes)
     }
 }
 

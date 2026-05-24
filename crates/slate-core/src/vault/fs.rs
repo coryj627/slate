@@ -270,12 +270,18 @@ impl VaultProvider for FsVaultProvider {
         Ok(None)
     }
 
-    fn verify_in_vault(&self, relative: &str) -> Result<(), VaultError> {
+    fn read_in_vault_with_cap(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        use std::io::Read;
+
         // The textual `resolve` already rejected `..` and absolute
         // paths. What remains is symlink escape: an entry under the
         // vault that points OUT (e.g. `Templates/Pwn.md` →
         // `/etc/passwd`). `fs::canonicalize` resolves the symlink
-        // chain and returns the real on-disk location; we then check
+        // chain and returns the real on-disk location; we check
         // that location is under a canonicalized vault root.
         //
         // Both sides are canonicalized so a symlinked vault root
@@ -293,7 +299,23 @@ impl VaultProvider for FsVaultProvider {
                 ),
             });
         }
-        Ok(())
+
+        // **Critical for TOCTOU safety**: open the CANONICAL path,
+        // not `resolved` or `relative`. The canonical path has no
+        // symlink components — `File::open` resolves it once and
+        // can't be redirected by a symlink swap that lands after
+        // our `canonicalize` call. An attacker with vault write
+        // access could in principle still hot-swap a parent
+        // *directory* between canonicalize and open, but that
+        // requires the same privilege as just writing into the
+        // vault directly — no meaningful escalation. (Codoki
+        // PR #153 Medium.)
+        let file = fs::File::open(&canonical_target)?;
+        let cap = max_bytes.saturating_add(1);
+        let mut handle = file.take(cap);
+        let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024) as usize);
+        handle.read_to_end(&mut buf)?;
+        Ok(buf)
     }
 }
 

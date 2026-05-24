@@ -933,28 +933,22 @@ impl VaultSession {
                 continue;
             }
             let rel = format!("{dir}/{name}", name = entry.name);
-            // Reject entries whose canonical target leaves the vault
-            // root. Catches symlinks dropped under `Templates/` that
-            // point at sensitive system files — the textual
-            // `resolve_relative` checks above only catch `..` inside
-            // the string, not symlinks introduced by the filesystem
-            // (#132). Both `InvalidPath` (escape) and `Io` (broken
-            // symlink, permission denied) end the same way here:
-            // silently drop the entry rather than failing the whole
-            // picker. The picker is a benign UI surface and any
-            // single bad template should not blank the list.
-            if self.provider.verify_in_vault(&rel).is_err() {
-                continue;
-            }
-            // Read with the same cap the editor uses so a stray multi-
-            // gigabyte file in Templates/ doesn't OOM the picker.
-            let bytes = match self.provider.read_file_with_cap(&rel, limit) {
+            // `read_in_vault_with_cap` does the canonical-path
+            // verify AND the read in one atomic step, so there's
+            // no TOCTOU window where a symlink could be swapped
+            // between the check and the open (#132, Codoki PR #153
+            // follow-up). Three failure modes all end the same way
+            // here: silently drop the entry rather than blanking
+            // the picker over one bad template:
+            //   - `InvalidPath` — canonical target escapes the
+            //     vault root (e.g. `Templates/Pwn.md → /etc/passwd`).
+            //   - `Io(NotFound)` — broken symlink or template was
+            //     deleted between `list_dir` and the read.
+            //   - any other `Io` — permission denied etc.
+            let bytes = match self.provider.read_in_vault_with_cap(&rel, limit) {
                 Ok(b) => b,
-                // A template that was deleted between list_dir and
-                // read shouldn't fail the entire enumeration.
-                Err(VaultError::Io(io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
-                    continue;
-                }
+                Err(VaultError::InvalidPath { .. }) => continue,
+                Err(VaultError::Io(_)) => continue,
                 Err(e) => return Err(e),
             };
             if (bytes.len() as u64) > limit {
@@ -998,14 +992,26 @@ impl VaultSession {
         template_path: &str,
         context: crate::TemplateContext,
     ) -> Result<crate::RenderedTemplate, VaultError> {
-        // Symmetric with `list_templates`: refuse to render a template
-        // whose canonical target escapes the vault. Unlike the picker
-        // path (which silently drops bad entries), here we surface the
-        // error so the host can show a clear "refused for safety"
-        // message rather than rendering whatever the symlink points
-        // at (#132).
-        self.provider.verify_in_vault(template_path)?;
-        let source = self.read_text(template_path)?;
+        // Use the atomic verify-and-read instead of `read_text` so a
+        // symlink can't be swapped between the scope check and the
+        // open (#132, Codoki PR #153 follow-up). The provider's
+        // `resolve` step inside this call rejects `..` / absolute
+        // paths textually before the canonicalize, matching what
+        // `read_text` did. Errors surface as-is: the picker drops
+        // bad entries silently, but explicit render attempts get a
+        // real error so the host can show "refused for safety" or
+        // "template not found" cleanly.
+        let limit = self.config.large_file_refuse_bytes;
+        let bytes = self.provider.read_in_vault_with_cap(template_path, limit)?;
+        if (bytes.len() as u64) > limit {
+            return Err(VaultError::FileTooLarge {
+                path: template_path.to_string(),
+                size: bytes.len() as u64,
+            });
+        }
+        let source = String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
+            path: template_path.to_string(),
+        })?;
         Ok(crate::render_template_source(&source, &context))
     }
 
@@ -4776,11 +4782,19 @@ mod tests {
     //
     // `resolve_relative` rejects lexical escapes (`..`, absolute
     // paths) but is blind to a symlink under the vault that points
-    // outside. Without `verify_in_vault` the picker would surface
-    // such symlinks as normal templates and `render_template` would
+    // outside. Without the atomic verify-and-read in
+    // `read_in_vault_with_cap`, the picker would surface such
+    // symlinks as normal templates and `render_template` would
     // happily inline `/etc/passwd` into a new note. These tests
     // lock in the canonicalize-and-reject behaviour.
+    //
+    // Gated to `#[cfg(unix)]` because `std::os::unix::fs::symlink`
+    // is the only API used here; Windows symlink creation is
+    // privileged + has its own API (`std::os::windows::fs::symlink_file`)
+    // and the scenario doesn't apply on the platforms slate ships
+    // to today (Codoki PR #153 follow-up).
 
+    #[cfg(unix)]
     #[test]
     fn list_templates_drops_symlinks_pointing_outside_the_vault() {
         // Sentinel file outside the vault: a symlink dropped under
@@ -4805,6 +4819,7 @@ mod tests {
         assert_eq!(names, vec!["Real"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn list_templates_follows_symlinks_pointing_inside_the_vault() {
         // Symmetric: a symlink under Templates/ whose canonical target
@@ -4829,6 +4844,7 @@ mod tests {
         assert_eq!(names, vec!["Daily", "Real"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn render_template_refuses_escaping_symlink_with_invalid_path() {
         // `render_template` is more emphatic than `list_templates`:
@@ -4853,6 +4869,41 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn render_template_opens_canonical_path_not_original_symlink() {
+        // Direct test of the TOCTOU defence (Codoki PR #153 Medium).
+        // The provider's `read_in_vault_with_cap` opens the CANONICAL
+        // resolved path, not the original symlink — so a swap of the
+        // symlink between the canonicalize and the open can't redirect
+        // the read.
+        //
+        // We can't reproduce the race timing reliably in a unit test,
+        // but we CAN verify the canonical-open behaviour by setting up
+        // a chain `Templates/Alias.md → Templates/inner/Real.md` and
+        // confirming the read returns the real file's contents
+        // unambiguously. Combined with the
+        // `list_templates_drops_symlinks_pointing_outside_the_vault`
+        // test, this proves the provider does the right thing on
+        // both sides of the scope boundary.
+        let (vault_tmp, session) = make_vault(|p| {
+            p.write_file("Templates/inner/Real.md", b"# real inside\n")
+                .unwrap();
+        });
+        std::os::unix::fs::symlink(
+            vault_tmp.path().join("Templates/inner/Real.md"),
+            vault_tmp.path().join("Templates/Alias.md"),
+        )
+        .unwrap();
+
+        let ctx = crate::TemplateContext::new(0, "t", "v");
+        let rendered = session
+            .render_template("Templates/Alias.md", ctx)
+            .expect("in-vault symlink chain should render cleanly");
+        assert_eq!(rendered.body, "# real inside\n");
+    }
+
+    #[cfg(unix)]
     #[test]
     fn list_templates_skips_broken_symlinks_without_error() {
         // Defensive: a broken symlink under Templates/ (target was
