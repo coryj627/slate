@@ -136,25 +136,29 @@ fn bench_list_files_paged(c: &mut Criterion) {
 }
 
 fn bench_tasks_scan_and_query(c: &mut Criterion) {
-    // Milestone G #115: 10k tasks spread across 1k files (10 per
-    // file). The bench has two timed measurements:
+    // Milestone G #115, refreshed #146: 1k-file vault with a
+    // realistic-vault task distribution (~70% zero-task / ~25%
+    // 1–3 tasks scattered / ~5% heavy 10–15-task blocks).
     //
-    //   - `cold_scan`: wipe `.slate` and run `scan_initial` on a
-    //     vault whose every file carries a Tasks block. This is the
-    //     same shape as `first_open_and_scan` but with tasks in the
-    //     mix, so we can compare scanner cost with and without the
-    //     tasks pipeline running.
+    // The previous shape (every file got a uniform `## Tasks`
+    // block with 10 tasks) was a parser-hot-path stress test;
+    // the new shape measures what the cold scan actually does
+    // on a typical user's vault and surfaces the M3 fast-path
+    // benefit (~70% of files skip pulldown-cmark entirely).
+    //
+    //   - `tasks_cold_scan`: wipe `.slate` and run `scan_initial`.
+    //     Realistic shape so the headline number tracks
+    //     real-world cold-open latency, not a worst-case.
     //   - `tasks_in_vault_first_page`: cache primed; each iteration
     //     pulls the first page (200 rows) of the vault-wide tasks
     //     query with the All filter. Drives the TasksReviewView's
     //     initial render.
     const FILE_COUNT: usize = 1_000;
-    const TASKS_PER_FILE: usize = 10;
 
     let mut cold = c.benchmark_group("tasks_cold_scan");
     cold.sample_size(10);
-    cold.bench_function("1k_files_10k_tasks", |b| {
-        let vault = generate_tasks_vault(FILE_COUNT, TASKS_PER_FILE);
+    cold.bench_function("1k_files_realistic", |b| {
+        let vault = generate_tasks_vault(FILE_COUNT);
         let vault_path = vault.path().to_path_buf();
         b.iter_batched(
             || {
@@ -173,8 +177,8 @@ fn bench_tasks_scan_and_query(c: &mut Criterion) {
 
     let mut query = c.benchmark_group("tasks_in_vault_first_page");
     query.sample_size(20);
-    query.bench_function("1k_files_10k_tasks", |b| {
-        let vault = generate_tasks_vault(FILE_COUNT, TASKS_PER_FILE);
+    query.bench_function("1k_files_realistic", |b| {
+        let vault = generate_tasks_vault(FILE_COUNT);
         let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
         session.scan_initial(&CancelToken::new()).expect("prime");
         b.iter(|| {
