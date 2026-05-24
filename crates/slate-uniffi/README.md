@@ -4,6 +4,8 @@
 
 This crate is the FFI boundary between Slate's pure-Rust core and platform-native UI code on Apple and Android. Windows uses a separate `csbindgen`-based binding crate (not yet present).
 
+**Scope (as of Milestone H — Templates).** Vault open + scan with cooperative cancellation and progress callbacks; paged file listing with markdown-only filtering; per-file metadata hydration including headings, parsed frontmatter properties, outgoing links, paged backlinks, and parsed tasks; FTS5-backed full-text search across the vault; atomic `save_text` with content-hash conflict detection and op-log append; vault-wide task review with filtering and sort-tuple-cursor paging; markdown task toggle (`toggle_task_status`); template enumeration and `{{date}}` / `{{title}}` / `{{prompt:Label}}` substitution. Architectural rationale lives in [`docs/plans/05_locked_architecture_decisions.md`](../../docs/plans/05_locked_architecture_decisions.md).
+
 ## Building
 
 ```sh
@@ -59,7 +61,7 @@ Everything below is defined in [`src/lib.rs`](src/lib.rs) and exposed to Swift /
 
 | Type | Kind | Description |
 |------|------|-------------|
-| `VaultError` | enum | 11 variants surfaced across the API: `Io`, `Db`, `InvalidPath`, `Trash`, `Cancelled`, `FileTooLarge`, `Conflict`, `InvalidQuery`, `OpLogCorrupt`, `WriteConflict`, `FrontmatterParse`. |
+| `VaultError` | enum | 11 variants surfaced across the API: `Io`, `Db`, `InvalidPath`, `Trash`, `Cancelled`, `InvalidUtf8`, `FileTooLarge`, `InvalidQuery`, `Unsupported`, `InvalidArgument`, `WriteConflict`. `WriteConflict` carries `current_content_hash` + `expected_content_hash` + `current_mtime_ms` so the host can drive a "Keep mine / Reload from disk" resolution UI. `InvalidArgument` is returned for caller-side validation failures (out-of-range ordinal, status-char outside the allowlist, etc.). |
 
 ### Cancellation
 
@@ -95,15 +97,15 @@ Everything below is defined in [`src/lib.rs`](src/lib.rs) and exposed to Swift /
 
 | Type | Kind | Description |
 |------|------|-------------|
-| `SearchScope` | enum | `Vault` (everything) or `Folder(prefix)`. |
-| `QueryHit` | struct | One FTS5 match — path, name, snippet with `<<<` / `>>>` markers. |
+| `SearchScope` | enum | `Vault` (everything), `Folder{path}` (prefix-bounded), `File{path}` (reserved — returns `Cancelled` today), `Tag{name}` (reserved — returns `Cancelled` today). |
+| `QueryHit` | struct | One FTS5 match — path, name, snippet wrapping matched tokens in `STX` / `ETX` (U+0002 / U+0003) for the host to replace with attributed-string emphasis. |
 | `QueryResultSet` | struct | Hits + paging cursor + (eventually) facets. |
 
 ### Scan progress
 
 | Type | Kind | Description |
 |------|------|-------------|
-| `ScanProgress` | enum | Progress events: `Started{total}`, `FileIndexed{path, indexed, total}`, `Finished{report}`, `Cancelled`. |
+| `ScanProgress` | enum | Progress events: `Started{total_files}`, `FileIndexed{path, indexed, total}`, `Finished{report}`, `Cancelled`, `Failed{message}`. |
 | `ScanProgressListener` | callback trait | Implemented on the consumer side; receives `on_progress(event)` callbacks. Used by the Mac app for the scan strip. |
 | `ScanReport` | struct | End-of-scan summary: files indexed, skipped, errors collected. |
 
@@ -114,6 +116,33 @@ Everything below is defined in [`src/lib.rs`](src/lib.rs) and exposed to Swift /
 | `SaveReport` | struct | Result of a `save_text` call: new content_hash, mtime, op-log entry id. |
 | `OpKind` | enum | Op-log entry types. Currently `WholeFileReplace`. |
 | `OpLogEntry` | struct | One op-log row: timestamp, kind, actor, before/after hashes, payload. |
+
+### Tasks (Milestone G)
+
+Markdown task lines (`- [ ]` / `- [x]` / `- [/]` / etc.) parsed out of note bodies and indexed in the `tasks` SQLite table. Surfaces the Tasks panel (per-file) and the vault-wide Tasks Review view.
+
+| Type | Kind | Description |
+|------|------|-------------|
+| `TaskItem` | struct | One parsed task: ordinal (0-based document order, stable across saves), text, status_char (`String` — uniffi has no `char`), completed (derived from status_char `x`/`X`), due_ms / scheduled_ms / priority / recurrence (Tasks-plugin emoji metadata), line (1-based), byte_offset. |
+| `TaskWithLocation` | struct | `TaskItem` + owning file's `path` + `file_name`, so the vault-wide review view doesn't pay a second roundtrip per row. |
+| `TaskFilter` | struct | `tasks_in_vault` query shape: `completed: Option<bool>`, `due_from_ms` / `due_to_ms` (inclusive lower / exclusive upper), `priority_at_least`. |
+| `TaskWithLocationPage` | struct | Paged `TaskWithLocation` — items + next_cursor + total_filtered. |
+
+`VaultSession` adds `tasks_for_file(path)`, `tasks_in_vault(filter, paging)`, and `toggle_task_status(path, ordinal, new_status_char, expected_content_hash)`. Toggle routes through `save_text` under the connection mutex so it shares the editor's conflict-detection, atomic-write, index-refresh, and op-log discipline. `new_status_char` is allowlisted to printable ASCII minus `[` / `]` / `\t` / `\n` / `\r` (would corrupt the file).
+
+### Templates (Milestone H)
+
+`{{date}}` / `{{title}}` / `{{prompt:Label}}` substitution over a Markdown template file. Drives the Mac UI's create-from-template flow.
+
+| Type | Kind | Description |
+|------|------|-------------|
+| `TemplateSummary` | struct | Row in the template picker: vault-relative path, name (file stem), optional description (frontmatter `description:` or first non-blank non-frontmatter line, truncated to 120 chars). |
+| `TemplatePrompt` | struct | One `{{prompt:Label}}` marker — `key` (dedup-friendly slug) + `label` (raw human-facing text). |
+| `TemplateMetadata` | struct | What `extract_template_metadata(source)` returns — just `prompts: Vec<TemplatePrompt>` today, additive shape for future fields. |
+| `TemplateContext` | struct | Render-time inputs: `now_ms` (UTC reference for `{{date}}` / `{{time}}`), `title`, `vault_name`, `prompt_values: Map<key, response>`. Missing prompt keys leave the marker literal. |
+| `RenderedTemplate` | struct | Result of `render_template`: `body` (substituted Markdown, with `{{cursor}}` stripped) + optional `cursor_byte_offset` for the host editor to park the caret. |
+
+`VaultSession` adds `list_templates()` and `render_template(template_path, context)`. The free function `extract_template_metadata(source)` runs without a session so the UI can pre-flight a template's prompt set before the user confirms.
 
 ## Consumer notes
 
