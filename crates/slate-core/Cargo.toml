@@ -19,16 +19,16 @@ yaml-rust2 = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 
+# `libc::O_NOFOLLOW` for the templates-flow symlink-escape defence
+# (#132 / Codoki PR #153 Critical). Unix-only; Windows builds fall
+# back to a plain `File::open` and would need an `openat2`-equivalent
+# defence if/when that target lands.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
-
-# Used only by the Unix-only `rescan_with_mtime_preserved_but_ctime_changed_rehashes`
-# test, which calls utimensat(2) directly to simulate an mtime-
-# preserving writer. Listing it as a Unix-target dev-dep keeps it
-# off the Windows build entirely.
-[target.'cfg(unix)'.dev-dependencies]
-libc = "0.2"
 
 [[bench]]
 name = "scan_bench"
