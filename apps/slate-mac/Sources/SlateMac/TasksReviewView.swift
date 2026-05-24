@@ -189,7 +189,11 @@ struct TasksReviewView: View {
     /// disabling here gives a visible signal).
     private var loadMoreRow: some View {
         let loading = appState.isLoadingMoreVaultTasks
-        let remaining = Int(appState.vaultTasksTotalFiltered) - appState.vaultTasks.count
+        // Clamp to ≥0 so a transient desync between `vaultTasks.count`
+        // and `vaultTasksTotalFiltered` (e.g. an in-flight toggle
+        // that flipped a row out of the filter) doesn't produce
+        // "-3 remaining" in the a11y announcement (#164 Codoki).
+        let remaining = max(0, Int(appState.vaultTasksTotalFiltered) - appState.vaultTasks.count)
         return HStack(spacing: 8) {
             Button {
                 appState.loadMoreVaultTasks()

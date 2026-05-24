@@ -1571,8 +1571,16 @@ final class AppState: ObservableObject {
         .value
 
         // If the user changed the filter while we were loading, a
-        // newer task is already in flight; drop this result.
-        guard !Task.isCancelled, taskReviewFilter == activeFilter else { return }
+        // newer task is already in flight; drop this result. Also
+        // drop if the underlying VaultSession was swapped (close +
+        // reopen on a different vault) — the captured `session`
+        // would no longer match the live one, and applying its
+        // rows to `vaultTasks` would pollute the new vault's
+        // surface with the old vault's tasks (#164 Codoki).
+        guard !Task.isCancelled,
+              taskReviewFilter == activeFilter,
+              currentSession === session
+        else { return }
 
         switch result {
         case .success(let page):
@@ -1645,8 +1653,13 @@ final class AppState: ObservableObject {
         // If the user changed the filter while the page was in
         // flight, the appended rows would not match the visible
         // filter — drop the result and let the new filter's
-        // initial load take over.
-        guard !Task.isCancelled, taskReviewFilter == activeFilter else { return }
+        // initial load take over. Same session-identity guard as
+        // `loadVaultTasks` to defend against cross-vault races
+        // (#164 Codoki).
+        guard !Task.isCancelled,
+              taskReviewFilter == activeFilter,
+              currentSession === session
+        else { return }
 
         switch result {
         case .success(let page):
