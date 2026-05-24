@@ -2590,6 +2590,9 @@ final class AppState: ObservableObject {
             // surfacing it through the generic humanReadable path is
             // a last-resort fallback for non-editor callers.
             return "This file was modified by another writer since you opened it. Reload to see the latest version."
+        case .MalformedFrontmatter(let path, let reason):
+            return
+                "Frontmatter at \(path) is malformed: \(reason). Fix the YAML in this note before editing properties."
         }
     }
 }
