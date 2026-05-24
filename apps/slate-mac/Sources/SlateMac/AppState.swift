@@ -320,11 +320,32 @@ final class AppState: ObservableObject {
     /// Result rows of the most recent vault-wide tasks query.
     /// Populated by `loadVaultTasks()` whenever the review surface
     /// is open AND the filter changes (or the user explicitly
-    /// re-loads).
+    /// re-loads). `loadMoreVaultTasks()` *appends* to this array
+    /// rather than replacing it, so it grows as the user pages
+    /// through the result set.
     @Published private(set) var vaultTasks: [TaskWithLocation] = []
-    /// True while `loadVaultTasks()` is in flight. The
-    /// `TasksReviewView` uses this to show a loading placeholder.
+    /// True while `loadVaultTasks()` is in flight (i.e. the
+    /// initial query for the current filter). The
+    /// `TasksReviewView` uses this to show a loading placeholder
+    /// when there are no rows yet. Held separately from
+    /// `isLoadingMoreVaultTasks` so the "Load more" affordance
+    /// doesn't replace the empty-state spinner mid-flow.
     @Published private(set) var isLoadingVaultTasks: Bool = false
+    /// True while `loadMoreVaultTasks()` is in flight (#160). The
+    /// review surface uses this to disable the "Load more" button
+    /// and surface a small progress indicator next to it.
+    @Published private(set) var isLoadingMoreVaultTasks: Bool = false
+    /// Opaque cursor for the next page of `vaultTasks`, returned
+    /// by `tasks_in_vault` when the result set extends beyond the
+    /// current page. `nil` means the page is the last one — the
+    /// "Load more" button hides when this is nil.
+    @Published private(set) var vaultTasksNextCursor: String?
+    /// Total count of tasks matching the active filter regardless
+    /// of pagination. Computed by `tasks_in_vault` in the same
+    /// query, so reading it costs the same as fetching the page.
+    /// The review surface shows "Showing N of M tasks" against
+    /// this when N < M.
+    @Published private(set) var vaultTasksTotalFiltered: UInt64 = 0
     /// Surfaced when the vault-wide query fails.
     @Published var vaultTasksLoadError: String?
     /// Active filter for the review surface. Mutating this kicks
@@ -1007,6 +1028,12 @@ final class AppState: ObservableObject {
         tasksLoadError = nil
         vaultTasks = []
         vaultTasksLoadError = nil
+        // #160 pagination state — reset alongside the rest of the
+        // review-surface bookkeeping so reopening on a different
+        // vault doesn't carry forward a cursor from the old one.
+        vaultTasksNextCursor = nil
+        vaultTasksTotalFiltered = 0
+        isLoadingMoreVaultTasks = false
         taskReviewFilter = .all
         isTasksReviewOpen = false
         isScanning = false
@@ -1498,15 +1525,20 @@ final class AppState: ObservableObject {
         )
     }
 
+    /// Page size for the vault-wide tasks query. Matches the
+    /// bench scenario `tasks_in_vault_first_page` so production
+    /// behaviour is what perf is measured against. Lifted to a
+    /// named constant (#160) so the inline `200` literal isn't
+    /// duplicated between `loadVaultTasks` and
+    /// `loadMoreVaultTasks`.
+    static let vaultTasksPageSize: UInt32 = 200
+
     /// Run `tasksInVault` against the current filter and publish
-    /// the rows as `vaultTasks`. Mirrors `loadFiles`' shape:
+    /// the first page as `vaultTasks`. Mirrors `loadFiles`' shape:
     /// off-actor query, cancellation-aware, no error surfaced
-    /// when cancelled mid-flight.
-    ///
-    /// Page size of 200 matches the bench scenario in
-    /// `tasks_in_vault_first_page` — the review view doesn't
-    /// paginate yet (V1 scope), so this is effectively the only
-    /// page rendered.
+    /// when cancelled mid-flight. Also captures the cursor +
+    /// total filtered count returned by the FFI so the review
+    /// surface can show pagination affordances (#160).
     func loadVaultTasks() async {
         guard let session = currentSession else { return }
         let filter = taskReviewFilter.toFFIFilter()
@@ -1520,15 +1552,16 @@ final class AppState: ObservableObject {
         // which return arm we hit.
         defer { isLoadingVaultTasks = false }
 
-        let result: Result<[TaskWithLocation], VaultError> = await Task.detached(
+        let pageSize = Self.vaultTasksPageSize
+        let result: Result<TaskWithLocationPage, VaultError> = await Task.detached(
             priority: .userInitiated
         ) {
             do {
                 let page = try session.tasksInVault(
                     filter: filter,
-                    paging: Paging(cursor: nil, limit: 200)
+                    paging: Paging(cursor: nil, limit: pageSize)
                 )
-                return .success(page.items)
+                return .success(page)
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -1542,11 +1575,90 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, taskReviewFilter == activeFilter else { return }
 
         switch result {
-        case .success(let rows):
-            vaultTasks = rows
+        case .success(let page):
+            vaultTasks = page.items
+            vaultTasksNextCursor = page.nextCursor
+            vaultTasksTotalFiltered = page.totalFiltered
             vaultTasksLoadError = nil
         case .failure(let error):
             vaultTasks = []
+            vaultTasksNextCursor = nil
+            vaultTasksTotalFiltered = 0
+            vaultTasksLoadError = humanReadable(error)
+        }
+    }
+
+    /// Append the next page of `vaultTasks` using the cursor
+    /// returned by the previous `loadVaultTasks` /
+    /// `loadMoreVaultTasks` call. No-op when there's no cursor
+    /// (the result set has been fully loaded) or when a load is
+    /// already in flight. Returns the in-flight Task so tests
+    /// can await it deterministically.
+    @discardableResult
+    func loadMoreVaultTasks() -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        guard let cursor = vaultTasksNextCursor else { return nil }
+        // Don't stack concurrent "Load more" requests — the button
+        // is disabled while one is in flight, but a programmatic
+        // caller could still spam this. Re-entrancy here would
+        // double-page and append duplicates.
+        guard !isLoadingMoreVaultTasks else { return nil }
+        let filter = taskReviewFilter.toFFIFilter()
+        let activeFilter = taskReviewFilter
+        isLoadingMoreVaultTasks = true
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performLoadMoreVaultTasks(
+                session: session,
+                filter: filter,
+                cursor: cursor,
+                activeFilter: activeFilter
+            )
+        }
+        return task
+    }
+
+    private func performLoadMoreVaultTasks(
+        session: VaultSession,
+        filter: TaskFilter,
+        cursor: String,
+        activeFilter: TaskReviewFilter
+    ) async {
+        defer { isLoadingMoreVaultTasks = false }
+        let pageSize = Self.vaultTasksPageSize
+        let result: Result<TaskWithLocationPage, VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
+            do {
+                let page = try session.tasksInVault(
+                    filter: filter,
+                    paging: Paging(cursor: cursor, limit: pageSize)
+                )
+                return .success(page)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }
+        .value
+
+        // If the user changed the filter while the page was in
+        // flight, the appended rows would not match the visible
+        // filter — drop the result and let the new filter's
+        // initial load take over.
+        guard !Task.isCancelled, taskReviewFilter == activeFilter else { return }
+
+        switch result {
+        case .success(let page):
+            vaultTasks.append(contentsOf: page.items)
+            vaultTasksNextCursor = page.nextCursor
+            vaultTasksTotalFiltered = page.totalFiltered
+            vaultTasksLoadError = nil
+        case .failure(let error):
+            // Don't clear `vaultTasks` on a failed "Load more" —
+            // the user's already-visible rows are still valid; we
+            // just surface the error so they know the next page
+            // didn't land.
             vaultTasksLoadError = humanReadable(error)
         }
     }

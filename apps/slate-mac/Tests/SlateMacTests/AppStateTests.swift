@@ -2828,4 +2828,110 @@ final class AppStateTests: XCTestCase {
             "deselecting mid-load must clear the per-note spinner"
         )
     }
+
+    // MARK: - Vault tasks pagination (#160)
+    //
+    // The vault-wide review queries with a 200-row page size; the
+    // FFI returns a nextCursor + totalFiltered so the surface can
+    // page forward and advertise truncation. These tests build a
+    // 201-task fixture (one over the page boundary) so the first
+    // page is full + an explicit "more to fetch" signal lands.
+
+    /// Build a vault with `count` open tasks across one file.
+    /// Lives here rather than in the global test helpers because
+    /// the only callers are the pagination tests.
+    private func makePaginationFixture(at url: URL, count: Int) throws {
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true
+        )
+        var lines = "# Pagination Fixture\n"
+        for index in 1...count {
+            lines += "- [ ] task \(index)\n"
+        }
+        try lines.data(using: .utf8)!.write(
+            to: url.appendingPathComponent("tasks.md")
+        )
+    }
+
+    func testVaultTasksReviewSurfacesTruncationWhenOver200Results() async throws {
+        let vault = tempDir.appendingPathComponent("pagination-vault")
+        try makePaginationFixture(at: vault, count: 201)
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+
+        XCTAssertEqual(
+            state.vaultTasks.count, Int(AppState.vaultTasksPageSize),
+            "the first page should fill to the page size limit"
+        )
+        XCTAssertEqual(
+            state.vaultTasksTotalFiltered, 201,
+            "totalFiltered should report the full result-set size, not just the page"
+        )
+        XCTAssertNotNil(
+            state.vaultTasksNextCursor,
+            "an over-page-size result set must return a non-nil cursor"
+        )
+        XCTAssertFalse(
+            state.isLoadingMoreVaultTasks,
+            "no Load more is in flight after the initial load settles"
+        )
+    }
+
+    func testLoadMoreVaultTasksAppendsNextPage() async throws {
+        let vault = tempDir.appendingPathComponent("pagination-load-more-vault")
+        try makePaginationFixture(at: vault, count: 201)
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+
+        // Sanity: cursor exists before "Load more".
+        XCTAssertNotNil(state.vaultTasksNextCursor)
+        let firstPageLastText = try XCTUnwrap(state.vaultTasks.last?.task.text)
+
+        // Trigger the second page.
+        let loadMoreTask = state.loadMoreVaultTasks()
+        XCTAssertNotNil(loadMoreTask, "loadMoreVaultTasks should return a task while a cursor exists")
+        await loadMoreTask?.value
+
+        XCTAssertEqual(
+            state.vaultTasks.count, 201,
+            "the appended page should bring the total to 201 (200 + 1)"
+        )
+        XCTAssertNil(
+            state.vaultTasksNextCursor,
+            "after the last page lands, the cursor should be nil"
+        )
+        XCTAssertEqual(
+            state.vaultTasksTotalFiltered, 201,
+            "totalFiltered stays consistent across page loads"
+        )
+        XCTAssertFalse(state.isLoadingMoreVaultTasks)
+
+        // First-page rows still in place — the append happened
+        // after them, not in their stead.
+        XCTAssertEqual(
+            state.vaultTasks[Int(AppState.vaultTasksPageSize) - 1].task.text,
+            firstPageLastText,
+            "the last row of page 1 should still be at its original index after the append"
+        )
+
+        // Calling loadMoreVaultTasks again with no cursor is a
+        // no-op (returns nil) — the button hides in the UI but
+        // the API should be defensive against programmatic
+        // callers too.
+        XCTAssertNil(
+            state.loadMoreVaultTasks(),
+            "loadMoreVaultTasks must no-op once the cursor is exhausted"
+        )
+    }
 }
