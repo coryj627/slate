@@ -169,19 +169,43 @@ fn target_size_for(seed: usize) -> usize {
 }
 
 // =====================================================================
-// Tasks fixture (Milestone G #115)
+// Tasks fixture (Milestone G #115, refreshed #146)
 // =====================================================================
 
-/// Build a vault with `file_count` Markdown files, each carrying
-/// `tasks_per_file` task lines. Used by the Tasks-milestone bench to
-/// drive the scan + query path on a realistic-but-deterministic
-/// workload. Returns the owning `TempDir`.
+/// Build a vault of `file_count` Markdown files with a
+/// realistic-vault task distribution. Returns the owning `TempDir`.
 ///
-/// Each file mixes a short note body with a `## Tasks` block; the
-/// tasks vary across the four shape axes the Tasks panel exercises:
-/// open/done/in-progress, with and without due dates, with and
-/// without priorities, with and without recurrences.
-pub fn generate_tasks_vault(file_count: usize, tasks_per_file: usize) -> TempDir {
+/// **Distribution rationale.** Real-world Obsidian vaults from
+/// casual users skew heavily toward notes that contain **no
+/// tasks at all** (daily-journal entries, reference material,
+/// captured-text snippets). A smaller chunk carries one or two
+/// task lines embedded inline in body text (action items
+/// captured while reading). A few notes are dedicated to-do
+/// lists with a heavier task block.
+///
+/// The original `generate_tasks_vault` shape (every file gets a
+/// uniform `## Tasks` block with 10 task lines) was useful for
+/// stress-testing the parser hot path but **over-counted the
+/// per-file parse cost** vs. the typical workload. After the
+/// `extract_tasks` fast path landed (#144), most files in a real
+/// vault skip the pulldown-cmark walk entirely — a benefit the
+/// uniform fixture couldn't measure.
+///
+/// Current shape:
+/// - **~70% zero-task files.** Body content (frontmatter,
+///   headings, paragraphs, occasional code fence) with no
+///   task lines. Exercises the M3 fast-path return.
+/// - **~25% light files.** 1–3 tasks scattered through body
+///   paragraphs (not bunched in a `## Tasks` section).
+///   Exercises the parser's mid-document line-walk path.
+/// - **~5% heavy files.** 10–15 tasks in a dedicated `## Tasks`
+///   block. Exercises the bulk-insert path of
+///   `replace_tasks_for_file`.
+///
+/// File category is chosen deterministically via `seed % 100`,
+/// so re-running the bench compares apples-to-apples across
+/// commits.
+pub fn generate_tasks_vault(file_count: usize) -> TempDir {
     let tmp = tempfile::tempdir().expect("create tempdir for tasks vault");
     let subdir_count = (file_count / 100).clamp(1, 50);
     let mut last_dir: Option<PathBuf> = None;
@@ -193,42 +217,94 @@ pub fn generate_tasks_vault(file_count: usize, tasks_per_file: usize) -> TempDir
             last_dir = Some(dir.clone());
         }
         let path = dir.join(format!("note-{i:08}.md"));
-        fs::write(&path, synthetic_note_with_tasks(i, tasks_per_file)).expect("write tasks note");
+        fs::write(&path, synthetic_note_realistic(i)).expect("write tasks note");
     }
     tmp
 }
 
-fn synthetic_note_with_tasks(seed: usize, tasks_per_file: usize) -> String {
-    // Mix of open / done / in-progress so the `completed` filter has
-    // realistic selectivity. Roughly 50% open, 40% done, 10% in
-    // progress matches the rough population of a working tasks
-    // backlog without trying to be precise about it.
-    const STATUSES: &[char] = &[' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', '/'];
-
-    let mut out = String::with_capacity(tasks_per_file * 48);
-    out.push_str(&format!("# Note {seed}\n\n"));
-    out.push_str("Background paragraph for context.\n\n## Tasks\n\n");
-    for j in 0..tasks_per_file {
-        let status = STATUSES[(seed + j) % STATUSES.len()];
-        let mut line = format!("- [{status}] task {seed}-{j}");
-        // ~50% carry a due date; spread across a 60-day window so
-        // the due-window filter has work to do.
-        if (seed + j).is_multiple_of(2) {
-            let day = ((seed + j) % 30) + 1; // 1..=30
-            line.push_str(&format!(" 📅 2026-06-{day:02}"));
-        }
-        // ~25% carry a priority.
-        match (seed + j) % 8 {
-            0 => line.push_str(" ⏫"),
-            3 => line.push_str(" 🔼"),
-            _ => {}
-        }
-        // ~10% carry a recurrence.
-        if (seed + j).is_multiple_of(10) {
-            line.push_str(" 🔁 every week");
-        }
-        line.push('\n');
-        out.push_str(&line);
+/// Realistic-distribution note body. `seed % 100` picks the
+/// category (zero / light / heavy); the seed also drives the
+/// per-file content shape so the result is byte-stable across
+/// runs.
+fn synthetic_note_realistic(seed: usize) -> String {
+    match seed % 100 {
+        // 0..70 — zero-task. Reuse the regular `synthetic_markdown`
+        // shape so the cold-scan path sees real frontmatter +
+        // headings + paragraphs + code fences (≈ Apple-Notes-import
+        // territory).
+        0..=69 => synthetic_markdown(seed),
+        // 70..95 — light. 1–3 tasks scattered through body
+        // paragraphs.
+        70..=94 => synthetic_light_tasks_note(seed),
+        // 95..99 — heavy. 10–15 tasks in a dedicated `## Tasks`
+        // block.
+        _ => synthetic_heavy_tasks_note(seed),
     }
+}
+
+/// Body with 1–3 task lines sprinkled between paragraphs.
+fn synthetic_light_tasks_note(seed: usize) -> String {
+    // Deterministic task count based on the seed so the
+    // distribution stays apples-to-apples across re-runs.
+    let task_count = 1 + (seed % 3); // 1, 2, or 3 tasks
+    let mut out = String::with_capacity(800);
+    out.push_str(&format!("# Note {seed}\n\n"));
+    out.push_str(
+        "Some captured reading notes follow. The task list below \
+         is intentionally mixed with prose so the parser walks the \
+         full body, not a dedicated section.\n\n",
+    );
+    out.push_str(&format!(
+        "## Section\n\nA paragraph about topic {}.\n\n",
+        seed % 7
+    ));
+    for j in 0..task_count {
+        out.push_str(&task_line(seed, j));
+        out.push('\n');
+        out.push_str(&format!(
+            "Follow-up paragraph after task {j}. More prose to keep \
+             the parser scanning past the task line.\n\n"
+        ));
+    }
+    out.push_str("Final paragraph closing the note.\n");
     out
+}
+
+/// Body with a dedicated `## Tasks` block carrying 10–15 task
+/// lines.
+fn synthetic_heavy_tasks_note(seed: usize) -> String {
+    let task_count = 10 + (seed % 6); // 10..=15
+    let mut out = String::with_capacity(task_count * 64 + 256);
+    out.push_str(&format!(
+        "# Note {seed}\n\nProject overview paragraph.\n\n## Tasks\n\n"
+    ));
+    for j in 0..task_count {
+        out.push_str(&task_line(seed, j));
+        out.push('\n');
+    }
+    out.push_str("\n## Notes\n\nWrap-up paragraph after the task block.\n");
+    out
+}
+
+/// One task line with deterministic metadata shape. Mix of
+/// open / done / in-progress, ~50% with due date, ~25% with
+/// priority, ~10% with recurrence — same statistical mix the
+/// previous fixture used, just applied selectively.
+fn task_line(seed: usize, j: usize) -> String {
+    const STATUSES: &[char] = &[' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', '/'];
+    let status = STATUSES[(seed + j) % STATUSES.len()];
+    let mut line = format!("- [{status}] task {seed}-{j}");
+    if (seed + j).is_multiple_of(2) {
+        let day = ((seed + j) % 30) + 1;
+        line.push_str(&format!(" 📅 2026-06-{day:02}"));
+    }
+    match (seed + j) % 8 {
+        0 => line.push_str(" ⏫"),
+        3 => line.push_str(" 🔼"),
+        _ => {}
+    }
+    if (seed + j).is_multiple_of(10) {
+        line.push_str(" 🔁 every week");
+    }
+    line
 }

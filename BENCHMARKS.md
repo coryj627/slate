@@ -97,14 +97,18 @@ _Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/
 
 The fast path checks ctime in addition to mtime+size, which catches mtime-preserving writers like `cp -p` and `rsync -a` that the original optimization (PR #40) would have wrongly skipped. ctime adds one extra `i64` to the per-file `SELECT`, costing about 10 % vs the mtime/size-only version on 10k+ — still ~19× under the V1 50 k gate. On platforms without portable ctime access (Windows) the column stays at 0 and the fast path keeps its mtime+size semantics.
 
-## V1 baseline — 2026-05-23 (Milestone G Tasks)
+## V1 baseline — 2026-05-24 (Milestone G Tasks, realistic fixture)
 
-Same machine + toolchain as the 2026-05-17 row. The fixture is `generate_tasks_vault(1_000, 10)` from `crates/slate-core/benches/common/mod.rs`: 1 000 markdown notes spread across ~10 subdirectories, each note carrying a `## Tasks` block with 10 task lines that mix open / done / in-progress statuses, due dates across a 60-day window, priorities, and recurrences.
+Same machine + toolchain as the 2026-05-17 row. The fixture is `generate_tasks_vault(1_000)` from `crates/slate-core/benches/common/mod.rs`. **Distribution refresh from #146** — the prior shape (every file a uniform 10-task block) over-counted real-world parser cost. The current shape mirrors a casual-user Obsidian vault:
 
-| Benchmark | 1 k files × 10 tasks (10 k tasks) |
+- **~70% zero-task files** — frontmatter + headings + paragraphs + occasional code fence; no task lines. Exercises the M3 fast-path return added in #144.
+- **~25% light files** — 1–3 tasks scattered through body paragraphs (not bunched in a `## Tasks` section). Exercises the parser's mid-document line walk.
+- **~5% heavy files** — 10–15 tasks in a dedicated `## Tasks` block. Exercises the bulk-insert path of `replace_tasks_for_file`.
+
+| Benchmark | 1 k files (realistic distribution) |
 |---|---|
-| `tasks_cold_scan` | 29.5 ms |
-| `tasks_in_vault_first_page` (200 rows) | 1.23 ms |
+| `tasks_cold_scan` | 65.5 ms |
+| `tasks_in_vault_first_page` (200 rows) | 338 µs |
 
 | Benchmark | 1 KB doc | 10 KB doc | 50 KB doc |
 |---|---|---|---|
@@ -112,7 +116,18 @@ Same machine + toolchain as the 2026-05-17 row. The fixture is `generate_tasks_v
 
 _Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/criterion/`._
 
-`parser_zero_task_overhead` measures `extract_tasks` on a zero-task document (frontmatter + headings + paragraphs + markdown links — same shape as a typical no-tasks note in a real vault). With the byte-scan prefilter added in #144, the parser short-circuits before pulldown-cmark, so the cost stays in the nanosecond-to-low-microsecond range regardless of doc size. Before the prefilter, the same 50 KB doc cost ~50 µs per call (red-team measurement on PR #134) — ~3.4× speedup on the worst case, with disproportionate impact on cold-scan latency across vaults dominated by zero-task notes. (The initial #148 implementation used `str::contains` and benchmarked ~2× faster, but had a correctness gap on multi-whitespace task lines flagged by Codoki review; the corrected byte-scan version trades SIMD-vectorisation for a no-false-negatives guarantee.)
+### Reading the new task-bench numbers
+
+The absolute figures differ from the 2026-05-23 row (29.5 ms / 1.23 ms) — that's **not a regression**, it's a fixture change:
+
+- **`tasks_cold_scan` went up** because the realistic fixture has much larger file bodies (frontmatter, headings, multi-paragraph prose, occasional code fences) than the prior synthetic vault. Cold scan time is dominated by file-content reading + blake3 hashing, not parsing. The 65.5 ms figure tracks real-world cold-open latency on a typical user's notes.
+- **`tasks_in_vault_first_page` went down** because the realistic fixture carries roughly ~1100 tasks total (25% × ~2 + 5% × ~12 per file), against ~10 000 in the prior uniform shape. Smaller table = faster first-page query. The 338 µs figure is what the Mac TasksReviewView's initial render actually pays in production.
+
+`parser_zero_task_overhead` is unchanged — that's a focused micro-bench on the M3 fast path and doesn't depend on the vault fixture.
+
+### Context on `parser_zero_task_overhead`
+
+Measures `extract_tasks` on a zero-task document (frontmatter + headings + paragraphs + markdown links — same shape as a typical no-tasks note in a real vault). With the byte-scan prefilter added in #144, the parser short-circuits before pulldown-cmark, so the cost stays in the nanosecond-to-low-microsecond range regardless of doc size. Before the prefilter, the same 50 KB doc cost ~50 µs per call (red-team measurement on PR #134) — ~3.4× speedup on the worst case. The shared `TASK_BULLETS` / `TASK_BULLET_SEPARATORS` constants added in PR #148's polish round keep the prefilter and `parse_task_line` from drifting apart on what counts as a task-line opener.
 
 **Cold scan cost.** Adding the tasks pipeline to the scanner adds roughly the same per-file overhead as the headings / links / properties pipelines — well within the scanner's existing headroom against the V1 first-open gate. The fast-path rescan invariant (no churn on unchanged files) carries over to the tasks table; see the `fast_path_rescan_does_not_touch_tasks_table` integration test.
 
