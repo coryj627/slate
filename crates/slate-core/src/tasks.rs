@@ -230,13 +230,20 @@ fn split_text_and_metadata(
         let after_marker_idx = marker.len_utf8();
         let after_marker = &remaining[after_marker_idx..];
         // Payload is everything up to the next marker (or EOL),
-        // with edge whitespace stripped.
+        // with edge whitespace and emoji variation selectors
+        // (U+FE0F, "VS-16") stripped. macOS and iOS keyboards emit
+        // the colour-presentation form of an emoji as `<base> +
+        // U+FE0F`; without the strip, a user typing `📅\u{FE0F}
+        // 2026-06-01` (which is what those keyboards produce when
+        // the emoji picker has VS-16 locked) would have the date
+        // silently dropped because chrono can't parse a leading
+        // VS-16 (#138 / red-team H3).
         let payload_end = after_marker
             .char_indices()
             .find(|(_, c)| is_marker(*c))
             .map(|(i, _)| i)
             .unwrap_or(after_marker.len());
-        let payload = after_marker[..payload_end].trim();
+        let payload = trim_marker_payload(&after_marker[..payload_end]);
         // First marker wins per axis — `is_none()` guards keep
         // duplicate markers (e.g. two 📅 entries on the same line)
         // from silently overwriting earlier well-formed payloads.
@@ -262,6 +269,17 @@ fn split_text_and_metadata(
         priority,
         recurrence,
     )
+}
+
+/// Strip ASCII/Unicode whitespace AND emoji variation selectors
+/// (U+FE0F) from both edges of `s`. The marker payload extraction
+/// uses this in place of `str::trim` so a base-emoji + VS-16
+/// pairing — what Apple keyboards emit when the user picks a
+/// colour-presentation emoji from the system picker — doesn't
+/// leak the variation-selector codepoint into the chrono /
+/// recurrence parsers downstream.
+fn trim_marker_payload(s: &str) -> &str {
+    s.trim_matches(|c: char| c.is_whitespace() || c == '\u{FE0F}')
 }
 
 fn parse_date_to_ms(s: &str) -> Option<i64> {
@@ -659,6 +677,57 @@ mod tests {
     #[test]
     fn trailing_whitespace_after_metadata_is_tolerated() {
         let src = "- [ ] thing 📅 2026-06-01   \n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks[0].due_ms, Some(ms_for(2026, 6, 1)));
+    }
+
+    // --- #138: emoji variation selector (VS-16, U+FE0F) handling ---
+    //
+    // macOS and iOS keyboards emit `<base emoji> + U+FE0F` for the
+    // colour-presentation form of an emoji. Without the strip in
+    // `trim_marker_payload`, that variation selector landed at the
+    // start of the payload string and made chrono / recurrence
+    // parsing fail silently — the line was still indexed but the
+    // field stayed `None`.
+
+    #[test]
+    fn vs16_after_due_marker_does_not_drop_date() {
+        let src = "- [ ] thing 📅\u{FE0F} 2026-06-01\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks[0].text, "thing");
+        assert_eq!(tasks[0].due_ms, Some(ms_for(2026, 6, 1)));
+    }
+
+    #[test]
+    fn vs16_after_scheduled_marker_does_not_drop_date() {
+        let src = "- [ ] thing ⏳\u{FE0F} 2026-05-25\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks[0].scheduled_ms, Some(ms_for(2026, 5, 25)));
+    }
+
+    #[test]
+    fn vs16_after_priority_marker_resolves_priority_and_doesnt_corrupt_next_marker_search() {
+        // ⏫ has no payload, but VS-16 must not bleed into the
+        // payload-end search and confuse a later marker on the
+        // same line.
+        let src = "- [ ] thing ⏫\u{FE0F} 📅 2026-06-01\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks[0].priority, Some(2));
+        assert_eq!(tasks[0].due_ms, Some(ms_for(2026, 6, 1)));
+    }
+
+    #[test]
+    fn vs16_after_recurrence_marker_does_not_pollute_payload() {
+        let src = "- [ ] thing 🔁\u{FE0F} every week\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks[0].recurrence.as_deref(), Some("every week"));
+    }
+
+    #[test]
+    fn vs16_trailing_payload_is_also_stripped() {
+        // Less common in the wild but worth defending — a date
+        // followed by VS-16 must still parse.
+        let src = "- [ ] thing 📅 2026-06-01\u{FE0F}\n";
         let tasks = extract_tasks(src);
         assert_eq!(tasks[0].due_ms, Some(ms_for(2026, 6, 1)));
     }
