@@ -2067,10 +2067,9 @@ final class AppStateTests: XCTestCase {
         let firstTask = try XCTUnwrap(state.currentNoteTasks.first)
         XCTAssertFalse(firstTask.completed)
         await state.toggleCurrentTask(firstTask)?.value
-        // Drop into the next runloop pass so the post-toggle refresh
-        // task (refreshTasksAfterSave) lands.
-        await Task.yield()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // `performToggleCurrentTask` awaits the refresh + reload
+        // tasks before its outer Task resolves, so the line above
+        // is sufficient — no Task.sleep settle (#161).
 
         // On-disk file flipped from `[ ]` to `[x]`.
         let onDisk = try String(
@@ -2198,10 +2197,10 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isTasksReviewOpen)
         XCTAssertEqual(state.selectedFilePath, "b.md")
         await state.noteLoadTask?.value
-        // Yield twice so the awaiting Task that fires the scroll
-        // request lands before we read `received`.
-        await Task.yield()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // The inner Task that awaits the load + sends the scroll
+        // request is tracked as `taskRowActivationTask` (#161),
+        // so we can await it deterministically instead of sleeping.
+        await state.taskRowActivationTask?.value
         XCTAssertEqual(
             received, [3],
             "Activation should request a scroll to the task's source line (1-based)"
@@ -2470,11 +2469,9 @@ final class AppStateTests: XCTestCase {
         // cache updated after the round-trip lands.
         let preToggleHash = state.currentNoteContentHash
         await state.toggleCurrentTask(openTodayTask)?.value
-        // refreshTasksAfterSave + reloadEditorBufferAfterToggle
-        // are fire-and-forget Tasks; yield + brief sleep so they
-        // settle. The unit test for toggle uses the same pattern.
-        await Task.yield()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // `performToggleCurrentTask` awaits the refresh + reload
+        // tasks before its outer Task resolves (#161); the await
+        // above is the full settle.
 
         // On-disk file flipped from `[ ]` to `[x]` on the
         // today-dated task.
@@ -2517,10 +2514,9 @@ final class AppStateTests: XCTestCase {
         try "# Overwritten externally\n- [ ] new task\n"
             .data(using: .utf8)!
             .write(to: vault.appendingPathComponent("work.md"))
-        // Give the FS write a beat so the next toggle's read sees
-        // the new content (and the new hash). Same 50ms cadence
-        // as the post-toggle settle.
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // `Data.write(to:)` is synchronous on macOS, so the new
+        // content + hash are visible to the next toggle's read
+        // immediately — no sleep needed.
 
         // Use the now-stale "overdue work" task — its identity
         // doesn't matter, the conflict surfaces before mutation.
@@ -2528,8 +2524,12 @@ final class AppStateTests: XCTestCase {
             state.currentNoteTasks.first(where: { $0.text == "overdue work" }),
             "stale panel should still expose the overdue row"
         )
+        // Same as the happy-path toggle above: the toggle Task's
+        // value awaits the full settle (#161). The conflict arm
+        // of `performToggleCurrentTask` populates
+        // `currentSaveConflict` before returning, so no further
+        // wait is needed.
         await state.toggleCurrentTask(staleTask)?.value
-        try await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertNotNil(
             state.currentSaveConflict,
