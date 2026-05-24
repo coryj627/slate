@@ -1860,6 +1860,72 @@ final class AppStateTests: XCTestCase {
         )
     }
 
+    func testDailyTemplateNameMatcherTreatsSubstringMatchesAsNotDaily() {
+        // Codoki PR #154 follow-up: `Dailyness` and `Daily123`
+        // start with the substring `daily` but aren't daily-note
+        // templates. Only the standalone word `daily` (followed by
+        // end-of-string OR a non-alphanumeric boundary) should
+        // qualify.
+        XCTAssertTrue(AppState.isDailyTemplateName("Daily"))
+        XCTAssertTrue(AppState.isDailyTemplateName("daily"))
+        XCTAssertTrue(AppState.isDailyTemplateName("Daily Standup"))
+        XCTAssertTrue(AppState.isDailyTemplateName("Daily-Notes"))
+        XCTAssertTrue(AppState.isDailyTemplateName("Daily.md"))
+        XCTAssertTrue(AppState.isDailyTemplateName("DAILY"))
+
+        XCTAssertFalse(AppState.isDailyTemplateName("Dailyness"))
+        XCTAssertFalse(AppState.isDailyTemplateName("Daily123"))
+        XCTAssertFalse(AppState.isDailyTemplateName("DailyMeeting"))
+        XCTAssertFalse(AppState.isDailyTemplateName(""))
+        XCTAssertFalse(AppState.isDailyTemplateName("Weekly"))
+    }
+
+    func testDefaultNewNoteNameForDailynessTemplateDoesNotGetDateSuffix() async throws {
+        // Regression for Codoki PR #154 Medium. Before the
+        // word-boundary fix, a template named `Dailyness.md`
+        // produced `Dailyness 2026-05-24.md` instead of just
+        // `Dailyness.md`.
+        let (state, _) = try await makeTemplatesVault(templates: [
+            ("Dailyness.md", "# wellbeing\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+
+        let defaultName = state.defaultNewNoteName(for: summary)
+        XCTAssertEqual(defaultName, "Dailyness.md")
+    }
+
+    func testSubmitTemplateNoteNameHandlesMultiDotExtensions() async throws {
+        // Codoki PR #154 suggestion: `archive.tar.MD` is already
+        // markdown-shaped (extension `MD`, case-insensitively `md`);
+        // the previous hasSuffix(".md") branch handled it, but the
+        // new `pathExtension` shape is more semantically correct
+        // and worth locking in.
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Plain.md", "# stub\n"),
+        ])
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+
+        state.submitTemplateNoteName("archive.tar.MD")
+        await state.templateCreateTask?.value
+
+        let preserved = vault.appendingPathComponent("archive.tar.MD")
+        let doubled = vault.appendingPathComponent("archive.tar.MD.md")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: preserved.path),
+            "expected `archive.tar.MD` to be preserved as-is"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: doubled.path),
+            "must not double-suffix to `archive.tar.MD.md`"
+        )
+    }
+
     func testCancelFromPromptSheetResetsFlowAndWritesNoFile() async throws {
         let (state, vault) = try await makeTemplatesVault(templates: [
             ("Meeting.md", "# {{prompt:Topic}}\n"),
