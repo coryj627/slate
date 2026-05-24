@@ -38,14 +38,19 @@ struct FileListSidebar: View {
             // file list around in the empty case. Order matches the
             // mental model of "what does this note say about itself
             // / link to / get linked from": properties → outgoing →
-            // backlinks. (Outline lives in the third NavigationSplit
-            // column, not here.)
+            // backlinks → tasks. Tasks lands last because users
+            // typically scroll to it after reading the note's
+            // structural context; the panel is dense (toggleable
+            // rows) and benefits from being below the metadata
+            // sections that don't require interaction. (Outline
+            // lives in the third NavigationSplit column, not here.)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     PropertiesPanel()
                     OutgoingLinksPanel()
                     BacklinksPanel()
+                    TasksPanel()
                 }
             }
             .frame(maxHeight: 400)
