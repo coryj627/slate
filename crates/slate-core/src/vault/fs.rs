@@ -300,23 +300,59 @@ impl VaultProvider for FsVaultProvider {
             });
         }
 
-        // **Critical for TOCTOU safety**: open the CANONICAL path,
-        // not `resolved` or `relative`. The canonical path has no
-        // symlink components — `File::open` resolves it once and
-        // can't be redirected by a symlink swap that lands after
-        // our `canonicalize` call. An attacker with vault write
-        // access could in principle still hot-swap a parent
-        // *directory* between canonicalize and open, but that
-        // requires the same privilege as just writing into the
-        // vault directly — no meaningful escalation. (Codoki
-        // PR #153 Medium.)
-        let file = fs::File::open(&canonical_target)?;
+        // **TOCTOU defence — `O_NOFOLLOW` on the open.** Canonicalize
+        // returns a string snapshot of where the symlinks pointed at
+        // that instant. The subsequent `open` re-resolves that path
+        // string through the kernel; if an attacker replaces the
+        // canonical target's final component with a symlink between
+        // the canonicalize and the open, a bare `File::open` would
+        // happily follow the new symlink OUT of the vault (Codoki
+        // PR #153 Critical).
+        //
+        // `O_NOFOLLOW` makes the open refuse symlinks on the final
+        // path component — if anyone hot-swaps it in the race
+        // window, we get `ELOOP` instead of an escape. The
+        // canonical path's final component is by construction a
+        // regular file (canonicalize resolved any symlinks), so
+        // the flag has no effect on the legitimate path; it only
+        // bites the racing attacker.
+        //
+        // An attacker who also hot-swaps a parent *directory* in
+        // the canonical path can still race the open, but that
+        // requires write access to a parent directory inside the
+        // vault — the same privilege as just dropping a malicious
+        // file directly. No meaningful escalation.
+        //
+        // Non-Unix builds fall back to the bare `File::open`; the
+        // platforms slate ships to today (macOS, Linux) all
+        // support `O_NOFOLLOW`. Windows would need an
+        // `openat2`-style alternative when that target lands.
+        let file = open_nofollow(&canonical_target)?;
         let cap = max_bytes.saturating_add(1);
         let mut handle = file.take(cap);
         let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024) as usize);
         handle.read_to_end(&mut buf)?;
         Ok(buf)
     }
+}
+
+/// Read-only `File::open` that refuses to follow a symlink on the
+/// final path component. On Unix this is `O_NOFOLLOW` via the std
+/// `custom_flags` extension; on other targets it's a plain open
+/// (the host platforms slate ships to are Unix-likes, so this is
+/// the operative path).
+#[cfg(unix)]
+fn open_nofollow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nofollow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 /// Remove a dangling symlink entry. Pulled out as a helper so the
@@ -419,6 +455,55 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let provider = FsVaultProvider::new(tmp.path().to_path_buf());
         (tmp, provider)
+    }
+
+    /// Direct test that `open_nofollow` refuses a symlink at the
+    /// final path component on Unix. This is what closes the
+    /// post-canonicalize TOCTOU window in `read_in_vault_with_cap`:
+    /// if an attacker hot-swaps the canonical target's final
+    /// component to a symlink between our `canonicalize` and the
+    /// `File::open`, the `O_NOFOLLOW` flag turns the open into
+    /// `ELOOP` instead of an escape (Codoki PR #153 Critical).
+    ///
+    /// The race itself isn't reproducible without injecting a
+    /// delay; what this test locks in is the kernel-level
+    /// contract: open_nofollow on a symlink path fails with
+    /// ELOOP. The provider's read path uses this helper, so the
+    /// defence is in place wherever the helper is invoked.
+    #[cfg(unix)]
+    #[test]
+    fn open_nofollow_refuses_a_symlinked_final_component_with_eloop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real.md");
+        std::fs::write(&real, b"real contents").unwrap();
+        let link = tmp.path().join("sym.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // Sanity check: a regular `File::open` on the symlink
+        // successfully follows to `real.md`.
+        let bare = std::fs::read(&link).unwrap();
+        assert_eq!(bare, b"real contents");
+
+        // `open_nofollow` should refuse to follow that final-
+        // component symlink. Map the io error to its raw_os_error
+        // so the assertion is portable across libc versions.
+        let err = open_nofollow(&link).expect_err("expected ELOOP");
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::ELOOP),
+            "expected ELOOP (libc::ELOOP = {}), got io error: {err:?}",
+            libc::ELOOP
+        );
+
+        // And opening the REAL path directly still works — the
+        // flag only bites symlinks on the final component, not
+        // regular files.
+        let direct = open_nofollow(&real).expect("regular file should open");
+        let mut buf = String::new();
+        use std::io::Read;
+        let mut r = direct;
+        r.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "real contents");
     }
 
     #[test]
