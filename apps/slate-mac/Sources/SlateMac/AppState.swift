@@ -463,6 +463,29 @@ final class AppState: ObservableObject {
     /// the toggled row.
     private(set) var taskToggleTask: Task<Void, Never>?
 
+    /// Handle on the most recent `refreshTasksAfterSave` call.
+    /// The refresh re-runs `tasksForFile` off the main actor to
+    /// update `currentNoteTasks` after a toggle or save lands.
+    /// Production code doesn't await this (the user sees the row
+    /// flip when the refresh's @Published write fires); tests
+    /// await it instead of using time-based settle waits (#161).
+    private(set) var tasksRefreshTask: Task<Void, Never>?
+
+    /// Handle on the most recent `reloadEditorBufferAfterToggle`
+    /// call. The reload re-reads disk into `currentNoteText` +
+    /// `savedBaselineText` so the editor's view of the file
+    /// matches the toggled-on-disk state. Same lifecycle shape
+    /// as `tasksRefreshTask` — production fire-and-forget,
+    /// tests await deterministically (#161).
+    private(set) var editorReloadTask: Task<Void, Never>?
+
+    /// Handle on the inner Task spawned by `openTaskRowInEditor`
+    /// when activating a row that points to a different file.
+    /// The Task waits for the new file's load to settle, then
+    /// emits `lineScrollRequest`. Held so tests can await the
+    /// scroll emission (#161).
+    private(set) var taskRowActivationTask: Task<Void, Never>?
+
     /// Handle on the most recent template-flow task — opens the
     /// picker (`openTemplatePicker`), reads source for prompt
     /// extraction (`selectTemplate`), or runs the render+save
@@ -1332,7 +1355,15 @@ final class AppState: ObservableObject {
     /// next selection change. Mirrors `refreshHeadingsAfterSave`'s
     /// shape: off-actor query, post-await re-grab of `self`, drop
     /// the result if the user has navigated away.
-    private func refreshTasksAfterSave(session: VaultSession, path: String) {
+    ///
+    /// Returns the in-flight Task so callers can stash it on
+    /// `tasksRefreshTask` (and tests can await it deterministically
+    /// instead of leaning on `Task.sleep` settle waits — #161).
+    @discardableResult
+    private func refreshTasksAfterSave(
+        session: VaultSession,
+        path: String
+    ) -> Task<Void, Never> {
         Task { [weak self] in
             let tasks: [TaskItem]? = await Task.detached(priority: .userInitiated) {
                 try? session.tasksForFile(path: path)
@@ -1437,12 +1468,23 @@ final class AppState: ObservableObject {
             // except for the toggled char. Re-reading from disk
             // back into `currentNoteText` + `savedBaselineText` is
             // therefore safe — no buffer edits to lose.
-            refreshTasksAfterSave(session: session, path: path)
+            //
+            // Track the in-flight refresh + reload tasks and await
+            // them before this toggle's `taskToggleTask` resolves
+            // (#161). Production users never observe the difference
+            // — `taskToggleTask` isn't subscribed by any UI — but
+            // tests can `await state.taskToggleTask?.value` and
+            // know the full settle has landed without sleeping.
+            let refresh = refreshTasksAfterSave(session: session, path: path)
+            tasksRefreshTask = refresh
             // Also refresh the editor's view of the file so the
             // toggled character appears in the rendered text.
             // Mirrors `loadCurrentNote`'s read-text shape but
             // doesn't redo the heading/property work.
-            reloadEditorBufferAfterToggle(session: session, path: path)
+            let reload = reloadEditorBufferAfterToggle(session: session, path: path)
+            editorReloadTask = reload
+            await refresh.value
+            await reload.value
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
             // Same surface as the editor save's WriteConflict
             // path. The attemptedContents is the toggled file
@@ -1471,7 +1513,15 @@ final class AppState: ObservableObject {
     /// changed; the editor buffer and `savedBaselineText` need to
     /// follow. Off-actor read so the SQLite-backed code path
     /// doesn't pin the main actor.
-    private func reloadEditorBufferAfterToggle(session: VaultSession, path: String) {
+    ///
+    /// Returns the in-flight Task so the caller can stash it on
+    /// `editorReloadTask` (#161 — tests await this handle instead
+    /// of using `Task.sleep` to wait for the buffer to settle).
+    @discardableResult
+    private func reloadEditorBufferAfterToggle(
+        session: VaultSession,
+        path: String
+    ) -> Task<Void, Never> {
         Task { [weak self] in
             let text: String? = await Task.detached(priority: .userInitiated) {
                 try? session.readText(path: path)
@@ -1753,10 +1803,17 @@ final class AppState: ObservableObject {
             // the `.overdue` filter result).
             await loadVaultTasks()
             // Per-note panel stays in sync if the toggle hit the
-            // currently-loaded file.
+            // currently-loaded file. Track + await the refresh and
+            // reload so this toggle's `taskToggleTask` resolves
+            // only after the full settle lands (#161 — lets tests
+            // skip the `Task.sleep(50ms)` pattern).
             if loadedFilePath == path {
-                refreshTasksAfterSave(session: session, path: path)
-                reloadEditorBufferAfterToggle(session: session, path: path)
+                let refresh = refreshTasksAfterSave(session: session, path: path)
+                tasksRefreshTask = refresh
+                let reload = reloadEditorBufferAfterToggle(session: session, path: path)
+                editorReloadTask = reload
+                await refresh.value
+                await reload.value
             }
         case .failure(let error):
             vaultTasksLoadError = humanReadable(error)
@@ -1788,7 +1845,11 @@ final class AppState: ObservableObject {
         // rendered tree before `ScrollViewReader.scrollTo` runs.
         selectedFilePath = target
         let pendingLoad = noteLoadTask
-        Task { @MainActor [weak self] in
+        // Track the inner Task so tests can await the deferred
+        // scroll emission (#161). Production: nothing depends on
+        // its completion, so this is purely a test-determinism
+        // aid.
+        taskRowActivationTask = Task { @MainActor [weak self] in
             if let pendingLoad {
                 await pendingLoad.value
             }
@@ -1914,7 +1975,7 @@ final class AppState: ObservableObject {
             // switches selection; refreshing them here would
             // double-spin the SQLite mutex for marginal benefit.
             refreshHeadingsAfterSave(session: session, path: path)
-            refreshTasksAfterSave(session: session, path: path)
+            tasksRefreshTask = refreshTasksAfterSave(session: session, path: path)
             postAccessibilityAnnouncement(
                 "Saved \(filename(of: path)).",
                 priority: .medium
