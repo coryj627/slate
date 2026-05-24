@@ -79,6 +79,13 @@ pub enum VaultError {
     #[error("operation not supported yet: {feature}")]
     Unsupported { feature: String },
 
+    /// Caller passed an argument that doesn't fit the current vault
+    /// state — e.g. a `toggle_task_status` with an out-of-range
+    /// ordinal or a multi-character status string. The file is left
+    /// untouched.
+    #[error("invalid argument: {message}")]
+    InvalidArgument { message: String },
+
     /// Save failed because the on-disk file no longer matches the
     /// `expected_content_hash` the caller supplied. Surfaces the
     /// current state so the host can drive a "Keep mine / Reload
@@ -114,6 +121,9 @@ impl From<core::VaultError> for VaultError {
             }
             core::VaultError::InvalidQuery { message } => VaultError::InvalidQuery { message },
             core::VaultError::Unsupported { feature } => VaultError::Unsupported { feature },
+            core::VaultError::InvalidArgument { message } => {
+                VaultError::InvalidArgument { message }
+            }
             core::VaultError::WriteConflict {
                 current_content_hash,
                 expected_content_hash,
@@ -357,6 +367,62 @@ impl VaultSession {
             .into_iter()
             .map(TemplateSummary::from)
             .collect())
+    }
+
+    /// Every task parsed from `path`, in document order. Empty result
+    /// when the file isn't indexed yet or has no tasks. Used by the
+    /// Mac per-file Tasks panel.
+    pub fn tasks_for_file(&self, path: String) -> Result<Vec<TaskItem>, VaultError> {
+        Ok(self
+            .inner
+            .tasks_for_file(&path)?
+            .into_iter()
+            .map(TaskItem::from)
+            .collect())
+    }
+
+    /// Paged vault-wide task query. Used by the Mac TasksReviewView
+    /// to render filtered overdue / today / soon views without
+    /// loading every task into memory.
+    pub fn tasks_in_vault(
+        &self,
+        filter: TaskFilter,
+        paging: Paging,
+    ) -> Result<TaskWithLocationPage, VaultError> {
+        let page = self.inner.tasks_in_vault(filter.into(), paging.into())?;
+        Ok(page.into())
+    }
+
+    /// Replace one task's `[X]` status character in place, routed
+    /// through `save_text` so the index, op-log, and conflict
+    /// detection stay consistent with editor saves.
+    ///
+    /// `new_status_char` must be exactly one Unicode scalar (typically
+    /// `" "`, `"x"`, `"/"`, or `"-"`). Anything else returns
+    /// `InvalidArgument`.
+    pub fn toggle_task_status(
+        &self,
+        path: String,
+        ordinal: u32,
+        new_status_char: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let mut chars = new_status_char.chars();
+        let c = chars.next().ok_or(VaultError::InvalidArgument {
+            message: "new_status_char must be exactly one Unicode scalar (got empty string)"
+                .to_string(),
+        })?;
+        if chars.next().is_some() {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "new_status_char must be exactly one Unicode scalar (got {new_status_char:?})"
+                ),
+            });
+        }
+        let report =
+            self.inner
+                .toggle_task_status(&path, ordinal, c, expected_content_hash.as_deref())?;
+        Ok(report.into())
     }
 
     /// Render the template at `template_path` against `context`. The
@@ -936,6 +1002,113 @@ impl From<core::OpLogEntry> for OpLogEntry {
     }
 }
 
+// =====================================================================
+// Tasks FFI surface (Milestone G)
+// =====================================================================
+
+/// One parsed Markdown task. Mirrors `slate_core::TaskItem` with the
+/// status char encoded as a String (uniffi has no char primitive).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TaskItem {
+    pub ordinal: u32,
+    pub text: String,
+    /// Raw status character between `[` and `]` (e.g. `" "`, `"x"`,
+    /// `"/"`). Always exactly one Unicode scalar; modelled as a
+    /// String so foreign languages without a `char` type don't have
+    /// to invent one.
+    pub status_char: String,
+    pub completed: bool,
+    pub due_ms: Option<i64>,
+    pub scheduled_ms: Option<i64>,
+    pub priority: Option<i32>,
+    pub recurrence: Option<String>,
+    /// 1-based line number in the source.
+    pub line: u32,
+    /// Byte offset of the task's line start.
+    pub byte_offset: u32,
+}
+
+impl From<core::TaskItem> for TaskItem {
+    fn from(t: core::TaskItem) -> Self {
+        Self {
+            ordinal: t.ordinal,
+            text: t.text,
+            status_char: t.status_char.to_string(),
+            completed: t.completed,
+            due_ms: t.due_ms,
+            scheduled_ms: t.scheduled_ms,
+            priority: t.priority,
+            recurrence: t.recurrence,
+            line: t.line,
+            byte_offset: t.byte_offset,
+        }
+    }
+}
+
+/// Task plus the file it lives in, for the vault-wide review view.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TaskWithLocation {
+    pub task: TaskItem,
+    pub path: String,
+    pub file_name: String,
+}
+
+impl From<core::TaskWithLocation> for TaskWithLocation {
+    fn from(t: core::TaskWithLocation) -> Self {
+        Self {
+            task: t.task.into(),
+            path: t.path,
+            file_name: t.file_name,
+        }
+    }
+}
+
+/// Filter shape for `tasks_in_vault`. `None` fields mean "no
+/// restriction on this axis."
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TaskFilter {
+    /// `None` = both open and done; `Some(false)` = only open;
+    /// `Some(true)` = only done.
+    pub completed: Option<bool>,
+    /// Inclusive lower bound for `due_ms`.
+    pub due_from_ms: Option<i64>,
+    /// Exclusive upper bound for `due_ms`.
+    pub due_to_ms: Option<i64>,
+    /// Tasks with priority `>= this` (NULL priorities are excluded
+    /// when this is `Some`).
+    pub priority_at_least: Option<i32>,
+}
+
+impl From<TaskFilter> for core::TaskFilter {
+    fn from(f: TaskFilter) -> Self {
+        Self {
+            completed: f.completed,
+            due_from_ms: f.due_from_ms,
+            due_to_ms: f.due_to_ms,
+            priority_at_least: f.priority_at_least,
+        }
+    }
+}
+
+/// Paged result of `tasks_in_vault`. uniffi can't generate generic
+/// `Page<T>`, so this is the concrete instantiation.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TaskWithLocationPage {
+    pub items: Vec<TaskWithLocation>,
+    pub next_cursor: Option<String>,
+    pub total_filtered: u64,
+}
+
+impl From<core::Page<core::TaskWithLocation>> for TaskWithLocationPage {
+    fn from(p: core::Page<core::TaskWithLocation>) -> Self {
+        Self {
+            items: p.items.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
+            total_filtered: p.total_filtered,
+        }
+    }
+}
+
 /// Summary of a scan operation.
 #[derive(uniffi::Record)]
 pub struct ScanReport {
@@ -1196,6 +1369,58 @@ mod tests {
                 assert!(current_mtime_ms > 0);
             }
             other => panic!("expected WriteConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tasks_for_file_round_trips_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("n.md"),
+            "- [ ] open\n- [x] done 📅 2026-06-01\n",
+        )
+        .unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+        let tasks = session.tasks_for_file("n.md".into()).unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].status_char, " ");
+        assert_eq!(tasks[1].status_char, "x");
+        assert!(tasks[1].completed);
+        assert!(tasks[1].due_ms.is_some());
+    }
+
+    #[test]
+    fn toggle_task_status_round_trips_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("n.md"), "- [ ] thing\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let report = session
+            .toggle_task_status("n.md".into(), 0, "x".into(), None)
+            .expect("toggle ok");
+        assert!(!report.new_content_hash.is_empty());
+
+        let after = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(after, "- [x] thing\n");
+    }
+
+    #[test]
+    fn toggle_task_status_multi_char_status_string_returns_invalid_argument() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("n.md"), "- [ ] thing\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        match session.toggle_task_status("n.md".into(), 0, "xy".into(), None) {
+            Err(VaultError::InvalidArgument { message }) => {
+                assert!(message.contains("one Unicode scalar"), "got: {message}");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 

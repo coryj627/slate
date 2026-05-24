@@ -18,10 +18,10 @@ use std::fs;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
-use slate_core::{CancelToken, FileFilter, Paging, VaultSession};
+use slate_core::{CancelToken, FileFilter, Paging, TaskFilter, VaultSession};
 
 mod common;
-use common::generate_vault;
+use common::{generate_tasks_vault, generate_vault};
 
 const SIZES: &[usize] = &[1_000, 10_000, 50_000];
 
@@ -135,10 +135,65 @@ fn bench_list_files_paged(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_tasks_scan_and_query(c: &mut Criterion) {
+    // Milestone G #115: 10k tasks spread across 1k files (10 per
+    // file). The bench has two timed measurements:
+    //
+    //   - `cold_scan`: wipe `.slate` and run `scan_initial` on a
+    //     vault whose every file carries a Tasks block. This is the
+    //     same shape as `first_open_and_scan` but with tasks in the
+    //     mix, so we can compare scanner cost with and without the
+    //     tasks pipeline running.
+    //   - `tasks_in_vault_first_page`: cache primed; each iteration
+    //     pulls the first page (200 rows) of the vault-wide tasks
+    //     query with the All filter. Drives the TasksReviewView's
+    //     initial render.
+    const FILE_COUNT: usize = 1_000;
+    const TASKS_PER_FILE: usize = 10;
+
+    let mut cold = c.benchmark_group("tasks_cold_scan");
+    cold.sample_size(10);
+    cold.bench_function("1k_files_10k_tasks", |b| {
+        let vault = generate_tasks_vault(FILE_COUNT, TASKS_PER_FILE);
+        let vault_path = vault.path().to_path_buf();
+        b.iter_batched(
+            || {
+                let _ = fs::remove_dir_all(vault_path.join(".slate"));
+                vault_path.clone()
+            },
+            |path| {
+                let session = VaultSession::from_filesystem(path).expect("open vault");
+                black_box(session.scan_initial(&CancelToken::new()).expect("scan"))
+            },
+            BatchSize::SmallInput,
+        );
+        drop(vault);
+    });
+    cold.finish();
+
+    let mut query = c.benchmark_group("tasks_in_vault_first_page");
+    query.sample_size(20);
+    query.bench_function("1k_files_10k_tasks", |b| {
+        let vault = generate_tasks_vault(FILE_COUNT, TASKS_PER_FILE);
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+        session.scan_initial(&CancelToken::new()).expect("prime");
+        b.iter(|| {
+            let page = session
+                .tasks_in_vault(TaskFilter::default(), Paging::first(200))
+                .expect("tasks_in_vault");
+            black_box(page.items.len())
+        });
+        drop(session);
+        drop(vault);
+    });
+    query.finish();
+}
+
 criterion_group!(
     benches,
     bench_first_open_and_scan,
     bench_reopen_with_cache,
-    bench_list_files_paged
+    bench_list_files_paged,
+    bench_tasks_scan_and_query,
 );
 criterion_main!(benches);

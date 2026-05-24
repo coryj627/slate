@@ -15,6 +15,8 @@ pub mod oplog;
 pub mod properties_db;
 pub mod search_db;
 pub mod session;
+pub mod tasks;
+pub mod tasks_db;
 pub mod templates;
 pub mod vault;
 
@@ -29,6 +31,8 @@ pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultInd
 pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{OpKind, OpLogEntry};
+pub use tasks::{extract_tasks, TaskItem};
+pub use tasks_db::{TaskFilter, TaskWithLocation};
 pub use templates::{
     extract_template_metadata, render_template_source, RenderedTemplate, TemplateContext,
     TemplateMetadata, TemplatePrompt, TemplateSummary,
@@ -83,6 +87,13 @@ pub enum VaultError {
     /// "feature not landed yet" (#93 item 2).
     #[error("operation not supported yet: {feature}")]
     Unsupported { feature: String },
+
+    /// Caller passed an argument that doesn't make sense for the
+    /// current vault state — e.g. an out-of-range `ordinal` to
+    /// `toggle_task_status`, or a multi-character status char. The
+    /// file is left untouched.
+    #[error("invalid argument: {message}")]
+    InvalidArgument { message: String },
 
     /// Returned from `save_text` when an `expected_content_hash` was
     /// supplied and the on-disk file no longer matches it — i.e. an
