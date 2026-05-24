@@ -2540,4 +2540,197 @@ final class AppStateTests: XCTestCase {
             "the conflict should be attributed to the file that was overwritten"
         )
     }
+
+    // MARK: - Toggle-while-dirty buffer protection (#158)
+    //
+    // The toggle path's post-save reload (`reloadEditorBufferAfterToggle`)
+    // overwrites `currentNoteText` from disk. If the buffer has
+    // unsaved edits, those are silently dropped. The FFI's
+    // WriteConflict check doesn't catch this case because
+    // `currentNoteContentHash` tracks the disk hash, not the
+    // buffer hash. AppState now guards the toggle entry points
+    // against this scenario.
+
+    func testToggleCurrentTaskNoOpsWhenEditorHasUnsavedChanges() async throws {
+        let vault = tempDir.appendingPathComponent("dirty-toggle-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] still open\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+
+        // Simulate the user typing into the editor — pushes the
+        // buffer dirty without touching disk. updateEditorText is
+        // the same path the SwiftUI Binding uses.
+        let originalText = try XCTUnwrap(state.currentNoteText)
+        state.updateEditorText(originalText + "\nuser edit\n")
+        XCTAssertTrue(
+            state.hasUnsavedChanges,
+            "precondition: editor buffer is dirty"
+        )
+
+        let task = try XCTUnwrap(state.currentNoteTasks.first)
+        let toggleResult = state.toggleCurrentTask(task)
+
+        XCTAssertNil(
+            toggleResult,
+            "toggle should be a no-op while editor is dirty; returns nil"
+        )
+
+        // The on-disk file is untouched.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("a.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            onDisk, "- [ ] still open\n",
+            "on-disk file must not change when the toggle is blocked"
+        )
+        // The buffer's user edits stay intact.
+        XCTAssertEqual(
+            state.currentNoteText,
+            originalText + "\nuser edit\n",
+            "editor buffer must keep the user's unsaved edits"
+        )
+        // Dirty flag stays true so the next save still flushes.
+        XCTAssertTrue(state.hasUnsavedChanges)
+        // No conflict UI fires — this isn't a conflict, it's a
+        // pre-emptive block.
+        XCTAssertNil(state.currentSaveConflict)
+        // Panel state reflects the (unchanged) on-disk task.
+        XCTAssertFalse(
+            state.currentNoteTasks.first?.completed ?? true,
+            "task remains open since the toggle was blocked"
+        )
+    }
+
+    func testToggleVaultTaskNoOpsWhenTogglingActiveFileWithDirtyBuffer() async throws {
+        let vault = tempDir.appendingPathComponent("dirty-vault-toggle")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try "- [ ] from review\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        // Select the file + dirty its buffer so the review's
+        // toggle would target the loaded-and-dirty file.
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+        let originalText = try XCTUnwrap(state.currentNoteText)
+        state.updateEditorText(originalText + "\ndirty edit\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        let row = try XCTUnwrap(state.vaultTasks.first)
+        let toggleResult = state.toggleVaultTask(row)
+
+        XCTAssertNil(
+            toggleResult,
+            "toggleVaultTask should no-op against the loaded-and-dirty file"
+        )
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("a.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            onDisk, "- [ ] from review\n",
+            "on-disk file must not change when the toggle is blocked"
+        )
+        XCTAssertEqual(
+            state.currentNoteText,
+            originalText + "\ndirty edit\n",
+            "editor buffer keeps the user's unsaved edits"
+        )
+        XCTAssertTrue(state.hasUnsavedChanges)
+        // The row in the vault list still shows the task as open
+        // (no re-query was triggered, but the underlying state
+        // didn't change so this should hold regardless).
+        XCTAssertFalse(state.vaultTasks.first?.task.completed ?? true)
+    }
+
+    func testToggleVaultTaskProceedsWhenTogglingUnloadedFile() async throws {
+        let vault = tempDir.appendingPathComponent("unloaded-toggle-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        // Two files: a.md (we'll load + dirty), b.md (we'll
+        // toggle from the review surface). Dirtying a.md must NOT
+        // block toggles on b.md because b.md has no live buffer.
+        try "- [ ] task in A\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md")
+        )
+        try "- [ ] task in B\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("b.md")
+        )
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.tasksLoadTask?.value
+        // Dirty the editor buffer for a.md.
+        let originalAText = try XCTUnwrap(state.currentNoteText)
+        state.updateEditorText(originalAText + "\nedit in A\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+
+        // Find the row from b.md — that's the unloaded file.
+        let bRow = try XCTUnwrap(
+            state.vaultTasks.first(where: { $0.path == "b.md" }),
+            "fixture should expose b.md's task in the vault tasks list"
+        )
+        let toggleResult = state.toggleVaultTask(bRow)
+        XCTAssertNotNil(
+            toggleResult,
+            "toggle on an unloaded file should proceed even when the loaded buffer is dirty"
+        )
+        await toggleResult?.value
+
+        // b.md flipped on disk.
+        let onDiskB = try String(
+            contentsOf: vault.appendingPathComponent("b.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            onDiskB.contains("- [x] task in B"),
+            "b.md's task should have been toggled to done; got: \(onDiskB)"
+        )
+
+        // a.md untouched on disk (still has the open task).
+        let onDiskA = try String(
+            contentsOf: vault.appendingPathComponent("a.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            onDiskA, "- [ ] task in A\n",
+            "a.md must stay untouched"
+        )
+        // a.md's buffer still has the user's unsaved edits.
+        XCTAssertEqual(
+            state.currentNoteText,
+            originalAText + "\nedit in A\n",
+            "a.md's buffer keeps the user's edits"
+        )
+        XCTAssertTrue(state.hasUnsavedChanges)
+    }
 }

@@ -1327,6 +1327,22 @@ final class AppState: ObservableObject {
     func toggleCurrentTask(_ task: TaskItem) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
         guard let path = loadedFilePath else { return nil }
+        // #158: The editor buffer is the user's authority. The
+        // toggle's post-save reload (`reloadEditorBufferAfterToggle`)
+        // unconditionally overwrites `currentNoteText` from disk —
+        // and the FFI's WriteConflict check doesn't catch this case
+        // because `currentNoteContentHash` tracks the *disk* hash,
+        // not the buffer hash (the buffer can drift dirty while the
+        // disk hash stays valid). So a toggle while the editor has
+        // unsaved changes would silently drop those edits. Block
+        // here, prompt the user to save first.
+        guard !hasUnsavedChanges else {
+            postAccessibilityAnnouncement(
+                "Cannot toggle task. The editor has unsaved changes in \(filename(of: path)). Save the note first.",
+                priority: .high
+            )
+            return nil
+        }
         let newChar = task.completed ? " " : "x"
         let expected = currentNoteContentHash
         let toggle: Task<Void, Never> = Task { [weak self] in
@@ -1381,17 +1397,12 @@ final class AppState: ObservableObject {
             // the on-disk file changed and the cached content
             // hash needs updating to match.
             currentNoteContentHash = report.newContentHash
-            // If the editor has unsaved buffer changes, the
-            // toggle just clobbered them on disk — but the editor
-            // buffer is the user's authority. Mark dirty so the
-            // next save re-asserts the buffer. With expectedHash
-            // set above, this branch wouldn't have been taken
-            // anyway (the FFI would have returned WriteConflict),
-            // so in practice we reach here with the buffer
-            // already matching disk except for the toggled char.
-            // Re-read the buffer + reflect the toggle so
-            // `savedBaselineText` and `currentNoteText` stay in
-            // sync.
+            // The `toggleCurrentTask` guard (#158) blocks toggles
+            // while `hasUnsavedChanges == true`, so we only reach
+            // this branch with the buffer already matching disk
+            // except for the toggled char. Re-reading from disk
+            // back into `currentNoteText` + `savedBaselineText` is
+            // therefore safe — no buffer edits to lose.
             refreshTasksAfterSave(session: session, path: path)
             // Also refresh the editor's view of the file so the
             // toggled character appears in the rendered text.
@@ -1541,6 +1552,19 @@ final class AppState: ObservableObject {
     @discardableResult
     func toggleVaultTask(_ row: TaskWithLocation) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
+        // #158: Toggling the currently-loaded file's task would
+        // clobber any unsaved buffer edits on the post-save
+        // reload — see the comment in `toggleCurrentTask` for the
+        // full reasoning. Toggles against *other* files in the
+        // review are safe because there's no live editor buffer
+        // to lose, so we only block the loaded-file case.
+        if row.path == loadedFilePath && hasUnsavedChanges {
+            postAccessibilityAnnouncement(
+                "Cannot toggle task. The editor has unsaved changes in \(filename(of: row.path)). Save the note first.",
+                priority: .high
+            )
+            return nil
+        }
         let newChar = row.task.completed ? " " : "x"
         let path = row.path
         let ordinal = row.task.ordinal

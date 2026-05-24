@@ -161,7 +161,11 @@ struct TasksReviewView: View {
     }
 
     private func rowView(for row: TaskWithLocation) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        // #158: Only block the row whose file matches the editor's
+        // dirty buffer — toggling other files from the review
+        // surface is safe because there's no live buffer to lose.
+        let blocked = (row.path == appState.loadedFilePath && appState.hasUnsavedChanges)
+        return HStack(alignment: .top, spacing: 8) {
             Button {
                 appState.toggleVaultTask(row)
             } label: {
@@ -169,8 +173,13 @@ struct TasksReviewView: View {
                     .imageScale(.large)
             }
             .buttonStyle(.plain)
+            .disabled(blocked)
             .accessibilityLabel(row.task.completed ? "Mark incomplete" : "Mark complete")
-            .accessibilityHint("Toggles the task between open and done.")
+            .accessibilityHint(
+                blocked
+                    ? "Save \(row.fileName) first. Toggle is disabled while the editor has unsaved changes."
+                    : "Toggles the task between open and done."
+            )
             .accessibilityAddTraits(row.task.completed ? [.isSelected] : [])
 
             Button {

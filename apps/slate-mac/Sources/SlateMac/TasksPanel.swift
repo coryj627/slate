@@ -115,7 +115,14 @@ struct TasksPanel: View {
     }
 
     private func checkbox(for task: TaskItem) -> some View {
-        Button {
+        // #158: Block toggle interaction while the editor has
+        // unsaved changes. The toggle's post-save reload would
+        // overwrite the buffer otherwise; AppState.toggleCurrentTask
+        // also no-ops in this case but disabling here gives the
+        // user a visible "save first" signal and routes VoiceOver
+        // away from a button that would do nothing.
+        let blocked = appState.hasUnsavedChanges
+        return Button {
             appState.toggleCurrentTask(task)
         } label: {
             // Single-character placeholder; the real visual is a
@@ -126,13 +133,22 @@ struct TasksPanel: View {
                 .imageScale(.large)
         }
         .buttonStyle(.plain)
+        .disabled(blocked)
         .accessibilityLabel(task.completed ? "Mark incomplete" : "Mark complete")
-        .accessibilityHint("Toggles the task between open and done.")
+        .accessibilityHint(
+            blocked
+                ? "Save the note first. Toggle is disabled while the editor has unsaved changes."
+                : "Toggles the task between open and done."
+        )
         .accessibilityAddTraits(task.completed ? [.isSelected] : [])
         // WCAG 1.4.1: status NOT communicated via colour alone.
         // The accessibility label carries the explicit state; the
         // SF Symbol carries the visual; both flip together.
-        .help(task.completed ? "Mark incomplete" : "Mark complete")
+        .help(
+            blocked
+                ? "Save the note first. Toggle is disabled while the editor has unsaved changes."
+                : (task.completed ? "Mark incomplete" : "Mark complete")
+        )
     }
 
     private func taskBody(_ task: TaskItem) -> some View {
