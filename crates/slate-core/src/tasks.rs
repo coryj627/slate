@@ -63,10 +63,20 @@ pub struct TaskItem {
 /// Extract tasks from a Markdown source string in document order.
 ///
 /// Returns an empty Vec for sources with no task lines (including
-/// the empty string). Fenced code blocks are skipped so a task-list
-/// example pasted into a tutorial doesn't pollute the Tasks panel.
+/// the empty string). The following ranges are excluded from the
+/// task-line scan so structurally-non-task content doesn't pollute
+/// the Tasks panel:
+///
+/// - **Fenced code blocks** (```` ``` ```` / `~~~`) — a task-list
+///   syntax pasted into a tutorial isn't a task.
+/// - **HTML blocks** (`<div>` / `<details>` / etc.) — task-shaped
+///   lines inside raw HTML are presentational, not actionable.
+/// - **YAML frontmatter** (between leading `---` delimiters) —
+///   YAML list elements that happen to look like `- [ ] x` are
+///   structured data, not tasks; they're already picked up by the
+///   properties pipeline.
 pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
-    let code_ranges = fenced_code_block_ranges(source);
+    let excluded = excluded_byte_ranges(source);
     let mut out = Vec::new();
     let mut ordinal: u32 = 0;
     let mut byte_offset: u32 = 0;
@@ -78,7 +88,7 @@ pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
         let line_start = byte_offset;
         byte_offset = byte_offset.saturating_add(line.len() as u32);
 
-        if byte_in_code_block(line_start as usize, &code_ranges) {
+        if byte_in_excluded_range(line_start as usize, &excluded) {
             continue;
         }
         let Some(parsed) = parse_task_line(trimmed_end) else {
@@ -267,24 +277,50 @@ fn parse_date_to_ms(s: &str) -> Option<i64> {
     Some(dt.timestamp_millis())
 }
 
-// --- Code-block exclusion ---
+// --- Range exclusion ---
 
-/// Byte ranges of fenced code blocks in `source`. A task-shaped line
-/// inside one of these ranges is treated as documentation, not a
-/// task. Indented code blocks are not detected here — they'd
-/// conflict with the legitimate "nested task indented under a list"
-/// pattern, and the Milestone G acceptance criteria don't call them
-/// out.
-fn fenced_code_block_ranges(source: &str) -> Vec<(usize, usize)> {
+/// Byte ranges in `source` that the task-line scanner should skip.
+///
+/// Covers three families of "looks like a task line but isn't":
+///
+/// 1. **Fenced code blocks** — pulldown-cmark `Tag::CodeBlock`.
+///    Indented code blocks are *not* collected because that would
+///    conflict with the legitimate nested-task-under-list pattern.
+/// 2. **HTML blocks** — pulldown-cmark `Tag::HtmlBlock`. Catches
+///    `<div>`, `<details>`, and the rest. Task-shaped lines inside
+///    raw HTML are presentational, not actionable (#137 / red-team
+///    H2).
+/// 3. **YAML frontmatter** — leading `--- … ---` envelope. The
+///    properties pipeline already extracts YAML list elements that
+///    look like `- [ ] x` as structured data; surfacing them again
+///    in the Tasks panel double-counts the same row (#136 /
+///    red-team H1).
+fn excluded_byte_ranges(source: &str) -> Vec<(usize, usize)> {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
-    let parser = Parser::new(source).into_offset_iter();
     let mut ranges = Vec::new();
-    let mut stack: Vec<usize> = Vec::new();
+
+    // (3) Frontmatter — cheap to check; covers the most common
+    // false-positive shape.
+    if let Some(fm) = crate::frontmatter::frontmatter_range(source) {
+        ranges.push((fm.start, fm.end));
+    }
+
+    // (1) + (2) Code blocks and HTML blocks via pulldown-cmark's
+    // offset iterator. One pass, two tag families collected.
+    let parser = Parser::new(source).into_offset_iter();
+    let mut code_stack: Vec<usize> = Vec::new();
+    let mut html_stack: Vec<usize> = Vec::new();
     for (event, range) in parser {
         match event {
-            Event::Start(Tag::CodeBlock(_)) => stack.push(range.start),
+            Event::Start(Tag::CodeBlock(_)) => code_stack.push(range.start),
             Event::End(TagEnd::CodeBlock) => {
-                if let Some(start) = stack.pop() {
+                if let Some(start) = code_stack.pop() {
+                    ranges.push((start, range.end));
+                }
+            }
+            Event::Start(Tag::HtmlBlock) => html_stack.push(range.start),
+            Event::End(TagEnd::HtmlBlock) => {
+                if let Some(start) = html_stack.pop() {
                     ranges.push((start, range.end));
                 }
             }
@@ -295,7 +331,7 @@ fn fenced_code_block_ranges(source: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-fn byte_in_code_block(byte: usize, ranges: &[(usize, usize)]) -> bool {
+fn byte_in_excluded_range(byte: usize, ranges: &[(usize, usize)]) -> bool {
     ranges.iter().any(|(s, e)| byte >= *s && byte < *e)
 }
 
@@ -389,6 +425,61 @@ mod tests {
         let tasks = extract_tasks(src);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].text, "real task");
+    }
+
+    // --- #136: frontmatter task-shape false positives ---
+
+    #[test]
+    fn ignores_task_shaped_lines_inside_yaml_frontmatter() {
+        // YAML list elements that happen to look like markdown
+        // tasks are structured data, not actionable items. The
+        // properties pipeline already indexes them; including
+        // them in the Tasks panel would double-count.
+        let src = "---\ntitle: x\nitems:\n  - [ ] task-in-yaml\n---\n\n# Body\n\n- [ ] real task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1, "got: {tasks:?}");
+        assert_eq!(tasks[0].text, "real task");
+    }
+
+    #[test]
+    fn body_task_line_and_byte_offset_correct_after_frontmatter_skip() {
+        // Confirm the line/byte_offset accounting still tracks the
+        // source-document position, not a frontmatter-stripped one.
+        let src = "---\ntitle: x\n---\n- [ ] body task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "body task");
+        assert_eq!(tasks[0].line, 4);
+        // "---\n" (4) + "title: x\n" (9) + "---\n" (4) = 17
+        assert_eq!(tasks[0].byte_offset, 17);
+    }
+
+    #[test]
+    fn no_frontmatter_still_extracts_every_body_task() {
+        let src = "# Body\n\n- [ ] one\n- [ ] two\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 2);
+    }
+
+    // --- #137: HTML-block task-shape false positives ---
+
+    #[test]
+    fn ignores_task_shaped_lines_inside_html_blocks() {
+        let src = "<div>\n- [ ] inside html\n</div>\n\n- [ ] real task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1, "got: {tasks:?}");
+        assert_eq!(tasks[0].text, "real task");
+    }
+
+    #[test]
+    fn ignores_task_shaped_lines_inside_details_blocks() {
+        // <details> is a common Obsidian collapse pattern; tasks
+        // inside should not leak into the panel either.
+        let src =
+            "<details>\n<summary>Old TODO</summary>\n- [ ] historical task\n</details>\n\n- [ ] active task\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 1, "got: {tasks:?}");
+        assert_eq!(tasks[0].text, "active task");
     }
 
     #[test]
