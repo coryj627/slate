@@ -255,10 +255,16 @@ fn bench_full_text_search(c: &mut Criterion) {
         .scan_initial(&CancelToken::new())
         .expect("prime scan");
 
+    // Construct a single CancelToken outside the iter loop so the
+    // hot-path timing measures search cost only, not per-iter
+    // token construction (Codoki PR #155 perf suggestion). The
+    // token's purpose here is just to satisfy the API; we never
+    // call .cancel() so a shared instance is fine.
+    let cancel = CancelToken::new();
     group.bench_function("10k_files_common_token", |b| {
         b.iter(|| {
             let result = session
-                .full_text_search("lorem", &SearchScope::Vault, &CancelToken::new())
+                .full_text_search("lorem", &SearchScope::Vault, &cancel)
                 .expect("search");
             black_box(result.rows.len())
         });
