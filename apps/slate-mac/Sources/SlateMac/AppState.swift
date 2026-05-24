@@ -1577,8 +1577,15 @@ final class AppState: ObservableObject {
         // Append `.md` if the user omitted it. The picker's "default
         // name" already includes it, but a paste from elsewhere
         // might not — adding it here keeps every created template
-        // note Markdown-shaped.
-        let normalized = trimmed.hasSuffix(".md") ? trimmed : "\(trimmed).md"
+        // note Markdown-shaped. `pathExtension` is more robust than
+        // a bare `hasSuffix(".md")`: it correctly handles multi-dot
+        // names like `archive.tar.MD` (extension is `MD`, lowercased
+        // matches `md`, so we leave it alone instead of producing
+        // `archive.tar.MD.md` — Codoki PR #154 suggestion). Case-
+        // insensitive comparison also preserves the user's casing
+        // for any-case `.md` / `.MD` / `.Md` (#133).
+        let normalized = (trimmed as NSString).pathExtension.lowercased() == "md"
+            ? trimmed : "\(trimmed).md"
         // `title` for the rendered template is the file stem of the
         // new note, not the template's own name. Matches how
         // `{{title}}` is documented to behave in §8.2.
@@ -1706,18 +1713,48 @@ final class AppState: ObservableObject {
 
     /// Convenience: the new-note name field's default value for a
     /// freshly-selected template. Templates whose name starts with
-    /// `Daily` get a date suffix so the user can confirm-Enter on
-    /// the daily-note flow without typing; everything else
-    /// pre-fills with the template's own name.
+    /// the **word** `Daily` get a date suffix so the user can
+    /// confirm-Enter on the daily-note flow without typing;
+    /// everything else pre-fills with the template's own name.
+    ///
+    /// The date is joined with a **space** rather than a dash so
+    /// multi-word names read naturally: `Daily Standup` becomes
+    /// `Daily Standup 2026-05-23.md`, not the awkward
+    /// `Daily Standup-2026-05-23.md` (#133). A bare `Daily` template
+    /// becomes `Daily 2026-05-23.md`, which matches the spacing most
+    /// users would type by hand.
+    ///
+    /// "Word" prefix means `daily` is either the whole name or is
+    /// followed by a non-alphanumeric character — so `Daily`,
+    /// `Daily Standup`, `Daily-notes`, and `Daily.md` all qualify,
+    /// but `Dailyness` and `Daily123` don't (Codoki PR #154
+    /// suggestion).
     func defaultNewNoteName(for template: TemplateSummary) -> String {
-        if template.name.lowercased().hasPrefix("daily") {
+        if Self.isDailyTemplateName(template.name) {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.timeZone = TimeZone(secondsFromGMT: 0)
             formatter.dateFormat = "yyyy-MM-dd"
-            return "\(template.name)-\(formatter.string(from: Date())).md"
+            return "\(template.name) \(formatter.string(from: Date())).md"
         }
         return "\(template.name).md"
+    }
+
+    /// `true` iff `name` begins with the standalone word `daily`
+    /// (case-insensitive). Catches `Daily`, `Daily Standup`,
+    /// `Daily-notes`; rejects `Dailyness`, `Daily123`. Pulled out
+    /// + made static so tests can drive it directly without
+    /// constructing a `TemplateSummary`.
+    static func isDailyTemplateName(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        guard lower.hasPrefix("daily") else { return false }
+        let afterIdx = lower.index(lower.startIndex, offsetBy: "daily".count)
+        if afterIdx == lower.endIndex { return true }
+        let next = lower[afterIdx]
+        // Anything that isn't a continuation of the word `daily` is
+        // a word boundary: whitespace, dashes, periods, slashes are
+        // all valid daily-template separators.
+        return !next.isLetter && !next.isNumber
     }
 
     /// Post a polite announcement through AppKit's accessibility
