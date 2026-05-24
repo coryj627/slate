@@ -169,6 +169,28 @@ pub fn read_headings(path: String) -> Result<Vec<Heading>, VaultError> {
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Allowlist for `toggle_task_status`'s `new_status_char` argument.
+///
+/// **Printable ASCII (0x20..=0x7E)** minus `[` and `]` (would
+/// unbalance the bracket pair) and any whitespace control codes
+/// that aren't space. Tabs / newlines / carriage returns would
+/// split the task line into two and corrupt the on-disk file —
+/// the file would re-parse with the task gone (see red-team L4
+/// probe results: `"\n"` rewrites `- [\n] body` which the line
+/// scanner then loses entirely).
+///
+/// The space character (0x20) is explicitly allowed because it's
+/// the canonical "unchecked" status. The remaining excluded ASCII
+/// — control chars (0x00..=0x1F, 0x7F) — aren't 0x20..=0x7E so
+/// they're already rejected by the range check.
+fn is_allowed_status_char(c: char) -> bool {
+    let b = c as u32;
+    (0x20..=0x7E).contains(&b) && c != '[' && c != ']' && c != '\t' // 0x09 — already outside the range, but the
+                                                                    // intent here is to be explicit about WHY
+                                                                    // it's rejected so a future widening of the
+                                                                    // range doesn't accidentally re-admit it.
+}
+
 /// FFI-exposed vault session. Wraps `slate_core::VaultSession`.
 ///
 /// Constructed via `VaultSession.openFilesystem(rootPath:)` on the
@@ -397,9 +419,21 @@ impl VaultSession {
     /// through `save_text` so the index, op-log, and conflict
     /// detection stay consistent with editor saves.
     ///
-    /// `new_status_char` must be exactly one Unicode scalar (typically
-    /// `" "`, `"x"`, `"/"`, or `"-"`). Anything else returns
-    /// `InvalidArgument`.
+    /// `new_status_char` must be **exactly one printable ASCII
+    /// character**, excluding `[`, `]`, `\n`, `\r`, `\t`. This is
+    /// narrower than "any Unicode scalar" by design:
+    ///
+    /// - `\n` / `\r` would split the task line in two and corrupt
+    ///   the file (re-parse would lose the task entirely).
+    /// - `[` / `]` would unbalance the `[X]` bracket pair and
+    ///   confuse downstream parsing.
+    /// - Non-ASCII / control characters either don't render as a
+    ///   task in any consumer or break the GFM checkbox convention.
+    ///
+    /// The Mac UI today only emits `' '` / `'x'` / `'/'` / `'-'`,
+    /// well inside the allowlist. Scripted callers and tester
+    /// explorations get a clean `InvalidArgument` instead of
+    /// silent file corruption (#147 / red-team L4).
     pub fn toggle_task_status(
         &self,
         path: String,
@@ -409,13 +443,21 @@ impl VaultSession {
     ) -> Result<SaveReport, VaultError> {
         let mut chars = new_status_char.chars();
         let c = chars.next().ok_or(VaultError::InvalidArgument {
-            message: "new_status_char must be exactly one Unicode scalar (got empty string)"
-                .to_string(),
+            message:
+                "new_status_char must be exactly one printable ASCII character (got empty string)"
+                    .to_string(),
         })?;
         if chars.next().is_some() {
             return Err(VaultError::InvalidArgument {
                 message: format!(
-                    "new_status_char must be exactly one Unicode scalar (got {new_status_char:?})"
+                    "new_status_char must be exactly one printable ASCII character (got {new_status_char:?} — multiple scalars / grapheme cluster)"
+                ),
+            });
+        }
+        if !is_allowed_status_char(c) {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "new_status_char {c:?} is not allowed — must be printable ASCII (0x20..=0x7E), excluding `[`, `]`, `\\n`, `\\r`, `\\t`"
                 ),
             });
         }
@@ -1418,9 +1460,96 @@ mod tests {
 
         match session.toggle_task_status("n.md".into(), 0, "xy".into(), None) {
             Err(VaultError::InvalidArgument { message }) => {
-                assert!(message.contains("one Unicode scalar"), "got: {message}");
+                assert!(
+                    message.contains("printable ASCII"),
+                    "expected printable-ASCII message; got: {message}"
+                );
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    // --- #147: tighter status-char allowlist on the FFI ---
+    //
+    // The previous shape accepted any single Unicode scalar, so a
+    // caller passing "\n" / "[" / "🇺🇸" / "\u{200D}" could either
+    // corrupt the file outright (newline splits the task line) or
+    // produce a task that no renderer recognises. The Mac UI never
+    // exercises these — it hardcodes ' ' / 'x' / '/' / '-' — but
+    // scripted callers and tester explorations get a clean error
+    // instead of silent on-disk damage.
+
+    #[test]
+    fn toggle_task_status_rejects_newline_status_char() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("n.md"), "- [ ] thing\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        match session.toggle_task_status("n.md".into(), 0, "\n".into(), None) {
+            Err(VaultError::InvalidArgument { message }) => {
+                assert!(
+                    message.contains("printable ASCII"),
+                    "expected allowlist rejection; got: {message}"
+                );
+            }
+            other => panic!("expected InvalidArgument for newline, got {other:?}"),
+        }
+        // File untouched — the rejection must happen before any IO.
+        let on_disk = std::fs::read_to_string(tmp.path().join("n.md")).unwrap();
+        assert_eq!(on_disk, "- [ ] thing\n");
+    }
+
+    #[test]
+    fn toggle_task_status_rejects_bracket_status_chars() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("n.md"), "- [ ] thing\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        for bad in ["[", "]"] {
+            match session.toggle_task_status("n.md".into(), 0, bad.into(), None) {
+                Err(VaultError::InvalidArgument { .. }) => {}
+                other => panic!("expected InvalidArgument for {bad:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn toggle_task_status_rejects_non_ascii_status_char() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("n.md"), "- [ ] thing\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        for bad in ["✓", "é", "\u{200D}"] {
+            match session.toggle_task_status("n.md".into(), 0, bad.into(), None) {
+                Err(VaultError::InvalidArgument { .. }) => {}
+                other => panic!("expected InvalidArgument for {bad:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn toggle_task_status_accepts_the_common_status_set() {
+        // Document the canonical accepted set so the contract is
+        // visible in tests, not just doc comments. Each call must
+        // succeed; the resulting status_char is what we asked for.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("n.md"), "- [ ] thing\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        for ch in [" ", "x", "X", "/", "-", "!", "?"] {
+            session
+                .toggle_task_status("n.md".into(), 0, ch.into(), None)
+                .unwrap_or_else(|e| {
+                    panic!("expected {ch:?} to be accepted by the allowlist; got {e:?}")
+                });
         }
     }
 
