@@ -8,7 +8,7 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 authors = ["Cory Joseph <cj@startingblind.com>"]
 repository = "https://github.com/coryj627/slate"
 # 1.89 picks up stable `std::fs::File::lock`, which the oplog's first-
