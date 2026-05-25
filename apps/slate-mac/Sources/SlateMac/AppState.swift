@@ -143,6 +143,22 @@ struct SaveConflict: Equatable {
     let currentMtimeMs: Int64
 }
 
+/// Per-incident snapshot for the editor's embed-preview popover
+/// (#188). Carries enough state for the popover to render the
+/// resolved embed without re-querying the backend — the resolution
+/// has already been cached by `loadCurrentNoteEmbedResolutions`.
+///
+/// `sourceLine` is the 1-based line number of the embed's source
+/// `![[…]]` reference in the editor buffer. Surfaced in the
+/// popover header so users have textual spatial bearing without
+/// AppKit geometry plumbing (audit #209). Nil when the caller
+/// can't compute it (synthetic callers in tests).
+struct EmbedPreview: Equatable {
+    let target: String
+    let resolution: EmbedResolution
+    let sourceLine: Int?
+}
+
 /// What edit the user was trying to make when a property-edit
 /// `WriteConflict` fired. Carries enough state for the resolve
 /// helpers to re-issue the original edit verbatim.
@@ -404,6 +420,13 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight embed-resolution task so tests can
     /// `await state.embedsLoadTask?.value` for a settled state.
     private(set) var embedsLoadTask: Task<Void, Never>?
+
+    /// Discriminated state for the editor's Cmd+E embed-preview
+    /// popover. The editor's keyDown handler computes the embed
+    /// at cursor and calls `requestEmbedPreview(target:)`; the
+    /// popover dismisses via `dismissEmbedPreview()`. Nil when
+    /// no popover is active.
+    @Published var pendingEmbedPreview: EmbedPreview?
 
     // MARK: Tasks (#113 + #114 — Milestone G UI)
 
@@ -855,6 +878,7 @@ final class AppState: ObservableObject {
             currentOutgoingLinks = []
             currentNoteProperties = []
             currentNoteEmbedResolutions = [:]
+            pendingEmbedPreview = nil
             currentNoteTasks = []
             isLoadingNote = false
             isLoadingLinks = false
@@ -885,6 +909,9 @@ final class AppState: ObservableObject {
         // synchronously so the panel falls back to "not yet
         // resolved" placeholders until the new resolutions land.
         currentNoteEmbedResolutions = [:]
+        // Drop any open embed-preview popover too — its target may
+        // not exist in the new file's embed set.
+        pendingEmbedPreview = nil
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
@@ -1177,6 +1204,7 @@ final class AppState: ObservableObject {
         currentOutgoingLinks = []
         currentNoteProperties = []
         currentNoteEmbedResolutions = [:]
+        pendingEmbedPreview = nil
         embedsLoadError = nil
         linksLoadError = nil
         currentNoteTasks = []
@@ -1543,6 +1571,60 @@ final class AppState: ObservableObject {
     /// point + announcement shape.
     func openEmbedTarget(_ path: String) {
         navigate(to: path, kind: "Opened embed source")
+    }
+
+    /// Pop the editor's Cmd+E embed-preview popover for `target`.
+    /// `target` is the cache key form (target + optional `#heading`
+    /// / `^block` suffix); we look up the already-resolved entry
+    /// in `currentNoteEmbedResolutions` rather than re-resolving.
+    /// No-op when the embed isn't in the cache (e.g. the user
+    /// pressed Cmd+E before the resolutions finished loading).
+    ///
+    /// Audit #211: previously this also posted a "preview opened"
+    /// AT announcement which competed with the popover's own
+    /// `.accessibilityLabel` + the EmbedView's disclosure label,
+    /// firing three near-identical sentences back to back. Dropped
+    /// the action confirmation — the popover's label is the
+    /// canonical "what you're looking at" message.
+    ///
+    /// Audit #212: rapid double Cmd+E with the same target used to
+    /// re-fire side effects without state changes. Short-circuit
+    /// when the same target is already pending so the popover
+    /// behaves like an idempotent open.
+    func requestEmbedPreview(target: String, sourceLine: Int? = nil) {
+        // Idempotency: re-firing Cmd+E on the exact same embed
+        // occurrence (same target AND same source line) is a
+        // no-op. A second Cmd+E on a different occurrence of
+        // the same target — `![[foo]]` appearing twice on
+        // different lines — still updates the popover so the
+        // header's line number reflects where the user actually
+        // is (Codoki PR #206).
+        if let existing = pendingEmbedPreview,
+            existing.target == target,
+            existing.sourceLine == sourceLine
+        {
+            return
+        }
+        guard let resolution = currentNoteEmbedResolutions[target] else {
+            postAccessibilityAnnouncement(
+                "No resolved embed at cursor.",
+                priority: .medium
+            )
+            return
+        }
+        pendingEmbedPreview = EmbedPreview(
+            target: target,
+            resolution: resolution,
+            sourceLine: sourceLine
+        )
+    }
+
+    /// Dismiss the embed-preview popover. Called by the popover's
+    /// SwiftUI binding when the user clicks outside, presses Esc,
+    /// or activates "Jump to source" (which closes the popover
+    /// and navigates).
+    func dismissEmbedPreview() {
+        pendingEmbedPreview = nil
     }
 
     /// Compose the lookup key for an embed in `currentNoteEmbedResolutions`.
