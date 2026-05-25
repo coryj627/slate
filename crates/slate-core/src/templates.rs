@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::format::{strftime::StrftimeItems, Item};
 use chrono::{DateTime, Utc};
 
-use crate::frontmatter::{extract_frontmatter, frontmatter_range, PropertyValue};
+use crate::frontmatter::{self, extract_frontmatter, PropertyValue};
 
 // --- Types ---------------------------------------------------------
 
@@ -362,27 +362,14 @@ pub(crate) fn description_from_source(source: &str) -> Option<String> {
             }
         }
     }
-    let body_start = source_after_frontmatter(source);
-    for line in source[body_start..].lines() {
+    let body = frontmatter::body_after_frontmatter(source);
+    for line in body.lines() {
         let trimmed = line.trim();
         if !trimmed.is_empty() {
             return Some(truncate_chars(trimmed, 120));
         }
     }
     None
-}
-
-/// Byte offset of the first character after the closing `---` line.
-/// `0` when there's no frontmatter.
-fn source_after_frontmatter(source: &str) -> usize {
-    let Some(range) = frontmatter_range(source) else {
-        return 0;
-    };
-    let after_body = &source[range.end..];
-    match after_body.find('\n') {
-        Some(nl) => range.end + nl + 1,
-        None => source.len(),
-    }
 }
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {

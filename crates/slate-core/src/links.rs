@@ -100,11 +100,31 @@ pub struct ParsedLink {
 /// Pure function — no IO, no allocation beyond the returned vec and
 /// per-link owned strings. Safe to call on huge inputs (sizing is
 /// driven by the number of links, not the source length).
+///
+/// YAML frontmatter is skipped before parsing (#235): wikilink values
+/// inside YAML scalars (`related: "[[Other Note]]"`) reach the link
+/// graph through the property mechanism (`PropertyValue::Wikilink`
+/// in `frontmatter::extract_frontmatter`), and Markdown links inside
+/// YAML strings are pure noise. Emitted `span_start` / `span_end`
+/// are shifted back into the original-source coordinate space so
+/// callers can keep indexing into the full source they passed in.
 pub fn extract_links(source: &str) -> Vec<ParsedLink> {
-    let (md_links, code_ranges) = walk_markdown(source);
-    let wiki_links = scan_wikilinks(source, &code_ranges);
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let body_offset = source.len() - body.len();
+
+    let (md_links, code_ranges) = walk_markdown(body);
+    let wiki_links = scan_wikilinks(body, &code_ranges);
 
     let mut out: Vec<ParsedLink> = md_links.into_iter().chain(wiki_links).collect();
+    if body_offset > 0 {
+        // Shift offsets back into the original-source coordinate
+        // space. No-op for the common no-frontmatter path because
+        // `body_offset == 0`.
+        for link in &mut out {
+            link.span_start += body_offset;
+            link.span_end += body_offset;
+        }
+    }
     // Document order so callers (and tests) can rely on positional
     // semantics without sorting at the call site.
     out.sort_by_key(|link| link.span_start);
@@ -652,5 +672,64 @@ mod tests {
                 LinkKind::Markdown => assert!(slice.starts_with("[") || slice.starts_with("!")),
             }
         }
+    }
+
+    // --- Frontmatter handling (#235) -------------------------------
+
+    #[test]
+    fn extract_links_skips_yaml_frontmatter() {
+        // A wikilink value inside a YAML scalar would have been
+        // emitted as a ParsedLink pre-fix, feeding the backlinks
+        // graph from the property block. With the skip, only the
+        // body's link counts.
+        let source = "---\n\
+            related: \"[[Other Note]]\"\n\
+            url: \"[md-in-yaml](https://example.com)\"\n\
+            ---\n\n\
+            body [[Real]] paragraph\n";
+        let links = extract_links(source);
+        assert_eq!(links.iter().map(target).collect::<Vec<_>>(), vec!["Real"]);
+    }
+
+    #[test]
+    fn extract_links_span_offsets_remain_in_source_coordinates_after_skip() {
+        // Critical: callers (links_db's `snippet_around`) index into
+        // the original source using the emitted offsets. The
+        // frontmatter-skip rewrite must shift offsets back into the
+        // full source's coordinate space, not the body slice's.
+        let source = "---\nkey: value\n---\n\nbody [[Alpha]] suffix\n";
+        let links = extract_links(source);
+        assert_eq!(links.len(), 1);
+        let link = &links[0];
+        assert_eq!(
+            &source[link.span_start..link.span_end],
+            "[[Alpha]]",
+            "span_start/span_end must point into the full source after frontmatter skip"
+        );
+    }
+
+    #[test]
+    fn extract_links_passthrough_with_no_frontmatter() {
+        // Fast-path regression: a plain body should produce the
+        // same links as before with no offset shift.
+        let source = "alpha [[Beta]] gamma";
+        let links = extract_links(source);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].span_start, 6);
+        assert_eq!(&source[links[0].span_start..links[0].span_end], "[[Beta]]");
+    }
+
+    #[test]
+    fn extract_links_passthrough_with_open_frontmatter_without_close() {
+        // Mid-edit shape: leading `---` but no closing `---`.
+        // body_after_frontmatter is a no-op, so the link inside
+        // the unterminated YAML still gets emitted. Today's
+        // pulldown-cmark behaviour stands.
+        let source = "---\nrelated: \"[[Other Note]]\"\n\n[[Real]]\n";
+        let links = extract_links(source);
+        // Both links present because no frontmatter was detected.
+        let targets: Vec<&str> = links.iter().map(target).collect();
+        assert!(targets.contains(&"Other Note"));
+        assert!(targets.contains(&"Real"));
     }
 }
