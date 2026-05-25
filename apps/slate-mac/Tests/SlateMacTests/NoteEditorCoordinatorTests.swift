@@ -150,4 +150,92 @@ final class NoteEditorCoordinatorTests: XCTestCase {
             "accessibility-options notification must re-run applyEmbedHighlighting"
         )
     }
+
+    /// Audit [#233](https://github.com/coryj627/slate/issues/233):
+    /// `attach(textView:)` is a re-bind point, not just a reference
+    /// grab. A new textView handed to a recycled coordinator must
+    /// start in a known typing-attributes state — otherwise an
+    /// inherited `.foregroundColor` attribute could shadow
+    /// `NSColor.textColor` and re-introduce the dark-mode invisible
+    /// text bug from #226.
+    func testAttachResetsTypingAttributesAndForegroundColor() {
+        // Simulate a textView that was previously stamped with a
+        // stale foreground color (e.g. red, from a hypothetical
+        // earlier rendering pass).
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        textView.string = "hello world"
+        let storage = textView.textStorage!
+        storage.addAttribute(
+            .foregroundColor,
+            value: NSColor.red,
+            range: NSRange(location: 0, length: storage.length)
+        )
+
+        let binding = Binding<String>(get: { "hello world" }, set: { _ in })
+        let coordinator = NoteEditorView.Coordinator(
+            text: binding,
+            onSave: {},
+            previewEmbedAtCursor: nil
+        )
+        coordinator.attach(textView: textView)
+
+        // After attach: storage-level foreground stripped, typing
+        // attributes reset to textColor.
+        let foreground = storage.attribute(
+            .foregroundColor, at: 0, effectiveRange: nil
+        )
+        XCTAssertNil(
+            foreground,
+            "attach must strip storage-level foreground color so dynamic textColor shows through"
+        )
+        let typingColor = textView.typingAttributes[.foregroundColor] as? NSColor
+        XCTAssertEqual(
+            typingColor, NSColor.textColor,
+            "attach must restore textColor in typing attributes for new typed text"
+        )
+    }
+
+    /// Audit [#233](https://github.com/coryj627/slate/issues/233):
+    /// repeated `attach` calls must not stack notification handlers.
+    /// Without the dedup, a coordinator recycled twice would re-run
+    /// `applyEmbedHighlighting` twice for every appearance change,
+    /// which is wasted work and a soft hint that lifecycle hygiene
+    /// is slipping.
+    func testRepeatedAttachDoesNotDoubleFireObservers() {
+        let (coordinator, _, storage) = makeCoordinator(text: "edge ![[a]] case")
+        // Re-attach to a fresh textView (simulating SwiftUI handing
+        // the same coordinator a new NSView).
+        let newTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        newTextView.string = "edge ![[a]] case"
+        coordinator.attach(textView: newTextView)
+
+        // Drive the notification once; expect a single re-apply.
+        // (Storage from `makeCoordinator` is no longer the live one;
+        // assert against the new textView's storage.)
+        let newStorage = newTextView.textStorage!
+        newStorage.removeAttribute(
+            .underlineStyle,
+            range: NSRange(location: 0, length: newStorage.length)
+        )
+        NotificationCenter.default.post(
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+        // The originally-attached storage MUST NOT have been
+        // re-highlighted (the coordinator now points at newTextView).
+        let oldStorageUnderline = storage.attribute(
+            .underlineStyle, at: 6, effectiveRange: nil
+        )
+        XCTAssertNil(
+            oldStorageUnderline,
+            "after re-attach, observer must target the new textView only — the old one stays untouched"
+        )
+        let newStorageUnderline = newStorage.attribute(
+            .underlineStyle, at: 6, effectiveRange: nil
+        )
+        XCTAssertEqual(
+            newStorageUnderline as? Int, NSUnderlineStyle.single.rawValue,
+            "re-attached coordinator must apply highlight to the new textView"
+        )
+    }
 }
