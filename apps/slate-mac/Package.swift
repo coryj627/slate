@@ -23,6 +23,16 @@ let package = Package(
             url: "https://github.com/colinc86/LaTeXSwiftUI",
             from: "1.5.0"
         ),
+        // SwiftDraw renders SVG content to native AppKit. Used by
+        // `MermaidView` (#222) to display the mermaid-rs-renderer's
+        // SVG output alongside the backend-generated structured
+        // description the AT layer consumes. (SwiftDraw is also a
+        // transitive dep of LaTeXSwiftUI; declaring it explicitly
+        // here so its surface is reachable from our code.)
+        .package(
+            url: "https://github.com/swhitty/SwiftDraw",
+            from: "0.21.0"
+        ),
     ],
     targets: [
         // System-library target that wraps the C header emitted by
@@ -40,6 +50,7 @@ let package = Package(
             dependencies: [
                 "slate_uniffiFFI",
                 .product(name: "LaTeXSwiftUI", package: "LaTeXSwiftUI"),
+                .product(name: "SwiftDraw", package: "SwiftDraw"),
             ],
             linkerSettings: [
                 .linkedLibrary("slate_uniffi"),
