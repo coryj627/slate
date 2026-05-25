@@ -471,6 +471,11 @@ final class AppState: ObservableObject {
     /// until #224 is in.
     @Published var mathPrefs: MathPrefs = MathPrefs() {
         didSet {
+            // Audit #257 L1: SwiftUI bindings (a Picker writing
+            // back through `$mathPrefs.speechStyle`) can re-fire
+            // the setter with the same value on view rebuilds.
+            // Skip the loader spin-up if nothing actually changed.
+            guard oldValue != mathPrefs else { return }
             guard let path = selectedFilePath else { return }
             mathBlocksLoadTask?.cancel()
             mathBlocksLoadTask = Task { [weak self] in
@@ -909,6 +914,17 @@ final class AppState: ObservableObject {
         linksLoadTask = nil
         tasksLoadTask?.cancel()
         tasksLoadTask = nil
+        // Audit #257 M1: orphaned content-pipeline tasks would
+        // otherwise keep grabbing the session mutex after the user
+        // switched files, serialising the new selection's loads
+        // behind their FFI bodies. Cancel them eagerly so rapid
+        // file switching doesn't pile up serialized work.
+        mathBlocksLoadTask?.cancel()
+        mathBlocksLoadTask = nil
+        codeBlocksLoadTask?.cancel()
+        codeBlocksLoadTask = nil
+        diagramBlocksLoadTask?.cancel()
+        diagramBlocksLoadTask = nil
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
@@ -1644,6 +1660,13 @@ final class AppState: ObservableObject {
     func loadCurrentNoteMathBlocks(path: String) async {
         guard let session = currentSession else { return }
         isLoadingMathBlocks = true
+        // Audit #257 M2: clear the spinner on EVERY exit path,
+        // including cancellation / selection-moved-away. Without
+        // `defer`, the late-arriving race-guard short-circuit
+        // would leave `isLoadingMathBlocks = true` forever — a
+        // WCAG 4.1.3 "stuck busy state" that VoiceOver would
+        // announce and never withdraw.
+        defer { isLoadingMathBlocks = false }
         let result: Result<[MathBlock], VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
@@ -1664,7 +1687,6 @@ final class AppState: ObservableObject {
             currentNoteMathBlocks = []
             mathBlocksLoadError = humanReadable(err)
         }
-        isLoadingMathBlocks = false
     }
 
     /// Load code blocks (syntax-highlighted) for `path` and publish
@@ -1673,6 +1695,7 @@ final class AppState: ObservableObject {
     func loadCurrentNoteCodeBlocks(path: String) async {
         guard let session = currentSession else { return }
         isLoadingCodeBlocks = true
+        defer { isLoadingCodeBlocks = false }  // audit #257 M2
         let result: Result<[CodeBlock], VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
@@ -1693,7 +1716,6 @@ final class AppState: ObservableObject {
             currentNoteCodeBlocks = []
             codeBlocksLoadError = humanReadable(err)
         }
-        isLoadingCodeBlocks = false
     }
 
     /// Load Mermaid diagram blocks (rendered SVG + structured
@@ -1703,6 +1725,7 @@ final class AppState: ObservableObject {
     func loadCurrentNoteDiagramBlocks(path: String) async {
         guard let session = currentSession else { return }
         isLoadingDiagramBlocks = true
+        defer { isLoadingDiagramBlocks = false }  // audit #257 M2
         let result: Result<[DiagramBlock], VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
@@ -1723,7 +1746,6 @@ final class AppState: ObservableObject {
             currentNoteDiagramBlocks = []
             diagramBlocksLoadError = humanReadable(err)
         }
-        isLoadingDiagramBlocks = false
     }
 
     /// Off-actor mirror of `humanReadable(_:)` — used inside the
