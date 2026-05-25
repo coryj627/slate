@@ -177,7 +177,15 @@ pub fn read_headings(path: impl AsRef<Path>) -> Result<Vec<Heading>, VaultError>
 pub fn extract_headings(source: &str) -> Vec<Heading> {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-    let parser = Parser::new(source);
+    // Skip the YAML frontmatter block so pulldown-cmark doesn't read
+    // the closing `---` as a Setext H2 underline for the preceding
+    // YAML lines (issue #227 — the outline picked up the entire
+    // frontmatter content as a fake heading). `body_after_frontmatter`
+    // is a no-op when the file has no detectable frontmatter, so the
+    // common plain-Markdown path takes one extra branch and nothing
+    // else.
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let parser = Parser::new(body);
     let mut raw: Vec<(u8, String)> = Vec::new();
     let mut current_level: Option<u8> = None;
     let mut current_text = String::new();
@@ -352,5 +360,84 @@ mod tests {
         // Non-ASCII collapses to dashes; the year stays. Slug is
         // deterministic; that's all we promise here.
         assert_eq!(headings[0].anchor_id, "caf-r-sum-2026");
+    }
+
+    // --- Frontmatter handling (#227) -------------------------------
+
+    #[test]
+    fn skips_yaml_frontmatter_when_extracting_headings() {
+        // Without skipping, pulldown-cmark reads the closing `---`
+        // as a Setext H2 underline for the preceding YAML lines and
+        // produces one giant fake heading containing the concatenated
+        // frontmatter content.
+        let source = "---\n\
+            tags: goal\n\
+            alias: Invest in startup\n\
+            Type: Wealth\n\
+            Progress: 0\n\
+            ---\n\n\
+            # Real Heading\n\n\
+            body text\n";
+        let headings = extract_headings(source);
+        assert_eq!(headings, vec![h(1, "Real Heading", 0, "real-heading")]);
+    }
+
+    #[test]
+    fn frontmatter_skip_preserves_real_h2_setext_after_body_text() {
+        // Setext H2 headings (text on one line, `---` underline on
+        // the next, no blank line between) inside the body must still
+        // extract. The frontmatter skip only affects the leading block.
+        let source = "---\nkey: value\n---\n\n\
+            Body Setext Heading\n\
+            ---\n\n\
+            paragraph after\n";
+        let headings = extract_headings(source);
+        assert_eq!(
+            headings,
+            vec![h(2, "Body Setext Heading", 0, "body-setext-heading")]
+        );
+    }
+
+    #[test]
+    fn frontmatter_skip_noop_when_opening_delim_has_no_close() {
+        // Degenerate / mid-edit shape: leading `---` with no closing
+        // `---` later in the file. `body_after_frontmatter` is a no-op
+        // here so we don't accidentally hide content. Today's
+        // pulldown-cmark behaviour stands.
+        let source = "---\nstill writing the frontmatter\n\n# Real Heading\n";
+        let headings = extract_headings(source);
+        // The leading `---` is an isolated horizontal rule from
+        // pulldown-cmark's POV; the H1 still extracts cleanly.
+        assert_eq!(headings, vec![h(1, "Real Heading", 0, "real-heading")]);
+    }
+
+    #[test]
+    fn frontmatter_skip_does_not_eat_body_thematic_breaks() {
+        // `---` in the body (not part of a Setext underline because
+        // a blank line separates it from prior text) is a horizontal
+        // rule, not frontmatter. Must not be confused for either.
+        let source = "---\nkey: value\n---\n\n\
+            # First\n\n\
+            ---\n\n\
+            # Second\n";
+        let headings = extract_headings(source);
+        assert_eq!(
+            headings,
+            vec![h(1, "First", 0, "first"), h(1, "Second", 1, "second"),]
+        );
+    }
+
+    #[test]
+    fn plain_markdown_without_frontmatter_unaffected() {
+        // The fast path: no frontmatter, headings extract as before.
+        let source = "# Just a heading\n\nbody\n## Sub\n";
+        let headings = extract_headings(source);
+        assert_eq!(
+            headings,
+            vec![
+                h(1, "Just a heading", 0, "just-a-heading"),
+                h(2, "Sub", 1, "sub"),
+            ]
+        );
     }
 }
