@@ -81,10 +81,14 @@ struct BulkRenameSheet: View {
                     summary: summary(from: report)
                 )
             } else {
+                // WCAG 2.5.3: the AX label must begin with the
+                // visible text so speech-control activation matches
+                // the visible string. (CI's a11y-check catches this
+                // when prefix-before-visible-text drops the score.)
                 Text("Run a preview to see which files would change.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("No preview yet. Run a preview to see which files would change.")
+                    .accessibilityLabel("Run a preview to see which files would change.")
             }
 
             HStack {
