@@ -55,12 +55,14 @@ struct NoteEditorView: NSViewRepresentable {
     /// before talking to `NSTextView`.
     let cursorByteOffsetRequest: AnyPublisher<Int, Never>
     /// Cmd+E handler (#188): receives the `target` of the embed
-    /// the cursor is currently inside. Hooked at the SwiftUI layer
-    /// to `AppState.requestEmbedPreview(target:)` so the popover
-    /// opens via `pendingEmbedPreview`. Nil disables the
+    /// the cursor is currently inside, plus the 1-based source
+    /// line number for the popover header's spatial-bearing cue
+    /// (audit #209). Hooked at the SwiftUI layer to
+    /// `AppState.requestEmbedPreview(target:sourceLine:)` so the
+    /// popover opens via `pendingEmbedPreview`. Nil disables the
     /// shortcut — used by the previewless contexts that include
     /// the editor (none today, kept for future surfaces).
-    let previewEmbedAtCursor: ((String) -> Void)?
+    let previewEmbedAtCursor: ((String, Int) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -201,7 +203,7 @@ struct NoteEditorView: NSViewRepresentable {
         var onSave: () -> Void
         var headings: [Heading] = []
         var accessibilityLabel: String = ""
-        var previewEmbedAtCursor: ((String) -> Void)?
+        var previewEmbedAtCursor: ((String, Int) -> Void)?
         private weak var textView: NSTextView?
         private var subscriptions: Set<AnyCancellable> = []
         /// Cached embed spans for the current buffer state. Updated
@@ -213,7 +215,7 @@ struct NoteEditorView: NSViewRepresentable {
         init(
             text: Binding<String>,
             onSave: @escaping () -> Void,
-            previewEmbedAtCursor: ((String) -> Void)?
+            previewEmbedAtCursor: ((String, Int) -> Void)?
         ) {
             self._text = text
             self.onSave = onSave
@@ -225,9 +227,21 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         /// Recompute embed spans for the current buffer and apply
-        /// highlight attributes (foreground color + underline) to
-        /// each. Resets attributes on the full range first so
-        /// spans the user typed past lose their highlight.
+        /// highlight attributes (underline only) to each. Resets
+        /// attributes on the full range first so spans the user
+        /// typed past lose their highlight.
+        ///
+        /// Audit #207 + #214: an earlier shape used `systemBlue`
+        /// foreground which measured ~4.0:1 against the default
+        /// editor background (fails WCAG 1.4.3) and ~2.7:1 against
+        /// `selectedTextBackgroundColor` while a selection
+        /// covered the embed. Dropped foreground color entirely;
+        /// the underline + `underlineColor: controlAccentColor`
+        /// carries the "this is an embed" cue without any
+        /// foreground/background contrast risk — the text itself
+        /// stays at the system's primary color, which Apple
+        /// guarantees meets contrast against the matched
+        /// background.
         ///
         /// NSTextStorage's attribute layer works even with
         /// `isRichText = false` — that flag restricts what the
@@ -246,9 +260,10 @@ struct NoteEditorView: NSViewRepresentable {
             storage.beginEditing()
             storage.removeAttribute(.foregroundColor, range: fullRange)
             storage.removeAttribute(.underlineStyle, range: fullRange)
+            storage.removeAttribute(.underlineColor, range: fullRange)
             let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.systemBlue,
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .underlineColor: NSColor.controlAccentColor,
             ]
             for span in spans {
                 let clamped = NSIntersectionRange(span.range, fullRange)
@@ -279,7 +294,11 @@ struct NoteEditorView: NSViewRepresentable {
             }
             let cursor = textView.selectedRange().location
             if let span = embedSpanContaining(cursor: cursor, in: embedSpans) {
-                callback(span.target)
+                let line = oneBasedLineForUTF16Offset(
+                    cursor,
+                    in: textView.string
+                )
+                callback(span.target, line)
                 return true
             }
             postAccessibilityAnnouncement(
@@ -287,6 +306,25 @@ struct NoteEditorView: NSViewRepresentable {
                 priority: .medium
             )
             return false
+        }
+
+        /// Convert a UTF-16 buffer offset to a 1-based line number
+        /// for the popover header's spatial-bearing cue (audit
+        /// #209). Counts `\n` from the start of the buffer up to
+        /// the offset; clamps to last line on overshoot.
+        private func oneBasedLineForUTF16Offset(_ offset: Int, in source: String) -> Int {
+            let utf16 = source.utf16
+            let safeOffset = min(max(offset, 0), utf16.count)
+            var line = 1
+            var idx = utf16.startIndex
+            let end = utf16.index(utf16.startIndex, offsetBy: safeOffset)
+            while idx < end {
+                if utf16[idx] == UInt16(0x0A) {  // `\n`
+                    line += 1
+                }
+                idx = utf16.index(after: idx)
+            }
+            return line
         }
 
         func subscribe(
@@ -444,15 +482,17 @@ final class SlateEditorTextView: NSTextView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Cmd+E: open the embed-preview popover for the embed
-        // under the cursor. Falls through to NSTextView's
-        // default (which has its own Cmd+E meaning depending on
-        // the responder chain) when no embed is at the cursor.
+        // under the cursor. Always swallowed (returns `true`)
+        // even when no embed is at the cursor — letting Cmd+E
+        // fall through to NSTextView's default ("Use Selection
+        // For Find") silently mutates the system find pasteboard
+        // and the user has no idea why a later Cmd+F search has
+        // mystery contents in the field (audit #208).
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
             event.charactersIgnoringModifiers == "e"
         {
-            if coordinator?.openEmbedPreviewAtCursor() == true {
-                return true
-            }
+            coordinator?.openEmbedPreviewAtCursor()
+            return true
         }
         return super.performKeyEquivalent(with: event)
     }

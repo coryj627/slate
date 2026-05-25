@@ -30,8 +30,20 @@ struct NoteContentView: View {
     /// dismissal — WCAG 2.4.3 + 2.1.2.
     @AccessibilityFocusState private var popoverFocusReturn: PopoverFocusTarget?
 
+    /// Initial-focus target inside the popover. Audit #215 caught
+    /// that the popover opened without an explicit focus target,
+    /// leaving keyboard-only users unable to reach the Close /
+    /// Jump-to-source controls via Tab from the editor. We focus
+    /// the Close button on appear so Esc / Return / Tab all work
+    /// immediately.
+    @FocusState private var popoverInitialFocus: PopoverInitialFocusTarget?
+
     enum PopoverFocusTarget: Hashable {
         case editor
+    }
+
+    enum PopoverInitialFocusTarget: Hashable {
+        case closeButton
     }
 
     var body: some View {
@@ -122,8 +134,8 @@ struct NoteContentView: View {
             scrollAnchorRequest: appState.scrollAnchorRequest.eraseToAnyPublisher(),
             lineScrollRequest: appState.lineScrollRequest.eraseToAnyPublisher(),
             cursorByteOffsetRequest: appState.cursorByteOffsetRequest.eraseToAnyPublisher(),
-            previewEmbedAtCursor: { [appState] target in
-                appState.requestEmbedPreview(target: target)
+            previewEmbedAtCursor: { [appState] target, line in
+                appState.requestEmbedPreview(target: target, sourceLine: line)
             }
         )
         .onAppear { _ = text }
@@ -148,29 +160,90 @@ struct NoteContentView: View {
             arrowEdge: .top
         ) {
             if let preview = appState.pendingEmbedPreview {
-                VStack(alignment: .leading, spacing: 8) {
-                    EmbedView(
-                        resolution: preview.resolution,
-                        jumpToSourceAction: { [appState] target in
-                            appState.dismissEmbedPreview()
-                            popoverFocusReturn = .editor
-                            appState.openEmbedTarget(target)
-                        }
-                    )
-                    Button("Close") {
-                        appState.dismissEmbedPreview()
-                        popoverFocusReturn = .editor
-                    }
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityHint(
-                        "Close the embed preview. Focus returns to the editor."
-                    )
-                }
-                .frame(minWidth: 420, idealWidth: 480, maxWidth: 640)
-                .padding(12)
-                .accessibilityLabel("Embed preview for \(preview.target).")
+                embedPreviewContent(preview)
             }
         }
+    }
+
+    /// Popover body for an active `EmbedPreview`. Split out so the
+    /// `.popover` modifier's content closure stays readable, and so
+    /// the a11y wiring (initial focus, contain-children scope,
+    /// scrollable body, header with source-line cue) all lives in
+    /// one place.
+    @ViewBuilder
+    private func embedPreviewContent(_ preview: EmbedPreview) -> some View {
+        // Audit #213: cap the popover height so large Dynamic
+        // Type doesn't push the body past the visible area
+        // (WCAG 1.4.10). Body scrolls if it exceeds the cap.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                // Audit #209: textual spatial-bearing cue. The
+                // popover can't visually anchor at the cursor's
+                // screen position without geometry plumbing, so
+                // surface the line number in the header instead
+                // — VoiceOver users + magnifier users both
+                // benefit.
+                Text(verbatim: previewHeaderText(preview))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+
+                EmbedView(
+                    resolution: preview.resolution,
+                    jumpToSourceAction: { [appState] target in
+                        appState.dismissEmbedPreview()
+                        popoverFocusReturn = .editor
+                        appState.openEmbedTarget(target)
+                    }
+                )
+
+                Button("Close") {
+                    appState.dismissEmbedPreview()
+                    popoverFocusReturn = .editor
+                }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityHint(
+                    "Close the embed preview. Focus returns to the editor."
+                )
+                // Audit #215: initial keyboard focus on the
+                // popover. Close button gets focus on appear so
+                // Esc / Return / Tab all work from the moment
+                // the popover renders.
+                .focused($popoverInitialFocus, equals: .closeButton)
+            }
+            .padding(12)
+        }
+        .frame(
+            minWidth: 420,
+            idealWidth: 480,
+            maxWidth: 640,
+            minHeight: 200,
+            maxHeight: 540
+        )
+        // Audit #210: pair `.accessibilityLabel` with
+        // `.accessibilityElement(children: .contain)` so the
+        // label scopes the contained tree without the (undefined)
+        // sibling-vs-combined behaviour the lone label modifier
+        // produced.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(previewAccessibilityLabel(preview))
+        .onAppear {
+            popoverInitialFocus = .closeButton
+        }
+    }
+
+    private func previewHeaderText(_ preview: EmbedPreview) -> String {
+        if let line = preview.sourceLine {
+            return "Preview for `\(preview.target)` — source line \(line)"
+        }
+        return "Preview for `\(preview.target)`"
+    }
+
+    private func previewAccessibilityLabel(_ preview: EmbedPreview) -> String {
+        if let line = preview.sourceLine {
+            return "Embed preview for \(preview.target), source line \(line)."
+        }
+        return "Embed preview for \(preview.target)."
     }
 
     // MARK: - Helpers

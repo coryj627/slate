@@ -147,9 +147,16 @@ struct SaveConflict: Equatable {
 /// (#188). Carries enough state for the popover to render the
 /// resolved embed without re-querying the backend — the resolution
 /// has already been cached by `loadCurrentNoteEmbedResolutions`.
+///
+/// `sourceLine` is the 1-based line number of the embed's source
+/// `![[…]]` reference in the editor buffer. Surfaced in the
+/// popover header so users have textual spatial bearing without
+/// AppKit geometry plumbing (audit #209). Nil when the caller
+/// can't compute it (synthetic callers in tests).
 struct EmbedPreview: Equatable {
     let target: String
     let resolution: EmbedResolution
+    let sourceLine: Int?
 }
 
 /// What edit the user was trying to make when a property-edit
@@ -1572,7 +1579,22 @@ final class AppState: ObservableObject {
     /// in `currentNoteEmbedResolutions` rather than re-resolving.
     /// No-op when the embed isn't in the cache (e.g. the user
     /// pressed Cmd+E before the resolutions finished loading).
-    func requestEmbedPreview(target: String) {
+    ///
+    /// Audit #211: previously this also posted a "preview opened"
+    /// AT announcement which competed with the popover's own
+    /// `.accessibilityLabel` + the EmbedView's disclosure label,
+    /// firing three near-identical sentences back to back. Dropped
+    /// the action confirmation — the popover's label is the
+    /// canonical "what you're looking at" message.
+    ///
+    /// Audit #212: rapid double Cmd+E with the same target used to
+    /// re-fire side effects without state changes. Short-circuit
+    /// when the same target is already pending so the popover
+    /// behaves like an idempotent open.
+    func requestEmbedPreview(target: String, sourceLine: Int? = nil) {
+        if pendingEmbedPreview?.target == target {
+            return
+        }
         guard let resolution = currentNoteEmbedResolutions[target] else {
             postAccessibilityAnnouncement(
                 "No resolved embed at cursor.",
@@ -1580,10 +1602,10 @@ final class AppState: ObservableObject {
             )
             return
         }
-        pendingEmbedPreview = EmbedPreview(target: target, resolution: resolution)
-        postAccessibilityAnnouncement(
-            "Embed preview opened for \(target).",
-            priority: .medium
+        pendingEmbedPreview = EmbedPreview(
+            target: target,
+            resolution: resolution,
+            sourceLine: sourceLine
         )
     }
 
