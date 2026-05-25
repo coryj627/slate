@@ -222,8 +222,36 @@ struct NoteEditorView: NSViewRepresentable {
             self.previewEmbedAtCursor = previewEmbedAtCursor
         }
 
+        /// Re-bind point. Called from `makeNSView` on initial setup
+        /// and re-callable for SwiftUI lifecycle paths that hand the
+        /// same coordinator a different `NSTextView` instance (audit
+        /// #233). Resets the new view's typing attributes to a known
+        /// state and strips any storage-level `.foregroundColor`
+        /// that might be left over from a prior bind, so the dynamic
+        /// `NSColor.textColor` AppKit relies on for dark-mode
+        /// rendering isn't shadowed (the failure pattern from
+        /// #226). Observer registration is idempotent — removing
+        /// first lets repeated `attach` calls not double-fire.
         func attach(textView: NSTextView) {
             self.textView = textView
+
+            // Reset typing attributes + any inherited foreground
+            // color so the view starts in a known state. Uses
+            // textView.font as the source of truth so wrappers that
+            // installed a custom font keep it.
+            let font = textView.font ?? NSFont.monospacedSystemFont(
+                ofSize: NSFont.systemFontSize,
+                weight: .regular
+            )
+            textView.typingAttributes = [
+                .font: font,
+                .foregroundColor: NSColor.textColor,
+            ]
+            if let storage = textView.textStorage {
+                let fullRange = NSRange(location: 0, length: storage.length)
+                storage.removeAttribute(.foregroundColor, range: fullRange)
+            }
+
             // Re-run the highlight pass when the user toggles Increase
             // Contrast or changes accent color so the embed underline
             // adapts. Audit #230: `NSColor.controlAccentColor` is
@@ -231,6 +259,10 @@ struct NoteEditorView: NSViewRepresentable {
             // accent (borderline WCAG 1.4.11) and worse on Graphite —
             // when Increase Contrast is on we swap to `labelColor` for
             // a guaranteed-pass underline.
+            //
+            // Remove first so repeated attach calls don't stack
+            // notification handlers.
+            NotificationCenter.default.removeObserver(self)
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(systemColorPreferencesChanged),
