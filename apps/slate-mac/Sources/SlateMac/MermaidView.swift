@@ -26,6 +26,13 @@ import SwiftUI
 struct MermaidView: View {
     let block: DiagramBlock
 
+    /// Dynamic-Type-aware max height for the rendered SVG (audit
+    /// #254 M1). The SVG glyphs themselves don't reflow at Dynamic
+    /// Type, but scaling the container's height cap with the user's
+    /// text size keeps the diagram large enough to read on the same
+    /// terms as surrounding text.
+    @ScaledMetric(relativeTo: .body) private var maxImageHeight: CGFloat = 600
+
     var body: some View {
         Group {
             switch block.renderStatus {
@@ -37,12 +44,15 @@ struct MermaidView: View {
                 failureFallback(reason: message, kind: "failed")
             }
         }
-        // Own the AT surface authoritatively. SVGKit / SwiftDraw
-        // emit inner image nodes whose accessibility tree (auto-
-        // generated IDs, glyph descriptions) is noise — VO would
-        // hear "image" or random SVG group labels before our
-        // structured description if we didn't take charge.
-        .accessibilityElement(children: .ignore)
+        // Audit #254 H1: the outer `.ignore` previously stranded the
+        // failure-path source ScrollView from AT (visible to sighted
+        // users, invisible to VO). Switched to `.contain` so the
+        // outer container carries the label authoritatively but
+        // children remain reachable. The SVG `Image` itself opts out
+        // via `.accessibilityHidden(true)` (SwiftDraw's inner nodes
+        // are noise); the failure-path Text remains reachable so VO
+        // can read the source if the user drills in.
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(primaryAccessibilityLabel)
         // Source rotor entry — reachable through verbose AT mode or
         // VO+Shift+Down; matches MathView's pattern.
@@ -53,9 +63,10 @@ struct MermaidView: View {
         )
         // WCAG 2.5.3 (Label in Name): voice-control users see the
         // rendered diagram, not the structured description. Tooltip
-        // exposes a hint of the source for hover + Voice Control
-        // "show numbers" coverage.
-        .help(block.source)
+        // exposes a SHORT preview of the source (audit #254 M2 —
+        // full source as a tooltip becomes a wall of text that
+        // obscures other UI under 1.4.13).
+        .help(tooltipPreview)
     }
 
     // MARK: - Render variants
@@ -66,14 +77,16 @@ struct MermaidView: View {
             Image(nsImage: nsImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: 600)
+                // Audit #254 M1: max-height scales with Dynamic
+                // Type so diagrams stay legible at large text sizes.
+                .frame(maxWidth: .infinity, maxHeight: maxImageHeight)
                 // The container owns the AT label via
                 // `.accessibilityLabel(structuredDescription)` +
-                // `.accessibilityElement(children: .ignore)`. Hide
-                // the Image so the static analyzer + VoiceOver
-                // both see the container's label as the only
-                // announcement (no duplicate "image" trait, no
-                // missing-label false positive).
+                // `.accessibilityElement(children: .contain)`. Hide
+                // the Image so VO doesn't announce "image" and the
+                // static analyzer doesn't trip on a label-less
+                // image (the structured description IS the label
+                // at the container level).
                 .accessibilityHidden(true)
         } else {
             // Backend said Ok but didn't produce SVG / SwiftDraw
@@ -127,8 +140,36 @@ struct MermaidView: View {
 
     /// SVG `Data` → `NSImage` via SwiftDraw. Returns nil on decode
     /// failure (covered by the soft-failure branch above).
+    ///
+    /// Important: the unlabeled `NSImage(data)` form is load-bearing.
+    /// AppKit's stock initializer is `init?(data: Data)` — labeled.
+    /// SwiftDraw's convenience init is `init?(_ data: Data)` —
+    /// unlabeled. A future refactor that changes `data` → `data:
+    /// data` would silently flip to AppKit and produce a blank
+    /// (non-SVG) NSImage without test signal. Keep the call form
+    /// unlabeled (audit #254 L3).
     private func decodeSvg(_ data: Data) -> NSImage? {
         NSImage(data)
+    }
+
+    // MARK: - Tooltip preview
+
+    /// Truncated source preview for the `.help` tooltip. Full
+    /// source is reachable via the `Source` rotor entry, so the
+    /// tooltip can stay short. Limits to ~120 chars / 3 lines.
+    /// Audit #254 M2 (WCAG 1.4.13 Content on Hover or Focus).
+    var tooltipPreview: String {
+        let maxChars = 120
+        let lines = block.source.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        let firstFew = lines.prefix(3).joined(separator: " ")
+        if firstFew.count <= maxChars && lines.count <= 3 {
+            return firstFew
+        }
+        let truncated = String(firstFew.prefix(maxChars))
+        return truncated + "…"
     }
 
     // MARK: - Accessibility helpers

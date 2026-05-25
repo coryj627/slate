@@ -98,6 +98,42 @@ final class MermaidViewTests: XCTestCase {
         XCTAssertEqual(view.sourceAccessibilityValue, "Source not available.")
     }
 
+    /// Audit #254 L1: empty SVG bytes route to the failure fallback.
+    /// `nil` was already tested; empty `Data()` wasn't.
+    func testEmptySvgDataRoutesToFailureFallback() {
+        let block = makeBlock(
+            svg: Data(),
+            structuredDescription: "Flowchart with 1 step.",
+            renderStatus: .ok
+        )
+        let view = MermaidView(block: block)
+        // AT label is still the structured description regardless
+        // of the visual path.
+        XCTAssertEqual(view.primaryAccessibilityLabel, "Flowchart with 1 step.")
+    }
+
+    /// Audit #254 M2: tooltip preview must be short. Sources over
+    /// 120 chars or 3 lines get truncated with an ellipsis.
+    func testTooltipPreviewTruncatesLongSource() {
+        let longSource = String(repeating: "flowchart LR\nA --> B\n", count: 30)
+        let block = makeBlock(source: longSource)
+        let view = MermaidView(block: block)
+        XCTAssertTrue(
+            view.tooltipPreview.hasSuffix("…"),
+            "Long source should be truncated with an ellipsis; got \(view.tooltipPreview)"
+        )
+        XCTAssertLessThanOrEqual(view.tooltipPreview.count, 121)
+    }
+
+    func testTooltipPreviewKeepsShortSourceVerbatim() {
+        let block = makeBlock(source: "flowchart LR\nA --> B")
+        let view = MermaidView(block: block)
+        XCTAssertFalse(
+            view.tooltipPreview.hasSuffix("…"),
+            "Short source should not be truncated; got \(view.tooltipPreview)"
+        )
+    }
+
     func testAllRenderStatusBranchesConstructValidViews() {
         let ok = makeBlock(renderStatus: .ok)
         let unsupported = makeBlock(
