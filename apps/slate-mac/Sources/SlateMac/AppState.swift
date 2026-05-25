@@ -380,8 +380,15 @@ final class AppState: ObservableObject {
     /// currently-loaded note, keyed by the raw target string
     /// (including any `#heading` / `^block` suffix). Populated by
     /// `loadCurrentNoteEmbedResolutions(path:)` after a selection
-    /// change and refreshed after a save so structural edits
-    /// (adding an embed, renaming a target) reflect immediately.
+    /// change (chained on the back of `linksLoadTask`).
+    ///
+    /// Refresh shape: the cache is cleared on note-to-note
+    /// transitions and re-populated when the next chained load
+    /// resolves — same lifecycle as `currentBacklinks` /
+    /// `currentOutgoingLinks` (and like them, NOT refreshed inline
+    /// post-save; a save triggers a selection re-resolve via the
+    /// scanner). Audit #205 corrected an earlier doc claim of
+    /// "refreshed after a save" that didn't reflect the code path.
     ///
     /// Empty while no note is selected, while the resolutions are
     /// loading, or when the note has no embeds.
@@ -867,6 +874,17 @@ final class AppState: ObservableObject {
         // path) ensures the newer task's writes win, so the user only
         // sees stale content for the duration of the IO — typically
         // a few milliseconds.
+        //
+        // Embeds are the exception (audit #203). Each cached
+        // resolution carries the embedded note's full body text;
+        // holding the prior file's resolutions during a transition
+        // would briefly render the prior file's *content* inside
+        // panels labelled as belonging to the new file. The window
+        // is sub-second but uniquely confusing for embeds because
+        // the stale data is whole notes, not one-liners. Clear
+        // synchronously so the panel falls back to "not yet
+        // resolved" placeholders until the new resolutions land.
+        currentNoteEmbedResolutions = [:]
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
@@ -875,7 +893,17 @@ final class AppState: ObservableObject {
             // Chain the embed-resolution load on after links — we
             // need the outgoing-links query result (specifically
             // `is_embed = true` rows) before we know what to resolve.
-            await self?.loadCurrentNoteEmbedResolutions(path: path)
+            // Assign to `embedsLoadTask` so tests + future
+            // cancellation paths have a handle on this leg
+            // independently of the parent links load (audit #204
+            // caught the missing assignment).
+            let embedsTask: Task<Void, Never> = Task { [weak self] in
+                await self?.loadCurrentNoteEmbedResolutions(path: path)
+            }
+            await MainActor.run { [weak self] in
+                self?.embedsLoadTask = embedsTask
+            }
+            await embedsTask.value
         }
         tasksLoadTask = Task { [weak self] in
             await self?.loadCurrentNoteTasks(path: path)
@@ -1417,10 +1445,16 @@ final class AppState: ObservableObject {
     ///
     /// Each resolution is a separate FFI call; we batch them off
     /// the main actor to avoid pinning it while the SQLite mutex
-    /// is held repeatedly. A resolution that returns
-    /// `EmbedResolution.unresolved` is still cached — it's a
-    /// successful "this embed has no target" result, not a load
-    /// failure.
+    /// is held repeatedly.
+    ///
+    /// Failure handling (audit #202): per-embed failures don't
+    /// discard the rest of the batch. An FFI throw on one embed
+    /// becomes a synthesized `EmbedResolution.unresolved(reason:
+    /// .readError(message:))` for that key and the loop keeps
+    /// going. `embedsLoadError` is reserved for whole-batch
+    /// problems (no session, etc.) — per-embed errors land in the
+    /// resolution itself where the UI's `EmbedView` already
+    /// renders them with the right shape.
     func loadCurrentNoteEmbedResolutions(path: String) async {
         guard let session = currentSession else { return }
         // Snapshot the embed targets from the just-loaded links.
@@ -1436,11 +1470,8 @@ final class AppState: ObservableObject {
             return
         }
         isLoadingEmbeds = true
-        // `defer` so an early bail-out (selection moved on) still
-        // clears the spinner.
-        defer { isLoadingEmbeds = false }
 
-        let result: Result<[String: EmbedResolution], VaultError> =
+        let resolutions: [String: EmbedResolution] =
             await Task.detached(priority: .userInitiated) {
                 var out: [String: EmbedResolution] = [:]
                 for target in embedTargets {
@@ -1451,28 +1482,58 @@ final class AppState: ObservableObject {
                         )
                         out[target] = resolution
                     } catch let error as VaultError {
-                        return .failure(error)
+                        // Per-embed failure: synthesize an
+                        // Unresolved entry instead of bailing out
+                        // of the whole batch (audit #202).
+                        out[target] = .unresolved(
+                            reason: .readError(message: Self.humanReadableVaultError(error))
+                        )
                     } catch {
-                        return .failure(.Io(message: error.localizedDescription))
+                        out[target] = .unresolved(
+                            reason: .readError(message: error.localizedDescription)
+                        )
                     }
                 }
-                return .success(out)
+                return out
             }
             .value
 
-        // If the user navigated away mid-resolution, drop the
-        // result rather than mutating the cache for a file the
-        // user has moved on from. Same race-cancel pattern as
-        // `loadCurrentLinks`.
+        // Audit #201: clearing the spinner via `defer` made an old
+        // cancelled task's late-firing deferred clear race the new
+        // task's `isLoadingEmbeds = true`, briefly exposing the
+        // panel to "not yet resolved" placeholders. Set explicitly
+        // at the end, gated on the selection-change check below —
+        // same pattern `loadCurrentLinks` uses.
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
-        switch result {
-        case .success(let resolutions):
-            currentNoteEmbedResolutions = resolutions
-            embedsLoadError = nil
-        case .failure(let error):
-            currentNoteEmbedResolutions = [:]
-            embedsLoadError = humanReadable(error)
+        currentNoteEmbedResolutions = resolutions
+        embedsLoadError = nil
+        isLoadingEmbeds = false
+    }
+
+    /// Off-actor mirror of `humanReadable(_:)` — used inside the
+    /// detached resolver loop where `self` isn't available. Keeps
+    /// the per-embed `ReadError` message shape consistent with
+    /// what the main-actor error surface produces.
+    private nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
+        switch error {
+        case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
+            .InvalidArgument(let m):
+            return m
+        case .InvalidPath(let path, let reason):
+            return "Invalid path \(path): \(reason)"
+        case .Cancelled:
+            return "Operation cancelled."
+        case .InvalidUtf8(let path):
+            return "File at \(path) is not valid UTF-8."
+        case .FileTooLarge(let path, let size):
+            return "File at \(path) is \(size) bytes — larger than this build's refuse threshold."
+        case .Unsupported(let feature):
+            return "\(feature) is not implemented yet."
+        case .WriteConflict:
+            return "File changed externally."
+        case .MalformedFrontmatter(let path, let reason):
+            return "Frontmatter at \(path) is malformed: \(reason)."
         }
     }
 
