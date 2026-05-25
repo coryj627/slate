@@ -8,12 +8,15 @@
 
 pub mod blocks;
 pub mod blocks_db;
+pub mod code;
 pub mod db;
+pub mod diagram;
 pub mod embeds;
 pub mod frontmatter;
 pub mod link_resolver;
 pub mod links;
 pub mod links_db;
+pub mod math;
 pub mod oplog;
 pub mod properties_db;
 pub mod search_db;

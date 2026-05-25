@@ -19,6 +19,36 @@ yaml-rust2 = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 
+# --- Milestone K content pipelines (#217 / #218 / #219) ---------------
+# Math: LaTeX → MathML → MathCAT speech + braille. `include-zip`
+# bundles MathCAT's rule files into the binary so we don't need a
+# runtime file search path. Locked picks per `05` §2.4.
+pulldown-latex = "0.7"
+mathcat = { version = "0.7.6-beta.4", default-features = false, features = ["include-zip"] }
+
+# Code: tree-sitter + the 15 compiled-in grammar set per `05` §6.4.
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-md = "0.5"            # `tree-sitter-markdown` was renamed `tree-sitter-md` upstream
+tree-sitter-yaml = "0.7"
+tree-sitter-json = "0.24"
+tree-sitter-bash = "0.25"
+tree-sitter-sequel = "0.3"        # `tree-sitter-sql` 0.0.2 pins tree-sitter 0.19; sequel is the modern SQL grammar
+tree-sitter-html = "0.23"
+tree-sitter-css = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+
+# Mermaid: pure-Rust SVG renderer + structured-description source.
+# Disable the cli + png features (we render to SVG-only and ship via
+# AppKit's SVG paths).
+mermaid-rs-renderer = { version = "0.2", default-features = false }
+
 # `libc::O_NOFOLLOW` for the templates-flow symlink-escape defence
 # (#132 / Codoki PR #153 Critical). Unix-only; Windows builds fall
 # back to a plain `File::open` and would need an `openat2`-equivalent

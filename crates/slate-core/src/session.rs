@@ -82,6 +82,12 @@ pub struct SessionConfig {
     /// vault-relative path (e.g. `"Notes/Templates"`) to honor a
     /// non-conventional vault layout.
     pub templates_dir: Option<String>,
+
+    /// Per-user math rendering preferences. Consumed by
+    /// `get_math_blocks` to drive MathCAT's speech style, verbosity,
+    /// and braille code. Cache invalidates when this changes
+    /// (see `MathPrefs::fingerprint`).
+    pub math_prefs: crate::math::MathPrefs,
 }
 
 impl SessionConfig {
@@ -102,6 +108,7 @@ impl SessionConfig {
             large_attachment_refuse_bytes: 50 * 1024 * 1024,
             user_actor_id: "local".to_string(),
             templates_dir: None,
+            math_prefs: crate::math::MathPrefs::default(),
         }
     }
 
@@ -1728,6 +1735,49 @@ impl VaultSession {
             path: template_path.to_string(),
         })?;
         Ok(crate::render_template_source(&source, &context))
+    }
+
+    // --- Milestone K content pipelines (#217 / #218 / #219) -------
+
+    /// Extract every math block in `path` and render each via the
+    /// session's `math_prefs`. Returns `Vec::new()` for files with
+    /// no math.
+    ///
+    /// Reads the file fresh on each call (no cache yet — the LRU
+    /// cache is a follow-up; render time on a typical note is
+    /// dominated by MathCAT's per-block work which is bounded). The
+    /// session's `math_prefs` field is consulted on every call so a
+    /// settings change is observed immediately.
+    pub fn get_math_blocks(&self, path: &str) -> Result<Vec<crate::math::MathBlock>, VaultError> {
+        let source = self.read_text(path)?;
+        let raws = crate::math::extract_math_blocks(&source);
+        let prefs = self.config.math_prefs;
+        Ok(raws
+            .iter()
+            .map(|raw| crate::math::render_math(raw, prefs))
+            .collect())
+    }
+
+    /// Extract every code block in `path` and highlight each via the
+    /// matching tree-sitter grammar. Unknown languages fall back to a
+    /// single `Other` token covering the source — never panics.
+    pub fn get_syntax_tokens(&self, path: &str) -> Result<Vec<crate::code::CodeBlock>, VaultError> {
+        let source = self.read_text(path)?;
+        let raws = crate::code::extract_code_blocks(&source);
+        Ok(raws.iter().map(crate::code::highlight_code).collect())
+    }
+
+    /// Extract every Mermaid diagram block in `path` and render each
+    /// to SVG plus structured description. Failures surface as typed
+    /// `DiagramRenderStatus::RenderFailed` with the source preserved
+    /// so AT users still hear the raw text.
+    pub fn get_diagram_blocks(
+        &self,
+        path: &str,
+    ) -> Result<Vec<crate::diagram::DiagramBlock>, VaultError> {
+        let source = self.read_text(path)?;
+        let raws = crate::diagram::extract_diagram_blocks(&source);
+        Ok(raws.iter().map(crate::diagram::render_diagram).collect())
     }
 
     /// Accessor for the underlying config. Useful for hosts that want to

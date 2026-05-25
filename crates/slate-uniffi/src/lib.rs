@@ -575,6 +575,42 @@ impl VaultSession {
         let rendered = self.inner.render_template(&template_path, context.into())?;
         Ok(rendered.into())
     }
+
+    // --- Milestone K content pipelines (#217 / #218 / #219) -------
+
+    /// Extract + render math blocks in `path` via MathCAT. Honors
+    /// the session's `math_prefs`.
+    pub fn get_math_blocks(&self, path: String) -> Result<Vec<MathBlock>, VaultError> {
+        Ok(self
+            .inner
+            .get_math_blocks(&path)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Extract + highlight code blocks in `path` via tree-sitter.
+    /// Unknown languages fall back to a single `Other` token.
+    pub fn get_syntax_tokens(&self, path: String) -> Result<Vec<CodeBlock>, VaultError> {
+        Ok(self
+            .inner
+            .get_syntax_tokens(&path)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Extract + render Mermaid diagrams in `path`. Render failures
+    /// surface as typed status; structured description is always
+    /// populated.
+    pub fn get_diagram_blocks(&self, path: String) -> Result<Vec<DiagramBlock>, VaultError> {
+        Ok(self
+            .inner
+            .get_diagram_blocks(&path)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -1721,6 +1757,269 @@ impl From<core::RenderedTemplate> for RenderedTemplate {
 #[uniffi::export]
 pub fn extract_template_metadata(source: String) -> TemplateMetadata {
     core::extract_template_metadata(&source).into()
+}
+
+// --- Milestone K content pipelines (#217 / #218 / #219) ---------------
+
+// Math pipeline mirror.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum MathDisplayStyle {
+    Inline,
+    Block,
+}
+
+impl From<core::math::MathDisplayStyle> for MathDisplayStyle {
+    fn from(v: core::math::MathDisplayStyle) -> Self {
+        match v {
+            core::math::MathDisplayStyle::Inline => MathDisplayStyle::Inline,
+            core::math::MathDisplayStyle::Block => MathDisplayStyle::Block,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum MathSpeechStyle {
+    ClearSpeak,
+    MathSpeak,
+}
+
+impl From<MathSpeechStyle> for core::math::MathSpeechStyle {
+    fn from(v: MathSpeechStyle) -> Self {
+        match v {
+            MathSpeechStyle::ClearSpeak => core::math::MathSpeechStyle::ClearSpeak,
+            MathSpeechStyle::MathSpeak => core::math::MathSpeechStyle::MathSpeak,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum MathVerbosity {
+    Terse,
+    Medium,
+    Verbose,
+}
+
+impl From<MathVerbosity> for core::math::MathVerbosity {
+    fn from(v: MathVerbosity) -> Self {
+        match v {
+            MathVerbosity::Terse => core::math::MathVerbosity::Terse,
+            MathVerbosity::Medium => core::math::MathVerbosity::Medium,
+            MathVerbosity::Verbose => core::math::MathVerbosity::Verbose,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BrailleCode {
+    Nemeth,
+    Ueb,
+}
+
+impl From<BrailleCode> for core::math::BrailleCode {
+    fn from(v: BrailleCode) -> Self {
+        match v {
+            BrailleCode::Nemeth => core::math::BrailleCode::Nemeth,
+            BrailleCode::Ueb => core::math::BrailleCode::Ueb,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct MathBlock {
+    pub source: String,
+    pub display_style: MathDisplayStyle,
+    pub mathml: String,
+    pub speech: String,
+    pub braille: Vec<u8>,
+    pub line: u32,
+    pub byte_offset: u32,
+}
+
+impl From<core::math::MathBlock> for MathBlock {
+    fn from(b: core::math::MathBlock) -> Self {
+        Self {
+            source: b.source,
+            display_style: b.display_style.into(),
+            mathml: b.mathml,
+            speech: b.speech,
+            braille: b.braille,
+            line: b.line,
+            byte_offset: b.byte_offset,
+        }
+    }
+}
+
+// Code pipeline mirror.
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum TokenKind {
+    Keyword,
+    String,
+    Number,
+    Comment,
+    Identifier,
+    Type,
+    Function,
+    Operator,
+    Punctuation,
+    Other { label: String },
+}
+
+impl From<core::code::TokenKind> for TokenKind {
+    fn from(k: core::code::TokenKind) -> Self {
+        match k {
+            core::code::TokenKind::Keyword => TokenKind::Keyword,
+            core::code::TokenKind::String => TokenKind::String,
+            core::code::TokenKind::Number => TokenKind::Number,
+            core::code::TokenKind::Comment => TokenKind::Comment,
+            core::code::TokenKind::Identifier => TokenKind::Identifier,
+            core::code::TokenKind::Type => TokenKind::Type,
+            core::code::TokenKind::Function => TokenKind::Function,
+            core::code::TokenKind::Operator => TokenKind::Operator,
+            core::code::TokenKind::Punctuation => TokenKind::Punctuation,
+            core::code::TokenKind::Other(s) => TokenKind::Other { label: s },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SyntaxToken {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub kind: TokenKind,
+}
+
+impl From<core::code::SyntaxToken> for SyntaxToken {
+    fn from(t: core::code::SyntaxToken) -> Self {
+        Self {
+            start_byte: t.start_byte,
+            end_byte: t.end_byte,
+            kind: t.kind.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SemanticKind {
+    Function,
+    Type,
+    Variable,
+}
+
+impl From<core::code::SemanticKind> for SemanticKind {
+    fn from(k: core::code::SemanticKind) -> Self {
+        match k {
+            core::code::SemanticKind::Function => SemanticKind::Function,
+            core::code::SemanticKind::Type => SemanticKind::Type,
+            core::code::SemanticKind::Variable => SemanticKind::Variable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SemanticSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub kind: SemanticKind,
+    pub name: String,
+}
+
+impl From<core::code::SemanticSpan> for SemanticSpan {
+    fn from(s: core::code::SemanticSpan) -> Self {
+        Self {
+            start_byte: s.start_byte,
+            end_byte: s.end_byte,
+            kind: s.kind.into(),
+            name: s.name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CodeBlock {
+    pub source: String,
+    pub language: Option<String>,
+    pub tokens: Vec<SyntaxToken>,
+    pub semantic_spans: Vec<SemanticSpan>,
+    pub line: u32,
+    pub byte_offset: u32,
+}
+
+impl From<core::code::CodeBlock> for CodeBlock {
+    fn from(b: core::code::CodeBlock) -> Self {
+        Self {
+            source: b.source,
+            language: b.language,
+            tokens: b.tokens.into_iter().map(Into::into).collect(),
+            semantic_spans: b.semantic_spans.into_iter().map(Into::into).collect(),
+            line: b.line,
+            byte_offset: b.byte_offset,
+        }
+    }
+}
+
+// Diagram pipeline mirror.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum DiagramDialect {
+    Mermaid,
+}
+
+impl From<core::diagram::DiagramDialect> for DiagramDialect {
+    fn from(d: core::diagram::DiagramDialect) -> Self {
+        match d {
+            core::diagram::DiagramDialect::Mermaid => DiagramDialect::Mermaid,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum DiagramRenderStatus {
+    Ok,
+    UnsupportedDialect { reason: String },
+    RenderFailed { message: String },
+}
+
+impl From<core::diagram::DiagramRenderStatus> for DiagramRenderStatus {
+    fn from(s: core::diagram::DiagramRenderStatus) -> Self {
+        match s {
+            core::diagram::DiagramRenderStatus::Ok => DiagramRenderStatus::Ok,
+            core::diagram::DiagramRenderStatus::UnsupportedDialect { reason } => {
+                DiagramRenderStatus::UnsupportedDialect { reason }
+            }
+            core::diagram::DiagramRenderStatus::RenderFailed { message } => {
+                DiagramRenderStatus::RenderFailed { message }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DiagramBlock {
+    pub source: String,
+    pub dialect: DiagramDialect,
+    pub svg: Option<Vec<u8>>,
+    pub png_fallback: Option<Vec<u8>>,
+    pub structured_description: String,
+    pub render_status: DiagramRenderStatus,
+    pub line: u32,
+    pub byte_offset: u32,
+}
+
+impl From<core::diagram::DiagramBlock> for DiagramBlock {
+    fn from(b: core::diagram::DiagramBlock) -> Self {
+        Self {
+            source: b.source,
+            dialect: b.dialect.into(),
+            svg: b.svg,
+            png_fallback: b.png_fallback,
+            structured_description: b.structured_description,
+            render_status: b.render_status.into(),
+            line: b.line,
+            byte_offset: b.byte_offset,
+        }
+    }
 }
 
 #[cfg(test)]
