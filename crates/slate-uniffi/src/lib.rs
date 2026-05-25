@@ -611,6 +611,16 @@ impl VaultSession {
             .map(Into::into)
             .collect())
     }
+
+    /// Swap the session's math preferences at runtime. Settings UI
+    /// (#224) drives this when the user changes a Picker — the
+    /// next `get_math_blocks` call renders with the new prefs.
+    /// Audit #259 — the missing FFI surface that left Settings
+    /// changes UI-only.
+    pub fn set_math_prefs(&self, prefs: MathPrefs) -> Result<(), VaultError> {
+        self.inner.set_math_prefs(prefs.into())?;
+        Ok(())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -1821,6 +1831,26 @@ impl From<BrailleCode> for core::math::BrailleCode {
         match v {
             BrailleCode::Nemeth => core::math::BrailleCode::Nemeth,
             BrailleCode::Ueb => core::math::BrailleCode::Ueb,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::math::MathPrefs`. Settings panel
+/// (#224) drives this; `VaultSession::set_math_prefs` consumes it.
+/// Audit #259.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct MathPrefs {
+    pub speech_style: MathSpeechStyle,
+    pub verbosity: MathVerbosity,
+    pub braille_code: BrailleCode,
+}
+
+impl From<MathPrefs> for core::math::MathPrefs {
+    fn from(p: MathPrefs) -> Self {
+        core::math::MathPrefs {
+            speech_style: p.speech_style.into(),
+            verbosity: p.verbosity.into(),
+            braille_code: p.braille_code.into(),
         }
     }
 }

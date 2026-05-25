@@ -477,6 +477,24 @@ final class AppState: ObservableObject {
             // Skip the loader spin-up if nothing actually changed.
             guard oldValue != mathPrefs else { return }
             preferencesStore.saveMathPrefs(mathPrefs)
+            // Audit #259: push the new prefs into the open session
+            // so subsequent `get_math_blocks` calls render with
+            // them. Without this the Picker update was UI-only —
+            // the backend kept the prefs captured at session-open
+            // time. `setMathPrefs` throws VaultError; the only
+            // realistic failure is a poisoned mutex, which is
+            // unrecoverable — log and continue, the next loader
+            // call will still use the cached prefs.
+            if let session = currentSession {
+                do {
+                    try session.setMathPrefs(prefs: mathPrefs)
+                } catch {
+                    fputs(
+                        "Slate: session.setMathPrefs failed: \(error)\n",
+                        stderr
+                    )
+                }
+            }
             // Audit #261 H1 (WCAG 4.1.3): when the user changes a
             // Picker in Settings, SwiftUI silently re-renders the
             // live preview's accessibilityLabel — VoiceOver won't
@@ -486,6 +504,12 @@ final class AppState: ObservableObject {
             announceMathPrefsDiff(from: oldValue, to: mathPrefs)
             guard let path = selectedFilePath else { return }
             mathBlocksLoadTask?.cancel()
+            // Red-team M2: also cancel an in-flight
+            // refresh-after-save task whose payload would otherwise
+            // land AFTER the prefs-driven reload and clobber the
+            // new-prefs result with the old-prefs blocks.
+            mathBlocksRefreshTask?.cancel()
+            mathBlocksRefreshTask = nil
             mathBlocksLoadTask = Task { [weak self] in
                 await self?.loadCurrentNoteMathBlocks(path: path)
             }
@@ -702,6 +726,18 @@ final class AppState: ObservableObject {
     /// flip when the refresh's @Published write fires); tests
     /// await it instead of using time-based settle waits (#161).
     private(set) var tasksRefreshTask: Task<Void, Never>?
+
+    /// Handles on the most recent post-save content-pipeline
+    /// refresh calls. Audit #258 wired three refresh-after-save
+    /// helpers (math / code / diagram) so editing a fenced block
+    /// updates the displayed cache. Red-team M1: stash the handles
+    /// so `closeVault` and the selection-change clear path can
+    /// cancel them — otherwise a save-then-immediately-close (or
+    /// save-then-switch-files) window leaves orphan tasks running
+    /// the off-actor FFI calls.
+    private(set) var mathBlocksRefreshTask: Task<Void, Never>?
+    private(set) var codeBlocksRefreshTask: Task<Void, Never>?
+    private(set) var diagramBlocksRefreshTask: Task<Void, Never>?
 
     /// Handle on the most recent `reloadEditorBufferAfterToggle`
     /// call. The reload re-reads disk into `currentNoteText` +
@@ -986,6 +1022,17 @@ final class AppState: ObservableObject {
         codeBlocksLoadTask = nil
         diagramBlocksLoadTask?.cancel()
         diagramBlocksLoadTask = nil
+        // Red-team M1+M2: cancel pending refresh-after-save tasks
+        // too — same conn-mutex contention argument, plus this
+        // avoids a race where the orphan refresh's old-prefs
+        // result lands AFTER a prefs-driven reload publishes the
+        // new-prefs blocks.
+        mathBlocksRefreshTask?.cancel()
+        mathBlocksRefreshTask = nil
+        codeBlocksRefreshTask?.cancel()
+        codeBlocksRefreshTask = nil
+        diagramBlocksRefreshTask?.cancel()
+        diagramBlocksRefreshTask = nil
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
@@ -1277,6 +1324,20 @@ final class AppState: ObservableObject {
     func openVault(at url: URL) {
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
+            // Audit #259: push the persisted math prefs into the
+            // fresh session so a user who set ClearSpeak → MathSpeak
+            // in a prior run gets MathSpeak from the very first
+            // `get_math_blocks` call. The Rust-side session opens
+            // with defaults; without this the prefs would only take
+            // effect after the first Picker interaction.
+            do {
+                try session.setMathPrefs(prefs: mathPrefs)
+            } catch {
+                fputs(
+                    "Slate: initial session.setMathPrefs failed: \(error)\n",
+                    stderr
+                )
+            }
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -1348,6 +1409,13 @@ final class AppState: ObservableObject {
         vaultTasksLoadTask = nil
         taskToggleTask?.cancel()
         taskToggleTask = nil
+        // Audit #260: embed-resolution batch keeps grabbing the
+        // session mutex post-closeVault if not cancelled. Race-guard
+        // catches the stale write but the orphan task delays
+        // session-deallocation.
+        embedsLoadTask?.cancel()
+        embedsLoadTask = nil
+        isLoadingEmbeds = false
         closeSearchOverlay()
         searchQuery = ""
         currentSession = nil
@@ -1378,6 +1446,15 @@ final class AppState: ObservableObject {
         codeBlocksLoadTask = nil
         diagramBlocksLoadTask?.cancel()
         diagramBlocksLoadTask = nil
+        // Red-team M1: cancel any in-flight refresh-after-save
+        // tasks so a save-then-immediately-close window doesn't
+        // leave them grabbing the conn-mutex post-close.
+        mathBlocksRefreshTask?.cancel()
+        mathBlocksRefreshTask = nil
+        codeBlocksRefreshTask?.cancel()
+        codeBlocksRefreshTask = nil
+        diagramBlocksRefreshTask?.cancel()
+        diagramBlocksRefreshTask = nil
         embedsLoadError = nil
         linksLoadError = nil
         currentNoteTasks = []
@@ -1986,6 +2063,63 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Content pipeline refresh-after-save (audit #258)
+    //
+    // The math / code / diagram pipelines didn't refresh after a
+    // `save_text`, so editing a fenced block would leave the
+    // cached arrays stale until the user navigated away. Mirrors
+    // `refreshTasksAfterSave`'s shape: off-actor FFI call,
+    // post-await re-grab of `self`, drop the result if the user
+    // has navigated away.
+
+    @discardableResult
+    private func refreshMathBlocksAfterSave(
+        session: VaultSession,
+        path: String
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
+            let blocks: [MathBlock]? = await Task.detached(priority: .userInitiated) {
+                try? session.getMathBlocks(path: path)
+            }
+            .value
+            guard let self else { return }
+            guard self.loadedFilePath == path else { return }
+            self.currentNoteMathBlocks = blocks ?? []
+        }
+    }
+
+    @discardableResult
+    private func refreshCodeBlocksAfterSave(
+        session: VaultSession,
+        path: String
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
+            let blocks: [CodeBlock]? = await Task.detached(priority: .userInitiated) {
+                try? session.getSyntaxTokens(path: path)
+            }
+            .value
+            guard let self else { return }
+            guard self.loadedFilePath == path else { return }
+            self.currentNoteCodeBlocks = blocks ?? []
+        }
+    }
+
+    @discardableResult
+    private func refreshDiagramBlocksAfterSave(
+        session: VaultSession,
+        path: String
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
+            let blocks: [DiagramBlock]? = await Task.detached(priority: .userInitiated) {
+                try? session.getDiagramBlocks(path: path)
+            }
+            .value
+            guard let self else { return }
+            guard self.loadedFilePath == path else { return }
+            self.currentNoteDiagramBlocks = blocks ?? []
+        }
+    }
+
     /// Flip the status character on a single task in the currently-
     /// loaded note. Calls `toggleTaskStatus` with the cached
     /// `currentNoteContentHash` so a mid-edit external write
@@ -2587,6 +2721,28 @@ final class AppState: ObservableObject {
             // double-spin the SQLite mutex for marginal benefit.
             refreshHeadingsAfterSave(session: session, path: path)
             tasksRefreshTask = refreshTasksAfterSave(session: session, path: path)
+            // Audit #258: refresh the content-pipeline caches so an
+            // edit that adds / removes / changes a math / code /
+            // diagram block reflects in the panels without waiting
+            // for the next selection-change. The race-guard inside
+            // each refresher (loadedFilePath == path) drops the
+            // result if the user has moved on, but red-team M1
+            // flagged that orphan tasks still grab the conn-mutex
+            // on close-during-save / switch-during-save — so we
+            // stash the handles on the AppState and cancel them
+            // from `closeVault` + the selection-change clear path.
+            mathBlocksRefreshTask?.cancel()
+            mathBlocksRefreshTask = refreshMathBlocksAfterSave(
+                session: session, path: path
+            )
+            codeBlocksRefreshTask?.cancel()
+            codeBlocksRefreshTask = refreshCodeBlocksAfterSave(
+                session: session, path: path
+            )
+            diagramBlocksRefreshTask?.cancel()
+            diagramBlocksRefreshTask = refreshDiagramBlocksAfterSave(
+                session: session, path: path
+            )
             postAccessibilityAnnouncement(
                 "Saved \(filename(of: path)).",
                 priority: .medium

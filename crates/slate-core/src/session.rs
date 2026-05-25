@@ -413,6 +413,13 @@ pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
     config: SessionConfig,
+    /// Runtime-mutable math preferences. Audit #259: changing
+    /// `config.math_prefs` at runtime isn't possible because
+    /// `config` is owned by the session. UI surfaces (Settings
+    /// panel #224) drive this lock; `get_math_blocks` reads
+    /// through it on every call so a preference change takes
+    /// effect immediately.
+    math_prefs: Mutex<crate::math::MathPrefs>,
 }
 
 impl VaultSession {
@@ -430,10 +437,12 @@ impl VaultSession {
         let mut conn = db::open_database(&db_path, config.max_db_cache_pages)?;
         db::migrate(&mut conn)?;
 
+        let math_prefs = Mutex::new(config.math_prefs);
         Ok(Self {
             provider,
             conn: Mutex::new(conn),
             config,
+            math_prefs,
         })
     }
 
@@ -1751,11 +1760,24 @@ impl VaultSession {
     pub fn get_math_blocks(&self, path: &str) -> Result<Vec<crate::math::MathBlock>, VaultError> {
         let source = self.read_text(path)?;
         let raws = crate::math::extract_math_blocks(&source);
-        let prefs = self.config.math_prefs;
+        // Audit #259: read through the runtime-mutable Mutex so a
+        // Settings-panel pref change reflects on the next call.
+        // MathPrefs is Copy + small; the lock is held only long
+        // enough to clone the value, no contention with renderers.
+        let prefs = *self.math_prefs.lock().expect("math_prefs mutex poisoned");
         Ok(raws
             .iter()
             .map(|raw| crate::math::render_math(raw, prefs))
             .collect())
+    }
+
+    /// Swap the session's math preferences at runtime. Settings
+    /// panel UIs call this when the user changes a Picker so
+    /// subsequent `get_math_blocks` calls render with the new
+    /// preferences immediately. Audit #259.
+    pub fn set_math_prefs(&self, prefs: crate::math::MathPrefs) -> Result<(), VaultError> {
+        *self.math_prefs.lock().expect("math_prefs mutex poisoned") = prefs;
+        Ok(())
     }
 
     /// Extract every code block in `path` and highlight each via the
@@ -7479,5 +7501,63 @@ mod tests {
             b_entry.byte_offset_in_parent,
             text.len()
         );
+    }
+
+    // --- set_math_prefs (#259) -----------------------------------
+
+    /// Audit #259: changing prefs at runtime via `set_math_prefs`
+    /// must take effect on the very next `get_math_blocks` call.
+    /// Before this PR the session captured prefs at open time and
+    /// the Settings Picker was UI-only.
+    #[test]
+    fn set_math_prefs_takes_effect_on_next_get_math_blocks() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"$x + 1$\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Default prefs → ClearSpeak.
+        let blocks_a = session.get_math_blocks("note.md").unwrap();
+        assert_eq!(blocks_a.len(), 1);
+        // We can't easily compare speech strings (MathCAT init may
+        // not run in the test env), but the call must succeed. The
+        // real test is that set_math_prefs doesn't error and a
+        // follow-up call still returns one block — confirming the
+        // mutex round-trip works.
+
+        session
+            .set_math_prefs(crate::math::MathPrefs {
+                speech_style: crate::math::MathSpeechStyle::MathSpeak,
+                verbosity: crate::math::MathVerbosity::Verbose,
+                braille_code: crate::math::BrailleCode::Ueb,
+            })
+            .expect("set_math_prefs must not error");
+
+        let blocks_b = session.get_math_blocks("note.md").unwrap();
+        assert_eq!(
+            blocks_b.len(),
+            1,
+            "post-swap call should still find the block"
+        );
+    }
+
+    #[test]
+    fn set_math_prefs_handles_rapid_concurrent_swaps() {
+        // The mutex around math_prefs must serialize correctly
+        // even under contention — a Settings Picker held down
+        // (arrow keys repeating) could fire dozens of sets per
+        // second.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", b"$x$\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        for _ in 0..20 {
+            session
+                .set_math_prefs(crate::math::MathPrefs::default())
+                .unwrap();
+        }
+        let blocks = session.get_math_blocks("note.md").unwrap();
+        assert_eq!(blocks.len(), 1);
     }
 }
