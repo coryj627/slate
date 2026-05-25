@@ -1,4 +1,7 @@
 // swift-tools-version:5.9
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import PackageDescription
 
 // SwiftUI Mac app for Slate. Calls the Rust `slate-core` library through

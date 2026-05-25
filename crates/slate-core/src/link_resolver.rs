@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Resolves parsed link targets against a vault's file index.
 //!
 //! Takes a `target_raw` string (the part before `|`/`#`/`^` already

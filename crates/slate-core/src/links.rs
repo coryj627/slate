@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Link extraction for note content.
 //!
 //! Pulls every link out of a Markdown source string and normalizes

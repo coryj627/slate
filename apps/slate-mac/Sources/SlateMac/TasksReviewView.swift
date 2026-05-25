@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import SwiftUI
 
 /// Vault-wide Tasks Review surface (#114). Sheet presented from

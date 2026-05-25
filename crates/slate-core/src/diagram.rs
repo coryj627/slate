@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Diagram pipeline for Milestone K (#219).
 //!
 //! Walks a Markdown source for fenced `mermaid` blocks. For each

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Core engine for Slate, an accessibility-first knowledge workspace.
 //!
 //! The full API surface is documented in

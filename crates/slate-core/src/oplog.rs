@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Append-only binary save journal for vault notes.
 //!
 //! Each indexed note gets its own log at

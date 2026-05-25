@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! FFI bindings for `slate-core` via `uniffi-rs`.
 //!
 //! This crate wraps the pure-Rust `slate-core` API with uniffi annotations

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import SwiftUI
 
 /// Skeleton accessible data grid per `docs/plans/05_locked_architecture_decisions.md` §8.7.

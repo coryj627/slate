@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Full-text search over the `files_fts` virtual table.
 //!
 //! Exposes a single entry point — `full_text_search` — that runs an
