@@ -400,8 +400,8 @@ fn classify_swift(kind: &str) -> Option<TokenKind> {
         "type_identifier" => Some(TokenKind::Type),
         "line_str_text" | "multi_line_str_text" | "escape_sequence" => Some(TokenKind::String),
         "integer_literal" | "real_literal" => Some(TokenKind::Number),
-        "func" | "let" | "var" | "return" | "if" | "else" | "for" | "while" | "switch"
-        | "case" | "default" | "break" | "continue" | "struct" | "class" | "enum" | "protocol"
+        "func" | "let" | "var" | "return" | "if" | "else" | "for" | "while" | "switch" | "case"
+        | "default" | "break" | "continue" | "struct" | "class" | "enum" | "protocol"
         | "import" | "self" | "Self" | "true" | "false" | "nil" | "guard" | "do" | "try"
         | "catch" | "throw" | "throws" | "async" | "await" | "in" | "is" | "as" | "typealias"
         | "static" | "private" | "public" | "internal" | "override" | "init" | "deinit"
@@ -429,15 +429,17 @@ fn classify_python(kind: &str) -> Option<TokenKind> {
 
 fn classify_javascript(kind: &str) -> Option<TokenKind> {
     match kind {
-        "identifier" | "property_identifier" | "shorthand_property_identifier"
+        "identifier"
+        | "property_identifier"
+        | "shorthand_property_identifier"
         | "shorthand_property_identifier_pattern" => Some(TokenKind::Identifier),
         "string_fragment" | "escape_sequence" | "template_fragment" => Some(TokenKind::String),
         "number" => Some(TokenKind::Number),
         "function" | "let" | "const" | "var" | "return" | "if" | "else" | "for" | "while"
         | "do" | "switch" | "case" | "default" | "break" | "continue" | "class" | "extends"
         | "new" | "delete" | "typeof" | "instanceof" | "void" | "in" | "of" | "import"
-        | "export" | "from" | "as" | "try" | "catch" | "finally" | "throw" | "yield"
-        | "async" | "await" | "true" | "false" | "null" | "undefined" | "this" | "super" => {
+        | "export" | "from" | "as" | "try" | "catch" | "finally" | "throw" | "yield" | "async"
+        | "await" | "true" | "false" | "null" | "undefined" | "this" | "super" => {
             Some(TokenKind::Keyword)
         }
         _ => None,
@@ -446,7 +448,9 @@ fn classify_javascript(kind: &str) -> Option<TokenKind> {
 
 fn classify_typescript(kind: &str) -> Option<TokenKind> {
     match kind {
-        "identifier" | "property_identifier" | "shorthand_property_identifier"
+        "identifier"
+        | "property_identifier"
+        | "shorthand_property_identifier"
         | "shorthand_property_identifier_pattern" => Some(TokenKind::Identifier),
         "type_identifier" => Some(TokenKind::Type),
         "string_fragment" | "escape_sequence" | "template_fragment" => Some(TokenKind::String),
@@ -455,11 +459,11 @@ fn classify_typescript(kind: &str) -> Option<TokenKind> {
         | "bigint" => Some(TokenKind::Type),
         "function" | "let" | "const" | "var" | "return" | "if" | "else" | "for" | "while"
         | "do" | "switch" | "case" | "default" | "break" | "continue" | "class" | "extends"
-        | "implements" | "interface" | "new" | "delete" | "typeof" | "instanceof" | "in"
-        | "of" | "import" | "export" | "from" | "as" | "try" | "catch" | "finally" | "throw"
-        | "yield" | "async" | "await" | "true" | "false" | "null" | "undefined" | "this"
-        | "super" | "abstract" | "declare" | "enum" | "type" | "namespace" | "module"
-        | "readonly" | "private" | "protected" | "public" | "static" | "keyof" | "infer" => {
+        | "implements" | "interface" | "new" | "delete" | "typeof" | "instanceof" | "in" | "of"
+        | "import" | "export" | "from" | "as" | "try" | "catch" | "finally" | "throw" | "yield"
+        | "async" | "await" | "true" | "false" | "null" | "undefined" | "this" | "super"
+        | "abstract" | "declare" | "enum" | "type" | "namespace" | "module" | "readonly"
+        | "private" | "protected" | "public" | "static" | "keyof" | "infer" => {
             Some(TokenKind::Keyword)
         }
         _ => None,
@@ -538,7 +542,9 @@ fn classify_go(kind: &str) -> Option<TokenKind> {
     match kind {
         "identifier" | "field_identifier" | "package_identifier" => Some(TokenKind::Identifier),
         "type_identifier" => Some(TokenKind::Type),
-        "interpreted_string_literal_content" | "raw_string_literal_content" | "rune_literal"
+        "interpreted_string_literal_content"
+        | "raw_string_literal_content"
+        | "rune_literal"
         | "escape_sequence" => Some(TokenKind::String),
         "int_literal" | "float_literal" | "imaginary_literal" => Some(TokenKind::Number),
         "package" | "import" | "func" | "return" | "if" | "else" | "for" | "range" | "switch"
@@ -559,8 +565,8 @@ fn classify_c(kind: &str) -> Option<TokenKind> {
         "number_literal" => Some(TokenKind::Number),
         "if" | "else" | "for" | "while" | "do" | "switch" | "case" | "default" | "break"
         | "continue" | "return" | "goto" | "struct" | "union" | "enum" | "typedef" | "sizeof"
-        | "static" | "extern" | "const" | "volatile" | "inline" | "register" | "auto"
-        | "void" | "signed" | "unsigned" | "true" | "false" | "NULL" => Some(TokenKind::Keyword),
+        | "static" | "extern" | "const" | "volatile" | "inline" | "register" | "auto" | "void"
+        | "signed" | "unsigned" | "true" | "false" | "NULL" => Some(TokenKind::Keyword),
         _ => None,
     }
 }
@@ -592,13 +598,22 @@ fn classify_cpp(kind: &str) -> Option<TokenKind> {
 fn classify_markdown(kind: &str) -> Option<TokenKind> {
     match kind {
         "inline" | "text" => Some(TokenKind::Other("text".into())),
-        "atx_h1_marker" | "atx_h2_marker" | "atx_h3_marker" | "atx_h4_marker"
-        | "atx_h5_marker" | "atx_h6_marker" | "setext_h1_underline" | "setext_h2_underline"
+        "atx_h1_marker"
+        | "atx_h2_marker"
+        | "atx_h3_marker"
+        | "atx_h4_marker"
+        | "atx_h5_marker"
+        | "atx_h6_marker"
+        | "setext_h1_underline"
+        | "setext_h2_underline"
         | "thematic_break" => Some(TokenKind::Keyword),
-        "list_marker_minus" | "list_marker_plus" | "list_marker_star" | "list_marker_dot"
-        | "list_marker_parenthesis" | "code_span_delimiter" | "fenced_code_block_delimiter" => {
-            Some(TokenKind::Punctuation)
-        }
+        "list_marker_minus"
+        | "list_marker_plus"
+        | "list_marker_star"
+        | "list_marker_dot"
+        | "list_marker_parenthesis"
+        | "code_span_delimiter"
+        | "fenced_code_block_delimiter" => Some(TokenKind::Punctuation),
         _ => None,
     }
 }
@@ -606,10 +621,8 @@ fn classify_markdown(kind: &str) -> Option<TokenKind> {
 fn classify_universal(kind: &str) -> Option<TokenKind> {
     match kind {
         "->" | "=>" | "==" | "!=" | ">=" | "<=" | "&&" | "||" | "+=" | "-=" | "*=" | "/="
-        | "%=" | "&=" | "|=" | "^=" | "<<" | ">>" | "++" | "--" | "**" | ":=" | "+" | "-"
-        | "/" | "%" | "=" | "!" | "~" | "*" | "&" | "|" | "^" | "<" | ">" => {
-            Some(TokenKind::Operator)
-        }
+        | "%=" | "&=" | "|=" | "^=" | "<<" | ">>" | "++" | "--" | "**" | ":=" | "+" | "-" | "/"
+        | "%" | "=" | "!" | "~" | "*" | "&" | "|" | "^" | "<" | ">" => Some(TokenKind::Operator),
         "\"" | "'" | "`" => Some(TokenKind::String),
         "(" | ")" | "{" | "}" | "[" | "]" | "," | ";" | ":" | "::" | "." | "?" | "</" | "#"
         | "@" | "\\" | "$" => Some(TokenKind::Punctuation),
@@ -737,14 +750,19 @@ mod tests {
     // --- Per-grammar token classification tests (audit #247) ---
 
     fn has_kind(block: &CodeBlock, kind: &TokenKind) -> bool {
-        block.tokens.iter().any(|t| std::mem::discriminant(&t.kind) == std::mem::discriminant(kind))
+        block
+            .tokens
+            .iter()
+            .any(|t| std::mem::discriminant(&t.kind) == std::mem::discriminant(kind))
     }
 
     #[test]
     fn grammar_rust() {
         let block = highlight_code(&RawCodeBlock {
             source: "fn foo(x: i32) -> String { let s = \"hello\"; return s; }".into(),
-            language: Some("rust".into()), line: 1, byte_offset: 0,
+            language: Some("rust".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Identifier));
@@ -756,11 +774,15 @@ mod tests {
     fn grammar_swift_simple_identifier() {
         let block = highlight_code(&RawCodeBlock {
             source: "func foo(x: Int) -> String { let s = \"hello\"; return s }".into(),
-            language: Some("swift".into()), line: 1, byte_offset: 0,
+            language: Some("swift".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
-        assert!(has_kind(&block, &TokenKind::Identifier),
-            "Swift's simple_identifier must classify as Identifier");
+        assert!(
+            has_kind(&block, &TokenKind::Identifier),
+            "Swift's simple_identifier must classify as Identifier"
+        );
         assert!(has_kind(&block, &TokenKind::Type));
         assert!(has_kind(&block, &TokenKind::String));
     }
@@ -769,7 +791,9 @@ mod tests {
     fn grammar_python() {
         let block = highlight_code(&RawCodeBlock {
             source: "def foo(x):\n    s = \"hello\"\n    return s\n".into(),
-            language: Some("python".into()), line: 1, byte_offset: 0,
+            language: Some("python".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Identifier));
@@ -780,7 +804,9 @@ mod tests {
     fn grammar_javascript() {
         let block = highlight_code(&RawCodeBlock {
             source: "function foo(x) { let s = \"hello\"; return s; }\nconst n = 42;".into(),
-            language: Some("javascript".into()), line: 1, byte_offset: 0,
+            language: Some("javascript".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Identifier));
@@ -791,12 +817,18 @@ mod tests {
     #[test]
     fn grammar_typescript() {
         let block = highlight_code(&RawCodeBlock {
-            source: "function foo(x: number): string { return \"hi\"; }\ninterface Bar { val: string }".into(),
-            language: Some("typescript".into()), line: 1, byte_offset: 0,
+            source:
+                "function foo(x: number): string { return \"hi\"; }\ninterface Bar { val: string }"
+                    .into(),
+            language: Some("typescript".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
-        assert!(has_kind(&block, &TokenKind::Type),
-            "TypeScript type_identifier must classify as Type");
+        assert!(
+            has_kind(&block, &TokenKind::Type),
+            "TypeScript type_identifier must classify as Type"
+        );
         assert!(has_kind(&block, &TokenKind::String));
         assert!(has_kind(&block, &TokenKind::Number));
     }
@@ -805,7 +837,9 @@ mod tests {
     fn grammar_json() {
         let block = highlight_code(&RawCodeBlock {
             source: r#"{"key": 42, "flag": true}"#.into(),
-            language: Some("json".into()), line: 1, byte_offset: 0,
+            language: Some("json".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::String));
         assert!(has_kind(&block, &TokenKind::Number));
@@ -816,7 +850,9 @@ mod tests {
     fn grammar_yaml() {
         let block = highlight_code(&RawCodeBlock {
             source: "key: value\nnumber: 42\nbool: true".into(),
-            language: Some("yaml".into()), line: 1, byte_offset: 0,
+            language: Some("yaml".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::String));
         assert!(has_kind(&block, &TokenKind::Number));
@@ -827,7 +863,9 @@ mod tests {
     fn grammar_bash() {
         let block = highlight_code(&RawCodeBlock {
             source: "if [ $foo = \"hello\" ]; then\n  echo $foo\nfi".into(),
-            language: Some("bash".into()), line: 1, byte_offset: 0,
+            language: Some("bash".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Identifier));
@@ -838,12 +876,18 @@ mod tests {
     fn grammar_html() {
         let block = highlight_code(&RawCodeBlock {
             source: "<div class=\"box\"><p>Hello</p></div>".into(),
-            language: Some("html".into()), line: 1, byte_offset: 0,
+            language: Some("html".into()),
+            line: 1,
+            byte_offset: 0,
         });
-        assert!(has_kind(&block, &TokenKind::Keyword),
-            "HTML tag_name must classify as Keyword");
-        assert!(has_kind(&block, &TokenKind::Identifier),
-            "HTML attribute_name must classify as Identifier");
+        assert!(
+            has_kind(&block, &TokenKind::Keyword),
+            "HTML tag_name must classify as Keyword"
+        );
+        assert!(
+            has_kind(&block, &TokenKind::Identifier),
+            "HTML attribute_name must classify as Identifier"
+        );
         assert!(has_kind(&block, &TokenKind::String));
     }
 
@@ -851,7 +895,9 @@ mod tests {
     fn grammar_css() {
         let block = highlight_code(&RawCodeBlock {
             source: ".box { color: red; }".into(),
-            language: Some("css".into()), line: 1, byte_offset: 0,
+            language: Some("css".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Identifier));
         assert!(has_kind(&block, &TokenKind::String));
@@ -861,7 +907,9 @@ mod tests {
     fn grammar_go() {
         let block = highlight_code(&RawCodeBlock {
             source: "package main\nfunc foo(x int) string { s := \"hello\"; return s }".into(),
-            language: Some("go".into()), line: 1, byte_offset: 0,
+            language: Some("go".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Identifier));
@@ -873,7 +921,9 @@ mod tests {
     fn grammar_c() {
         let block = highlight_code(&RawCodeBlock {
             source: "int foo(int x) { char* s = \"hello\"; return 0; }".into(),
-            language: Some("c".into()), line: 1, byte_offset: 0,
+            language: Some("c".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Type));
@@ -885,7 +935,9 @@ mod tests {
     fn grammar_cpp() {
         let block = highlight_code(&RawCodeBlock {
             source: "class Bar { public: double val; };".into(),
-            language: Some("cpp".into()), line: 1, byte_offset: 0,
+            language: Some("cpp".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(has_kind(&block, &TokenKind::Keyword));
         assert!(has_kind(&block, &TokenKind::Type));
@@ -896,10 +948,14 @@ mod tests {
     fn grammar_sql() {
         let block = highlight_code(&RawCodeBlock {
             source: "SELECT id, name FROM users WHERE age > 18;".into(),
-            language: Some("sql".into()), line: 1, byte_offset: 0,
+            language: Some("sql".into()),
+            line: 1,
+            byte_offset: 0,
         });
-        assert!(has_kind(&block, &TokenKind::Keyword),
-            "SQL keyword_* nodes must classify as Keyword");
+        assert!(
+            has_kind(&block, &TokenKind::Keyword),
+            "SQL keyword_* nodes must classify as Keyword"
+        );
         assert!(has_kind(&block, &TokenKind::Identifier));
         assert!(has_kind(&block, &TokenKind::Number));
     }
@@ -908,7 +964,9 @@ mod tests {
     fn grammar_markdown() {
         let block = highlight_code(&RawCodeBlock {
             source: "# Hello\n\n- item\n- item2".into(),
-            language: Some("markdown".into()), line: 1, byte_offset: 0,
+            language: Some("markdown".into()),
+            line: 1,
+            byte_offset: 0,
         });
         assert!(!block.tokens.is_empty());
     }
