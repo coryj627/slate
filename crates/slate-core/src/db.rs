@@ -365,6 +365,71 @@ mod tests {
         );
     }
 
+    /// Regression for [#240](https://github.com/coryj627/slate/issues/240):
+    /// migration 012 invalidates cached `headings` rows after the
+    /// frontmatter-skip fix in `extract_headings`. The first cut of
+    /// the migration only did `DELETE FROM headings`, but the
+    /// scanner's per-file fast path (`session.rs::index_file_slow_path`)
+    /// would then skip every unchanged file's `replace_headings`
+    /// call, leaving the outline empty until each file's content
+    /// changed. Setting `mtime_ms = 0` forces every file onto the
+    /// slow path on the next scan so headings repopulate.
+    #[test]
+    fn migration_012_resets_mtime_and_clears_headings() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).unwrap();
+
+        // Seed a files row + a headings row, as if a previous scan
+        // populated them with the pre-fix extractor.
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/foo.md', 'foo.md', 'md', 100, 1700000000000,
+               1700000000000, 'abc123', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        let file_id: i64 = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = 'notes/foo.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO headings (file_id, ordinal, level, text, anchor_id)
+             VALUES (?1, 0, 2, 'pre-fix fake heading', 'pre-fix-fake-heading')",
+            rusqlite::params![file_id],
+        )
+        .unwrap();
+
+        // Run migration 012's SQL manually (the migration itself
+        // already ran during `migrate()`; this re-applies its body
+        // to a populated database, simulating what an in-the-wild
+        // upgrade does).
+        let sql = include_str!("../migrations/012_invalidate_headings_for_frontmatter_fix.sql");
+        conn.execute_batch(sql).unwrap();
+
+        let headings: u32 = conn
+            .query_row("SELECT COUNT(*) FROM headings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(headings, 0, "migration 012 must wipe cached headings");
+
+        let mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'notes/foo.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            mtime, 0,
+            "migration 012 must reset mtime_ms so the scanner's fast path takes the slow branch on the next scan"
+        );
+    }
+
     #[test]
     fn current_version_is_zero_on_empty_db() {
         // No `ensure_version_table` setup: a fresh connection should
