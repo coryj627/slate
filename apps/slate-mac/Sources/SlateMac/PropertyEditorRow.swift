@@ -348,18 +348,31 @@ struct PropertyEditorRow: View {
     // MARK: Action buttons
 
     private var actionButtons: some View {
+        // Audit #238: Save's window-scoped `.keyboardShortcut(.return)`
+        // dropped. Each TextField variant already calls `commitDraft`
+        // via `.onSubmit`, so in-field Return still commits. Removing
+        // the window-level shortcut means Return inside a different
+        // surface (a sheet, another row's editor) can no longer fire
+        // *this* row's Save by accident. Tab-to-Save + Space/Return
+        // still works via AppKit's default button activation.
+        //
+        // Audit #239: the delete button used to be icon-only with an
+        // accessibility label that didn't appear visibly anywhere —
+        // failing WCAG 2.5.3 (Label in Name). Replace with a "Delete"
+        // text button so speech control + AT users see the same name
+        // sighted users do. Destructive role gives the red treatment
+        // the icon was carrying.
         HStack(spacing: 4) {
             Button("Save") { commitDraft() }
                 .disabled(!hasUnsavedChanges || appState.isEditingProperty)
-                .keyboardShortcut(.return, modifiers: [])
                 .accessibilityLabel("Save changes to \(property.key)")
-            Button(role: .destructive) {
+                .help("Save changes to \(property.key)")
+            Button("Delete", role: .destructive) {
                 pendingDelete = true
-            } label: {
-                Image(systemName: "minus.circle")
             }
             .keyboardShortcut(.delete, modifiers: .command)
             .accessibilityLabel("Delete property \(property.key)")
+            .help("Delete property \(property.key)")
         }
     }
 
