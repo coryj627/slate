@@ -98,9 +98,7 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         description: "headings: invalidate cached rows after frontmatter-skip fix (#227)",
-        sql: include_str!(
-            "../migrations/012_invalidate_headings_for_frontmatter_fix.sql"
-        ),
+        sql: include_str!("../migrations/012_invalidate_headings_for_frontmatter_fix.sql"),
     },
 ];
 
