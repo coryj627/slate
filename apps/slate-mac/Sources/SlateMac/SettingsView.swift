@@ -114,15 +114,14 @@ struct MathSettingsTab: View {
                 // ("Changes apply immediately…"), so promote to
                 // `.primary` and rely on `.font(.caption)` size
                 // to keep the visual hierarchy.
-                Text(
-                    "Changes apply immediately to math in the read pane. "
-                        + "Speech style controls how math is read aloud (ClearSpeak: "
-                        + "intuitive; MathSpeak: precise / verbatim). Verbosity sets "
-                        + "how detailed the spoken math is. Braille code switches "
-                        + "between Nemeth and UEB encodings."
-                )
-                .font(.caption)
-                .foregroundStyle(.primary)
+                //
+                // Same Swift-type-checker workaround as the Code
+                // tab — string is built via a computed property
+                // to avoid timing out on long `+` operator chains
+                // inside a deep view body.
+                Text(mathFooterText)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
             }
 
             Section {
@@ -136,6 +135,17 @@ struct MathSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Footer guidance for the Math tab. Extracted to a property
+    /// so the Swift type checker doesn't time out building the
+    /// surrounding Form body.
+    private var mathFooterText: String {
+        "Changes apply immediately to math in the read pane. "
+            + "Speech style controls how math is read aloud (ClearSpeak: "
+            + "intuitive; MathSpeak: precise / verbatim). Verbosity sets "
+            + "how detailed the spoken math is. Braille code switches "
+            + "between Nemeth and UEB encodings."
     }
 }
 
@@ -264,17 +274,17 @@ struct CodeSettingsTab: View {
                 // verbosity levels so AT users hear what each
                 // means without relying on the Picker's
                 // unreliable hint announcement.
-                Text(
-                    "Affects the preamble screen readers hear before a code "
-                        + "block. \"Preamble only\" reads \"Code block, "
-                        + "<language>, N lines.\" \"Preamble + first line\" "
-                        + "adds the signature/first non-blank line. "
-                        + "\"Preamble + all tokens\" reads every token (useful "
-                        + "for braille display work). Font and color preferences "
-                        + "land later."
-                )
-                .font(.caption)
-                .foregroundStyle(.primary)
+                //
+                // The string is built via a computed property
+                // (not inline `+`-concat) because Swift's type
+                // checker times out on long operator chains
+                // inside a deep SwiftUI view body — locally builds
+                // but CI hit "compiler is unable to type-check
+                // this expression in reasonable time" on macOS
+                // Swift 5.10.
+                Text(codeFooterText)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
             }
 
             Section {
@@ -296,6 +306,17 @@ struct CodeSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Footer guidance for the Code tab. Extracted to a property
+    /// so the Swift type checker doesn't time out building the
+    /// surrounding Form body.
+    private var codeFooterText: String {
+        "Affects the preamble screen readers hear before a code block. "
+            + "\"Preamble only\" reads \"Code block, <language>, N lines.\" "
+            + "\"Preamble + first line\" adds the signature/first non-blank "
+            + "line. \"Preamble + all tokens\" reads every token (useful for "
+            + "braille display work). Font and color preferences land later."
     }
 
     private var previewPreamble: String {
