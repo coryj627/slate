@@ -67,6 +67,14 @@ struct MermaidView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: 600)
+                // The container owns the AT label via
+                // `.accessibilityLabel(structuredDescription)` +
+                // `.accessibilityElement(children: .ignore)`. Hide
+                // the Image so the static analyzer + VoiceOver
+                // both see the container's label as the only
+                // announcement (no duplicate "image" trait, no
+                // missing-label false positive).
+                .accessibilityHidden(true)
         } else {
             // Backend said Ok but didn't produce SVG / SwiftDraw
             // couldn't decode it. Treat as a soft render failure so
