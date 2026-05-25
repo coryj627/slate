@@ -22,5 +22,18 @@
 --
 -- ON DELETE CASCADE from `files` doesn't help here because the files
 -- themselves aren't going away. A direct DELETE is the simplest path.
+--
+-- Force the scanner's slow path on the next scan: the per-file fast
+-- path in `session.rs::index_file_slow_path` short-circuits when the
+-- file's `(mtime_ms, size_bytes, ctime_ms)` triple matches what's
+-- cached. After we wipe headings, an unchanged file would skip
+-- `replace_headings` and leave the outline empty (issue #240 —
+-- strictly worse than the original fake-Setext-H2 bug). Setting
+-- `mtime_ms = 0` ensures `db_mtime_ms == stat.mtime_ms` is false
+-- for every real file on the next scan, forcing the slow path and
+-- the corrected `extract_headings` to run. The slow path then
+-- updates `mtime_ms` back to the real stat value, so the cost is
+-- one-time per file.
 
+UPDATE files SET mtime_ms = 0;
 DELETE FROM headings;
