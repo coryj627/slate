@@ -6,9 +6,9 @@ import SwiftUI
 /// Two layers, two audiences:
 /// - **Visual** — an `NSTextView` (read-only, selectable, monospaced)
 ///   showing the source with per-`TokenKind` foreground colors
-///   drawn from `Theme`. Matches Xcode's default palette closely
-///   enough that a developer scanning the read pane sees familiar
-///   highlighting.
+///   drawn from `CodeTokenTheme`. Matches Xcode's default palette
+///   closely enough that a developer scanning the read pane sees
+///   familiar highlighting.
 /// - **Accessibility** — the container carries a `"Code block,
 ///   <language>, N lines"` preamble so VoiceOver users know what
 ///   they're entering before they drill in. `accessibilityElement(
@@ -37,6 +37,18 @@ struct CodeBlockView: View {
             // catastrophic).
             .accessibilityElement(children: .contain)
             .accessibilityLabel(preambleLabel)
+            // Audit #252 M3: a code block can clip long lines (the
+            // NSScrollView allows horizontal scroll). VO users
+            // wouldn't otherwise know — autohidesScrollers means
+            // the scrollbar doesn't announce. The hint covers it.
+            .accessibilityHint("Long lines scroll horizontally. Right-click to copy the source.")
+            // Audit #252 L4: keyboard / Voice Control users can't
+            // reach NSTextView's mouse-selection affordance. A
+            // context menu with "Copy code" gives mouse,
+            // keyboard, and Voice Control users a uniform path.
+            .contextMenu {
+                Button("Copy code") { copyCodeToPasteboard() }
+            }
             // NOTE: `.textSelection(.enabled)` is NOT applied at
             // container level. SwiftUI's container-scoped text
             // selection breaks VO continuous-read at the leaf level
@@ -90,20 +102,43 @@ struct CodeBlockView: View {
         }
         return count
     }
+
+    /// Copy the raw (un-attributed) source to the pasteboard. Plain
+    /// text on purpose — pasting code into another editor should
+    /// not carry our highlight colours.
+    private func copyCodeToPasteboard() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(block.source, forType: .string)
+    }
 }
 
 // MARK: - Token theme
 
 /// Foreground colors per `TokenKind`. Sensible defaults inspired by
-/// Xcode's default palette. Every colour is system-defined so it
-/// adapts to Light / Dark / Increase Contrast automatically.
+/// Xcode's default palette.
 ///
-/// Contrast verified: all colors clear 4.5:1 against
-/// `NSColor.textBackgroundColor` in Light + Dark modes (the
-/// `NSColor.system*` values are Apple-curated for that exact
-/// guarantee).
+/// Contrast (audit #252 H1 + H2): the default palette uses
+/// `NSColor.system*` semantic colors, which are tuned by Apple
+/// against the standard label/background pairing — but several
+/// (`controlAccentColor` on Graphite especially, `systemRed` /
+/// `systemPurple` in Dark Mode) land in the 3.0–4.5:1 range against
+/// `NSColor.textBackgroundColor`, below WCAG 1.4.3's 4.5:1 bar.
+/// Under `accessibilityDisplayShouldIncreaseContrast` we collapse
+/// the whole palette to `NSColor.labelColor` (Apple-guaranteed
+/// contrast against the matched background) so highlighting stays
+/// discriminable for low-vision users — same pattern audit #230
+/// applied to the editor's embed underline.
 enum CodeTokenTheme {
-    static func color(for kind: TokenKind) -> NSColor {
+    static func color(for kind: TokenKind, increaseContrast: Bool) -> NSColor {
+        if increaseContrast {
+            // Single high-contrast color across all kinds. Tokens
+            // are still semantically tagged (via the attribute
+            // layer), just not colour-coded — which is correct
+            // a11y behaviour: shape / position carry the structure,
+            // not colour alone (WCAG 1.4.1).
+            return NSColor.labelColor
+        }
         switch kind {
         case .keyword:
             return NSColor.systemPurple
@@ -113,17 +148,15 @@ enum CodeTokenTheme {
             return NSColor.systemBlue
         case .comment:
             // Comments are de-emphasized. `secondaryLabelColor` is
-            // a system gray that's tuned for body text against the
-            // text-background pairing — Apple guarantees the
-            // contrast.
+            // a system gray that's Apple-tuned for body text
+            // against text-background pairing.
             return NSColor.secondaryLabelColor
         case .identifier:
             return NSColor.labelColor
         case .type:
             return NSColor.systemTeal
         case .function:
-            // Function names get the system accent so they pop —
-            // Xcode does similar.
+            // Function names get the system accent so they pop.
             return NSColor.controlAccentColor
         case .operator:
             return NSColor.labelColor
@@ -140,6 +173,18 @@ enum CodeTokenTheme {
 private struct CodeBlockContent: NSViewRepresentable {
     let block: CodeBlock
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject {
+        weak var textView: NSTextView?
+        var block: CodeBlock?
+
+        @objc func systemContrastChanged() {
+            guard let textView, let block else { return }
+            applyAttributedString(to: textView, block: block)
+        }
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = false
@@ -150,61 +195,94 @@ private struct CodeBlockContent: NSViewRepresentable {
         let textView = NSTextView(frame: .zero)
         textView.isEditable = false
         textView.isSelectable = true
-        textView.isRichText = true
+        // Audit #252 L1: a read-only view doesn't need rich-text
+        // input. Attributed-string rendering still works with
+        // `isRichText = false`; the flag governs USER input
+        // (paste-as-rich-text, Format menu), not what the storage
+        // can hold. Set to false so a Cmd+C copy lands as plain
+        // UTF-8 instead of RTF.
+        textView.isRichText = false
         textView.drawsBackground = true
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.textColor = NSColor.labelColor
+        // Audit #252 M2: Dynamic Type / system text size. Pinning
+        // to 12pt makes the code smaller than the editor pane and
+        // ignores System Settings → Display → Text Size. Use the
+        // user's chosen system font size (same as the editor pane,
+        // see NoteEditorView).
         textView.font = NSFont.monospacedSystemFont(
-            ofSize: 12,
+            ofSize: NSFont.systemFontSize,
             weight: .regular
         )
         textView.textContainerInset = NSSize(width: 8, height: 8)
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.isAutomaticLinkDetectionEnabled = false
-        textView.smartInsertDeleteEnabled = false
         textView.usesFontPanel = false
         textView.usesRuler = false
+        // The automatic-substitution flags are irrelevant on
+        // `isEditable = false` (there's no typing surface to
+        // substitute on), but we keep `smartInsertDeleteEnabled =
+        // false` as defensive cover in case the view ever flips
+        // editable for a "scratchpad" feature.
+        textView.smartInsertDeleteEnabled = false
 
-        // NSTextView ships its own native VoiceOver behavior —
-        // character/word/line nav, selection announcements, etc.
-        // The wrapping container's accessibilityLabel provides the
-        // preamble; the textview itself is the textual body VO
-        // walks through after the user drills in. Don't override
-        // textview's AX traits.
-        textView.setAccessibilityLabel("Code")
+        // Audit #252 M1: do NOT add `setAccessibilityLabel("Code")`
+        // here. With the container's accessibilityLabel providing
+        // the preamble + children: .contain, the inner "Code"
+        // label would announce noise on drill-in ("Code block,
+        // rust, 5 lines… Code… fn main…"). Leaving the textview
+        // label nil lets VO read straight into the source content
+        // after the preamble — what the container's docstring
+        // already promised.
 
-        applyAttributedString(to: textView)
+        context.coordinator.textView = textView
+        context.coordinator.block = block
+
+        // Re-render token colors when the user toggles Increase
+        // Contrast at runtime (audit #252 H1).
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.systemContrastChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+
+        applyAttributedString(to: textView, block: block)
         scrollView.documentView = textView
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        applyAttributedString(to: textView)
+        context.coordinator.block = block
+        applyAttributedString(to: textView, block: block)
     }
 
-    /// Build the `NSAttributedString` from the block's tokens and
-    /// apply it. The full source is written first so ranges
-    /// uncovered by any token still render with the default text
-    /// color (rather than vanishing).
-    private func applyAttributedString(to textView: NSTextView) {
-        let storage = textView.textStorage ?? NSTextStorage()
-        let attributed = attributedString(for: block)
-        storage.beginEditing()
-        storage.setAttributedString(attributed)
-        storage.endEditing()
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        NotificationCenter.default.removeObserver(coordinator)
     }
+}
+
+/// Build the `NSAttributedString` from the block's tokens and apply
+/// it. The full source is written first so ranges uncovered by any
+/// token still render with the default text color.
+private func applyAttributedString(to textView: NSTextView, block: CodeBlock) {
+    guard let storage = textView.textStorage else { return }
+    let attributed = attributedString(
+        for: block,
+        increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    )
+    storage.beginEditing()
+    storage.setAttributedString(attributed)
+    storage.endEditing()
 }
 
 /// Pure helper exposed for tests. Builds the attributed string
 /// independent of NSTextView so XCTest can assert on attributes
-/// without needing a real view.
-func attributedString(for block: CodeBlock) -> NSAttributedString {
+/// without needing a real view. The `increaseContrast` parameter
+/// lets tests cover both palettes (audit #252 H1/H2) without
+/// depending on the system's actual setting.
+func attributedString(for block: CodeBlock, increaseContrast: Bool = false) -> NSAttributedString {
     let baseAttributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+        .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
         .foregroundColor: NSColor.labelColor,
     ]
     let attributed = NSMutableAttributedString(
@@ -214,12 +292,6 @@ func attributedString(for block: CodeBlock) -> NSAttributedString {
     let nsSource = block.source as NSString
     let length = nsSource.length
     for token in block.tokens {
-        // Tokens are byte offsets from tree-sitter. NSAttributedString
-        // works in UTF-16 code units, which matches NSString's
-        // indexing — for ASCII code (the common case for source) the
-        // two coincide. For non-ASCII source (rare but possible),
-        // round-trip through `String` indices to avoid splitting a
-        // grapheme cluster mid-token.
         guard
             let range = utf16Range(
                 forUtf8Start: Int(token.startByte),
@@ -230,7 +302,7 @@ func attributedString(for block: CodeBlock) -> NSAttributedString {
         else {
             continue
         }
-        let color = CodeTokenTheme.color(for: token.kind)
+        let color = CodeTokenTheme.color(for: token.kind, increaseContrast: increaseContrast)
         attributed.addAttribute(.foregroundColor, value: color, range: range)
     }
     return attributed

@@ -88,7 +88,7 @@ final class CodeBlockViewTests: XCTestCase {
             SyntaxToken(startByte: 7, endByte: 8, kind: .punctuation), // ")"
         ]
         let block = makeBlock(source: source, language: "rust", tokens: tokens)
-        let attributed = attributedString(for: block)
+        let attributed = attributedString(for: block, increaseContrast: false)
 
         XCTAssertEqual(attributed.string, source)
 
@@ -97,14 +97,54 @@ final class CodeBlockViewTests: XCTestCase {
             at: 0, // "f" of "fn"
             effectiveRange: nil
         ) as? NSColor
-        XCTAssertEqual(keywordColor, CodeTokenTheme.color(for: .keyword))
+        XCTAssertEqual(
+            keywordColor,
+            CodeTokenTheme.color(for: .keyword, increaseContrast: false)
+        )
 
         let functionColor = attributed.attribute(
             .foregroundColor,
             at: 3, // "f" of "foo"
             effectiveRange: nil
         ) as? NSColor
-        XCTAssertEqual(functionColor, CodeTokenTheme.color(for: .function))
+        XCTAssertEqual(
+            functionColor,
+            CodeTokenTheme.color(for: .function, increaseContrast: false)
+        )
+    }
+
+    /// Audit #252 H1 + H2: under Increase Contrast, every token kind
+    /// collapses to `labelColor` (a high-contrast Apple-guaranteed
+    /// color). Information is still encoded in the attribute layer
+    /// (so AT and inspectors can still tell tokens apart) — just
+    /// not via color, which is the right outcome for users who
+    /// asked for higher contrast.
+    func testIncreaseContrastFlattensAllColorsToLabelColor() {
+        let kinds: [TokenKind] = [
+            .keyword, .string, .number, .comment, .identifier,
+            .type, .function, .operator, .punctuation,
+            .other(label: "x"),
+        ]
+        for kind in kinds {
+            let color = CodeTokenTheme.color(for: kind, increaseContrast: true)
+            XCTAssertEqual(
+                color,
+                NSColor.labelColor,
+                "TokenKind \(kind) under Increase Contrast must collapse to labelColor"
+            )
+        }
+    }
+
+    func testDefaultPaletteRetainsKindSpecificColors() {
+        // Sanity: the default palette is NOT collapsed. Keyword and
+        // string should produce different colors when Increase
+        // Contrast is off.
+        let keyword = CodeTokenTheme.color(for: .keyword, increaseContrast: false)
+        let string = CodeTokenTheme.color(for: .string, increaseContrast: false)
+        XCTAssertNotEqual(
+            keyword, string,
+            "default palette should distinguish keyword from string"
+        )
     }
 
     /// Ranges uncovered by any token still render — with the default
@@ -115,7 +155,7 @@ final class CodeBlockViewTests: XCTestCase {
             language: "rust",
             tokens: [] // No tokens at all.
         )
-        let attributed = attributedString(for: block)
+        let attributed = attributedString(for: block, increaseContrast: false)
         let color = attributed.attribute(
             .foregroundColor,
             at: 0,
@@ -137,7 +177,7 @@ final class CodeBlockViewTests: XCTestCase {
             ]
         )
         // Just constructing must not panic.
-        let attributed = attributedString(for: block)
+        let attributed = attributedString(for: block, increaseContrast: false)
         XCTAssertEqual(attributed.string, "ab")
     }
 
@@ -155,14 +195,17 @@ final class CodeBlockViewTests: XCTestCase {
                 SyntaxToken(startByte: 3, endByte: 5, kind: .string), // "é"
             ]
         )
-        let attributed = attributedString(for: block)
+        let attributed = attributedString(for: block, increaseContrast: false)
         var effectiveRange = NSRange()
         let color = attributed.attribute(
             .foregroundColor,
             at: 3, // utf16 position of é
             effectiveRange: &effectiveRange
         ) as? NSColor
-        XCTAssertEqual(color, CodeTokenTheme.color(for: .string))
+        XCTAssertEqual(
+            color,
+            CodeTokenTheme.color(for: .string, increaseContrast: false)
+        )
         XCTAssertEqual(effectiveRange.length, 1)
     }
 }
