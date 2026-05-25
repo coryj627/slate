@@ -152,19 +152,22 @@ struct MathLivePreview: View {
         VStack(alignment: .leading, spacing: 8) {
             MathView(block: sampleBlock)
                 .frame(maxWidth: .infinity, alignment: .center)
+            // Audit #261 H2 (WCAG 2.5.3 Label in Name): visible
+            // text IS the accessibility label. Earlier shape had
+            // visible "Currently: ClearSpeak, Medium, Nemeth" but
+            // AT label "Current settings: speech style …, verbosity
+            // …, braille code …" — the visible string wasn't a
+            // substring of the AT label, so a Voice Control user
+            // saying "Currently ClearSpeak Medium Nemeth" wouldn't
+            // match. Resolve by making one canonical phrasing.
             Text(
-                "Currently: \(appState.mathPrefs.speechStyle.displayName), "
-                    + "\(appState.mathPrefs.verbosity.displayName), "
-                    + "\(appState.mathPrefs.brailleCode.displayName)"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel(
-                "Current settings: speech style "
+                "Currently: speech style "
                     + "\(appState.mathPrefs.speechStyle.displayName), "
                     + "verbosity \(appState.mathPrefs.verbosity.displayName), "
                     + "braille code \(appState.mathPrefs.brailleCode.displayName)."
             )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 }

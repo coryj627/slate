@@ -477,11 +477,42 @@ final class AppState: ObservableObject {
             // Skip the loader spin-up if nothing actually changed.
             guard oldValue != mathPrefs else { return }
             preferencesStore.saveMathPrefs(mathPrefs)
+            // Audit #261 H1 (WCAG 4.1.3): when the user changes a
+            // Picker in Settings, SwiftUI silently re-renders the
+            // live preview's accessibilityLabel — VoiceOver won't
+            // re-announce it unless focus is on that element. Post
+            // an AT announcement describing what changed so users
+            // hear confirmation regardless of focus location.
+            announceMathPrefsDiff(from: oldValue, to: mathPrefs)
             guard let path = selectedFilePath else { return }
             mathBlocksLoadTask?.cancel()
             mathBlocksLoadTask = Task { [weak self] in
                 await self?.loadCurrentNoteMathBlocks(path: path)
             }
+        }
+    }
+
+    /// Compose a brief diff announcement for `mathPrefs` changes.
+    /// Only one of the three fields can change per Picker selection
+    /// (UI surface uses three separate Pickers), so the announcement
+    /// reads like "Speech style: MathSpeak" — short, focused,
+    /// announces what the user just did. (Audit #261 H1.)
+    private func announceMathPrefsDiff(from old: MathPrefs, to new: MathPrefs) {
+        if old.speechStyle != new.speechStyle {
+            postAccessibilityAnnouncement(
+                "Math speech style: \(new.speechStyle.displayName).",
+                priority: .medium
+            )
+        } else if old.verbosity != new.verbosity {
+            postAccessibilityAnnouncement(
+                "Math verbosity: \(new.verbosity.displayName).",
+                priority: .medium
+            )
+        } else if old.brailleCode != new.brailleCode {
+            postAccessibilityAnnouncement(
+                "Math braille code: \(new.brailleCode.displayName).",
+                priority: .medium
+            )
         }
     }
 
@@ -494,6 +525,12 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != codePrefs else { return }
             preferencesStore.saveCodePrefs(codePrefs)
+            if oldValue.verbosity != codePrefs.verbosity {
+                postAccessibilityAnnouncement(
+                    "Code preamble verbosity: \(codePrefs.verbosity.displayName).",
+                    priority: .medium
+                )
+            }
         }
     }
 

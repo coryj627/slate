@@ -3623,22 +3623,34 @@ final class AppStateTests: XCTestCase {
         try Data("# Note\n\n$x$\n".utf8)
             .write(to: vault.appendingPathComponent("note.md"))
 
-        let state = try makeAppState()
+        // Isolated UserDefaults so the starting pref state is
+        // deterministic. Without this, `UserDefaults.standard`
+        // could have a non-default value persisted from a prior
+        // dev / test run, and the equality guard added in PR #257
+        // L1 would short-circuit the didSet.
+        let suiteName = "slate.prefs.tests.\(UUID().uuidString)"
+        let isolated = UserDefaults(suiteName: suiteName)!
+        defer { isolated.removePersistentDomain(forName: suiteName) }
+        let store = PreferencesStore(defaults: isolated)
+        let state = await AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("\(suiteName).recents.json")
+            ),
+            externalOpener: { _ in true },
+            preferencesStore: store
+        )
         state.openVault(at: vault)
         await state.scanTask?.value
         state.selectedFilePath = "note.md"
         await state.mathBlocksLoadTask?.value
         let firstTask = state.mathBlocksLoadTask
 
-        // Flip a pref. The didSet must fire a NEW load task — i.e.
-        // the handle stored on `mathBlocksLoadTask` becomes a
-        // different instance.
+        // Flip a pref. With isolated defaults the starting state
+        // is the type default (.clearSpeak), so .mathSpeak is a
+        // real change — the didSet must fire a NEW load task.
         state.mathPrefs.speechStyle = .mathSpeak
         let secondTask = state.mathBlocksLoadTask
         XCTAssertNotNil(secondTask)
-        // `Task` is a value type with no identity check, but the
-        // `firstTask?.hashValue != secondTask?.hashValue` proves
-        // they were swapped. (We can't do `===` on Task.)
         XCTAssertNotEqual(
             firstTask?.hashValue,
             secondTask?.hashValue,
