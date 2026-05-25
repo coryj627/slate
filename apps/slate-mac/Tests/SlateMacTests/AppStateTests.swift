@@ -842,6 +842,199 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(display2.visibleText, "anything")
     }
 
+    // MARK: - Property edits (Milestone I)
+
+    /// Open a small vault and load `note.md` so subsequent
+    /// setProperty / deleteProperty calls have a `loadedFilePath`
+    /// to act on. Returns the configured `AppState`.
+    private func makeAppStateWithLoadedNote(
+        body: String,
+        notePath: String = "note.md"
+    ) async throws -> (AppState, URL) {
+        let vault = tempDir.appendingPathComponent("prop-edit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data(body.utf8).write(to: vault.appendingPathComponent(notePath))
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = notePath
+        await state.noteLoadTask?.value
+        await state.linksLoadTask?.value
+        return (state, vault)
+    }
+
+    func testSetPropertyRoundTripsTextValue() async throws {
+        let (state, vault) = try await makeAppStateWithLoadedNote(
+            body: "---\ntitle: Old\n---\nbody\n"
+        )
+        await state.setProperty(
+            path: "note.md",
+            key: "title",
+            value: PropertyValue.text(value: "New")
+        )?.value
+
+        // Panel reflects the new value.
+        let title = state.currentNoteProperties.first { $0.key == "title" }
+        XCTAssertNotNil(title)
+        // Body byte-equal on disk.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("note.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(onDisk.contains("title: New"))
+        XCTAssertTrue(onDisk.hasSuffix("body\n"))
+    }
+
+    func testSetPropertyAddsNewKeyToExistingFrontmatter() async throws {
+        let (state, _) = try await makeAppStateWithLoadedNote(
+            body: "---\ntitle: Hi\n---\nbody\n"
+        )
+        await state.setProperty(
+            path: "note.md",
+            key: "author",
+            value: PropertyValue.text(value: "Cory")
+        )?.value
+
+        let keys = state.currentNoteProperties.map(\.key)
+        XCTAssertEqual(keys, ["title", "author"])
+    }
+
+    func testSetPropertyOnStaleHashSurfacesConflictDialog() async throws {
+        let (state, vault) = try await makeAppStateWithLoadedNote(
+            body: "---\ntitle: Hi\n---\nbody\n"
+        )
+
+        // Mutate the file externally so the cached
+        // currentNoteContentHash no longer matches disk.
+        try Data("---\ntitle: Hi\n---\nbody mutated\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        await state.setProperty(
+            path: "note.md",
+            key: "author",
+            value: PropertyValue.text(value: "Cory")
+        )?.value
+
+        // The edit should have produced a property-edit conflict
+        // and NOT clobbered the external write.
+        XCTAssertNotNil(state.currentPropertyEditConflict)
+        XCTAssertEqual(state.currentPropertyEditConflict?.key, "author")
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("note.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(onDisk.contains("body mutated"))
+        XCTAssertFalse(onDisk.contains("author:"))
+    }
+
+    func testDeletePropertyRoundTrips() async throws {
+        let (state, _) = try await makeAppStateWithLoadedNote(
+            body: "---\ntitle: Hi\nauthor: Cory\n---\nbody\n"
+        )
+        await state.deleteProperty(path: "note.md", key: "author")?.value
+
+        let keys = state.currentNoteProperties.map(\.key)
+        XCTAssertEqual(keys, ["title"])
+    }
+
+    func testDeletePropertyOnLastKeyStripsFrontmatterBlock() async throws {
+        let (state, vault) = try await makeAppStateWithLoadedNote(
+            body: "---\ntitle: Hi\n---\nbody\n"
+        )
+        await state.deleteProperty(path: "note.md", key: "title")?.value
+
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("note.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(onDisk, "body\n")
+        XCTAssertTrue(state.currentNoteProperties.isEmpty)
+    }
+
+    func testSetPropertyRejectsInvalidValueWithoutTouchingFile() async throws {
+        let (state, vault) = try await makeAppStateWithLoadedNote(
+            body: "---\ntitle: Hi\n---\nbody\n"
+        )
+
+        await state.setProperty(
+            path: "note.md",
+            key: "ratio",
+            value: PropertyValue.float(value: .nan)
+        )?.value
+
+        // No frontmatter mutation; the validation error is surfaced.
+        let onDisk = try String(
+            contentsOf: vault.appendingPathComponent("note.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(onDisk, "---\ntitle: Hi\n---\nbody\n")
+        XCTAssertNotNil(state.propertyEditError)
+    }
+
+    func testPreviewPropertyRenameMatchesApply() async throws {
+        let vault = tempDir.appendingPathComponent("rename-test")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("---\nauthor: Cory\n---\nbody A\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+        try Data("---\ntitle: B\nauthor: Cory\n---\nbody B\n".utf8)
+            .write(to: vault.appendingPathComponent("b.md"))
+        try Data("---\ntitle: C\n---\nbody C\n".utf8)
+            .write(to: vault.appendingPathComponent("c.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        await state.previewPropertyRename(oldKey: "author", newKey: "by")?.value
+        let preview = try XCTUnwrap(state.pendingRenameReport)
+        XCTAssertEqual(preview.affected.count, 2)
+        XCTAssertTrue(preview.affected.allSatisfy { !$0.applied })
+
+        await state.applyPropertyRename(oldKey: "author", newKey: "by")?.value
+        let applied = try XCTUnwrap(state.pendingRenameReport)
+        XCTAssertEqual(applied.affected.count, 2)
+        XCTAssertTrue(applied.affected.allSatisfy { $0.applied })
+
+        // Affected paths match between preview + apply.
+        let previewPaths = preview.affected.map(\.path).sorted()
+        let appliedPaths = applied.affected.map(\.path).sorted()
+        XCTAssertEqual(previewPaths, appliedPaths)
+
+        // On disk: a.md + b.md now use `by:`; c.md is untouched.
+        let a = try String(contentsOf: vault.appendingPathComponent("a.md"), encoding: .utf8)
+        XCTAssertTrue(a.contains("by:") && !a.contains("author:"))
+        let c = try String(contentsOf: vault.appendingPathComponent("c.md"), encoding: .utf8)
+        XCTAssertEqual(c, "---\ntitle: C\n---\nbody C\n")
+    }
+
+    func testApplyRenameWithKeyCollisionSkipsThatFile() async throws {
+        let vault = tempDir.appendingPathComponent("collision-test")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("---\nauthor: Cory\nby: Existing\n---\nbody\n".utf8)
+            .write(to: vault.appendingPathComponent("collide.md"))
+        try Data("---\nauthor: Cory\n---\nbody\n".utf8)
+            .write(to: vault.appendingPathComponent("clean.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        await state.applyPropertyRename(oldKey: "author", newKey: "by")?.value
+        let report = try XCTUnwrap(state.pendingRenameReport)
+        XCTAssertEqual(report.affected.count, 1)
+        XCTAssertEqual(report.affected[0].path, "clean.md")
+        XCTAssertEqual(report.skipped.count, 1)
+        XCTAssertEqual(report.skipped[0].path, "collide.md")
+        XCTAssertEqual(report.skipped[0].reason, RenameSkipReason.keyCollision)
+
+        // collide.md untouched.
+        let raw = try String(
+            contentsOf: vault.appendingPathComponent("collide.md"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(raw, "---\nauthor: Cory\nby: Existing\n---\nbody\n")
+    }
+
     // MARK: - Search overlay (#58)
 
     /// Drain the debouncer + the in-flight search task so tests

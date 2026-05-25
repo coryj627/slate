@@ -143,6 +143,27 @@ struct SaveConflict: Equatable {
     let currentMtimeMs: Int64
 }
 
+/// What edit the user was trying to make when a property-edit
+/// `WriteConflict` fired. Carries enough state for the resolve
+/// helpers to re-issue the original edit verbatim.
+enum PropertyEditAction: Equatable {
+    case set(PropertyValue)
+    case delete
+}
+
+/// Per-incident snapshot for the property-edit conflict alert.
+/// Modeled on `SaveConflict` (whole-file save) but scoped to a
+/// single key edit so "Keep mine" re-issues the property action
+/// rather than the whole-file save.
+struct PropertyEditConflict: Equatable {
+    let path: String
+    let key: String
+    let action: PropertyEditAction
+    let currentContentHash: String
+    let expectedContentHash: String
+    let currentMtimeMs: Int64
+}
+
 /// Destination the user asked to navigate to while the editor was
 /// dirty. Held in `AppState.pendingNavigation` until the user
 /// responds to the "Save changes?" alert.
@@ -285,6 +306,57 @@ final class AppState: ObservableObject {
     /// `get_file_metadata` under the SQLite mutex) so we don't pay
     /// for two trips through the lock per selection.
     @Published private(set) var currentNoteProperties: [Property] = []
+
+    /// Conflict from `setProperty` / `deleteProperty`. Drives the
+    /// "Property edit blocked" alert in `MainSplitView`. Modeled on
+    /// `currentSaveConflict` but scoped to a single key edit rather
+    /// than a whole-file save so the resolve actions can re-issue
+    /// the original property edit verbatim.
+    @Published var currentPropertyEditConflict: PropertyEditConflict?
+
+    /// Surfaced when `setProperty` / `deleteProperty` fails with
+    /// something other than `WriteConflict` — invalid value, malformed
+    /// frontmatter, etc. Separate from `saveError` so a property
+    /// failure can't shadow an editor save alert and vice versa.
+    @Published var propertyEditError: String?
+
+    /// True while a property set / delete / rename is in flight.
+    /// Used by the row editors + sheets to disable commit buttons.
+    @Published private(set) var isEditingProperty: Bool = false
+
+    /// Handle on the in-flight property edit task. Exposed (internal)
+    /// so tests can `await state.propertyEditTask?.value`.
+    private(set) var propertyEditTask: Task<Void, Never>?
+
+    /// True when the Add-Property sheet is presented. Driven by
+    /// `PropertiesPanel`'s header button.
+    @Published var isAddPropertySheetOpen: Bool = false
+
+    /// True when the Bulk-Rename sheet is presented. Driven by
+    /// `PropertiesPanel`'s header button + Cmd+Shift+R shortcut.
+    @Published var isBulkRenameSheetOpen: Bool = false
+
+    /// Latest `RenameReport` from `previewPropertyRename` (dry-run)
+    /// or `applyPropertyRename` (applied). The bulk-rename sheet
+    /// renders this in its accessible data grid.
+    @Published private(set) var pendingRenameReport: RenameReport?
+
+    /// True while a rename preview / apply call is in flight.
+    @Published private(set) var isRenameInFlight: Bool = false
+
+    /// Surfaced when `previewPropertyRename` / `applyPropertyRename`
+    /// fails outright (not the per-file `RenameFailed` rows — those
+    /// land in `pendingRenameReport.failed`).
+    @Published var renameError: String?
+
+    /// Handle on the in-flight rename task. Exposed for tests + so
+    /// the sheet's Esc handler can cancel via the token.
+    private(set) var renameTask: Task<Void, Never>?
+
+    /// Cancellation token for the in-flight rename. Recreated per
+    /// call so a stale `cancel()` from a previous sheet open doesn't
+    /// kill a fresh request.
+    private var renameCancelToken: CancelToken?
 
     /// Inbound links to the currently-selected note. Updated whenever
     /// `selectedFilePath` changes. Empty while no note is selected or
@@ -2060,6 +2132,314 @@ final class AppState: ObservableObject {
     /// stays true so the indicator and dirty-gate remain active.
     func resolveSaveConflictCancel() {
         currentSaveConflict = nil
+    }
+
+    // MARK: - Property edits (Milestone I)
+
+    /// Insert or replace a frontmatter property on `path`. Routes
+    /// through the same `save_text` pipeline as the editor save, so
+    /// `WriteConflict` is detected the same way and the F-precedent
+    /// conflict dialog is reused (scoped to the property edit via
+    /// `currentPropertyEditConflict`).
+    ///
+    /// On success: refreshes `currentNoteProperties` +
+    /// `currentNoteContentHash` so the panel reflects the new state
+    /// and a subsequent edit doesn't carry a stale hash.
+    @discardableResult
+    func setProperty(path: String, key: String, value: PropertyValue) -> Task<Void, Never>? {
+        guard !isEditingProperty else { return nil }
+        guard let session = currentSession else { return nil }
+        isEditingProperty = true
+        propertyEditError = nil
+        let expected = currentNoteContentHash
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performPropertyEdit(
+                session: session,
+                path: path,
+                key: key,
+                action: .set(value),
+                expectedHash: expected
+            )
+            return
+        }
+        propertyEditTask = task
+        return task
+    }
+
+    /// Remove a frontmatter property. Symmetric to `setProperty`:
+    /// same conflict path, same refresh on success.
+    @discardableResult
+    func deleteProperty(path: String, key: String) -> Task<Void, Never>? {
+        guard !isEditingProperty else { return nil }
+        guard let session = currentSession else { return nil }
+        isEditingProperty = true
+        propertyEditError = nil
+        let expected = currentNoteContentHash
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performPropertyEdit(
+                session: session,
+                path: path,
+                key: key,
+                action: .delete,
+                expectedHash: expected
+            )
+            return
+        }
+        propertyEditTask = task
+        return task
+    }
+
+    /// Shared body for `setProperty` / `deleteProperty`. Detaches
+    /// the SQLite-mutex-holding FFI call off the main actor, then
+    /// routes the outcome to one of three paths (success / conflict
+    /// / error) on the main actor.
+    private func performPropertyEdit(
+        session: VaultSession,
+        path: String,
+        key: String,
+        action: PropertyEditAction,
+        expectedHash: String?
+    ) async {
+        let outcome: Result<SaveReport, VaultError> = await Task.detached(priority: .userInitiated) {
+            do {
+                switch action {
+                case .set(let value):
+                    let report = try session.setProperty(
+                        path: path,
+                        key: key,
+                        value: value,
+                        expectedContentHash: expectedHash
+                    )
+                    return .success(report)
+                case .delete:
+                    let report = try session.deleteProperty(
+                        path: path,
+                        key: key,
+                        expectedContentHash: expectedHash
+                    )
+                    return .success(report)
+                }
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }.value
+
+        // If the user navigated away mid-edit, drop the result
+        // rather than mutating state for a file the user has
+        // already moved on from. Same shape as `performSave`.
+        guard loadedFilePath == path else {
+            isEditingProperty = false
+            return
+        }
+
+        switch outcome {
+        case .success(let report):
+            currentNoteContentHash = report.newContentHash
+            // Refresh the properties panel so the row updates in
+            // place. `loadCurrentLinks` already runs one trip
+            // through the SQLite mutex for backlinks + outgoing +
+            // properties — reusing it keeps the panel coherent
+            // without a second round-trip.
+            await loadCurrentLinks(path: path)
+            postAccessibilityAnnouncement(
+                "Property \(key) \(action == .delete ? "deleted" : "updated").",
+                priority: .medium
+            )
+        case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
+            currentPropertyEditConflict = PropertyEditConflict(
+                path: path,
+                key: key,
+                action: action,
+                currentContentHash: currentHash,
+                expectedContentHash: expected,
+                currentMtimeMs: currentMtimeMs
+            )
+            postAccessibilityAnnouncement(
+                "Property edit blocked. \(filename(of: path)) was modified externally. Resolve in the dialog.",
+                priority: .medium
+            )
+        case .failure(let error):
+            propertyEditError = humanReadable(error)
+            postAccessibilityAnnouncement(
+                "Property edit failed: \(propertyEditError ?? "")",
+                priority: .high
+            )
+        }
+        isEditingProperty = false
+    }
+
+    /// Re-issue the property edit with the new on-disk hash as
+    /// `expectedHash` — the user explicitly chose to overwrite the
+    /// external change.
+    @discardableResult
+    func resolvePropertyEditConflictKeepMine() -> Task<Void, Never>? {
+        guard let conflict = currentPropertyEditConflict,
+            let session = currentSession,
+            loadedFilePath == conflict.path
+        else {
+            currentPropertyEditConflict = nil
+            return nil
+        }
+        currentPropertyEditConflict = nil
+        isEditingProperty = true
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performPropertyEdit(
+                session: session,
+                path: conflict.path,
+                key: conflict.key,
+                action: conflict.action,
+                expectedHash: conflict.currentContentHash
+            )
+            return
+        }
+        propertyEditTask = task
+        return task
+    }
+
+    /// Drop the property edit attempt and reload the file from
+    /// disk. The user explicitly chose to let the external write
+    /// win for this property.
+    @discardableResult
+    func resolvePropertyEditConflictReloadFromDisk() -> Task<Void, Never>? {
+        guard let conflict = currentPropertyEditConflict else { return nil }
+        currentPropertyEditConflict = nil
+        // Same path the conflict came from — refresh text + hash +
+        // properties so the panel mirrors disk.
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.loadCurrentNote(path: conflict.path)
+            return
+        }
+        noteLoadTask = task
+        return task
+    }
+
+    /// Dismiss the property-edit conflict alert without acting on
+    /// it. The panel stays as-is; the row's local "in-flight edit"
+    /// state is cleared by the resolver (the row reads
+    /// `currentPropertyEditConflict` going to `nil` as the cue to
+    /// reset its commit state).
+    func resolvePropertyEditConflictCancel() {
+        currentPropertyEditConflict = nil
+    }
+
+    // MARK: - Bulk rename (#170)
+
+    /// Dry-run a vault-wide property rename, populating
+    /// `pendingRenameReport` with the per-file diff for the
+    /// bulk-rename sheet's preview grid. No writes.
+    @discardableResult
+    func previewPropertyRename(oldKey: String, newKey: String) -> Task<Void, Never>? {
+        runRename(oldKey: oldKey, newKey: newKey, dryRun: true)
+    }
+
+    /// Apply a vault-wide property rename. Each affected file is
+    /// saved with its fresh on-disk hash as `expected_content_hash`
+    /// so an external mid-rename modification surfaces as a per-file
+    /// `RenameFailed` rather than aborting the whole run.
+    @discardableResult
+    func applyPropertyRename(oldKey: String, newKey: String) -> Task<Void, Never>? {
+        runRename(oldKey: oldKey, newKey: newKey, dryRun: false)
+    }
+
+    /// Cancel an in-flight preview or apply via the existing
+    /// cancellation token. The sheet's Esc handler calls this.
+    func cancelPendingRename() {
+        renameCancelToken?.cancel()
+    }
+
+    private func runRename(oldKey: String, newKey: String, dryRun: Bool) -> Task<Void, Never>? {
+        guard !isRenameInFlight else { return nil }
+        guard let session = currentSession else { return nil }
+        renameError = nil
+        isRenameInFlight = true
+        let cancel = CancelToken()
+        renameCancelToken = cancel
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performRename(
+                session: session,
+                oldKey: oldKey,
+                newKey: newKey,
+                dryRun: dryRun,
+                cancel: cancel
+            )
+            return
+        }
+        renameTask = task
+        return task
+    }
+
+    private func performRename(
+        session: VaultSession,
+        oldKey: String,
+        newKey: String,
+        dryRun: Bool,
+        cancel: CancelToken
+    ) async {
+        let outcome: Result<RenameReport, VaultError> = await Task.detached(priority: .userInitiated) {
+            do {
+                let report = try session.renamePropertyAcrossVault(
+                    oldKey: oldKey,
+                    newKey: newKey,
+                    dryRun: dryRun,
+                    cancel: cancel
+                )
+                return .success(report)
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }.value
+
+        switch outcome {
+        case .success(let report):
+            pendingRenameReport = report
+            // Apply may have touched the currently-loaded note's
+            // properties (when the renamed key was in it). Refresh
+            // links + properties so the panel doesn't show stale
+            // rows for the renamed key.
+            if !dryRun, let path = loadedFilePath {
+                await loadCurrentLinks(path: path)
+                // Refresh the disk-tracked hash so subsequent edits
+                // don't trip a stale WriteConflict. `getFileMetadata`
+                // returns `FileMetadata?` and `try?` flattens the
+                // throw, so we get a double-Optional that we unwrap
+                // before reading the hash.
+                let metadata: FileMetadata?? = await Task.detached(priority: .userInitiated) {
+                    try? session.getFileMetadata(path: path)
+                }.value
+                if let outer = metadata, let inner = outer {
+                    currentNoteContentHash = inner.contentHash
+                }
+            }
+            let summary = renameSummary(report: report, applied: !dryRun)
+            postAccessibilityAnnouncement(summary, priority: .medium)
+        case .failure(let error):
+            renameError = humanReadable(error)
+            postAccessibilityAnnouncement(
+                "Rename failed: \(renameError ?? "")",
+                priority: .high
+            )
+        }
+        isRenameInFlight = false
+        renameCancelToken = nil
+    }
+
+    /// Render a one-line summary of a `RenameReport` for the
+    /// accessibility announcement + the sheet's footer.
+    private func renameSummary(report: RenameReport, applied: Bool) -> String {
+        if applied {
+            let renamed = report.affected.filter { $0.applied }.count
+            let skipped = report.skipped.count
+            let failed = report.failed.count
+            return "\(renamed) renamed, \(skipped) skipped, \(failed) failed."
+        } else {
+            let will = report.affected.count
+            let skipped = report.skipped.count
+            return "\(will) \(will == 1 ? "file" : "files") will be renamed, \(skipped) skipped, 0 errors."
+        }
     }
 
     /// "Save changes?" prompt: Save → run the save, then continue
