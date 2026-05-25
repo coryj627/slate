@@ -250,11 +250,17 @@ fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRend
             },
         );
     }
+    // Skip Mermaid directive / comment lines (e.g.
+    // `%%{ init: {'theme': 'dark'} }%%` config blocks at the top
+    // of a diagram, or `%% standalone comments`) when looking for
+    // the kind-declaring first line — Codoki PR #245 catch. Without
+    // this skip, every theme-using diagram in the wild reported as
+    // UnsupportedDialect.
     let first_line = trimmed
         .lines()
-        .find(|l| !l.trim().is_empty())
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("%%"))
         .unwrap_or("")
-        .trim()
         .to_ascii_lowercase();
     if matches!(classify_mermaid_kind(&first_line), MermaidKind::Unknown) {
         return (
@@ -456,5 +462,42 @@ mod tests {
             other => panic!("expected Ok for valid flowchart; got {other:?}"),
         }
         assert!(block.svg.is_some());
+    }
+
+    /// Codoki polish on M1: Mermaid theme/init directives at the
+    /// top of a diagram look like `%%{ init: {...} }%%`. The
+    /// validation must skip them and find the actual kind-
+    /// declaring line below — otherwise every themed diagram
+    /// in the wild reports as UnsupportedDialect.
+    #[test]
+    fn render_skips_init_directive_when_classifying() {
+        let raw = RawDiagramBlock {
+            source: "%%{ init: { 'theme': 'dark' } }%%\nflowchart LR\nA --> B\n".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_diagram(&raw);
+        match block.render_status {
+            DiagramRenderStatus::Ok => {}
+            other => panic!("themed flowchart should classify as Ok; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn render_skips_comment_lines_when_classifying() {
+        let raw = RawDiagramBlock {
+            source: "%% top-level comment\n%% another\nclassDiagram\nclass Foo\n".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_diagram(&raw);
+        match block.render_status {
+            DiagramRenderStatus::Ok => {}
+            other => {
+                panic!("leading comment-only lines should not block kind detection; got {other:?}")
+            }
+        }
     }
 }

@@ -219,21 +219,27 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
 /// `None` when the block doesn't close before EOF (degenerate / mid-
 /// edit) so we don't sweep math syntax over the rest of the file.
 ///
-/// Honors `\$` escapes (audit #245 H3): `$$ … \$$ … $$` doesn't close
-/// at the escaped `\$$` — keep scanning for the real `$$`. Without
-/// this guard a display block containing an escaped dollar sign
-/// gets truncated mid-content and the trailing text becomes
-/// orphaned.
+/// Honors `\$` escapes (audit #245 H3, Codoki polish on top): a `$$`
+/// is escaped only when preceded by an **odd** number of backslashes.
+/// `\$$` (one `\`) is escaped → keep scanning. `\\$$` (two `\`s) is
+/// not escaped — the backslashes form a literal `\\` and the `$$`
+/// closes normally. Without the parity check, a literal-backslash
+/// LaTeX expression (`\\`-terminated) followed by the close fence
+/// would skip the close and consume the rest of the file.
 fn find_double_dollar_close(after: &[u8]) -> Option<usize> {
     let mut i = 0;
     while i + 1 < after.len() {
         if &after[i..i + 2] == b"$$" {
-            // The first `$` at position i is the candidate close.
-            // It's escaped if the byte at i-1 (within `after`) is
-            // `\\`. We bound-check `i >= 1` because position 0 has
-            // no predecessor to read.
-            let escaped = i >= 1 && after[i - 1] == b'\\';
-            if !escaped {
+            // Count consecutive `\` bytes preceding the candidate
+            // close. Odd count means the `$` is escaped; even count
+            // (including zero) means it isn't.
+            let mut backslashes = 0usize;
+            let mut j = i;
+            while j > 0 && after[j - 1] == b'\\' {
+                backslashes += 1;
+                j -= 1;
+            }
+            if backslashes.is_multiple_of(2) {
                 return Some(i);
             }
         }
@@ -568,6 +574,25 @@ mod tests {
         assert!(
             blocks[0].source.contains("\\$5"),
             "escaped dollar should remain inside the block; got: {:?}",
+            blocks[0].source
+        );
+    }
+
+    /// Codoki polish on H3: a `$$` preceded by an EVEN number of
+    /// backslashes is NOT escaped — the backslashes form literal
+    /// `\\` pairs and the close fence stands. The original single-
+    /// backslash check would treat `\\$$` as escaped and skip the
+    /// close, sweeping math through the rest of the file.
+    #[test]
+    fn display_math_does_not_treat_double_backslash_as_escape() {
+        // `$$ x \\$$ trailing text` — the `\\` is a LaTeX line
+        // break, then `$$` closes the block normally.
+        let src = "$$ x \\\\$$ trailing text";
+        let blocks = extract_math_blocks(src);
+        assert_eq!(blocks.len(), 1, "got {:?}", blocks);
+        assert!(
+            !blocks[0].source.contains("trailing"),
+            "double-backslash before `$$` must close — block should not include trailing text; got: {:?}",
             blocks[0].source
         );
     }
