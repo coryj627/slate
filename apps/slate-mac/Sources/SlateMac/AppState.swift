@@ -1592,7 +1592,17 @@ final class AppState: ObservableObject {
     /// when the same target is already pending so the popover
     /// behaves like an idempotent open.
     func requestEmbedPreview(target: String, sourceLine: Int? = nil) {
-        if pendingEmbedPreview?.target == target {
+        // Idempotency: re-firing Cmd+E on the exact same embed
+        // occurrence (same target AND same source line) is a
+        // no-op. A second Cmd+E on a different occurrence of
+        // the same target — `![[foo]]` appearing twice on
+        // different lines — still updates the popover so the
+        // header's line number reflects where the user actually
+        // is (Codoki PR #206).
+        if let existing = pendingEmbedPreview,
+            existing.target == target,
+            existing.sourceLine == sourceLine
+        {
             return
         }
         guard let resolution = currentNoteEmbedResolutions[target] else {
