@@ -64,14 +64,26 @@ def main() -> int:
     files = tracked_source_files(repo_root)
     changed = 0
     skipped = 0
+    failed: list[tuple[Path, str]] = []
     for path in files:
-        text = path.read_text(encoding="utf-8")
-        if already_headered(text):
-            skipped += 1
-            continue
-        path.write_text(insert_header(text, path), encoding="utf-8")
-        changed += 1
+        try:
+            text = path.read_text(encoding="utf-8")
+            if already_headered(text):
+                skipped += 1
+                continue
+            path.write_text(insert_header(text, path), encoding="utf-8")
+            changed += 1
+        except OSError as err:
+            # Per-file IO failure: keep going so a single unreadable file
+            # doesn't strand the rest in a half-applied state. Re-runs are
+            # safe — the script is idempotent on already-headered files.
+            failed.append((path, str(err)))
     print(f"applied: {changed}, skipped (already headered): {skipped}, total: {len(files)}")
+    if failed:
+        print(f"failed: {len(failed)} file(s) could not be read or written:", file=sys.stderr)
+        for path, err in failed:
+            print(f"  {path.relative_to(repo_root)}: {err}", file=sys.stderr)
+        return 1
     return 0
 
 
