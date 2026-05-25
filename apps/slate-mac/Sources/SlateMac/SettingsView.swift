@@ -116,10 +116,10 @@ struct MathSettingsTab: View {
                 // to keep the visual hierarchy.
                 //
                 // Same Swift-type-checker workaround as the Code
-                // tab — string is built via a computed property
-                // to avoid timing out on long `+` operator chains
+                // tab — string is hoisted to a static let to
+                // avoid timing out on long `+` operator chains
                 // inside a deep view body.
-                Text(mathFooterText)
+                Text(Self.mathFooterText)
                     .font(.caption)
                     .foregroundStyle(.primary)
             }
@@ -137,16 +137,27 @@ struct MathSettingsTab: View {
         .formStyle(.grouped)
     }
 
-    /// Footer guidance for the Math tab. Extracted to a property
-    /// so the Swift type checker doesn't time out building the
-    /// surrounding Form body.
-    private var mathFooterText: String {
+    /// Footer guidance for the Math tab.
+    ///
+    /// Stored as a `static let` for two reasons:
+    /// 1. The string never changes per-instance — `static let` is
+    ///    the canonical Swift shape for "this is a constant" and
+    ///    drops even the (negligible) computed-property overhead.
+    /// 2. The `+`-concat chain has to live OUTSIDE the SwiftUI view
+    ///    body — keeping it inline tripped CI's Swift 5.10
+    ///    type-checker with "compiler is unable to type-check this
+    ///    expression in reasonable time" (PR #263 fixup). Keep the
+    ///    hoisted form so a future visitor doesn't re-inline it
+    ///    and re-trip the type-checker.
+    ///
+    /// Full `String(localized:)` / `.xcstrings` migration is
+    /// deferred until i18n infrastructure lands (issue #264 notes).
+    private static let mathFooterText: String =
         "Changes apply immediately to math in the read pane. "
-            + "Speech style controls how math is read aloud (ClearSpeak: "
-            + "intuitive; MathSpeak: precise / verbatim). Verbosity sets "
-            + "how detailed the spoken math is. Braille code switches "
-            + "between Nemeth and UEB encodings."
-    }
+        + "Speech style controls how math is read aloud (ClearSpeak: "
+        + "intuitive; MathSpeak: precise / verbatim). Verbosity sets "
+        + "how detailed the spoken math is. Braille code switches "
+        + "between Nemeth and UEB encodings."
 }
 
 /// Renders a sample formula via the same MathView the read pane uses,
@@ -275,14 +286,13 @@ struct CodeSettingsTab: View {
                 // means without relying on the Picker's
                 // unreliable hint announcement.
                 //
-                // The string is built via a computed property
-                // (not inline `+`-concat) because Swift's type
-                // checker times out on long operator chains
-                // inside a deep SwiftUI view body — locally builds
-                // but CI hit "compiler is unable to type-check
-                // this expression in reasonable time" on macOS
-                // Swift 5.10.
-                Text(codeFooterText)
+                // The string is hoisted to a static let (not an
+                // inline `+`-concat) because Swift's type checker
+                // times out on long operator chains inside a deep
+                // SwiftUI view body — locally builds but CI hit
+                // "compiler is unable to type-check this expression
+                // in reasonable time" on macOS Swift 5.10.
+                Text(Self.codeFooterText)
                     .font(.caption)
                     .foregroundStyle(.primary)
             }
@@ -308,16 +318,19 @@ struct CodeSettingsTab: View {
         .formStyle(.grouped)
     }
 
-    /// Footer guidance for the Code tab. Extracted to a property
-    /// so the Swift type checker doesn't time out building the
-    /// surrounding Form body.
-    private var codeFooterText: String {
+    /// Footer guidance for the Code tab.
+    ///
+    /// See `MathSettingsTab.mathFooterText` for the full rationale
+    /// — same shape (static let, hoisted out of the view body to
+    /// keep the Swift 5.10 type checker under its time budget on
+    /// the CI macOS runner). Future `String(localized:)` migration
+    /// tracked by issue #264.
+    private static let codeFooterText: String =
         "Affects the preamble screen readers hear before a code block. "
-            + "\"Preamble only\" reads \"Code block, <language>, N lines.\" "
-            + "\"Preamble + first line\" adds the signature/first non-blank "
-            + "line. \"Preamble + all tokens\" reads every token (useful for "
-            + "braille display work). Font and color preferences land later."
-    }
+        + "\"Preamble only\" reads \"Code block, <language>, N lines.\" "
+        + "\"Preamble + first line\" adds the signature/first non-blank "
+        + "line. \"Preamble + all tokens\" reads every token (useful for "
+        + "braille display work). Font and color preferences land later."
 
     private var previewPreamble: String {
         switch appState.codePrefs.verbosity {
