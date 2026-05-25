@@ -160,17 +160,22 @@ struct EmbedView: View {
                     .accessibilityLabel(title)
                     .help(title)
             } else {
-                imageDecodeFailureView(label: title, mime: mime)
+                imageDecodeFailureView(mime: mime)
             }
         }
     }
 
-    private func imageDecodeFailureView(label: String, mime: String) -> some View {
+    private func imageDecodeFailureView(mime: String) -> some View {
         // Audit #192: conveying error state by red color alone
         // dropped contrast below 4.5:1. Lead with an SF Symbol
         // (shape-encoded warning) + primary-color text — the
         // semantic is carried by the icon, the text passes
         // contrast trivially.
+        //
+        // The EmbedDisclosure wrapper already labels this region
+        // with "Embedded image: <descriptor>"; the inner view only
+        // needs to carry the failure detail, not re-state the
+        // outer label (audit fixup PR #191).
         let message =
             "Could not decode image. MIME: \(mime). The file may be corrupt or an unsupported codec."
         return HStack(alignment: .top, spacing: 6) {
@@ -184,7 +189,7 @@ struct EmbedView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label). \(message)")
+        .accessibilityLabel(message)
     }
 
     private func unresolvedView(reason: EmbedUnresolvedReason) -> some View {
@@ -213,7 +218,8 @@ struct EmbedView: View {
         // missing and how to see it.
         let head = target.map { "Embed depth limit reached for \($0)." }
             ?? "Embed depth limit reached."
-        let remediation = "Open the source note directly to see embeds nested beyond depth 3."
+        let remediation =
+            "Open the source note directly to see embeds nested beyond depth \(Self.embedDepthLimit)."
         let visible = "\(head) \(remediation)"
         return HStack(alignment: .top, spacing: 6) {
             Image(systemName: "arrow.down.right.and.arrow.up.left")
