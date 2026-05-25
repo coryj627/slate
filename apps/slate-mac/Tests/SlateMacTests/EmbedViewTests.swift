@@ -43,13 +43,10 @@ final class EmbedViewTests: XCTestCase {
         guard case .embed(let ne) = segments[1] else { XCTFail(); return }
         XCTAssertEqual(ne.rawTarget, "beta")
         guard case .text(let trailing) = segments[2] else { XCTFail(); return }
-        // `![[beta]]` is 9 bytes; we approximate as 4 + target.utf8 = 8,
-        // so the trailing text starts one byte before the real end of
-        // the embed syntax — leaving one stray `]` in the trailing
-        // text. That's the documented V1 approximation tradeoff;
-        // the test pins it so a future tightening produces a visible
-        // diff rather than silent drift.
-        XCTAssertEqual(trailing, "] gamma")
+        // `![[beta]]` is exactly `5 + "beta".utf8.count` = 9 bytes
+        // (`![[` + target + `]]`); after the fix in audit #199 the
+        // trailing text starts cleanly after the closing `]]`.
+        XCTAssertEqual(trailing, " gamma")
     }
 
     func testSpliceWithMultipleNestedEmbedsKeepsThemInOffsetOrder() {

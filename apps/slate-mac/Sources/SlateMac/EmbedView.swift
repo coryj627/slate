@@ -15,7 +15,10 @@ import SwiftUI
 /// Recursion: `FullNote` / `Section` carry a pre-resolved
 /// `nested` tree from the backend. The view depth-guards locally
 /// (defense in depth on top of the backend's own depth limit) so
-/// a malformed resolver response can't blow the stack.
+/// a malformed resolver response can't blow the stack. Nested
+/// embeds (`depth > 0`) start collapsed so VoiceOver users can
+/// skip past a top-level embed without traversing every level of
+/// its body (audit #195).
 struct EmbedView: View {
     let resolution: EmbedResolution
     let jumpToSourceAction: ((String) -> Void)?
@@ -34,7 +37,7 @@ struct EmbedView: View {
 
     var body: some View {
         if depth >= Self.embedDepthLimit {
-            depthLimitView
+            depthLimitView(target: targetForDepthLimit(resolution: resolution))
         } else {
             content
         }
@@ -66,7 +69,8 @@ struct EmbedView: View {
         EmbedDisclosure(
             label: "Embedded note: \(targetPath)",
             jumpToSourceAction: jumpToSourceAction,
-            jumpToTarget: targetPath
+            jumpToTarget: targetPath,
+            initiallyExpanded: depth == 0
         ) {
             EmbeddedNoteBody(
                 text: text,
@@ -86,7 +90,8 @@ struct EmbedView: View {
         EmbedDisclosure(
             label: "Embedded section: \(heading) from \(targetPath)",
             jumpToSourceAction: jumpToSourceAction,
-            jumpToTarget: targetPath
+            jumpToTarget: targetPath,
+            initiallyExpanded: depth == 0
         ) {
             EmbeddedNoteBody(
                 text: text,
@@ -105,16 +110,21 @@ struct EmbedView: View {
         EmbedDisclosure(
             label: "Embedded block from \(targetPath)",
             jumpToSourceAction: jumpToSourceAction,
-            jumpToTarget: targetPath
+            jumpToTarget: targetPath,
+            initiallyExpanded: depth == 0
         ) {
+            // WCAG 2.5.3 (audit #193): the AX label is the visible
+            // text first, with the block id named at the end so
+            // VoiceOver reads the content before any metadata.
+            // Block ids like `^my-block-1` would otherwise be
+            // spelled out character-by-character ahead of the
+            // user's actual content.
             Text(text)
                 .font(.body)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
-                .accessibilityLabel(
-                    "Block \(blockId) content: \(text)"
-                )
+                .accessibilityLabel("\(text). Block id: \(blockId).")
         }
     }
 
@@ -124,34 +134,52 @@ struct EmbedView: View {
         mime: String,
         alt: String?
     ) -> some View {
-        let label = alt.map { "Embedded image: \($0)" }
-            ?? "Embedded image: \((targetPath as NSString).lastPathComponent)"
-        return Group {
+        // Audit #196: image embeds wrap in the same EmbedDisclosure
+        // shell as the other variants so sighted users see the
+        // "Embedded image: <…>" title and everyone gets a
+        // Jump-to-source affordance.
+        // Audit #198: an empty-string alt collapsed to a label of
+        // `"Embedded image: "` — treat empty the same as nil.
+        let trimmedAlt = alt?.trimmingCharacters(in: .whitespaces)
+        let altText: String? =
+            (trimmedAlt?.isEmpty == false) ? trimmedAlt : nil
+        let descriptor =
+            altText ?? (targetPath as NSString).lastPathComponent
+        let title = "Embedded image: \(descriptor)"
+        return EmbedDisclosure(
+            label: title,
+            jumpToSourceAction: jumpToSourceAction,
+            jumpToTarget: targetPath,
+            initiallyExpanded: depth == 0
+        ) {
             if let nsImage = NSImage(data: bytes) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity)
-                    .accessibilityLabel(label)
-                    .help(label)
+                    .accessibilityLabel(title)
+                    .help(title)
             } else {
-                imageDecodeFailureView(label: label, mime: mime)
+                imageDecodeFailureView(label: title, mime: mime)
             }
         }
     }
 
     private func imageDecodeFailureView(label: String, mime: String) -> some View {
-        // Decode failure (corrupt file, unsupported codec) — surface
-        // the cue so the user knows why no image rendered. Same AT
-        // label as the success path so a screen-reader user
-        // navigating an embed-heavy note doesn't lose the per-image
-        // anchor.
+        // Audit #192: conveying error state by red color alone
+        // dropped contrast below 4.5:1. Lead with an SF Symbol
+        // (shape-encoded warning) + primary-color text — the
+        // semantic is carried by the icon, the text passes
+        // contrast trivially.
         let message =
             "Could not decode image. MIME: \(mime). The file may be corrupt or an unsupported codec."
-        return VStack(alignment: .leading, spacing: 4) {
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
             Text(message)
                 .font(.caption)
-                .foregroundStyle(.red)
+                .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
@@ -161,24 +189,55 @@ struct EmbedView: View {
 
     private func unresolvedView(reason: EmbedUnresolvedReason) -> some View {
         let (visible, axLabel) = unresolvedText(reason: reason)
-        return Text(visible)
-            .font(.callout)
-            .foregroundStyle(.red)
-            .padding(.vertical, 4)
-            .accessibilityLabel(axLabel)
+        // Same shape as imageDecodeFailureView — color isn't the
+        // only cue.
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            Text(visible)
+                .font(.callout)
+                .foregroundStyle(.primary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(axLabel)
     }
 
-    private var depthLimitView: some View {
+    private func depthLimitView(target: String?) -> some View {
         // Defense-in-depth fallback when the depth counter trips
         // even though the backend's `MAX_EMBED_DEPTH` should have
         // already stopped us. WCAG 2.5.3: AX label begins with the
-        // visible text.
-        let msg = "Embed depth limit reached."
-        return Text(msg)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.vertical, 4)
-            .accessibilityLabel("\(msg) Further embeds inside this one are not rendered.")
+        // visible text. Audit #197: name the target if we have one
+        // + point at a remediation so the user knows what they're
+        // missing and how to see it.
+        let head = target.map { "Embed depth limit reached for \($0)." }
+            ?? "Embed depth limit reached."
+        let remediation = "Open the source note directly to see embeds nested beyond depth 3."
+        let visible = "\(head) \(remediation)"
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(visible)
+                .font(.callout)
+                .foregroundStyle(.primary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(visible)
+    }
+
+    private func targetForDepthLimit(resolution: EmbedResolution) -> String? {
+        switch resolution {
+        case .fullNote(let target, _, _),
+            .section(let target, _, _, _),
+            .block(let target, _, _),
+            .image(let target, _, _, _):
+            return target
+        case .unresolved:
+            return nil
+        }
     }
 
     private func unresolvedText(reason: EmbedUnresolvedReason) -> (visible: String, ax: String) {
@@ -205,15 +264,38 @@ struct EmbedView: View {
 // MARK: - Disclosure shell
 
 /// One disclosure-group + optional "jump to source" button shared by
-/// the FullNote / Section / Block variants. Splitting it out keeps
-/// the per-variant AT label / activation behavior in one spot.
+/// the FullNote / Section / Block / Image variants. Splitting it out
+/// keeps the per-variant AT label / activation behavior in one spot.
+///
+/// `initiallyExpanded` controls whether the group starts open. The
+/// per-variant call sites pass `depth == 0`: top-level embeds are
+/// open by default (sighted users see the body without clicking),
+/// nested embeds start collapsed so screen-reader users can skip
+/// over an embedded note without traversing four levels of body
+/// content first (audit #195).
 private struct EmbedDisclosure<Content: View>: View {
     let label: String
     let jumpToSourceAction: ((String) -> Void)?
     let jumpToTarget: String?
+    let initiallyExpanded: Bool
     let content: () -> Content
 
-    @State private var expanded: Bool = true
+    @State private var expanded: Bool
+
+    init(
+        label: String,
+        jumpToSourceAction: ((String) -> Void)?,
+        jumpToTarget: String?,
+        initiallyExpanded: Bool,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.label = label
+        self.jumpToSourceAction = jumpToSourceAction
+        self.jumpToTarget = jumpToTarget
+        self.initiallyExpanded = initiallyExpanded
+        self.content = content
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
@@ -228,9 +310,15 @@ private struct EmbedDisclosure<Content: View>: View {
             }
             .padding(.leading, 12)
         } label: {
+            // Audit #194: dropped `.accessibilityAddTraits(.isHeader)`.
+            // Embed-disclosure labels were polluting VoiceOver's
+            // Headings rotor with embed chrome — inside a note that
+            // contains four embeds the rotor would show four
+            // "Embedded note:" entries among the user's real
+            // headings. DisclosureGroup's native role already
+            // announces "disclosure group, collapsed/expanded".
             Text(label)
                 .font(.callout.weight(.semibold))
-                .accessibilityAddTraits(.isHeader)
         }
         .padding(.vertical, 4)
         .background(
@@ -294,11 +382,15 @@ enum EmbedBodySegment {
 /// alternating sequence of `.text` and `.embed` segments in source
 /// order.
 ///
-/// Length of the dropped span is the embed's `raw_target` plus
-/// the surrounding `![[…]]` (4 bytes) — close enough for the V1
-/// splice. A more precise length needs the backend to surface the
-/// span end alongside the start; tracked as a follow-up if the
-/// approximation produces visible artifacts.
+/// The dropped span length is `5 + raw_target.utf8.count` —
+/// `![[` (3 bytes) + target + `]]` (2 bytes) for the wikilink
+/// embed form. Audit #199: earlier shape used `4 + …` which left a
+/// stray `]` in the trailing text that VoiceOver would read as
+/// "right bracket". For Markdown-image embeds (`![alt](src)`) the
+/// length is variable; until the backend reports a real span_end
+/// the approximation may leave a small remainder for those —
+/// documented limitation, mostly invisible because Markdown-image
+/// embeds inside an embedded note are rare.
 func splice(text: String, nested: [NestedEmbed]) -> [EmbedBodySegment] {
     if nested.isEmpty {
         return [.text(text)]
@@ -315,8 +407,8 @@ func splice(text: String, nested: [NestedEmbed]) -> [EmbedBodySegment] {
             let leading = substringByByteRange(text: text, start: cursor, end: offset)
             out.append(.text(leading))
         }
-        // Best-effort span length: `![[target]]` = 4 + target.utf8.count.
-        let approxLen = 4 + ne.rawTarget.utf8.count
+        // Wikilink embed span: `![[target]]` = 5 + target.utf8.count.
+        let approxLen = 5 + ne.rawTarget.utf8.count
         let consumed = min(offset + approxLen, totalLen)
         out.append(.embed(ne))
         cursor = consumed
