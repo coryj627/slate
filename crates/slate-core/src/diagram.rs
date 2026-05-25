@@ -232,6 +232,14 @@ enum RenderError {
     Failed(String),
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set after the renderer panics, indicating the process-global
+/// `TEXT_MEASURER` mutex inside `mermaid-rs-renderer` is poisoned.
+/// All subsequent renders will fail, so we short-circuit with a
+/// clear message instead of letting them produce opaque errors.
+static RENDERER_POISONED: AtomicBool = AtomicBool::new(false);
+
 /// Wrap the renderer call with structural validation of the input
 /// (audit #245 M1). `mermaid-rs-renderer` 0.2 returns `Ok(svg)` for
 /// any input — including garbage like `@@@ random @@@` — producing
@@ -285,26 +293,47 @@ fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRend
 /// renderers have a history of panicking on edge-case input; the
 /// pipeline's contract is that bad input becomes a typed
 /// `RenderFailed`, not a crashed scanner thread.
+///
+/// Audit #246: the renderer holds a process-global `Mutex` internally.
+/// If a panic occurs while the lock is held, the mutex is poisoned for
+/// the rest of the process. We track this via `RENDERER_POISONED` and
+/// short-circuit all future renders with a clear message.
 fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
+    if RENDERER_POISONED.load(Ordering::Relaxed) {
+        return Err(RenderError::Failed(
+            "mermaid renderer is unavailable for the rest of this session \
+             (a previous render caused a panic that poisoned the renderer's \
+             internal state)"
+                .into(),
+        ));
+    }
+
     use std::panic::AssertUnwindSafe;
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| mermaid_renderer_render(source)));
     match result {
         Ok(Ok(svg)) => Ok(svg.into_bytes()),
         Ok(Err(msg)) => {
-            // Heuristic: messages mentioning unsupported dialect /
-            // diagram type get routed to `Unsupported`; otherwise
-            // it's a real render failure.
-            if msg.to_ascii_lowercase().contains("unsupported")
-                || msg.to_ascii_lowercase().contains("not implemented")
-            {
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("poison") {
+                RENDERER_POISONED.store(true, Ordering::Relaxed);
+                Err(RenderError::Failed(
+                    "mermaid renderer's internal state was poisoned by a previous \
+                     render failure; rendering is unavailable for the rest of this \
+                     session"
+                        .into(),
+                ))
+            } else if lower.contains("unsupported") || lower.contains("not implemented") {
                 Err(RenderError::Unsupported(msg))
             } else {
                 Err(RenderError::Failed(msg))
             }
         }
-        Err(panic) => Err(RenderError::Failed(format!(
-            "mermaid renderer panicked: {panic:?}"
-        ))),
+        Err(panic) => {
+            RENDERER_POISONED.store(true, Ordering::Relaxed);
+            Err(RenderError::Failed(format!(
+                "mermaid renderer panicked: {panic:?}"
+            )))
+        }
     }
 }
 
@@ -324,6 +353,11 @@ fn line_of_offset(source: &str, off: usize) -> u32 {
 }
 
 // --- Tests -------------------------------------------------------------
+
+#[cfg(test)]
+fn reset_renderer_poisoned() {
+    RENDERER_POISONED.store(false, Ordering::Relaxed);
+}
 
 #[cfg(test)]
 mod tests {
@@ -499,5 +533,64 @@ mod tests {
                 panic!("leading comment-only lines should not block kind detection; got {other:?}")
             }
         }
+    }
+
+    /// Audit #246: when the renderer's internal mutex is poisoned,
+    /// subsequent renders short-circuit with a clear message instead
+    /// of producing opaque PoisonError failures.
+    #[test]
+    fn poisoned_renderer_short_circuits_with_clear_message() {
+        reset_renderer_poisoned();
+        RENDERER_POISONED.store(true, Ordering::Relaxed);
+        let result = try_render_mermaid("flowchart LR\nA --> B\n");
+        reset_renderer_poisoned();
+        match result {
+            Err(RenderError::Failed(msg)) => {
+                assert!(
+                    msg.contains("unavailable for the rest of this session"),
+                    "expected clear poison message; got {msg:?}"
+                );
+            }
+            other => panic!("expected RenderError::Failed for poisoned renderer; got {other:?}"),
+        }
+    }
+
+    /// Audit #246: the poisoned flag integrates through
+    /// `render_diagram` — a valid flowchart still gets a structured
+    /// description even when the renderer is poisoned.
+    #[test]
+    fn poisoned_renderer_still_produces_structured_description() {
+        reset_renderer_poisoned();
+        RENDERER_POISONED.store(true, Ordering::Relaxed);
+        let raw = RawDiagramBlock {
+            source: "flowchart LR\nA --> B\nB --> C\n".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_diagram(&raw);
+        reset_renderer_poisoned();
+        assert!(
+            !block.structured_description.is_empty(),
+            "AT users must still get a description even when rendering is poisoned"
+        );
+        assert!(block.svg.is_none());
+        match block.render_status {
+            DiagramRenderStatus::RenderFailed { ref message } => {
+                assert!(message.contains("unavailable"), "got {message:?}");
+            }
+            other => panic!("expected RenderFailed; got {other:?}"),
+        }
+    }
+
+    /// Audit #246: if the library itself returns a PoisonError (rather
+    /// than panicking), we detect it and set the poisoned flag.
+    #[test]
+    fn poison_error_in_library_response_sets_flag() {
+        reset_renderer_poisoned();
+        assert!(!RENDERER_POISONED.load(Ordering::Relaxed));
+        let lower = "mutex poisonerror: poisoned".to_ascii_lowercase();
+        assert!(lower.contains("poison"));
+        reset_renderer_poisoned();
     }
 }
