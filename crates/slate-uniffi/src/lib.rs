@@ -1173,6 +1173,11 @@ impl From<core::RenameSkipped> for RenameSkipped {
 pub enum RenameSkipReason {
     NoSuchKey,
     KeyCollision,
+    /// Rename would cross the `tags` key boundary with a list-shaped
+    /// value, which would flip the type discriminator between `List`
+    /// and `TagList` on round-trip. UI can offer a manual-edit
+    /// fallback. Audit #180.
+    TagsKeyTypeDrift,
 }
 
 impl From<core::RenameSkipReason> for RenameSkipReason {
@@ -1180,6 +1185,7 @@ impl From<core::RenameSkipReason> for RenameSkipReason {
         match r {
             core::RenameSkipReason::NoSuchKey => RenameSkipReason::NoSuchKey,
             core::RenameSkipReason::KeyCollision => RenameSkipReason::KeyCollision,
+            core::RenameSkipReason::TagsKeyTypeDrift => RenameSkipReason::TagsKeyTypeDrift,
         }
     }
 }

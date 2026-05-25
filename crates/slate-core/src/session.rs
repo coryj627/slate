@@ -224,6 +224,12 @@ pub struct RenameSkipped {
 pub enum RenameSkipReason {
     NoSuchKey,
     KeyCollision,
+    /// The rename would cross the `tags` key boundary with a list-
+    /// shaped value, and the reader's `tags`-keyname special-casing
+    /// would silently flip the type discriminator between `List` and
+    /// `TagList`. Audit #180: refuse rather than mutate the disk
+    /// byte form. UI can offer a manual-edit fallback.
+    TagsKeyTypeDrift,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -951,14 +957,7 @@ impl VaultSession {
 
         let contents = self.read_text(path)?;
         let new_contents = crate::frontmatter::set_property_in_source(&contents, key, &value)
-            .map_err(|e| match e {
-                crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(reason) => {
-                    VaultError::MalformedFrontmatter {
-                        path: path.to_string(),
-                        reason,
-                    }
-                }
-            })?;
+            .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
 
         if new_contents.len() as u64 > self.config.large_file_refuse_bytes {
             return Err(VaultError::FileTooLarge {
@@ -995,29 +994,30 @@ impl VaultSession {
         let mut conn = self.conn.lock().expect("session connection mutex");
 
         let contents = self.read_text(path)?;
-        let edit =
-            crate::frontmatter::delete_property_in_source(&contents, key).map_err(|e| match e {
-                crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(reason) => {
-                    VaultError::MalformedFrontmatter {
-                        path: path.to_string(),
-                        reason,
-                    }
-                }
-            })?;
+        let edit = crate::frontmatter::delete_property_in_source(&contents, key)
+            .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
 
         let new_contents = match edit {
             crate::frontmatter::FrontmatterEdit::Changed(s) => s,
             crate::frontmatter::FrontmatterEdit::Unchanged => {
-                // No write to make, but the contract is to still
-                // validate `expected_content_hash` so callers don't
-                // see a phantom success on a stale read.
-                let (current_hash, current_mtime_ms) = compute_disk_hash(
-                    self.provider.as_ref(),
-                    path,
-                    self.config.large_file_refuse_bytes,
-                )?;
+                // Audit #174: the previous short-circuit did a second
+                // disk read via `compute_disk_hash` to populate the
+                // SaveReport, which could race against the `read_text`
+                // we already did and produce a SaveReport whose hash
+                // didn't match the bytes we actually observed. Hash
+                // the bytes we read instead — the SaveReport then
+                // describes the state we acted on, not a possibly-
+                // different state on disk.
+                let current_hash = crate::vault::content_hash(contents.as_bytes());
                 if let Some(expected) = expected_content_hash {
                     if current_hash != expected {
+                        // mtime is best-effort metadata for the caller's
+                        // change tracking; if the file's been deleted
+                        // out from under us between read and now, fall
+                        // back to 0 rather than failing the whole call
+                        // on a missing-file stat.
+                        let current_mtime_ms =
+                            self.provider.stat(path).map(|s| s.mtime_ms).unwrap_or(0);
                         return Err(VaultError::WriteConflict {
                             current_content_hash: current_hash,
                             expected_content_hash: expected.to_string(),
@@ -1025,13 +1025,10 @@ impl VaultSession {
                         });
                     }
                 }
-                // Pull current size from the provider — `compute_disk_hash`
-                // already read the file once, but the SaveReport surface
-                // is small enough that a second `stat` is fine.
                 let stat = self.provider.stat(path)?;
                 return Ok(SaveReport {
                     new_content_hash: current_hash,
-                    new_size_bytes: stat.size_bytes,
+                    new_size_bytes: contents.len() as u64,
                     new_mtime_ms: stat.mtime_ms,
                 });
             }
@@ -1084,6 +1081,19 @@ impl VaultSession {
         if old_key == new_key {
             return Err(VaultError::InvalidArgument {
                 message: "old_key and new_key are identical".to_string(),
+            });
+        }
+        // Audit #179: dotted keys aren't symmetric between the read
+        // path (which produces them by flattening nested mappings)
+        // and the write path (which would create a duplicate top-
+        // level key). Refuse at the boundary.
+        if old_key.contains('.') || new_key.contains('.') {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "rename refuses dotted keys ({old_key:?} → {new_key:?}); \
+                     the read path's dotted-key flattening isn't symmetric \
+                     with the writer"
+                ),
             });
         }
 
@@ -1167,6 +1177,19 @@ impl VaultSession {
                 continue;
             }
 
+            // Audit #180B: crossing the `tags` key boundary with a
+            // list-shaped value drifts the type discriminator on
+            // round-trip (reader's `tags`-keyname classifier flips
+            // `List ↔ TagList`). Refuse rather than silently mutate
+            // the on-disk value form.
+            if crosses_tags_boundary(old_key, new_key, &old_value) {
+                report.skipped.push(RenameSkipped {
+                    path,
+                    reason: RenameSkipReason::TagsKeyTypeDrift,
+                });
+                continue;
+            }
+
             // In-memory edit: set new_key to the old value, then drop
             // old_key. Both helpers reject malformed frontmatter, so the
             // first call effectively gates the second.
@@ -1184,11 +1207,19 @@ impl VaultSession {
                         }
                     }) {
                     Ok(s) => s,
-                    Err(crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(reason)) => {
+                    Err(e) => {
+                        let (kind, message) = match e {
+                            crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(
+                                reason,
+                            ) => (RenameFailureKind::MalformedFrontmatter, reason),
+                            crate::frontmatter::FrontmatterEditError::InvalidPropertyValue {
+                                reason,
+                            } => (RenameFailureKind::Other, reason),
+                        };
                         report.failed.push(RenameFailed {
                             path,
-                            kind: RenameFailureKind::MalformedFrontmatter,
-                            message: reason,
+                            kind,
+                            message,
                         });
                         continue;
                     }
@@ -2168,6 +2199,50 @@ fn validate_save_path(path: &str) -> Result<(), VaultError> {
 /// if the file genuinely exceeds the threshold we surface
 /// `FileTooLarge` and abort rather than allocating arbitrarily large
 /// buffers to compute a hash we're about to compare.
+/// True when the rename would push a list-shaped value across the
+/// `tags` key boundary. The reader's `tags`-keyname special-case
+/// classifies a list of strings as `TagList`; under any other key
+/// the same list classifies as `List([Text, …])`. A rename that
+/// crosses the boundary therefore flips the discriminator on
+/// round-trip without changing the disk-byte form in the way the
+/// user would expect. We refuse and surface the case as a
+/// `TagsKeyTypeDrift` skip so the UI can offer a manual-edit
+/// fallback (audit #180B).
+fn crosses_tags_boundary(old_key: &str, new_key: &str, value: &crate::PropertyValue) -> bool {
+    let is_list = matches!(
+        value,
+        crate::PropertyValue::List(_) | crate::PropertyValue::TagList(_)
+    );
+    if !is_list {
+        return false;
+    }
+    (old_key == "tags") ^ (new_key == "tags")
+}
+
+/// Map a `FrontmatterEditError` to the `VaultError` shape the FFI
+/// surface expects. Keeps all three callers (`set_property`,
+/// `delete_property`, the rename helper) in sync — adding a new
+/// `FrontmatterEditError` variant will fail to compile here, not at
+/// each scattered match site.
+fn frontmatter_edit_error_to_vault_error(
+    err: crate::frontmatter::FrontmatterEditError,
+    path: &str,
+) -> VaultError {
+    match err {
+        crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(reason) => {
+            VaultError::MalformedFrontmatter {
+                path: path.to_string(),
+                reason,
+            }
+        }
+        crate::frontmatter::FrontmatterEditError::InvalidPropertyValue { reason } => {
+            VaultError::InvalidArgument {
+                message: format!("invalid property value for {path:?}: {reason}"),
+            }
+        }
+    }
+}
+
 fn classify_rename_failure(err: &VaultError) -> RenameFailureKind {
     match err {
         VaultError::WriteConflict { .. } => RenameFailureKind::WriteConflict,
@@ -2181,19 +2256,30 @@ fn classify_rename_failure(err: &VaultError) -> RenameFailureKind {
 /// line on each side, for the bulk-rename preview UI. Returns an empty
 /// string when the file has no frontmatter or the key isn't present —
 /// the caller decides how to render the absence.
+///
+/// Match rule (audit #178): the line must start `key:` at column 0
+/// (no leading whitespace) so we don't false-positive on:
+///   - block-scalar continuation lines that happen to start with
+///     `key:` after indentation,
+///   - nested-mapping keys (those are dotted in the read path; their
+///     literal-on-disk form is indented and shouldn't match a flat
+///     top-level rename).
+///
+/// The match also tolerates yaml-rust2's emitter quoting the key
+/// (`"key":` / `'key':`) — it does that for scalars that look like
+/// YAML 1.1 booleans (`y`, `n`, `on`, `off`, etc.) or that are
+/// otherwise ambiguous.
 fn excerpt_around_key(source: &str, key: &str) -> String {
     let Some(range) = crate::frontmatter::frontmatter_range(source) else {
         return String::new();
     };
     let body = &source[range];
     let lines: Vec<&str> = body.lines().collect();
-    // Match the key prefix at the start of a line — `key:` covers the
-    // dominant shape; we don't try to handle multi-line block scalars
-    // or anchors here because the round-trip emitter normalizes them
-    // and the excerpt is for human eyeballing, not parsing.
-    let key_prefix = format!("{key}:");
+    let bare = format!("{key}:");
+    let dquoted = format!("\"{key}\":");
+    let squoted = format!("'{key}':");
     let key_indexed = lines.iter().enumerate().find_map(|(i, line)| {
-        if line.trim_start().starts_with(&key_prefix) {
+        if line.starts_with(&bare) || line.starts_with(&dquoted) || line.starts_with(&squoted) {
             Some(i)
         } else {
             None
@@ -6333,6 +6419,49 @@ mod tests {
     }
 
     #[test]
+    fn delete_property_short_circuit_hash_matches_bytes_we_read() {
+        // Audit #174: the no-op short-circuit used to do a fresh
+        // disk read for the SaveReport's hash, which could race
+        // against the `read_text` that preceded it. The fix is to
+        // hash the bytes we actually read. Verify with a provider
+        // that mutates the file between the two reads — the
+        // SaveReport's hash must still match the original bytes,
+        // not the mutated ones.
+        let tmp = tempfile::tempdir().unwrap();
+        let setup = FsVaultProvider::new(tmp.path().to_path_buf());
+        setup
+            .write_file("note.md", b"---\ntitle: T\n---\nbody A\n")
+            .unwrap();
+        let raced_inner = FsVaultProvider::new(tmp.path().to_path_buf());
+        let provider = Arc::new(RaceOnFirstReadProvider {
+            inner: raced_inner,
+            race_path: "note.md".to_string(),
+            post_read_bytes: b"---\ntitle: T\n---\nbody MUTATED\n".to_vec(),
+            raced: std::sync::atomic::AtomicBool::new(false),
+        });
+        let config = SessionConfig::new(tmp.path().join(".slate"));
+        let session = VaultSession::open(provider, config).unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Delete a key that isn't there → hits the short-circuit.
+        // expected_content_hash = None on purpose to follow the
+        // CLI/scripted path the audit calls out.
+        let report = session
+            .delete_property("note.md", "nonexistent", None)
+            .unwrap();
+
+        // The SaveReport's hash should equal the hash of the bytes
+        // read_text observed (the original "body A\n" version),
+        // NOT the mutated bytes on disk.
+        let expected_hash = crate::vault::content_hash(b"---\ntitle: T\n---\nbody A\n");
+        assert_eq!(report.new_content_hash, expected_hash);
+        assert_eq!(
+            report.new_size_bytes,
+            "---\ntitle: T\n---\nbody A\n".len() as u64
+        );
+    }
+
+    #[test]
     fn delete_property_missing_key_still_validates_hash() {
         let (_tmp, session) = make_vault(|p| {
             p.write_file("note.md", b"---\ntitle: Hi\n---\nbody\n")
@@ -6420,6 +6549,65 @@ mod tests {
         // collide.md preserved as-is.
         let raw = session.read_text("collide.md").unwrap();
         assert_eq!(raw, "---\nauthor: Cory\nby: Existing\n---\nbody\n");
+    }
+
+    #[test]
+    fn rename_property_skips_tags_boundary_crossing_with_list_value() {
+        // Audit #180B. Two scenarios:
+        //   - `tags` → `labels` with a tag list → would lose `#`
+        //     prefixes on round-trip (reader's `tags`-keyname
+        //     classification doesn't apply under `labels`).
+        //   - `authors` → `tags` with a plain string list → would
+        //     gain `TagList` classification under `tags`.
+        // Both refused; scalar-valued renames across the same
+        // boundary are unaffected.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"---\ntags:\n  - foo\n  - bar\n---\nbody\n")
+                .unwrap();
+            p.write_file("b.md", b"---\nauthors:\n  - alice\n  - bob\n---\nbody\n")
+                .unwrap();
+            p.write_file("c.md", b"---\ntags: scalar-not-list\n---\nbody\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        // Case 1: tags → labels with list value, skipped.
+        let report = session
+            .rename_property_across_vault("tags", "labels", false, &CancelToken::new())
+            .unwrap();
+        // a.md (list-valued tags) skipped; c.md (scalar-valued tags)
+        // applied.
+        let skipped_paths: Vec<&str> = report
+            .skipped
+            .iter()
+            .filter(|s| s.reason == RenameSkipReason::TagsKeyTypeDrift)
+            .map(|s| s.path.as_str())
+            .collect();
+        assert_eq!(skipped_paths, vec!["a.md"]);
+        let applied_paths: Vec<&str> = report
+            .affected
+            .iter()
+            .filter(|a| a.applied)
+            .map(|a| a.path.as_str())
+            .collect();
+        assert!(applied_paths.contains(&"c.md"));
+        // a.md's disk content untouched.
+        let raw = session.read_text("a.md").unwrap();
+        assert_eq!(raw, "---\ntags:\n  - foo\n  - bar\n---\nbody\n");
+
+        // Case 2: authors → tags with list value, skipped.
+        let report = session
+            .rename_property_across_vault("authors", "tags", false, &CancelToken::new())
+            .unwrap();
+        let skipped_paths: Vec<&str> = report
+            .skipped
+            .iter()
+            .filter(|s| s.reason == RenameSkipReason::TagsKeyTypeDrift)
+            .map(|s| s.path.as_str())
+            .collect();
+        assert_eq!(skipped_paths, vec!["b.md"]);
+        let raw = session.read_text("b.md").unwrap();
+        assert_eq!(raw, "---\nauthors:\n  - alice\n  - bob\n---\nbody\n");
     }
 
     /// Provider that intercepts one specific file's first read and,
@@ -6573,30 +6761,31 @@ mod tests {
 
     #[test]
     fn rename_property_preserves_list_values() {
+        // Rename a list-valued key that doesn't cross the `tags`
+        // boundary so the elements survive the round-trip cleanly.
+        // (The `tags`-boundary crossing case is now a deliberate
+        // skip per audit #180B — see
+        // `rename_property_skips_tags_boundary_crossing_with_list_value`.)
         let (_tmp, session) = make_vault(|p| {
-            p.write_file("note.md", b"---\ntags:\n  - foo\n  - bar\n---\nbody\n")
-                .unwrap();
+            p.write_file(
+                "note.md",
+                b"---\ncategories:\n  - foo\n  - bar\n---\nbody\n",
+            )
+            .unwrap();
         });
         session.scan_initial(&CancelToken::new()).unwrap();
 
         let report = session
-            .rename_property_across_vault("tags", "topics", false, &CancelToken::new())
+            .rename_property_across_vault("categories", "topics", false, &CancelToken::new())
             .unwrap();
         assert_eq!(report.affected.len(), 1);
 
-        // Reindex picked up the new key with the same elements.
         let bundle = session
             .note_load_bundle("note.md", Paging::first(50))
             .unwrap();
         let topics = bundle.properties.iter().find(|p| p.key == "topics");
         match topics.map(|p| &p.value) {
-            Some(crate::PropertyValue::TagList(items)) => {
-                assert_eq!(items, &vec!["foo".to_string(), "bar".to_string()]);
-            }
-            Some(crate::PropertyValue::List(items)) if items.len() == 2 => {
-                // Acceptable — `tags` keyname's TagList special-case
-                // doesn't apply to `topics`.
-            }
+            Some(crate::PropertyValue::List(items)) if items.len() == 2 => {}
             other => panic!("expected list value for `topics`, got {other:?}"),
         }
     }
@@ -6610,6 +6799,58 @@ mod tests {
         session.scan_initial(&CancelToken::new()).unwrap();
         let err = session
             .rename_property_across_vault("author", "author", false, &CancelToken::new())
+            .unwrap_err();
+        assert!(matches!(err, VaultError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rename_property_excerpt_ignores_block_scalar_continuations() {
+        // Audit #178: the previous excerpt logic matched any line
+        // whose first non-whitespace token started with `<key>:`,
+        // so a continuation line inside a `|` block scalar that
+        // happened to read `des: …` would steal the excerpt from
+        // the real top-level `des:` key.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "note.md",
+                b"---\ntext: |\n  des: this is a continuation, not a key\nrealkey: hi\ndes: real value\n---\nbody\n",
+            )
+            .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let report = session
+            .rename_property_across_vault("des", "y", true, &CancelToken::new())
+            .unwrap();
+        assert_eq!(report.affected.len(), 1);
+        let aff = &report.affected[0];
+        // The excerpt must contain the real `des: real value` line,
+        // not the block-scalar continuation.
+        assert!(
+            aff.before_excerpt.contains("des: real value"),
+            "before_excerpt should include the real key line; got {:?}",
+            aff.before_excerpt
+        );
+        // And the after_excerpt should include the renamed key
+        // somewhere — yaml-rust2 quotes `y` (a YAML 1.1 boolean
+        // alias) on emit, so the line reads `"y": real value`.
+        assert!(
+            aff.after_excerpt.contains("real value")
+                && (aff.after_excerpt.contains("y:") || aff.after_excerpt.contains("\"y\":")),
+            "after_excerpt should include the renamed key; got {:?}",
+            aff.after_excerpt
+        );
+    }
+
+    #[test]
+    fn rename_property_rejects_dotted_keys() {
+        let (_tmp, session) = make_vault(|_| {});
+        let err = session
+            .rename_property_across_vault("person.name", "name", false, &CancelToken::new())
+            .unwrap_err();
+        assert!(matches!(err, VaultError::InvalidArgument { .. }));
+        let err = session
+            .rename_property_across_vault("name", "person.name", false, &CancelToken::new())
             .unwrap_err();
         assert!(matches!(err, VaultError::InvalidArgument { .. }));
     }
