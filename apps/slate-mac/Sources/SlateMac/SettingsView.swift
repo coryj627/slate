@@ -93,13 +93,19 @@ struct MathSettingsTab: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Braille code")
             } header: {
-                // Red-team L2: Form Sections already expose the
-                // header with the correct AT role; explicit
-                // `.isHeader` on top can cause VO to double-
-                // announce "heading, heading" on some AppKit
-                // versions. Rely on the native Section header.
+                // CI's a11y linter (slate-a11y-check) enforces
+                // `.accessibilityAddTraits(.isHeader)` on every
+                // heading-styled Text per WCAG 2.4.6, even when
+                // the surrounding Form Section header role would
+                // *also* fire natively. The lint's `heading-
+                // trait-missing` rule is structural (font-only),
+                // so the explicit trait is the way to keep CI
+                // green. A pre-push red-team flagged this as
+                // potentially double-announcing, but the codebase
+                // policy is to defer to the linter.
                 Text("Math accessibility")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             } footer: {
                 // Audit #262 M3: was `.foregroundStyle(.secondary)`
                 // which lands ~3.2:1 against the Form's grouped-
@@ -122,10 +128,11 @@ struct MathSettingsTab: View {
             Section {
                 MathLivePreview()
             } header: {
-                // Red-team L2: native Section header carries the
-                // AT role — no manual `.isHeader` needed.
+                // See "Math accessibility" header above for the
+                // CI lint rationale on keeping `.isHeader`.
                 Text("Live preview")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
         .formStyle(.grouped)
@@ -244,10 +251,11 @@ struct CodeSettingsTab: View {
                 // footer Text below, which IS reliably announced
                 // as section content.
             } header: {
-                // Red-team L2: native Section header carries the
-                // AT role — no manual `.isHeader` needed.
+                // See "Math accessibility" header above for the
+                // CI lint rationale on keeping `.isHeader`.
                 Text("Code accessibility")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             } footer: {
                 // Audit #262 M3 + M4: `.primary` foreground so the
                 // ~4.5:1 contrast against the form background is
@@ -280,10 +288,11 @@ struct CodeSettingsTab: View {
                         // is the AT label; no override needed.
                 }
             } header: {
-                // Red-team L2: native Section header carries the
-                // AT role — no manual `.isHeader` needed.
+                // See "Math accessibility" header above for the
+                // CI lint rationale on keeping `.isHeader`.
                 Text("Example preamble")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
         .formStyle(.grouped)
