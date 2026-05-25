@@ -476,11 +476,24 @@ final class AppState: ObservableObject {
             // the setter with the same value on view rebuilds.
             // Skip the loader spin-up if nothing actually changed.
             guard oldValue != mathPrefs else { return }
+            preferencesStore.saveMathPrefs(mathPrefs)
             guard let path = selectedFilePath else { return }
             mathBlocksLoadTask?.cancel()
             mathBlocksLoadTask = Task { [weak self] in
                 await self?.loadCurrentNoteMathBlocks(path: path)
             }
+        }
+    }
+
+    /// Code pipeline preferences. Controls the AT preamble's
+    /// verbosity on rendered code blocks. Settings panel #224
+    /// drives this. The CodeBlockView UI binding to this is V1.x
+    /// follow-up — today the view uses the same default
+    /// (`preambleOnly`) the type carries.
+    @Published var codePrefs: CodePrefs = CodePrefs() {
+        didSet {
+            guard oldValue != codePrefs else { return }
+            preferencesStore.saveCodePrefs(codePrefs)
         }
     }
 
@@ -712,10 +725,14 @@ final class AppState: ObservableObject {
     /// `XCTest` runs don't actually spawn the user's default browser
     /// every time the suite touches an external-link code path.
     private let externalOpener: (URL) -> Bool
+    /// Preferences persistence (math + code panels, #224). Injected
+    /// at init so tests can substitute a non-standard `UserDefaults`.
+    let preferencesStore: PreferencesStore
 
     init(
         recentsStore: RecentVaultsStore? = nil,
-        externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+        externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
+        preferencesStore: PreferencesStore = PreferencesStore()
     ) {
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
@@ -731,6 +748,13 @@ final class AppState: ObservableObject {
             self.recentsStore = RecentVaultsStore(fileURL: fallback)
         }
         self.externalOpener = externalOpener
+        self.preferencesStore = preferencesStore
+        // Load persisted preferences AFTER the store is set, BEFORE
+        // any other init work that might consume them. The didSet
+        // observers haven't been installed yet (they only run on
+        // assignment after init), so loading here doesn't recurse.
+        self.mathPrefs = preferencesStore.loadMathPrefs()
+        self.codePrefs = preferencesStore.loadCodePrefs()
         self.recentVaults = self.recentsStore.load()
 
         // Watch `selectedFilePath` and (re)trigger note loading on

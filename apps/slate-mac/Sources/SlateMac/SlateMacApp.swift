@@ -25,6 +25,15 @@ struct SlateMacApp: App {
                 .keyboardShortcut("o", modifiers: [.command])
             }
         }
+
+        // Settings scene (#224) — Cmd+, opens it from anywhere.
+        // SwiftUI auto-installs the "Slate ▸ Settings…" menu item
+        // and the keyboard shortcut when the App declares a
+        // `Settings` scene.
+        Settings {
+            SettingsView()
+                .environmentObject(appState)
+        }
     }
 }
 
