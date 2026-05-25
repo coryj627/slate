@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Template discovery, metadata extraction, and safe rendering.
 //!
 //! Templates are plain Markdown files. They become useful through

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! SQLite-backed metadata index for a vault.
 //!
 //! This module owns the database connection lifecycle, the PRAGMA defaults,

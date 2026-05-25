@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Vault session: opens a vault, manages its SQLite metadata index,
 //! and exposes file enumeration to callers.
 //!

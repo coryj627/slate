@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Synthetic vault fixture for benchmarks.
 //!
 //! `generate_vault(n)` lays out `n` Markdown files across ~50 sub-

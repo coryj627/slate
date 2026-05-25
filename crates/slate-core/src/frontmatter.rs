@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! YAML frontmatter parser with type inference.
 //!
 //! A note's frontmatter is the YAML block bracketed by `---` lines at

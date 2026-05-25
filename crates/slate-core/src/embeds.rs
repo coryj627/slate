@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Embed resolution: turn a `![[target]]` / `![alt](src)` reference
 //! into the text or bytes the UI needs to render.
 //!

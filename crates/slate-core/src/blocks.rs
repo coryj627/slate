@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Block-anchor (`^block-id`) extraction.
 //!
 //! Obsidian's convention for "embed this specific paragraph / list

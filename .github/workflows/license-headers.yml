@@ -1,0 +1,42 @@
+# License-header guard.
+#
+# Fails any PR that introduces a tracked .rs or .swift file without an
+# `SPDX-License-Identifier` line in its first 20 lines. The fixer is
+# `scripts/apply-license-header.py` — idempotent, safe to re-run. See
+# issue #266 for the rationale and the chosen header format.
+
+name: License headers
+
+on:
+  pull_request:
+    paths:
+      - '**/*.rs'
+      - '**/*.swift'
+      - 'scripts/check-license-headers.sh'
+      - 'scripts/apply-license-header.py'
+      - '.github/workflows/license-headers.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/*.swift'
+      - 'scripts/check-license-headers.sh'
+      - 'scripts/apply-license-header.py'
+      - '.github/workflows/license-headers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: SPDX header present on every .rs/.swift
+    # ubuntu is fine — no toolchain needed, just bash + grep + git.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Run check
+        run: ./scripts/check-license-headers.sh

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! SQLite storage + query surface for note-to-note links.
 //!
 //! Schema lives in `migrations/004_links.sql`. Rows are written

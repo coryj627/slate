@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import Foundation
 
 /// Persistent store for the welcome screen's recent-vaults list.

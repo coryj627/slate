@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Vault file-system abstraction.
 //!
 //! `VaultProvider` is the trait through which the vault session reads

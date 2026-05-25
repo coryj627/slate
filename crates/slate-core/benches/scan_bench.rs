@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Criterion benchmarks covering Milestone A's hot paths.
 //!
 //! - `first_open_and_scan`: cold open + initial scan. The `.slate`

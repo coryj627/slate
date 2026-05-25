@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import Foundation
 
 /// One heading-bounded chunk of a note's source. `.heading` is nil for

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! SQLite storage + query surface for frontmatter properties.
 //!
 //! Schema lives in `migrations/005_properties.sql`. Rows are

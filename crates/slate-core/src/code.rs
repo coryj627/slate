@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Code pipeline for Milestone K (#218).
 //!
 //! Walks a Markdown source for fenced code blocks, classifies each by

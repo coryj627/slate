@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! Desktop `VaultProvider` implementation backed by `std::fs`.
 //!
 //! Used on Mac and Windows. iOS and Android supply their own host-side

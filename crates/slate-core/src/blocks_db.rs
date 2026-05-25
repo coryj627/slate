@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! SQLite persistence for `^block-id` anchors.
 //!
 //! Mirrors the lifecycle of `headings_db` / `links_db` / `properties_db` /
