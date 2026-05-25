@@ -54,22 +54,51 @@ struct NoteEditorView: NSViewRepresentable {
     /// H). The coordinator converts the byte offset to UTF-16
     /// before talking to `NSTextView`.
     let cursorByteOffsetRequest: AnyPublisher<Int, Never>
+    /// Cmd+E handler (#188): receives the `target` of the embed
+    /// the cursor is currently inside. Hooked at the SwiftUI layer
+    /// to `AppState.requestEmbedPreview(target:)` so the popover
+    /// opens via `pendingEmbedPreview`. Nil disables the
+    /// shortcut — used by the previewless contexts that include
+    /// the editor (none today, kept for future surfaces).
+    let previewEmbedAtCursor: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
-            onSave: onSave
+            onSave: onSave,
+            previewEmbedAtCursor: previewEmbedAtCursor
         )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        // Standard scrollable text view container — same setup
-        // Xcode's File > New > Storyboard scaffold uses for a plain
-        // editor pane.
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return scrollView
-        }
+        // Custom subclass for the Cmd+E embed-preview intercept
+        // (#188). `SlateEditorTextView.performKeyEquivalent(with:)`
+        // routes the shortcut to the coordinator; everything else
+        // falls through to NSTextView's native handling so the
+        // rich VoiceOver / responder behaviour is untouched.
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        let contentSize = scrollView.contentSize
+        let textView = SlateEditorTextView(
+            frame: NSRect(origin: .zero, size: contentSize)
+        )
+        textView.coordinator = context.coordinator
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.containerSize = NSSize(
+            width: contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = true
+        scrollView.documentView = textView
 
         // Editor configuration. The defaults make NSTextView
         // attempt to be a word-processor (smart quotes, dashes,
@@ -129,6 +158,7 @@ struct NoteEditorView: NSViewRepresentable {
             textView.string = text
         }
         context.coordinator.attach(textView: textView)
+        context.coordinator.applyEmbedHighlighting()
         context.coordinator.subscribe(
             scrollAnchorRequest: scrollAnchorRequest,
             lineScrollRequest: lineScrollRequest,
@@ -162,6 +192,7 @@ struct NoteEditorView: NSViewRepresentable {
             textView.string = text
             let clampedLocation = min(previousRange.location, text.utf16.count)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
+            context.coordinator.applyEmbedHighlighting()
         }
     }
 
@@ -170,16 +201,92 @@ struct NoteEditorView: NSViewRepresentable {
         var onSave: () -> Void
         var headings: [Heading] = []
         var accessibilityLabel: String = ""
+        var previewEmbedAtCursor: ((String) -> Void)?
         private weak var textView: NSTextView?
         private var subscriptions: Set<AnyCancellable> = []
+        /// Cached embed spans for the current buffer state. Updated
+        /// by `applyEmbedHighlighting` on every text change so
+        /// `openEmbedPreviewAtCursor` can answer "what embed is the
+        /// cursor inside" in O(spans) without re-running the regex.
+        private(set) var embedSpans: [EditorEmbedSpan] = []
 
-        init(text: Binding<String>, onSave: @escaping () -> Void) {
+        init(
+            text: Binding<String>,
+            onSave: @escaping () -> Void,
+            previewEmbedAtCursor: ((String) -> Void)?
+        ) {
             self._text = text
             self.onSave = onSave
+            self.previewEmbedAtCursor = previewEmbedAtCursor
         }
 
         func attach(textView: NSTextView) {
             self.textView = textView
+        }
+
+        /// Recompute embed spans for the current buffer and apply
+        /// highlight attributes (foreground color + underline) to
+        /// each. Resets attributes on the full range first so
+        /// spans the user typed past lose their highlight.
+        ///
+        /// NSTextStorage's attribute layer works even with
+        /// `isRichText = false` — that flag restricts what the
+        /// user can do via the font panel / paste-with-formatting,
+        /// not what we set programmatically. VoiceOver doesn't
+        /// emit colour attributes; the highlight is purely a
+        /// sighted-user affordance, and AT users still hear the
+        /// raw `![[…]]` text.
+        func applyEmbedHighlighting() {
+            guard let textView, let storage = textView.textStorage else { return }
+            let source = textView.string
+            let nsSource = source as NSString
+            let fullRange = NSRange(location: 0, length: nsSource.length)
+            let spans = findEditorEmbedSpans(in: source)
+            embedSpans = spans
+            storage.beginEditing()
+            storage.removeAttribute(.foregroundColor, range: fullRange)
+            storage.removeAttribute(.underlineStyle, range: fullRange)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.systemBlue,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ]
+            for span in spans {
+                let clamped = NSIntersectionRange(span.range, fullRange)
+                if clamped.length > 0 {
+                    storage.addAttributes(attrs, range: clamped)
+                }
+            }
+            storage.endEditing()
+        }
+
+        /// Cmd+E entry point — called by `SlateEditorTextView`'s
+        /// `performKeyEquivalent(with:)` when the user hits the
+        /// shortcut. Finds the embed span containing the cursor
+        /// and invokes `previewEmbedAtCursor` with its target.
+        /// When the cursor isn't inside any embed, posts a polite
+        /// announcement so the user knows the shortcut fired but
+        /// found nothing.
+        ///
+        /// Returns `true` when the shortcut was meaningful (cursor
+        /// was inside an embed, callback fired). The subclass uses
+        /// the return value to decide whether to swallow the event
+        /// or let it fall through to NSTextView's default Cmd+E
+        /// behaviour ("Use Selection For Find").
+        @discardableResult
+        func openEmbedPreviewAtCursor() -> Bool {
+            guard let textView, let callback = previewEmbedAtCursor else {
+                return false
+            }
+            let cursor = textView.selectedRange().location
+            if let span = embedSpanContaining(cursor: cursor, in: embedSpans) {
+                callback(span.target)
+                return true
+            }
+            postAccessibilityAnnouncement(
+                "No embed at cursor.",
+                priority: .medium
+            )
+            return false
         }
 
         func subscribe(
@@ -218,6 +325,12 @@ struct NoteEditorView: NSViewRepresentable {
             // which goes through `AppState.updateEditorText` and
             // recomputes `hasUnsavedChanges`.
             text = textView.string
+            // Re-highlight embed spans for the new buffer state.
+            // Cheap to redo from scratch — the regex scan over a
+            // 100k-character buffer is sub-millisecond and AppKit's
+            // editing transactions batch attribute updates without
+            // forcing layout each iteration.
+            applyEmbedHighlighting()
         }
 
         // MARK: - Scroll routing
@@ -313,5 +426,34 @@ struct NoteEditorView: NSViewRepresentable {
             textView.scrollRangeToVisible(range)
             textView.setSelectedRange(range)
         }
+    }
+}
+
+/// `NSTextView` subclass that intercepts Cmd+E for the
+/// embed-preview popover (#188). Routes the shortcut to the
+/// coordinator; everything else (typing, selection, VoiceOver,
+/// drag-and-drop, etc.) falls through to NSTextView's native
+/// handling — the rich AT behaviour the editor inherits stays
+/// untouched.
+///
+/// Held by the scroll view's `documentView`; the wrapper sets
+/// `coordinator` after construction so the keyDown handler has
+/// a route back to the SwiftUI layer.
+final class SlateEditorTextView: NSTextView {
+    weak var coordinator: NoteEditorView.Coordinator?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Cmd+E: open the embed-preview popover for the embed
+        // under the cursor. Falls through to NSTextView's
+        // default (which has its own Cmd+E meaning depending on
+        // the responder chain) when no embed is at the cursor.
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+            event.charactersIgnoringModifiers == "e"
+        {
+            if coordinator?.openEmbedPreviewAtCursor() == true {
+                return true
+            }
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }

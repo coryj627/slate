@@ -24,6 +24,16 @@ struct NoteContentView: View {
     /// vestibular-sensitive users see no movement.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Focus-return target for the embed-preview popover (#188).
+    /// The popover's content + dismiss path set this to `.editor`
+    /// so VoiceOver / keyboard focus returns to the editor after
+    /// dismissal — WCAG 2.4.3 + 2.1.2.
+    @AccessibilityFocusState private var popoverFocusReturn: PopoverFocusTarget?
+
+    enum PopoverFocusTarget: Hashable {
+        case editor
+    }
+
     var body: some View {
         Group {
             if let error = appState.noteLoadError {
@@ -111,9 +121,56 @@ struct NoteContentView: View {
             onSave: { [appState] in appState.saveCurrentNote() },
             scrollAnchorRequest: appState.scrollAnchorRequest.eraseToAnyPublisher(),
             lineScrollRequest: appState.lineScrollRequest.eraseToAnyPublisher(),
-            cursorByteOffsetRequest: appState.cursorByteOffsetRequest.eraseToAnyPublisher()
+            cursorByteOffsetRequest: appState.cursorByteOffsetRequest.eraseToAnyPublisher(),
+            previewEmbedAtCursor: { [appState] target in
+                appState.requestEmbedPreview(target: target)
+            }
         )
         .onAppear { _ = text }
+        .accessibilityFocused($popoverFocusReturn, equals: .editor)
+        // Embed-preview popover (#188): bound to AppState's
+        // `pendingEmbedPreview`. Cmd+E in the editor populates it
+        // via the closure above; the popover dismisses via the
+        // binding setter (click outside, Esc) or "Jump to source"
+        // (which closes + navigates). Each dismissal path sets
+        // `popoverFocusReturn = .editor` so VoiceOver/keyboard
+        // focus returns to the editor (WCAG 2.4.3 + 2.1.2).
+        .popover(
+            isPresented: Binding(
+                get: { appState.pendingEmbedPreview != nil },
+                set: { isShown in
+                    if !isShown {
+                        appState.dismissEmbedPreview()
+                        popoverFocusReturn = .editor
+                    }
+                }
+            ),
+            arrowEdge: .top
+        ) {
+            if let preview = appState.pendingEmbedPreview {
+                VStack(alignment: .leading, spacing: 8) {
+                    EmbedView(
+                        resolution: preview.resolution,
+                        jumpToSourceAction: { [appState] target in
+                            appState.dismissEmbedPreview()
+                            popoverFocusReturn = .editor
+                            appState.openEmbedTarget(target)
+                        }
+                    )
+                    Button("Close") {
+                        appState.dismissEmbedPreview()
+                        popoverFocusReturn = .editor
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityHint(
+                        "Close the embed preview. Focus returns to the editor."
+                    )
+                }
+                .frame(minWidth: 420, idealWidth: 480, maxWidth: 640)
+                .padding(12)
+                .accessibilityLabel("Embed preview for \(preview.target).")
+            }
+        }
     }
 
     // MARK: - Helpers

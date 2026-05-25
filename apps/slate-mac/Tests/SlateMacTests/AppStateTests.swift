@@ -1008,6 +1008,90 @@ final class AppStateTests: XCTestCase {
         XCTAssertNotNil(state.currentNoteEmbedResolutions["b-target"])
     }
 
+    func testRequestEmbedPreviewSurfacesCachedResolution() async throws {
+        let vault = tempDir.appendingPathComponent("embed-preview-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[target]]\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("target body\n".utf8)
+            .write(to: vault.appendingPathComponent("target.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        XCTAssertNil(state.pendingEmbedPreview)
+        state.requestEmbedPreview(target: "target")
+        XCTAssertEqual(state.pendingEmbedPreview?.target, "target")
+    }
+
+    func testRequestEmbedPreviewWithUnknownTargetIsNoOp() async throws {
+        // The cache miss path should not surface a popover —
+        // posting a polite "no embed at cursor" announcement is
+        // what AppState does instead.
+        let vault = tempDir.appendingPathComponent("embed-preview-miss-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[target]]\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("target body\n".utf8)
+            .write(to: vault.appendingPathComponent("target.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        state.requestEmbedPreview(target: "not-in-cache")
+        XCTAssertNil(state.pendingEmbedPreview)
+    }
+
+    func testDismissEmbedPreviewClearsState() async throws {
+        let vault = tempDir.appendingPathComponent("embed-preview-dismiss-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[t]]\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("body\n".utf8)
+            .write(to: vault.appendingPathComponent("t.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        state.requestEmbedPreview(target: "t")
+        XCTAssertNotNil(state.pendingEmbedPreview)
+        state.dismissEmbedPreview()
+        XCTAssertNil(state.pendingEmbedPreview)
+    }
+
+    func testSelectionChangeDismissesEmbedPreview() async throws {
+        let vault = tempDir.appendingPathComponent("embed-preview-transition-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[t]]\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+        try Data("body\n".utf8)
+            .write(to: vault.appendingPathComponent("b.md"))
+        try Data("body\n".utf8)
+            .write(to: vault.appendingPathComponent("t.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        state.requestEmbedPreview(target: "t")
+        XCTAssertNotNil(state.pendingEmbedPreview)
+
+        state.selectedFilePath = "b.md"
+        // Selection change drops the popover state synchronously
+        // — its target may not exist in the new file.
+        XCTAssertNil(state.pendingEmbedPreview)
+    }
+
     func testOpenEmbedTargetNavigatesToTarget() async throws {
         let vault = tempDir.appendingPathComponent("embed-jump-vault")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)

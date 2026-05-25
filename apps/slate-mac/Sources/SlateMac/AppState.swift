@@ -143,6 +143,15 @@ struct SaveConflict: Equatable {
     let currentMtimeMs: Int64
 }
 
+/// Per-incident snapshot for the editor's embed-preview popover
+/// (#188). Carries enough state for the popover to render the
+/// resolved embed without re-querying the backend — the resolution
+/// has already been cached by `loadCurrentNoteEmbedResolutions`.
+struct EmbedPreview: Equatable {
+    let target: String
+    let resolution: EmbedResolution
+}
+
 /// What edit the user was trying to make when a property-edit
 /// `WriteConflict` fired. Carries enough state for the resolve
 /// helpers to re-issue the original edit verbatim.
@@ -404,6 +413,13 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight embed-resolution task so tests can
     /// `await state.embedsLoadTask?.value` for a settled state.
     private(set) var embedsLoadTask: Task<Void, Never>?
+
+    /// Discriminated state for the editor's Cmd+E embed-preview
+    /// popover. The editor's keyDown handler computes the embed
+    /// at cursor and calls `requestEmbedPreview(target:)`; the
+    /// popover dismisses via `dismissEmbedPreview()`. Nil when
+    /// no popover is active.
+    @Published var pendingEmbedPreview: EmbedPreview?
 
     // MARK: Tasks (#113 + #114 — Milestone G UI)
 
@@ -855,6 +871,7 @@ final class AppState: ObservableObject {
             currentOutgoingLinks = []
             currentNoteProperties = []
             currentNoteEmbedResolutions = [:]
+            pendingEmbedPreview = nil
             currentNoteTasks = []
             isLoadingNote = false
             isLoadingLinks = false
@@ -885,6 +902,9 @@ final class AppState: ObservableObject {
         // synchronously so the panel falls back to "not yet
         // resolved" placeholders until the new resolutions land.
         currentNoteEmbedResolutions = [:]
+        // Drop any open embed-preview popover too — its target may
+        // not exist in the new file's embed set.
+        pendingEmbedPreview = nil
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
@@ -1177,6 +1197,7 @@ final class AppState: ObservableObject {
         currentOutgoingLinks = []
         currentNoteProperties = []
         currentNoteEmbedResolutions = [:]
+        pendingEmbedPreview = nil
         embedsLoadError = nil
         linksLoadError = nil
         currentNoteTasks = []
@@ -1543,6 +1564,35 @@ final class AppState: ObservableObject {
     /// point + announcement shape.
     func openEmbedTarget(_ path: String) {
         navigate(to: path, kind: "Opened embed source")
+    }
+
+    /// Pop the editor's Cmd+E embed-preview popover for `target`.
+    /// `target` is the cache key form (target + optional `#heading`
+    /// / `^block` suffix); we look up the already-resolved entry
+    /// in `currentNoteEmbedResolutions` rather than re-resolving.
+    /// No-op when the embed isn't in the cache (e.g. the user
+    /// pressed Cmd+E before the resolutions finished loading).
+    func requestEmbedPreview(target: String) {
+        guard let resolution = currentNoteEmbedResolutions[target] else {
+            postAccessibilityAnnouncement(
+                "No resolved embed at cursor.",
+                priority: .medium
+            )
+            return
+        }
+        pendingEmbedPreview = EmbedPreview(target: target, resolution: resolution)
+        postAccessibilityAnnouncement(
+            "Embed preview opened for \(target).",
+            priority: .medium
+        )
+    }
+
+    /// Dismiss the embed-preview popover. Called by the popover's
+    /// SwiftUI binding when the user clicks outside, presses Esc,
+    /// or activates "Jump to source" (which closes the popover
+    /// and navigates).
+    func dismissEmbedPreview() {
+        pendingEmbedPreview = nil
     }
 
     /// Compose the lookup key for an embed in `currentNoteEmbedResolutions`.
