@@ -202,7 +202,7 @@ pub fn highlight_code(raw: &RawCodeBlock) -> CodeBlock {
         Some(t) => t,
         None => return passthrough_code_block(raw, &language_key),
     };
-    let (tokens, semantic_spans) = walk_tree(&tree, raw.source.as_bytes());
+    let (tokens, semantic_spans) = walk_tree(&tree, raw.source.as_bytes(), &language_key);
 
     CodeBlock {
         source: raw.source.clone(),
@@ -268,13 +268,14 @@ fn passthrough_code_block(raw: &RawCodeBlock, language_key: &str) -> CodeBlock {
 /// and one semantic span per declaration site we recognise. Token
 /// classes are derived from the node's `kind` field — broad bins by
 /// design, since per-language refinement isn't in V1's scope.
-fn walk_tree(tree: &Tree, source: &[u8]) -> (Vec<SyntaxToken>, Vec<SemanticSpan>) {
+fn walk_tree(tree: &Tree, source: &[u8], language: &str) -> (Vec<SyntaxToken>, Vec<SemanticSpan>) {
     let mut tokens: Vec<SyntaxToken> = Vec::new();
     let mut semantic: Vec<SemanticSpan> = Vec::new();
     let mut cursor = tree.walk();
     walk_node(
         tree.root_node(),
         source,
+        language,
         &mut tokens,
         &mut semantic,
         &mut cursor,
@@ -286,18 +287,17 @@ fn walk_tree(tree: &Tree, source: &[u8]) -> (Vec<SyntaxToken>, Vec<SemanticSpan>
 fn walk_node<'a>(
     node: Node<'a>,
     source: &[u8],
+    language: &str,
     tokens: &mut Vec<SyntaxToken>,
     semantic: &mut Vec<SemanticSpan>,
     cursor: &mut tree_sitter::TreeCursor<'a>,
 ) {
-    // Semantic span detection: definition-site nodes for function /
-    // type / variable get an entry pointing at their identifier.
     capture_semantic(node, source, semantic);
 
     let kind_name = node.kind();
     let is_leaf = node.child_count() == 0;
     if is_leaf && !node.is_extra() && !node.is_missing() {
-        if let Some(kind) = classify_node_kind(kind_name) {
+        if let Some(kind) = classify_node_kind(kind_name, language) {
             tokens.push(SyntaxToken {
                 start_byte: node.start_byte() as u32,
                 end_byte: node.end_byte() as u32,
@@ -306,7 +306,6 @@ fn walk_node<'a>(
         }
         return;
     }
-    // Comments are non-leaf nodes in many grammars; still record.
     if matches!(
         kind_name,
         "comment" | "line_comment" | "block_comment" | "doc_comment"
@@ -319,10 +318,8 @@ fn walk_node<'a>(
         return;
     }
     for child in node.children(cursor) {
-        // Build a fresh cursor for each child so the iterator state
-        // doesn't get confused by recursion.
         let mut child_cursor = child.walk();
-        walk_node(child, source, tokens, semantic, &mut child_cursor);
+        walk_node(child, source, language, tokens, semantic, &mut child_cursor);
     }
 }
 
@@ -355,131 +352,282 @@ fn capture_semantic(node: Node, source: &[u8], out: &mut Vec<SemanticSpan>) {
     }
 }
 
-fn classify_node_kind(kind: &str) -> Option<TokenKind> {
-    // Common kinds across grammars. Not exhaustive — anything we
-    // don't recognise stays unclassified (no token emitted), which
-    // means it'll fall through to the editor's default text style.
-    // V1.x refinement can add per-language tables.
-    let lower = kind.to_ascii_lowercase();
-    if lower.contains("string") || lower == "raw_string_literal" {
-        return Some(TokenKind::String);
+/// Audit #247: per-grammar classifier tables replace the previous
+/// substring heuristics (`contains("string")`, `contains("type")`)
+/// that over-matched and under-matched across grammars.
+fn classify_node_kind(kind: &str, language: &str) -> Option<TokenKind> {
+    let result = match language {
+        "rust" | "rs" => classify_rust(kind),
+        "swift" => classify_swift(kind),
+        "python" | "py" => classify_python(kind),
+        "javascript" | "js" => classify_javascript(kind),
+        "typescript" | "ts" | "tsx" => classify_typescript(kind),
+        "json" => classify_json(kind),
+        "yaml" | "yml" => classify_yaml(kind),
+        "bash" | "sh" | "shell" => classify_bash(kind),
+        "sql" => classify_sql(kind),
+        "html" => classify_html(kind),
+        "css" => classify_css(kind),
+        "go" => classify_go(kind),
+        "c" => classify_c(kind),
+        "cpp" | "c++" | "cxx" | "cc" => classify_cpp(kind),
+        "markdown" | "md" => classify_markdown(kind),
+        _ => None,
+    };
+    result.or_else(|| classify_universal(kind))
+}
+
+fn classify_rust(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" | "field_identifier" | "shorthand_field_identifier" => {
+            Some(TokenKind::Identifier)
+        }
+        "type_identifier" | "primitive_type" => Some(TokenKind::Type),
+        "string_content" | "char_literal" | "escape_sequence" => Some(TokenKind::String),
+        "integer_literal" | "float_literal" => Some(TokenKind::Number),
+        "fn" | "let" | "mut" | "const" | "static" | "if" | "else" | "match" | "while" | "for"
+        | "loop" | "return" | "break" | "continue" | "use" | "pub" | "mod" | "struct" | "enum"
+        | "trait" | "impl" | "self" | "Self" | "where" | "async" | "await" | "as" | "in"
+        | "ref" | "move" | "true" | "false" | "crate" | "super" | "dyn" | "type" | "unsafe"
+        | "extern" | "mutable_specifier" => Some(TokenKind::Keyword),
+        _ => None,
     }
-    if lower.contains("number") || lower.contains("integer") || lower.contains("float") {
-        return Some(TokenKind::Number);
+}
+
+fn classify_swift(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "simple_identifier" => Some(TokenKind::Identifier),
+        "type_identifier" => Some(TokenKind::Type),
+        "line_str_text" | "multi_line_str_text" | "escape_sequence" => Some(TokenKind::String),
+        "integer_literal" | "real_literal" => Some(TokenKind::Number),
+        "func" | "let" | "var" | "return" | "if" | "else" | "for" | "while" | "switch" | "case"
+        | "default" | "break" | "continue" | "struct" | "class" | "enum" | "protocol"
+        | "import" | "self" | "Self" | "true" | "false" | "nil" | "guard" | "do" | "try"
+        | "catch" | "throw" | "throws" | "async" | "await" | "in" | "is" | "as" | "typealias"
+        | "static" | "private" | "public" | "internal" | "override" | "init" | "deinit"
+        | "where" | "repeat" => Some(TokenKind::Keyword),
+        _ => None,
     }
-    if lower == "identifier"
-        || lower == "field_identifier"
-        || lower == "shorthand_property_identifier"
-        || lower == "property_identifier"
-    {
-        return Some(TokenKind::Identifier);
+}
+
+fn classify_python(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" => Some(TokenKind::Identifier),
+        "string_start" | "string_content" | "string_end" | "escape_sequence" => {
+            Some(TokenKind::String)
+        }
+        "integer" | "float" => Some(TokenKind::Number),
+        "def" | "class" | "return" | "if" | "elif" | "else" | "for" | "while" | "break"
+        | "continue" | "import" | "from" | "as" | "with" | "try" | "except" | "finally"
+        | "raise" | "pass" | "del" | "and" | "or" | "not" | "in" | "is" | "lambda" | "yield"
+        | "global" | "nonlocal" | "assert" | "True" | "False" | "None" | "async" | "await" => {
+            Some(TokenKind::Keyword)
+        }
+        _ => None,
     }
-    if lower.contains("type") && lower.ends_with("identifier") {
-        return Some(TokenKind::Type);
+}
+
+fn classify_javascript(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier"
+        | "property_identifier"
+        | "shorthand_property_identifier"
+        | "shorthand_property_identifier_pattern" => Some(TokenKind::Identifier),
+        "string_fragment" | "escape_sequence" | "template_fragment" => Some(TokenKind::String),
+        "number" => Some(TokenKind::Number),
+        "function" | "let" | "const" | "var" | "return" | "if" | "else" | "for" | "while"
+        | "do" | "switch" | "case" | "default" | "break" | "continue" | "class" | "extends"
+        | "new" | "delete" | "typeof" | "instanceof" | "void" | "in" | "of" | "import"
+        | "export" | "from" | "as" | "try" | "catch" | "finally" | "throw" | "yield" | "async"
+        | "await" | "true" | "false" | "null" | "undefined" | "this" | "super" => {
+            Some(TokenKind::Keyword)
+        }
+        _ => None,
     }
-    if matches!(
-        kind,
-        "fn" | "let"
-            | "mut"
-            | "const"
-            | "static"
-            | "if"
-            | "else"
-            | "match"
-            | "while"
-            | "for"
-            | "loop"
-            | "return"
-            | "break"
-            | "continue"
-            | "use"
-            | "pub"
-            | "mod"
-            | "struct"
-            | "enum"
-            | "trait"
-            | "impl"
-            | "self"
-            | "Self"
-            | "where"
-            | "async"
-            | "await"
-            | "import"
-            | "from"
-            | "as"
-            | "def"
-            | "class"
-            | "func"
-            | "var"
-            | "true"
-            | "false"
-            | "null"
-            | "None"
-            | "True"
-            | "False"
-            | "package"
-            | "interface"
-            | "type"
-            | "switch"
-            | "case"
-            | "default"
-            | "do"
-            | "try"
-            | "except"
-            | "finally"
-            | "raise"
-            | "throw"
-            | "throws"
-            | "extends"
-            | "implements"
-            | "abstract"
-            | "private"
-            | "protected"
-            | "public"
-            | "static_keyword"
-            | "yield"
-            | "with"
-            | "in"
-            | "is"
-            | "and"
-            | "or"
-            | "not"
-            | "new"
-            | "delete"
-            | "void"
-            | "let_keyword"
-    ) {
-        return Some(TokenKind::Keyword);
+}
+
+fn classify_typescript(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier"
+        | "property_identifier"
+        | "shorthand_property_identifier"
+        | "shorthand_property_identifier_pattern" => Some(TokenKind::Identifier),
+        "type_identifier" => Some(TokenKind::Type),
+        "string_fragment" | "escape_sequence" | "template_fragment" => Some(TokenKind::String),
+        "number" => Some(TokenKind::Number),
+        "string" | "boolean" | "void" | "any" | "never" | "unknown" | "object" | "symbol"
+        | "bigint" => Some(TokenKind::Type),
+        "function" | "let" | "const" | "var" | "return" | "if" | "else" | "for" | "while"
+        | "do" | "switch" | "case" | "default" | "break" | "continue" | "class" | "extends"
+        | "implements" | "interface" | "new" | "delete" | "typeof" | "instanceof" | "in" | "of"
+        | "import" | "export" | "from" | "as" | "try" | "catch" | "finally" | "throw" | "yield"
+        | "async" | "await" | "true" | "false" | "null" | "undefined" | "this" | "super"
+        | "abstract" | "declare" | "enum" | "type" | "namespace" | "module" | "readonly"
+        | "private" | "protected" | "public" | "static" | "keyof" | "infer" => {
+            Some(TokenKind::Keyword)
+        }
+        _ => None,
     }
-    if lower.contains("operator")
-        || matches!(
-            kind,
-            "->" | "=>"
-                | "=="
-                | "!="
-                | "+"
-                | "-"
-                | "*"
-                | "/"
-                | "%"
-                | "="
-                | "<"
-                | ">"
-                | "&"
-                | "|"
-                | "^"
-                | "~"
-        )
-    {
-        return Some(TokenKind::Operator);
+}
+
+fn classify_json(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "string_content" => Some(TokenKind::String),
+        "number" => Some(TokenKind::Number),
+        "true" | "false" | "null" => Some(TokenKind::Keyword),
+        _ => None,
     }
-    if matches!(
-        kind,
-        "(" | ")" | "{" | "}" | "[" | "]" | "," | ";" | ":" | "::" | "." | "?"
-    ) {
-        return Some(TokenKind::Punctuation);
+}
+
+fn classify_yaml(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "string_scalar" | "double_quote_scalar" | "single_quote_scalar" | "block_scalar" => {
+            Some(TokenKind::String)
+        }
+        "integer_scalar" | "float_scalar" => Some(TokenKind::Number),
+        "boolean_scalar" | "null_scalar" => Some(TokenKind::Keyword),
+        "anchor" | "alias" | "tag" => Some(TokenKind::Identifier),
+        _ => None,
     }
-    None
+}
+
+fn classify_bash(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "variable_name" | "word" | "special_variable_name" => Some(TokenKind::Identifier),
+        "string_content" | "raw_string" | "ansii_c_string" | "heredoc_body" => {
+            Some(TokenKind::String)
+        }
+        "number" => Some(TokenKind::Number),
+        "if" | "then" | "else" | "elif" | "fi" | "for" | "while" | "do" | "done" | "case"
+        | "esac" | "in" | "function" | "return" | "local" | "export" | "declare" | "readonly"
+        | "unset" => Some(TokenKind::Keyword),
+        _ => None,
+    }
+}
+
+fn classify_sql(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" => Some(TokenKind::Identifier),
+        "literal" => Some(TokenKind::Number),
+        k if k.starts_with("keyword_") => Some(TokenKind::Keyword),
+        _ => None,
+    }
+}
+
+fn classify_html(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "tag_name" => Some(TokenKind::Keyword),
+        "attribute_name" => Some(TokenKind::Identifier),
+        "attribute_value" | "text" => Some(TokenKind::String),
+        _ => None,
+    }
+}
+
+fn classify_css(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" | "class_name" | "id_name" | "property_name" | "feature_name" => {
+            Some(TokenKind::Identifier)
+        }
+        "tag_name" | "nesting_selector" | "universal_selector" | "important" => {
+            Some(TokenKind::Keyword)
+        }
+        "string_value" | "plain_value" => Some(TokenKind::String),
+        "integer_value" | "float_value" | "color_value" => Some(TokenKind::Number),
+        "unit" => Some(TokenKind::Type),
+        _ => None,
+    }
+}
+
+fn classify_go(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" | "field_identifier" | "package_identifier" => Some(TokenKind::Identifier),
+        "type_identifier" => Some(TokenKind::Type),
+        "interpreted_string_literal_content"
+        | "raw_string_literal_content"
+        | "rune_literal"
+        | "escape_sequence" => Some(TokenKind::String),
+        "int_literal" | "float_literal" | "imaginary_literal" => Some(TokenKind::Number),
+        "package" | "import" | "func" | "return" | "if" | "else" | "for" | "range" | "switch"
+        | "case" | "default" | "break" | "continue" | "go" | "defer" | "select" | "chan"
+        | "map" | "struct" | "interface" | "type" | "const" | "var" | "fallthrough" | "goto"
+        | "true" | "false" | "nil" | "iota" => Some(TokenKind::Keyword),
+        _ => None,
+    }
+}
+
+fn classify_c(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" | "field_identifier" => Some(TokenKind::Identifier),
+        "type_identifier" | "primitive_type" | "sized_type_specifier" => Some(TokenKind::Type),
+        "string_content" | "char_literal" | "escape_sequence" | "system_lib_string" => {
+            Some(TokenKind::String)
+        }
+        "number_literal" => Some(TokenKind::Number),
+        "if" | "else" | "for" | "while" | "do" | "switch" | "case" | "default" | "break"
+        | "continue" | "return" | "goto" | "struct" | "union" | "enum" | "typedef" | "sizeof"
+        | "static" | "extern" | "const" | "volatile" | "inline" | "register" | "auto" | "void"
+        | "signed" | "unsigned" | "true" | "false" | "NULL" => Some(TokenKind::Keyword),
+        _ => None,
+    }
+}
+
+fn classify_cpp(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "identifier" | "field_identifier" | "namespace_identifier" | "destructor_name" => {
+            Some(TokenKind::Identifier)
+        }
+        "type_identifier" | "primitive_type" | "sized_type_specifier" | "auto" => {
+            Some(TokenKind::Type)
+        }
+        "string_content" | "char_literal" | "escape_sequence" | "raw_string_content"
+        | "system_lib_string" => Some(TokenKind::String),
+        "number_literal" => Some(TokenKind::Number),
+        "if" | "else" | "for" | "while" | "do" | "switch" | "case" | "default" | "break"
+        | "continue" | "return" | "goto" | "struct" | "class" | "union" | "enum" | "typedef"
+        | "sizeof" | "static" | "extern" | "const" | "volatile" | "inline" | "virtual"
+        | "override" | "final" | "explicit" | "friend" | "namespace" | "using" | "template"
+        | "typename" | "public" | "private" | "protected" | "new" | "delete" | "throw" | "try"
+        | "catch" | "noexcept" | "nullptr" | "true" | "false" | "this" | "operator"
+        | "constexpr" | "static_cast" | "dynamic_cast" | "reinterpret_cast" | "const_cast" => {
+            Some(TokenKind::Keyword)
+        }
+        _ => None,
+    }
+}
+
+fn classify_markdown(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "inline" | "text" => Some(TokenKind::Other("text".into())),
+        "atx_h1_marker"
+        | "atx_h2_marker"
+        | "atx_h3_marker"
+        | "atx_h4_marker"
+        | "atx_h5_marker"
+        | "atx_h6_marker"
+        | "setext_h1_underline"
+        | "setext_h2_underline"
+        | "thematic_break" => Some(TokenKind::Keyword),
+        "list_marker_minus"
+        | "list_marker_plus"
+        | "list_marker_star"
+        | "list_marker_dot"
+        | "list_marker_parenthesis"
+        | "code_span_delimiter"
+        | "fenced_code_block_delimiter" => Some(TokenKind::Punctuation),
+        _ => None,
+    }
+}
+
+fn classify_universal(kind: &str) -> Option<TokenKind> {
+    match kind {
+        "->" | "=>" | "==" | "!=" | ">=" | "<=" | "&&" | "||" | "+=" | "-=" | "*=" | "/="
+        | "%=" | "&=" | "|=" | "^=" | "<<" | ">>" | "++" | "--" | "**" | ":=" | "+" | "-" | "/"
+        | "%" | "=" | "!" | "~" | "*" | "&" | "|" | "^" | "<" | ">" => Some(TokenKind::Operator),
+        "\"" | "'" | "`" => Some(TokenKind::String),
+        "(" | ")" | "{" | "}" | "[" | "]" | "," | ";" | ":" | "::" | "." | "?" | "</" | "#"
+        | "@" | "\\" | "$" => Some(TokenKind::Punctuation),
+        _ => None,
+    }
 }
 
 fn line_of_offset(source: &str, off: usize) -> u32 {
@@ -553,22 +701,6 @@ mod tests {
     }
 
     #[test]
-    fn rust_grammar_recognises_fn_keyword() {
-        let raw = RawCodeBlock {
-            source: "fn foo() -> i32 { 0 }".to_string(),
-            language: Some("rust".to_string()),
-            line: 1,
-            byte_offset: 0,
-        };
-        let block = highlight_code(&raw);
-        let kinds: Vec<&TokenKind> = block.tokens.iter().map(|t| &t.kind).collect();
-        assert!(
-            kinds.iter().any(|k| matches!(k, TokenKind::Keyword)),
-            "expected a Keyword token in rust output; got {kinds:?}"
-        );
-    }
-
-    #[test]
     fn rust_grammar_emits_function_semantic_span() {
         let raw = RawCodeBlock {
             source: "fn my_function() {}".to_string(),
@@ -586,43 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn python_grammar_recognises_def() {
-        let raw = RawCodeBlock {
-            source: "def foo():\n    return 1\n".to_string(),
-            language: Some("python".to_string()),
-            line: 1,
-            byte_offset: 0,
-        };
-        let block = highlight_code(&raw);
-        // Sanity: any token emitted. Per-language depth (catching
-        // `def` specifically vs `keyword`) is V1.x territory.
-        assert!(!block.tokens.is_empty());
-    }
-
-    #[test]
-    fn json_grammar_recognises_string_and_number() {
-        let raw = RawCodeBlock {
-            source: r#"{"key": 42}"#.to_string(),
-            language: Some("json".to_string()),
-            line: 1,
-            byte_offset: 0,
-        };
-        let block = highlight_code(&raw);
-        let kinds: Vec<&TokenKind> = block.tokens.iter().map(|t| &t.kind).collect();
-        assert!(
-            kinds.iter().any(|k| matches!(k, TokenKind::String)),
-            "expected String token; got {kinds:?}"
-        );
-        assert!(
-            kinds.iter().any(|k| matches!(k, TokenKind::Number)),
-            "expected Number token; got {kinds:?}"
-        );
-    }
-
-    #[test]
     fn no_panic_on_malformed_source() {
-        // Truncated, syntactically broken — tree-sitter has to keep
-        // going. We just want no panic and some token output.
         let raw = RawCodeBlock {
             source: "fn (".to_string(),
             language: Some("rust".to_string()),
@@ -632,14 +728,9 @@ mod tests {
         let _block = highlight_code(&raw);
     }
 
-    /// Audit #245 M3: source above the size cap must skip tree-
-    /// sitter and emit one `Other("oversized")` token. Pinning a
-    /// cap matters for two reasons: (a) memory bound on the token
-    /// vec, (b) per-call latency bound — tree-sitter on a 10 MiB
-    /// adversarial block could otherwise hang for seconds.
     #[test]
     fn oversized_block_returns_single_oversized_token() {
-        let big = "fn foo() {}\n".repeat(30_000); // > 256 KiB
+        let big = "fn foo() {}\n".repeat(30_000);
         assert!(big.len() > CODE_BLOCK_MAX_BYTES);
         let raw = RawCodeBlock {
             source: big.clone(),
@@ -654,5 +745,229 @@ mod tests {
             other => panic!("expected Other(\"oversized\"); got {other:?}"),
         }
         assert!(block.semantic_spans.is_empty());
+    }
+
+    // --- Per-grammar token classification tests (audit #247) ---
+
+    fn has_kind(block: &CodeBlock, kind: &TokenKind) -> bool {
+        block
+            .tokens
+            .iter()
+            .any(|t| std::mem::discriminant(&t.kind) == std::mem::discriminant(kind))
+    }
+
+    #[test]
+    fn grammar_rust() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "fn foo(x: i32) -> String { let s = \"hello\"; return s; }".into(),
+            language: Some("rust".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::Type));
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_swift_simple_identifier() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "func foo(x: Int) -> String { let s = \"hello\"; return s }".into(),
+            language: Some("swift".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(
+            has_kind(&block, &TokenKind::Identifier),
+            "Swift's simple_identifier must classify as Identifier"
+        );
+        assert!(has_kind(&block, &TokenKind::Type));
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_python() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "def foo(x):\n    s = \"hello\"\n    return s\n".into(),
+            language: Some("python".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_javascript() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "function foo(x) { let s = \"hello\"; return s; }\nconst n = 42;".into(),
+            language: Some("javascript".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::String));
+        assert!(has_kind(&block, &TokenKind::Number));
+    }
+
+    #[test]
+    fn grammar_typescript() {
+        let block = highlight_code(&RawCodeBlock {
+            source:
+                "function foo(x: number): string { return \"hi\"; }\ninterface Bar { val: string }"
+                    .into(),
+            language: Some("typescript".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(
+            has_kind(&block, &TokenKind::Type),
+            "TypeScript type_identifier must classify as Type"
+        );
+        assert!(has_kind(&block, &TokenKind::String));
+        assert!(has_kind(&block, &TokenKind::Number));
+    }
+
+    #[test]
+    fn grammar_json() {
+        let block = highlight_code(&RawCodeBlock {
+            source: r#"{"key": 42, "flag": true}"#.into(),
+            language: Some("json".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::String));
+        assert!(has_kind(&block, &TokenKind::Number));
+        assert!(has_kind(&block, &TokenKind::Keyword));
+    }
+
+    #[test]
+    fn grammar_yaml() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "key: value\nnumber: 42\nbool: true".into(),
+            language: Some("yaml".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::String));
+        assert!(has_kind(&block, &TokenKind::Number));
+        assert!(has_kind(&block, &TokenKind::Keyword));
+    }
+
+    #[test]
+    fn grammar_bash() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "if [ $foo = \"hello\" ]; then\n  echo $foo\nfi".into(),
+            language: Some("bash".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_html() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "<div class=\"box\"><p>Hello</p></div>".into(),
+            language: Some("html".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(
+            has_kind(&block, &TokenKind::Keyword),
+            "HTML tag_name must classify as Keyword"
+        );
+        assert!(
+            has_kind(&block, &TokenKind::Identifier),
+            "HTML attribute_name must classify as Identifier"
+        );
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_css() {
+        let block = highlight_code(&RawCodeBlock {
+            source: ".box { color: red; }".into(),
+            language: Some("css".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_go() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "package main\nfunc foo(x int) string { s := \"hello\"; return s }".into(),
+            language: Some("go".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::Type));
+        assert!(has_kind(&block, &TokenKind::String));
+    }
+
+    #[test]
+    fn grammar_c() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "int foo(int x) { char* s = \"hello\"; return 0; }".into(),
+            language: Some("c".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Type));
+        assert!(has_kind(&block, &TokenKind::String));
+        assert!(has_kind(&block, &TokenKind::Number));
+    }
+
+    #[test]
+    fn grammar_cpp() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "class Bar { public: double val; };".into(),
+            language: Some("cpp".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(has_kind(&block, &TokenKind::Keyword));
+        assert!(has_kind(&block, &TokenKind::Type));
+        assert!(has_kind(&block, &TokenKind::Identifier));
+    }
+
+    #[test]
+    fn grammar_sql() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "SELECT id, name FROM users WHERE age > 18;".into(),
+            language: Some("sql".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(
+            has_kind(&block, &TokenKind::Keyword),
+            "SQL keyword_* nodes must classify as Keyword"
+        );
+        assert!(has_kind(&block, &TokenKind::Identifier));
+        assert!(has_kind(&block, &TokenKind::Number));
+    }
+
+    #[test]
+    fn grammar_markdown() {
+        let block = highlight_code(&RawCodeBlock {
+            source: "# Hello\n\n- item\n- item2".into(),
+            language: Some("markdown".into()),
+            line: 1,
+            byte_offset: 0,
+        });
+        assert!(!block.tokens.is_empty());
     }
 }
