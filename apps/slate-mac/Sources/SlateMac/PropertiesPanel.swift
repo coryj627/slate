@@ -1,25 +1,21 @@
 import Foundation
 import SwiftUI
 
-/// Frontmatter properties sidebar section. Read-only display of the
-/// currently-selected note's YAML frontmatter as a typed list.
+/// Frontmatter properties sidebar section. Editable per-row via
+/// `PropertyEditorRow`, with header affordances for adding a new
+/// property and renaming a key across the whole vault.
 ///
 /// Sits below `OutlineSidebar`-style sections and above
 /// `BacklinksPanel` / `OutgoingLinksPanel` in the sidebar column.
-/// Each row's accessibility label includes a type cue ("Property
-/// <key>: <value>", "Property <key>, list of N: …", etc.) so
-/// VoiceOver users hear what kind of data they're navigating
-/// without having to inspect the visual style.
 struct PropertiesPanel: View {
     @EnvironmentObject private var appState: AppState
     @State private var isExpanded = true
 
     var body: some View {
-        // Hide entirely when no note is selected OR when the
-        // currently-selected note has no frontmatter. EmptyView
-        // removes the panel from the AX tree so VoiceOver doesn't
-        // enumerate an empty section.
-        if appState.selectedFilePath == nil || appState.currentNoteProperties.isEmpty {
+        // Hide entirely when no note is selected. We keep the panel
+        // visible (rather than EmptyView) when the note has no
+        // properties yet — the Add button needs to be reachable.
+        if appState.selectedFilePath == nil {
             EmptyView()
         } else {
             DisclosureGroup(isExpanded: $isExpanded) {
@@ -29,79 +25,83 @@ struct PropertiesPanel: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
+            .keyboardShortcut(KeyEquivalent("r"), modifiers: [.command, .shift])
+            // Hidden trigger for Cmd+Shift+R when the panel has
+            // keyboard focus — opens the bulk-rename sheet. The
+            // visible "Bulk rename" button below is the discoverable
+            // surface; this shortcut is for power users.
+            .background(
+                Button("") {
+                    appState.isBulkRenameSheetOpen = true
+                }
+                .keyboardShortcut(KeyEquivalent("r"), modifiers: [.command, .shift])
+                .opacity(0)
+                .accessibilityHidden(true)
+            )
         }
     }
 
     private var header: some View {
         let count = appState.currentNoteProperties.count
         let suffix = count == 1 ? "item" : "items"
-        return Text("Properties, \(count) \(suffix)")
-            .font(.headline)
-            .accessibilityAddTraits(.isHeader)
+        return HStack {
+            Text("Properties, \(count) \(suffix)")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
+            Button {
+                appState.isAddPropertySheetOpen = true
+            } label: {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Add property")
+            .accessibilityLabel("Add property")
+            .disabled(appState.loadedFilePath == nil)
+            Button {
+                appState.isBulkRenameSheetOpen = true
+            } label: {
+                Image(systemName: "rectangle.2.swap")
+            }
+            .buttonStyle(.borderless)
+            .help("Rename property across the vault")
+            .accessibilityLabel("Rename property across the vault")
+            .disabled(appState.currentSession == nil)
+        }
     }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(appState.currentNoteProperties.enumerated()), id: \.offset) {
-                _,
-                property in
-                PropertyRow(property: property)
+            if appState.currentNoteProperties.isEmpty {
+                // WCAG 2.5.3: the speech-control label has to contain
+                // the visible string verbatim so a user saying the
+                // sentence triggers the same element.
+                Text("No properties yet. Add one to start.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
+                    .accessibilityLabel("No properties yet. Add one to start.")
+            } else if let path = appState.loadedFilePath {
+                ForEach(Array(appState.currentNoteProperties.enumerated()), id: \.offset) {
+                    _,
+                    property in
+                    PropertyEditorRow(
+                        property: property,
+                        path: path,
+                        vaultRoot: appState.currentVaultURL
+                    )
+                }
             }
         }
     }
 }
 
-/// Single property row. Split into its own view so the panel can
-/// keep type-specific formatting localized.
-///
-/// Wikilink rows render as static text rather than buttons. The
-/// previous shape wrapped wikilink rows in a `Button` with hint
-/// "Opens the linked note." but the activation path hard-coded
-/// `isUnresolved: true`, so every press announced "<target> is
-/// unresolved. Cannot open." — the hint was a promise the UI
-/// couldn't keep (WCAG 2.5.3 label-in-name concern, #90). Until a
-/// real wikilink resolver lands for frontmatter values, we drop
-/// the button and let the type-cued accessibility label
-/// ("Property X, link to Y") tell the user what the row is
-/// without overpromising activation.
-private struct PropertyRow: View {
-    let property: Property
-
-    var body: some View {
-        let display = PropertyValueDisplay.decode(
-            kind: property.kind,
-            valueJson: property.valueJson
-        )
-        rowContent(display: display)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(display.accessibilityLabel(for: property.key))
-    }
-
-    private func rowContent(display: PropertyValueDisplay) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(property.key)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.primary)
-            // No lineLimit: property values are user-authored data
-            // (a sentence-long description, a long list, a wikilink
-            // path, etc.). At large Dynamic Type sizes the previous
-            // `.lineLimit(3)` truncated below the WCAG 1.4.4 threshold
-            // for sighted users (`.help()` tooltip helps mouse users
-            // but not keyboard-only ones). Let it wrap.
-            Text(display.visibleText)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
-        .help(display.tooltip)
-    }
-}
-
 /// Decoded view-model for one property: the human-readable display
 /// text, an accessibility label that includes a type cue, and the
-/// optional wikilink target if the property is a wikilink (which
-/// drives the row's button activation).
+/// optional wikilink target if the property is a wikilink.
+///
+/// Used by `PropertyEditorRow` (for the editor's pre-fill draft)
+/// and the AX label.
 struct PropertyValueDisplay {
     let visibleText: String
     let tooltip: String
@@ -236,12 +236,6 @@ struct PropertyValueDisplay {
     }
 
     private static func formatDatetime(_ raw: String) -> String {
-        // ISO 8601 covers `YYYY-MM-DDTHH:MM:SS[Z|±HH:MM]`. Try the
-        // strictest formatter first; fall back to a relaxed parse
-        // for Z-less local times like `2024-01-02T03:04:05` — those
-        // are interpreted as `TimeZone.current` per the YAML
-        // frontmatter convention (the user typed them; if they
-        // wanted UTC, they would have added the `Z`).
         if let date = Self.isoFormatter.date(from: raw) {
             return Self.datetimeFormatter.string(from: date)
         }
@@ -252,14 +246,7 @@ struct PropertyValueDisplay {
     }
 
     // Cached formatters: DateFormatter / ISO8601DateFormatter are
-    // expensive to construct (CFLocale lookups, ICU init), and the
-    // Properties Panel re-decodes on every selection change.
-    // Cached as `static let` so all rows in a vault session reuse
-    // the same instances.
-    //
-    // Thread safety: DateFormatter's `date(from:)` /
-    // `string(from:)` are documented thread-safe on macOS 10.9+ and
-    // iOS 7+; we read-only after construction so this is fine.
+    // expensive to construct (CFLocale lookups, ICU init).
     private static let dateParser: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"

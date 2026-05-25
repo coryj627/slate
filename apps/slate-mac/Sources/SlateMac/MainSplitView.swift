@@ -226,6 +226,41 @@ struct MainSplitView: View {
                 "Save changes to \(name)?"
             )
         }
+        // Property-edit conflict alert. Mirrors the editor-save
+        // conflict alert above but scopes the message + actions to
+        // a single key edit (Milestone I / #168). Same three-button
+        // shape so VoiceOver users learn one mental model.
+        .alert(
+            "Property edit blocked",
+            isPresented: propertyEditConflictPresented,
+            presenting: appState.currentPropertyEditConflict
+        ) { conflict in
+            Button("Keep mine") {
+                appState.resolvePropertyEditConflictKeepMine()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint(
+                "Re-apply your property edit, overwriting the external change."
+            )
+            Button("Reload from disk", role: .destructive) {
+                appState.resolvePropertyEditConflictReloadFromDisk()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint(
+                "Discard your property edit and reload the note from disk."
+            )
+            Button("Cancel", role: .cancel) {
+                appState.resolvePropertyEditConflictCancel()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint(
+                "Close this dialog. The properties panel stays as it was."
+            )
+        } message: { conflict in
+            Text(
+                "\(filename(of: conflict.path)) was modified outside the editor while you were editing the `\(conflict.key)` property. Choose how to resolve."
+            )
+        }
         .sheet(isPresented: $appState.isTemplatePickerOpen) {
             TemplatePicker()
                 .environmentObject(appState)
@@ -236,6 +271,14 @@ struct MainSplitView: View {
         }
         .sheet(isPresented: $appState.isTasksReviewOpen) {
             TasksReviewView()
+                .environmentObject(appState)
+        }
+        .sheet(isPresented: $appState.isAddPropertySheetOpen) {
+            AddPropertySheet()
+                .environmentObject(appState)
+        }
+        .sheet(isPresented: $appState.isBulkRenameSheetOpen) {
+            BulkRenameSheet()
                 .environmentObject(appState)
         }
         .onAppear {
@@ -267,6 +310,17 @@ struct MainSplitView: View {
             set: { presented in
                 if !presented {
                     appState.currentSaveConflict = nil
+                }
+            }
+        )
+    }
+
+    private var propertyEditConflictPresented: Binding<Bool> {
+        Binding(
+            get: { appState.currentPropertyEditConflict != nil },
+            set: { presented in
+                if !presented {
+                    appState.currentPropertyEditConflict = nil
                 }
             }
         )
