@@ -37,7 +37,12 @@ tree-sitter-md = "0.5"            # `tree-sitter-markdown` was renamed `tree-sit
 tree-sitter-yaml = "0.7"
 tree-sitter-json = "0.24"
 tree-sitter-bash = "0.25"
-tree-sitter-sequel = "0.3"        # `tree-sitter-sql` 0.0.2 pins tree-sitter 0.19; sequel is the modern SQL grammar
+tree-sitter-sequel = "0.3"        # Audit #248: third-party SQL grammar (maintainer: derekstride, not
+                                   # the tree-sitter org). Used because `tree-sitter-sql` 0.0.2 pins
+                                   # tree-sitter 0.19, incompatible with the 0.26 all other grammars use.
+                                   # Monitor for abandonment; long-term, upstreaming a 0.26 update to
+                                   # `tree-sitter-sql` would eliminate this dependency.
+                                   # Pinned test: `sql_grammar_keyword_prefix_convention` in code.rs.
 tree-sitter-html = "0.23"
 tree-sitter-css = "0.25"
 tree-sitter-go = "0.25"
