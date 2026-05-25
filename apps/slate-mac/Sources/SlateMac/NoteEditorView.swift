@@ -257,8 +257,16 @@ struct NoteEditorView: NSViewRepresentable {
             let fullRange = NSRange(location: 0, length: nsSource.length)
             let spans = findEditorEmbedSpans(in: source)
             embedSpans = spans
+            // Do NOT remove `.foregroundColor` here. Earlier shipping
+            // applied a foreground color for the embed highlight; audit
+            // #207 changed the highlight to underline-only, and the
+            // foreground-color stripping that lived alongside the old
+            // apply path stayed behind. Removing the attribute every
+            // pass blew away the dynamic `NSColor.textColor` AppKit
+            // stamps onto typed text, which falls back to a static
+            // black under dark mode (issue #226 — text invisible
+            // against the dark editor background, WCAG 1.4.3 fail).
             storage.beginEditing()
-            storage.removeAttribute(.foregroundColor, range: fullRange)
             storage.removeAttribute(.underlineStyle, range: fullRange)
             storage.removeAttribute(.underlineColor, range: fullRange)
             let attrs: [NSAttributedString.Key: Any] = [
