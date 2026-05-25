@@ -537,6 +537,26 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// Resolve one `![[…]]` embed into the text or bytes the UI
+    /// needs to render. Note targets recurse up to depth 3; deeper
+    /// embeds surface as `Unresolved { DepthLimitReached }`.
+    pub fn resolve_embed(
+        &self,
+        host_path: String,
+        target: String,
+    ) -> Result<EmbedResolution, VaultError> {
+        let resolution = self.inner.resolve_embed(&host_path, &target)?;
+        Ok(resolution.into())
+    }
+
+    /// Read a binary attachment from the vault. Used by the read-
+    /// pane image preview + future "open original" / copy flows.
+    /// Returns the raw bytes alongside an inferred MIME type.
+    pub fn read_attachment(&self, path: String) -> Result<AttachmentBytes, VaultError> {
+        let attachment = self.inner.read_attachment(&path)?;
+        Ok(attachment.into())
+    }
+
     /// Render the template at `template_path` against `context`. The
     /// host reads `body` and parks the editor's cursor at
     /// `cursor_byte_offset` if it's `Some(_)`.
@@ -1228,6 +1248,177 @@ impl From<core::RenameFailureKind> for RenameFailureKind {
             }
             core::RenameFailureKind::Cancelled => RenameFailureKind::Cancelled,
             core::RenameFailureKind::Other => RenameFailureKind::Other,
+        }
+    }
+}
+
+// --- Embed resolution (Milestone J / #185) ---------------------------
+
+/// Raw bytes returned by `read_attachment`. Mirrors
+/// `slate_core::AttachmentBytes`. `bytes` crosses FFI as `Data`
+/// (Swift) / `ByteArray` (Kotlin); UI uses it directly for image
+/// rendering.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AttachmentBytes {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+}
+
+impl From<core::AttachmentBytes> for AttachmentBytes {
+    fn from(a: core::AttachmentBytes) -> Self {
+        Self {
+            bytes: a.bytes,
+            mime: a.mime,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::EmbedResolution`. Variants carry the
+/// same data the resolver produces — including the pre-resolved
+/// `nested` tree on `FullNote` / `Section` so the UI never needs
+/// to recurse manually. Recursive via `NestedEmbed`, the same
+/// pattern `PropertyValue::List` validated for UniFFI.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum EmbedResolution {
+    FullNote {
+        target_path: String,
+        text: String,
+        nested: Vec<NestedEmbed>,
+    },
+    Section {
+        target_path: String,
+        heading: String,
+        text: String,
+        nested: Vec<NestedEmbed>,
+    },
+    Block {
+        target_path: String,
+        block_id: String,
+        text: String,
+    },
+    Image {
+        target_path: String,
+        bytes: Vec<u8>,
+        mime: String,
+        alt: Option<String>,
+    },
+    Unresolved {
+        reason: EmbedUnresolvedReason,
+    },
+}
+
+impl From<core::EmbedResolution> for EmbedResolution {
+    fn from(r: core::EmbedResolution) -> Self {
+        match r {
+            core::EmbedResolution::FullNote {
+                target_path,
+                text,
+                nested,
+            } => EmbedResolution::FullNote {
+                target_path,
+                text,
+                nested: nested.into_iter().map(Into::into).collect(),
+            },
+            core::EmbedResolution::Section {
+                target_path,
+                heading,
+                text,
+                nested,
+            } => EmbedResolution::Section {
+                target_path,
+                heading,
+                text,
+                nested: nested.into_iter().map(Into::into).collect(),
+            },
+            core::EmbedResolution::Block {
+                target_path,
+                block_id,
+                text,
+            } => EmbedResolution::Block {
+                target_path,
+                block_id,
+                text,
+            },
+            core::EmbedResolution::Image {
+                target_path,
+                bytes,
+                mime,
+                alt,
+            } => EmbedResolution::Image {
+                target_path,
+                bytes,
+                mime,
+                alt,
+            },
+            core::EmbedResolution::Unresolved { reason } => EmbedResolution::Unresolved {
+                reason: reason.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct NestedEmbed {
+    pub raw_target: String,
+    pub byte_offset_in_parent: u32,
+    pub resolution: EmbedResolution,
+}
+
+impl From<core::NestedEmbed> for NestedEmbed {
+    fn from(n: core::NestedEmbed) -> Self {
+        Self {
+            raw_target: n.raw_target,
+            byte_offset_in_parent: n.byte_offset_in_parent,
+            resolution: n.resolution.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum EmbedUnresolvedReason {
+    TargetNotFound {
+        target: String,
+    },
+    HeadingNotFound {
+        target_path: String,
+        heading: String,
+    },
+    BlockNotFound {
+        target_path: String,
+        block_id: String,
+    },
+    DepthLimitReached,
+    ReadError {
+        message: String,
+    },
+}
+
+impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
+    fn from(r: core::EmbedUnresolvedReason) -> Self {
+        match r {
+            core::EmbedUnresolvedReason::TargetNotFound { target } => {
+                EmbedUnresolvedReason::TargetNotFound { target }
+            }
+            core::EmbedUnresolvedReason::HeadingNotFound {
+                target_path,
+                heading,
+            } => EmbedUnresolvedReason::HeadingNotFound {
+                target_path,
+                heading,
+            },
+            core::EmbedUnresolvedReason::BlockNotFound {
+                target_path,
+                block_id,
+            } => EmbedUnresolvedReason::BlockNotFound {
+                target_path,
+                block_id,
+            },
+            core::EmbedUnresolvedReason::DepthLimitReached => {
+                EmbedUnresolvedReason::DepthLimitReached
+            }
+            core::EmbedUnresolvedReason::ReadError { message } => {
+                EmbedUnresolvedReason::ReadError { message }
+            }
         }
     }
 }

@@ -396,7 +396,7 @@ fn parse_date_to_ms(s: &str) -> Option<i64> {
 ///    look like `- [ ] x` as structured data; surfacing them again
 ///    in the Tasks panel double-counts the same row (#136 /
 ///    red-team H1).
-fn excluded_byte_ranges(source: &str) -> Vec<(usize, usize)> {
+pub(crate) fn excluded_byte_ranges(source: &str) -> Vec<(usize, usize)> {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
     let mut ranges = Vec::new();
 
@@ -462,7 +462,7 @@ fn coalesce_ranges(ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     out
 }
 
-fn byte_in_excluded_range(byte: usize, ranges: &[(usize, usize)]) -> bool {
+pub(crate) fn byte_in_excluded_range(byte: usize, ranges: &[(usize, usize)]) -> bool {
     ranges.iter().any(|(s, e)| byte >= *s && byte < *e)
 }
 
