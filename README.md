@@ -39,7 +39,7 @@ slate/
 │   ├── diagrams/         Mermaid architecture diagrams.
 │   └── research/         Competitive landscape and other research.
 ├── Cargo.toml            Workspace.
-├── LICENSE               MIT.
+├── LICENSE               GNU AGPL v3.0 (or later).
 ├── Makefile              Common commands. `make help` to list.
 └── rust-toolchain.toml   Pins to stable + rustfmt + clippy.
 ```
@@ -70,7 +70,11 @@ After `make mac-app-run`, the SwiftUI smoke-test window opens with headings pars
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Copyright (C) 2026 Cory Joseph.
+
+Slate is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE) for the full text.
+
+Slate is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for details.
 
 ## Don't try to use this yet
 
