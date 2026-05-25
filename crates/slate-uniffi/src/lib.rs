@@ -99,6 +99,12 @@ pub enum VaultError {
         expected_content_hash: String,
         current_mtime_ms: i64,
     },
+
+    /// `set_property` / `delete_property` / `rename_property_across_vault`
+    /// refused to merge the requested edit into a YAML block that
+    /// doesn't parse. The user's broken YAML is left on disk.
+    #[error("frontmatter at {path:?} is malformed: {reason}")]
+    MalformedFrontmatter { path: String, reason: String },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -133,6 +139,9 @@ impl From<core::VaultError> for VaultError {
                 expected_content_hash,
                 current_mtime_ms,
             },
+            core::VaultError::MalformedFrontmatter { path, reason } => {
+                VaultError::MalformedFrontmatter { path, reason }
+            }
         }
     }
 }
@@ -467,6 +476,67 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// Insert or replace a YAML frontmatter property. Routes through
+    /// the same atomic-write + reindex + op-log pipeline as
+    /// `save_text` so the host UI can reuse the conflict dialog and
+    /// op-log surface without special-casing.
+    ///
+    /// Existing keys keep their position in the frontmatter block; a
+    /// brand-new key appends at the end. The body of the note is
+    /// byte-identical to its pre-edit state.
+    pub fn set_property(
+        &self,
+        path: String,
+        key: String,
+        value: PropertyValue,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let report =
+            self.inner
+                .set_property(&path, &key, value.into(), expected_content_hash.as_deref())?;
+        Ok(report.into())
+    }
+
+    /// Remove a YAML frontmatter property. When the deletion empties
+    /// the frontmatter, the `---` shell is removed too.
+    ///
+    /// When the key isn't present (or the file has no frontmatter),
+    /// the call short-circuits: no write, no op-log entry — but
+    /// `expected_content_hash` is still validated so callers don't
+    /// silently miss a stale-read race.
+    pub fn delete_property(
+        &self,
+        path: String,
+        key: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let report = self
+            .inner
+            .delete_property(&path, &key, expected_content_hash.as_deref())?;
+        Ok(report.into())
+    }
+
+    /// Rename a YAML frontmatter property across every file in the
+    /// vault that currently carries `old_key`. `dry_run = true`
+    /// returns the per-file diff without writing; `dry_run = false`
+    /// iterates per-file with atomic save_text calls.
+    ///
+    /// Per-file `WriteConflict` from external mid-rename modification
+    /// becomes a `RenameFailed` entry; the rest of the vault still
+    /// processes.
+    pub fn rename_property_across_vault(
+        &self,
+        old_key: String,
+        new_key: String,
+        dry_run: bool,
+        cancel: Arc<CancelToken>,
+    ) -> Result<RenameReport, VaultError> {
+        let report =
+            self.inner
+                .rename_property_across_vault(&old_key, &new_key, dry_run, &cancel.inner)?;
+        Ok(report.into())
+    }
+
     /// Render the template at `template_path` against `context`. The
     /// host reads `body` and parks the editor's cursor at
     /// `cursor_byte_offset` if it's `Some(_)`.
@@ -587,6 +657,46 @@ impl From<core::Property> for Property {
             key: p.key,
             kind: kind.to_string(),
             value_json,
+        }
+    }
+}
+
+/// Discriminated `PropertyValue` for the write-side API
+/// (`set_property`, `rename_property_across_vault`).
+///
+/// Read-side (`get_file_metadata`, `note_load_bundle`, etc.) keeps
+/// returning the `(kind, value_json)` encoding on `Property` — the
+/// two surfaces aren't unified because callers reading bulk metadata
+/// don't pay the cost of a tagged union per row, while callers
+/// writing one edit at a time get a clean discriminated value they
+/// can pattern-match instead of dispatching on a kind string.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum PropertyValue {
+    Text { value: String },
+    Integer { value: i64 },
+    Float { value: f64 },
+    Boolean { value: bool },
+    Date { value: String },
+    Datetime { value: String },
+    Wikilink { target: String },
+    List { items: Vec<PropertyValue> },
+    TagList { tags: Vec<String> },
+}
+
+impl From<PropertyValue> for core::PropertyValue {
+    fn from(v: PropertyValue) -> Self {
+        match v {
+            PropertyValue::Text { value } => core::PropertyValue::Text(value),
+            PropertyValue::Integer { value } => core::PropertyValue::Integer(value),
+            PropertyValue::Float { value } => core::PropertyValue::Float(value),
+            PropertyValue::Boolean { value } => core::PropertyValue::Boolean(value),
+            PropertyValue::Date { value } => core::PropertyValue::Date(value),
+            PropertyValue::Datetime { value } => core::PropertyValue::Datetime(value),
+            PropertyValue::Wikilink { target } => core::PropertyValue::Wikilink(target),
+            PropertyValue::List { items } => {
+                core::PropertyValue::List(items.into_iter().map(Into::into).collect())
+            }
+            PropertyValue::TagList { tags } => core::PropertyValue::TagList(tags),
         }
     }
 }
@@ -1001,6 +1111,123 @@ impl From<core::SaveReport> for SaveReport {
             new_content_hash: r.new_content_hash,
             new_size_bytes: r.new_size_bytes,
             new_mtime_ms: r.new_mtime_ms,
+        }
+    }
+}
+
+/// Outcome of a `rename_property_across_vault` call. Mirrors
+/// `slate_core::RenameReport`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RenameReport {
+    pub affected: Vec<RenameAffected>,
+    pub skipped: Vec<RenameSkipped>,
+    pub failed: Vec<RenameFailed>,
+}
+
+impl From<core::RenameReport> for RenameReport {
+    fn from(r: core::RenameReport) -> Self {
+        Self {
+            affected: r.affected.into_iter().map(Into::into).collect(),
+            skipped: r.skipped.into_iter().map(Into::into).collect(),
+            failed: r.failed.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RenameAffected {
+    pub path: String,
+    pub before_excerpt: String,
+    pub after_excerpt: String,
+    /// `false` for dry-run results, `true` for successful applies.
+    pub applied: bool,
+}
+
+impl From<core::RenameAffected> for RenameAffected {
+    fn from(a: core::RenameAffected) -> Self {
+        Self {
+            path: a.path,
+            before_excerpt: a.before_excerpt,
+            after_excerpt: a.after_excerpt,
+            applied: a.applied,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RenameSkipped {
+    pub path: String,
+    pub reason: RenameSkipReason,
+}
+
+impl From<core::RenameSkipped> for RenameSkipped {
+    fn from(s: core::RenameSkipped) -> Self {
+        Self {
+            path: s.path,
+            reason: s.reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum RenameSkipReason {
+    NoSuchKey,
+    KeyCollision,
+    /// Rename would cross the `tags` key boundary with a list-shaped
+    /// value, which would flip the type discriminator between `List`
+    /// and `TagList` on round-trip. UI can offer a manual-edit
+    /// fallback. Audit #180.
+    TagsKeyTypeDrift,
+}
+
+impl From<core::RenameSkipReason> for RenameSkipReason {
+    fn from(r: core::RenameSkipReason) -> Self {
+        match r {
+            core::RenameSkipReason::NoSuchKey => RenameSkipReason::NoSuchKey,
+            core::RenameSkipReason::KeyCollision => RenameSkipReason::KeyCollision,
+            core::RenameSkipReason::TagsKeyTypeDrift => RenameSkipReason::TagsKeyTypeDrift,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RenameFailed {
+    pub path: String,
+    pub kind: RenameFailureKind,
+    pub message: String,
+}
+
+impl From<core::RenameFailed> for RenameFailed {
+    fn from(f: core::RenameFailed) -> Self {
+        Self {
+            path: f.path,
+            kind: f.kind.into(),
+            message: f.message,
+        }
+    }
+}
+
+/// Coarse classification of a per-file rename failure. The full
+/// error text is in `RenameFailed::message`; this enum lets the UI
+/// route to specific recovery flows (e.g. the conflict dialog)
+/// without pattern-matching on display strings.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum RenameFailureKind {
+    WriteConflict,
+    MalformedFrontmatter,
+    Cancelled,
+    Other,
+}
+
+impl From<core::RenameFailureKind> for RenameFailureKind {
+    fn from(k: core::RenameFailureKind) -> Self {
+        match k {
+            core::RenameFailureKind::WriteConflict => RenameFailureKind::WriteConflict,
+            core::RenameFailureKind::MalformedFrontmatter => {
+                RenameFailureKind::MalformedFrontmatter
+            }
+            core::RenameFailureKind::Cancelled => RenameFailureKind::Cancelled,
+            core::RenameFailureKind::Other => RenameFailureKind::Other,
         }
     }
 }

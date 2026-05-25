@@ -39,8 +39,9 @@ pub use templates::{
 };
 
 pub use session::{
-    CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging, SaveReport,
-    ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
+    CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging,
+    RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped,
+    SaveReport, ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
     content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,
@@ -109,6 +110,14 @@ pub enum VaultError {
         expected_content_hash: String,
         current_mtime_ms: i64,
     },
+
+    /// Returned from `set_property` / `delete_property` /
+    /// `rename_property_across_vault` when a file's YAML frontmatter
+    /// can't be parsed and we can't safely merge the requested edit.
+    /// The user's broken YAML is preserved on disk; the UI can route
+    /// the user to fix it manually before retrying.
+    #[error("frontmatter at {path:?} is malformed: {reason}")]
+    MalformedFrontmatter { path: String, reason: String },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so

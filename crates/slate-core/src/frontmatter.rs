@@ -59,7 +59,8 @@
 
 use std::ops::Range;
 
-use yaml_rust2::{Yaml, YamlLoader};
+use yaml_rust2::yaml::Hash as YamlHash;
+use yaml_rust2::{Yaml, YamlEmitter, YamlLoader};
 
 /// Maximum nesting depth for `walk_value`. yaml-rust2 has a
 /// parser-side guard but no runtime cap on the resulting tree, so a
@@ -155,8 +156,8 @@ pub fn frontmatter_range(source: &str) -> Option<Range<usize>> {
 }
 
 /// Returns the source slice past the opening `---` line if and only
-/// if the file starts with one (no leading whitespace allowed before
-/// the dashes — byte 0 must be `-`).
+/// if the file starts with one (byte 0 must be `-`, or a UTF-8 BOM
+/// followed by `-`).
 ///
 /// The dashes must be followed by EOL, with optional trailing
 /// whitespace tolerated on the line. The closing delimiter already
@@ -165,10 +166,17 @@ pub fn frontmatter_range(source: &str) -> Option<Range<usize>> {
 /// looked like "no frontmatter at all" while the same trailing-space
 /// pattern on the closing delimiter was accepted (#93 item 4).
 ///
+/// A leading UTF-8 BOM (`\u{FEFF}`) is tolerated and consumed before
+/// the dash check — many editors default-save UTF-8-with-BOM, and
+/// without this the writer would synthesize a duplicate frontmatter
+/// block ahead of the BOM and silently shadow the user's original
+/// (audit #173).
+///
 /// A bare `---` at EOF still isn't a valid opening (no body can
 /// follow), so a missing newline returns `None`.
 fn strip_opening_delimiter(source: &str) -> Option<&str> {
-    let after_dashes = source.strip_prefix("---")?;
+    let body_source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
+    let after_dashes = body_source.strip_prefix("---")?;
     let line_end = after_dashes.find('\n')?;
     let trailing = &after_dashes[..line_end];
     if !trailing.chars().all(char::is_whitespace) {
@@ -560,6 +568,419 @@ fn yaml_type_name(value: &Yaml) -> &'static str {
         Yaml::Null => "null",
         Yaml::BadValue => "bad-value",
     }
+}
+
+// --- Edit primitives for set_property / delete_property ---------------
+
+/// Outcome of a delete-property edit on a source string.
+///
+/// `Unchanged` covers the cases where the requested key isn't in the
+/// frontmatter (or there's no frontmatter at all) — callers short-
+/// circuit on this without writing to disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrontmatterEdit {
+    Unchanged,
+    Changed(String),
+}
+
+/// Errors that prevent us from editing the frontmatter cleanly.
+///
+/// `MalformedFrontmatter` covers source-side problems (broken YAML,
+/// stacked delimiters, anchors we can't preserve). `InvalidPropertyValue`
+/// covers caller-side problems (a `PropertyValue` whose shape can't be
+/// emitted such that the read path will round-trip it back to the
+/// same variant — non-finite floats, wikilinks containing `]]`, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrontmatterEditError {
+    MalformedFrontmatter(String),
+    InvalidPropertyValue { reason: String },
+}
+
+impl std::fmt::Display for FrontmatterEditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FrontmatterEditError::MalformedFrontmatter(reason) => {
+                write!(f, "frontmatter is malformed: {reason}")
+            }
+            FrontmatterEditError::InvalidPropertyValue { reason } => {
+                write!(f, "invalid property value: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FrontmatterEditError {}
+
+/// Insert or replace `key` → `value` in the frontmatter block, returning
+/// the rewritten source.
+///
+/// Behavior:
+///   - If `source` has no frontmatter block, prepend one carrying just
+///     this key. The body byte range is left untouched.
+///   - If the block exists, the YAML hash is mutated via the
+///     `LinkedHashMap::replace` semantics: existing keys keep their
+///     position; brand-new keys append at the end.
+///   - YAML comments inside the block are stripped by the emitter —
+///     `yaml-rust2`'s emitter doesn't round-trip them. The body
+///     (everything after the closing `---`) is byte-identical to the
+///     input.
+///   - A malformed YAML block returns `MalformedFrontmatter`; we don't
+///     try to merge into broken YAML.
+pub fn set_property_in_source(
+    source: &str,
+    key: &str,
+    value: &PropertyValue,
+) -> Result<String, FrontmatterEditError> {
+    reject_dotted_key(key)?;
+    let yaml_value = property_value_to_yaml(value)?;
+    let yaml_key = Yaml::String(key.to_string());
+
+    match frontmatter_range(source) {
+        None => synthesize_block(source, yaml_key, yaml_value),
+        Some(range) => {
+            let yaml_src = &source[range.clone()];
+            let mut hash = parse_hash(yaml_src)?;
+            hash.replace(yaml_key, yaml_value);
+            let new_yaml = emit_hash_body(&hash);
+            Ok(replace_range(source, range, &new_yaml))
+        }
+    }
+}
+
+/// Remove `key` from the frontmatter block. Returns `Unchanged` if the
+/// key (or the whole block) isn't present.
+///
+/// If removing `key` empties the frontmatter, the entire `---`-bracketed
+/// block is removed too — no empty frontmatter shell left behind.
+///
+/// As with `set_property_in_source`, a malformed YAML block returns
+/// `MalformedFrontmatter`. Comments inside the block are not preserved
+/// when the rest of the YAML round-trips through the emitter.
+pub fn delete_property_in_source(
+    source: &str,
+    key: &str,
+) -> Result<FrontmatterEdit, FrontmatterEditError> {
+    reject_dotted_key(key)?;
+    let Some(range) = frontmatter_range(source) else {
+        return Ok(FrontmatterEdit::Unchanged);
+    };
+    let yaml_src = &source[range.clone()];
+    let mut hash = parse_hash(yaml_src)?;
+    let yaml_key = Yaml::String(key.to_string());
+    if hash.remove(&yaml_key).is_none() {
+        return Ok(FrontmatterEdit::Unchanged);
+    }
+    if hash.is_empty() {
+        // The block is now empty — strip the whole `---<eol>…---<eol>`
+        // shell. `frontmatter_range` guarantees the opening delimiter
+        // starts at byte 0, so the block runs `0..closing----<eol>`.
+        // The closing `---` sits at `range.end..range.end + 3`; its
+        // trailing newline (LF or CRLF) follows immediately, but is
+        // not always present (a file ending mid-frontmatter has no
+        // trailing newline at all).
+        let mut block_end = range.end + 3;
+        if source.as_bytes().get(block_end) == Some(&b'\r') {
+            block_end += 1;
+        }
+        if source.as_bytes().get(block_end) == Some(&b'\n') {
+            block_end += 1;
+        }
+        let mut out = String::with_capacity(source.len() - block_end);
+        out.push_str(&source[block_end..]);
+        return Ok(FrontmatterEdit::Changed(out));
+    }
+    let new_yaml = emit_hash_body(&hash);
+    Ok(FrontmatterEdit::Changed(replace_range(
+        source, range, &new_yaml,
+    )))
+}
+
+/// Reject dotted keys at the API boundary.
+///
+/// The read path flattens nested mappings (`person:\n  name: X` →
+/// `person.name`), so a UI that surfaces dotted keys to the user
+/// would otherwise naturally pass them back to `set_property` /
+/// `delete_property` / `rename_property_across_vault`. The write
+/// path can't drill into nested mappings — it would create a
+/// duplicate top-level key alongside the original (audit #179) —
+/// so we refuse at the boundary and route the caller to a different
+/// flow. (Today: no flow; users hand-edit the file. Future: a
+/// dedicated "edit nested property" surface.)
+fn reject_dotted_key(key: &str) -> Result<(), FrontmatterEditError> {
+    if key.contains('.') {
+        return Err(FrontmatterEditError::InvalidPropertyValue {
+            reason: format!(
+                "dotted keys (e.g. {key:?}) aren't supported by the write API; \
+                 the read path's dotted-key flattening isn't symmetric with the \
+                 writer, and editing a nested property requires a different surface"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Convert a `PropertyValue` to the `Yaml` representation we want the
+/// emitter to write. Choices here are what controls how a property
+/// round-trips through `extract_frontmatter`:
+///   - `Date` / `Datetime` / `Text` → quoted/plain string, classified
+///     back to the same variant by `classify_string`.
+///   - `Wikilink(t)` → emitted as `"[[t]]"` so the read path
+///     recognises it as a wikilink again. Targets that would be
+///     ambiguous on round-trip (containing `]]`, newline, or empty)
+///     are rejected with `InvalidPropertyValue` (audit #176).
+///   - `Float(f)` → emitted as a decimal-form `Real`. Non-finite
+///     values (NaN, ±inf) are rejected because neither
+///     `yaml-rust2`'s emitter nor Rust's `f64::parse` round-trip
+///     them as floats; the value would silently demote to `Text` on
+///     the next read (audit #175).
+///   - `List` and `TagList` always emit block style. `TagList`
+///     strips a leading `#` from each tag before re-prepending one,
+///     so `TagList(["#foo"])` round-trips as `TagList(["foo"])`
+///     instead of growing a `##` prefix on disk (audit #180).
+fn property_value_to_yaml(value: &PropertyValue) -> Result<Yaml, FrontmatterEditError> {
+    Ok(match value {
+        PropertyValue::Text(s) => Yaml::String(s.clone()),
+        PropertyValue::Integer(i) => Yaml::Integer(*i),
+        PropertyValue::Float(f) => {
+            if !f.is_finite() {
+                return Err(FrontmatterEditError::InvalidPropertyValue {
+                    reason: format!(
+                        "non-finite float ({f}) can't be safely round-tripped through YAML"
+                    ),
+                });
+            }
+            // yaml-rust2's `Real` is the string form a YAML float
+            // would be written as. `f64::to_string` matches Rust's
+            // canonical decimal form, which the parser will accept
+            // back as `Real` and the layered classifier converts to
+            // `Float` again.
+            Yaml::Real(f.to_string())
+        }
+        PropertyValue::Boolean(b) => Yaml::Boolean(*b),
+        PropertyValue::Date(s) | PropertyValue::Datetime(s) => Yaml::String(s.clone()),
+        PropertyValue::Wikilink(target) => {
+            if target.is_empty() {
+                return Err(FrontmatterEditError::InvalidPropertyValue {
+                    reason: "wikilink target is empty".to_string(),
+                });
+            }
+            if target.contains('\n') || target.contains('\r') {
+                return Err(FrontmatterEditError::InvalidPropertyValue {
+                    reason: "wikilink target contains a newline".to_string(),
+                });
+            }
+            if target.contains("]]") {
+                return Err(FrontmatterEditError::InvalidPropertyValue {
+                    reason: "wikilink target contains `]]` which would produce ambiguous output"
+                        .to_string(),
+                });
+            }
+            Yaml::String(format!("[[{target}]]"))
+        }
+        PropertyValue::List(items) => Yaml::Array(
+            items
+                .iter()
+                .map(property_value_to_yaml)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        PropertyValue::TagList(tags) => Yaml::Array(
+            tags.iter()
+                .map(|t| {
+                    let bare = t.strip_prefix('#').unwrap_or(t);
+                    Yaml::String(format!("#{bare}"))
+                })
+                .collect(),
+        ),
+    })
+}
+
+fn parse_hash(yaml_src: &str) -> Result<YamlHash, FrontmatterEditError> {
+    // Audit #181: anchors and aliases get expanded inline by
+    // `YamlLoader` so we can't preserve them through the round-trip.
+    // Refuse rather than silently rewriting `&b shared` / `*b` into
+    // two literal copies. Detection walks the Parser event stream
+    // (the AST drops the anchor info, but the parser exposes it).
+    detect_anchors_or_aliases(yaml_src)?;
+
+    let docs = YamlLoader::load_from_str(yaml_src).map_err(|e| {
+        FrontmatterEditError::MalformedFrontmatter(rewrite_duplicate_key_message(e.to_string()))
+    })?;
+    match docs.into_iter().next() {
+        Some(Yaml::Hash(h)) => Ok(h),
+        // Empty `---\n---` is a valid starting point for edits — treat
+        // it as an empty mapping so `set_property` can populate it.
+        // But "empty" YAML that the source authored as comments-only
+        // (`---\n# do not edit\n---`) would silently lose those
+        // comments on round-trip; refuse if any non-whitespace text
+        // remains in the source slice (audit #181).
+        None | Some(Yaml::Null) | Some(Yaml::BadValue) => {
+            if yaml_src.chars().all(char::is_whitespace) {
+                Ok(YamlHash::new())
+            } else {
+                Err(FrontmatterEditError::MalformedFrontmatter(
+                    "frontmatter block contains only comments; editing would silently \
+                     drop them. Add a real key (or delete the block) before editing properties"
+                        .to_string(),
+                ))
+            }
+        }
+        Some(other) => Err(FrontmatterEditError::MalformedFrontmatter(format!(
+            "frontmatter root must be a YAML mapping; got {}",
+            yaml_type_name(&other)
+        ))),
+    }
+}
+
+/// Walk the parser event stream looking for anchor IDs or aliases.
+/// Returns `Err(MalformedFrontmatter)` on the first hit. yaml-rust2's
+/// AST hides anchor info (aliases are expanded inline to their target
+/// value), so a successful parse alone can't tell us whether the
+/// source used them.
+fn detect_anchors_or_aliases(yaml_src: &str) -> Result<(), FrontmatterEditError> {
+    use yaml_rust2::parser::{Event, Parser};
+    let mut parser = Parser::new(yaml_src.chars());
+    loop {
+        let (ev, _marker) = match parser.next_token() {
+            Ok(pair) => pair,
+            // A scan error here resurfaces as a more user-friendly
+            // MalformedFrontmatter when `YamlLoader` runs over the
+            // same input below; treat anchor detection as best-
+            // effort and let the loader produce the message.
+            Err(_) => return Ok(()),
+        };
+        match ev {
+            Event::Alias(_) => {
+                return Err(FrontmatterEditError::MalformedFrontmatter(
+                    "frontmatter uses YAML aliases (`*ref`) which the editor can't \
+                     preserve through the round-trip. Inline the alias values \
+                     before editing properties"
+                        .to_string(),
+                ));
+            }
+            Event::Scalar(_, _, anchor, _)
+            | Event::SequenceStart(anchor, _)
+            | Event::MappingStart(anchor, _)
+                if anchor != 0 =>
+            {
+                return Err(FrontmatterEditError::MalformedFrontmatter(
+                    "frontmatter uses YAML anchors (`&name`) which the editor can't \
+                     preserve through the round-trip. Inline the anchor values \
+                     before editing properties"
+                        .to_string(),
+                ));
+            }
+            Event::StreamEnd => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
+/// Audit #182: yaml-rust2's duplicate-key parse error renders as
+/// `String("title"): duplicated key in mapping at byte N line L col C`.
+/// Rewrite it to surface the offending key in a form the UI can show
+/// without re-parsing. Falls through with the raw text if the message
+/// shape changes in a future yaml-rust2 release.
+fn rewrite_duplicate_key_message(raw: String) -> String {
+    let dup_marker = "duplicated key in mapping";
+    if !raw.contains(dup_marker) {
+        return format!("YAML parse error: {raw}");
+    }
+    let prefix = "String(\"";
+    if let Some(key_start) = raw.find(prefix) {
+        let after_quote = &raw[key_start + prefix.len()..];
+        if let Some(end_quote) = after_quote.find("\")") {
+            let key = &after_quote[..end_quote];
+            return format!(
+                "duplicate frontmatter key `{key}`. Remove the duplicate before \
+                 editing properties through this API"
+            );
+        }
+    }
+    format!("YAML parse error: {raw}")
+}
+
+/// Emit a YAML hash as a frontmatter body — i.e. without the leading
+/// `---\n` that `YamlEmitter::dump` always prepends, and with a single
+/// trailing newline so the closing `---` line sits flush.
+fn emit_hash_body(hash: &YamlHash) -> String {
+    let mut raw = String::new();
+    {
+        let mut emitter = YamlEmitter::new(&mut raw);
+        // `dump` is infallible for our inputs (no recursion, no IO);
+        // the emitter only errors on `BadValue`, which we never
+        // construct.
+        let _ = emitter.dump(&Yaml::Hash(hash.clone()));
+    }
+    // Strip the leading `---\n` document marker.
+    let stripped = raw.strip_prefix("---\n").unwrap_or(&raw);
+    // Ensure a trailing newline so the next line (the closing `---`)
+    // sits at column 0.
+    if stripped.ends_with('\n') {
+        stripped.to_string()
+    } else {
+        format!("{stripped}\n")
+    }
+}
+
+fn synthesize_block(source: &str, key: Yaml, value: Yaml) -> Result<String, FrontmatterEditError> {
+    // Walk past a UTF-8 BOM if present so the synthesized block lands
+    // *after* the BOM, not before it — otherwise the next reader's
+    // BOM-tolerant `strip_opening_delimiter` would still find the
+    // synthesized block, but external tools that don't tolerate BOM
+    // would see a stray BOM in what they call the body (#173).
+    let (prefix, after_bom) = match source.strip_prefix('\u{FEFF}') {
+        Some(rest) => ("\u{FEFF}", rest),
+        None => ("", source),
+    };
+
+    // Guard against inputs that look like a half-formed frontmatter
+    // block: a leading `---\n` (or `--- \n` etc.) followed by content
+    // that `frontmatter_range` couldn't pair with a closing delimiter.
+    // Synthesizing a fresh block ahead of those would stack `---`
+    // lines and produce visibly broken Markdown (#177).
+    if looks_like_unfinished_opening_delimiter(after_bom) {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "file appears to start with a frontmatter delimiter but no closing \
+             `---` line was found; fix the YAML in this note before editing properties"
+                .to_string(),
+        ));
+    }
+
+    let mut hash = YamlHash::new();
+    hash.insert(key, value);
+    let body = emit_hash_body(&hash);
+    // Prepend `---\n<body>---\n` to the source. Body already ends with
+    // `\n`, so the closing `---\n` lines up cleanly.
+    let mut out = String::with_capacity(source.len() + body.len() + 8);
+    out.push_str(prefix);
+    out.push_str("---\n");
+    out.push_str(&body);
+    out.push_str("---\n");
+    out.push_str(after_bom);
+    Ok(out)
+}
+
+/// `true` when `s` opens with a frontmatter-style `---<whitespace>*\n`
+/// line. Mirrors the shape `strip_opening_delimiter` accepts so the
+/// synthesize-block guard rejects exactly the inputs the
+/// `frontmatter_range`-returning-None path would otherwise stack a
+/// duplicate `---` ahead of.
+fn looks_like_unfinished_opening_delimiter(s: &str) -> bool {
+    let Some(after_dashes) = s.strip_prefix("---") else {
+        return false;
+    };
+    let Some(line_end) = after_dashes.find('\n') else {
+        return false;
+    };
+    after_dashes[..line_end].chars().all(char::is_whitespace)
+}
+
+fn replace_range(source: &str, range: Range<usize>, replacement: &str) -> String {
+    let mut out = String::with_capacity(source.len() - range.len() + replacement.len());
+    out.push_str(&source[..range.start]);
+    out.push_str(replacement);
+    out.push_str(&source[range.end..]);
+    out
 }
 
 #[cfg(test)]
@@ -1001,5 +1422,427 @@ mod tests {
         // The whole file is body.
         let src = "---\nkey: value\nno close here";
         assert!(frontmatter_range(src).is_none());
+    }
+
+    // --- set_property_in_source / delete_property_in_source ---
+
+    #[test]
+    fn set_property_inserts_new_key_into_existing_frontmatter() {
+        let src = "---\ntitle: Hello\n---\nbody\n";
+        let out = set_property_in_source(src, "author", &PropertyValue::Text("Cory".to_string()))
+            .unwrap();
+        let p = props(&out);
+        assert_eq!(
+            find(&p, "title"),
+            Some(PropertyValue::Text("Hello".to_string()))
+        );
+        assert_eq!(
+            find(&p, "author"),
+            Some(PropertyValue::Text("Cory".to_string()))
+        );
+    }
+
+    #[test]
+    fn set_property_appends_new_key_at_end_not_alphabetical() {
+        let src = "---\nzebra: 1\nalpha: 2\n---\nbody\n";
+        let out = set_property_in_source(src, "middle", &PropertyValue::Integer(99)).unwrap();
+        // Read keys back in document order.
+        let p = props(&out);
+        let order: Vec<&str> = p.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(order, vec!["zebra", "alpha", "middle"]);
+    }
+
+    #[test]
+    fn set_property_updates_existing_key_in_place() {
+        let src = "---\nzebra: 1\nalpha: 2\nomega: 3\n---\nbody\n";
+        let out = set_property_in_source(src, "alpha", &PropertyValue::Integer(42)).unwrap();
+        let p = props(&out);
+        let order: Vec<&str> = p.iter().map(|p| p.key.as_str()).collect();
+        // Order preserved — `alpha` didn't migrate to the end.
+        assert_eq!(order, vec!["zebra", "alpha", "omega"]);
+        assert_eq!(find(&p, "alpha"), Some(PropertyValue::Integer(42)));
+    }
+
+    #[test]
+    fn set_property_synthesizes_block_when_no_frontmatter() {
+        let src = "# Note\n\nBody text.\n";
+        let out =
+            set_property_in_source(src, "title", &PropertyValue::Text("Hi".to_string())).unwrap();
+        assert!(out.starts_with("---\n"));
+        assert!(out.ends_with("# Note\n\nBody text.\n"));
+        let p = props(&out);
+        assert_eq!(
+            find(&p, "title"),
+            Some(PropertyValue::Text("Hi".to_string()))
+        );
+    }
+
+    #[test]
+    fn set_property_keeps_body_byte_identical() {
+        // The byte range after the closing `---\n` must round-trip
+        // through `set_property_in_source` untouched. This is the
+        // load-bearing guarantee: editing frontmatter never disturbs
+        // note content.
+        let src =
+            "---\ntitle: Old\n---\n# Heading\n\nParagraph with **bold** and `code`.\n\n- list item\n";
+        let body = &src["---\ntitle: Old\n---\n".len()..];
+        let out =
+            set_property_in_source(src, "title", &PropertyValue::Text("New".to_string())).unwrap();
+        assert!(out.ends_with(body));
+    }
+
+    #[test]
+    fn set_property_round_trips_each_value_variant() {
+        let src = "---\nplaceholder: x\n---\nbody\n";
+        let cases: Vec<(&str, PropertyValue)> = vec![
+            ("text_k", PropertyValue::Text("hello world".to_string())),
+            ("int_k", PropertyValue::Integer(-7)),
+            ("float_k", PropertyValue::Float(3.5)),
+            ("bool_k", PropertyValue::Boolean(true)),
+            ("date_k", PropertyValue::Date("2026-05-24".to_string())),
+            (
+                "dt_k",
+                PropertyValue::Datetime("2026-05-24T10:00:00Z".to_string()),
+            ),
+            ("wiki_k", PropertyValue::Wikilink("Note Title".to_string())),
+            (
+                "list_k",
+                PropertyValue::List(vec![
+                    PropertyValue::Text("a".to_string()),
+                    PropertyValue::Text("b".to_string()),
+                ]),
+            ),
+            (
+                "tags",
+                PropertyValue::TagList(vec!["foo".to_string(), "bar".to_string()]),
+            ),
+        ];
+        let mut current = src.to_string();
+        for (k, v) in &cases {
+            current = set_property_in_source(&current, k, v).unwrap();
+        }
+        let p = props(&current);
+        for (k, v) in &cases {
+            assert_eq!(
+                find(&p, k).as_ref(),
+                Some(v),
+                "round-trip failed for key {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_property_on_malformed_yaml_returns_error() {
+        // Unterminated string — yaml-rust2 rejects the parse.
+        let src = "---\ntitle: \"unterminated\n---\nbody\n";
+        let err = set_property_in_source(src, "author", &PropertyValue::Text("x".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, FrontmatterEditError::MalformedFrontmatter(_)));
+    }
+
+    #[test]
+    fn delete_property_missing_key_returns_unchanged() {
+        let src = "---\ntitle: Hi\n---\nbody\n";
+        assert_eq!(
+            delete_property_in_source(src, "author").unwrap(),
+            FrontmatterEdit::Unchanged
+        );
+    }
+
+    #[test]
+    fn delete_property_no_frontmatter_returns_unchanged() {
+        let src = "# Note\n\nBody.\n";
+        assert_eq!(
+            delete_property_in_source(src, "anything").unwrap(),
+            FrontmatterEdit::Unchanged
+        );
+    }
+
+    #[test]
+    fn delete_property_removes_one_of_many_keys_in_place() {
+        let src = "---\ntitle: Hi\nauthor: Cory\nyear: 2026\n---\nbody\n";
+        let out = match delete_property_in_source(src, "author").unwrap() {
+            FrontmatterEdit::Changed(s) => s,
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        let p = props(&out);
+        let order: Vec<&str> = p.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(order, vec!["title", "year"]);
+        assert!(out.ends_with("body\n"));
+    }
+
+    #[test]
+    fn delete_property_on_last_key_strips_whole_block() {
+        let src = "---\ntitle: Hi\n---\nbody\n";
+        let out = match delete_property_in_source(src, "title").unwrap() {
+            FrontmatterEdit::Changed(s) => s,
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        // No `---` block left at all.
+        assert_eq!(out, "body\n");
+    }
+
+    #[test]
+    fn delete_property_on_empty_frontmatter_returns_unchanged() {
+        // `---\n---\n` is technically a frontmatter block with zero
+        // keys. Deleting any key from it is unchanged.
+        let src = "---\n---\nbody\n";
+        assert_eq!(
+            delete_property_in_source(src, "anything").unwrap(),
+            FrontmatterEdit::Unchanged
+        );
+    }
+
+    #[test]
+    fn delete_property_strips_block_with_crlf_line_endings() {
+        // Same shape as the LF case but with Windows line endings on
+        // the frontmatter delimiters. The `\r\n` after the closing
+        // `---` must also be consumed.
+        let src = "---\r\ntitle: Hi\r\n---\r\nbody\n";
+        let out = match delete_property_in_source(src, "title").unwrap() {
+            FrontmatterEdit::Changed(s) => s,
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        assert_eq!(out, "body\n");
+    }
+
+    #[test]
+    fn delete_property_keeps_body_byte_identical() {
+        let src = "---\ntitle: Hi\nauthor: Cory\n---\n# Heading\n\nParagraph.\n";
+        let body = &src["---\ntitle: Hi\nauthor: Cory\n---\n".len()..];
+        let out = match delete_property_in_source(src, "author").unwrap() {
+            FrontmatterEdit::Changed(s) => s,
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        assert!(out.ends_with(body));
+    }
+
+    // --- Audit fixes -------------------------------------------------
+
+    #[test]
+    fn set_property_tolerates_leading_bom_and_edits_existing_block() {
+        // Audit #173: a UTF-8 BOM ahead of `---` was making
+        // frontmatter_range return None, so set_property synthesized
+        // a duplicate block ahead of the BOM and silently shadowed
+        // the original frontmatter. With BOM tolerance, the existing
+        // block is detected and edited in place.
+        let src = "\u{FEFF}---\ntitle: Original\n---\nbody\n";
+        let out = set_property_in_source(src, "year", &PropertyValue::Integer(2026)).unwrap();
+        let (props, _) = extract_frontmatter(&out);
+        let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, vec!["title", "year"]);
+        // BOM is preserved at byte 0.
+        assert!(out.starts_with('\u{FEFF}'));
+        // Body bytes after the closing `---\n` are byte-identical.
+        assert!(out.ends_with("body\n"));
+    }
+
+    #[test]
+    fn set_property_synthesizes_after_bom_for_plain_markdown() {
+        // BOM-prefixed file with no frontmatter still gets a
+        // synthesized block — but the BOM stays at byte 0 so external
+        // tools and BOM-tolerant readers agree on where the
+        // frontmatter starts.
+        let src = "\u{FEFF}# Note\n\nbody\n";
+        let out = set_property_in_source(src, "title", &PropertyValue::Text("Hi".into())).unwrap();
+        assert!(out.starts_with("\u{FEFF}---\n"));
+        let (props, _) = extract_frontmatter(&out);
+        let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, vec!["title"]);
+    }
+
+    #[test]
+    fn set_property_refuses_to_stack_delimiters_on_half_formed_frontmatter() {
+        // Audit #177: source already starts with `---\n` but the
+        // closing delimiter isn't where frontmatter_range expects it.
+        // Synthesizing a fresh block would produce stacked `---`
+        // lines and visibly broken Markdown — refuse instead.
+        for src in [
+            "---\nfoo bar\n",         // missing close
+            "---\n---\nbody\n",       // empty-block-no-close shape
+            "\u{FEFF}---\nfoo bar\n", // same with BOM
+        ] {
+            let err =
+                set_property_in_source(src, "title", &PropertyValue::Text("X".into())).unwrap_err();
+            assert!(
+                matches!(err, FrontmatterEditError::MalformedFrontmatter(_)),
+                "expected MalformedFrontmatter for {src:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn delete_property_tolerates_leading_bom() {
+        let src = "\u{FEFF}---\ntitle: Hi\nauthor: Cory\n---\nbody\n";
+        let out = match delete_property_in_source(src, "author").unwrap() {
+            FrontmatterEdit::Changed(s) => s,
+            other => panic!("expected Changed, got {other:?}"),
+        };
+        assert!(out.starts_with('\u{FEFF}'));
+        let (props, _) = extract_frontmatter(&out);
+        let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, vec!["title"]);
+    }
+
+    #[test]
+    fn set_property_refuses_non_finite_floats() {
+        // Audit #175: NaN/inf/-inf would round-trip from Float to
+        // Text (yaml-rust2 produces Real(".nan") which Rust's
+        // f64::parse rejects, falling back to PropertyValue::Text).
+        // Refuse at emit time instead.
+        let src = "---\np: x\n---\nbody\n";
+        for f in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = set_property_in_source(src, "nv", &PropertyValue::Float(f)).unwrap_err();
+            assert!(
+                matches!(err, FrontmatterEditError::InvalidPropertyValue { .. }),
+                "expected InvalidPropertyValue for {f}, got {err:?}"
+            );
+        }
+        // A list containing one bad float is rejected as a whole —
+        // the previous behavior demoted every element of the list to
+        // Text on round-trip (audit #175 cascade).
+        let bad_list = PropertyValue::List(vec![
+            PropertyValue::Float(f64::NAN),
+            PropertyValue::Float(1.25),
+        ]);
+        assert!(matches!(
+            set_property_in_source(src, "vals", &bad_list).unwrap_err(),
+            FrontmatterEditError::InvalidPropertyValue { .. }
+        ));
+    }
+
+    #[test]
+    fn set_property_refuses_invalid_wikilink_targets() {
+        // Audit #176: empty / newline / `]]` targets either silently
+        // demote on round-trip (empty, newline) or produce ambiguous
+        // output (`]]`). All three rejected at emit time.
+        let src = "---\np: x\n---\nbody\n";
+        for target in ["", "a\nb", "evil]]injected", "trail\r"] {
+            let err =
+                set_property_in_source(src, "link", &PropertyValue::Wikilink(target.to_string()))
+                    .unwrap_err();
+            assert!(
+                matches!(err, FrontmatterEditError::InvalidPropertyValue { .. }),
+                "expected InvalidPropertyValue for target {target:?}, got {err:?}"
+            );
+        }
+        // Valid target still round-trips.
+        let out = set_property_in_source(
+            src,
+            "link",
+            &PropertyValue::Wikilink("Plain Note".to_string()),
+        )
+        .unwrap();
+        let (props, _) = extract_frontmatter(&out);
+        let link = props.iter().find(|p| p.key == "link").unwrap();
+        assert_eq!(
+            link.value,
+            PropertyValue::Wikilink("Plain Note".to_string())
+        );
+    }
+
+    #[test]
+    fn set_property_refuses_to_overwrite_anchors_and_aliases() {
+        // Audit #181: yaml-rust2's loader expands anchors and
+        // aliases inline. Round-tripping a frontmatter that uses
+        // them would silently turn `&b shared` + `*b` into two
+        // literal `shared` copies. Refuse instead.
+        let src = "---\nbase: &b shared\nref: *b\nplain: keep\n---\nbody\n";
+        let err = set_property_in_source(src, "year", &PropertyValue::Integer(2026)).unwrap_err();
+        assert!(matches!(err, FrontmatterEditError::MalformedFrontmatter(_)));
+
+        // Just an anchor, no alias use, still refused — round-trip
+        // would still drop the anchor token from disk.
+        let src = "---\nbase: &b shared\nplain: keep\n---\nbody\n";
+        let err = set_property_in_source(src, "year", &PropertyValue::Integer(2026)).unwrap_err();
+        assert!(matches!(err, FrontmatterEditError::MalformedFrontmatter(_)));
+    }
+
+    #[test]
+    fn set_property_refuses_to_clobber_comments_only_block() {
+        // Audit #181: a frontmatter consisting entirely of comments
+        // parses to an empty hash. Without a guard, set_property
+        // would synthesize a fresh block carrying just the new key
+        // and silently lose every comment line.
+        let src = "---\n# IMPORTANT: machine-managed\n# generated 2026-05-24\n---\nbody\n";
+        let err =
+            set_property_in_source(src, "title", &PropertyValue::Text("New".into())).unwrap_err();
+        assert!(matches!(err, FrontmatterEditError::MalformedFrontmatter(_)));
+    }
+
+    #[test]
+    fn set_property_duplicate_key_error_names_the_key() {
+        // Audit #182: yaml-rust2's raw duplicate-key error is hard
+        // to act on. Rewrite it to call out the offending key by
+        // name so the UI can present it without re-parsing.
+        let src = "---\ntitle: First\ntitle: Second\n---\nbody\n";
+        let err = set_property_in_source(src, "year", &PropertyValue::Integer(2026)).unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(
+                    msg.contains("duplicate frontmatter key `title`"),
+                    "expected duplicate-key message naming `title`, got {msg:?}"
+                );
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_property_rejects_dotted_keys() {
+        // Audit #179: the reader flattens nested mappings to dotted
+        // keys (`person:\n  name: X` → `person.name`). The writer
+        // can't drill into the mapping, so a dotted key would create
+        // a duplicate top-level entry. Refuse at the boundary.
+        let src = "---\nperson:\n  name: Original\n---\nbody\n";
+        let err = set_property_in_source(src, "person.name", &PropertyValue::Text("Y".into()))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            FrontmatterEditError::InvalidPropertyValue { .. }
+        ));
+
+        // Same rejection on a plain-flat file — the rule is at the
+        // API boundary, not contingent on the source shape.
+        let src = "---\ntitle: Hi\n---\nbody\n";
+        let err = set_property_in_source(src, "a.b", &PropertyValue::Text("X".into())).unwrap_err();
+        assert!(matches!(
+            err,
+            FrontmatterEditError::InvalidPropertyValue { .. }
+        ));
+
+        // delete_property symmetric.
+        let err = delete_property_in_source(src, "a.b").unwrap_err();
+        assert!(matches!(
+            err,
+            FrontmatterEditError::InvalidPropertyValue { .. }
+        ));
+    }
+
+    #[test]
+    fn set_property_taglist_strips_existing_hash_before_re_prefixing() {
+        // Audit #180A: TagList(["#foo"]) was emitting as `- "##foo"`
+        // on disk. Round-trip preserved the type but disk content
+        // grew an extra `#` the user didn't author.
+        let src = "---\np: x\n---\nbody\n";
+        let out = set_property_in_source(
+            src,
+            "tags",
+            &PropertyValue::TagList(vec!["#leading".to_string()]),
+        )
+        .unwrap();
+        // The on-disk form has a single `#` prefix.
+        assert!(
+            out.contains("- \"#leading\"") || out.contains("- '#leading'"),
+            "expected single-# emit, got {out:?}"
+        );
+        assert!(!out.contains("##"), "got double-# in {out:?}");
+        // Round-trips as the same tag value.
+        let (props, _) = extract_frontmatter(&out);
+        let tags = props.iter().find(|p| p.key == "tags").unwrap();
+        assert_eq!(
+            tags.value,
+            PropertyValue::TagList(vec!["leading".to_string()])
+        );
     }
 }

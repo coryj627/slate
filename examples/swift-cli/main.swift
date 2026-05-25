@@ -37,16 +37,7 @@ func run() {
             let headings = try readHeadings(path: path)
             printHeadings(headings)
         } catch let error as VaultError {
-            let message: String
-            switch error {
-            case .Io(let m), .Db(let m), .Trash(let m):
-                message = m
-            case .InvalidPath(let path, let reason):
-                message = "invalid path \(path): \(reason)"
-            case .Cancelled:
-                message = "operation cancelled"
-            }
-            FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+            FileHandle.standardError.write(Data("error: \(describe(error))\n".utf8))
             exit(1)
         } catch {
             FileHandle.standardError.write(Data("error: \(error)\n".utf8))
@@ -56,6 +47,33 @@ func run() {
         print("Extracting headings from embedded sample (pass a path to read a file):")
         let headings = extractHeadings(source: sample)
         printHeadings(headings)
+    }
+}
+
+/// Render a `VaultError` as a single-line message. Centralising the
+/// switch here keeps the FFI enum exhaustively covered in one place
+/// — adding a new variant to the Rust side will fail to compile
+/// here, not silently fall through a `default` clause.
+func describe(_ error: VaultError) -> String {
+    switch error {
+    case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
+        .InvalidArgument(let m):
+        return m
+    case .InvalidPath(let path, let reason):
+        return "invalid path \(path): \(reason)"
+    case .Cancelled:
+        return "operation cancelled"
+    case .InvalidUtf8(let path):
+        return "file at \(path) is not valid UTF-8"
+    case .FileTooLarge(let path, let size):
+        return "file at \(path) is \(size) bytes, larger than the configured refuse threshold"
+    case .Unsupported(let feature):
+        return "operation not supported yet: \(feature)"
+    case .WriteConflict(let current, let expected, _):
+        return
+            "write conflict: file has been modified since it was read (expected \(expected), current \(current))"
+    case .MalformedFrontmatter(let path, let reason):
+        return "frontmatter at \(path) is malformed: \(reason)"
     }
 }
 
@@ -99,16 +117,7 @@ func runVaultDemo(rootPath: String) {
             print("  … more pages available")
         }
     } catch let error as VaultError {
-        let message: String
-        switch error {
-        case .Io(let m), .Db(let m), .Trash(let m):
-            message = m
-        case .InvalidPath(let path, let reason):
-            message = "invalid path \(path): \(reason)"
-        case .Cancelled:
-            message = "operation cancelled"
-        }
-        FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+        FileHandle.standardError.write(Data("error: \(describe(error))\n".utf8))
         exit(1)
     } catch {
         FileHandle.standardError.write(Data("error: \(error)\n".utf8))
