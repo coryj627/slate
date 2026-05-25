@@ -1005,15 +1005,15 @@ mod tests {
             );
         }
     }
-}
 
-fn collect_keywords(node: tree_sitter::Node, out: &mut Vec<String>) {
-    let kind = node.kind();
-    if kind.starts_with("keyword_") {
-        out.push(kind.to_string());
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_keywords(child, out);
+    fn collect_keywords(node: tree_sitter::Node, out: &mut Vec<String>) {
+        let kind = node.kind();
+        if kind.starts_with("keyword_") {
+            out.push(kind.to_string());
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_keywords(child, out);
+        }
     }
 }
