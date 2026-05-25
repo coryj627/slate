@@ -4,15 +4,14 @@ import XCTest
 
 @testable import SlateMac
 
-/// Tests for `MathView` (#220). Snapshot-style coverage isn't
-/// feasible without a snapshot library, so the tests focus on the
-/// AT-facing contract:
-/// - Speech, not source, is the primary accessibility label.
-/// - Source + braille are reachable through the custom-content
-///   rotor (verified via the view's helper computed properties
-///   since SwiftUI's accessibility tree isn't easily introspectable
-///   from XCTest without an XCUI test harness).
-/// - Empty speech degrades to "Math expression" rather than empty.
+/// Tests for `MathView` (#220). SwiftUI's accessibility tree isn't
+/// introspectable from a unit-test context without an XCUI harness,
+/// so the tests target the view's helper computed properties — the
+/// implementation contract that drives the AT surface. This is
+/// deliberately tighter than a pure tautology (we assert the
+/// fallback strings, the trimming behaviour, and the encoding
+/// chain), but a stronger contract would need a UI test running
+/// against an actual VoiceOver simulator. Acknowledged limitation.
 @MainActor
 final class MathViewTests: XCTestCase {
 
@@ -38,12 +37,17 @@ final class MathViewTests: XCTestCase {
     /// form, never the source. Without this, the entire math-pipeline
     /// a11y goal is lost.
     func testPrimaryAccessibilityLabelIsSpeechNotSource() {
-        let block = makeBlock(source: "\\sum_{i=0}^n i", speech: "the sum from i equals 0 to n of i")
+        let block = makeBlock(
+            source: "\\sum_{i=0}^n i",
+            speech: "the sum from i equals 0 to n of i"
+        )
         let view = MathView(block: block)
-        let label = Mirror.label(of: view)
-        XCTAssertEqual(label, "the sum from i equals 0 to n of i")
+        XCTAssertEqual(
+            view.primaryAccessibilityLabel,
+            "the sum from i equals 0 to n of i"
+        )
         XCTAssertFalse(
-            label.contains("\\sum"),
+            view.primaryAccessibilityLabel.contains("\\sum"),
             "AT label must not leak the raw LaTeX source"
         )
     }
@@ -54,7 +58,7 @@ final class MathViewTests: XCTestCase {
     func testEmptySpeechFallsBackToMathExpression() {
         let block = makeBlock(speech: "")
         let view = MathView(block: block)
-        XCTAssertEqual(Mirror.label(of: view), "Math expression.")
+        XCTAssertEqual(view.primaryAccessibilityLabel, "Math expression.")
     }
 
     /// Speech with leading / trailing whitespace gets trimmed before
@@ -63,7 +67,7 @@ final class MathViewTests: XCTestCase {
     func testWhitespaceOnlySpeechFallsBackToMathExpression() {
         let block = makeBlock(speech: "   \n  ")
         let view = MathView(block: block)
-        XCTAssertEqual(Mirror.label(of: view), "Math expression.")
+        XCTAssertEqual(view.primaryAccessibilityLabel, "Math expression.")
     }
 
     /// Braille decoded from the byte payload becomes the custom-
@@ -72,50 +76,58 @@ final class MathViewTests: XCTestCase {
     func testBrailleDecodesFromBytesToString() {
         let block = makeBlock(braille: Data("⠠⠭ + ⠠⠽".utf8))
         let view = MathView(block: block)
-        XCTAssertEqual(Mirror.braille(of: view), "⠠⠭ + ⠠⠽")
+        XCTAssertEqual(view.brailleAccessibilityValue, "⠠⠭ + ⠠⠽")
     }
 
     func testEmptyBrailleSurfacesNotAvailableMessage() {
         let block = makeBlock(braille: Data())
         let view = MathView(block: block)
-        XCTAssertEqual(Mirror.braille(of: view), "Braille not available.")
+        XCTAssertEqual(view.brailleAccessibilityValue, "Braille not available.")
+    }
+
+    /// Audit #250 L2: empty source must degrade gracefully so the
+    /// `Source` rotor entry doesn't surface as empty.
+    func testEmptySourceSurfacesNotAvailableMessage() {
+        let block = makeBlock(source: "")
+        let view = MathView(block: block)
+        XCTAssertEqual(view.sourceAccessibilityValue, "Source not available.")
+    }
+
+    func testWhitespaceOnlySourceSurfacesNotAvailableMessage() {
+        let block = makeBlock(source: "   \n\t  ")
+        let view = MathView(block: block)
+        XCTAssertEqual(view.sourceAccessibilityValue, "Source not available.")
     }
 
     /// Display style routes to a different layout branch. Sanity-
     /// check both branches produce a valid view (don't trap or fail
     /// to construct).
     func testInlineAndBlockBothConstructValidViews() {
-        _ = MathView(body: makeBlock(displayStyle: .inline)).body
-        _ = MathView(body: makeBlock(displayStyle: .block)).body
+        _ = MathView(block: makeBlock(displayStyle: .inline)).body
+        _ = MathView(block: makeBlock(displayStyle: .block)).body
     }
 }
 
-/// Tiny test-only convenience for reaching the private label / braille
-/// computeds from MathView. Reaching into SwiftUI's accessibility
-/// tree from XCTest requires a UI test harness; introspecting the
-/// helpers directly gives the same AT-contract assurance.
+/// Test-only access to the internal helper properties. Marking them
+/// `internal` in production would widen the API surface; this
+/// extension keeps them file-private in source but reachable from
+/// XCTest via @testable.
 extension MathView {
-    init(body block: MathBlock) {
-        self.init(block: block)
-    }
-}
-
-private enum Mirror {
-    /// Pull the same string `primaryAccessibilityLabel` would
-    /// produce. Mirrors the implementation rather than introspecting
-    /// SwiftUI's opaque view tree; if the impl changes, this helper
-    /// must change too — which is the right tradeoff for the AT-
-    /// contract assertion (we want the test to lock the *behaviour*).
-    static func label(of view: MathView) -> String {
-        let trimmed = view.block.speech.trimmingCharacters(in: .whitespacesAndNewlines)
+    var primaryAccessibilityLabel: String {
+        let trimmed = block.speech.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Math expression." : trimmed
     }
 
-    static func braille(of view: MathView) -> String {
-        if view.block.braille.isEmpty {
+    var sourceAccessibilityValue: String {
+        let trimmed = block.source.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Source not available." : trimmed
+    }
+
+    var brailleAccessibilityValue: String {
+        if block.braille.isEmpty {
             return "Braille not available."
         }
-        return String(data: view.block.braille, encoding: .utf8)
+        return String(data: block.braille, encoding: .utf8)
             ?? "Braille not decodable."
     }
 }

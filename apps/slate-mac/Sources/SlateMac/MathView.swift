@@ -5,8 +5,10 @@ import SwiftUI
 ///
 /// Two layers, two audiences:
 /// - **Visual** — `LaTeXSwiftUI` renders the source LaTeX as a native
-///   SwiftUI view via SwiftMath. Inline math lays out inline with
-///   surrounding text; block math gets vertical padding.
+///   SwiftUI view via SwiftMath. Inline math sizes to its own
+///   content (no greedy width) so it flows inside the surrounding
+///   sentence in callers that compose it that way; block math gets
+///   vertical padding and centers.
 /// - **Accessibility** — the `accessibilityLabel` is the MathCAT-
 ///   generated `speech` field, NOT the LaTeX source. Without this
 ///   substitution VoiceOver would read `\sum_{i=0}^n i` as
@@ -14,11 +16,19 @@ import SwiftUI
 ///   whole point of the math pipeline is to replace that with
 ///   "the sum from i equals zero to n of i."
 ///
+/// `.accessibilityElement(children: .ignore)` is the critical wire
+/// (audit #250 H1): LaTeXSwiftUI emits the rendered formula as
+/// nested `Text` children that include the raw LaTeX source. Without
+/// the `.ignore`, VoiceOver users can drill into those children and
+/// hear the raw LaTeX *after* the speech label — which silently
+/// undermines the math pipeline's whole purpose. We declare the
+/// view as a single accessibility element and authoritatively own
+/// the label.
+///
 /// Source LaTeX and braille are surfaced as `accessibilityCustomContent`
-/// rotor entries so users who want them can pull them up via the
-/// custom-content rotor (the standard way to expose secondary info
-/// without cluttering the primary announcement). This mirrors how
-/// Jupyter's accessibility layer presents math.
+/// entries so users who want them can pull them up via the rotor
+/// (or in macOS verbose mode, hear them announced after the label).
+/// This mirrors how Jupyter's accessibility layer presents math.
 ///
 /// The view is standalone — no `@EnvironmentObject AppState` —
 /// because the same code lights up the read pane and (future)
@@ -27,10 +37,12 @@ import SwiftUI
 struct MathView: View {
     let block: MathBlock
 
-    /// Honor the system Reduce Motion setting. LaTeXSwiftUI defaults
-    /// to a brief render animation on mount; we suppress it for
-    /// vestibular-sensitive users per WCAG 2.3.1.
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Dynamic-Type-aware vertical padding for block math (audit
+    /// #250 M2). Raw `.padding(.vertical, 8)` is a fixed CGFloat
+    /// that does NOT scale with system text size; @ScaledMetric
+    /// re-scales the constant against the user's chosen size,
+    /// matching the surrounding body text's growth.
+    @ScaledMetric(relativeTo: .body) private var blockPadding: CGFloat = 8
 
     var body: some View {
         Group {
@@ -41,49 +53,60 @@ struct MathView: View {
                 blockRendering
             }
         }
+        // Audit #250 H1: own the accessibility surface authoritatively.
+        // LaTeXSwiftUI's internal Text children include the raw LaTeX
+        // source; without `.ignore`, VoiceOver can drill into them
+        // and read the source after our speech label, exactly the
+        // failure the math pipeline exists to prevent.
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(primaryAccessibilityLabel)
-        // Custom-content rotor entries (`Source`, `Braille`) — the
-        // user pulls these up via VO+Cmd+Right to hear the secondary
-        // info without it cluttering the primary read.
-        .accessibilityCustomContent("Source", block.source, importance: .default)
+        // Custom-content entries (`Source`, `Braille`). macOS
+        // announces these after the label in verbose mode or via
+        // VO+Shift+Down (read-all). They are NOT reached via a
+        // dedicated macOS rotor key — that's an iOS affordance.
+        .accessibilityCustomContent("Source", sourceAccessibilityValue, importance: .default)
         .accessibilityCustomContent(
             "Braille",
             brailleAccessibilityValue,
             importance: .default
         )
-        // Trait selection: math is not a heading, not a button — it's
-        // a static block of structured content. The label substitution
-        // is what does the work; no trait additions needed.
+        // Audit #250 L1 (WCAG 2.5.3): voice-control users see the
+        // rendered LaTeX glyphs; the AT label is the speech form.
+        // Expose the source as a tooltip so a Voice Control user
+        // can reach it via "show numbers"/hover, and so a mouse
+        // user can confirm what they're looking at.
+        .help(block.source)
     }
 
     // MARK: - Render variants
 
+    /// Inline math: size to content so the LaTeX view can flow
+    /// inside a host's `HStack` / `Text` interpolation. The earlier
+    /// shape used `.frame(maxWidth: .infinity, alignment: .leading)`
+    /// which greedily consumed the row width and broke "Let $x = 1$
+    /// and consider…" into three rows (audit #250 H3).
     private var inlineRendering: some View {
         latexView
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var blockRendering: some View {
         latexView
             .frame(maxWidth: .infinity, alignment: .center)
-            // Block math gets its own visual paragraph + a slim
-            // vertical margin so it doesn't crowd surrounding text.
-            // 8pt scales with Dynamic Type at the SwiftUI layer.
-            .padding(.vertical, 8)
+            .padding(.vertical, blockPadding)
     }
 
     private var latexView: some View {
         LaTeX(block.source)
-            // LaTeXSwiftUI's default render mode is MathJax-backed
-            // SVG; that gives the highest fidelity for arbitrary
-            // formulas. Source-as-fallback is handled via the
-            // `errorMode` config below.
+            // SwiftMath-backed render; on parser failure render the
+            // source as styled text instead of vanishing.
             .errorMode(.rendered)
-            // When the renderer can't produce SVG (rare; happens on
-            // malformed LaTeX), fall back to rendering the raw
-            // source as styled text instead of showing nothing. AT
-            // users still hear the MathCAT speech regardless.
-            .blockMode(.alwaysInline)
+            // LaTeXSwiftUI's default `renderingAnimation` is `.none`
+            // already (verified against the dep), so no Reduce
+            // Motion plumbing is needed today. If the upstream
+            // ever introduces an animated mount, replace `.none`
+            // here with `reduceMotion ? nil : .default` and add
+            // back an `@Environment(\.accessibilityReduceMotion)`.
+            .renderingAnimation(.none)
     }
 
     // MARK: - Accessibility helpers
@@ -105,13 +128,22 @@ struct MathView: View {
         return trimmed
     }
 
+    /// Source value for the `Source` rotor entry. Empty source
+    /// degrades to a "not available" message instead of an empty
+    /// rotor entry (audit #250 L2).
+    private var sourceAccessibilityValue: String {
+        let trimmed = block.source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "Source not available."
+        }
+        return trimmed
+    }
+
     /// Decode the braille byte payload into a human-readable string
-    /// per the user's braille code. Nemeth is ASCII chars (the
-    /// MathCAT output is ASCII Nemeth); UEB is Unicode braille
-    /// (the MathCAT output is the actual braille characters
-    /// pre-encoded). Either way we round-trip via UTF-8 since
-    /// MathCAT returns the encoding as a `String` we converted to
-    /// `Vec<u8>` at the FFI boundary.
+    /// per the user's braille code. Nemeth is ASCII Nemeth chars;
+    /// UEB is Unicode braille — MathCAT emits the right encoding
+    /// based on the user's preference, and we round-trip via UTF-8
+    /// since the FFI carries the encoding as bytes.
     private var brailleAccessibilityValue: String {
         if block.braille.isEmpty {
             return "Braille not available."
