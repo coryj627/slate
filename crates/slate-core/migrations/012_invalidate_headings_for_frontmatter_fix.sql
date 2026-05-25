@@ -1,0 +1,26 @@
+-- Migration 012: invalidate cached headings rows after the
+-- frontmatter-skip fix.
+--
+-- Pre-fix, `extract_headings` fed raw source to pulldown-cmark, which
+-- read the closing `---` of a YAML frontmatter block as a Setext H2
+-- underline for the preceding YAML lines — producing one giant fake
+-- H2 heading per frontmatter-bearing file (issue #227).
+--
+-- The fix in `extract_headings` only takes effect on the scanner's
+-- slow path: when a file's mtime+size+ctime hasn't changed since the
+-- last scan, the cached rows are kept. So vaults indexed pre-fix
+-- would keep displaying the bug in the Outline sidebar until each
+-- individual file's content changed.
+--
+-- Wipe the `headings` table so the next slow-path scan rewrites
+-- every file's headings using the corrected extractor. This is a
+-- bulk DELETE rather than a per-file rewrite because:
+--   - the rows are scanner-managed (the schema's docstring says so);
+--   - the rebuild cost is bounded by the file count, not the schema's;
+--   - we'd otherwise need to mark every file dirty, which is more
+--     code for the same end state.
+--
+-- ON DELETE CASCADE from `files` doesn't help here because the files
+-- themselves aren't going away. A direct DELETE is the simplest path.
+
+DELETE FROM headings;

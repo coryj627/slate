@@ -165,6 +165,14 @@ pub fn frontmatter_range(source: &str) -> Option<Range<usize>> {
 /// reads as Setext H2 underlines when they follow non-blank text —
 /// issue #227). Uses `frontmatter_range` for detection so the
 /// definition of "is this a frontmatter block" stays in one place.
+///
+/// Line-ending support after the closing `---`: LF and CRLF are
+/// consumed. Bare CR (classic-Mac line terminators) is not — those
+/// files would pass the leading CR through to the parser, but
+/// classic-Mac line endings have been out of practical use for two
+/// decades and pulldown-cmark itself doesn't treat bare CR as a
+/// line boundary either, so the asymmetry doesn't matter in
+/// practice.
 pub fn body_after_frontmatter(source: &str) -> &str {
     let Some(range) = frontmatter_range(source) else {
         return source;

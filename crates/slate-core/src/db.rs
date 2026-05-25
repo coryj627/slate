@@ -96,6 +96,12 @@ const MIGRATIONS: &[Migration] = &[
         description: "blocks: per-file `^block-id` anchors for embed resolution",
         sql: include_str!("../migrations/011_blocks.sql"),
     },
+    Migration {
+        description: "headings: invalidate cached rows after frontmatter-skip fix (#227)",
+        sql: include_str!(
+            "../migrations/012_invalidate_headings_for_frontmatter_fix.sql"
+        ),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
