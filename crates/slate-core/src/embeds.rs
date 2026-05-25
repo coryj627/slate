@@ -192,22 +192,11 @@ pub(crate) enum EmbedAnchor<'a> {
 
 /// Strip the YAML frontmatter block (if any) from `source`,
 /// returning the body slice. Reads the embed's "content" exactly
-/// as the user sees it in the note pane.
+/// as the user sees it in the note pane. Thin shim over the
+/// general-purpose [`frontmatter::body_after_frontmatter`] so the
+/// "what counts as frontmatter" definition stays in one place.
 pub(crate) fn strip_frontmatter_for_embed(source: &str) -> &str {
-    let Some(range) = crate::frontmatter::frontmatter_range(source) else {
-        return source;
-    };
-    // The closing `---\n` follows the YAML body. Find its end.
-    let after_body = &source[range.end..];
-    let Some(rest) = after_body.strip_prefix("---") else {
-        return source;
-    };
-    // Skip the trailing newline(s) after `---`.
-    let rest = rest
-        .strip_prefix("\r\n")
-        .or_else(|| rest.strip_prefix('\n'))
-        .unwrap_or(rest);
-    rest
+    crate::frontmatter::body_after_frontmatter(source)
 }
 
 /// Extract the section of `source` headed by `heading_name`. The

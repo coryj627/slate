@@ -155,6 +155,41 @@ pub fn frontmatter_range(source: &str) -> Option<Range<usize>> {
     None
 }
 
+/// Return the source slice past a YAML frontmatter block, if any —
+/// i.e. the Markdown body the reader actually sees. When there's no
+/// detectable frontmatter (no leading `---` line, or no matching
+/// closing `---`), returns `source` unchanged.
+///
+/// Wrap-around helper for parsers that operate on the body and would
+/// be confused by YAML's `---` delimiters (which pulldown-cmark
+/// reads as Setext H2 underlines when they follow non-blank text —
+/// issue #227). Uses `frontmatter_range` for detection so the
+/// definition of "is this a frontmatter block" stays in one place.
+///
+/// Line-ending support after the closing `---`: LF and CRLF are
+/// consumed. Bare CR (classic-Mac line terminators) is not — those
+/// files would pass the leading CR through to the parser, but
+/// classic-Mac line endings have been out of practical use for two
+/// decades and pulldown-cmark itself doesn't treat bare CR as a
+/// line boundary either, so the asymmetry doesn't matter in
+/// practice.
+pub fn body_after_frontmatter(source: &str) -> &str {
+    let Some(range) = frontmatter_range(source) else {
+        return source;
+    };
+    // `range.end` is the start of the closing `---` line. Skip the
+    // `---` plus its line ending (CRLF or LF). If the file ended at
+    // the closing delimiter with no trailing newline, return the
+    // empty slice past it.
+    let after_body = &source[range.end..];
+    let Some(rest) = after_body.strip_prefix("---") else {
+        return source;
+    };
+    rest.strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))
+        .unwrap_or(rest)
+}
+
 /// Returns the source slice past the opening `---` line if and only
 /// if the file starts with one (byte 0 must be `-`, or a UTF-8 BOM
 /// followed by `-`).
@@ -1414,6 +1449,36 @@ mod tests {
         let src = "---\nkey: value\n---\nbody starts here";
         let range = frontmatter_range(src).unwrap();
         assert_eq!(&src[range], "key: value\n");
+    }
+
+    #[test]
+    fn body_after_frontmatter_returns_post_block_slice() {
+        let src = "---\nkey: value\n---\nbody text\n";
+        assert_eq!(body_after_frontmatter(src), "body text\n");
+    }
+
+    #[test]
+    fn body_after_frontmatter_handles_crlf_after_closing_delim() {
+        let src = "---\r\nkey: value\r\n---\r\nbody text\r\n";
+        // `frontmatter_range` is line-ending-tolerant only on the
+        // closing-delimiter trim, so the CRLF after the closing
+        // `---` is consumed by the trailing newline strip.
+        assert_eq!(body_after_frontmatter(src), "body text\r\n");
+    }
+
+    #[test]
+    fn body_after_frontmatter_passes_through_when_no_frontmatter() {
+        let src = "# just a body\nno frontmatter here\n";
+        assert_eq!(body_after_frontmatter(src), src);
+    }
+
+    #[test]
+    fn body_after_frontmatter_passes_through_when_open_without_close() {
+        // Mid-edit shape: opening `---` but no closing delimiter
+        // anywhere — frontmatter_range returns None, so the body
+        // helper is a no-op and we keep all the user's text visible.
+        let src = "---\nstill writing\nno close yet\n";
+        assert_eq!(body_after_frontmatter(src), src);
     }
 
     #[test]
