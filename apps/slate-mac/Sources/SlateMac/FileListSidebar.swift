@@ -50,6 +50,7 @@ struct FileListSidebar: View {
                     PropertiesPanel()
                     OutgoingLinksPanel()
                     BacklinksPanel()
+                    EmbedsPanel()
                     TasksPanel()
                 }
             }
