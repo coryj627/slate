@@ -1,21 +1,55 @@
 import Foundation
 
-/// Swift-side mirror of `slate_core::math::MathPrefs`. The FFI
-/// surfaces the enum components (`MathSpeechStyle`, `MathVerbosity`,
-/// `BrailleCode`) but not the wrapping struct — defined here so
-/// `AppState.mathPrefs` has a single binding for UI panels to drive
-/// + observe.
-///
-/// Settings panel (#224) consumes this; the backend's
-/// `get_math_blocks` reads the equivalent from its own
-/// `SessionConfig.math_prefs` snapshot. Until #224 lands the
-/// session-side setter, changes to this struct re-fire the load
-/// but the rendered output uses session defaults — see the docstring
-/// on `AppState.mathPrefs`.
-struct MathPrefs: Equatable, Codable {
-    var speechStyle: MathSpeechStyle = .clearSpeak
-    var verbosity: MathVerbosity = .medium
-    var brailleCode: BrailleCode = .nemeth
+// MARK: - MathPrefs extension (FFI struct + Swift-side niceties)
+//
+// `MathPrefs` itself is now an FFI-generated struct in
+// `slate_uniffi.swift` (Record). This file adds the Swift-side
+// niceties on top:
+// - A default-arguments init so callers can write `MathPrefs()` /
+//   `MathPrefs(speechStyle: .mathSpeak)` without spelling out every
+//   field.
+// - `Codable` for the `PreferencesStore` JSON persistence chain.
+// - `Equatable` is implied by uniffi's `Record` derivation.
+
+extension MathPrefs {
+    /// Default-initialized prefs. Mirrors the Rust-side
+    /// `MathPrefs::default()` (ClearSpeak / Medium / Nemeth).
+    init() {
+        self.init(
+            speechStyle: .clearSpeak,
+            verbosity: .medium,
+            brailleCode: .nemeth
+        )
+    }
+}
+
+// Codable conformance for MathPrefs. The FFI struct itself isn't
+// Codable, but we can extend it with a single-container encoding
+// that mirrors the field shape so JSON round-trips through
+// PreferencesStore.
+
+extension MathPrefs: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case speechStyle
+        case verbosity
+        case brailleCode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            speechStyle: try c.decode(MathSpeechStyle.self, forKey: .speechStyle),
+            verbosity: try c.decode(MathVerbosity.self, forKey: .verbosity),
+            brailleCode: try c.decode(BrailleCode.self, forKey: .brailleCode)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(speechStyle, forKey: .speechStyle)
+        try c.encode(verbosity, forKey: .verbosity)
+        try c.encode(brailleCode, forKey: .brailleCode)
+    }
 }
 
 // MARK: - Codable + UI labels for the FFI enums
@@ -26,6 +60,16 @@ struct MathPrefs: Equatable, Codable {
 // encode(to:) using a stable string identifier (independent of the
 // user-facing displayName so renaming the UI label doesn't migrate
 // stored preferences).
+//
+// **Persistence-tag stability — DO NOT RENAME.** The string literals
+// inside every `persistenceTag` switch below are written into users'
+// UserDefaults via `PreferencesStore`. Changing any of them (e.g.
+// the Rust FFI renaming `.terse` to `.short`) silently corrupts
+// stored prefs on the next launch — the JSON decode falls into the
+// `default:` branch and throws DataCorrupted, and we lose the user's
+// choice back to whatever the type's Swift default is. If you must
+// rename an FFI case, add a migration path that reads the old tag
+// first; never just bump the tag.
 
 extension MathSpeechStyle: Codable, CaseIterable {
     public static var allCases: [MathSpeechStyle] {

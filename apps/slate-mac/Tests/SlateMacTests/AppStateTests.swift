@@ -3690,4 +3690,161 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isLoadingCodeBlocks)
         XCTAssertFalse(state.isLoadingDiagramBlocks)
     }
+
+    /// Audit #258 verification: editing a fenced math / code /
+    /// mermaid block and saving must re-populate the corresponding
+    /// content-pipeline cache. Before the fix, saveCurrentNote only
+    /// fired `refreshTasksAfterSave`, leaving the math / code /
+    /// diagram arrays stale until the user navigated away and back.
+    func testSaveRefreshesContentPipelineCachesAfterEdit() async throws {
+        let vault = tempDir.appendingPathComponent("refresh-after-save-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        // Start with a note that has zero blocks of each kind so the
+        // baseline caches land empty; the save mutates the file to
+        // add one block of each kind and we assert the caches catch up.
+        try Data("# Note\n\nplain body, no blocks yet.\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        await state.mathBlocksLoadTask?.value
+        await state.codeBlocksLoadTask?.value
+        await state.diagramBlocksLoadTask?.value
+        XCTAssertEqual(state.currentNoteMathBlocks.count, 0)
+        XCTAssertEqual(state.currentNoteCodeBlocks.count, 0)
+        XCTAssertEqual(state.currentNoteDiagramBlocks.count, 0)
+
+        // User edits the buffer to introduce one math, one code, and
+        // one mermaid block, then saves. The save success path fires
+        // refreshMathBlocksAfterSave / refreshCodeBlocksAfterSave /
+        // refreshDiagramBlocksAfterSave, each of which re-queries
+        // the backend off-actor and republishes.
+        let edited = """
+            # Note
+
+            Inline math: $x + y$
+
+            ```rust
+            fn foo() {}
+            ```
+
+            ```mermaid
+            flowchart LR
+            A --> B
+            ```
+            """
+        state.updateEditorText(edited)
+        await state.saveCurrentNote()?.value
+
+        // The refresh-after-save tasks are detached/fire-and-forget so
+        // we poll briefly until each cache reflects the new content.
+        // `getSyntaxTokens` returns one entry per fenced code block,
+        // and the mermaid fence counts as a code block too, so the
+        // expected code-cache count is 2 (rust + mermaid).
+        // Cap at ~2s to avoid hanging CI on regressions; the polling
+        // loop sleeps 20ms between checks.
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if state.currentNoteMathBlocks.count == 1
+                && state.currentNoteCodeBlocks.count >= 1
+                && state.currentNoteDiagramBlocks.count == 1
+            {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        XCTAssertEqual(
+            state.currentNoteMathBlocks.count, 1,
+            "math cache must refresh after save (audit #258)"
+        )
+        XCTAssertGreaterThanOrEqual(
+            state.currentNoteCodeBlocks.count, 1,
+            "code cache must refresh after save (audit #258); "
+                + "rust fence + possibly mermaid fence"
+        )
+        XCTAssertEqual(
+            state.currentNoteDiagramBlocks.count, 1,
+            "diagram cache must refresh after save (audit #258)"
+        )
+    }
+
+    /// Audit #260 verification: closeVault must cancel + nil out the
+    /// in-flight embeds load task and clear the isLoadingEmbeds
+    /// spinner flag. Before the fix, the task lived past the close
+    /// and could publish embed resolutions into a closed vault's
+    /// state if it raced the cancellation.
+    ///
+    /// Red-team L4: the original shape of this test awaited
+    /// `embedsLoadTask?.value` BEFORE closing, so the task had
+    /// already settled and the test wasn't actually exercising the
+    /// race the audit fix addressed. The revised flow lets the
+    /// selection-change kick off the linksLoadTask (which armed
+    /// embedsLoadTask as a chained child), polls briefly until the
+    /// handle is observable, and ONLY THEN calls closeVault — so
+    /// the close runs while the embed resolution may still be in
+    /// flight.
+    func testCloseVaultCancelsEmbedsLoadTask() async throws {
+        let vault = tempDir.appendingPathComponent("close-embeds-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# Host\n\n![[target]]\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("target body\n".utf8)
+            .write(to: vault.appendingPathComponent("target.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        // Capture the linksLoadTask handle so we can later check
+        // that it was the one in flight at close. The
+        // embedsLoadTask is assigned inside the links task body
+        // after the outgoing-links query completes; we poll up to
+        // 1 second for it to be observably non-nil before closing.
+        state.selectedFilePath = "host.md"
+        let deadline = Date().addingTimeInterval(1.0)
+        while state.embedsLoadTask == nil && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertNotNil(
+            state.embedsLoadTask,
+            "test precondition: embedsLoadTask handle must be set "
+                + "before we close (otherwise we're not exercising the race)"
+        )
+        let inFlight = state.embedsLoadTask
+
+        // Close without awaiting the embed task. The audit-#260
+        // fix cancels the task and clears the handle + spinner;
+        // the cancellation is propagated through Swift Concurrency
+        // so the inner Task.value awaits should fall out fast.
+        state.closeVault()
+
+        XCTAssertNil(
+            state.embedsLoadTask,
+            "embedsLoadTask must be cleared on closeVault (audit #260)"
+        )
+        XCTAssertFalse(
+            state.isLoadingEmbeds,
+            "isLoadingEmbeds spinner flag must be cleared on closeVault (audit #260)"
+        )
+
+        // Even if the task happened to complete before close (race
+        // window), the cancellation should still have fired — wait
+        // for its final settle so the test doesn't leak a running
+        // task into the next case.
+        await inFlight?.value
+        XCTAssertEqual(
+            state.currentNoteEmbedResolutions, [:],
+            "embed resolutions must be cleared on closeVault"
+        )
+    }
 }

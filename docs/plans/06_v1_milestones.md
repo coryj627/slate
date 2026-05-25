@@ -1,14 +1,16 @@
 # 06 — V1 Milestone Decomposition (read+edit Mac alpha)
 
-**Status (2026-05-23):** ✅ All six milestones (A–F) shipped. The alpha build covers the four primary read-and-write workflows — find a note, read its content, follow its links, and edit it — and is ready for the AT-user tester cohort. Per-milestone close dates are in the status table below. Issue tracking continues per the conventions section at the bottom.
+**Status (2026-05-25):** ✅ Alpha milestones A–F shipped (read+edit Mac alpha). ✅ Post-alpha tester-driven milestones G–J shipped (tasks, templates, property editing, embeds). 🟡 V1.x milestones K–P open on GitHub: content pipelines (K), citations (L), sync diagnostics + CLI (M), Bases (N), local history + change tracking (O), Graph view (P). Per-milestone close dates are in the tables below; live scope lives on the GitHub Milestones (links inline).
 
-**Strategic goal of this phase:** the 4 committed AT-user testers have a Mac app they can use against their own existing Obsidian vaults, with their own screen readers, to do all four primary read-and-write workflows. The phase shipped six progressively-richer builds, not one big drop at the end.
+**Strategic goal of the alpha phase:** the 4 committed AT-user testers have a Mac app they can use against their own existing Obsidian vaults, with their own screen readers, to do all four primary read-and-write workflows. The phase shipped six progressively-richer builds, not one big drop at the end.
 
-**Pacing note for future phases:** the original plan budgeted 12–16 weeks; A–F closed in 6 calendar days (2026-05-17 → 2026-05-23). The 2-week-per-milestone cadence remains the right *commitment* shape for tester comms — don't promise an end date, promise the next build — even when execution runs faster.
+**Pacing note for future phases:** the original plan budgeted 12–16 weeks; A–F closed in 6 calendar days (2026-05-17 → 2026-05-23), and G–J closed in the following 2 days. The 2-week-per-milestone cadence remains the right *commitment* shape for tester comms — don't promise an end date, promise the next build — even when execution runs faster.
 
 ## Where to find the live plan
 
 Per-milestone goals, scope, schema, tests, and acceptance criteria live on **GitHub Milestones**, not in this file:
+
+### Alpha (read+edit Mac alpha, A–F)
 
 | Milestone | GitHub | Status |
 |---|---|---|
@@ -18,6 +20,30 @@ Per-milestone goals, scope, schema, tests, and acceptance criteria live on **Git
 | D — Frontmatter properties | [milestone 4](https://github.com/coryj627/slate/milestone/4) | ✅ Shipped (2026-05-19) |
 | E — Full-text search | [milestone 5](https://github.com/coryj627/slate/milestone/5) | ✅ Shipped (2026-05-19) |
 | F — Editing | [milestone 6](https://github.com/coryj627/slate/milestone/6) | ✅ Shipped (2026-05-23) — backend [#105](https://github.com/coryj627/slate/pull/105), UI [#106](https://github.com/coryj627/slate/pull/106) |
+
+### Post-alpha tester-driven (G–J)
+
+Added after A–F based on tester pull during the alpha. Not in the original plan; tracked here so the doc reflects what actually shipped.
+
+| Milestone | GitHub | Status |
+|---|---|---|
+| G — Tasks | [milestone 7](https://github.com/coryj627/slate/milestone/7) | ✅ Shipped (2026-05-24) |
+| H — Templates | [milestone 8](https://github.com/coryj627/slate/milestone/8) | ✅ Shipped (2026-05-23) |
+| I — Property editing | [milestone 9](https://github.com/coryj627/slate/milestone/9) | ✅ Shipped (2026-05-25) |
+| J — Embeds in the content view | [milestone 10](https://github.com/coryj627/slate/milestone/10) | ✅ Shipped (2026-05-25) |
+
+### V1.x (K–P) — open
+
+The full V1.x scope per `05_locked_architecture_decisions.md`. Ordering between K–P is not fixed; tester feedback during K–M will sharpen N's defaults, and O/P can ship in either order.
+
+| Milestone | GitHub | Notes |
+|---|---|---|
+| K — Content pipelines (math, code, Mermaid) | [milestone 11](https://github.com/coryj627/slate/milestone/11) | Implements `05` §6.2–6.4. |
+| L — Citations + bibliography | [milestone 12](https://github.com/coryj627/slate/milestone/12) | Implements `05` §6.5. Defer-the-whole-milestone clause if no tester is actively citing. |
+| M — Sync detection + diagnostics + CLI v1 | [milestone 13](https://github.com/coryj627/slate/milestone/13) | Implements `05` §7.2 phase 1 + §8.3 Tier 2 (CLI). Local HTTP API ships separately later. |
+| N — Bases v1 | [milestone 14](https://github.com/coryj627/slate/milestone/14) | Implements `05` §8. Biggest scope item in V1.x; recommended after K–M. |
+| O — Local history + change tracking | [milestone 15](https://github.com/coryj627/slate/milestone/15) | Implements `05` §7.5, §8.9, and `03` §11. Consumes F's op-log infra + N's Bases AST. |
+| P — Graph view | [milestone 16](https://github.com/coryj627/slate/milestone/16) | Implements `05` §5.2 + `01` §7 Phase 1 and accessible-equivalents portion of Phase 2. |
 
 Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migrations, tests, accessibility checkpoints, tester-feedback questions, and definition of done. Individual issues link back to their milestone.
 
@@ -41,16 +67,24 @@ Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migra
 - **Tester compensation.** If testers spend real time on builds, they get paid per project principle (`feedback_oss_a11y_contribution.md`). Build it into the budget thinking now, not at first invoice.
 - **Vault file safety.** Every file write goes through the atomic temp+rename pattern. Never overwrite directly. Conflict detection in Milestone F is the first safety net; full snapshot history (the "history" workstream from `docs/plans/03`) is V1.x.
 
-## Explicitly NOT in months 0–3
+## Explicitly NOT in months 0–3 (alpha phase)
 
-- Math, Mermaid, code-block visual rendering (V1.x — see `05` §6.2, §6.3, §6.4).
-- Citations and bibliography (V1.x — see §6.5).
-- Bases / query builder / saved queries (V1.x — see §8).
-- Tier 1 config-based plugins beyond saved-vault paths (V1.x — see §10).
+Original alpha-scope exclusions. Most of the V1.x items below now have GitHub milestones (K–P); the others remain unscheduled.
+
+- Math, Mermaid, code-block visual rendering — Milestone K.
+- Citations and bibliography — Milestone L.
+- Bases / query builder / saved queries — Milestone N.
+- Local history + change tracking — Milestone O.
+- Graph view — Milestone P.
+- Tier 1 config-based plugins beyond saved-vault paths (V1.x — see `05` §10; no milestone yet).
+- Local HTTP API (V1.x — see `05` §10; ships separately after CLI in M).
+- WASM tree-sitter grammar loading at runtime (V1.x — see `05` §6.4; no milestone yet).
+- "Explain this function" semantic AT command + per-language semantic refinements (V1.x — see `05` §6.4; no milestone yet).
+- `not-portable.md` migration-docs deliverable (V1.x — see `05` §10; no milestone yet).
 - Sync writer (V2).
-- Accessible structured conflict resolution UI beyond file-level (V2 — see §7.3).
-- iOS, Windows, Android UI (later platforms — see §3).
-- Themes, dark mode polish, command palette as a first-class surface.
+- Accessible structured conflict resolution UI beyond file-level (V2 — see `05` §7.3; data plumbing in O).
+- iOS, Windows, Android UI (later platforms — see `05` §3).
+- Themes, dark mode polish, command palette as a first-class surface (no V1.x commitment; natural home is here if testers ask).
 
 ## Risk register
 
