@@ -14,6 +14,16 @@ let package = Package(
     products: [
         .executable(name: "SlateMac", targets: ["SlateMac"]),
     ],
+    dependencies: [
+        // LaTeXSwiftUI renders LaTeX math expressions to native SwiftUI
+        // views via SwiftMath. Used by `MathView` (#220) for the visual
+        // representation alongside the MathCAT-generated speech /
+        // braille that the AT layer consumes.
+        .package(
+            url: "https://github.com/colinc86/LaTeXSwiftUI",
+            from: "1.5.0"
+        ),
+    ],
     targets: [
         // System-library target that wraps the C header emitted by
         // uniffi-bindgen. The module name MUST match what the
@@ -27,7 +37,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "SlateMac",
-            dependencies: ["slate_uniffiFFI"],
+            dependencies: [
+                "slate_uniffiFFI",
+                .product(name: "LaTeXSwiftUI", package: "LaTeXSwiftUI"),
+            ],
             linkerSettings: [
                 .linkedLibrary("slate_uniffi"),
                 // -L points at the workspace's Cargo target dir. The
