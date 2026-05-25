@@ -46,24 +46,34 @@ struct PropertyEditorRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(property.key)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .accessibilityHidden(true)
+        // Layout (issue #228): the label sits on its own row at the
+        // top, and the editor + action buttons share a centred row
+        // below. The earlier shape pinned `actionButtons` to the
+        // VStack's first text baseline (the label's baseline), which
+        // visually anchored Save / delete to the *label* and left
+        // the input row looking empty to the right of the field.
+        // Putting buttons in the same HStack as the editor makes them
+        // belong to the input they actually act on, and centre
+        // alignment keeps them vertically aligned with the field
+        // regardless of variant (tag-list rows are taller than
+        // scalar-text rows).
+        VStack(alignment: .leading, spacing: 4) {
+            Text(property.key)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.primary)
+                .accessibilityHidden(true)
 
+            HStack(alignment: .center, spacing: 8) {
                 editor
-
-                if let err = inputValidationError {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .accessibilityLabel("Validation error: \(err)")
-                }
+                actionButtons
             }
-            Spacer(minLength: 4)
-            actionButtons
+
+            if let err = inputValidationError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Validation error: \(err)")
+            }
         }
         .padding(.vertical, 2)
         .accessibilityFocused($deleteDialogFocusReturn, equals: .row)
