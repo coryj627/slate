@@ -428,6 +428,62 @@ final class AppState: ObservableObject {
     /// no popover is active.
     @Published var pendingEmbedPreview: EmbedPreview?
 
+    // MARK: Content pipelines (#223 — Milestone K)
+
+    /// Math blocks parsed + rendered (LaTeX → MathML → MathCAT
+    /// speech + braille) for the currently-loaded note. Loaded by
+    /// `loadCurrentNoteMathBlocks(path:)` after a selection change,
+    /// chained in parallel off `linksLoadTask` alongside code +
+    /// diagram. Cleared on selection change.
+    @Published private(set) var currentNoteMathBlocks: [MathBlock] = []
+    @Published private(set) var isLoadingMathBlocks: Bool = false
+    @Published var mathBlocksLoadError: String?
+    private(set) var mathBlocksLoadTask: Task<Void, Never>?
+
+    /// Code blocks parsed + highlighted (tree-sitter) for the
+    /// currently-loaded note. Same lifecycle as `currentNoteMathBlocks`.
+    @Published private(set) var currentNoteCodeBlocks: [CodeBlock] = []
+    @Published private(set) var isLoadingCodeBlocks: Bool = false
+    @Published var codeBlocksLoadError: String?
+    private(set) var codeBlocksLoadTask: Task<Void, Never>?
+
+    /// Mermaid diagram blocks parsed + rendered (SVG + structured
+    /// description) for the currently-loaded note. Same lifecycle
+    /// as `currentNoteMathBlocks`.
+    @Published private(set) var currentNoteDiagramBlocks: [DiagramBlock] = []
+    @Published private(set) var isLoadingDiagramBlocks: Bool = false
+    @Published var diagramBlocksLoadError: String?
+    private(set) var diagramBlocksLoadTask: Task<Void, Never>?
+
+    /// Per-user math rendering preferences. UI panels bind to this;
+    /// the `didSet` re-triggers the math-block load for the current
+    /// path so settings changes propagate to the rendered output.
+    ///
+    /// **Note**: `MathPrefs` is a Swift-side mirror of the Rust
+    /// `slate_core::math::MathPrefs` — the FFI doesn't surface the
+    /// struct directly (only its enum components, which the FFI
+    /// mirrors as `MathSpeechStyle`, `MathVerbosity`, `BrailleCode`).
+    /// The session's `get_math_blocks` reads prefs from
+    /// `SessionConfig.math_prefs` captured at session-open time;
+    /// hot-swapping requires a session-side setter that the
+    /// Settings PR (#224) lands. For #223 the UI state path is
+    /// wired but the rendered output still uses session defaults
+    /// until #224 is in.
+    @Published var mathPrefs: MathPrefs = MathPrefs() {
+        didSet {
+            // Audit #257 L1: SwiftUI bindings (a Picker writing
+            // back through `$mathPrefs.speechStyle`) can re-fire
+            // the setter with the same value on view rebuilds.
+            // Skip the loader spin-up if nothing actually changed.
+            guard oldValue != mathPrefs else { return }
+            guard let path = selectedFilePath else { return }
+            mathBlocksLoadTask?.cancel()
+            mathBlocksLoadTask = Task { [weak self] in
+                await self?.loadCurrentNoteMathBlocks(path: path)
+            }
+        }
+    }
+
     // MARK: Tasks (#113 + #114 — Milestone G UI)
 
     /// Tasks parsed from the currently-selected note, in document
@@ -858,6 +914,17 @@ final class AppState: ObservableObject {
         linksLoadTask = nil
         tasksLoadTask?.cancel()
         tasksLoadTask = nil
+        // Audit #257 M1: orphaned content-pipeline tasks would
+        // otherwise keep grabbing the session mutex after the user
+        // switched files, serialising the new selection's loads
+        // behind their FFI bodies. Cancel them eagerly so rapid
+        // file switching doesn't pile up serialized work.
+        mathBlocksLoadTask?.cancel()
+        mathBlocksLoadTask = nil
+        codeBlocksLoadTask?.cancel()
+        codeBlocksLoadTask = nil
+        diagramBlocksLoadTask?.cancel()
+        diagramBlocksLoadTask = nil
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
@@ -880,10 +947,16 @@ final class AppState: ObservableObject {
             currentNoteEmbedResolutions = [:]
             pendingEmbedPreview = nil
             currentNoteTasks = []
+            currentNoteMathBlocks = []
+            currentNoteCodeBlocks = []
+            currentNoteDiagramBlocks = []
             isLoadingNote = false
             isLoadingLinks = false
             isLoadingEmbeds = false
             isLoadingTasks = false
+            isLoadingMathBlocks = false
+            isLoadingCodeBlocks = false
+            isLoadingDiagramBlocks = false
             return
         }
         // Note-to-note transitions: leave `currentBacklinks`,
@@ -912,6 +985,15 @@ final class AppState: ObservableObject {
         // Drop any open embed-preview popover too — its target may
         // not exist in the new file's embed set.
         pendingEmbedPreview = nil
+        // Content pipelines: same synchronous-clear reasoning as
+        // embeds. The blocks carry rendered MathML / token streams /
+        // SVG bytes for the previous file's body — holding them
+        // during a transition would render the prior file's content
+        // inside panels labelled as the new file's. Audit #203
+        // logic, repeated.
+        currentNoteMathBlocks = []
+        currentNoteCodeBlocks = []
+        currentNoteDiagramBlocks = []
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
@@ -934,6 +1016,21 @@ final class AppState: ObservableObject {
         }
         tasksLoadTask = Task { [weak self] in
             await self?.loadCurrentNoteTasks(path: path)
+        }
+        // Content pipelines (#223): math + code + diagram fan out
+        // in parallel after the selection lands. They don't depend
+        // on links or each other; running concurrently keeps the
+        // post-selection latency down. Each loader carries its own
+        // race-guard (selectedFilePath == path) so a fast switch
+        // can't write stale state.
+        mathBlocksLoadTask = Task { [weak self] in
+            await self?.loadCurrentNoteMathBlocks(path: path)
+        }
+        codeBlocksLoadTask = Task { [weak self] in
+            await self?.loadCurrentNoteCodeBlocks(path: path)
+        }
+        diagramBlocksLoadTask = Task { [weak self] in
+            await self?.loadCurrentNoteDiagramBlocks(path: path)
         }
     }
 
@@ -1205,6 +1302,21 @@ final class AppState: ObservableObject {
         currentNoteProperties = []
         currentNoteEmbedResolutions = [:]
         pendingEmbedPreview = nil
+        currentNoteMathBlocks = []
+        currentNoteCodeBlocks = []
+        currentNoteDiagramBlocks = []
+        mathBlocksLoadError = nil
+        codeBlocksLoadError = nil
+        diagramBlocksLoadError = nil
+        isLoadingMathBlocks = false
+        isLoadingCodeBlocks = false
+        isLoadingDiagramBlocks = false
+        mathBlocksLoadTask?.cancel()
+        mathBlocksLoadTask = nil
+        codeBlocksLoadTask?.cancel()
+        codeBlocksLoadTask = nil
+        diagramBlocksLoadTask?.cancel()
+        diagramBlocksLoadTask = nil
         embedsLoadError = nil
         linksLoadError = nil
         currentNoteTasks = []
@@ -1537,6 +1649,103 @@ final class AppState: ObservableObject {
         currentNoteEmbedResolutions = resolutions
         embedsLoadError = nil
         isLoadingEmbeds = false
+    }
+
+    // MARK: - Content pipelines (#223)
+
+    /// Load math blocks for `path` via the math pipeline and publish
+    /// to `currentNoteMathBlocks`. Cancellable, race-guarded, drops
+    /// stale writes when the user has moved on. Same shape as
+    /// `loadCurrentNoteEmbedResolutions`.
+    func loadCurrentNoteMathBlocks(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingMathBlocks = true
+        // Audit #257 M2: clear the spinner on EVERY exit path,
+        // including cancellation / selection-moved-away. Without
+        // `defer`, the late-arriving race-guard short-circuit
+        // would leave `isLoadingMathBlocks = true` forever — a
+        // WCAG 4.1.3 "stuck busy state" that VoiceOver would
+        // announce and never withdraw.
+        defer { isLoadingMathBlocks = false }
+        let result: Result<[MathBlock], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try session.getMathBlocks(path: path))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+        switch result {
+        case .success(let blocks):
+            currentNoteMathBlocks = blocks
+            mathBlocksLoadError = nil
+        case .failure(let err):
+            currentNoteMathBlocks = []
+            mathBlocksLoadError = humanReadable(err)
+        }
+    }
+
+    /// Load code blocks (syntax-highlighted) for `path` and publish
+    /// to `currentNoteCodeBlocks`. Same shape as
+    /// `loadCurrentNoteMathBlocks`.
+    func loadCurrentNoteCodeBlocks(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingCodeBlocks = true
+        defer { isLoadingCodeBlocks = false }  // audit #257 M2
+        let result: Result<[CodeBlock], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try session.getSyntaxTokens(path: path))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+        switch result {
+        case .success(let blocks):
+            currentNoteCodeBlocks = blocks
+            codeBlocksLoadError = nil
+        case .failure(let err):
+            currentNoteCodeBlocks = []
+            codeBlocksLoadError = humanReadable(err)
+        }
+    }
+
+    /// Load Mermaid diagram blocks (rendered SVG + structured
+    /// description) for `path` and publish to
+    /// `currentNoteDiagramBlocks`. Same shape as
+    /// `loadCurrentNoteMathBlocks`.
+    func loadCurrentNoteDiagramBlocks(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingDiagramBlocks = true
+        defer { isLoadingDiagramBlocks = false }  // audit #257 M2
+        let result: Result<[DiagramBlock], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try session.getDiagramBlocks(path: path))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+        switch result {
+        case .success(let blocks):
+            currentNoteDiagramBlocks = blocks
+            diagramBlocksLoadError = nil
+        case .failure(let err):
+            currentNoteDiagramBlocks = []
+            diagramBlocksLoadError = humanReadable(err)
+        }
     }
 
     /// Off-actor mirror of `humanReadable(_:)` — used inside the

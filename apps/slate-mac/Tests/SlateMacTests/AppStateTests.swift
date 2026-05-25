@@ -3493,4 +3493,189 @@ final class AppStateTests: XCTestCase {
             ".dueToday with no due-dated tasks should land an empty set; the OLD filter's page-2 must not have been appended"
         )
     }
+
+    // MARK: - Content pipelines (#223)
+
+    /// Selection landing on a note with math content populates
+    /// `currentNoteMathBlocks` after the loader fires.
+    func testLoadCurrentNoteMathBlocksPopulatesCache() async throws {
+        let vault = tempDir.appendingPathComponent("math-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# Note\n\nFormula: $x + y$ inline.\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.mathBlocksLoadTask?.value
+
+        XCTAssertEqual(state.currentNoteMathBlocks.count, 1)
+        XCTAssertEqual(state.currentNoteMathBlocks.first?.source, "x + y")
+        XCTAssertNil(state.mathBlocksLoadError)
+        XCTAssertFalse(state.isLoadingMathBlocks)
+    }
+
+    /// Code blocks populate via `loadCurrentNoteCodeBlocks`.
+    func testLoadCurrentNoteCodeBlocksPopulatesCache() async throws {
+        let vault = tempDir.appendingPathComponent("code-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# Note\n\n```rust\nfn foo() {}\n```\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.codeBlocksLoadTask?.value
+
+        XCTAssertEqual(state.currentNoteCodeBlocks.count, 1)
+        XCTAssertEqual(state.currentNoteCodeBlocks.first?.language, "rust")
+        XCTAssertNil(state.codeBlocksLoadError)
+    }
+
+    /// Diagram blocks populate via `loadCurrentNoteDiagramBlocks`.
+    func testLoadCurrentNoteDiagramBlocksPopulatesCache() async throws {
+        let vault = tempDir.appendingPathComponent("diagram-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# Note\n\n```mermaid\nflowchart LR\nA --> B\n```\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.diagramBlocksLoadTask?.value
+
+        XCTAssertEqual(state.currentNoteDiagramBlocks.count, 1)
+        XCTAssertEqual(
+            state.currentNoteDiagramBlocks.first?.dialect,
+            .mermaid
+        )
+        XCTAssertNil(state.diagramBlocksLoadError)
+    }
+
+    /// Selection change clears all three caches synchronously so a
+    /// stale render doesn't show the prior file's content in the
+    /// new file's panels.
+    func testSelectionChangeClearsContentPipelineCaches() async throws {
+        let vault = tempDir.appendingPathComponent("clear-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# A\n\n$x + y$\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+        try Data("# B\n\nno math here\n".utf8)
+            .write(to: vault.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.mathBlocksLoadTask?.value
+        XCTAssertEqual(state.currentNoteMathBlocks.count, 1)
+
+        // Switch to b.md — the math cache for a.md must NOT remain
+        // populated. The new load fires and resolves to an empty
+        // list.
+        state.selectedFilePath = "b.md"
+        // The selection-change handler clears the caches
+        // synchronously (note-to-note transition path).
+        XCTAssertEqual(
+            state.currentNoteMathBlocks.count, 0,
+            "math cache must clear synchronously on selection change"
+        )
+        XCTAssertEqual(
+            state.currentNoteCodeBlocks.count, 0,
+            "code cache must clear synchronously on selection change"
+        )
+        XCTAssertEqual(
+            state.currentNoteDiagramBlocks.count, 0,
+            "diagram cache must clear synchronously on selection change"
+        )
+        await state.mathBlocksLoadTask?.value
+        XCTAssertEqual(
+            state.currentNoteMathBlocks.count, 0,
+            "b.md has no math; reload should land empty"
+        )
+    }
+
+    /// Changing `mathPrefs` triggers a re-load of the math blocks
+    /// for the currently-loaded note. (The backend session still
+    /// uses its captured prefs until #224 lands the session-side
+    /// setter; the *re-load fires* is what this test pins.)
+    func testMathPrefsChangeRefiresLoad() async throws {
+        let vault = tempDir.appendingPathComponent("prefs-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# Note\n\n$x$\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.mathBlocksLoadTask?.value
+        let firstTask = state.mathBlocksLoadTask
+
+        // Flip a pref. The didSet must fire a NEW load task — i.e.
+        // the handle stored on `mathBlocksLoadTask` becomes a
+        // different instance.
+        state.mathPrefs.speechStyle = .mathSpeak
+        let secondTask = state.mathBlocksLoadTask
+        XCTAssertNotNil(secondTask)
+        // `Task` is a value type with no identity check, but the
+        // `firstTask?.hashValue != secondTask?.hashValue` proves
+        // they were swapped. (We can't do `===` on Task.)
+        XCTAssertNotEqual(
+            firstTask?.hashValue,
+            secondTask?.hashValue,
+            "mathPrefs.didSet should swap mathBlocksLoadTask for a fresh task"
+        )
+        await secondTask?.value
+    }
+
+    /// `closeVault` cancels and clears all three load tasks +
+    /// publishes empty arrays so reopening on a different vault
+    /// can't render stale content.
+    func testCloseVaultClearsContentPipelineState() async throws {
+        let vault = tempDir.appendingPathComponent("close-vault")
+        try FileManager.default.createDirectory(
+            at: vault,
+            withIntermediateDirectories: true
+        )
+        try Data("# Note\n\n$x + y$\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.mathBlocksLoadTask?.value
+        XCTAssertEqual(state.currentNoteMathBlocks.count, 1)
+
+        state.closeVault()
+
+        XCTAssertEqual(state.currentNoteMathBlocks.count, 0)
+        XCTAssertEqual(state.currentNoteCodeBlocks.count, 0)
+        XCTAssertEqual(state.currentNoteDiagramBlocks.count, 0)
+        XCTAssertNil(state.mathBlocksLoadTask)
+        XCTAssertNil(state.codeBlocksLoadTask)
+        XCTAssertNil(state.diagramBlocksLoadTask)
+        XCTAssertFalse(state.isLoadingMathBlocks)
+        XCTAssertFalse(state.isLoadingCodeBlocks)
+        XCTAssertFalse(state.isLoadingDiagramBlocks)
+    }
 }
