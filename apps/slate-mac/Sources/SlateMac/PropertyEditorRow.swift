@@ -46,26 +46,58 @@ struct PropertyEditorRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(property.key)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .accessibilityHidden(true)
+        // Layout (issue #228): the label sits on its own row at the
+        // top; editor + action buttons share the next row; validation
+        // error sits below. The earlier shape pinned `actionButtons`
+        // to the outer HStack's first text baseline (the label's),
+        // which left the input row looking empty to the right of
+        // the field.
+        //
+        // Alignment is `.top` (audit #237 red-team): on multi-row
+        // variants (list / tagList) `.center` made Save / ⊖ sit at
+        // the vertical mid-point of a 5-item list, adjacent to
+        // item 3, with no visual association to any one row. `.top`
+        // anchors them with the first item / single-line input —
+        // for scalar variants the visual is identical to `.center`
+        // because the editor is one line tall.
+        //
+        // Spacer between editor and buttons (audit #237 red-team):
+        // without it, numeric editors (`.frame(minWidth: 80)` only)
+        // leave Save / ⊖ floating in the middle of a wide sidebar.
+        // The spacer pushes buttons to the trailing edge so they
+        // anchor consistently across all panel widths and variants.
+        //
+        // Spacing 12 (audit #237 red-team): bumped from 8 to give
+        // the field's focus ring + the delete button's button-style
+        // ring room to coexist under macOS "Increase contrast"
+        // without visually fusing into one fuzzy focus indicator.
+        VStack(alignment: .leading, spacing: 4) {
+            Text(property.key)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.primary)
+                .accessibilityHidden(true)
 
+            HStack(alignment: .top, spacing: 12) {
                 editor
-
-                if let err = inputValidationError {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .accessibilityLabel("Validation error: \(err)")
-                }
+                Spacer(minLength: 4)
+                actionButtons
             }
-            Spacer(minLength: 4)
-            actionButtons
+
+            if let err = inputValidationError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Validation error: \(err)")
+            }
         }
         .padding(.vertical, 2)
+        // Audit #237 red-team: pair the row-scoped focus return with
+        // `accessibilityElement(children: .contain)` so VoiceOver
+        // completes row traversal (editor → Save → delete → error)
+        // before walking to the next row. Without `.contain`, a VO
+        // user who Tabs forward after a failed commit would skip
+        // the validation error and hear the next row's editor.
+        .accessibilityElement(children: .contain)
         .accessibilityFocused($deleteDialogFocusReturn, equals: .row)
         .confirmationDialog(
             "Delete property `\(property.key)`?",
