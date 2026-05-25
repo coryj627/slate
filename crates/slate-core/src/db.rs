@@ -92,6 +92,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "tasks: expression index over the sort tuple",
         sql: include_str!("../migrations/010_tasks_sort_index.sql"),
     },
+    Migration {
+        description: "blocks: per-file `^block-id` anchors for embed resolution",
+        sql: include_str!("../migrations/011_blocks.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

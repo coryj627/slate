@@ -6,7 +6,10 @@
 //! module) and the vault filesystem abstraction (`vault` module) plus the
 //! pre-existing heading extraction used by the FFI smoke tests.
 
+pub mod blocks;
+pub mod blocks_db;
 pub mod db;
+pub mod embeds;
 pub mod frontmatter;
 pub mod link_resolver;
 pub mod links;
@@ -24,6 +27,10 @@ pub use search_db::{
     full_text_search, QueryHit, QueryResultSet, SearchScope, SNIPPET_HIT_END, SNIPPET_HIT_START,
 };
 
+pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
+pub use embeds::{
+    AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
+};
 pub use frontmatter::{
     extract_frontmatter, frontmatter_range, Property, PropertyParseWarning, PropertyValue,
 };
