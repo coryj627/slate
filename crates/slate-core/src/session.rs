@@ -845,12 +845,13 @@ impl VaultSession {
         }
 
         let (note_name, anchor) = parse_embed_target(target);
-        let _ = host_path; // reserved for relative-path resolution in a future iteration
 
         // Image targets: looks_like_image fires on the raw target's
-        // extension before we hit the link_resolver.
+        // extension before we hit the link_resolver. Thread the
+        // host path through so relative-folder resolution stays
+        // symmetric with the note-target branch (Codoki PR #190).
         if crate::embeds::looks_like_image(note_name) {
-            return self.resolve_image_embed(target, note_name);
+            return self.resolve_image_embed(host_path, target, note_name);
         }
 
         // Note target: snapshot the file index, run link_resolver,
@@ -906,13 +907,16 @@ impl VaultSession {
 
     fn resolve_image_embed(
         &self,
+        host_path: &str,
         raw_target: &str,
         note_name: &str,
     ) -> Result<crate::EmbedResolution, VaultError> {
         // Same path-resolution strategy as note targets: snapshot
         // the file index and run the link_resolver. `looks_like_image`
         // guaranteed the extension is one the resolver recognises;
-        // basename / folder matching does the rest.
+        // basename / folder matching does the rest. `host_path`
+        // threads through so any future folder-relative resolution
+        // in `link_resolver` lights up automatically.
         let target_path = {
             let conn = self.conn.lock().expect("session connection mutex");
             let paths: Vec<String> = conn
@@ -920,7 +924,7 @@ impl VaultSession {
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             let vault_index = crate::InMemoryVaultIndex::new(paths);
-            match crate::resolve_link(note_name, None, "", &vault_index) {
+            match crate::resolve_link(note_name, None, host_path, &vault_index) {
                 crate::ResolvedLink::Resolved { target_path, .. } => target_path,
                 _ => {
                     return Ok(crate::EmbedResolution::Unresolved {

@@ -5,7 +5,7 @@
 //! shapes:
 //!
 //! - **Trailing on the last line of a block**:
-//!   ```
+//!   ```text
 //!   paragraph text spans multiple
 //!   lines and ends with the anchor ^my-block
 //!   ```
@@ -13,7 +13,7 @@
 //!   whitespace of its last line.
 //!
 //! - **Standalone on a line of its own** immediately after a block:
-//!   ```
+//!   ```text
 //!   paragraph text
 //!   ^my-block
 //!   ```
