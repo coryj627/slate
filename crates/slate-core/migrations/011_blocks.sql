@@ -48,4 +48,8 @@ CREATE TABLE blocks (
 );
 
 -- Resolver lookup: `resolve_embed("note^block-id")` hits this index.
-CREATE INDEX idx_blocks_lookup ON blocks(file_id, block_id);
+-- UNIQUE so duplicate block_ids per file are rejected at the DB
+-- layer even if a future `extract_blocks` regression slipped a
+-- duplicate past its own dedupe pass — matches the docstring's
+-- "the first occurrence wins" guarantee (Codoki PR #190).
+CREATE UNIQUE INDEX idx_blocks_lookup ON blocks(file_id, block_id);
