@@ -119,7 +119,7 @@ struct EmbedView: View {
             // Block ids like `^my-block-1` would otherwise be
             // spelled out character-by-character ahead of the
             // user's actual content.
-            Text(text)
+            Text(verbatim: text)
                 .font(.body)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,7 +182,7 @@ struct EmbedView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .accessibilityHidden(true)
-            Text(message)
+            Text(verbatim: message)
                 .font(.caption)
                 .foregroundStyle(.primary)
         }
@@ -200,7 +200,7 @@ struct EmbedView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .accessibilityHidden(true)
-            Text(visible)
+            Text(verbatim: visible)
                 .font(.callout)
                 .foregroundStyle(.primary)
         }
@@ -225,7 +225,7 @@ struct EmbedView: View {
             Image(systemName: "arrow.down.right.and.arrow.up.left")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text(visible)
+            Text(verbatim: visible)
                 .font(.callout)
                 .foregroundStyle(.primary)
         }
@@ -323,7 +323,7 @@ private struct EmbedDisclosure<Content: View>: View {
             // "Embedded note:" entries among the user's real
             // headings. DisclosureGroup's native role already
             // announces "disclosure group, collapsed/expanded".
-            Text(label)
+            Text(verbatim: label)
                 .font(.callout.weight(.semibold))
         }
         .padding(.vertical, 4)
@@ -359,7 +359,7 @@ private struct EmbeddedNoteBody: View {
                 switch segment {
                 case .text(let s):
                     if !s.isEmpty {
-                        Text(s)
+                        Text(verbatim: s)
                             .font(.body)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
