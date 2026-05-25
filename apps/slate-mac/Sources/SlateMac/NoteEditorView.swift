@@ -224,6 +224,55 @@ struct NoteEditorView: NSViewRepresentable {
 
         func attach(textView: NSTextView) {
             self.textView = textView
+            // Re-run the highlight pass when the user toggles Increase
+            // Contrast or changes accent color so the embed underline
+            // adapts. Audit #230: `NSColor.controlAccentColor` is
+            // ~3:1 against `textBackgroundColor` on the default Blue
+            // accent (borderline WCAG 1.4.11) and worse on Graphite —
+            // when Increase Contrast is on we swap to `labelColor` for
+            // a guaranteed-pass underline.
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(systemColorPreferencesChanged),
+                name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(systemColorPreferencesChanged),
+                name: NSNotification.Name("AppleAquaColorVariantChanged"),
+                object: nil
+            )
+        }
+
+        @objc private func systemColorPreferencesChanged() {
+            applyEmbedHighlighting()
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        /// Underline color for the embed highlight, picked per the
+        /// system Increase Contrast setting. The accent color reads
+        /// fine for users on default colour pairings but drops below
+        /// 3:1 against `textBackgroundColor` on the Graphite accent +
+        /// dark mode; under Increase Contrast we swap to `labelColor`
+        /// which is contractually contrast-compliant against the
+        /// matched background. Audit #230.
+        var embedUnderlineColor: NSColor {
+            Self.embedUnderlineColor(
+                increaseContrast: NSWorkspace.shared
+                    .accessibilityDisplayShouldIncreaseContrast
+            )
+        }
+
+        /// Pure helper extracted for testability — the instance form
+        /// reads `NSWorkspace.shared`, which can't be flipped from a
+        /// test. This form takes the toggle directly so a unit test
+        /// can verify both branches without mocking AppKit.
+        static func embedUnderlineColor(increaseContrast: Bool) -> NSColor {
+            increaseContrast ? NSColor.labelColor : NSColor.controlAccentColor
         }
 
         /// Recompute embed spans for the current buffer and apply
@@ -257,13 +306,30 @@ struct NoteEditorView: NSViewRepresentable {
             let fullRange = NSRange(location: 0, length: nsSource.length)
             let spans = findEditorEmbedSpans(in: source)
             embedSpans = spans
+            // Do NOT remove `.foregroundColor` here. Earlier shipping
+            // applied a foreground color for the embed highlight; audit
+            // #207 changed the highlight to underline-only, and the
+            // foreground-color stripping that lived alongside the old
+            // apply path stayed behind. Removing the attribute every
+            // pass blew away the dynamic `NSColor.textColor` AppKit
+            // stamps onto typed text, which falls back to a static
+            // black under dark mode (issue #226 — text invisible
+            // against the dark editor background, WCAG 1.4.3 fail).
+            //
+            // Audit #232 — this no-strip behaviour assumes callers
+            // refresh the storage via `textView.string = …` for content
+            // swaps (which `string =` does — it resets attributes too).
+            // A future hot-reload path that switches to
+            // `replaceCharacters(in:with:)` to preserve undo / selection
+            // would need to either strip explicitly here or only on the
+            // embed-span ranges (which are the only ranges this code
+            // ever owned attribute-wise).
             storage.beginEditing()
-            storage.removeAttribute(.foregroundColor, range: fullRange)
             storage.removeAttribute(.underlineStyle, range: fullRange)
             storage.removeAttribute(.underlineColor, range: fullRange)
             let attrs: [NSAttributedString.Key: Any] = [
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
-                .underlineColor: NSColor.controlAccentColor,
+                .underlineColor: embedUnderlineColor,
             ]
             for span in spans {
                 let clamped = NSIntersectionRange(span.range, fullRange)
