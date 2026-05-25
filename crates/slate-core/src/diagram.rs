@@ -114,15 +114,7 @@ pub fn extract_diagram_blocks(source: &str) -> Vec<RawDiagramBlock> {
 pub fn render_diagram(raw: &RawDiagramBlock) -> DiagramBlock {
     let description = structured_description(&raw.source, raw.dialect);
     let (svg, status) = match raw.dialect {
-        DiagramDialect::Mermaid => match try_render_mermaid(&raw.source) {
-            Ok(svg) => (Some(svg), DiagramRenderStatus::Ok),
-            Err(RenderError::Unsupported(reason)) => {
-                (None, DiagramRenderStatus::UnsupportedDialect { reason })
-            }
-            Err(RenderError::Failed(message)) => {
-                (None, DiagramRenderStatus::RenderFailed { message })
-            }
-        },
+        DiagramDialect::Mermaid => render_mermaid_with_validation(&raw.source),
     };
     DiagramBlock {
         source: raw.source.clone(),
@@ -238,6 +230,47 @@ fn classify_mermaid_kind(first_line_lower: &str) -> MermaidKind {
 enum RenderError {
     Unsupported(String),
     Failed(String),
+}
+
+/// Wrap the renderer call with structural validation of the input
+/// (audit #245 M1). `mermaid-rs-renderer` 0.2 returns `Ok(svg)` for
+/// any input — including garbage like `@@@ random @@@` — producing
+/// small-but-meaningless SVGs. We pre-check that the source's first
+/// non-blank line classifies as a known Mermaid diagram kind; if
+/// not, route to `UnsupportedDialect` immediately so the user
+/// hears "diagram couldn't render" instead of seeing a fake
+/// rectangle.
+fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRenderStatus) {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return (
+            None,
+            DiagramRenderStatus::RenderFailed {
+                message: "empty diagram source".into(),
+            },
+        );
+    }
+    let first_line = trimmed
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(classify_mermaid_kind(&first_line), MermaidKind::Unknown) {
+        return (
+            None,
+            DiagramRenderStatus::UnsupportedDialect {
+                reason: format!("unrecognized Mermaid diagram type (first line: {first_line:?})"),
+            },
+        );
+    }
+    match try_render_mermaid(source) {
+        Ok(svg) => (Some(svg), DiagramRenderStatus::Ok),
+        Err(RenderError::Unsupported(reason)) => {
+            (None, DiagramRenderStatus::UnsupportedDialect { reason })
+        }
+        Err(RenderError::Failed(message)) => (None, DiagramRenderStatus::RenderFailed { message }),
+    }
 }
 
 /// Render a Mermaid source string to SVG bytes.
@@ -371,5 +404,57 @@ mod tests {
         // Whichever way the renderer reacted, the structured
         // description has to be non-empty so AT users have content.
         assert!(!block.structured_description.is_empty());
+    }
+
+    /// Audit #245 M1: mermaid-rs-renderer 0.2 accepts ANY input
+    /// (returns `Ok(svg)` even for garbage). Pre-validate that the
+    /// source's first non-blank line classifies as a known Mermaid
+    /// kind before accepting the renderer's output — otherwise route
+    /// to `UnsupportedDialect`.
+    #[test]
+    fn render_garbage_routes_to_unsupported_dialect_not_ok() {
+        let raw = RawDiagramBlock {
+            source: "@@@ garbage @@@".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_diagram(&raw);
+        match block.render_status {
+            DiagramRenderStatus::UnsupportedDialect { .. } => {}
+            other => panic!("expected UnsupportedDialect for unknown first-line; got {other:?}"),
+        }
+        assert!(block.svg.is_none(), "garbage input must not produce SVG");
+    }
+
+    #[test]
+    fn render_empty_source_routes_to_render_failed() {
+        let raw = RawDiagramBlock {
+            source: "".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_diagram(&raw);
+        match block.render_status {
+            DiagramRenderStatus::RenderFailed { .. } => {}
+            other => panic!("expected RenderFailed for empty source; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn render_valid_flowchart_yields_ok_status() {
+        let raw = RawDiagramBlock {
+            source: "flowchart LR\nA --> B\n".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_diagram(&raw);
+        match block.render_status {
+            DiagramRenderStatus::Ok => {}
+            other => panic!("expected Ok for valid flowchart; got {other:?}"),
+        }
+        assert!(block.svg.is_some());
     }
 }

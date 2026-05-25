@@ -141,6 +141,22 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
     out
 }
 
+/// Largest code-block source we hand to tree-sitter (audit #245 M3).
+/// Above the cap we skip parsing and emit a single `Other("oversized")`
+/// token; the visual fallback is plain-monospace rendering which is
+/// honest for huge blocks anyway. 256 KiB comfortably covers
+/// real-world fenced blocks; pathological / minified inputs (10MB+
+/// of one-line JS) would otherwise blow memory on the token stream.
+const CODE_BLOCK_MAX_BYTES: usize = 256 * 1024;
+
+// Note on parse-time bounds (audit #245 M3, partial address):
+// tree-sitter 0.26 replaced `set_timeout_micros` with a
+// `progress_callback` on `ParseOptions`. For this PR we rely on
+// the size cap (`CODE_BLOCK_MAX_BYTES`) as the primary bound —
+// 256 KiB of source has a hard ceiling on parse cost in practice.
+// A proper wall-clock callback can be added as a follow-up if real-
+// world profiling shows it's needed.
+
 /// Dispatch a raw block to the matching tree-sitter grammar.
 ///
 /// Returns a single `Other` token covering the source when the
@@ -153,6 +169,26 @@ pub fn highlight_code(raw: &RawCodeBlock) -> CodeBlock {
         .as_deref()
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
+
+    // Audit #245 M3: size cap. Anything past the cap skips tree-
+    // sitter entirely and emits one `Other("oversized")` token so
+    // downstream consumers see "no syntax highlighting available"
+    // rather than a multi-million-entry token vector.
+    if raw.source.len() > CODE_BLOCK_MAX_BYTES {
+        return CodeBlock {
+            source: raw.source.clone(),
+            language: raw.language.clone(),
+            tokens: vec![SyntaxToken {
+                start_byte: 0,
+                end_byte: raw.source.len() as u32,
+                kind: TokenKind::Other("oversized".to_string()),
+            }],
+            semantic_spans: Vec::new(),
+            line: raw.line,
+            byte_offset: raw.byte_offset,
+        };
+    }
+
     let lang = match grammar_for_tag(&language_key) {
         Some(l) => l,
         None => return passthrough_code_block(raw, &language_key),
@@ -594,5 +630,29 @@ mod tests {
             byte_offset: 0,
         };
         let _block = highlight_code(&raw);
+    }
+
+    /// Audit #245 M3: source above the size cap must skip tree-
+    /// sitter and emit one `Other("oversized")` token. Pinning a
+    /// cap matters for two reasons: (a) memory bound on the token
+    /// vec, (b) per-call latency bound — tree-sitter on a 10 MiB
+    /// adversarial block could otherwise hang for seconds.
+    #[test]
+    fn oversized_block_returns_single_oversized_token() {
+        let big = "fn foo() {}\n".repeat(30_000); // > 256 KiB
+        assert!(big.len() > CODE_BLOCK_MAX_BYTES);
+        let raw = RawCodeBlock {
+            source: big.clone(),
+            language: Some("rust".to_string()),
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = highlight_code(&raw);
+        assert_eq!(block.tokens.len(), 1);
+        match &block.tokens[0].kind {
+            TokenKind::Other(label) => assert_eq!(label, "oversized"),
+            other => panic!("expected Other(\"oversized\"); got {other:?}"),
+        }
+        assert!(block.semantic_spans.is_empty());
     }
 }
