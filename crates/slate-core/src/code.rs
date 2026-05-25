@@ -970,4 +970,50 @@ mod tests {
         });
         assert!(!block.tokens.is_empty());
     }
+
+    /// Audit #248: tree-sitter-sequel is a third-party grammar (maintainer:
+    /// derekstride, not the tree-sitter org). This test pins the `keyword_*`
+    /// naming convention our `classify_sql` relies on — if the grammar
+    /// changes its node-kind scheme, this test breaks and flags the issue.
+    #[test]
+    fn sql_grammar_keyword_prefix_convention() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_sequel::LANGUAGE.into())
+            .expect("tree-sitter-sequel must be compatible with tree-sitter 0.26");
+        let source = "SELECT id FROM users WHERE age > 18 ORDER BY name LIMIT 10;";
+        let tree = parser.parse(source, None).expect("SQL parse must succeed");
+        let mut keyword_nodes: Vec<String> = Vec::new();
+        collect_keywords(tree.root_node(), &mut keyword_nodes);
+        assert!(
+            keyword_nodes.iter().all(|k| k.starts_with("keyword_")),
+            "tree-sitter-sequel SQL keywords must use the keyword_* prefix convention; \
+             got: {keyword_nodes:?}"
+        );
+        let expected = [
+            "keyword_select",
+            "keyword_from",
+            "keyword_where",
+            "keyword_order",
+            "keyword_by",
+            "keyword_limit",
+        ];
+        for kw in &expected {
+            assert!(
+                keyword_nodes.iter().any(|k| k == kw),
+                "expected {kw} in SQL keyword nodes; got: {keyword_nodes:?}"
+            );
+        }
+    }
+
+    fn collect_keywords(node: tree_sitter::Node, out: &mut Vec<String>) {
+        let kind = node.kind();
+        if kind.starts_with("keyword_") {
+            out.push(kind.to_string());
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_keywords(child, out);
+        }
+    }
 }
