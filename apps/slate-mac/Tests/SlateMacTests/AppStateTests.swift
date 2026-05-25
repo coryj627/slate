@@ -842,6 +842,197 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(display2.visibleText, "anything")
     }
 
+    // MARK: - Embeds (#187 — Milestone J UI)
+
+    func testEmbedTargetKeyComposesAnchorMarker() throws {
+        let state = try makeAppState()
+        let plain = OutgoingLink(
+            targetPath: "target.md",
+            targetRaw: "target",
+            targetAnchor: nil,
+            kind: "wikilink",
+            isEmbed: true,
+            isExternal: false,
+            isUnresolved: false,
+            snippet: "",
+            ordinal: 0
+        )
+        XCTAssertEqual(state.embedTargetKey(plain), "target")
+
+        let headingAnchor = OutgoingLink(
+            targetPath: "target.md",
+            targetRaw: "target",
+            targetAnchor: LinkAnchor(kind: "heading", text: "Section A"),
+            kind: "wikilink",
+            isEmbed: true,
+            isExternal: false,
+            isUnresolved: false,
+            snippet: "",
+            ordinal: 1
+        )
+        XCTAssertEqual(state.embedTargetKey(headingAnchor), "target#Section A")
+
+        let blockAnchor = OutgoingLink(
+            targetPath: "target.md",
+            targetRaw: "target",
+            targetAnchor: LinkAnchor(kind: "block", text: "my-block"),
+            kind: "wikilink",
+            isEmbed: true,
+            isExternal: false,
+            isUnresolved: false,
+            snippet: "",
+            ordinal: 2
+        )
+        XCTAssertEqual(state.embedTargetKey(blockAnchor), "target^my-block")
+    }
+
+    func testLoadCurrentNoteEmbedResolutionsPopulatesCache() async throws {
+        let vault = tempDir.appendingPathComponent("embed-cache-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Host\n\nSee ![[target]] for details.\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("# Target\n\nTarget body.\n".utf8)
+            .write(to: vault.appendingPathComponent("target.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        // `linksLoadTask` chains the embed-resolution load on the
+        // back, so by the time we await it both have settled.
+        XCTAssertEqual(state.currentNoteEmbedResolutions.count, 1)
+        let resolution = state.currentNoteEmbedResolutions["target"]
+        XCTAssertNotNil(resolution)
+        if case .fullNote(let targetPath, _, _) = resolution {
+            XCTAssertEqual(targetPath, "target.md")
+        } else {
+            XCTFail("Expected FullNote resolution, got \(String(describing: resolution))")
+        }
+    }
+
+    func testSelectionChangeClearsEmbedCache() async throws {
+        let vault = tempDir.appendingPathComponent("embed-clear-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[other]]\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+        try Data("body B\n".utf8)
+            .write(to: vault.appendingPathComponent("b.md"))
+        try Data("other body\n".utf8)
+            .write(to: vault.appendingPathComponent("other.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteEmbedResolutions.count, 1)
+
+        state.selectedFilePath = nil
+        // Synchronously cleared on full deselect.
+        XCTAssertEqual(state.currentNoteEmbedResolutions, [:])
+    }
+
+    func testLoadCurrentNoteEmbedResolutionsAccumulatesPartialSuccess() async throws {
+        // Audit #202 regression: a note with one resolvable embed
+        // and one missing target should produce TWO entries in the
+        // cache (one FullNote + one Unresolved), not zero with a
+        // batch-level error string. The backend already returns
+        // `EmbedResolution.unresolved` for missing targets, so the
+        // accumulator just has to keep going across iterations
+        // without short-circuiting on any per-embed failure.
+        let vault = tempDir.appendingPathComponent("embed-partial-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[good]] and ![[missing]]\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("good body\n".utf8)
+            .write(to: vault.appendingPathComponent("good.md"))
+        // No `missing.md` deliberately.
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        XCTAssertEqual(state.currentNoteEmbedResolutions.count, 2)
+        if case .fullNote = state.currentNoteEmbedResolutions["good"] {
+        } else {
+            XCTFail("Expected FullNote for `good`")
+        }
+        if case .unresolved(let reason) = state.currentNoteEmbedResolutions["missing"] {
+            if case .targetNotFound = reason {} else {
+                XCTFail("Expected TargetNotFound, got \(reason)")
+            }
+        } else {
+            XCTFail("Expected Unresolved for `missing`")
+        }
+        // Whole-batch error string stays nil — per-embed failures
+        // are not batch failures.
+        XCTAssertNil(state.embedsLoadError)
+    }
+
+    func testNoteToNoteTransitionClearsEmbedCache() async throws {
+        // Audit #203 regression: transitioning from A to B should
+        // synchronously drop A's resolutions so the panel doesn't
+        // flash A's embed bodies under B's label.
+        let vault = tempDir.appendingPathComponent("embed-transition-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[a-target]]\n".utf8)
+            .write(to: vault.appendingPathComponent("a.md"))
+        try Data("![[b-target]]\n".utf8)
+            .write(to: vault.appendingPathComponent("b.md"))
+        try Data("a content\n".utf8)
+            .write(to: vault.appendingPathComponent("a-target.md"))
+        try Data("b content\n".utf8)
+            .write(to: vault.appendingPathComponent("b-target.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "a.md"
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteEmbedResolutions.count, 1)
+
+        // Selection change must clear synchronously; the new
+        // resolutions land after the next chained load.
+        state.selectedFilePath = "b.md"
+        XCTAssertEqual(
+            state.currentNoteEmbedResolutions, [:],
+            "embed cache should clear synchronously on note-to-note transition"
+        )
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentNoteEmbedResolutions.count, 1)
+        XCTAssertNotNil(state.currentNoteEmbedResolutions["b-target"])
+    }
+
+    func testOpenEmbedTargetNavigatesToTarget() async throws {
+        let vault = tempDir.appendingPathComponent("embed-jump-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("![[other]]\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("body\n".utf8)
+            .write(to: vault.appendingPathComponent("other.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        state.openEmbedTarget("other.md")
+        XCTAssertEqual(state.selectedFilePath, "other.md")
+        if case .openedInternal(let path) = state.lastActivatedLinkOutcome {
+            XCTAssertEqual(path, "other.md")
+        } else {
+            XCTFail(
+                "Expected openedInternal outcome, got \(String(describing: state.lastActivatedLinkOutcome))"
+            )
+        }
+    }
+
     // MARK: - Property edits (Milestone I)
 
     /// Open a small vault and load `note.md` so subsequent

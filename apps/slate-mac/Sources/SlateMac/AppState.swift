@@ -374,6 +374,37 @@ final class AppState: ObservableObject {
     /// alert state doesn't cross-fire with the content pane's.
     @Published var linksLoadError: String?
 
+    // MARK: Embeds (#187 — Milestone J UI)
+
+    /// Resolved `EmbedResolution` for each `![[…]]` reference in the
+    /// currently-loaded note, keyed by the raw target string
+    /// (including any `#heading` / `^block` suffix). Populated by
+    /// `loadCurrentNoteEmbedResolutions(path:)` after a selection
+    /// change (chained on the back of `linksLoadTask`).
+    ///
+    /// Refresh shape: the cache is cleared on note-to-note
+    /// transitions and re-populated when the next chained load
+    /// resolves — same lifecycle as `currentBacklinks` /
+    /// `currentOutgoingLinks` (and like them, NOT refreshed inline
+    /// post-save; a save triggers a selection re-resolve via the
+    /// scanner). Audit #205 corrected an earlier doc claim of
+    /// "refreshed after a save" that didn't reflect the code path.
+    ///
+    /// Empty while no note is selected, while the resolutions are
+    /// loading, or when the note has no embeds.
+    @Published private(set) var currentNoteEmbedResolutions: [String: EmbedResolution] = [:]
+    /// True while the embed-resolution batch is in flight.
+    @Published private(set) var isLoadingEmbeds: Bool = false
+    /// Surfaced when one of the per-embed resolves throws. Per-embed
+    /// failures land in the resolution itself as
+    /// `EmbedResolution::Unresolved` — this string only fires when
+    /// the whole batch can't run (e.g. SQLite mutex held by the
+    /// scanner errored). Independent of `linksLoadError`.
+    @Published var embedsLoadError: String?
+    /// Handle on the in-flight embed-resolution task so tests can
+    /// `await state.embedsLoadTask?.value` for a settled state.
+    private(set) var embedsLoadTask: Task<Void, Never>?
+
     // MARK: Tasks (#113 + #114 — Milestone G UI)
 
     /// Tasks parsed from the currently-selected note, in document
@@ -823,9 +854,11 @@ final class AppState: ObservableObject {
             currentBacklinks = []
             currentOutgoingLinks = []
             currentNoteProperties = []
+            currentNoteEmbedResolutions = [:]
             currentNoteTasks = []
             isLoadingNote = false
             isLoadingLinks = false
+            isLoadingEmbeds = false
             isLoadingTasks = false
             return
         }
@@ -841,11 +874,36 @@ final class AppState: ObservableObject {
         // path) ensures the newer task's writes win, so the user only
         // sees stale content for the duration of the IO — typically
         // a few milliseconds.
+        //
+        // Embeds are the exception (audit #203). Each cached
+        // resolution carries the embedded note's full body text;
+        // holding the prior file's resolutions during a transition
+        // would briefly render the prior file's *content* inside
+        // panels labelled as belonging to the new file. The window
+        // is sub-second but uniquely confusing for embeds because
+        // the stale data is whole notes, not one-liners. Clear
+        // synchronously so the panel falls back to "not yet
+        // resolved" placeholders until the new resolutions land.
+        currentNoteEmbedResolutions = [:]
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
         linksLoadTask = Task { [weak self] in
             await self?.loadCurrentLinks(path: path)
+            // Chain the embed-resolution load on after links — we
+            // need the outgoing-links query result (specifically
+            // `is_embed = true` rows) before we know what to resolve.
+            // Assign to `embedsLoadTask` so tests + future
+            // cancellation paths have a handle on this leg
+            // independently of the parent links load (audit #204
+            // caught the missing assignment).
+            let embedsTask: Task<Void, Never> = Task { [weak self] in
+                await self?.loadCurrentNoteEmbedResolutions(path: path)
+            }
+            await MainActor.run { [weak self] in
+                self?.embedsLoadTask = embedsTask
+            }
+            await embedsTask.value
         }
         tasksLoadTask = Task { [weak self] in
             await self?.loadCurrentNoteTasks(path: path)
@@ -1118,6 +1176,8 @@ final class AppState: ObservableObject {
         currentBacklinks = []
         currentOutgoingLinks = []
         currentNoteProperties = []
+        currentNoteEmbedResolutions = [:]
+        embedsLoadError = nil
         linksLoadError = nil
         currentNoteTasks = []
         tasksLoadError = nil
@@ -1373,6 +1433,133 @@ final class AppState: ObservableObject {
             linksLoadError = humanReadable(error)
         }
         isLoadingLinks = false
+    }
+
+    // MARK: - Embeds (#187)
+
+    /// Resolve every `is_embed = true` outgoing link in
+    /// `currentOutgoingLinks` against the backend and publish the
+    /// result map as `currentNoteEmbedResolutions`. Called after
+    /// `loadCurrentLinks` so the link list is already populated
+    /// when we fan out per-embed.
+    ///
+    /// Each resolution is a separate FFI call; we batch them off
+    /// the main actor to avoid pinning it while the SQLite mutex
+    /// is held repeatedly.
+    ///
+    /// Failure handling (audit #202): per-embed failures don't
+    /// discard the rest of the batch. An FFI throw on one embed
+    /// becomes a synthesized `EmbedResolution.unresolved(reason:
+    /// .readError(message:))` for that key and the loop keeps
+    /// going. `embedsLoadError` is reserved for whole-batch
+    /// problems (no session, etc.) — per-embed errors land in the
+    /// resolution itself where the UI's `EmbedView` already
+    /// renders them with the right shape.
+    func loadCurrentNoteEmbedResolutions(path: String) async {
+        guard let session = currentSession else { return }
+        // Snapshot the embed targets from the just-loaded links.
+        // We pass these into the detached task so a selection
+        // change can't race the snapshot against a partial refresh.
+        let embedTargets: [String] = currentOutgoingLinks
+            .filter { $0.isEmbed }
+            .map(embedTargetKey)
+        if embedTargets.isEmpty {
+            currentNoteEmbedResolutions = [:]
+            embedsLoadError = nil
+            isLoadingEmbeds = false
+            return
+        }
+        isLoadingEmbeds = true
+
+        let resolutions: [String: EmbedResolution] =
+            await Task.detached(priority: .userInitiated) {
+                var out: [String: EmbedResolution] = [:]
+                for target in embedTargets {
+                    do {
+                        let resolution = try session.resolveEmbed(
+                            hostPath: path,
+                            target: target
+                        )
+                        out[target] = resolution
+                    } catch let error as VaultError {
+                        // Per-embed failure: synthesize an
+                        // Unresolved entry instead of bailing out
+                        // of the whole batch (audit #202).
+                        out[target] = .unresolved(
+                            reason: .readError(message: Self.humanReadableVaultError(error))
+                        )
+                    } catch {
+                        out[target] = .unresolved(
+                            reason: .readError(message: error.localizedDescription)
+                        )
+                    }
+                }
+                return out
+            }
+            .value
+
+        // Audit #201: clearing the spinner via `defer` made an old
+        // cancelled task's late-firing deferred clear race the new
+        // task's `isLoadingEmbeds = true`, briefly exposing the
+        // panel to "not yet resolved" placeholders. Set explicitly
+        // at the end, gated on the selection-change check below —
+        // same pattern `loadCurrentLinks` uses.
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+
+        currentNoteEmbedResolutions = resolutions
+        embedsLoadError = nil
+        isLoadingEmbeds = false
+    }
+
+    /// Off-actor mirror of `humanReadable(_:)` — used inside the
+    /// detached resolver loop where `self` isn't available. Keeps
+    /// the per-embed `ReadError` message shape consistent with
+    /// what the main-actor error surface produces.
+    private nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
+        switch error {
+        case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
+            .InvalidArgument(let m):
+            return m
+        case .InvalidPath(let path, let reason):
+            return "Invalid path \(path): \(reason)"
+        case .Cancelled:
+            return "Operation cancelled."
+        case .InvalidUtf8(let path):
+            return "File at \(path) is not valid UTF-8."
+        case .FileTooLarge(let path, let size):
+            return "File at \(path) is \(size) bytes — larger than this build's refuse threshold."
+        case .Unsupported(let feature):
+            return "\(feature) is not implemented yet."
+        case .WriteConflict:
+            return "File changed externally."
+        case .MalformedFrontmatter(let path, let reason):
+            return "Frontmatter at \(path) is malformed: \(reason)."
+        }
+    }
+
+    /// Navigate to the target of an embed's "Jump to source" action.
+    /// Wraps the private `navigate(to:kind:)` step so the embed
+    /// panel + future inline editor activations share one entry
+    /// point + announcement shape.
+    func openEmbedTarget(_ path: String) {
+        navigate(to: path, kind: "Opened embed source")
+    }
+
+    /// Compose the lookup key for an embed in `currentNoteEmbedResolutions`.
+    /// Mirrors how the backend's `resolve_embed` parses the raw
+    /// target (target_raw + optional anchor suffix); the map is
+    /// keyed on this composite so the panel can look up "the
+    /// resolution for this exact `![[…]]` reference."
+    ///
+    /// `LinkAnchor.kind` is one of `"heading"` / `"block"` — we map
+    /// that back to the `#` / `^` marker so the reconstructed
+    /// target matches what the user wrote between `![[` and `]]`.
+    func embedTargetKey(_ link: OutgoingLink) -> String {
+        if let anchor = link.targetAnchor {
+            let marker = anchor.kind == "block" ? "^" : "#"
+            return "\(link.targetRaw)\(marker)\(anchor.text)"
+        }
+        return link.targetRaw
     }
 
     // MARK: - Tasks (per-note + vault-wide)
