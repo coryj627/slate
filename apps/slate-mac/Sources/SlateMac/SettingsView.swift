@@ -69,6 +69,7 @@ struct MathSettingsTab: View {
             } header: {
                 Text("Math accessibility")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             } footer: {
                 Text("Changes apply immediately to math in the read pane.")
                     .font(.caption)
@@ -80,6 +81,7 @@ struct MathSettingsTab: View {
             } header: {
                 Text("Live preview")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
         .formStyle(.grouped)
@@ -190,6 +192,7 @@ struct CodeSettingsTab: View {
             } header: {
                 Text("Code accessibility")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             } footer: {
                 Text(
                     "Affects the preamble that screen readers hear before"
@@ -213,6 +216,7 @@ struct CodeSettingsTab: View {
             } header: {
                 Text("Example preamble")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
         .formStyle(.grouped)
