@@ -254,6 +254,17 @@ struct NoteEditorView: NSViewRepresentable {
                 let fullRange = NSRange(location: 0, length: storage.length)
                 storage.removeAttribute(.foregroundColor, range: fullRange)
             }
+            // Explicit textColor: AppKit's NSTextView leaves `textColor` as nil after
+            // the standard init when the storage has no `.foregroundColor` attribute
+            // (#226 strips that attribute so the dynamic color resolves correctly).
+            // With both nil, the live rendering falls back to a dimmer color than
+            // `NSColor.textColor` resolves to — empirically a near-secondary
+            // brightness against `textBackgroundColor` in dark mode, which reads as
+            // grayish-on-dark instead of the WCAG-compliant pure-white contrast.
+            // Stamping `textColor` directly forces the dynamic system text color and
+            // re-runs at every `attach` so an appearance change picks up the fresh
+            // value.
+            textView.textColor = NSColor.textColor
 
             // Re-run the highlight pass when the user toggles Increase
             // Contrast or changes accent color so the embed underline
