@@ -12,6 +12,32 @@ struct CitationPopover: View {
     let citation: RenderedCitation
     let onClose: () -> Void
 
+    /// Convenience constructor: build the popover from a bare
+    /// `BibEntry` (used by `BibliographyPanel`). We wrap the entry
+    /// in a synthetic `RenderedCitation` so the popover renders
+    /// without a separate code path. The synthetic citation has no
+    /// `raw` source form (the entry didn't come from a note) but
+    /// the popover only consults `raw` for the unresolved fallback,
+    /// which never fires for a real BibEntry.
+    init(entry: BibEntry, onClose: @escaping () -> Void) {
+        let title = entry.title.isEmpty ? entry.key : entry.title
+        let yearSuffix = entry.year.map { " \($0)" } ?? ""
+        let speech = "Citation: \(title)\(yearSuffix)"
+        self.citation = RenderedCitation(
+            raw: "",
+            visualText: title,
+            speechText: speech,
+            bibEntry: entry,
+            styleId: ""
+        )
+        self.onClose = onClose
+    }
+
+    init(citation: RenderedCitation, onClose: @escaping () -> Void) {
+        self.citation = citation
+        self.onClose = onClose
+    }
+
     @State private var abstractExpanded: Bool = false
     @FocusState private var initialFocus: InitialFocusTarget?
 
