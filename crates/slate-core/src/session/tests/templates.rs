@@ -156,6 +156,7 @@ fn render_template_rejects_path_outside_vault() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn list_templates_drops_symlinks_pointing_outside_the_vault() {
     // Sentinel file outside the vault: a symlink dropped under
@@ -180,6 +181,7 @@ fn list_templates_drops_symlinks_pointing_outside_the_vault() {
     assert_eq!(names, vec!["Real"]);
 }
 
+#[cfg(unix)]
 #[test]
 fn list_templates_follows_symlinks_pointing_inside_the_vault() {
     // Symmetric: a symlink under Templates/ whose canonical target
@@ -204,6 +206,7 @@ fn list_templates_follows_symlinks_pointing_inside_the_vault() {
     assert_eq!(names, vec!["Daily", "Real"]);
 }
 
+#[cfg(unix)]
 #[test]
 fn render_template_refuses_escaping_symlink_with_invalid_path() {
     // `render_template` is more emphatic than `list_templates`:
@@ -228,6 +231,7 @@ fn render_template_refuses_escaping_symlink_with_invalid_path() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn render_template_opens_canonical_path_not_original_symlink() {
     // Direct test of the TOCTOU defence (Codoki PR #153 Medium).
@@ -261,6 +265,7 @@ fn render_template_opens_canonical_path_not_original_symlink() {
     assert_eq!(rendered.body, "# real inside\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn list_templates_skips_broken_symlinks_without_error() {
     // Defensive: a broken symlink under Templates/ (target was

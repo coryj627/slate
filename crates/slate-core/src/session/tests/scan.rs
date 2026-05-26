@@ -109,6 +109,7 @@ fn rescan_with_changed_mtime_falls_through_to_rehash() {
     assert!(second.bytes_processed > 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn rescan_with_mtime_preserved_but_ctime_changed_rehashes() {
     // The mtime/size heuristic alone misses mtime-preserving
@@ -498,6 +499,7 @@ fn files_seen_counts_only_files_not_directories() {
     assert_eq!(report.files_indexed, 5);
 }
 
+#[cfg(unix)]
 #[test]
 fn symlinks_pointing_out_of_vault_are_not_indexed() {
     // Sentinel file outside the vault.

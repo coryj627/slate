@@ -130,10 +130,12 @@ pub(super) fn rewrite_until_mtime_advances(
     }
 }
 
+#[cfg(unix)]
 pub(super) fn filetime_from(secs: i64, nanos: i64) -> (i64, u32) {
     (secs, nanos as u32)
 }
 
+#[cfg(unix)]
 pub(super) fn set_atime_mtime(path: &std::path::Path, atime: (i64, u32), mtime: (i64, u32)) {
     // Use the libc `utimensat` syscall directly so we don't pull
     // in a `filetime` dev-dependency just for one Unix-only test.
