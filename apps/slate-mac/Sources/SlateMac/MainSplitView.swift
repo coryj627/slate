@@ -135,6 +135,36 @@ struct MainSplitView: View {
                     "Opens the vault-wide tasks review. Cmd+Shift+T. Esc closes."
                 )
             }
+            // Milestone L #282: Citation Summary. Cmd+Shift+J opens
+            // the sheet showing N citations / M unique sources for
+            // the current note. Disabled with no note selected.
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.isCitationSummaryOpen = true
+                } label: {
+                    Label("Citation Summary", systemImage: "quote.bubble.fill")
+                }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+                .disabled(appState.selectedFilePath == nil)
+                .accessibilityHint(
+                    "Opens the citation summary for the current note. Cmd+Shift+J. Esc closes."
+                )
+            }
+            // Milestone L #282: Jump to bibliography from the
+            // currently-expanded citation. Cmd+J. Active only when
+            // a citation popover is open.
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.jumpToBibliographyFromExpandedCitation()
+                } label: {
+                    Label("Jump to Bibliography", systemImage: "books.vertical")
+                }
+                .keyboardShortcut("j", modifiers: .command)
+                .disabled(appState.expandedCitation == nil)
+                .accessibilityHint(
+                    "Filters the Bibliography sidebar to the citation's key. Cmd+J."
+                )
+            }
             ToolbarItem(placement: .automatic) {
                 Button("Close Vault") {
                     // Route through attemptCloseVault so the
@@ -368,6 +398,13 @@ struct MainSplitView: View {
                 paths: appState.filesCitingResult ?? [],
                 onClose: { appState.filesCitingResult = nil }
             )
+        }
+        // Citation summary sheet (#282). Cmd+Shift+J opens, the body
+        // reads from `currentNoteCitations`. Esc / Done closes via
+        // the binding setter.
+        .sheet(isPresented: $appState.isCitationSummaryOpen) {
+            CitationSummarySheet()
+                .environmentObject(appState)
         }
         .onAppear {
             postAccessibilityAnnouncement(

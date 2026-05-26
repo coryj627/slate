@@ -50,6 +50,18 @@ struct BibliographyPanel: View {
                 await appState.loadBibliographyEntries()
             }
         }
+        .onChange(of: appState.pendingBibliographyKeyFocus) { newKey in
+            // Cmd+J from an expanded citation routes here. Switch to
+            // the Entries segment and let the search field do the
+            // filtering — `bibliographySearchText` is already set by
+            // `jumpToBibliographyFromExpandedCitation`. Clear the
+            // pending key once we've handled it so the next jump can
+            // re-trigger this onChange.
+            if newKey != nil {
+                segment = .entries
+                appState.pendingBibliographyKeyFocus = nil
+            }
+        }
     }
 
     // MARK: - Segments
