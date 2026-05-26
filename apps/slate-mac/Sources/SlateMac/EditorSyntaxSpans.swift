@@ -311,7 +311,13 @@ private func findSetextUnderlines(in text: String) -> [NSRange] {
         }
         let lineRange = NSRange(location: lineStart, length: lineEnd - lineStart)
         let line = nsText.substring(with: lineRange)
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // .whitespacesAndNewlines includes `\r` (CR), `\n` (LF), and
+        // other line terminators — important for CRLF-encoded files
+        // where `line` ends in `\r` after the `\n`-only split above.
+        // `.whitespaces` alone leaves the trailing `\r`, which breaks
+        // the `allSatisfy { $0 == "=" }` check below (Codoki PR #307
+        // medium finding).
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         let isAllEquals = !trimmed.isEmpty && trimmed.allSatisfy { $0 == "=" }
         let isAllDashes = !trimmed.isEmpty && trimmed.allSatisfy { $0 == "-" }
         if (isAllEquals || isAllDashes) && previousLineWasNonEmpty {

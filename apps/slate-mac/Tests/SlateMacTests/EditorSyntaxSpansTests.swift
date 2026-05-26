@@ -60,6 +60,22 @@ final class EditorSyntaxSpansTests: XCTestCase {
 
     // MARK: - Setext underlines
 
+    /// Codoki PR #307 medium finding: the line scanner splits on `\n`
+    /// only, so on CRLF-encoded files (`\r\n`) each `line` ends in a
+    /// trailing `\r`. The first revision used
+    /// `.trimmingCharacters(in: .whitespaces)` which doesn't include
+    /// `\r`, so `=====\r` failed the `allSatisfy` check and the
+    /// underline went undetected. Fix uses `.whitespacesAndNewlines`.
+    /// This test pins the fix so a future revert is caught immediately.
+    func testSetextUnderlineMatchesCRLF() {
+        let text = "Title\r\n=====\r\n\r\nBody\r\n"
+        let underlines = spans(text, kind: .setextUnderline)
+        XCTAssertEqual(underlines.count, 1, "setext underline must be detected under CRLF line endings")
+        let underlineText = substring(text, range: underlines[0].range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(underlineText, "=====")
+    }
+
     func testSetextUnderlineMatchesEqualsAndDashes() {
         let text = "Hello\n=====\n\nWorld\n-----\n"
         let underlines = spans(text, kind: .setextUnderline)
