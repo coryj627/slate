@@ -12,6 +12,55 @@ use super::*;
 
 type TaskSnapshotRow = (u32, char, bool, String, Option<i64>, Option<i32>);
 
+/// One row of `EXPLAIN QUERY PLAN` output, parsed into its column
+/// shape rather than collapsed into one substring-matched blob.
+/// Used by the two planner-shape tests below — audit #284 flagged
+/// the original concatenate-then-substring pattern as brittle to
+/// SQLite phrasing tweaks; this structural form keeps the index-
+/// name check (which IS stable across SQLite versions) but gives
+/// per-row failure messages.
+#[derive(Debug, Clone)]
+struct PlanRow {
+    id: i64,
+    parent: i64,
+    detail: String,
+}
+
+/// Run `EXPLAIN QUERY PLAN <sql>` and collect the per-step rows.
+/// The `notused` column (column 2 in SQLite ≥ 3.24) is skipped;
+/// `detail` (column 3) is what carries "USING INDEX <name>" and
+/// "SCAN <table>" markers the tests assert against.
+fn explain_plan_rows(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> Vec<PlanRow> {
+    let explain = format!("EXPLAIN QUERY PLAN {sql}");
+    conn.prepare(&explain)
+        .unwrap()
+        .query_map(params, |row| {
+            Ok(PlanRow {
+                id: row.get::<_, i64>(0)?,
+                parent: row.get::<_, i64>(1)?,
+                detail: row.get::<_, String>(3)?,
+            })
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+/// Render a plan as a multi-line string for assertion failure
+/// messages. Each row shows its tree id + parent so the optimizer's
+/// step hierarchy is visible — easier to debug a regression than
+/// the joined-detail blob the old tests printed.
+fn format_plan(rows: &[PlanRow]) -> String {
+    rows.iter()
+        .map(|row| format!("  [id={}, parent={}] {}", row.id, row.parent, row.detail))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn tasks_snapshot(session: &VaultSession, path: &str) -> Vec<TaskSnapshotRow> {
     session
         .tasks_for_file(path)
@@ -378,43 +427,47 @@ fn priority_at_least_filter_uses_idx_tasks_priority_not_table_scan() {
     // produces for a `priority_at_least` filter. The planner
     // picks the index based on WHERE + cardinality; LIMIT is
     // included for parity with the real path.
-    let plan: Vec<String> = conn
-        .prepare(
-            "EXPLAIN QUERY PLAN
-             SELECT f.path, t.ordinal
-             FROM tasks t
-             JOIN files f ON f.id = t.file_id
-             WHERE t.priority IS NOT NULL AND t.priority >= ?
-             ORDER BY IFNULL(t.due_ms, ?) ASC,
-                      IFNULL(t.priority, ?) DESC,
-                      f.path COLLATE BINARY ASC,
-                      t.ordinal ASC
-             LIMIT ?",
-        )
-        .unwrap()
-        .query_map(
-            rusqlite::params![1i64, i64::MAX, i32::MIN as i64, 200i64],
-            |row| row.get::<_, String>(3),
-        )
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let plan_text = plan.join("\n");
+    let plan = explain_plan_rows(
+        &conn,
+        "SELECT f.path, t.ordinal
+         FROM tasks t
+         JOIN files f ON f.id = t.file_id
+         WHERE t.priority IS NOT NULL AND t.priority >= ?
+         ORDER BY IFNULL(t.due_ms, ?) ASC,
+                  IFNULL(t.priority, ?) DESC,
+                  f.path COLLATE BINARY ASC,
+                  t.ordinal ASC
+         LIMIT ?",
+        rusqlite::params![1i64, i64::MAX, i32::MIN as i64, 200i64],
+    );
 
+    // Audit #284: parse rows from `EXPLAIN QUERY PLAN` structurally
+    // (one detail string per planner step) rather than concatenating
+    // them all into one blob and substring-matching. The index name
+    // is the most stable part of the planner's output across SQLite
+    // versions — phrasing around it ("USING INDEX" → "USING COVERING
+    // INDEX") can drift but the name itself doesn't. Companion
+    // tests verify the index exists in `sqlite_master` independently
+    // (`idx_tasks_priority_exists_after_migration_009`).
     assert!(
-        plan_text.contains("idx_tasks_priority"),
-        "priority filter should use idx_tasks_priority; plan:\n{plan_text}",
+        plan.iter()
+            .any(|row| row.detail.contains("idx_tasks_priority")),
+        "priority filter should use idx_tasks_priority; plan:\n{}",
+        format_plan(&plan),
     );
     // Defensive check: regardless of how SQLite phrases the
     // optimizer output in future versions, no line should
     // start with a bare full-table SCAN of `t`. The plan may
     // include "USE TEMP B-TREE FOR ORDER BY" — that's the
     // sort step, separately tracked as red-team M2.
-    for line in plan_text.lines() {
-        let trimmed = line.trim_start();
+    for row in &plan {
+        let trimmed = row.detail.trim_start();
         assert!(
             !(trimmed.starts_with("SCAN t ") || trimmed == "SCAN t"),
-            "expected no full SCAN of tasks; got line: {line:?}\nfull plan:\n{plan_text}",
+            "expected no full SCAN of tasks; row {}: {:?}\nfull plan:\n{}",
+            row.id,
+            row.detail,
+            format_plan(&plan),
         );
     }
 }
@@ -497,27 +550,26 @@ fn unfiltered_tasks_in_vault_uses_idx_tasks_sort_not_full_temp_btree() {
     // Replicates the ORDER BY shape `tasks_db::tasks_in_vault`
     // produces, including the literal IFNULL sentinels that
     // match the expression-index definition.
-    let plan: Vec<String> = conn
-        .prepare(
-            "EXPLAIN QUERY PLAN
-             SELECT f.path, t.ordinal
-             FROM tasks t JOIN files f ON f.id = t.file_id
-             ORDER BY IFNULL(t.due_ms, 9223372036854775807) ASC,
-                      IFNULL(t.priority, -2147483648) DESC,
-                      f.path COLLATE BINARY ASC,
-                      t.ordinal ASC
-             LIMIT ?",
-        )
-        .unwrap()
-        .query_map(rusqlite::params![200i64], |row| row.get::<_, String>(3))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let plan_text = plan.join("\n");
+    let plan = explain_plan_rows(
+        &conn,
+        "SELECT f.path, t.ordinal
+         FROM tasks t JOIN files f ON f.id = t.file_id
+         ORDER BY IFNULL(t.due_ms, 9223372036854775807) ASC,
+                  IFNULL(t.priority, -2147483648) DESC,
+                  f.path COLLATE BINARY ASC,
+                  t.ordinal ASC
+         LIMIT ?",
+        rusqlite::params![200i64],
+    );
 
+    // Audit #284: same structural-parse approach as
+    // `priority_at_least_filter_uses_idx_tasks_priority_not_table_scan`.
+    // Companion `idx_tasks_sort_exists_after_migration_010` test
+    // verifies the index's existence independent of EXPLAIN output.
     assert!(
-        plan_text.contains("idx_tasks_sort"),
-        "ORDER BY should use idx_tasks_sort; plan:\n{plan_text}",
+        plan.iter().any(|row| row.detail.contains("idx_tasks_sort")),
+        "ORDER BY should use idx_tasks_sort; plan:\n{}",
+        format_plan(&plan),
     );
     // The FULL temp-btree variant (no qualifier) means the
     // entire ORDER BY had to be sorted from scratch — that's
@@ -525,11 +577,12 @@ fn unfiltered_tasks_in_vault_uses_idx_tasks_sort_not_full_temp_btree() {
     // acceptable: the index satisfies the leading tiers and
     // only the trailing path tiebreak sorts in a temp btree
     // within tie-groups.
-    for line in plan_text.lines() {
-        let trimmed = line.trim_start();
+    for row in &plan {
+        let trimmed = row.detail.trim_start();
         assert!(
             trimmed != "USE TEMP B-TREE FOR ORDER BY",
-            "expected idx-driven sort, got full temp btree; plan:\n{plan_text}",
+            "expected idx-driven sort, got full temp btree; plan:\n{}",
+            format_plan(&plan),
         );
     }
 }
