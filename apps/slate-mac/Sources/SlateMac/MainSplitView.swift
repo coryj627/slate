@@ -91,22 +91,43 @@ struct MainSplitView: View {
                 .padding(.bottom, 4)
                 .accessibilityLabel("Sidebar tab")
 
-                // Each panel keeps its own internal state
-                // (selection, scroll, lazy load triggers). Building
-                // them unconditionally via `.opacity` would hold
-                // their environment subscriptions live in the
-                // background; the switch keeps only the active
-                // pane in the view hierarchy, matching what
-                // `TabView` did before.
-                Group {
-                    switch sidebarTab {
-                    case .outline:
-                        OutlineSidebar()
-                    case .citations:
-                        CitationsPanel()
-                    case .bibliography:
-                        BibliographyPanel()
-                    }
+                // Keep every panel mounted via `ZStack`, with
+                // `.opacity` + `.allowsHitTesting` + `.accessibilityHidden`
+                // gating which one is visible. `TabView`'s prior
+                // semantics retained per-panel `@State` across tab
+                // switches; a `switch` over `sidebarTab` would
+                // destroy and re-create the view on every switch,
+                // which silently regresses:
+                //
+                //   - `BibliographyPanel.segment` (entries vs.
+                //     unresolved) resets to `.entries` on every
+                //     visit.
+                //   - `BibliographyPanel.hasLoaded` resets to
+                //     `false`, re-firing the `loadBibliographyEntries`
+                //     fetch on each tab return (wasted IO).
+                //   - `OutlineSidebar` / `CitationsPanel`
+                //     `announcedFilePath` resets, causing
+                //     VoiceOver to re-announce the file every
+                //     time the user comes back to the tab.
+                //
+                // `accessibilityHidden(true)` plus
+                // `allowsHitTesting(false)` keep VoiceOver +
+                // pointer focus scoped to the visible panel — the
+                // hidden ones stay in the view hierarchy purely
+                // for state retention.
+                ZStack {
+                    OutlineSidebar()
+                        .opacity(sidebarTab == .outline ? 1 : 0)
+                        .allowsHitTesting(sidebarTab == .outline)
+                        .accessibilityHidden(sidebarTab != .outline)
+                    CitationsPanel()
+                        .opacity(sidebarTab == .citations ? 1 : 0)
+                        .allowsHitTesting(sidebarTab == .citations)
+                        .accessibilityHidden(sidebarTab != .citations)
+                    BibliographyPanel()
+                        .opacity(sidebarTab == .bibliography ? 1 : 0)
+                        .allowsHitTesting(sidebarTab == .bibliography)
+                        .accessibilityHidden(sidebarTab != .bibliography)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
