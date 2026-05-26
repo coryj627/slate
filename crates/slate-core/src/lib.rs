@@ -35,6 +35,13 @@ pub use search_db::{
 };
 
 pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
+pub use citations::bibliography::{
+    load_source as load_bibliography_source, merge_sources as merge_bibliography_sources,
+    spawn_debouncer as spawn_bibliography_debouncer,
+    spawn_debouncer_with_callback as spawn_bibliography_debouncer_with_callback, Author, BibEntry,
+    BibFormat, BibLoadWarning, BibliographyChangeSink, BibliographySource, KeyCollision,
+    LoadResult, DEFAULT_DEBOUNCE,
+};
 pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
 pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
@@ -133,6 +140,14 @@ pub enum VaultError {
     /// the user to fix it manually before retrying.
     #[error("frontmatter at {path:?} is malformed: {reason}")]
     MalformedFrontmatter { path: String, reason: String },
+
+    /// Returned from `citations::bibliography::load_source` when the
+    /// configured bibliography source file can't be opened (missing,
+    /// permission denied, IO error). Distinct from a successful load
+    /// with parse warnings — this is a file-level failure, not a
+    /// content-level one.
+    #[error("bibliography source {path:?} is unreadable: {reason}")]
+    BibSourceUnreadable { path: String, reason: String },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so

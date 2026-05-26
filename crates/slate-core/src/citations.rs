@@ -28,6 +28,8 @@
 //! - Bare `@text` whose key doesn't match `[a-zA-Z0-9_\-:.+]+`.
 //! - Brackets with no `@` inside (`[some text]` is just brackets).
 
+pub mod bibliography;
+
 use pulldown_cmark::{Event, Parser, Tag};
 
 /// One citation site in a source document. A site may contain
