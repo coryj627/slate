@@ -465,6 +465,14 @@ final class AppState: ObservableObject {
     /// Same lifecycle as `currentNoteMathBlocks`: cleared on
     /// selection change, repopulated by `loadCurrentNoteCitations`.
     @Published private(set) var currentNoteCitations: [RenderedCitation] = []
+
+    /// Parallel array of the structured `CitationReference`s the
+    /// rendered list came from. The `RenderedCitation` FFI shape
+    /// doesn't surface the per-site `citations` array, so any
+    /// caller that needs all keys at a multi-citation site (the
+    /// summary sheet's unique-source count, the rotor's positional
+    /// index, etc.) reads from here instead.
+    @Published private(set) var currentNoteCitationRefs: [CitationReference] = []
     @Published private(set) var isLoadingCitations: Bool = false
     @Published var citationsLoadError: String?
     private(set) var citationsLoadTask: Task<Void, Never>?
@@ -1153,6 +1161,7 @@ final class AppState: ObservableObject {
             currentNoteCodeBlocks = []
             currentNoteDiagramBlocks = []
             currentNoteCitations = []
+        currentNoteCitationRefs = []
             expandedCitation = nil
             isLoadingNote = false
             isLoadingLinks = false
@@ -1199,6 +1208,7 @@ final class AppState: ObservableObject {
         currentNoteCodeBlocks = []
         currentNoteDiagramBlocks = []
         currentNoteCitations = []
+        currentNoteCitationRefs = []
         expandedCitation = nil
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
@@ -1581,6 +1591,7 @@ final class AppState: ObservableObject {
         citationsLoadTask?.cancel()
         citationsLoadTask = nil
         currentNoteCitations = []
+        currentNoteCitationRefs = []
         citationsLoadError = nil
         isLoadingCitations = false
         expandedCitation = nil
@@ -2023,7 +2034,7 @@ final class AppState: ObservableObject {
         // come back empty from the renderer.
         let styleId = activeStyleId
 
-        let result: Result<[RenderedCitation], VaultError> =
+        let result: Result<([CitationReference], [RenderedCitation]), VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
                     let refs = try session.listCitationsInFile(path: path)
@@ -2033,9 +2044,9 @@ final class AppState: ObservableObject {
                         // the speech form. The panel announces these
                         // as "Citation: <key>" so AT users can still
                         // hear where citations are.
-                        return .success(refs.map { ref in
-                            placeholderRendered(for: ref)
-                        })
+                        return .success(
+                            (refs, refs.map { placeholderRendered(for: $0) })
+                        )
                     }
                     var rendered: [RenderedCitation] = []
                     rendered.reserveCapacity(refs.count)
@@ -2047,7 +2058,7 @@ final class AppState: ObservableObject {
                             )
                         )
                     }
-                    return .success(rendered)
+                    return .success((refs, rendered))
                 } catch let error as VaultError {
                     return .failure(error)
                 } catch {
@@ -2057,11 +2068,13 @@ final class AppState: ObservableObject {
             .value
         guard !Task.isCancelled, selectedFilePath == path else { return }
         switch result {
-        case .success(let renders):
+        case .success(let (refs, renders)):
+            currentNoteCitationRefs = refs
             currentNoteCitations = renders
             citationsLoadError = nil
         case .failure(let err):
             currentNoteCitations = []
+            currentNoteCitationRefs = []
             citationsLoadError = humanReadable(err)
         }
     }

@@ -82,24 +82,30 @@ struct CitationSummarySheet: View {
         -> (totalText: String, uniqueText: String)
     {
         let total = citations.count
+        // The structured CitationReferences (loaded in parallel with
+        // the rendered list) carry the per-site `citations` array
+        // each site can contain (`[@a; @b]` is one site with two
+        // CitedItems). Use them when present so multi-citation
+        // sites contribute every key to the unique-source set —
+        // the RenderedCitation FFI shape doesn't expose those.
+        // Fall back to the resolved `bibEntry.key` / raw-extracted
+        // key when refs aren't loaded yet (race window).
         var keys = Set<String>()
-        for citation in citations {
-            // Each RenderedCitation wraps a resolved or unresolved
-            // citation site. Use `bibEntry.key` for resolved cases;
-            // for unresolved, extract the citation key from the raw
-            // source-form text so the same key with different
-            // locators (e.g. "[@smith2020]" vs "[@smith2020, p. 2]")
-            // collapses to one unique source — same semantic the
-            // resolved branch gets for free.
-            //
-            // Codoki PR #293: previously used `raw` directly here,
-            // which over-counted unique sources whenever the same
-            // key appeared with multiple locators.
-            if let entry = citation.bibEntry {
-                keys.insert(entry.key)
-            } else {
-                let key = extractCitationKey(from: citation.raw)
-                keys.insert(key.isEmpty ? citation.raw : key)
+        let refs = appState.currentNoteCitationRefs
+        if refs.count == total {
+            for ref in refs {
+                for item in ref.citations {
+                    keys.insert(item.key)
+                }
+            }
+        } else {
+            for citation in citations {
+                if let entry = citation.bibEntry {
+                    keys.insert(entry.key)
+                } else {
+                    let key = extractCitationKey(from: citation.raw)
+                    keys.insert(key.isEmpty ? citation.raw : key)
+                }
             }
         }
         let unique = keys.count
