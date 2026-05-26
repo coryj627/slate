@@ -115,31 +115,21 @@ struct CitationsPanel: View {
         Button {
             appState.expandedCitation = citation
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                // Visible: the visual_text from hayagriva
-                // (e.g. "(Smith, 2020, p. 23)"). VoiceOver overrides
-                // this with `accessibilityLabel`, below, so sighted
-                // and AT users get distinct treatments.
-                Text(citation.visualText.isEmpty ? citation.raw : citation.visualText)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(
-                        citation.bibEntry == nil && citation.styleId.isEmpty == false
-                            ? Color.orange  // unresolved key marker
-                            : Color.primary
-                    )
-                if !citation.speechText.isEmpty && citation.visualText != citation.speechText {
-                    // Subtle secondary line for sighted users only;
-                    // hidden from VoiceOver because the full speech
-                    // form already lands via accessibilityLabel.
-                    Text(citation.speechText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .accessibilityHidden(true)
-                }
-            }
-            .contentShape(Rectangle())
+            // Visible: the visual_text from hayagriva
+            // (e.g. "(Smith, 2020, p. 23)"). VoiceOver overrides this
+            // with the row's `accessibilityLabel` below, so sighted
+            // and AT users get distinct treatments without showing
+            // both side by side (which would clutter the row + risk
+            // truncation under Dynamic Type — WCAG 1.4.4).
+            Text(citation.visualText.isEmpty ? citation.raw : citation.visualText)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(
+                    citation.bibEntry == nil && citation.styleId.isEmpty == false
+                        ? Color.orange  // unresolved key marker
+                        : Color.primary
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         // The AT label IS the speech_text — never the visual_text.
