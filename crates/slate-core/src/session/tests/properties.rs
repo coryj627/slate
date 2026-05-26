@@ -482,7 +482,8 @@ fn rename_property_dry_run_matches_apply() {
     assert!(dry.failed.is_empty());
     assert_eq!(dry.affected.len(), 2);
     assert!(dry.affected.iter().all(|a| !a.applied));
-    let dry_paths: Vec<&str> = dry.affected.iter().map(|a| a.path.as_str()).collect();
+    let mut dry_paths: Vec<&str> = dry.affected.iter().map(|a| a.path.as_str()).collect();
+    dry_paths.sort();
     assert_eq!(dry_paths, vec!["a.md", "b.md"]);
 
     let (_tmp2, apply_session) = make_vault(setup);
@@ -493,7 +494,8 @@ fn rename_property_dry_run_matches_apply() {
     assert!(apply.failed.is_empty());
     assert_eq!(apply.affected.len(), 2);
     assert!(apply.affected.iter().all(|a| a.applied));
-    let apply_paths: Vec<&str> = apply.affected.iter().map(|a| a.path.as_str()).collect();
+    let mut apply_paths: Vec<&str> = apply.affected.iter().map(|a| a.path.as_str()).collect();
+    apply_paths.sort();
     assert_eq!(apply_paths, dry_paths);
 
     // Verify on disk: a.md + b.md now have `by`, not `author`.

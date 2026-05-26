@@ -55,7 +55,8 @@ fn backlinks_returns_all_inbound_sources() {
     let page = session
         .backlinks("notes/target.md", Paging::first(100))
         .unwrap();
-    let paths: Vec<&str> = page.items.iter().map(|b| b.source_path.as_str()).collect();
+    let mut paths: Vec<&str> = page.items.iter().map(|b| b.source_path.as_str()).collect();
+    paths.sort();
     assert_eq!(paths, vec!["notes/a.md", "notes/b.md"]);
     for backlink in &page.items {
         assert!(
