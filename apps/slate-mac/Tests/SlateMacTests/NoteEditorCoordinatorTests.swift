@@ -154,17 +154,31 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         )
     }
 
-    /// Audit [#233](https://github.com/coryj627/slate/issues/233):
-    /// `attach(textView:)` is a re-bind point, not just a reference
-    /// grab. A new textView handed to a recycled coordinator must
-    /// start in a known typing-attributes state — otherwise an
-    /// inherited `.foregroundColor` attribute could shadow
-    /// `NSColor.textColor` and re-introduce the dark-mode invisible
-    /// text bug from #226.
-    func testAttachResetsTypingAttributesAndForegroundColor() {
+    /// Audit [#233](https://github.com/coryj627/slate/issues/233) +
+    /// follow-up: `attach(textView:)` is a re-bind point. A new
+    /// textView handed to a recycled coordinator must start with a
+    /// known *dynamic* text color so dark-mode renders white-on-dark
+    /// instead of the dim-grayish-on-dark we saw shipping on `main`
+    /// (root cause: `NSTextView.textColor` is `nil` after the
+    /// standard init in some contexts, and the rendering fallback
+    /// for nil-textColor + no-storage-foreground is darker than
+    /// `NSColor.textColor` resolves to).
+    ///
+    /// Contract after `attach`:
+    /// 1. `textView.textColor` is the semantic `NSColor.textColor`
+    ///    (dynamic; resolves per appearance).
+    /// 2. Storage foreground is the semantic `NSColor.textColor`
+    ///    (the textColor setter stamps it onto the existing range —
+    ///    that's how AppKit propagates the dynamic color into the
+    ///    rendered storage). Importantly this replaces any STALE
+    ///    color (e.g. a hardcoded `NSColor.red` from a hypothetical
+    ///    earlier pass) — the semantic NSColor still resolves
+    ///    dynamically per appearance, so the #226 dark-mode
+    ///    invisible-text bug doesn't return.
+    /// 3. Typing attributes carry textColor for newly typed chars.
+    func testAttachStampsDynamicTextColor() {
         // Simulate a textView that was previously stamped with a
-        // stale foreground color (e.g. red, from a hypothetical
-        // earlier rendering pass).
+        // stale, hardcoded foreground color.
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
         textView.string = "hello world"
         let storage = textView.textStorage!
@@ -182,15 +196,28 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         )
         coordinator.attach(textView: textView)
 
-        // After attach: storage-level foreground stripped, typing
-        // attributes reset to textColor.
+        // Contract 1: textView.textColor is NSColor.textColor.
+        XCTAssertEqual(
+            textView.textColor, NSColor.textColor,
+            "attach must set textView.textColor to the dynamic system text color"
+        )
+
+        // Contract 2: storage foreground is NSColor.textColor (not the
+        // stale red). The semantic color is dynamic, so dark-mode
+        // resolution still works.
         let foreground = storage.attribute(
             .foregroundColor, at: 0, effectiveRange: nil
+        ) as? NSColor
+        XCTAssertEqual(
+            foreground, NSColor.textColor,
+            "attach must replace stale foreground colors with the dynamic system text color"
         )
-        XCTAssertNil(
-            foreground,
-            "attach must strip storage-level foreground color so dynamic textColor shows through"
+        XCTAssertNotEqual(
+            foreground, NSColor.red,
+            "stale foreground (red) must not survive attach"
         )
+
+        // Contract 3: typing attributes carry textColor.
         let typingColor = textView.typingAttributes[.foregroundColor] as? NSColor
         XCTAssertEqual(
             typingColor, NSColor.textColor,
