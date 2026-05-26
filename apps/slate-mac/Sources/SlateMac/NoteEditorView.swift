@@ -347,70 +347,84 @@ struct NoteEditorView: NSViewRepresentable {
             increaseContrast ? NSColor.labelColor : NSColor.controlAccentColor
         }
 
-        /// Recompute embed spans for the current buffer and apply
-        /// highlight attributes (underline only) to each. Resets
-        /// attributes on the full range first so spans the user
-        /// typed past lose their highlight.
+        /// Recompute syntax + embed spans for the current buffer and
+        /// apply attributes:
         ///
-        /// Audit #207 + #214: an earlier shape used `systemBlue`
-        /// foreground which measured ~4.0:1 against the default
-        /// editor background (fails WCAG 1.4.3) and ~2.7:1 against
-        /// `selectedTextBackgroundColor` while a selection
-        /// covered the embed. Dropped foreground color entirely;
-        /// the underline + `underlineColor: controlAccentColor`
-        /// carries the "this is an embed" cue without any
-        /// foreground/background contrast risk — the text itself
-        /// stays at the system's primary color, which Apple
-        /// guarantees meets contrast against the matched
-        /// background.
+        /// 1. Re-stamp the entire range with `NSColor.textColor` as the
+        ///    foreground so any previously-applied syntax colour
+        ///    that's been edited past (e.g. the user deleted a `#`
+        ///    that turned a heading back into prose) falls back to
+        ///    the body colour. Same dynamic semantic colour as
+        ///    `attach()` uses — preserves the #226/#302 dark-mode
+        ///    contract.
+        /// 2. Apply syntax foreground colours per kind from
+        ///    `EditorSyntaxPalette` — each per-range stamp REPLACES
+        ///    the body colour on that range. Semantic colours stay
+        ///    dynamic per appearance + honor Increase Contrast via
+        ///    the palette's IC branch.
+        /// 3. Reset and reapply the embed underline (audit #207, #230)
+        ///    to the `![[…]]` spans. This runs after the syntax
+        ///    foreground pass so the embed's wikilink colour is in
+        ///    place underneath the underline.
+        ///
+        /// Audit #207 + #214: the old embed highlight used
+        /// `systemBlue` foreground which measured ~4.0:1 against
+        /// the default editor background (fails WCAG 1.4.3). The
+        /// underline-only approach for embeds stays — only the
+        /// per-kind syntax colours from #296 use foreground, and
+        /// the palette's IC branch collapses everything to
+        /// `labelColor` for guaranteed contrast.
         ///
         /// NSTextStorage's attribute layer works even with
-        /// `isRichText = false` — that flag restricts what the
-        /// user can do via the font panel / paste-with-formatting,
-        /// not what we set programmatically. VoiceOver doesn't
-        /// emit colour attributes; the highlight is purely a
-        /// sighted-user affordance, and AT users still hear the
-        /// raw `![[…]]` text.
-        func applyEmbedHighlighting() {
+        /// `isRichText = false` — that flag restricts what the user
+        /// can do via the font panel / paste-with-formatting, not
+        /// what we set programmatically. VoiceOver doesn't emit
+        /// colour attributes; the highlight is purely a sighted-
+        /// user affordance, and AT users still hear the raw text.
+        func applySyntaxHighlighting() {
             guard let textView, let storage = textView.textStorage else { return }
             let source = textView.string
             let nsSource = source as NSString
             let fullRange = NSRange(location: 0, length: nsSource.length)
-            let spans = findEditorEmbedSpans(in: source)
-            embedSpans = spans
-            // Do NOT remove `.foregroundColor` here. Earlier shipping
-            // applied a foreground color for the embed highlight; audit
-            // #207 changed the highlight to underline-only, and the
-            // foreground-color stripping that lived alongside the old
-            // apply path stayed behind. Removing the attribute every
-            // pass blew away the dynamic `NSColor.textColor` AppKit
-            // stamps onto typed text, which falls back to a static
-            // black under dark mode (issue #226 — text invisible
-            // against the dark editor background, WCAG 1.4.3 fail).
-            //
-            // Audit #232 — this no-strip behaviour assumes callers
-            // refresh the storage via `textView.string = …` for content
-            // swaps (which `string =` does — it resets attributes too).
-            // A future hot-reload path that switches to
-            // `replaceCharacters(in:with:)` to preserve undo / selection
-            // would need to either strip explicitly here or only on the
-            // embed-span ranges (which are the only ranges this code
-            // ever owned attribute-wise).
+            let syntaxSpans = findEditorSyntaxSpans(in: source)
+            let embeds = findEditorEmbedSpans(in: source)
+            embedSpans = embeds
+
             storage.beginEditing()
+            defer { storage.endEditing() }
+            // 1. Re-stamp body colour. Using addAttribute (not
+            // setAttributes) so we don't blow away the font / typing
+            // attributes already on the range.
+            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+            // 2. Syntax foreground per kind.
+            for span in syntaxSpans {
+                let clamped = NSIntersectionRange(span.range, fullRange)
+                guard clamped.length > 0 else { continue }
+                let color = EditorSyntaxPalette.color(for: span.kind)
+                storage.addAttribute(.foregroundColor, value: color, range: clamped)
+            }
+            // 3. Embed underline (#207, #230). Reset first so spans
+            // typed past lose their underline.
             storage.removeAttribute(.underlineStyle, range: fullRange)
             storage.removeAttribute(.underlineColor, range: fullRange)
-            let attrs: [NSAttributedString.Key: Any] = [
+            let underlineAttrs: [NSAttributedString.Key: Any] = [
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
                 .underlineColor: embedUnderlineColor,
             ]
-            for span in spans {
-                let clamped = NSIntersectionRange(span.range, fullRange)
+            for embed in embeds {
+                let clamped = NSIntersectionRange(embed.range, fullRange)
                 if clamped.length > 0 {
-                    storage.addAttributes(attrs, range: clamped)
+                    storage.addAttributes(underlineAttrs, range: clamped)
                 }
             }
-            storage.endEditing()
         }
+
+        /// Back-compat alias for the previous embed-only entry point
+        /// — tests call this name; coordinator code paths inside
+        /// this file have moved to `applySyntaxHighlighting`. Same
+        /// behaviour either way; both run the full syntax + embed
+        /// pass.
+        func applyEmbedHighlighting() { applySyntaxHighlighting() }
 
         /// Cmd+E entry point — called by `SlateEditorTextView`'s
         /// `performKeyEquivalent(with:)` when the user hits the
