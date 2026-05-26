@@ -127,6 +127,66 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         )
     }
 
+    /// Audit [#301](https://github.com/coryj627/slate/issues/301):
+    /// scroll routing must honor `accessibilityReduceMotion` (WCAG
+    /// 2.3.1). The pure static helper handles both branches without
+    /// going through SwiftUI's `@Environment` plumbing — verify it
+    /// scrolls the target into view in both modes, and that the
+    /// reduce-motion branch executes synchronously inside the
+    /// `NSAnimationContext.runAnimationGroup` block (i.e. the helper
+    /// itself doesn't error and the textView reflects the post-scroll
+    /// state before the call returns).
+    func testScrollRangeRespectsReduceMotion() {
+        // 100 lines × 80 chars so scrollRangeToVisible has work to do
+        // — without enough content, the textView's visible rect
+        // already covers the target and the call is a no-op.
+        let body = (0..<100).map { "line-\($0) " + String(repeating: "x", count: 70) }
+            .joined(separator: "\n")
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        textView.string = body
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        scrollView.documentView = textView
+        // Force layout so visibleRect is meaningful.
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+
+        let targetLocation = body.utf16.count - 50  // near the end
+        let target = NSRange(location: targetLocation, length: 0)
+
+        // reduceMotion=false — default animated path.
+        NoteEditorView.Coordinator.scrollRangeToVisible(
+            target, in: textView, reduceMotion: false
+        )
+        // The call always advances the selection-target glyph into the
+        // visible rect (animated or not — by the time the call returns,
+        // the visible rect has been updated). We can't precisely assert
+        // animation duration in a unit test, but we can assert the
+        // helper doesn't throw and the view is no longer scrolled to
+        // origin.
+        let yAfterAnimated = textView.visibleRect.origin.y
+        XCTAssertGreaterThan(
+            yAfterAnimated, 0,
+            "reduceMotion=false: scroll must advance the visible rect"
+        )
+
+        // Reset scroll position so the reduceMotion=true branch has
+        // work to do.
+        textView.scroll(.zero)
+        XCTAssertEqual(textView.visibleRect.origin.y, 0)
+
+        // reduceMotion=true — wrapped in NSAnimationContext with
+        // duration=0. Same end state as the animated path; the
+        // difference (no animation) is observable only via timing,
+        // not via the final visible-rect query.
+        NoteEditorView.Coordinator.scrollRangeToVisible(
+            target, in: textView, reduceMotion: true
+        )
+        let yAfterReduced = textView.visibleRect.origin.y
+        XCTAssertGreaterThan(
+            yAfterReduced, 0,
+            "reduceMotion=true: scroll must still advance the visible rect (instantly)"
+        )
+    }
+
     /// Audit [#230](https://github.com/coryj627/slate/issues/230)
     /// follow-on: changing the system display options must re-run the
     /// highlight pass so the underline color refreshes without a

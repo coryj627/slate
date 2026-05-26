@@ -67,6 +67,16 @@ struct NoteEditorView: NSViewRepresentable {
     /// the editor (none today, kept for future surfaces).
     let previewEmbedAtCursor: ((String, Int) -> Void)?
 
+    /// System Reduce Motion preference (WCAG 2.3.1). When `true`, the
+    /// editor's scroll-routing paths jump instantly instead of using
+    /// `NSTextView`'s default animated scroll — vestibular-sensitive
+    /// users avoid the spring-loaded re-position when activating an
+    /// outline row, scrolling to a line, or landing on a template
+    /// cursor offset. Read from `@Environment` so SwiftUI re-pushes
+    /// the value through `updateNSView` whenever the system pref
+    /// changes mid-session.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
@@ -162,6 +172,11 @@ struct NoteEditorView: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
         }
+        // Seed the coordinator with the initial Reduce Motion value
+        // — updateNSView will refresh on changes, but the first
+        // scroll-request fired before SwiftUI runs its first update
+        // pass still needs a defined value.
+        context.coordinator.reduceMotion = reduceMotion
         context.coordinator.attach(textView: textView)
         context.coordinator.applyEmbedHighlighting()
         context.coordinator.subscribe(
@@ -180,6 +195,11 @@ struct NoteEditorView: NSViewRepresentable {
         // request fired between updates uses the current snapshot.
         context.coordinator.headings = headings
         context.coordinator.accessibilityLabel = accessibilityLabel
+        // Push Reduce Motion through so scroll routing fired between
+        // updates uses the current preference value — SwiftUI re-runs
+        // updateNSView when @Environment(\.accessibilityReduceMotion)
+        // flips, so this stays in sync mid-session.
+        context.coordinator.reduceMotion = reduceMotion
         textView.setAccessibilityLabel(accessibilityLabel)
 
         // External buffer change (e.g. file reload after a
@@ -207,6 +227,11 @@ struct NoteEditorView: NSViewRepresentable {
         var headings: [Heading] = []
         var accessibilityLabel: String = ""
         var previewEmbedAtCursor: ((String, Int) -> Void)?
+        /// Mirror of `@Environment(\.accessibilityReduceMotion)` from
+        /// the SwiftUI parent. Refreshed by `updateNSView` so the
+        /// scroll-routing methods always see the current value (WCAG
+        /// 2.3.1, audit #301).
+        var reduceMotion: Bool = false
         private weak var textView: NSTextView?
         private var subscriptions: Set<AnyCancellable> = []
         /// Cached embed spans for the current buffer state. Updated
@@ -485,6 +510,43 @@ struct NoteEditorView: NSViewRepresentable {
 
         // MARK: - Scroll routing
 
+        /// `NSTextView.scrollRangeToVisible(_:)` routes through the
+        /// enclosing scroll view's animator proxy, which by default
+        /// produces a brief spring animation on macOS. When the
+        /// system Reduce Motion preference is on, vestibular-
+        /// sensitive users need the scroll to land instantly (WCAG
+        /// 2.3.1). Wrapping the call in an `NSAnimationContext`
+        /// group with `duration = 0` forces the animator path to
+        /// resolve immediately; under default prefs we pass through
+        /// to the unwrapped call so the visual continuity of the
+        /// animated scroll is preserved for non-AT users.
+        ///
+        /// Pure helper extracted for testability — the instance
+        /// scroll methods read `self.reduceMotion`; the static form
+        /// takes the toggle directly so a unit test can drive both
+        /// branches without going through SwiftUI's
+        /// `@Environment` plumbing.
+        static func scrollRangeToVisible(
+            _ range: NSRange,
+            in textView: NSTextView,
+            reduceMotion: Bool
+        ) {
+            if reduceMotion {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0
+                    ctx.allowsImplicitAnimation = false
+                    textView.scrollRangeToVisible(range)
+                }
+            } else {
+                textView.scrollRangeToVisible(range)
+            }
+        }
+
+        private func scrollRangeToVisibleRespectingReduceMotion(_ range: NSRange) {
+            guard let textView else { return }
+            Self.scrollRangeToVisible(range, in: textView, reduceMotion: reduceMotion)
+        }
+
         private func scrollToHeadingAnchor(_ anchor: String) {
             guard let textView else { return }
             guard let heading = headings.first(where: { $0.anchorId == anchor })
@@ -506,7 +568,7 @@ struct NoteEditorView: NSViewRepresentable {
             let needle = heading.text as String
             let range = ns.range(of: needle)
             guard range.location != NSNotFound else { return }
-            textView.scrollRangeToVisible(range)
+            scrollRangeToVisibleRespectingReduceMotion(range)
             textView.setSelectedRange(NSRange(location: range.location, length: 0))
         }
 
@@ -538,7 +600,7 @@ struct NoteEditorView: NSViewRepresentable {
                 to: utf16Idx
             )
             let range = NSRange(location: location, length: 0)
-            textView.scrollRangeToVisible(range)
+            scrollRangeToVisibleRespectingReduceMotion(range)
             textView.setSelectedRange(range)
         }
 
@@ -573,7 +635,7 @@ struct NoteEditorView: NSViewRepresentable {
                 to: currentLineStart.samePosition(in: source.utf16) ?? source.utf16.endIndex
             )
             let range = NSRange(location: location, length: 0)
-            textView.scrollRangeToVisible(range)
+            scrollRangeToVisibleRespectingReduceMotion(range)
             textView.setSelectedRange(range)
         }
     }
