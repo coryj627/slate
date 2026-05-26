@@ -103,6 +103,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "headings: invalidate cached rows after frontmatter-skip fix (#227)",
         sql: include_str!("../migrations/012_invalidate_headings_for_frontmatter_fix.sql"),
     },
+    Migration {
+        description: "citations: bibliography_entries + file_citations (Milestone L)",
+        sql: include_str!("../migrations/013_citations.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

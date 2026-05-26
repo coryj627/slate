@@ -120,6 +120,11 @@ pub enum VaultError {
     /// to one FFI variant.
     #[error("CSL style {path:?} is unreadable: {reason}")]
     CslStyleUnreadable { path: String, reason: String },
+
+    /// `.slate/prefs.json` exists but can't be opened OR its JSON
+    /// doesn't parse. A missing file is NOT an error.
+    #[error("preferences file {path:?} is unreadable: {reason}")]
+    PrefsUnreadable { path: String, reason: String },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -162,6 +167,9 @@ impl From<core::VaultError> for VaultError {
             }
             core::VaultError::CslStyleUnreadable { path, reason } => {
                 VaultError::CslStyleUnreadable { path, reason }
+            }
+            core::VaultError::PrefsUnreadable { path, reason } => {
+                VaultError::PrefsUnreadable { path, reason }
             }
         }
     }
@@ -641,6 +649,92 @@ impl VaultSession {
     pub fn set_math_prefs(&self, prefs: MathPrefs) -> Result<(), VaultError> {
         self.inner.set_math_prefs(prefs.into())?;
         Ok(())
+    }
+
+    // --- Milestone L citations + bibliography (#278) -------------
+
+    /// Replace the active bibliography sources, reload entries, and
+    /// bump the renderer's `BibIndex` version so any cached renders
+    /// are invalidated implicitly.
+    pub fn set_bibliography_sources(
+        &self,
+        sources: Vec<BibliographySource>,
+    ) -> Result<Vec<BibLoadWarning>, VaultError> {
+        let core_sources: Vec<core::BibliographySource> =
+            sources.into_iter().map(Into::into).collect();
+        let warnings = self.inner.set_bibliography_sources(core_sources)?;
+        Ok(warnings.into_iter().map(Into::into).collect())
+    }
+
+    pub fn get_bibliography_entries(&self) -> Result<Vec<BibEntry>, VaultError> {
+        Ok(self
+            .inner
+            .get_bibliography_entries()?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn get_bibliography_entry(&self, key: String) -> Result<Option<BibEntry>, VaultError> {
+        Ok(self.inner.get_bibliography_entry(&key)?.map(Into::into))
+    }
+
+    pub fn search_bibliography(&self, query: String) -> Result<Vec<BibEntry>, VaultError> {
+        Ok(self
+            .inner
+            .search_bibliography(&query)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn list_files_citing(&self, citation_key: String) -> Result<Vec<String>, VaultError> {
+        Ok(self
+            .inner
+            .list_files_citing(&citation_key)?
+            .into_iter()
+            .map(|f| f.path)
+            .collect())
+    }
+
+    pub fn list_unresolved_citations(&self) -> Result<Vec<UnresolvedCitation>, VaultError> {
+        Ok(self
+            .inner
+            .list_unresolved_citations()?
+            .into_iter()
+            .map(|(path, key)| UnresolvedCitation { path, key })
+            .collect())
+    }
+
+    pub fn list_citations_in_file(
+        &self,
+        path: String,
+    ) -> Result<Vec<CitationReference>, VaultError> {
+        Ok(self
+            .inner
+            .list_citations_in_file(&path)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn render_citation(
+        &self,
+        reference: CitationReference,
+        style_id: String,
+    ) -> Result<RenderedCitation, VaultError> {
+        let core_ref: core::CitationReference = reference.into();
+        let rendered = self.inner.render_citation(&core_ref, &style_id)?;
+        Ok(rendered.into())
+    }
+
+    pub fn list_csl_styles(&self) -> Result<Vec<CslStyleInfo>, VaultError> {
+        Ok(self
+            .inner
+            .list_csl_styles()?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 }
 
@@ -2071,6 +2165,302 @@ impl From<core::diagram::DiagramBlock> for DiagramBlock {
             byte_offset: b.byte_offset,
         }
     }
+}
+
+// =====================================================================
+// Milestone L citations + bibliography (#278) — FFI mirror
+// =====================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BibFormat {
+    BibTeX,
+    BibLaTeX,
+    CslJson,
+}
+
+impl From<BibFormat> for core::BibFormat {
+    fn from(f: BibFormat) -> Self {
+        match f {
+            BibFormat::BibTeX => core::BibFormat::BibTeX,
+            BibFormat::BibLaTeX => core::BibFormat::BibLaTeX,
+            BibFormat::CslJson => core::BibFormat::CslJson,
+        }
+    }
+}
+
+impl From<core::BibFormat> for BibFormat {
+    fn from(f: core::BibFormat) -> Self {
+        match f {
+            core::BibFormat::BibTeX => BibFormat::BibTeX,
+            core::BibFormat::BibLaTeX => BibFormat::BibLaTeX,
+            core::BibFormat::CslJson => BibFormat::CslJson,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BibliographySource {
+    pub path: String,
+    pub format: BibFormat,
+    pub watch: bool,
+}
+
+impl From<BibliographySource> for core::BibliographySource {
+    fn from(s: BibliographySource) -> Self {
+        Self {
+            path: s.path,
+            format: s.format.into(),
+            watch: s.watch,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Author {
+    pub family: String,
+    pub given: Option<String>,
+}
+
+impl From<core::Author> for Author {
+    fn from(a: core::Author) -> Self {
+        Self {
+            family: a.family,
+            given: a.given,
+        }
+    }
+}
+
+impl From<Author> for core::Author {
+    fn from(a: Author) -> Self {
+        Self {
+            family: a.family,
+            given: a.given,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BibEntry {
+    pub key: String,
+    pub item_type: String,
+    pub title: String,
+    pub authors: Vec<Author>,
+    pub year: Option<i32>,
+    pub journal: Option<String>,
+    pub doi: Option<String>,
+    pub url: Option<String>,
+    pub publisher: Option<String>,
+    pub abstract_text: Option<String>,
+    pub raw_csl_json: String,
+}
+
+impl From<core::BibEntry> for BibEntry {
+    fn from(e: core::BibEntry) -> Self {
+        Self {
+            key: e.key,
+            item_type: e.item_type,
+            title: e.title,
+            authors: e.authors.into_iter().map(Into::into).collect(),
+            year: e.year,
+            journal: e.journal,
+            doi: e.doi,
+            url: e.url,
+            publisher: e.publisher,
+            abstract_text: e.abstract_text,
+            raw_csl_json: e.raw_csl_json,
+        }
+    }
+}
+
+impl From<BibEntry> for core::BibEntry {
+    fn from(e: BibEntry) -> Self {
+        Self {
+            key: e.key,
+            item_type: e.item_type,
+            title: e.title,
+            authors: e.authors.into_iter().map(Into::into).collect(),
+            year: e.year,
+            journal: e.journal,
+            doi: e.doi,
+            url: e.url,
+            publisher: e.publisher,
+            abstract_text: e.abstract_text,
+            raw_csl_json: e.raw_csl_json,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BibLoadWarning {
+    pub source_path: String,
+    pub message: String,
+}
+
+impl From<core::BibLoadWarning> for BibLoadWarning {
+    fn from(w: core::BibLoadWarning) -> Self {
+        Self {
+            source_path: w.source_path,
+            message: w.message,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CitationMode {
+    Bracketed,
+    InText,
+    SuppressAuthor,
+}
+
+impl From<core::CitationMode> for CitationMode {
+    fn from(m: core::CitationMode) -> Self {
+        match m {
+            core::CitationMode::Bracketed => CitationMode::Bracketed,
+            core::CitationMode::InText => CitationMode::InText,
+            core::CitationMode::SuppressAuthor => CitationMode::SuppressAuthor,
+        }
+    }
+}
+
+impl From<CitationMode> for core::CitationMode {
+    fn from(m: CitationMode) -> Self {
+        match m {
+            CitationMode::Bracketed => core::CitationMode::Bracketed,
+            CitationMode::InText => core::CitationMode::InText,
+            CitationMode::SuppressAuthor => core::CitationMode::SuppressAuthor,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Locator {
+    pub label: String,
+    pub locator: String,
+}
+
+impl From<core::Locator> for Locator {
+    fn from(l: core::Locator) -> Self {
+        Self {
+            label: l.label,
+            locator: l.locator,
+        }
+    }
+}
+
+impl From<Locator> for core::Locator {
+    fn from(l: Locator) -> Self {
+        Self {
+            label: l.label,
+            locator: l.locator,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CitedItem {
+    pub key: String,
+    pub locator: Option<Locator>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+    pub mode: CitationMode,
+}
+
+impl From<core::CitedItem> for CitedItem {
+    fn from(i: core::CitedItem) -> Self {
+        Self {
+            key: i.key,
+            locator: i.locator.map(Into::into),
+            prefix: i.prefix,
+            suffix: i.suffix,
+            mode: i.mode.into(),
+        }
+    }
+}
+
+impl From<CitedItem> for core::CitedItem {
+    fn from(i: CitedItem) -> Self {
+        Self {
+            key: i.key,
+            locator: i.locator.map(Into::into),
+            prefix: i.prefix,
+            suffix: i.suffix,
+            mode: i.mode.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CitationReference {
+    pub raw: String,
+    pub citations: Vec<CitedItem>,
+    pub byte_offset: u32,
+    pub line: u32,
+}
+
+impl From<core::CitationReference> for CitationReference {
+    fn from(r: core::CitationReference) -> Self {
+        Self {
+            raw: r.raw,
+            citations: r.citations.into_iter().map(Into::into).collect(),
+            byte_offset: r.byte_offset,
+            line: r.line,
+        }
+    }
+}
+
+impl From<CitationReference> for core::CitationReference {
+    fn from(r: CitationReference) -> Self {
+        Self {
+            raw: r.raw,
+            citations: r.citations.into_iter().map(Into::into).collect(),
+            byte_offset: r.byte_offset,
+            line: r.line,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RenderedCitation {
+    pub raw: String,
+    pub visual_text: String,
+    pub speech_text: String,
+    pub bib_entry: Option<BibEntry>,
+    pub style_id: String,
+}
+
+impl From<core::RenderedCitation> for RenderedCitation {
+    fn from(r: core::RenderedCitation) -> Self {
+        Self {
+            raw: r.raw,
+            visual_text: r.visual_text,
+            speech_text: r.speech_text,
+            bib_entry: r.bib_entry.map(Into::into),
+            style_id: r.style_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CslStyleInfo {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+}
+
+impl From<core::CslStyleInfo> for CslStyleInfo {
+    fn from(s: core::CslStyleInfo) -> Self {
+        Self {
+            id: s.id,
+            path: s.path,
+            title: s.title,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UnresolvedCitation {
+    pub path: String,
+    pub key: String,
 }
 
 #[cfg(test)]

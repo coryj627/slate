@@ -91,6 +91,13 @@ pub struct SessionConfig {
     /// and braille code. Cache invalidates when this changes
     /// (see `MathPrefs::fingerprint`).
     pub math_prefs: crate::math::MathPrefs,
+
+    /// Per-vault citations configuration loaded from
+    /// `.slate/prefs.json`. Drives `set_bibliography_sources` +
+    /// the renderer's default style. An empty `CitationsPrefs`
+    /// means "no bibliography configured" (the common case until
+    /// a tester opts in).
+    pub citations_prefs: crate::citations::prefs::CitationsPrefs,
 }
 
 impl SessionConfig {
@@ -112,6 +119,7 @@ impl SessionConfig {
             user_actor_id: "local".to_string(),
             templates_dir: None,
             math_prefs: crate::math::MathPrefs::default(),
+            citations_prefs: crate::citations::prefs::CitationsPrefs::default(),
         }
     }
 
@@ -405,6 +413,17 @@ pub enum ScanProgress {
     Failed { message: String },
 }
 
+/// FFI-friendly subset of `CslStyle`: just the picker-display fields.
+/// Distinct from `citations::render::CslStyle` because that type
+/// holds a parsed `IndependentStyle` from hayagriva which doesn't
+/// cross the uniffi boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CslStyleInfo {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+}
+
 // --- The session ---
 
 /// A live vault session.
@@ -423,6 +442,17 @@ pub struct VaultSession {
     /// through it on every call so a preference change takes
     /// effect immediately.
     math_prefs: Mutex<crate::math::MathPrefs>,
+    /// Citations index — lazy view over `bibliography_entries`.
+    /// `set_bibliography_sources` bumps the version so the renderer's
+    /// cache invalidates implicitly (see `RenderCache`).
+    bib_index: Mutex<Arc<crate::citations::bibliography::BibIndex>>,
+    /// Lazy-loaded CSL styles, keyed by `style_id`. Populated on
+    /// first `render_citation` call against an unfamiliar id.
+    csl_styles: Mutex<std::collections::HashMap<String, Arc<crate::citations::render::CslStyle>>>,
+    /// Per-process render cache. Keyed on
+    /// `(reference, style_id, bib_index_version)` so bibliography
+    /// reload invalidates implicitly.
+    render_cache: crate::citations::render::RenderCache,
 }
 
 impl VaultSession {
@@ -441,11 +471,25 @@ impl VaultSession {
         db::migrate(&mut conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
+
+        // Build the initial BibIndex from whatever's already in the
+        // bibliography_entries table — empty after a fresh
+        // installation, populated after a re-open if the previous
+        // session ran `set_bibliography_sources`.
+        let initial_entries = crate::citations_db::list_bibliography_entries(&conn)?;
+        let bib_index = Arc::new(crate::citations::bibliography::BibIndex::build(
+            initial_entries,
+            1,
+        ));
+
         Ok(Self {
             provider,
             conn: Mutex::new(conn),
             config,
             math_prefs,
+            bib_index: Mutex::new(bib_index),
+            csl_styles: Mutex::new(std::collections::HashMap::new()),
+            render_cache: crate::citations::render::RenderCache::default(),
         })
     }
 
@@ -469,6 +513,10 @@ impl VaultSession {
         if root.join("Templates").is_dir() {
             config.templates_dir = Some("Templates".to_string());
         }
+        // Load Milestone-L citations prefs from `.slate/prefs.json`.
+        // Missing file is fine (default-empty prefs); a malformed
+        // file surfaces as `VaultError::PrefsUnreadable`.
+        config.citations_prefs = crate::citations::prefs::read_citations_prefs(&root)?;
         let provider = Arc::new(FsVaultProvider::new(root));
         Self::open(provider, config)
     }
@@ -764,6 +812,7 @@ impl VaultSession {
             crate::properties_db::replace_properties_for_file(&tx, file_id, contents)?;
             crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(&tx, file_id, contents)?;
+            crate::citations_db::replace_citations_for_file(&tx, file_id, contents)?;
         }
         tx.commit()?;
 
@@ -1810,6 +1859,237 @@ impl VaultSession {
     pub fn config(&self) -> &SessionConfig {
         &self.config
     }
+
+    // ================================================================
+    // Citations + bibliography (Milestone L, #278)
+    // ================================================================
+
+    /// Replace the active bibliography sources, reload all entries
+    /// from disk, write them into `bibliography_entries`, and bump
+    /// the in-memory `BibIndex` version so the renderer's cache
+    /// invalidates implicitly.
+    ///
+    /// Sources are merged with first-source-wins on key collisions.
+    /// Loader warnings are returned to the caller via the warnings
+    /// vec (the UI uses them to flag malformed entries inline next
+    /// to their source).
+    pub fn set_bibliography_sources(
+        &self,
+        sources: Vec<crate::citations::bibliography::BibliographySource>,
+    ) -> Result<Vec<crate::citations::bibliography::BibLoadWarning>, VaultError> {
+        let vault_root = self.vault_root_for_bibliography()?;
+        let mut all_warnings: Vec<crate::citations::bibliography::BibLoadWarning> = Vec::new();
+        let mut per_source: Vec<(String, Vec<crate::citations::bibliography::BibEntry>)> =
+            Vec::with_capacity(sources.len());
+        for src in &sources {
+            let result = crate::citations::bibliography::load_source(src, &vault_root)?;
+            all_warnings.extend(result.warnings);
+            per_source.push((src.path.clone(), result.entries));
+        }
+        let (merged, _collisions) = crate::citations::bibliography::merge_sources(&per_source);
+
+        // Source-path lookup for the DB rewrite. The merge already
+        // recorded a winner per key; we walk per_source in the same
+        // order to find which source owns each entry.
+        let source_for_key: std::collections::HashMap<String, String> = per_source
+            .iter()
+            .flat_map(|(path, entries)| entries.iter().map(move |e| (e.key.clone(), path.clone())))
+            .fold(std::collections::HashMap::new(), |mut acc, (k, v)| {
+                acc.entry(k).or_insert(v);
+                acc
+            });
+        let lookup = move |key: &str| -> String {
+            source_for_key
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| "(unknown)".to_string())
+        };
+
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::replace_bibliography_entries(&mut conn, &merged, &lookup, now_ms())?;
+        drop(conn);
+
+        // Bump the in-memory index so the renderer's cache
+        // invalidates on the next render call (the key includes
+        // version).
+        let mut idx = self.bib_index.lock().expect("bib_index mutex");
+        let new_version = idx.version().saturating_add(1);
+        *idx = Arc::new(crate::citations::bibliography::BibIndex::build(
+            merged,
+            new_version,
+        ));
+        Ok(all_warnings)
+    }
+
+    /// Render `reference` against the style identified by `style_id`.
+    /// Loads the style lazily (`style_id` matches the CSL file's
+    /// basename without `.csl`) and caches the resulting render keyed
+    /// on `(reference, style_id, bib_index_version)`.
+    ///
+    /// Returns `VaultError::CslStyleUnreadable` if no path in the
+    /// configured `default_style + additional_styles` matches
+    /// `style_id` (or the file fails to load).
+    pub fn render_citation(
+        &self,
+        reference: &crate::citations::CitationReference,
+        style_id: &str,
+    ) -> Result<crate::citations::render::RenderedCitation, VaultError> {
+        let style = self.style_by_id(style_id)?;
+        let bib = self.bib_index.lock().expect("bib_index mutex").clone();
+        Ok(self.render_cache.render(reference, &bib, &style))
+    }
+
+    /// Resolve a `style_id` against the configured styles. Lazy-loads
+    /// from disk on first miss; subsequent calls hit the cache.
+    fn style_by_id(
+        &self,
+        style_id: &str,
+    ) -> Result<Arc<crate::citations::render::CslStyle>, VaultError> {
+        {
+            let cache = self.csl_styles.lock().expect("csl_styles mutex");
+            if let Some(s) = cache.get(style_id) {
+                return Ok(s.clone());
+            }
+        }
+        let vault_root = self.vault_root_for_bibliography()?;
+        let prefs = &self.config.citations_prefs;
+        let candidate_paths: Vec<String> = prefs
+            .default_style
+            .iter()
+            .chain(prefs.additional_styles.iter())
+            .cloned()
+            .collect();
+        for rel in candidate_paths {
+            let p = std::path::Path::new(&rel);
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                vault_root.join(p)
+            };
+            let file_id = resolved
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            if file_id == style_id {
+                let style = Arc::new(crate::citations::render::load_style(&resolved)?);
+                let mut cache = self.csl_styles.lock().expect("csl_styles mutex");
+                cache.insert(style_id.to_string(), style.clone());
+                return Ok(style);
+            }
+        }
+        Err(VaultError::CslStyleUnreadable {
+            path: style_id.to_string(),
+            reason: "no configured CSL style matches this id".to_string(),
+        })
+    }
+
+    /// Lightweight metadata for every CSL style configured in
+    /// `.slate/prefs.json`. The full `CslStyle` value (including the
+    /// parsed XML) lives in the session's lazy cache; this method
+    /// returns only `(id, title, path)` so the FFI surface stays
+    /// POD-shaped.
+    pub fn list_csl_styles(&self) -> Result<Vec<CslStyleInfo>, VaultError> {
+        let vault_root = self.vault_root_for_bibliography()?;
+        let prefs = &self.config.citations_prefs;
+        let mut out = Vec::new();
+        for rel in prefs
+            .default_style
+            .iter()
+            .chain(prefs.additional_styles.iter())
+        {
+            let p = std::path::Path::new(rel);
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                vault_root.join(p)
+            };
+            let id = resolved
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            // Try to load to get the title; on failure fall back to
+            // the id so the picker still shows the entry.
+            let title = match crate::citations::render::load_style(&resolved) {
+                Ok(s) => s.title.clone(),
+                Err(_) => id.clone(),
+            };
+            out.push(CslStyleInfo {
+                id,
+                path: resolved.display().to_string(),
+                title,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Resolve the vault root for bibliography path resolution.
+    /// `.slate` is always at `<root>/.slate`, so the cache dir's
+    /// parent is the canonical lookup. Errors only if `cache_dir`
+    /// itself has no parent — defensive for in-memory test setups.
+    fn vault_root_for_bibliography(&self) -> Result<std::path::PathBuf, VaultError> {
+        self.config
+            .cache_dir
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| VaultError::Unsupported {
+                feature: "bibliography on non-filesystem vault".to_string(),
+            })
+    }
+
+    /// Every bibliography entry currently indexed, ordered by year
+    /// desc then title asc.
+    pub fn get_bibliography_entries(
+        &self,
+    ) -> Result<Vec<crate::citations::bibliography::BibEntry>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::list_bibliography_entries(&conn)
+    }
+
+    /// Look up one bibliography entry by citation key.
+    pub fn get_bibliography_entry(
+        &self,
+        key: &str,
+    ) -> Result<Option<crate::citations::bibliography::BibEntry>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::get_bibliography_entry(&conn, key)
+    }
+
+    /// Case-insensitive substring search on `title` + `authors_json`.
+    pub fn search_bibliography(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::citations::bibliography::BibEntry>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::search_bibliography(&conn, query)
+    }
+
+    /// Every file in the vault that contains at least one citation
+    /// of `citation_key`. Ordered by path.
+    pub fn list_files_citing(
+        &self,
+        citation_key: &str,
+    ) -> Result<Vec<crate::citations_db::FileCiting>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::list_files_citing(&conn, citation_key)
+    }
+
+    /// Every `(file_path, citation_key)` pair where the cited key
+    /// has no matching `bibliography_entries` row.
+    pub fn list_unresolved_citations(&self) -> Result<Vec<(String, String)>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::list_unresolved_citations(&conn)
+    }
+
+    /// Every citation reference indexed for `path`, in document
+    /// order. Empty vec when the file isn't indexed yet.
+    pub fn list_citations_in_file(
+        &self,
+        path: &str,
+    ) -> Result<Vec<crate::citations::CitationReference>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::citations_db::list_citations_in_file(&conn, path)
+    }
 }
 
 // --- Internal: scan ---
@@ -2315,6 +2595,7 @@ fn index_markdown_derivatives(
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, body_text)?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, body_text)?;
+    crate::citations_db::replace_citations_for_file(tx, file_id, body_text)?;
     Ok(())
 }
 
@@ -2376,6 +2657,7 @@ fn purge_markdown_derivatives(
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, "")?;
+    crate::citations_db::replace_citations_for_file(tx, file_id, "")?;
     Ok(())
 }
 
@@ -2767,4 +3049,7 @@ mod tests {
 
     #[path = "misc.rs"]
     mod misc;
+
+    #[path = "citations.rs"]
+    mod citations;
 }

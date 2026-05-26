@@ -1916,6 +1916,8 @@ final class AppState: ObservableObject {
             return "Bibliography source \(path) couldn't be opened: \(reason)."
         case .CslStyleUnreadable(let path, let reason):
             return "Citation style \(path) couldn't be loaded: \(reason)."
+        case .PrefsUnreadable(let path, let reason):
+            return "Preferences file \(path) couldn't be loaded: \(reason)."
         }
     }
 
@@ -3679,6 +3681,8 @@ final class AppState: ObservableObject {
             return "Bibliography source \(path) couldn't be opened: \(reason)."
         case .CslStyleUnreadable(let path, let reason):
             return "Citation style \(path) couldn't be loaded: \(reason)."
+        case .PrefsUnreadable(let path, let reason):
+            return "Preferences file \(path) couldn't be loaded: \(reason)."
         }
     }
 }

@@ -12,6 +12,7 @@
 pub mod blocks;
 pub mod blocks_db;
 pub mod citations;
+pub mod citations_db;
 pub mod code;
 pub mod db;
 pub mod diagram;
@@ -42,6 +43,7 @@ pub use citations::bibliography::{
     BibFormat, BibIndex, BibLoadWarning, BibliographyChangeSink, BibliographySource, KeyCollision,
     LoadResult, DEFAULT_DEBOUNCE,
 };
+pub use citations::prefs::{parse_citations_prefs, read_citations_prefs, CitationsPrefs};
 pub use citations::render::{
     load_style as load_csl_style, render_citation, style_from_xml as csl_style_from_xml, CslStyle,
     RenderCache, RenderedCitation,
@@ -65,7 +67,7 @@ pub use templates::{
 };
 
 pub use session::{
-    CancelToken, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging,
+    CancelToken, CslStyleInfo, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging,
     RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped,
     SaveReport, ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
@@ -159,6 +161,13 @@ pub enum VaultError {
     /// share one variant.
     #[error("CSL style {path:?} is unreadable: {reason}")]
     CslStyleUnreadable { path: String, reason: String },
+
+    /// Returned from `citations::prefs::read_citations_prefs` when
+    /// `<vault>/.slate/prefs.json` exists but can't be opened OR its
+    /// JSON doesn't parse. A missing file is NOT an error — that
+    /// path returns default prefs.
+    #[error("preferences file {path:?} is unreadable: {reason}")]
+    PrefsUnreadable { path: String, reason: String },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so

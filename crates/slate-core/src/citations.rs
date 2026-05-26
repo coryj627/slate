@@ -29,6 +29,7 @@
 //! - Brackets with no `@` inside (`[some text]` is just brackets).
 
 pub mod bibliography;
+pub mod prefs;
 pub mod render;
 
 use pulldown_cmark::{Event, Parser, Tag};
