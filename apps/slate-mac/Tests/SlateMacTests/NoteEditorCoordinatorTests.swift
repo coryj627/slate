@@ -33,65 +33,67 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         return (coordinator, textView, storage)
     }
 
-    /// Regression for [#226](https://github.com/coryj627/slate/issues/226):
-    /// `applyEmbedHighlighting` used to strip every `.foregroundColor`
-    /// attribute on every pass — a relic of the pre-#207 highlight
-    /// that applied a foreground color. After the highlight switched
-    /// to underline-only the strip stayed behind, blowing away the
-    /// dynamic `NSColor.textColor` AppKit stamps onto typed text and
-    /// rendering the editor as black-on-dark in dark mode.
-    func testApplyEmbedHighlightingPreservesStampedForegroundColor() {
+    /// Regression for [#226](https://github.com/coryj627/slate/issues/226)
+    /// + scope-expansion #296: `applySyntaxHighlighting` re-stamps
+    /// `NSColor.textColor` on the full range as the body colour, then
+    /// applies per-kind syntax colours on top. Ranges that aren't
+    /// classified by any syntax span MUST retain the dynamic
+    /// `NSColor.textColor` so dark-mode rendering keeps the
+    /// white-on-dark contrast the #226/#302 fixes earned.
+    ///
+    /// Fixture: ` !![[target]] ` — characters at offsets [0,6) are
+    /// plain prose ("hello "), the embed `![[target]]` spans
+    /// [6,17), and characters at [17,23) are plain prose (" world").
+    /// The plain-prose ranges must remain `textColor`; the embed
+    /// span gets the wikilink syntax colour (see the dedicated
+    /// embed-highlight test below).
+    func testApplySyntaxHighlightingPreservesBodyTextColorOutsideSpans() {
         let (coordinator, _, storage) = makeCoordinator(text: "hello ![[target]] world")
         let fullRange = NSRange(location: 0, length: storage.length)
-        // Stamp the dynamic system text color the way AppKit's typing-
-        // attributes path would on a fresh editor.
         storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
 
-        coordinator.applyEmbedHighlighting()
+        coordinator.applySyntaxHighlighting()
 
-        for offset in 0..<fullRange.length {
+        // Prose ranges: [0,6) and [17,23). All must keep textColor.
+        let proseOffsets: [Int] = Array(0..<6) + Array(17..<storage.length)
+        for offset in proseOffsets {
             let attrs = storage.attributes(at: offset, effectiveRange: nil)
             XCTAssertEqual(
                 attrs[.foregroundColor] as? NSColor,
                 NSColor.textColor,
-                "applyEmbedHighlighting must not strip the dynamic textColor at offset \(offset)"
+                "non-syntax prose at offset \(offset) must keep dynamic textColor"
             )
         }
     }
 
-    /// Audit [#231](https://github.com/coryj627/slate/issues/231): the
-    /// pre-stamped case above tests the "we don't strip what's there"
-    /// half. The actual failure path is typed text — AppKit doesn't
-    /// always stamp `.foregroundColor` onto storage, it inherits via
-    /// typing attributes. After the fix, running the highlight should
-    /// leave non-embed ranges with NO `.foregroundColor` attribute,
-    /// and embed ranges should ALSO have no foreground color (the
-    /// highlight is underline-only per audit #207).
-    func testApplyEmbedHighlightingNeverAddsForegroundColor() {
+    /// Audit [#231](https://github.com/coryj627/slate/issues/231) +
+    /// scope-expansion #296: post-highlighting, classified ranges
+    /// MUST carry the palette colour for their kind — not
+    /// `NSColor.textColor`, and not a stale stamped colour from a
+    /// previous pass. Inside `![[target]]` the wikilink colour
+    /// (`systemTeal` by default; `labelColor` under Increase
+    /// Contrast — see `EditorSyntaxPaletteTests`) is the contract.
+    /// The previous test enforces the inverse for ranges OUTSIDE
+    /// any span.
+    func testApplySyntaxHighlightingStampsWikilinkColorOnEmbedRange() {
         let (coordinator, _, storage) = makeCoordinator(text: "before ![[target]] after")
-        // Sanity-check the starting state: NSTextView's default
-        // `string =` may stamp typing attributes that include the
-        // foreground color. Whatever it did, we want the assertion to
-        // hold after `applyEmbedHighlighting` runs — that pass must
-        // not ADD a foreground color anywhere, especially not inside
-        // the embed span.
-        coordinator.applyEmbedHighlighting()
-        coordinator.applyEmbedHighlighting()  // twice — state must not accumulate
+        coordinator.applySyntaxHighlighting()
+        coordinator.applySyntaxHighlighting()  // twice — state must not accumulate
 
-        // Inside the embed span (offset 7..18, `![[target]]`) the
-        // highlight must NOT have added a foreground color attribute.
+        // Embed span: offset 7..18 (`![[target]]`). Every offset
+        // inside must carry the wikilink colour from the palette.
+        // Read the palette via the same instance entry point the
+        // highlighter uses (which consults NSWorkspace's IC pref)
+        // so the assertion matches regardless of the test host's
+        // Increase Contrast setting.
+        let expected = EditorSyntaxPalette.color(for: .wikilink)
         for offset in 7..<18 {
             let attrs = storage.attributes(at: offset, effectiveRange: nil)
-            // It's fine if AppKit's default put NSColor.textColor in
-            // there before we ran — but we must not see a different
-            // color, and especially not a static foreground that the
-            // pre-#207 highlight would have stamped (systemBlue).
-            if let color = attrs[.foregroundColor] as? NSColor {
-                XCTAssertEqual(
-                    color, NSColor.textColor,
-                    "applyEmbedHighlighting must not introduce a custom foreground color inside the embed span"
-                )
-            }
+            XCTAssertEqual(
+                attrs[.foregroundColor] as? NSColor,
+                expected,
+                "embed span offset \(offset) must carry the wikilink palette colour"
+            )
         }
     }
 
