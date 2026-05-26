@@ -11,6 +11,7 @@
 
 pub mod blocks;
 pub mod blocks_db;
+pub mod citations;
 pub mod code;
 pub mod db;
 pub mod diagram;
@@ -34,6 +35,7 @@ pub use search_db::{
 };
 
 pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
+pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
 pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
 };
