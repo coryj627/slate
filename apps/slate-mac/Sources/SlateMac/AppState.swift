@@ -1914,6 +1914,8 @@ final class AppState: ObservableObject {
             return "Frontmatter at \(path) is malformed: \(reason)."
         case .BibSourceUnreadable(let path, let reason):
             return "Bibliography source \(path) couldn't be opened: \(reason)."
+        case .CslStyleUnreadable(let path, let reason):
+            return "Citation style \(path) couldn't be loaded: \(reason)."
         }
     }
 
@@ -3675,6 +3677,8 @@ final class AppState: ObservableObject {
                 "Frontmatter at \(path) is malformed: \(reason). Fix the YAML in this note before editing properties."
         case .BibSourceUnreadable(let path, let reason):
             return "Bibliography source \(path) couldn't be opened: \(reason)."
+        case .CslStyleUnreadable(let path, let reason):
+            return "Citation style \(path) couldn't be loaded: \(reason)."
         }
     }
 }

@@ -39,8 +39,12 @@ pub use citations::bibliography::{
     load_source as load_bibliography_source, merge_sources as merge_bibliography_sources,
     spawn_debouncer as spawn_bibliography_debouncer,
     spawn_debouncer_with_callback as spawn_bibliography_debouncer_with_callback, Author, BibEntry,
-    BibFormat, BibLoadWarning, BibliographyChangeSink, BibliographySource, KeyCollision,
+    BibFormat, BibIndex, BibLoadWarning, BibliographyChangeSink, BibliographySource, KeyCollision,
     LoadResult, DEFAULT_DEBOUNCE,
+};
+pub use citations::render::{
+    load_style as load_csl_style, render_citation, style_from_xml as csl_style_from_xml, CslStyle,
+    RenderCache, RenderedCitation,
 };
 pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
 pub use embeds::{
@@ -148,6 +152,13 @@ pub enum VaultError {
     /// content-level one.
     #[error("bibliography source {path:?} is unreadable: {reason}")]
     BibSourceUnreadable { path: String, reason: String },
+
+    /// Returned from `citations::render::load_style` when a CSL file
+    /// can't be opened OR parsed. Both are user-facing failures that
+    /// need the same "this style isn't usable" UI response, so they
+    /// share one variant.
+    #[error("CSL style {path:?} is unreadable: {reason}")]
+    CslStyleUnreadable { path: String, reason: String },
 }
 
 // Convenience: bare rusqlite errors flow through the `Db` variant so

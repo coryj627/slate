@@ -122,6 +122,66 @@ pub struct LoadResult {
     pub warnings: Vec<BibLoadWarning>,
 }
 
+/// Read-only lookup table over the merged bibliography. Built once
+/// from the output of [`merge_sources`] and consumed by the renderer
+/// in #277. `version` increments on every rebuild so the renderer's
+/// per-process cache can be keyed on `(reference, style, version)`
+/// — bumping the index invalidates all cached renders implicitly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BibIndex {
+    by_key: HashMap<String, BibEntry>,
+    version: u64,
+}
+
+impl BibIndex {
+    /// Build an index from a flat entry list (the first element of
+    /// [`merge_sources`]'s return). Duplicate keys keep the first
+    /// occurrence — `merge_sources` has already de-duped, so in
+    /// practice this matters only for callers that bypass the merge.
+    pub fn build(entries: Vec<BibEntry>, version: u64) -> Self {
+        let mut by_key = HashMap::with_capacity(entries.len());
+        for entry in entries {
+            by_key.entry(entry.key.clone()).or_insert(entry);
+        }
+        Self { by_key, version }
+    }
+
+    /// Construct an empty index. Useful in tests and as the initial
+    /// session state before a bibliography is configured.
+    pub fn empty() -> Self {
+        Self {
+            by_key: HashMap::new(),
+            version: 0,
+        }
+    }
+
+    /// Lookup an entry by key.
+    pub fn get(&self, key: &str) -> Option<&BibEntry> {
+        self.by_key.get(key)
+    }
+
+    /// Number of entries in the index.
+    pub fn len(&self) -> usize {
+        self.by_key.len()
+    }
+
+    /// True if the index has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
+
+    /// Monotonic counter incremented every time the index is rebuilt.
+    /// Used as the third component of the renderer's cache key.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Iterate every entry. Order is unspecified.
+    pub fn iter(&self) -> impl Iterator<Item = &BibEntry> {
+        self.by_key.values()
+    }
+}
+
 /// Load a single bibliography source. Resolves `source.path`
 /// against `vault_root` (absolute paths are honoured as-is) and
 /// dispatches to the format-specific parser.

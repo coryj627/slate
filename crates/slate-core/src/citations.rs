@@ -29,13 +29,14 @@
 //! - Brackets with no `@` inside (`[some text]` is just brackets).
 
 pub mod bibliography;
+pub mod render;
 
 use pulldown_cmark::{Event, Parser, Tag};
 
 /// One citation site in a source document. A site may contain
 /// multiple cited items (e.g. `[@a; @b]` → one `CitationReference`
 /// with `citations.len() == 2`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CitationReference {
     /// Verbatim source slice that produced this reference. For
     /// bracketed forms this includes the `[` and `]`; for in-text
@@ -53,7 +54,7 @@ pub struct CitationReference {
 
 /// One key + optional locator + optional surrounding text inside a
 /// `CitationReference`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CitedItem {
     /// Citation key. Matches Better BibTeX's `[a-zA-Z0-9_\-:.+]+`.
     pub key: String,
@@ -73,7 +74,7 @@ pub struct CitedItem {
 
 /// Locator following a citation key, e.g. `p. 23` →
 /// `{ label: "p.", locator: "23" }`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Locator {
     /// Pandoc-standard label as authored (with the trailing `.` if
     /// present). Unrecognised locators are stored under `label =
@@ -84,7 +85,7 @@ pub struct Locator {
 }
 
 /// How the citation was authored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CitationMode {
     /// `[@key]` and its variants — appears inside square brackets.
     Bracketed,
