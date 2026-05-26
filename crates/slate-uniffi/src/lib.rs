@@ -114,6 +114,12 @@ pub enum VaultError {
     /// from a successful load with parse warnings.
     #[error("bibliography source {path:?} is unreadable: {reason}")]
     BibSourceUnreadable { path: String, reason: String },
+
+    /// CSL style file couldn't be opened OR parsed. Both share the
+    /// same UI response ("this style isn't usable") so they collapse
+    /// to one FFI variant.
+    #[error("CSL style {path:?} is unreadable: {reason}")]
+    CslStyleUnreadable { path: String, reason: String },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -153,6 +159,9 @@ impl From<core::VaultError> for VaultError {
             }
             core::VaultError::BibSourceUnreadable { path, reason } => {
                 VaultError::BibSourceUnreadable { path, reason }
+            }
+            core::VaultError::CslStyleUnreadable { path, reason } => {
+                VaultError::CslStyleUnreadable { path, reason }
             }
         }
     }

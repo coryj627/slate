@@ -59,7 +59,7 @@ mermaid-rs-renderer = { version = "0.2", default-features = false }
 # rendering in #277. `biblatex` feature pulls in the BibLaTeX parser
 # we use to load .bib files. `csl-json` exposes citationberg::json
 # types we read CSL-JSON sources into. Locked pick per `05` §2.4.
-hayagriva = { version = "0.9", default-features = false, features = ["biblatex", "csl-json"] }
+hayagriva = { version = "0.9", default-features = false, features = ["biblatex", "csl-json", "archive"] }
 
 # `libc::O_NOFOLLOW` for the templates-flow symlink-escape defence
 # (#132 / Codoki PR #153 Critical). Unix-only; Windows builds fall
