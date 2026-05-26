@@ -60,6 +60,10 @@ struct MainSplitView: View {
                     .tabItem {
                         Label("Citations", systemImage: "quote.bubble")
                     }
+                BibliographyPanel()
+                    .tabItem {
+                        Label("Bibliography", systemImage: "books.vertical")
+                    }
             }
             .accessibilityLabel("Sidebar")
         }
@@ -325,6 +329,45 @@ struct MainSplitView: View {
                 )
                 .environmentObject(appState)
             }
+        }
+        // BibliographyPanel entry expansion (#280). Same shape as
+        // expandedCitation above — separate state so the user can
+        // close one without affecting the other.
+        .sheet(
+            isPresented: Binding(
+                get: { appState.expandedBibEntry != nil },
+                set: { presented in
+                    if !presented {
+                        appState.expandedBibEntry = nil
+                    }
+                }
+            )
+        ) {
+            if let entry = appState.expandedBibEntry {
+                CitationPopover(
+                    entry: entry,
+                    onClose: { appState.expandedBibEntry = nil }
+                )
+                .environmentObject(appState)
+            }
+        }
+        // Files-citing sheet (#280 right-click action). Populated by
+        // `requestFilesCiting` and shown when non-nil. Empty list
+        // shows a friendly empty state rather than a blank sheet.
+        .sheet(
+            isPresented: Binding(
+                get: { appState.filesCitingResult != nil },
+                set: { presented in
+                    if !presented {
+                        appState.filesCitingResult = nil
+                    }
+                }
+            )
+        ) {
+            FilesCitingSheet(
+                paths: appState.filesCitingResult ?? [],
+                onClose: { appState.filesCitingResult = nil }
+            )
         }
         .onAppear {
             postAccessibilityAnnouncement(

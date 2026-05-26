@@ -488,6 +488,39 @@ final class AppState: ObservableObject {
     /// in `MainSplitView`.
     @Published var expandedCitation: RenderedCitation?
 
+    // MARK: - Bibliography (Milestone L, #280)
+
+    /// Full merged bibliography for the open vault. Populated by
+    /// `loadBibliographyEntries` after `setBibliographySources` runs
+    /// and on session open. Empty when no bibliography is configured.
+    @Published private(set) var bibliographyEntries: [BibEntry] = []
+    @Published private(set) var isLoadingBibliography: Bool = false
+    @Published var bibliographyLoadError: String?
+
+    /// Vault-wide unresolved citation list: `(file_path, key)` pairs
+    /// whose key has no matching `bibliography_entries` row. Bound
+    /// by the BibliographyPanel's Unresolved segment.
+    @Published private(set) var unresolvedCitations: [UnresolvedCitation] = []
+
+    /// Search query bound to the BibliographyPanel's search field.
+    /// The panel observes this and filters the entries list — kept on
+    /// AppState (not local @State) so the panel survives sidebar tab
+    /// switches without losing the query.
+    @Published var bibliographySearchText: String = ""
+
+    /// Bibliography entry the user wants to expand from the
+    /// BibliographyPanel (vs. the per-note `expandedCitation` set by
+    /// CitationsPanel). Drives the same `CitationPopover` sheet — we
+    /// wrap the entry in a synthetic `RenderedCitation` so the
+    /// popover renders without a separate code path.
+    @Published var expandedBibEntry: BibEntry?
+
+    /// Vault-relative paths of every file that cites the
+    /// currently-being-inspected key (right-click → Show files citing).
+    /// Empty until the user requests this; cleared on tab switch /
+    /// vault close.
+    @Published var filesCitingResult: [String]?
+
     /// Per-user math rendering preferences. UI panels bind to this;
     /// the `didSet` re-triggers the math-block load for the current
     /// path so settings changes propagate to the rendered output.
@@ -1498,6 +1531,22 @@ final class AppState: ObservableObject {
         codeBlocksRefreshTask = nil
         diagramBlocksRefreshTask?.cancel()
         diagramBlocksRefreshTask = nil
+        // Milestone L #279/#280: drop citation + bibliography state
+        // on vault close so a re-open starts fresh.
+        citationsLoadTask?.cancel()
+        citationsLoadTask = nil
+        currentNoteCitations = []
+        citationsLoadError = nil
+        isLoadingCitations = false
+        expandedCitation = nil
+        bibliographyEntries = []
+        bibliographyLoadError = nil
+        isLoadingBibliography = false
+        unresolvedCitations = []
+        bibliographySearchText = ""
+        expandedBibEntry = nil
+        filesCitingResult = nil
+        activeStyleId = ""
         embedsLoadError = nil
         linksLoadError = nil
         currentNoteTasks = []
@@ -1965,6 +2014,86 @@ final class AppState: ObservableObject {
             currentNoteCitations = []
             citationsLoadError = humanReadable(err)
         }
+    }
+
+    // MARK: - Bibliography loaders (#280)
+
+    /// Load the merged bibliography from the session's DB into
+    /// `bibliographyEntries`. Cancel-safe; idempotent. Call after
+    /// `setBibliographySources` or whenever the panel is opened to
+    /// re-read the index. Auto-refreshes the `unresolvedCitations`
+    /// list afterwards since the two views move together.
+    func loadBibliographyEntries() async {
+        guard let session = currentSession else {
+            bibliographyEntries = []
+            unresolvedCitations = []
+            return
+        }
+        isLoadingBibliography = true
+        defer { isLoadingBibliography = false }
+
+        let result: Result<([BibEntry], [UnresolvedCitation]), VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    let entries = try session.getBibliographyEntries()
+                    let unresolved = try session.listUnresolvedCitations()
+                    return .success((entries, unresolved))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .success(let (entries, unresolved)):
+            bibliographyEntries = entries
+            unresolvedCitations = unresolved
+            bibliographyLoadError = nil
+        case .failure(let err):
+            bibliographyEntries = []
+            unresolvedCitations = []
+            bibliographyLoadError = humanReadable(err)
+        }
+    }
+
+    /// Request the set of vault files that cite `key`. Populates
+    /// `filesCitingResult` for the BibliographyPanel's
+    /// "Show files citing this entry" sheet.
+    func requestFilesCiting(key: String) async {
+        guard let session = currentSession else { return }
+        let result: Result<[String], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try session.listFilesCiting(citationKey: key))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .success(let files):
+            filesCitingResult = files
+        case .failure:
+            filesCitingResult = []
+        }
+    }
+
+    /// Filtered view of `bibliographyEntries` against
+    /// `bibliographySearchText`. Empty query returns everything.
+    /// Substring match on title + author family + key (case-
+    /// insensitive). Defined as a method (not computed property)
+    /// because SwiftUI re-evaluates filtered lists every render
+    /// pass and the closure form keeps the call-site explicit.
+    func filteredBibliographyEntries() -> [BibEntry] {
+        filterBibliographyEntries(
+            bibliographyEntries,
+            query: bibliographySearchText
+        )
     }
 
     /// Load Mermaid diagram blocks (rendered SVG + structured
@@ -3807,6 +3936,31 @@ final class AppState: ObservableObject {
 /// Mirrors the Rust-side heuristic that lived in
 /// `search_db::find_first_token_line` before #92 item 1 moved
 /// line derivation out of `full_text_search`. Lowercases the body
+/// Pure filter used by `BibliographyPanel`. Empty query returns
+/// `entries` unchanged. Otherwise case-insensitive substring match
+/// against title, key, author family, and author given names. Split
+/// out as a free function so tests can exercise the logic without
+/// AppState's `private(set)` constraints.
+func filterBibliographyEntries(_ entries: [BibEntry], query: String) -> [BibEntry] {
+    let q = query
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    guard !q.isEmpty else { return entries }
+    return entries.filter { entry in
+        if entry.title.lowercased().contains(q) { return true }
+        if entry.key.lowercased().contains(q) { return true }
+        for author in entry.authors {
+            if author.family.lowercased().contains(q) { return true }
+            if let given = author.given,
+                given.lowercased().contains(q)
+            {
+                return true
+            }
+        }
+        return false
+    }
+}
+
 /// Synthesize a `RenderedCitation` for a `CitationReference` when no
 /// CSL style is configured yet. The panel will announce these via
 /// the citation key — better than rendering nothing, since AT users
