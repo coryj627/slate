@@ -538,6 +538,17 @@ final class AppState: ObservableObject {
     /// (e.g. "library.bib not found").
     @Published var bibliographySettingsError: String?
 
+    /// Drives the Citation Summary sheet (Cmd+Shift+J / #282). `true`
+    /// while the sheet is presented; the sheet body reads from
+    /// `currentNoteCitations` to compute counts.
+    @Published var isCitationSummaryOpen: Bool = false
+
+    /// Set by the Jump-to-Bibliography command (#282 / Cmd+J) from a
+    /// focused citation. When non-nil, the BibliographyPanel switches
+    /// to the Entries segment and filters to this key. Cleared after
+    /// the panel handles it.
+    @Published var pendingBibliographyKeyFocus: String?
+
     /// Per-user math rendering preferences. UI panels bind to this;
     /// the `didSet` re-triggers the math-block load for the current
     /// path so settings changes propagate to the rendered output.
@@ -1583,6 +1594,8 @@ final class AppState: ObservableObject {
         bibliographyPrefs = .empty
         availableCslStyles = []
         bibliographySettingsError = nil
+        isCitationSummaryOpen = false
+        pendingBibliographyKeyFocus = nil
         activeStyleId = ""
         embedsLoadError = nil
         linksLoadError = nil
@@ -2139,6 +2152,27 @@ final class AppState: ObservableObject {
         case .failure(let err):
             bibliographySettingsError = humanReadable(err)
         }
+    }
+
+    /// Jump-to-Bibliography (#282). Pull the first citation key out
+    /// of the currently-expanded citation's `raw` text, set the
+    /// search field + filter target, and close the popover so the
+    /// sidebar surface is reachable. The BibliographyPanel observes
+    /// `pendingBibliographyKeyFocus` and switches to its Entries
+    /// segment with the key as the query.
+    func jumpToBibliographyFromExpandedCitation() {
+        guard let citation = expandedCitation else { return }
+        let key = extractCitationKey(from: citation.raw)
+        guard !key.isEmpty else { return }
+        bibliographySearchText = key
+        pendingBibliographyKeyFocus = key
+        expandedCitation = nil
+        let resolved = bibliographyEntries.contains(where: { $0.key == key })
+        let message =
+            resolved
+            ? "Jumped to bibliography entry: \(key)."
+            : "Searching bibliography for: \(key)."
+        postAccessibilityAnnouncement(message, priority: .medium)
     }
 
     /// Update the active CSL style id (driven by Settings panel's
@@ -4105,6 +4139,23 @@ final class AppState: ObservableObject {
 /// Mirrors the Rust-side heuristic that lived in
 /// `search_db::find_first_token_line` before #92 item 1 moved
 /// line derivation out of `full_text_search`. Lowercases the body
+/// Pull the first citation key from a raw source-form string. Handles
+/// `[@key]`, `[@key, p. 23]`, `[-@key]`, `@key`, etc. Returns `""` when
+/// no `@`-anchored key is found. Mirrors the helper in
+/// `CitationPopover.extractKey` — pulled out here so the AppState
+/// Jump-to-Bibliography action can call it without coupling to the
+/// view layer.
+func extractCitationKey(from raw: String) -> String {
+    guard let atIdx = raw.firstIndex(of: "@") else { return "" }
+    let after = raw.index(after: atIdx)
+    let tail = raw[after...]
+    let key = tail.prefix { ch in
+        ch.isLetter || ch.isNumber || ch == "_" || ch == "-" || ch == ":"
+            || ch == "." || ch == "+"
+    }
+    return String(key).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+}
+
 /// Pure filter used by `BibliographyPanel`. Empty query returns
 /// `entries` unchanged. Otherwise case-insensitive substring match
 /// against title, key, author family, and author given names. Split
