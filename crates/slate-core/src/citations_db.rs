@@ -78,13 +78,15 @@ pub fn list_citations_in_file(
     conn: &Connection,
     path: &str,
 ) -> Result<Vec<CitationReference>, VaultError> {
-    let file_id: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM files WHERE path = ?1",
-            params![path],
-            |row| row.get(0),
-        )
-        .ok();
+    let file_id: Option<i64> = match conn.query_row(
+        "SELECT id FROM files WHERE path = ?1",
+        params![path],
+        |row| row.get(0),
+    ) {
+        Ok(id) => Some(id),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(other) => return Err(other.into()),
+    };
     let Some(file_id) = file_id else {
         return Ok(Vec::new());
     };
