@@ -84,16 +84,22 @@ struct CitationSummarySheet: View {
         let total = citations.count
         var keys = Set<String>()
         for citation in citations {
-            // Each RenderedCitation can wrap multiple CitedItems but
-            // the FFI shape we land on the Mac side has only `raw` +
-            // `bibEntry`. Use `bibEntry.key` when present and the raw
-            // text otherwise. Multi-item sources (e.g. `[@a; @b]`)
-            // get a coarse-grained count today; the integration test
-            // (#283) drives the precision check.
+            // Each RenderedCitation wraps a resolved or unresolved
+            // citation site. Use `bibEntry.key` for resolved cases;
+            // for unresolved, extract the citation key from the raw
+            // source-form text so the same key with different
+            // locators (e.g. "[@smith2020]" vs "[@smith2020, p. 2]")
+            // collapses to one unique source — same semantic the
+            // resolved branch gets for free.
+            //
+            // Codoki PR #293: previously used `raw` directly here,
+            // which over-counted unique sources whenever the same
+            // key appeared with multiple locators.
             if let entry = citation.bibEntry {
                 keys.insert(entry.key)
             } else {
-                keys.insert(citation.raw)
+                let key = extractCitationKey(from: citation.raw)
+                keys.insert(key.isEmpty ? citation.raw : key)
             }
         }
         let unique = keys.count

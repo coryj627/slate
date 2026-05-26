@@ -30,4 +30,17 @@ final class CitationSummaryTests: XCTestCase {
     func testExtractCitationKeyEmptyWhenNoAt() {
         XCTAssertEqual(extractCitationKey(from: "just plain text"), "")
     }
+
+    // Verify the unresolved-source counting collapses different
+    // locator forms of the same key into one unique source —
+    // Codoki PR #293.
+    func testSameKeyWithDifferentLocatorsCollapsesToOneUniqueSource() {
+        let a = extractCitationKey(from: "[@smith2020]")
+        let b = extractCitationKey(from: "[@smith2020, p. 2]")
+        let c = extractCitationKey(from: "[@smith2020, pp. 5-10]")
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(b, c)
+        let unique = Set([a, b, c])
+        XCTAssertEqual(unique.count, 1)
+    }
 }
