@@ -149,15 +149,16 @@ struct BibliographyPanel: View {
                 }
             }
             Button("Insert citation in current note (V1.x)") {
-                // V1.x scope per the milestone description; surface
-                // a non-modal alert so users discover the deferral
-                // without crashing into a broken codepath.
+                // V1.x scope per the milestone description. The
+                // button has to stay enabled so the announcement
+                // actually fires when activated — disabling it would
+                // make the menu item silent, defeating the discovery
+                // intent (Codoki PR #291).
                 postAccessibilityAnnouncement(
                     "Insert citation lands in V1.x. See Milestone L.",
                     priority: .medium
                 )
             }
-            .disabled(true)
         }
     }
 
