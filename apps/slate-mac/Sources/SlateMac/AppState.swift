@@ -458,6 +458,36 @@ final class AppState: ObservableObject {
     @Published var diagramBlocksLoadError: String?
     private(set) var diagramBlocksLoadTask: Task<Void, Never>?
 
+    /// Citations rendered for the currently-loaded note. Each entry
+    /// is a `RenderedCitation` carrying both `visual_text` (sighted)
+    /// and `speech_text` (AT) — the renderer (#277) built both from
+    /// structured data so the AT form never spells punctuation.
+    /// Same lifecycle as `currentNoteMathBlocks`: cleared on
+    /// selection change, repopulated by `loadCurrentNoteCitations`.
+    @Published private(set) var currentNoteCitations: [RenderedCitation] = []
+    @Published private(set) var isLoadingCitations: Bool = false
+    @Published var citationsLoadError: String?
+    private(set) var citationsLoadTask: Task<Void, Never>?
+
+    /// The style id that `loadCurrentNoteCitations` renders against.
+    /// Derived from `.slate/prefs.json`'s `default_style` (or empty
+    /// if no bibliography is configured). The style-switching command
+    /// in #281 mutates this; the `didSet` re-triggers a render.
+    @Published var activeStyleId: String = "" {
+        didSet {
+            guard activeStyleId != oldValue, let path = selectedFilePath else { return }
+            citationsLoadTask?.cancel()
+            citationsLoadTask = Task { [weak self] in
+                await self?.loadCurrentNoteCitations(path: path)
+            }
+        }
+    }
+
+    /// Citation the user wants to expand (Cmd+Shift+E / row activation
+    /// in `CitationsPanel`). Drives the `CitationPopover` sheet bound
+    /// in `MainSplitView`.
+    @Published var expandedCitation: RenderedCitation?
+
     /// Per-user math rendering preferences. UI panels bind to this;
     /// the `didSet` re-triggers the math-block load for the current
     /// path so settings changes propagate to the rendered output.
@@ -1061,6 +1091,8 @@ final class AppState: ObservableObject {
             currentNoteMathBlocks = []
             currentNoteCodeBlocks = []
             currentNoteDiagramBlocks = []
+            currentNoteCitations = []
+            expandedCitation = nil
             isLoadingNote = false
             isLoadingLinks = false
             isLoadingEmbeds = false
@@ -1105,6 +1137,8 @@ final class AppState: ObservableObject {
         currentNoteMathBlocks = []
         currentNoteCodeBlocks = []
         currentNoteDiagramBlocks = []
+        currentNoteCitations = []
+        expandedCitation = nil
         noteLoadTask = Task { [weak self] in
             await self?.loadCurrentNote(path: path)
         }
@@ -1142,6 +1176,12 @@ final class AppState: ObservableObject {
         }
         diagramBlocksLoadTask = Task { [weak self] in
             await self?.loadCurrentNoteDiagramBlocks(path: path)
+        }
+        // Milestone L (#279): citations for the current note. Same
+        // fan-out shape — race-guarded by selectedFilePath == path
+        // inside the loader.
+        citationsLoadTask = Task { [weak self] in
+            await self?.loadCurrentNoteCitations(path: path)
         }
     }
 
@@ -1856,6 +1896,74 @@ final class AppState: ObservableObject {
         case .failure(let err):
             currentNoteCodeBlocks = []
             codeBlocksLoadError = humanReadable(err)
+        }
+    }
+
+    /// Load citation references for `path`, render each against the
+    /// active CSL style, and publish to `currentNoteCitations`. Same
+    /// shape as `loadCurrentNoteMathBlocks` — cancellable, race-
+    /// guarded, drops stale writes when the user has moved on.
+    ///
+    /// When no bibliography is configured (`activeStyleId.isEmpty`)
+    /// we publish an empty list rather than calling render with a
+    /// missing style — the panel will then show the "no bibliography
+    /// configured" empty state. Citations without a matching
+    /// bibliography entry still render through the renderer's
+    /// unresolved path ("Unresolved citation: <key>") so screen-
+    /// reader users hear what's missing.
+    func loadCurrentNoteCitations(path: String) async {
+        guard let session = currentSession else { return }
+        isLoadingCitations = true
+        defer { isLoadingCitations = false }
+
+        // Style id source: `activeStyleId` is empty until the Settings
+        // panel (#281) wires `.slate/prefs.json`'s `default_style`
+        // through. An empty id means "render not possible yet" — we
+        // still pull the structural citation refs so the panel can
+        // show keys + line numbers, but the visual + speech forms
+        // come back empty from the renderer.
+        let styleId = activeStyleId
+
+        let result: Result<[RenderedCitation], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    let refs = try session.listCitationsInFile(path: path)
+                    guard !styleId.isEmpty else {
+                        // No style yet — synthesize a placeholder
+                        // RenderedCitation per ref using the key as
+                        // the speech form. The panel announces these
+                        // as "Citation: <key>" so AT users can still
+                        // hear where citations are.
+                        return .success(refs.map { ref in
+                            placeholderRendered(for: ref)
+                        })
+                    }
+                    var rendered: [RenderedCitation] = []
+                    rendered.reserveCapacity(refs.count)
+                    for ref in refs {
+                        rendered.append(
+                            try session.renderCitation(
+                                reference: ref,
+                                styleId: styleId
+                            )
+                        )
+                    }
+                    return .success(rendered)
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled, selectedFilePath == path else { return }
+        switch result {
+        case .success(let renders):
+            currentNoteCitations = renders
+            citationsLoadError = nil
+        case .failure(let err):
+            currentNoteCitations = []
+            citationsLoadError = humanReadable(err)
         }
     }
 
@@ -3699,6 +3807,34 @@ final class AppState: ObservableObject {
 /// Mirrors the Rust-side heuristic that lived in
 /// `search_db::find_first_token_line` before #92 item 1 moved
 /// line derivation out of `full_text_search`. Lowercases the body
+/// Synthesize a `RenderedCitation` for a `CitationReference` when no
+/// CSL style is configured yet. The panel will announce these via
+/// the citation key — better than rendering nothing, since AT users
+/// at least learn where citations live in the document. Once #281
+/// wires a default style, the real renderer takes over.
+func placeholderRendered(for ref: CitationReference) -> RenderedCitation {
+    let speech: String
+    if ref.citations.count == 1 {
+        let item = ref.citations[0]
+        switch item.mode {
+        case .inText:
+            speech = item.key
+        default:
+            speech = "Citation: \(item.key)"
+        }
+    } else {
+        let keys = ref.citations.map { $0.key }.joined(separator: ", ")
+        speech = "Citation: \(keys)"
+    }
+    return RenderedCitation(
+        raw: ref.raw,
+        visualText: ref.raw,
+        speechText: speech,
+        bibEntry: nil,
+        styleId: ""
+    )
+}
+
 /// once and counts newlines in the lowercased prefix — avoids a
 /// cross-string slice that would panic on non-boundary indices
 /// when Unicode lowercasing changes byte length (`İ` → `i` + U+0307

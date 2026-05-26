@@ -45,8 +45,23 @@ struct MainSplitView: View {
                 .accessibilityLabel("Note content pane")
                 .accessibilityFocused($alertFocusReturn, equals: .editor)
         } detail: {
-            OutlineSidebar()
-                .accessibilityLabel("Outline sidebar")
+            // Sidebar tabs (Milestone L #279 adds Citations alongside
+            // Outline). Both panels read from `AppState`'s
+            // currently-loaded note state, so switching tabs is free
+            // — no extra IO. Default tab is Outline because that's
+            // what was there before Milestone L; Citations earns its
+            // tab only on notes that actually cite something.
+            TabView {
+                OutlineSidebar()
+                    .tabItem {
+                        Label("Outline", systemImage: "list.bullet.indent")
+                    }
+                CitationsPanel()
+                    .tabItem {
+                        Label("Citations", systemImage: "quote.bubble")
+                    }
+            }
+            .accessibilityLabel("Sidebar")
         }
         .navigationTitle(vaultTitle)
         .toolbar {
@@ -283,6 +298,33 @@ struct MainSplitView: View {
         .sheet(isPresented: $appState.isBulkRenameSheetOpen) {
             BulkRenameSheet()
                 .environmentObject(appState)
+        }
+        // Citation expand popover (#279). Triggered by activating a
+        // row in `CitationsPanel`; the sheet binding tracks
+        // `expandedCitation`. Dismissal routes focus back to the
+        // editor (same shape as the embed-preview popover, WCAG
+        // 2.4.3 + 2.1.2).
+        .sheet(
+            isPresented: Binding(
+                get: { appState.expandedCitation != nil },
+                set: { presented in
+                    if !presented {
+                        appState.expandedCitation = nil
+                        alertFocusReturn = .editor
+                    }
+                }
+            )
+        ) {
+            if let citation = appState.expandedCitation {
+                CitationPopover(
+                    citation: citation,
+                    onClose: {
+                        appState.expandedCitation = nil
+                        alertFocusReturn = .editor
+                    }
+                )
+                .environmentObject(appState)
+            }
         }
         .onAppear {
             postAccessibilityAnnouncement(
