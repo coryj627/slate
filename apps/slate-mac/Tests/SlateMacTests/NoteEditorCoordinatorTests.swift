@@ -225,6 +225,77 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         )
     }
 
+    /// Codoki review on [PR #303](https://github.com/coryj627/slate/pull/303)
+    /// follow-up: locks in the editor's contract that `attach()`
+    /// *unconditionally* normalizes per-range foreground colors to
+    /// the semantic `NSColor.textColor`, not just the single stale-red
+    /// case covered by `testAttachStampsDynamicTextColor`.
+    ///
+    /// The editor never adds intentional per-range `.foregroundColor`
+    /// attributes — it only paints `.underlineStyle` + `.underlineColor`
+    /// for `![[…]]` embed spans (audit #207 + #214). If a future change
+    /// starts stamping per-range colors (e.g. a markdown syntax
+    /// highlighter, [#296](https://github.com/coryj627/slate/issues/296)),
+    /// the author needs to choose: either (a) accept that `attach`
+    /// will overwrite their colors and re-apply after attach, or (b)
+    /// teach `attach` a per-range-aware mode. This test fails loudly
+    /// if someone adds per-range colors and expects them to survive
+    /// across an `attach` cycle.
+    ///
+    /// Mixed-color fixture: red on `[0,5)`, blue on `[5,11)`. Both
+    /// must be normalized to a single dynamic-system-color run after
+    /// attach.
+    func testAttachNormalizesAllPerRangeForegroundColors() {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        textView.string = "hello world"
+        let storage = textView.textStorage!
+        storage.addAttribute(
+            .foregroundColor,
+            value: NSColor.red,
+            range: NSRange(location: 0, length: 5)
+        )
+        storage.addAttribute(
+            .foregroundColor,
+            value: NSColor.systemBlue,
+            range: NSRange(location: 5, length: 6)
+        )
+
+        let binding = Binding<String>(get: { "hello world" }, set: { _ in })
+        let coordinator = NoteEditorView.Coordinator(
+            text: binding,
+            onSave: {},
+            previewEmbedAtCursor: nil
+        )
+        coordinator.attach(textView: textView)
+
+        // Every offset must now report NSColor.textColor — both the
+        // red range and the blue range got normalized.
+        for offset in 0..<storage.length {
+            let color = storage.attribute(
+                .foregroundColor, at: offset, effectiveRange: nil
+            ) as? NSColor
+            XCTAssertEqual(
+                color, NSColor.textColor,
+                "offset \(offset) must be normalized to NSColor.textColor; got \(String(describing: color))"
+            )
+        }
+
+        // And the storage's foreground attribute run is contiguous —
+        // no surviving boundary between the old red/blue ranges.
+        var effectiveRange = NSRange(location: 0, length: 0)
+        _ = storage.attribute(
+            .foregroundColor,
+            at: 0,
+            longestEffectiveRange: &effectiveRange,
+            in: NSRange(location: 0, length: storage.length)
+        )
+        XCTAssertEqual(
+            effectiveRange,
+            NSRange(location: 0, length: storage.length),
+            "the entire storage must be a single textColor run after attach (no leftover per-range boundaries)"
+        )
+    }
+
     /// Audit [#233](https://github.com/coryj627/slate/issues/233):
     /// repeated `attach` calls must not stack notification handlers.
     /// Without the dedup, a coordinator recycled twice would re-run
