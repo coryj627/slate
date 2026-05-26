@@ -130,12 +130,17 @@ final class NoteEditorCoordinatorTests: XCTestCase {
     /// Audit [#301](https://github.com/coryj627/slate/issues/301):
     /// scroll routing must honor `accessibilityReduceMotion` (WCAG
     /// 2.3.1). The pure static helper handles both branches without
-    /// going through SwiftUI's `@Environment` plumbing — verify it
-    /// scrolls the target into view in both modes, and that the
-    /// reduce-motion branch executes synchronously inside the
-    /// `NSAnimationContext.runAnimationGroup` block (i.e. the helper
-    /// itself doesn't error and the textView reflects the post-scroll
-    /// state before the call returns).
+    /// going through SwiftUI's `@Environment` plumbing.
+    ///
+    /// We only assert end-state on the `reduceMotion = true` branch:
+    /// that path wraps the scroll in `NSAnimationContext` with
+    /// `duration = 0` and is guaranteed to land synchronously. The
+    /// `reduceMotion = false` path uses AppKit's default animator
+    /// proxy, which may defer the `visibleRect` update past the call
+    /// boundary — asserting on its post-call state risks cross-machine
+    /// flakiness (PR #306 Codoki review). For that branch we only
+    /// assert the helper doesn't crash.
+    @MainActor
     func testScrollRangeRespectsReduceMotion() {
         // 100 lines × 80 chars so scrollRangeToVisible has work to do
         // — without enough content, the textView's visible rect
@@ -152,38 +157,32 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         let targetLocation = body.utf16.count - 50  // near the end
         let target = NSRange(location: targetLocation, length: 0)
 
-        // reduceMotion=false — default animated path.
+        // reduceMotion = false — animated path. Just exercise the
+        // call to confirm it doesn't trap on a nil container, a
+        // detached scroll view, or any of the AppKit edge cases this
+        // path touches. End-state is intentionally not asserted: the
+        // animator proxy can defer the visibleRect update past the
+        // call boundary, which would make a positional assertion
+        // flake.
         NoteEditorView.Coordinator.scrollRangeToVisible(
             target, in: textView, reduceMotion: false
         )
-        // The call always advances the selection-target glyph into the
-        // visible rect (animated or not — by the time the call returns,
-        // the visible rect has been updated). We can't precisely assert
-        // animation duration in a unit test, but we can assert the
-        // helper doesn't throw and the view is no longer scrolled to
-        // origin.
-        let yAfterAnimated = textView.visibleRect.origin.y
-        XCTAssertGreaterThan(
-            yAfterAnimated, 0,
-            "reduceMotion=false: scroll must advance the visible rect"
-        )
 
-        // Reset scroll position so the reduceMotion=true branch has
-        // work to do.
+        // Reset scroll position so the reduceMotion = true branch has
+        // visible work to do.
         textView.scroll(.zero)
         XCTAssertEqual(textView.visibleRect.origin.y, 0)
 
-        // reduceMotion=true — wrapped in NSAnimationContext with
-        // duration=0. Same end state as the animated path; the
-        // difference (no animation) is observable only via timing,
-        // not via the final visible-rect query.
+        // reduceMotion = true — wrapped in NSAnimationContext with
+        // duration = 0, guaranteed synchronous landing. End-state IS
+        // asserted here: post-call the visible rect must reflect the
+        // scroll-target offset (no run-loop spin required).
         NoteEditorView.Coordinator.scrollRangeToVisible(
             target, in: textView, reduceMotion: true
         )
-        let yAfterReduced = textView.visibleRect.origin.y
         XCTAssertGreaterThan(
-            yAfterReduced, 0,
-            "reduceMotion=true: scroll must still advance the visible rect (instantly)"
+            textView.visibleRect.origin.y, 0,
+            "reduceMotion = true: scroll must land instantly (NSAnimationContext duration = 0)"
         )
     }
 

@@ -221,6 +221,7 @@ struct NoteEditorView: NSViewRepresentable {
         }
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
         var onSave: () -> Void
@@ -526,6 +527,13 @@ struct NoteEditorView: NSViewRepresentable {
         /// takes the toggle directly so a unit test can drive both
         /// branches without going through SwiftUI's
         /// `@Environment` plumbing.
+        ///
+        /// `@MainActor` because every caller path (NSTextView mutation,
+        /// scroll-view animator, NSAnimationContext) is main-thread-only.
+        /// Explicit annotation makes the contract visible at the call
+        /// site instead of relying on the enclosing Coordinator's
+        /// main-actor isolation by inheritance.
+        @MainActor
         static func scrollRangeToVisible(
             _ range: NSRange,
             in textView: NSTextView,
