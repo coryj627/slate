@@ -287,8 +287,8 @@ fn parse_segment(segment: &str) -> Option<CitedItem> {
     let mut at_pos = None;
     for (idx, &b) in bytes.iter().enumerate() {
         if b == b'@' {
-            let prev_word = idx > 0
-                && (bytes[idx - 1].is_ascii_alphanumeric() || bytes[idx - 1] == b'_');
+            let prev_word =
+                idx > 0 && (bytes[idx - 1].is_ascii_alphanumeric() || bytes[idx - 1] == b'_');
             if !prev_word {
                 at_pos = Some(idx);
                 break;

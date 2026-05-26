@@ -35,9 +35,7 @@ pub use search_db::{
 };
 
 pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
-pub use citations::{
-    extract_citations, CitationMode, CitationReference, CitedItem, Locator,
-};
+pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
 pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
 };
