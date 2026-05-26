@@ -31,6 +31,22 @@ struct MainSplitView: View {
         case editor
     }
 
+    /// Active right-sidebar tab. Replaced `TabView`'s implicit
+    /// selection with explicit state so the tab strip renders as
+    /// a single segmented control (Picker) instead of macOS
+    /// SwiftUI's default tab style — that default draws a
+    /// vertical separator between adjacent *unselected* tabs and
+    /// hides it under the selected pill, producing an asymmetric
+    /// look (e.g. divider visible between Citations and
+    /// Bibliography but not between Outline and Citations when
+    /// Outline is selected). The Picker style renders identical
+    /// dividers between every segment regardless of selection.
+    @State private var sidebarTab: SidebarTab = .outline
+
+    enum SidebarTab: Hashable, CaseIterable {
+        case outline, citations, bibliography
+    }
+
     var body: some View {
         // Each column gets its own .accessibilityLabel so VoiceOver
         // announces meaningful names when the user navigates between
@@ -51,19 +67,48 @@ struct MainSplitView: View {
             // — no extra IO. Default tab is Outline because that's
             // what was there before Milestone L; Citations earns its
             // tab only on notes that actually cite something.
-            TabView {
-                OutlineSidebar()
-                    .tabItem {
-                        Label("Outline", systemImage: "list.bullet.indent")
+            //
+            // Picker(.segmented) instead of `TabView` so the tab
+            // strip renders uniformly. AppKit's TabView default on
+            // macOS draws a vertical separator between adjacent
+            // *unselected* tabs and lets the selected pill occlude
+            // its neighbours' dividers, which surfaces visually as
+            // asymmetric dividers (the original Outline-selected
+            // shape only showed a divider between Citations and
+            // Bibliography). VoiceOver gets the same semantics — a
+            // segmented control with three named options — and
+            // arrow-key navigation between segments is built in.
+            VStack(spacing: 0) {
+                Picker("Sidebar tab", selection: $sidebarTab) {
+                    Text("Outline").tag(SidebarTab.outline)
+                    Text("Citations").tag(SidebarTab.citations)
+                    Text("Bibliography").tag(SidebarTab.bibliography)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+                .accessibilityLabel("Sidebar tab")
+
+                // Each panel keeps its own internal state
+                // (selection, scroll, lazy load triggers). Building
+                // them unconditionally via `.opacity` would hold
+                // their environment subscriptions live in the
+                // background; the switch keeps only the active
+                // pane in the view hierarchy, matching what
+                // `TabView` did before.
+                Group {
+                    switch sidebarTab {
+                    case .outline:
+                        OutlineSidebar()
+                    case .citations:
+                        CitationsPanel()
+                    case .bibliography:
+                        BibliographyPanel()
                     }
-                CitationsPanel()
-                    .tabItem {
-                        Label("Citations", systemImage: "quote.bubble")
-                    }
-                BibliographyPanel()
-                    .tabItem {
-                        Label("Bibliography", systemImage: "books.vertical")
-                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .accessibilityLabel("Sidebar")
         }
