@@ -521,6 +521,23 @@ final class AppState: ObservableObject {
     /// vault close.
     @Published var filesCitingResult: [String]?
 
+    /// Bibliography prefs in memory — the Settings panel's binding
+    /// surface (#281). On vault open we read the disk copy via
+    /// `loadBibliographyPrefsFromDisk`; on every mutation the
+    /// caller writes back via `applyBibliographyPrefs` (which both
+    /// persists to disk AND calls `setBibliographySources` so the
+    /// session re-loads).
+    @Published var bibliographyPrefs: BibliographyPrefs = .empty
+
+    /// CSL styles configured in `prefs.json` — populated by
+    /// `refreshAvailableCslStyles`. Bound by the Settings tab's
+    /// style picker and by the View → Citation Style menu in #282.
+    @Published var availableCslStyles: [CslStyleInfo] = []
+
+    /// Settings UI surface — when non-nil, an inline error is shown
+    /// (e.g. "library.bib not found").
+    @Published var bibliographySettingsError: String?
+
     /// Per-user math rendering preferences. UI panels bind to this;
     /// the `didSet` re-triggers the math-block load for the current
     /// path so settings changes propagate to the rendered output.
@@ -1431,6 +1448,23 @@ final class AppState: ObservableObject {
             scanTask = Task { [weak self] in
                 await self?.loadFiles()
             }
+            // Milestone L #281: read `.slate/prefs.json` so the
+            // Settings panel + style picker reflect the persisted
+            // configuration. If the file has a configured
+            // bibliography, push it through `setBibliographySources`
+            // so the session's `bibliography_entries` matches what
+            // the user last saved.
+            loadBibliographyPrefsFromDisk()
+            let persistedPrefs = bibliographyPrefs
+            if !persistedPrefs.sources.isEmpty {
+                Task { [weak self] in
+                    await self?.applyBibliographyPrefs(persistedPrefs)
+                }
+            } else {
+                Task { [weak self] in
+                    await self?.refreshAvailableCslStyles()
+                }
+            }
         } catch let error as VaultError {
             currentSession = nil
             currentVaultURL = nil
@@ -1546,6 +1580,9 @@ final class AppState: ObservableObject {
         bibliographySearchText = ""
         expandedBibEntry = nil
         filesCitingResult = nil
+        bibliographyPrefs = .empty
+        availableCslStyles = []
+        bibliographySettingsError = nil
         activeStyleId = ""
         embedsLoadError = nil
         linksLoadError = nil
@@ -2013,6 +2050,138 @@ final class AppState: ObservableObject {
         case .failure(let err):
             currentNoteCitations = []
             citationsLoadError = humanReadable(err)
+        }
+    }
+
+    // MARK: - Bibliography prefs (#281)
+
+    /// Read `<vault>/.slate/prefs.json` and publish its bibliography
+    /// section. Called after a successful `openVault`. Parse failures
+    /// surface as `bibliographyLoadError` so the user sees what went
+    /// wrong rather than a silent no-bibliography state.
+    func loadBibliographyPrefsFromDisk() {
+        guard let vault = currentVaultURL else {
+            bibliographyPrefs = .empty
+            return
+        }
+        let store = PrefsJsonStore(vaultRoot: vault)
+        do {
+            let prefs = try store.readBibliographyPrefs()
+            bibliographyPrefs = prefs
+            bibliographySettingsError = nil
+            // Seed activeStyleId from the persisted default (basename
+            // without `.csl`). The didSet on activeStyleId triggers
+            // a citation re-render for the current note.
+            if let defaultPath = prefs.defaultStyle, !defaultPath.isEmpty {
+                activeStyleId =
+                    (defaultPath as NSString).lastPathComponent
+                    .replacingOccurrences(of: ".csl", with: "")
+            } else {
+                activeStyleId = ""
+            }
+        } catch {
+            bibliographyPrefs = .empty
+            bibliographySettingsError = error.localizedDescription
+        }
+    }
+
+    /// Persist `newPrefs` to disk AND push the new sources through
+    /// the session (so the in-memory `bibliography_entries` table
+    /// matches what the user just configured). Called by every
+    /// Settings panel mutation — Add/Remove source, change default
+    /// style, etc.
+    func applyBibliographyPrefs(_ newPrefs: BibliographyPrefs) async {
+        guard let vault = currentVaultURL else { return }
+        let store = PrefsJsonStore(vaultRoot: vault)
+        do {
+            try store.writeBibliographyPrefs(newPrefs)
+        } catch {
+            bibliographySettingsError = error.localizedDescription
+            return
+        }
+        bibliographyPrefs = newPrefs
+        bibliographySettingsError = nil
+
+        // Push sources to the session. Warnings (malformed entries,
+        // missing files) flow back via `bibliographyLoadError` for
+        // surfacing in the Settings UI.
+        guard let session = currentSession else { return }
+        let sources = newPrefs.sources
+        let result: Result<[BibLoadWarning], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try session.setBibliographySources(sources: sources))
+                } catch let err as VaultError {
+                    return .failure(err)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .success(let warnings):
+            if !warnings.isEmpty {
+                bibliographySettingsError = warnings
+                    .map { "\($0.sourcePath): \($0.message)" }
+                    .joined(separator: "\n")
+            }
+            await loadBibliographyEntries()
+            await refreshAvailableCslStyles()
+            // Re-render the current note's citations against the
+            // (possibly new) default style.
+            if let path = selectedFilePath {
+                citationsLoadTask?.cancel()
+                citationsLoadTask = Task { [weak self] in
+                    await self?.loadCurrentNoteCitations(path: path)
+                }
+            }
+        case .failure(let err):
+            bibliographySettingsError = humanReadable(err)
+        }
+    }
+
+    /// Update the active CSL style id (driven by Settings panel's
+    /// style picker and by the View → Citation Style menu in #282).
+    /// Announces the change via VoiceOver and re-renders the current
+    /// note's citations. Idempotent — no announcement when `newId`
+    /// equals the current `activeStyleId`.
+    func switchActiveStyle(to newId: String) {
+        guard newId != activeStyleId else { return }
+        activeStyleId = newId  // didSet triggers re-render
+        let title =
+            availableCslStyles.first(where: { $0.id == newId })?.title ?? newId
+        postAccessibilityAnnouncement(
+            "Citation style: \(title).",
+            priority: .medium
+        )
+    }
+
+    /// Refresh `availableCslStyles` from the session — picks up
+    /// changes the user just made to prefs.json (e.g. adding an
+    /// additional style).
+    func refreshAvailableCslStyles() async {
+        guard let session = currentSession else {
+            availableCslStyles = []
+            return
+        }
+        let result: Result<[CslStyleInfo], VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try session.listCslStyles())
+                } catch let err as VaultError {
+                    return .failure(err)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }
+            .value
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .success(let styles):
+            availableCslStyles = styles
+        case .failure:
+            availableCslStyles = []
         }
     }
 

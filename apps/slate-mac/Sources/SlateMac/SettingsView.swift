@@ -37,6 +37,10 @@ struct SettingsView: View {
                             systemImage: "chevron.left.forwardslash.chevron.right"
                         )
                     }
+                BibliographySettingsTab()
+                    .tabItem {
+                        Label("Bibliography", systemImage: "books.vertical")
+                    }
             }
         }
         .frame(minWidth: 500, minHeight: 400)
@@ -346,5 +350,305 @@ struct CodeSettingsTab: View {
                 "Code block, rust, 5 lines. Tokens: keyword fn, identifier main, "
                 + "punctuation (, ), {, return, …"
         }
+    }
+}
+
+// MARK: - Bibliography tab (Milestone L, #281)
+
+/// Per-vault bibliography settings. Drives `.slate/prefs.json`
+/// through `PrefsJsonStore` + `AppState.applyBibliographyPrefs`.
+/// Three sections:
+///
+/// - Sources — list of `.bib` / `.json` files contributing entries.
+///   Add via NSOpenPanel; remove via Delete on a selected row.
+/// - Default style — picker over the configured CSL files.
+/// - Additional styles — `.csl` paths available for ad-hoc switching.
+///
+/// The full event-driven hot-reload from the disk-side notify
+/// watcher lives in a separate ticket alongside the vault scanner's
+/// real watcher; today, Add / Remove writes prefs.json + immediately
+/// pushes the new sources through `setBibliographySources`.
+struct BibliographySettingsTab: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        Group {
+            if appState.currentVaultURL == nil {
+                noVaultState
+            } else {
+                form
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var noVaultState: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Text("Open a vault to configure its bibliography.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Open a vault to configure its bibliography.")
+    }
+
+    private var form: some View {
+        Form {
+            sourcesSection
+            defaultStyleSection
+            additionalStylesSection
+            if let error = appState.bibliographySettingsError {
+                Section {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Bibliography settings error: \(error)")
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Sources
+
+    private var sourcesSection: some View {
+        Section {
+            if appState.bibliographyPrefs.sources.isEmpty {
+                Text("No sources configured yet.")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("No sources configured yet.")
+            } else {
+                ForEach(
+                    Array(appState.bibliographyPrefs.sources.enumerated()),
+                    id: \.offset
+                ) { index, source in
+                    sourceRow(index: index, source: source)
+                }
+            }
+            HStack {
+                Button("Add source…") { addSource() }
+                    .accessibilityHint(
+                        "Opens a file picker to add a .bib or CSL-JSON source."
+                    )
+                Spacer()
+            }
+        } header: {
+            Text("Sources")
+                .accessibilityAddTraits(.isHeader)
+        } footer: {
+            Text(
+                "BibTeX / BibLaTeX / CSL-JSON files. Drop your library export anywhere in the vault, then add it here. Multiple sources merge by citation key — first-source wins on duplicates."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func sourceRow(index: Int, source: BibliographySource) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(source.path)
+                    .lineLimit(2)
+                Text(formatLabel(source.format))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "Source: \(source.path), format \(formatLabel(source.format))."
+            )
+            Toggle(
+                "Watch",
+                isOn: Binding(
+                    get: { source.watch },
+                    set: { newValue in
+                        var prefs = appState.bibliographyPrefs
+                        if prefs.sources.indices.contains(index) {
+                            prefs.sources[index].watch = newValue
+                            persist(prefs)
+                        }
+                    }
+                )
+            )
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .accessibilityLabel(
+                "Watch for changes, \(source.watch ? "on" : "off"), \(source.path)."
+            )
+            Button("Remove") {
+                var prefs = appState.bibliographyPrefs
+                if prefs.sources.indices.contains(index) {
+                    prefs.sources.remove(at: index)
+                    persist(prefs)
+                }
+            }
+            .accessibilityLabel("Remove source \(source.path)")
+        }
+    }
+
+    private func formatLabel(_ format: BibFormat) -> String {
+        switch format {
+        case .bibTeX: return "BibTeX"
+        case .bibLaTeX: return "BibLaTeX"
+        case .cslJson: return "CSL-JSON"
+        }
+    }
+
+    // MARK: - Default style
+
+    private var defaultStyleSection: some View {
+        Section {
+            let bound = Binding(
+                get: { appState.bibliographyPrefs.defaultStyle ?? "" },
+                set: { newPath in
+                    var prefs = appState.bibliographyPrefs
+                    prefs.defaultStyle = newPath.isEmpty ? nil : newPath
+                    persist(prefs)
+                }
+            )
+            Picker("Default style", selection: bound) {
+                Text("None").tag("")
+                ForEach(allConfiguredStyles(), id: \.self) { path in
+                    Text(styleDisplayName(for: path)).tag(path)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityLabel("Default citation style")
+
+            HStack {
+                Button("Add style…") { addAdditionalStyle() }
+                    .accessibilityHint(
+                        "Opens a file picker to add a .csl style file."
+                    )
+                Spacer()
+            }
+        } header: {
+            Text("Default style")
+                .accessibilityAddTraits(.isHeader)
+        } footer: {
+            Text(
+                "Renders citations against this style by default. Use View → Citation Style to switch styles on a specific note."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Additional styles
+
+    private var additionalStylesSection: some View {
+        Section {
+            if appState.bibliographyPrefs.additionalStyles.isEmpty {
+                Text("No additional styles configured.")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("No additional styles configured.")
+            } else {
+                ForEach(
+                    Array(appState.bibliographyPrefs.additionalStyles.enumerated()),
+                    id: \.offset
+                ) { index, path in
+                    HStack {
+                        Text(path)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Additional style: \(path).")
+                        Button("Remove") {
+                            var prefs = appState.bibliographyPrefs
+                            if prefs.additionalStyles.indices.contains(index) {
+                                prefs.additionalStyles.remove(at: index)
+                                persist(prefs)
+                            }
+                        }
+                        .accessibilityLabel("Remove style \(path)")
+                    }
+                }
+            }
+        } header: {
+            Text("Additional styles")
+                .accessibilityAddTraits(.isHeader)
+        }
+    }
+
+    // MARK: - Actions
+
+    private func addSource() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = []
+        panel.message = "Choose a .bib or .json bibliography file"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let relPath = vaultRelative(url) ?? url.path
+        let format = inferFormat(from: url)
+        var prefs = appState.bibliographyPrefs
+        prefs.sources.append(
+            BibliographySource(path: relPath, format: format, watch: false)
+        )
+        persist(prefs)
+    }
+
+    private func addAdditionalStyle() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a .csl Citation Style Language file"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let relPath = vaultRelative(url) ?? url.path
+        var prefs = appState.bibliographyPrefs
+        if !prefs.additionalStyles.contains(relPath) {
+            prefs.additionalStyles.append(relPath)
+        }
+        persist(prefs)
+    }
+
+    private func persist(_ prefs: BibliographyPrefs) {
+        Task { await appState.applyBibliographyPrefs(prefs) }
+    }
+
+    // MARK: - Helpers
+
+    private func allConfiguredStyles() -> [String] {
+        var paths: [String] = []
+        if let d = appState.bibliographyPrefs.defaultStyle, !d.isEmpty {
+            paths.append(d)
+        }
+        for s in appState.bibliographyPrefs.additionalStyles {
+            if !paths.contains(s) {
+                paths.append(s)
+            }
+        }
+        return paths
+    }
+
+    private func styleDisplayName(for path: String) -> String {
+        let basename = (path as NSString).lastPathComponent
+            .replacingOccurrences(of: ".csl", with: "")
+        if let style = appState.availableCslStyles.first(where: { $0.id == basename })
+        {
+            return style.title
+        }
+        return basename
+    }
+
+    private func inferFormat(from url: URL) -> BibFormat {
+        let ext = url.pathExtension.lowercased()
+        if ext == "json" { return .cslJson }
+        return .bibTeX
+    }
+
+    private func vaultRelative(_ url: URL) -> String? {
+        guard let vault = appState.currentVaultURL else { return nil }
+        let vaultPath = vault.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard filePath.hasPrefix(vaultPath + "/") else { return nil }
+        return String(filePath.dropFirst(vaultPath.count + 1))
     }
 }
