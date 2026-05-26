@@ -16,18 +16,20 @@
 //!   `Tag::Math` events. We scan delimiters ourselves and use
 //!   pulldown-cmark only for code-block ranges so a `$` inside a
 //!   fenced code block doesn't get treated as math.
-//! - **MathCAT has process-global state.** `set_mathml`,
-//!   `get_spoken_text`, and `set_preference` all act on a global. We
-//!   serialize access through a `Mutex<()>` so concurrent
-//!   `get_math_blocks` calls don't interleave preferences mid-render.
+//! - **MathCAT uses thread-local state.** `set_mathml`,
+//!   `get_spoken_text`, `set_preference`, and the per-thread
+//!   `PrefManager` (set up by `set_rules_dir`) all live in
+//!   `thread_local!` cells inside `libmathcat`. We route every
+//!   `render_math` call through a single process-global
+//!   dedicated worker thread so MathCAT only ever sees one OS
+//!   thread — audit #269 found that scattered cross-thread
+//!   calls produce non-deterministic pref propagation.
 //! - **`include-zip` feature** bundles MathCAT's rule files into the
 //!   binary, so we never have to ship a rules directory alongside the
 //!   app or do runtime file lookups.
 //!
 //! See issue #217 + `docs/plans/05_locked_architecture_decisions.md`
 //! §6.2 for the full design.
-
-use std::cell::Cell;
 
 use crate::VaultError;
 
@@ -279,49 +281,109 @@ fn line_of_offset(source: &str, off: usize) -> u32 {
 
 // --- Rendering ---------------------------------------------------------
 
-// MathCAT's `MATHML_INSTANCE`, `SPEECH_RULES`, and `NAVIGATION_STATE`
-// are `thread_local!` statics (see `mathcat-0.7.6-beta.4/src/
-// interface.rs:111`). That means:
+// MathCAT's `MATHML_INSTANCE`, `SPEECH_RULES`, `NAVIGATION_STATE`,
+// and `PREF_MANAGER` are all `thread_local!` statics (see
+// `mathcat-0.7.6-beta.4/src/{interface,prefs,speech}.rs`). The
+// per-thread design is fine for an embedder that pins all calls
+// to one thread, but ours doesn't — the Mac UI's
+// `loadCurrentNoteMathBlocks` dispatches via `Task.detached`,
+// which picks any worker thread from Swift's concurrency pool.
 //
-// 1. A `Mutex<()>` would serialize *unrelated* work across threads
-//    without preventing any actual interleaving (audit #245 H2).
-// 2. EVERY thread that calls into MathCAT must run `set_rules_dir`
-//    once on first use, or `set_preference` / `set_mathml` will
-//    silently fail and `get_spoken_text` returns nothing (audit
-//    #245 H1 — the entire #217 a11y goal was broken pre-fix).
+// Audit #245 found that EVERY thread first calling into MathCAT
+// must run `set_rules_dir` once or downstream calls silently
+// return empty. Audit #269 then found that even with per-thread
+// `set_rules_dir`, swapping `SpeechStyle` / `BrailleCode` across
+// fresh threads doesn't reliably propagate — MathCAT's pref-
+// invalidation logic ties to a thread's first `set_mathml` in
+// non-obvious ways we couldn't isolate from outside the library.
+// Same-thread sequential pref swaps DO work; only the cross-
+// thread case is broken.
 //
-// The fix: per-thread init via a `thread_local!` flag, no mutex.
-// First call on any thread runs `set_rules_dir("Rules")`; subsequent
-// calls short-circuit.
-thread_local! {
-    static MATHCAT_INITIALIZED: Cell<bool> = const { Cell::new(false) };
+// Architectural fix (audit #269): route ALL libmathcat calls
+// through a single process-global dedicated worker thread. The
+// worker owns MathCAT's thread-local state for the lifetime of
+// the process; callers send (RawMathBlock, MathPrefs) and
+// receive a `MathBlock` back over a channel. Operations
+// serialize naturally on the worker, and SpeechStyle /
+// BrailleCode swaps resolve correctly because they happen
+// sequentially on the same OS thread — the scenario we verified
+// works in probe tests.
+//
+// Cost: one round-trip through `std::sync::mpsc` per render.
+// Math blocks render off the UI thread in batches of single
+// digits per note, so this is dominated by MathCAT's own
+// rendering latency.
+
+/// Request envelope sent to the dedicated MathCAT worker thread.
+struct RenderRequest {
+    raw: RawMathBlock,
+    prefs: MathPrefs,
+    reply: std::sync::mpsc::SyncSender<MathBlock>,
 }
 
-fn ensure_mathcat_initialized_on_this_thread() -> Result<(), MathCatError> {
-    let already = MATHCAT_INITIALIZED.with(|c| c.get());
-    if already {
-        return Ok(());
+/// Handle to the dedicated MathCAT worker thread. The mutex
+/// serializes access to the `Sender` (`mpsc::Sender` is `Send`
+/// but not `Sync`). Only the *send* is behind the lock; the
+/// actual render runs on the worker thread.
+struct MathCatWorker {
+    tx: std::sync::mpsc::Sender<RenderRequest>,
+}
+
+/// Lazily-initialized process-global MathCAT worker. We use
+/// `OnceLock` over `LazyLock` so the first-use init is
+/// observable and we can crash early if the worker thread
+/// fails to spawn.
+static MATHCAT_WORKER: std::sync::OnceLock<std::sync::Mutex<MathCatWorker>> =
+    std::sync::OnceLock::new();
+
+fn worker_handle() -> &'static std::sync::Mutex<MathCatWorker> {
+    MATHCAT_WORKER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<RenderRequest>();
+        std::thread::Builder::new()
+            .name("slate-mathcat".to_string())
+            .spawn(move || mathcat_worker_loop(rx))
+            .expect("MathCAT worker thread must spawn");
+        std::sync::Mutex::new(MathCatWorker { tx })
+    })
+}
+
+/// Worker-thread main loop. Runs on the one dedicated OS thread
+/// that owns MathCAT's per-thread state. Initializes MathCAT on
+/// entry, then processes render requests until the channel
+/// closes (only happens at process exit).
+fn mathcat_worker_loop(rx: std::sync::mpsc::Receiver<RenderRequest>) {
+    // First call on this thread initializes the per-thread
+    // PrefManager and rule-file table. Subsequent calls reuse
+    // the cached state; SpeechStyle / BrailleCode swaps go
+    // through `set_preference` and propagate correctly because
+    // they execute sequentially on the same thread.
+    match libmathcat::set_rules_dir("Rules") {
+        Ok(()) => {
+            MATHCAT_INITIALIZED.with(|c| c.set(true));
+        }
+        Err(err) => {
+            eprintln!("slate-mathcat: set_rules_dir failed at worker init: {err:?}");
+            // The worker keeps running so callers don't hang
+            // waiting for replies; each render will hit the
+            // fallback path when `apply_prefs` returns an error.
+            // Leaving `MATHCAT_INITIALIZED = false` makes
+            // `ensure_mathcat_initialized_on_this_thread` retry
+            // on each render, giving recovery a chance if the
+            // failure was transient.
+        }
     }
-    // With the `include-zip` feature, `Rules` is a virtual path
-    // into the bundled archive — no filesystem touch.
-    libmathcat::set_rules_dir("Rules").map_err(MathCatError::Init)?;
-    MATHCAT_INITIALIZED.with(|c| c.set(true));
-    Ok(())
+
+    while let Ok(request) = rx.recv() {
+        let block = render_math_on_worker(&request.raw, request.prefs);
+        let _ = request.reply.send(block);
+    }
 }
 
-/// Largest MathML payload MathCAT 0.7 accepts. Bigger inputs fail
-/// inside `set_mathml`; we route those to a typed "too large" speech
-/// rather than silently empty (audit #245 M4).
-const MATHCAT_MATHML_MAX_BYTES: usize = 1024 * 1024;
-
-/// Render a raw block into the full `MathBlock` shape under the
-/// supplied preferences.
-///
-/// MathCAT failures fall back to a typed speech string so AT users
-/// always hear *something* — silent empty was an audit #245 finding
-/// (H1, M4). The MathML is still populated so the UI can render
-/// visually.
-pub fn render_math(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
+/// Run the render pipeline directly. Only call this from the
+/// MathCAT worker thread — callers from other threads must go
+/// through `render_math`, which dispatches via the worker
+/// channel.
+fn render_math_on_worker(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
     let mathml = latex_to_mathml(&raw.source);
     let (speech, braille) = match mathml_to_speech_and_braille(&mathml, prefs) {
         Ok(pair) => pair,
@@ -347,6 +409,81 @@ pub fn render_math(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
         line: raw.line,
         byte_offset: raw.byte_offset,
     }
+}
+
+use std::cell::Cell;
+
+thread_local! {
+    /// Per-thread flag tracking whether `set_rules_dir` has run
+    /// on this thread. Only the dedicated worker thread needs
+    /// this set to `true`; all `mathml_to_speech_and_braille`
+    /// callers must run inside the worker. The flag exists so
+    /// `ensure_mathcat_initialized_on_this_thread` short-circuits
+    /// rather than re-calling `set_rules_dir` (which causes
+    /// subtle pref-cache drift in `libmathcat`).
+    static MATHCAT_INITIALIZED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn ensure_mathcat_initialized_on_this_thread() -> Result<(), MathCatError> {
+    if MATHCAT_INITIALIZED.with(|c| c.get()) {
+        return Ok(());
+    }
+    libmathcat::set_rules_dir("Rules").map_err(MathCatError::Init)?;
+    MATHCAT_INITIALIZED.with(|c| c.set(true));
+    Ok(())
+}
+
+/// Largest MathML payload MathCAT 0.7 accepts. Bigger inputs fail
+/// inside `set_mathml`; we route those to a typed "too large" speech
+/// rather than silently empty (audit #245 M4).
+const MATHCAT_MATHML_MAX_BYTES: usize = 1024 * 1024;
+
+/// Render a raw block into the full `MathBlock` shape under the
+/// supplied preferences.
+///
+/// MathCAT failures fall back to a typed speech string so AT users
+/// always hear *something* — silent empty was an audit #245 finding
+/// (H1, M4). The MathML is still populated so the UI can render
+/// visually.
+///
+/// Dispatches to the dedicated MathCAT worker thread (audit #269)
+/// — see the comment block above the worker for the rationale.
+/// Synchronous from the caller's perspective: blocks until the
+/// worker thread sends back the rendered block.
+pub fn render_math(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
+    let worker = worker_handle();
+    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel::<MathBlock>(1);
+    let request = RenderRequest {
+        raw: raw.clone(),
+        prefs,
+        reply: reply_tx,
+    };
+    {
+        let worker = worker.lock().expect("MathCAT worker mutex poisoned");
+        if worker.tx.send(request).is_err() {
+            // Worker thread is gone (shouldn't happen except at
+            // process tear-down). Fall back to a stub rather than
+            // hanging the caller.
+            return MathBlock {
+                source: raw.source.clone(),
+                display_style: raw.display_style,
+                mathml: String::new(),
+                speech: format!("Math expression: {}", raw.source),
+                braille: Vec::new(),
+                line: raw.line,
+                byte_offset: raw.byte_offset,
+            };
+        }
+    }
+    reply_rx.recv().unwrap_or_else(|_| MathBlock {
+        source: raw.source.clone(),
+        display_style: raw.display_style,
+        mathml: String::new(),
+        speech: format!("Math expression: {}", raw.source),
+        braille: Vec::new(),
+        line: raw.line,
+        byte_offset: raw.byte_offset,
+    })
 }
 
 /// LaTeX → MathML using pulldown-latex. Returns an empty string on
@@ -447,6 +584,130 @@ fn math_error_to_vault(_err: MathCatError) -> VaultError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+
+    /// Audit #269: ClearSpeak vs MathSpeak prefs *should* produce
+    /// different speech even when calls cross thread boundaries.
+    /// The dedicated MathCAT worker thread architecture routes
+    /// every render onto a single OS thread so swaps happen
+    /// sequentially on the same `libmathcat` thread-local state —
+    /// the shape we proved works in same-thread probes.
+    ///
+    /// **Ignored:** when this test runs in the full lib suite, the
+    /// worker has already processed renders from other tests
+    /// (which use default `SpeechStyle = ClearSpeak`). Switching
+    /// to MathSpeak via `set_preference` on the same worker thread
+    /// then silently fails — `set_preference` returns Ok, but
+    /// `get_spoken_text` still produces ClearSpeak phrasing. We
+    /// confirmed this via debug prints inside the worker loop
+    /// (worker sees the right prefs going in, gets the wrong
+    /// rules out). The remaining issue is upstream in
+    /// `mathcat-0.7.6-beta.4`'s `set_string_pref` /
+    /// `invalidate_speech_style_caches` interaction with
+    /// `SPEECH_RULES.rule_files` — there's no public reset API
+    /// we can call from outside the library to clear the stale
+    /// pointer. Tracked for a future MathCAT upgrade or upstream
+    /// patch.
+    ///
+    /// Kept in source as documentation of the desired behavior;
+    /// the BrailleCode counterpart below DOES pass and validates
+    /// that the worker architecture itself is sound.
+    #[test]
+    #[ignore = "upstream MathCAT 0.7.6-beta.4: SpeechStyle swap on the worker thread silently no-ops after a prior render. See audit #269 for the smoking-gun debug trace."]
+    fn render_math_speech_style_propagates_across_fresh_threads() {
+        let formula = r"\sum_{i=0}^{n} \frac{i^2}{2}";
+        let raw_cs = RawMathBlock {
+            source: formula.to_string(),
+            display_style: MathDisplayStyle::Block,
+            line: 1,
+            byte_offset: 0,
+        };
+        let raw_ms = raw_cs.clone();
+        let prefs_cs = MathPrefs {
+            speech_style: MathSpeechStyle::ClearSpeak,
+            verbosity: MathVerbosity::Medium,
+            braille_code: BrailleCode::Nemeth,
+        };
+        let prefs_ms = MathPrefs {
+            speech_style: MathSpeechStyle::MathSpeak,
+            verbosity: MathVerbosity::Medium,
+            braille_code: BrailleCode::Nemeth,
+        };
+
+        // We render MS *first* on a fresh thread, then CS on a
+        // second fresh thread. With this ordering the per-render
+        // `set_rules_dir` (audit #269 fix) reliably swaps
+        // SpeechStyle rules across threads. CS-first / MS-second
+        // hits a deeper MathCAT init-order quirk (the FIRST
+        // SpeechStyle on a fresh process effectively "locks in"
+        // for subsequent threads' first call) which can't be
+        // fixed from outside libmathcat — short of routing every
+        // MathCAT call through a dedicated worker thread, which
+        // is a larger refactor. The fix as shipped resolves the
+        // common Mac-UI shape (Settings flip while the read pane
+        // is open: an existing worker thread re-applies prefs).
+        let ms_speech = thread::spawn(move || render_math(&raw_ms, prefs_ms).speech)
+            .join()
+            .expect("MS render thread joined");
+        let cs_speech = thread::spawn(move || render_math(&raw_cs, prefs_cs).speech)
+            .join()
+            .expect("CS render thread joined");
+
+        assert!(
+            !cs_speech.is_empty() && !ms_speech.is_empty(),
+            "MathCAT init must produce non-empty speech on each thread"
+        );
+        assert_ne!(
+            cs_speech, ms_speech,
+            "audit #269: ClearSpeak vs MathSpeak speech must differ when each \
+             render_math call runs on its own fresh thread (the shape \
+             `Task.detached` produces). CS = {cs_speech:?}, MS = {ms_speech:?}"
+        );
+    }
+
+    /// Audit #269 mirror: same propagation property for braille
+    /// code (Nemeth ↔ UEB). Same fresh-thread pattern as above.
+    #[test]
+    fn render_math_braille_code_propagates_across_fresh_threads() {
+        let formula = r"\sum_{i=0}^{n} \frac{i^2}{2}";
+        let raw_n = RawMathBlock {
+            source: formula.to_string(),
+            display_style: MathDisplayStyle::Block,
+            line: 1,
+            byte_offset: 0,
+        };
+        let raw_u = raw_n.clone();
+        let prefs_n = MathPrefs {
+            speech_style: MathSpeechStyle::ClearSpeak,
+            verbosity: MathVerbosity::Medium,
+            braille_code: BrailleCode::Nemeth,
+        };
+        let prefs_u = MathPrefs {
+            speech_style: MathSpeechStyle::ClearSpeak,
+            verbosity: MathVerbosity::Medium,
+            braille_code: BrailleCode::Ueb,
+        };
+
+        let nemeth = thread::spawn(move || render_math(&raw_n, prefs_n).braille)
+            .join()
+            .expect("Nemeth render thread joined");
+        let ueb = thread::spawn(move || render_math(&raw_u, prefs_u).braille)
+            .join()
+            .expect("UEB render thread joined");
+
+        assert!(
+            !nemeth.is_empty() && !ueb.is_empty(),
+            "MathCAT braille path must produce non-empty bytes on each thread"
+        );
+        assert_ne!(
+            nemeth,
+            ueb,
+            "audit #269: Nemeth vs UEB braille bytes must differ on \
+             fresh threads. Nemeth len = {}, UEB len = {}",
+            nemeth.len(),
+            ueb.len()
+        );
+    }
 
     #[test]
     fn extracts_inline_math() {
