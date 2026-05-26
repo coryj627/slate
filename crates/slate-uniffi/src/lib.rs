@@ -108,6 +108,12 @@ pub enum VaultError {
     /// doesn't parse. The user's broken YAML is left on disk.
     #[error("frontmatter at {path:?} is malformed: {reason}")]
     MalformedFrontmatter { path: String, reason: String },
+
+    /// Bibliography source configured in `.slate/prefs.json` couldn't
+    /// be opened (missing, permission denied, IO error). Distinct
+    /// from a successful load with parse warnings.
+    #[error("bibliography source {path:?} is unreadable: {reason}")]
+    BibSourceUnreadable { path: String, reason: String },
 }
 
 impl From<core::VaultError> for VaultError {
@@ -144,6 +150,9 @@ impl From<core::VaultError> for VaultError {
             },
             core::VaultError::MalformedFrontmatter { path, reason } => {
                 VaultError::MalformedFrontmatter { path, reason }
+            }
+            core::VaultError::BibSourceUnreadable { path, reason } => {
+                VaultError::BibSourceUnreadable { path, reason }
             }
         }
     }
