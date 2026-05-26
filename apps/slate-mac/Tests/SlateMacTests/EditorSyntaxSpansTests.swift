@@ -76,6 +76,45 @@ final class EditorSyntaxSpansTests: XCTestCase {
         XCTAssertEqual(underlineText, "=====")
     }
 
+    /// Codoki PR #307 follow-up: mirror the CRLF equals-line test
+    /// for dashes (h2 setext underline). Same `\r`-in-trim-set
+    /// concern; this test guards against a future regression where
+    /// someone might "fix" the equals path without touching the
+    /// shared trim helper.
+    func testSetextUnderlineMatchesCRLFDashes() {
+        let text = "Section\r\n-----\r\n\r\nBody\r\n"
+        let underlines = spans(text, kind: .setextUnderline)
+        XCTAssertEqual(underlines.count, 1, "setext dashes underline must be detected under CRLF line endings")
+        let underlineText = substring(text, range: underlines[0].range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(underlineText, "-----")
+    }
+
+    /// Codoki PR #307 follow-up: CRLF lines may carry trailing
+    /// whitespace before the `\r\n` (e.g., a stray space typed at
+    /// EOL). The trim must strip both the trailing space AND the
+    /// `\r` so the `allSatisfy { $0 == "=" }` check passes.
+    func testSetextUnderlineMatchesCRLFWithTrailingSpaces() {
+        let text = "Title\r\n====   \r\n\r\nBody"
+        let underlines = spans(text, kind: .setextUnderline)
+        XCTAssertEqual(
+            underlines.count, 1,
+            "setext underline must survive trailing whitespace under CRLF"
+        )
+    }
+
+    /// Codoki PR #307 follow-up: a line that LOOKS underline-ish but
+    /// mixes characters (e.g., `===-`) must NOT classify as a setext
+    /// underline. Negative test guards against a future "tolerant"
+    /// rewrite that accidentally accepts mixed runs.
+    func testSetextUnderlineRejectsMixedCharacters() {
+        let text = "Title\r\n===-\r\n\r\nBody"
+        XCTAssertTrue(
+            spans(text, kind: .setextUnderline).isEmpty,
+            "mixed `===-` line must not be classified as a setext underline"
+        )
+    }
+
     func testSetextUnderlineMatchesEqualsAndDashes() {
         let text = "Hello\n=====\n\nWorld\n-----\n"
         let underlines = spans(text, kind: .setextUnderline)
