@@ -27,6 +27,26 @@ struct SlateMacApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command])
             }
+            // Command palette — Milestone Q #313. The menu item
+            // provides both the ⌘⇧P chord and the discoverable
+            // "Show Command Palette…" entry. Closing is handled
+            // exclusively by Esc inside the sheet (matches Xcode
+            // / Sublime / TextMate convention; the alternative —
+            // a hidden in-sheet ⌘⇧P button — would rely on SwiftUI
+            // shortcut routing through the sheet's responder chain
+            // and can't be unit-tested without XCUITest infra).
+            //
+            // Disabled when no vault is open so the chord doesn't
+            // silently flip the bool from the welcome screen (no
+            // sheet is mounted there → the bool would re-trigger
+            // an unwanted sheet on the next vault open).
+            CommandGroup(after: .sidebar) {
+                Button("Show Command Palette…") {
+                    appState.isCommandPaletteOpen = true
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen)
+            }
         }
 
         // Settings scene (#224) — Cmd+, opens it from anywhere.

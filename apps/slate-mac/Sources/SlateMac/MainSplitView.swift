@@ -399,6 +399,13 @@ struct MainSplitView: View {
             BulkRenameSheet()
                 .environmentObject(appState)
         }
+        // Command palette (Milestone Q #313). Triggered by ⌘⇧P from
+        // the SlateMacApp's CommandGroup; closes via Esc or another
+        // ⌘⇧P press (handled inside the sheet).
+        .sheet(isPresented: $appState.isCommandPaletteOpen) {
+            CommandPaletteView()
+                .environmentObject(appState)
+        }
         // Citation expand popover (#279). Triggered by activating a
         // row in `CitationsPanel`; the sheet binding tracks
         // `expandedCitation`. Dismissal routes focus back to the
