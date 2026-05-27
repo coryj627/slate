@@ -62,35 +62,48 @@ enum EditorSyntaxPalette {
 
     /// Heading / setext-underline. Hue family: blue.
     static let headingColor = dynamicColor(
+        name: "slate.editor.heading",
         light: NSColor(srgbRed: 0.00, green: 0.30, blue: 0.75, alpha: 1.0),
         dark: NSColor(srgbRed: 0.55, green: 0.88, blue: 1.00, alpha: 1.0)
     )
 
     /// Code block / inline code. Hue family: purple.
     static let codeColor = dynamicColor(
+        name: "slate.editor.code",
         light: NSColor(srgbRed: 0.55, green: 0.15, blue: 0.65, alpha: 1.0),
         dark: NSColor(srgbRed: 0.92, green: 0.82, blue: 1.00, alpha: 1.0)
     )
 
     /// Wikilink. Hue family: teal.
     static let wikilinkColor = dynamicColor(
+        name: "slate.editor.wikilink",
         light: NSColor(srgbRed: 0.00, green: 0.42, blue: 0.42, alpha: 1.0),
         dark: NSColor(srgbRed: 0.45, green: 0.95, blue: 0.95, alpha: 1.0)
     )
 
     /// Tag. Hue family: pink/magenta.
     static let tagColor = dynamicColor(
+        name: "slate.editor.tag",
         light: NSColor(srgbRed: 0.78, green: 0.05, blue: 0.30, alpha: 1.0),
         dark: NSColor(srgbRed: 1.00, green: 0.75, blue: 0.80, alpha: 1.0)
     )
 
     /// Build an appearance-aware NSColor from a (light, dark) sRGB
-    /// pair. HC appearances inherit their non-HC sibling's colour
-    /// (the IC branch in `color(for:increaseContrast:)` already
-    /// handles the `accessibilityDisplayShouldIncreaseContrast`
-    /// case by collapsing to `labelColor`).
-    private static func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
-        NSColor(name: nil) { appearance in
+    /// pair. The `name` surfaces in NSColor inspectors and `po`
+    /// output — pick a stable identifier per call site so debug
+    /// dumps name the colour rather than its anonymous dynamic
+    /// provider.
+    ///
+    /// HC appearances inherit their non-HC sibling's colour (the IC
+    /// branch in `color(for:increaseContrast:)` already handles the
+    /// `accessibilityDisplayShouldIncreaseContrast` case by
+    /// collapsing to `labelColor`).
+    private static func dynamicColor(
+        name: NSColor.Name,
+        light: NSColor,
+        dark: NSColor
+    ) -> NSColor {
+        NSColor(name: name) { appearance in
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
                 ? dark
                 : light
