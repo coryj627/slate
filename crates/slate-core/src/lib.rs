@@ -14,6 +14,7 @@ pub mod blocks_db;
 pub mod citations;
 pub mod citations_db;
 pub mod code;
+pub mod commands;
 pub mod db;
 pub mod diagram;
 pub mod embeds;
@@ -49,6 +50,7 @@ pub use citations::render::{
     RenderCache, RenderedCitation,
 };
 pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
+pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
 };
