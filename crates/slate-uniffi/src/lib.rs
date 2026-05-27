@@ -2463,9 +2463,370 @@ pub struct UnresolvedCitation {
     pub key: String,
 }
 
+// =====================================================================
+// Command palette registry FFI surface (Milestone Q, issue #312)
+// =====================================================================
+
+/// Maximum byte length for `ActionFailed.message` returned by a
+/// foreign action. Foreign callers — Swift menu items in #314, and
+/// V1.x plugin commands — supply this message; without a cap a
+/// hostile or buggy implementation could return megabytes that flow
+/// into `os_log`, the SwiftUI `Text` views that render error
+/// alerts, and VoiceOver. 1 KiB is generous for a real error
+/// message and orders of magnitude smaller than any plausible abuse
+/// payload. Truncation lands at a UTF-8 boundary with a "(truncated)"
+/// suffix so the result is still a valid Rust `String`.
+const MAX_ACTION_ERROR_MSG_LEN: usize = 1024;
+
+/// Top-level grouping for commands shown in the palette. Mirrors
+/// `slate_core::CommandSection` 1:1; declared in palette render
+/// order. New section requires a deliberate edit on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CommandSection {
+    File,
+    Navigation,
+    View,
+    Vault,
+    Editor,
+    Tasks,
+    Settings,
+    Plugins,
+}
+
+impl From<core::CommandSection> for CommandSection {
+    fn from(s: core::CommandSection) -> Self {
+        match s {
+            core::CommandSection::File => Self::File,
+            core::CommandSection::Navigation => Self::Navigation,
+            core::CommandSection::View => Self::View,
+            core::CommandSection::Vault => Self::Vault,
+            core::CommandSection::Editor => Self::Editor,
+            core::CommandSection::Tasks => Self::Tasks,
+            core::CommandSection::Settings => Self::Settings,
+            core::CommandSection::Plugins => Self::Plugins,
+        }
+    }
+}
+
+impl From<CommandSection> for core::CommandSection {
+    fn from(s: CommandSection) -> Self {
+        match s {
+            CommandSection::File => Self::File,
+            CommandSection::Navigation => Self::Navigation,
+            CommandSection::View => Self::View,
+            CommandSection::Vault => Self::Vault,
+            CommandSection::Editor => Self::Editor,
+            CommandSection::Tasks => Self::Tasks,
+            CommandSection::Settings => Self::Settings,
+            CommandSection::Plugins => Self::Plugins,
+        }
+    }
+}
+
+/// Metadata for a registered command. Mirrors `slate_core::Command`.
+/// The action implementation lives behind a callback interface
+/// ([`CommandAction`]) so the foreign side (Swift / Kotlin / etc.)
+/// can supply the actual handler at register time.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Command {
+    pub id: String,
+    pub label: String,
+    pub accessibility_hint: Option<String>,
+    pub hotkey_hint: Option<String>,
+    pub section: CommandSection,
+}
+
+impl From<core::Command> for Command {
+    fn from(c: core::Command) -> Self {
+        Self {
+            id: c.id,
+            label: c.label,
+            accessibility_hint: c.accessibility_hint,
+            hotkey_hint: c.hotkey_hint,
+            section: c.section.into(),
+        }
+    }
+}
+
+impl From<Command> for core::Command {
+    fn from(c: Command) -> Self {
+        Self {
+            id: c.id,
+            label: c.label,
+            accessibility_hint: c.accessibility_hint,
+            hotkey_hint: c.hotkey_hint,
+            section: c.section.into(),
+        }
+    }
+}
+
+/// FFI-exposed command registry errors. Mirrors
+/// `slate_core::CommandError`; struct-variant shape matches the rest
+/// of this crate's error surface so generated Swift enums stay
+/// readable.
+#[derive(Debug, thiserror::Error, uniffi::Error, PartialEq, Eq)]
+pub enum CommandError {
+    #[error("unknown command id: {id}")]
+    UnknownId { id: String },
+    /// Action returned an error. The `message` is **foreign-
+    /// controlled** — supplied by a Swift menu handler or a V1.x
+    /// plugin command — and is truncated by `ForeignActionAdapter::
+    /// invoke` to `MAX_ACTION_ERROR_MSG_LEN` bytes. Renderers must
+    /// treat it as plain text (not Markdown / `AttributedString`)
+    /// to avoid injection from a hostile plugin.
+    #[error("command action failed: {message}")]
+    ActionFailed { message: String },
+}
+
+impl From<core::CommandError> for CommandError {
+    fn from(e: core::CommandError) -> Self {
+        match e {
+            core::CommandError::UnknownId(id) => Self::UnknownId { id },
+            core::CommandError::ActionFailed(message) => Self::ActionFailed { message },
+        }
+    }
+}
+
+/// Foreign-implemented action for a registered command.
+///
+/// First **fallible** callback interface in `slate-uniffi` — the
+/// non-fallible `ScanProgressListener` (line ~1262 above) is the
+/// existing precedent; this trait adds `Result`-typed error
+/// propagation through [`CommandError`].
+///
+/// ## Untrusted boundary
+///
+/// Foreign callers — Swift menu wiring in #314, Kotlin equivalent
+/// later, and V1.x plugin commands — supply both the action and the
+/// `CommandError::ActionFailed { message }` returned by it. The
+/// message is **untrusted**: [`ForeignActionAdapter::invoke`]
+/// truncates it to `MAX_ACTION_ERROR_MSG_LEN` bytes so a hostile or
+/// buggy implementation can't flood logs or `Text` views. Renderers
+/// must treat the message as plain text (not Markdown /
+/// `AttributedString`).
+///
+/// ## Sendable contract
+///
+/// The Rust trait is `Send + Sync`. Foreign implementations MUST
+/// satisfy the same contract: on Swift, mark the implementing type
+/// `Sendable` (or `@unchecked Sendable` with a lock guarding any
+/// mutable state — see `ScanProgressAdapter` for the project
+/// precedent). The compiler-side check on the Swift side is faith-
+/// based; getting it wrong shows up as data races inside the
+/// callback, not as a build error.
+#[uniffi::export(with_foreign)]
+pub trait CommandAction: Send + Sync {
+    fn invoke(&self) -> Result<(), CommandError>;
+}
+
+/// Bridges a foreign `Arc<dyn CommandAction>` (uniffi) into a
+/// `slate_core::CommandAction` so the pure-Rust registry can hold
+/// foreign actions uniformly with native ones.
+///
+/// Truncates `ActionFailed::message` at the trust boundary; see
+/// [`MAX_ACTION_ERROR_MSG_LEN`] for the rationale.
+struct ForeignActionAdapter {
+    foreign: Arc<dyn CommandAction>,
+}
+
+impl core::CommandAction for ForeignActionAdapter {
+    fn invoke(&self) -> Result<(), core::CommandError> {
+        self.foreign.invoke().map_err(|e| match e {
+            CommandError::UnknownId { id } => core::CommandError::UnknownId(id),
+            CommandError::ActionFailed { message } => {
+                core::CommandError::ActionFailed(truncate_action_message(message))
+            }
+        })
+    }
+}
+
+/// Truncate a foreign-supplied `ActionFailed.message` at a UTF-8
+/// boundary so the result is a valid Rust `String`. Appends a
+/// human-readable "(truncated)" marker when truncation occurs so
+/// downstream renderers / log readers can tell the difference
+/// between a deliberately terse message and a clipped one.
+fn truncate_action_message(mut message: String) -> String {
+    if message.len() <= MAX_ACTION_ERROR_MSG_LEN {
+        return message;
+    }
+    let mut end = MAX_ACTION_ERROR_MSG_LEN;
+    while end > 0 && !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    message.truncate(end);
+    message.push_str("… (truncated)");
+    message
+}
+
+/// FFI-exposed command registry. Wraps `slate_core::CommandRegistry`.
+///
+/// Construct with `CommandRegistry()` on the foreign side. The
+/// registry is reference-counted and `Send + Sync`; the host can
+/// hold a single shared instance for the app's lifetime.
+#[derive(uniffi::Object)]
+pub struct CommandRegistry {
+    inner: core::CommandRegistry,
+}
+
+#[uniffi::export]
+impl CommandRegistry {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: core::CommandRegistry::new(),
+        })
+    }
+
+    /// Register a command with the foreign-implemented action.
+    /// Returns `true` when the call replaced an existing entry
+    /// with the same id, `false` for a fresh registration.
+    ///
+    /// Replace-semantics are deliberate (plugin hot-reload), but
+    /// silent override of a core `slate.*` id by a plugin would be
+    /// a privilege-escalation footgun — the menu bridge (#314) and
+    /// any future plugin loader MUST check the return value and
+    /// reject conflicts at the registration site.
+    pub fn register(&self, command: Command, action: Arc<dyn CommandAction>) -> bool {
+        self.inner
+            .register(command.into(), Arc::new(ForeignActionAdapter { foreign: action }))
+    }
+
+    /// Return every registered command's metadata, sorted by
+    /// `(section, id)` for deterministic palette rendering.
+    pub fn list(&self) -> Vec<Command> {
+        self.inner.list().into_iter().map(Into::into).collect()
+    }
+
+    /// Return the metadata for a single command, or `nil` if no
+    /// command is registered under `id`.
+    pub fn find_by_id(&self, id: String) -> Option<Command> {
+        self.inner.find_by_id(&id).map(Into::into)
+    }
+
+    /// Invoke the action for `id`. Returns `UnknownId` if no
+    /// command is registered, or `ActionFailed` if the action's
+    /// `invoke` returned an error.
+    pub fn invoke_by_id(&self, id: String) -> Result<(), CommandError> {
+        self.inner.invoke_by_id(&id).map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------
+    // truncate_action_message — trust-boundary truncation for the
+    // foreign-controlled CommandError::ActionFailed.message field.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn truncate_action_message_passes_short_messages_through() {
+        let msg = "ordinary error message".to_string();
+        let original = msg.clone();
+        assert_eq!(truncate_action_message(msg), original);
+    }
+
+    #[test]
+    fn truncate_action_message_truncates_at_cap_with_marker() {
+        let big = "a".repeat(MAX_ACTION_ERROR_MSG_LEN * 4);
+        let out = truncate_action_message(big);
+        // The truncated body is <= the cap, plus the marker suffix
+        // which is allowed to push the total slightly past.
+        assert!(out.starts_with(&"a".repeat(MAX_ACTION_ERROR_MSG_LEN)));
+        assert!(out.ends_with("(truncated)"));
+        // Hard upper bound — the marker is ~14 ASCII bytes; anything
+        // wildly larger means truncation regressed.
+        assert!(out.len() < MAX_ACTION_ERROR_MSG_LEN + 32);
+    }
+
+    #[test]
+    fn truncate_action_message_respects_utf8_boundaries() {
+        // Build a string that would split a 4-byte codepoint right
+        // at MAX_ACTION_ERROR_MSG_LEN if the truncation were
+        // byte-naïve.
+        let mut s = "x".repeat(MAX_ACTION_ERROR_MSG_LEN - 2);
+        // 4-byte codepoint (U+1F389 PARTY POPPER) straddling the cap.
+        s.push('🎉');
+        s.push_str(&"y".repeat(64));
+        let out = truncate_action_message(s);
+        // Result must be valid UTF-8 (Rust String invariant — if
+        // truncate had split the codepoint we'd have panicked on
+        // the String::truncate call, but the assertion is the
+        // contract).
+        assert!(out.is_char_boundary(out.find('…').unwrap_or(out.len())));
+        assert!(out.ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn foreign_action_adapter_truncates_action_failed_message() {
+        struct HostileAction;
+        impl CommandAction for HostileAction {
+            fn invoke(&self) -> Result<(), CommandError> {
+                Err(CommandError::ActionFailed {
+                    message: "x".repeat(MAX_ACTION_ERROR_MSG_LEN * 8),
+                })
+            }
+        }
+
+        let reg = CommandRegistry::new();
+        let cmd = Command {
+            id: "test.hostile".into(),
+            label: "hostile".into(),
+            accessibility_hint: None,
+            hotkey_hint: None,
+            section: CommandSection::Plugins,
+        };
+        let replaced = reg.register(cmd, Arc::new(HostileAction));
+        assert!(!replaced);
+
+        let err = reg.invoke_by_id("test.hostile".into()).unwrap_err();
+        let CommandError::ActionFailed { message } = err else {
+            panic!("expected ActionFailed");
+        };
+        assert!(message.len() < MAX_ACTION_ERROR_MSG_LEN + 32);
+        assert!(message.ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn command_section_round_trips_through_core() {
+        for sec in [
+            CommandSection::File,
+            CommandSection::Navigation,
+            CommandSection::View,
+            CommandSection::Vault,
+            CommandSection::Editor,
+            CommandSection::Tasks,
+            CommandSection::Settings,
+            CommandSection::Plugins,
+        ] {
+            let core: core::CommandSection = sec.into();
+            let back: CommandSection = core.into();
+            assert_eq!(sec, back);
+        }
+    }
+
+    #[test]
+    fn registry_register_returns_replaced_flag() {
+        struct NoOp;
+        impl CommandAction for NoOp {
+            fn invoke(&self) -> Result<(), CommandError> {
+                Ok(())
+            }
+        }
+        let reg = CommandRegistry::new();
+        let cmd = Command {
+            id: "test.dup".into(),
+            label: "dup".into(),
+            accessibility_hint: None,
+            hotkey_hint: None,
+            section: CommandSection::Plugins,
+        };
+        let first = reg.register(cmd.clone(), Arc::new(NoOp));
+        let second = reg.register(cmd, Arc::new(NoOp));
+        assert!(!first, "first registration is not a replacement");
+        assert!(second, "second registration must signal replacement");
+    }
 
     #[test]
     fn extract_headings_passes_through_to_core() {

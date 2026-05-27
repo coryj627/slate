@@ -14,6 +14,7 @@ pub mod blocks_db;
 pub mod citations;
 pub mod citations_db;
 pub mod code;
+pub mod commands;
 pub mod db;
 pub mod diagram;
 pub mod embeds;
@@ -36,6 +37,7 @@ pub use search_db::{
 };
 
 pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
+pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use citations::bibliography::{
     load_source as load_bibliography_source, merge_sources as merge_bibliography_sources,
     spawn_debouncer as spawn_bibliography_debouncer,
