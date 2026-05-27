@@ -320,6 +320,192 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertNil(model.selectedID, "no matches → no selection")
     }
 
+    // MARK: - Section grouping + Recent (#316)
+
+    /// Empty query, no recents → sections are the registry's
+    /// commands grouped by their native CommandSection in
+    /// declared order.
+    @MainActor
+    func testSectionsEmptyQueryNoRecentsGroupsByNativeSection() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixtureCommandsAcrossSections())
+        let sections = model.sections
+        // Editor + File were the only two sections in the fixture.
+        // File ships first in the declared order.
+        XCTAssertEqual(sections.map(\.title), ["File", "Editor"])
+        XCTAssertEqual(sections[0].commands.map(\.id), ["test.file.alpha", "test.file.beta"])
+        XCTAssertEqual(sections[1].commands.map(\.id), ["test.editor.save"])
+    }
+
+    /// Empty query, recents present → Recent section appears at
+    /// top; commands shown in Recent are EXCLUDED from their
+    /// native section so the flat displayOrder doesn't duplicate.
+    @MainActor
+    func testSectionsEmptyQueryWithRecentsAddsRecentSection() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(
+            fixtureCommandsAcrossSections(),
+            recents: ["test.editor.save", "test.file.alpha"]
+        )
+        let sections = model.sections
+        XCTAssertEqual(sections.map(\.title), ["Recent", "File"])
+        XCTAssertEqual(
+            sections[0].commands.map(\.id),
+            ["test.editor.save", "test.file.alpha"],
+            "Recent preserves invocation order"
+        )
+        // The Editor section dropped out entirely because its only
+        // command ('save') is now in Recent.
+        XCTAssertEqual(sections[1].commands.map(\.id), ["test.file.beta"])
+    }
+
+    /// Non-empty query → no Recent section (filter results are
+    /// what the user asked for, not history). Fuzzy-matched
+    /// commands grouped by native section.
+    @MainActor
+    func testSectionsNonEmptyQueryHasNoRecentSection() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(
+            fixtureCommandsAcrossSections(),
+            recents: ["test.editor.save"]
+        )
+        model.query = "save"
+        let sections = model.sections
+        XCTAssertEqual(sections.map(\.title), ["Editor"])
+        XCTAssertEqual(sections[0].commands.map(\.id), ["test.editor.save"])
+    }
+
+    /// Recent ids that no longer exist in the registry (e.g.
+    /// removed in an app update) are silently skipped — not a
+    /// crash and not a "phantom" row.
+    @MainActor
+    func testSectionsSkipsRecentsMissingFromRegistry() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(
+            fixtureCommandsAcrossSections(),
+            recents: ["slate.removed.command", "test.editor.save"]
+        )
+        let sections = model.sections
+        XCTAssertEqual(sections[0].title, "Recent")
+        XCTAssertEqual(
+            sections[0].commands.map(\.id),
+            ["test.editor.save"],
+            "missing recents are skipped, present ones survive"
+        )
+    }
+
+    /// `displayOrder` is the flat list arrow nav cycles through.
+    /// It must include Recent commands first when query is empty.
+    @MainActor
+    func testDisplayOrderReflectsRecentThenNative() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(
+            fixtureCommandsAcrossSections(),
+            recents: ["test.editor.save"]
+        )
+        XCTAssertEqual(
+            model.displayOrder.map(\.id),
+            ["test.editor.save", "test.file.alpha", "test.file.beta"],
+            "Recent first, then native sections in declared order, excluding recents"
+        )
+    }
+
+    /// Arrow navigation cycles through displayOrder (including
+    /// Recent rows), not the legacy flat-by-id list.
+    @MainActor
+    func testArrowNavCyclesAcrossRecentAndNative() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(
+            fixtureCommandsAcrossSections(),
+            recents: ["test.editor.save"]
+        )
+        XCTAssertEqual(model.selectedID, "test.editor.save", "starts on Recent row")
+        model.selectNext()
+        XCTAssertEqual(model.selectedID, "test.file.alpha")
+        model.selectNext()
+        XCTAssertEqual(model.selectedID, "test.file.beta")
+        // Wrap.
+        model.selectNext()
+        XCTAssertEqual(model.selectedID, "test.editor.save")
+    }
+
+    // MARK: - Filter-change announcement (#316)
+
+    @MainActor
+    func testFilterAnnouncementEmptyQueryIsNil() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixtureCommandsAcrossSections())
+        model.query = ""
+        model.handleQueryChange()
+        XCTAssertNil(
+            model.filterAnnouncement,
+            "empty query doesn't announce — user just opened or cleared"
+        )
+    }
+
+    @MainActor
+    func testFilterAnnouncementSingleMatch() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixtureCommandsAcrossSections())
+        model.query = "save"
+        model.handleQueryChange()
+        XCTAssertEqual(
+            model.filterAnnouncement,
+            "1 command matching \"save\""
+        )
+    }
+
+    @MainActor
+    func testFilterAnnouncementMultipleMatches() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixtureCommandsAcrossSections())
+        // "a" matches alpha + save + beta — pick a query that hits more than one
+        model.query = "e"
+        model.handleQueryChange()
+        // Expect a "<N> commands matching" with plural.
+        XCTAssertNotNil(model.filterAnnouncement)
+        XCTAssertTrue(
+            model.filterAnnouncement!.contains("commands matching"),
+            "got: \(model.filterAnnouncement ?? "nil")"
+        )
+    }
+
+    @MainActor
+    func testFilterAnnouncementNoMatches() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixtureCommandsAcrossSections())
+        model.query = "zzznothingmatches"
+        model.handleQueryChange()
+        XCTAssertEqual(
+            model.filterAnnouncement,
+            "No commands match \"zzznothingmatches\""
+        )
+    }
+
+    @MainActor
+    func testClearFilterAnnouncementResetsToNil() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixtureCommandsAcrossSections())
+        model.query = "save"
+        model.handleQueryChange()
+        XCTAssertNotNil(model.filterAnnouncement)
+        model.clearFilterAnnouncement()
+        XCTAssertNil(model.filterAnnouncement)
+    }
+
+    // MARK: - Section title mapping
+
+    func testSectionTitleMapping() {
+        XCTAssertEqual(CommandPaletteModel.title(for: .file), "File")
+        XCTAssertEqual(CommandPaletteModel.title(for: .navigation), "Navigation")
+        XCTAssertEqual(CommandPaletteModel.title(for: .view), "View")
+        XCTAssertEqual(CommandPaletteModel.title(for: .vault), "Vault")
+        XCTAssertEqual(CommandPaletteModel.title(for: .editor), "Editor")
+        XCTAssertEqual(CommandPaletteModel.title(for: .tasks), "Tasks")
+        XCTAssertEqual(CommandPaletteModel.title(for: .settings), "Settings")
+        XCTAssertEqual(CommandPaletteModel.title(for: .plugins), "Plugins")
+    }
+
     // MARK: - Invoke (#315)
 
     @MainActor
@@ -399,6 +585,18 @@ final class CommandPaletteViewTests: XCTestCase {
             Command(id: "test.a", label: "Alpha", accessibilityHint: nil, hotkeyHint: nil, section: .editor),
             Command(id: "test.b", label: "Beta",  accessibilityHint: nil, hotkeyHint: nil, section: .editor),
             Command(id: "test.c", label: "Gamma", accessibilityHint: nil, hotkeyHint: nil, section: .editor),
+        ]
+    }
+
+    /// Multi-section fixture used by the section-grouping tests
+    /// (#316). Two sections so we can verify cross-section
+    /// arrow nav and the Recent-excludes-from-native rule.
+    @MainActor
+    private func fixtureCommandsAcrossSections() -> [Command] {
+        [
+            Command(id: "test.file.alpha", label: "Alpha", accessibilityHint: nil, hotkeyHint: nil, section: .file),
+            Command(id: "test.file.beta",  label: "Beta",  accessibilityHint: nil, hotkeyHint: nil, section: .file),
+            Command(id: "test.editor.save", label: "Save", accessibilityHint: nil, hotkeyHint: nil, section: .editor),
         ]
     }
 

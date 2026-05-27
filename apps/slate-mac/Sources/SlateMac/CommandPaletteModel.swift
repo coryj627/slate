@@ -33,26 +33,155 @@ final class CommandPaletteModel: ObservableObject {
     /// Last announcement string the model wants posted via
     /// `postAccessibilityAnnouncement`. Stored separately from the
     /// view's own posting site so tests can assert on it without a
-    /// running NSApp.
+    /// running NSApp. Used for command-invocation feedback
+    /// (ActionFailed / UnknownId).
     @Published private(set) var pendingAnnouncement: String?
 
+    /// Filter-change announcement string (#316). The view watches
+    /// this and posts assertively whenever the user's typing
+    /// changes the result count. Separate from `pendingAnnouncement`
+    /// so per-keystroke filter feedback doesn't collide with one-
+    /// shot invocation outcomes.
+    @Published private(set) var filterAnnouncement: String?
+
+    /// Recent command ids in most-recent-first order. Set on
+    /// `loadCommands` from `AppState.commandPaletteRecents`. The
+    /// model uses these to populate the Recent section when query
+    /// is empty (#316).
+    @Published private(set) var recentIDs: [String] = []
+
     /// Initial-load entry point — called from the view's
-    /// `.onAppear`. Idempotent; calling twice with the same
-    /// command list is a no-op except for resetting `selectedID`
-    /// to the first row.
-    func loadCommands(_ snapshot: [Command]) {
+    /// `.onAppear`. Idempotent; calling twice resets `selectedID`
+    /// to the first row of the new display order.
+    func loadCommands(_ snapshot: [Command], recents: [String] = []) {
         commands = snapshot
-        selectedID = filteredCommands.first?.id
+        recentIDs = recents
+        selectedID = displayOrder.first?.id
     }
 
-    /// Re-run the selection-snap rule when `query` changes. The
-    /// view binds this to `.onChange(of: query)`.
+    /// Re-run the selection-snap rule when `query` changes, and
+    /// refresh the filter-change announcement. The view binds this
+    /// to `.onChange(of: query)`.
     func handleQueryChange() {
-        let f = filteredCommands
-        if selectedID == nil || !f.contains(where: { $0.id == selectedID }) {
-            selectedID = f.first?.id
+        let order = displayOrder
+        if selectedID == nil || !order.contains(where: { $0.id == selectedID }) {
+            selectedID = order.first?.id
+        }
+
+        // Don't announce on initial open (empty query → palette
+        // just rendered the full list, which the user can see).
+        // Announce on every non-empty filter change.
+        if query.isEmpty {
+            filterAnnouncement = nil
+        } else {
+            let count = filteredCommands.count
+            filterAnnouncement = count == 0
+                ? "No commands match \"\(query)\""
+                : "\(count) command\(count == 1 ? "" : "s") matching \"\(query)\""
         }
     }
+
+    /// Clear the filter-change announcement after the view has
+    /// posted it.
+    func clearFilterAnnouncement() {
+        filterAnnouncement = nil
+    }
+
+    // MARK: - Section grouping (#316)
+
+    /// Renderable grouping of the filtered commands. Drives the
+    /// SwiftUI `Section` hierarchy in `CommandPaletteView`.
+    ///
+    /// **Empty query**: Recent section at top (most-recent-first,
+    /// commands also in their native section are EXCLUDED from
+    /// the native sections to avoid duplicate rows), followed by
+    /// the CommandSection enums in declared order.
+    ///
+    /// **Non-empty query**: fuzzy-filter results grouped by their
+    /// native section in declared order; no Recent section
+    /// (filter results are what the user asked for, not history).
+    var sections: [PaletteSection] {
+        let filtered = filteredCommands
+
+        if query.isEmpty {
+            var result: [PaletteSection] = []
+
+            // Recent section first — preserves invocation order.
+            // Only includes recents that still exist in the
+            // registry (a command id may have been removed across
+            // app updates; we skip gracefully).
+            let recentSet = Set(recentIDs)
+            let recentCommands = recentIDs.compactMap { id in
+                commands.first(where: { $0.id == id })
+            }
+            if !recentCommands.isEmpty {
+                result.append(PaletteSection(
+                    title: "Recent",
+                    kind: nil,
+                    commands: recentCommands
+                ))
+            }
+
+            // Native sections — exclude commands already shown in
+            // Recent to keep the flat displayOrder de-duped.
+            let nativeOnly = filtered.filter { !recentSet.contains($0.id) }
+            let byType = Dictionary(grouping: nativeOnly, by: { $0.section })
+            for sec in Self.sectionOrder {
+                if let cmds = byType[sec], !cmds.isEmpty {
+                    result.append(PaletteSection(
+                        title: Self.title(for: sec),
+                        kind: sec,
+                        commands: cmds
+                    ))
+                }
+            }
+            return result
+        } else {
+            // With a query: group fuzzy-matched commands by their
+            // native section, in declared order. No Recent.
+            let byType = Dictionary(grouping: filtered, by: { $0.section })
+            return Self.sectionOrder.compactMap { sec -> PaletteSection? in
+                guard let cmds = byType[sec] else { return nil }
+                return PaletteSection(
+                    title: Self.title(for: sec),
+                    kind: sec,
+                    commands: cmds
+                )
+            }
+        }
+    }
+
+    /// Flat list of commands in display (section-flattened) order.
+    /// Feeds arrow-nav so the visual flow and selection cycle
+    /// match exactly.
+    var displayOrder: [Command] {
+        sections.flatMap { $0.commands }
+    }
+
+    /// Declared section order for the palette. Tracks
+    /// `CommandSection`'s `repr(u8)` order on the Rust side, but
+    /// stays explicit here so a Rust-side reorder doesn't silently
+    /// change the palette layout.
+    private nonisolated static let sectionOrder: [CommandSection] = [
+        .file, .navigation, .view, .vault, .editor, .tasks, .settings, .plugins,
+    ]
+
+    /// Human-readable header for a section. Plain en-US strings
+    /// in V1; localisation lands in V2 per #264.
+    nonisolated static func title(for section: CommandSection) -> String {
+        switch section {
+        case .file: return "File"
+        case .navigation: return "Navigation"
+        case .view: return "View"
+        case .vault: return "Vault"
+        case .editor: return "Editor"
+        case .tasks: return "Tasks"
+        case .settings: return "Settings"
+        case .plugins: return "Plugins"
+        }
+    }
+
+    // MARK: - Filtering
 
     /// Filtered, ranked command list. Empty query keeps the
     /// registry's deterministic `(section, id)` order; non-empty
@@ -76,24 +205,25 @@ final class CommandPaletteModel: ObservableObject {
             .map { $0.0 }
     }
 
-    /// Move selection to the next filtered result, wrapping at
-    /// the end. No-op when the filter is empty.
+    /// Move selection to the next visible row, wrapping at the
+    /// end. Operates on `displayOrder` (sectioned-and-deduped) so
+    /// arrow nav matches what the user sees.
     func selectNext() {
-        let filtered = filteredCommands
-        guard !filtered.isEmpty else { return }
-        let idx = filtered.firstIndex { $0.id == selectedID } ?? -1
-        let next = (idx + 1) % filtered.count
-        selectedID = filtered[next].id
+        let order = displayOrder
+        guard !order.isEmpty else { return }
+        let idx = order.firstIndex { $0.id == selectedID } ?? -1
+        let next = (idx + 1) % order.count
+        selectedID = order[next].id
     }
 
-    /// Move selection to the previous filtered result, wrapping
-    /// at the start. No-op when the filter is empty.
+    /// Move selection to the previous visible row, wrapping at
+    /// the start. Operates on `displayOrder`.
     func selectPrevious() {
-        let filtered = filteredCommands
-        guard !filtered.isEmpty else { return }
-        let idx = filtered.firstIndex { $0.id == selectedID } ?? filtered.count
-        let prev = (idx - 1 + filtered.count) % filtered.count
-        selectedID = filtered[prev].id
+        let order = displayOrder
+        guard !order.isEmpty else { return }
+        let idx = order.firstIndex { $0.id == selectedID } ?? order.count
+        let prev = (idx - 1 + order.count) % order.count
+        selectedID = order[prev].id
     }
 
     /// Invoke the command currently selected via the supplied
@@ -107,7 +237,7 @@ final class CommandPaletteModel: ObservableObject {
     @discardableResult
     func invokeSelected(via registry: CommandRegistry) -> InvocationOutcome {
         guard let id = selectedID,
-              let command = filteredCommands.first(where: { $0.id == id })
+              let command = displayOrder.first(where: { $0.id == id })
         else {
             return .noSelection
         }
@@ -215,4 +345,24 @@ enum InvocationOutcome: Equatable {
     case actionFailed(label: String, message: String)
     case unknownId(id: String)
     case noSelection
+}
+
+/// One renderable section in the palette. `kind == nil` is the
+/// synthetic "Recent" section; everything else maps 1:1 to a
+/// `CommandSection`.
+struct PaletteSection: Identifiable, Equatable {
+    let title: String
+    let kind: CommandSection?
+    let commands: [Command]
+
+    /// Stable identifier independent of the display title — a
+    /// future plugin section titled "Recent" can't collide with
+    /// the synthetic Recent section, and a localisation pass on
+    /// `title` (V2 per #264) doesn't change `id`.
+    var id: String {
+        if let kind {
+            return "kind.\(kind)"
+        }
+        return "recent"
+    }
 }
