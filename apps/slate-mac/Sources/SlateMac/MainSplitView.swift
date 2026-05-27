@@ -233,20 +233,12 @@ struct MainSplitView: View {
             }
             ToolbarItem(placement: .automatic) {
                 Button("Close Vault") {
-                    // Route through attemptCloseVault so the
-                    // "Save changes?" prompt fires when the editor
-                    // is dirty. The announcement moves to the
-                    // applyPendingNavigation tail when navigation
-                    // actually succeeds — closeVault() is still
-                    // called there.
-                    if appState.hasUnsavedChanges {
-                        appState.attemptCloseVault()
-                    } else {
-                        appState.closeVault()
-                        postAccessibilityAnnouncement(
-                            "Vault closed. Returned to the welcome screen."
-                        )
-                    }
+                    // Shared with the palette's slate.vault.close
+                    // registration (#314) so both surfaces post the
+                    // same VoiceOver announcement on clean close
+                    // and route the dirty path through the same
+                    // "Save changes?" prompt.
+                    appState.closeVaultFromUserAction()
                 }
                 .accessibilityHint(
                     "Returns to the welcome screen. Prompts to save if the editor has unsaved changes."
