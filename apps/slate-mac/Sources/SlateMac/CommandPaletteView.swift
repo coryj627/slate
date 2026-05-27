@@ -270,22 +270,58 @@ struct CommandPaletteView: View {
 
     // MARK: - VoiceOver label
 
+    /// Compose the command's label with the spelled-out chord so
+    /// VoiceOver users hear "Save, Command S" the way the macOS
+    /// menu bar does — and "Settings…, Command Comma" rather than
+    /// "Settings…, Command ," (which VoiceOver may elide entirely
+    /// when the user's punctuation setting is "None").
+    ///
+    /// Walks every character of `hotkeyHint` in order. Modifier
+    /// glyphs (⌘⇧⌥⌃) become their spoken word; punctuation keys
+    /// become their spoken name; alphanumeric keys pass through
+    /// as-is.
     static func voiceOverLabel(for command: Command) -> String {
         guard let hint = command.hotkeyHint, !hint.isEmpty else {
             return command.label
         }
-        let chordWords = hint.compactMap { chordGlyphWord[$0] }
-        let keyChar = hint.last.flatMap { chordGlyphWord[$0] == nil ? String($0) : nil }
-            ?? hint
-        let chordSpoken = (chordWords + [keyChar]).joined(separator: " ")
-        return "\(command.label), \(chordSpoken)"
+        var spoken: [String] = []
+        for char in hint {
+            if let modifierWord = chordGlyphWord[char] {
+                spoken.append(modifierWord)
+            } else {
+                spoken.append(chordKeyWord[char] ?? String(char))
+            }
+        }
+        return "\(command.label), \(spoken.joined(separator: " "))"
     }
 
+    /// Modifier-key glyphs → spoken names.
     private static let chordGlyphWord: [Character: String] = [
         "⌘": "Command",
         "⇧": "Shift",
         "⌥": "Option",
         "⌃": "Control",
+    ]
+
+    /// Punctuation keys → spoken names. VoiceOver's default
+    /// punctuation level ("Some") speaks "comma" for ",", but
+    /// users with "None" hear nothing — so a chord ending in
+    /// punctuation like ⌘, would become "Command" with no key
+    /// indicator. Spelling out the punctuation makes the chord
+    /// pronounceable at every VoiceOver punctuation level.
+    private static let chordKeyWord: [Character: String] = [
+        ",": "Comma",
+        ".": "Period",
+        "/": "Slash",
+        "\\": "Backslash",
+        ";": "Semicolon",
+        "'": "Quote",
+        "[": "Left Bracket",
+        "]": "Right Bracket",
+        "-": "Minus",
+        "=": "Equals",
+        "`": "Backtick",
+        " ": "Space",
     ]
 
     // MARK: - Arrow-key monitor

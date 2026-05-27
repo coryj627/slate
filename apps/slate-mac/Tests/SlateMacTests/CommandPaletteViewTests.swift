@@ -136,6 +136,13 @@ final class CommandPaletteViewTests: XCTestCase {
             ("Citation Summary", "⇧⌘J", "Citation Summary, Shift Command J"),
             ("Close Vault", nil, "Close Vault"),
             ("Plain Command", "", "Plain Command"),
+            // Settings (slate.settings.open, #320) — chord ends in
+            // ',' which VoiceOver may elide at punctuation = None.
+            // Spelling out "Comma" makes it pronounceable at every
+            // VO punctuation setting.
+            ("Settings…", "⌘,", "Settings…, Command Comma"),
+            // Hypothetical future plugin command using "/".
+            ("Open Help", "⌘/", "Open Help, Command Slash"),
         ]
         for (label, hint, expected) in cases {
             let cmd = Command(

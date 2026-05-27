@@ -249,6 +249,49 @@ final class SlateCommandsTests: XCTestCase {
         try appState.commandRegistry.invokeById(id: SlateCommandID.save)
     }
 
+    /// `slate.settings.open` invokes
+    /// `NSApplication.shared.sendAction("showSettingsWindow:")`,
+    /// which targets the SwiftUI-installed Settings scene's
+    /// responder. In a unit-test runner there's no installed
+    /// menu / responder chain, so the sendAction returns false
+    /// silently — same as the menu item itself would in that
+    /// environment. The contract we CAN test is that invoking
+    /// through the registry doesn't throw and matches the
+    /// shape the menu surface uses.
+    @MainActor
+    func testInvokingOpenSettingsCommandDoesNotThrow() async throws {
+        let appState = AppState()
+        try appState.commandRegistry.invokeById(id: SlateCommandID.openSettings)
+    }
+
+    /// The `slate.settings.open` action relies on SwiftUI's
+    /// auto-installed `Settings { }` scene to provide the
+    /// `showSettingsWindow:` responder. If the scene is ever
+    /// removed from `SlateMacApp.swift`, the command silently
+    /// becomes a no-op (sendAction returns `false`, no responder).
+    /// This structural test fails CI if someone removes the
+    /// scene without also dropping the palette command — closes
+    /// the silent-regression gap the invoke-doesn't-throw test
+    /// can't cover.
+    @MainActor
+    func testSettingsSceneStillExistsInSlateMacApp() async throws {
+        let appFile = Self.projectRoot
+            .appendingPathComponent("apps")
+            .appendingPathComponent("slate-mac")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("SlateMac")
+            .appendingPathComponent("SlateMacApp.swift")
+        let text = try String(contentsOf: appFile, encoding: .utf8)
+        XCTAssertTrue(
+            text.contains("Settings {"),
+            "SlateMacApp.swift must declare a `Settings { }` scene "
+                + "so the showSettingsWindow: responder exists for "
+                + "the slate.settings.open palette command. "
+                + "If you intentionally removed the scene, also "
+                + "drop the SlateCommandID.openSettings registration."
+        )
+    }
+
     /// `slate.navigation.jumpToBibliography` with no expanded
     /// citation is a no-op — the bridge mirrors the menu's
     /// disabled precondition.

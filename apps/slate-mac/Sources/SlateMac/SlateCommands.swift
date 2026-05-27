@@ -36,6 +36,9 @@ enum SlateCommandID {
     static let addProperty = "slate.editor.addProperty"
     static let bulkRenameProperties = "slate.editor.bulkRenameProperties"
 
+    // Settings
+    static let openSettings = "slate.settings.open"
+
     // Tasks
     static let tasksReview = "slate.tasks.review"
 
@@ -53,6 +56,7 @@ enum SlateCommandID {
         citationSummary,
         addProperty,
         bulkRenameProperties,
+        openSettings,
         tasksReview,
     ]
 }
@@ -112,12 +116,6 @@ final class MenuCommandAction: CommandAction, @unchecked Sendable {
 ///
 /// Skipped intentionally: `slate.view.showCommandPalette` — having
 /// the palette list itself is self-referential and adds no value.
-///
-/// TODO #320: register `slate.settings.open` once we settle on
-/// either the `NSApp.sendAction("showSettingsWindow:")` workaround
-/// or a macOS 14+ deployment-target bump. SwiftUI's auto-installed
-/// "Slate ▸ Settings…" menu item (`SlateMacApp.swift` Settings scene,
-/// ⌘,) is a reachable menu surface not yet in the registry.
 @MainActor
 func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
     // Helper that registers and asserts non-replacement. A `true`
@@ -229,6 +227,42 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⇧⌘R",
         hint: "Open the bulk-rename sheet to rename a property across the vault."
     ) { [weak appState] in appState?.isBulkRenameSheetOpen = true }
+
+    // ----- Settings -----
+
+    register(
+        SlateCommandID.openSettings,
+        label: "Settings…",
+        section: .settings,
+        hotkey: "⌘,",
+        hint: "Open the Settings window."
+    ) {
+        // SwiftUI's `Settings { ... }` scene auto-installs the
+        // "Slate ▸ Settings…" menu item + ⌘, chord and registers
+        // an `NSApplication` responder for `showSettingsWindow:`.
+        // macOS 13 (our deployment target) has no public API to
+        // open that window programmatically, so we send the same
+        // selector the menu item does. `@Environment(\.openSettings)`
+        // is the macOS 14+ replacement; tracked as a future cleanup
+        // when the deployment target bumps.
+        //
+        // Uses `NSApplication.shared` rather than the `NSApp`
+        // global. They reference the same singleton — but `NSApp`
+        // is `NSApplication!` (implicitly-unwrapped) that reads
+        // nil until `NSApplication.shared` is first called, which
+        // sets it as a side-effect of constructing the singleton.
+        // `swift test` doesn't go through the `@main App` entry
+        // point so nobody has touched `.shared` yet; reading
+        // `NSApp` there force-unwraps nil and crashes. Going
+        // through `.shared` forces lazy creation and works in
+        // both production and the test runner.
+        // No appState dependency — no weak capture needed.
+        NSApplication.shared.sendAction(
+            Selector(("showSettingsWindow:")),
+            to: nil,
+            from: nil
+        )
+    }
 
     // ----- Tasks -----
 
