@@ -2686,6 +2686,7 @@ impl CommandRegistry {
     /// a privilege-escalation footgun — the menu bridge (#314) and
     /// any future plugin loader MUST check the return value and
     /// reject conflicts at the registration site.
+    #[must_use = "register replaces existing entries silently; check the return value if uniqueness matters"]
     pub fn register(&self, command: Command, action: Arc<dyn CommandAction>) -> bool {
         self.inner.register(
             command.into(),

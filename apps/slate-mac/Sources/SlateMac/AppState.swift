@@ -916,6 +916,14 @@ final class AppState: ObservableObject {
     /// at init so tests can substitute a non-standard `UserDefaults`.
     let preferencesStore: PreferencesStore
 
+    /// Command palette registry (Milestone Q #314). Populated in
+    /// `init` by `registerCoreCommands` so every menu item /
+    /// keyboard shortcut surfaced in `MainSplitView`, `SlateMacApp`,
+    /// and `PropertiesPanel` has a matching `Command` the palette
+    /// can list and invoke. The id catalogue lives in
+    /// `SlateCommands.swift` (`SlateCommandID.all`).
+    let commandRegistry: CommandRegistry = CommandRegistry()
+
     init(
         recentsStore: RecentVaultsStore? = nil,
         externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
@@ -967,6 +975,12 @@ final class AppState: ObservableObject {
                 self?.runSearch(query: query)
             }
             .store(in: &subscriptions)
+
+        // Populate the command palette registry from the menu /
+        // toolbar surfaces (Milestone Q #314). Closures weak-capture
+        // `self` to break the appState → registry → action → appState
+        // cycle.
+        registerCoreCommands(into: commandRegistry, appState: self)
     }
 
     /// Push the current `searchQuery` through the debouncer. Called
@@ -1537,6 +1551,27 @@ final class AppState: ObservableObject {
     func pickAndOpenVault() {
         guard let url = VaultPicker.pick() else { return }
         openVault(at: url)
+    }
+
+    /// User-action wrapper around `closeVault()` / `attemptCloseVault()`
+    /// that mirrors what the MainSplitView "Close Vault" toolbar
+    /// button does, including the post-close VoiceOver announcement.
+    /// One source of truth for both the toolbar button (#296) and
+    /// the command palette's `slate.vault.close` registration (#314).
+    ///
+    /// - Dirty editor → routes through `attemptCloseVault`; the
+    ///   eventual close announces from `applyPendingNavigation`.
+    /// - Clean editor → closes immediately and posts the
+    ///   announcement inline here.
+    func closeVaultFromUserAction() {
+        if hasUnsavedChanges {
+            attemptCloseVault()
+        } else {
+            closeVault()
+            postAccessibilityAnnouncement(
+                "Vault closed. Returned to the welcome screen."
+            )
+        }
     }
 
     func closeVault() {

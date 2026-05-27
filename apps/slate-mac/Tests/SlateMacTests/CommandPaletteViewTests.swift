@@ -134,6 +134,38 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertNotNil(host.view)
     }
 
+    // MARK: - VoiceOver chord composition
+
+    /// `voiceOverLabel(for:)` composes the command label with the
+    /// spelled-out chord so blind users hear the same thing the
+    /// macOS menu bar reads. Catches glyph→word translation
+    /// regressions in `CommandPaletteView.chordGlyphWord`.
+    func testVoiceOverLabelComposesChordIntoSpokenString() {
+        let cases: [(label: String, hint: String?, expected: String)] = [
+            ("Save", "⌘S", "Save, Command S"),
+            ("New from Template…", "⇧⌘N", "New from Template…, Shift Command N"),
+            ("Search", "⌘F", "Search, Command F"),
+            ("Citation Summary", "⇧⌘J", "Citation Summary, Shift Command J"),
+            ("Close Vault", nil, "Close Vault"),
+            ("Plain Command", "", "Plain Command"),
+        ]
+
+        for (label, hint, expected) in cases {
+            let cmd = Command(
+                id: "test.\(label)",
+                label: label,
+                accessibilityHint: nil,
+                hotkeyHint: hint,
+                section: .editor
+            )
+            XCTAssertEqual(
+                CommandPaletteView.voiceOverLabel(for: cmd),
+                expected,
+                "voiceOverLabel for \(label) / \(hint ?? "nil") drifted"
+            )
+        }
+    }
+
     // APCA helper lives in `APCAContrast.swift` (shared with
     // `EditorSyntaxPaletteTests`). Reference: APCA-W3 v0.1.9,
     // G-4g constants.
