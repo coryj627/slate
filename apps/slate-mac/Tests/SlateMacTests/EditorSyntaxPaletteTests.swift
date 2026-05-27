@@ -8,20 +8,31 @@ import XCTest
 
 /// Contrast + branch tests for `EditorSyntaxPalette` (#296).
 ///
-/// The default palette uses Apple's system semantic colours; Apple
-/// tunes those against the standard `label` / `textBackground`
-/// pairing. We can't prove every system colour meets WCAG 1.4.3
-/// (4.5:1) in every mode without manually measuring on every macOS
-/// version, but we CAN prove:
+/// Contrast is measured with APCA (APCA-W3 v0.1.9, G-4g constants)
+/// rather than WCAG 2.x's relative-luminance ratio. APCA models
+/// perceived lightness contrast at the actual sRGB transfer
+/// function, so it tracks readability on modern displays better
+/// than the 4.5:1 ratio — the project's threshold is `|Lc| > 65`
+/// (between APCA's "small body text" 75 bucket and the "medium
+/// body" 60 bucket; comfortably above the 45 minimum-for-any-text
+/// floor).
+///
+/// The default palette uses Apple's system semantic colours. We
+/// verify both branches measurably and structurally:
 ///
 /// 1. The `increaseContrast = true` branch returns
-///    `NSColor.labelColor` for every kind (the swap guarantees
-///    contrast for low-vision users — Apple's contractual
-///    label-vs-background pairing).
+///    `NSColor.labelColor` for every kind, and that pairing clears
+///    Lc 65 against `textBackgroundColor` in both appearances
+///    (Apple's contractual label/text pairing, measured to catch
+///    a future appearance shift).
 /// 2. The `increaseContrast = false` branch returns the documented
 ///    system colour for each kind (so a future palette change is a
-///    deliberate edit, not an accidental rename).
-/// 3. Every kind has a non-nil colour (no enum case left unhandled).
+///    deliberate edit, not an accidental rename), AND every kind's
+///    resolved colour clears Lc 65 against `textBackgroundColor`
+///    in both appearances. System colours that fail this gate need
+///    a per-kind override in the palette.
+/// 3. Every kind has a non-nil colour in both branches (no enum
+///    case left unhandled).
 final class EditorSyntaxPaletteTests: XCTestCase {
 
     // MARK: - Increase Contrast branch
@@ -97,12 +108,12 @@ final class EditorSyntaxPaletteTests: XCTestCase {
 
     // MARK: - Contrast measurement against textBackgroundColor
 
-    /// Smoke check that the IC branch's `labelColor` clears the WCAG
-    /// 1.4.3 4.5:1 bar against `textBackgroundColor` in both light
-    /// and dark mode — Apple guarantees this pairing but we measure
-    /// to catch a future appearance change that would re-introduce
-    /// the #226 / #302 regression class.
-    func testIncreaseContrastLabelColorMeetsWCAGAgainstTextBackground() {
+    /// Smoke check that the IC branch's `labelColor` clears the
+    /// project's APCA `|Lc| > 65` bar against `textBackgroundColor`
+    /// in both light and dark mode — Apple guarantees this pairing
+    /// but we measure to catch a future appearance change that
+    /// would re-introduce the #226 / #302 regression class.
+    func testIncreaseContrastLabelColorMeetsAPCAAgainstTextBackground() {
         for appearanceName in [NSAppearance.Name.darkAqua, .aqua] {
             guard let appearance = NSAppearance(named: appearanceName) else { continue }
             var fg = NSColor.black, bg = NSColor.white
@@ -110,40 +121,108 @@ final class EditorSyntaxPaletteTests: XCTestCase {
                 fg = NSColor.labelColor.usingColorSpace(.sRGB)!
                 bg = NSColor.textBackgroundColor.usingColorSpace(.sRGB)!
             }
-            let ratio = contrastRatio(fg, bg)
-            XCTAssertGreaterThanOrEqual(
-                ratio, 4.5,
-                "labelColor vs textBackgroundColor under \(appearanceName.rawValue) must meet WCAG 1.4.3 (got \(ratio):1)"
+            let lc = apcaContrast(text: fg, background: bg)
+            XCTAssertGreaterThan(
+                abs(lc), 65,
+                "labelColor vs textBackgroundColor under \(appearanceName.rawValue) must clear APCA |Lc| > 65 (got Lc \(lc))"
             )
         }
     }
 
+    /// Sweep every `SyntaxKind`'s default-mode colour through APCA
+    /// against `textBackgroundColor` in both light and dark mode.
+    /// Apple tunes system colours against the standard label/text
+    /// pairing but doesn't certify them at any specific contrast
+    /// bar; this test surfaces which kinds clear the project's
+    /// `|Lc| > 65` gate and which would need a palette override.
+    ///
+    /// Each kind × appearance pair asserts independently so a
+    /// single failure reports every offending pair in one run
+    /// (kind, appearance, resolved sRGB, computed Lc).
+    ///
+    /// KNOWN-FAILING — tracked by [#308][issue]. Six pairs short:
+    /// `systemBlue` (heading/setextUnderline, both modes),
+    /// `systemPurple` (codeBlock/inlineCode, dark only), `systemPink`
+    /// (tag, both modes), `systemTeal` (wikilink, light only). Left
+    /// failing on `main` as a forcing function until the palette is
+    /// reworked. Do NOT XCTSkip without resolving #308.
+    ///
+    /// [issue]: https://github.com/coryj627/slate/issues/308
+    func testDefaultPaletteMeetsAPCAAgainstTextBackground() {
+        for appearanceName in [NSAppearance.Name.darkAqua, .aqua] {
+            guard let appearance = NSAppearance(named: appearanceName) else { continue }
+            for kind in SyntaxKind.allCases {
+                var fg = NSColor.black, bg = NSColor.white
+                appearance.performAsCurrentDrawingAppearance {
+                    fg = EditorSyntaxPalette.color(for: kind, increaseContrast: false)
+                        .usingColorSpace(.sRGB)!
+                    bg = NSColor.textBackgroundColor.usingColorSpace(.sRGB)!
+                }
+                let lc = apcaContrast(text: fg, background: bg)
+                XCTAssertGreaterThan(
+                    abs(lc), 65,
+                    "\(kind) under \(appearanceName.rawValue) must clear APCA |Lc| > 65 against textBackgroundColor (got Lc \(lc); fg \(rgbDescription(fg)), bg \(rgbDescription(bg)))"
+                )
+            }
+        }
+    }
+
+    private func rgbDescription(_ c: NSColor) -> String {
+        String(format: "rgb(%.3f, %.3f, %.3f)", c.redComponent, c.greenComponent, c.blueComponent)
+    }
+
     // MARK: - Contrast helper
 
-    /// WCAG 2.x contrast ratio per
-    /// https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio. Returns
-    /// (L1 + 0.05) / (L2 + 0.05) where L1 is the lighter relative
-    /// luminance and L2 the darker.
-    private func contrastRatio(_ a: NSColor, _ b: NSColor) -> Double {
-        let la = relativeLuminance(a)
-        let lb = relativeLuminance(b)
-        let lighter = max(la, lb)
-        let darker = min(la, lb)
-        return (lighter + 0.05) / (darker + 0.05)
-    }
+    /// APCA-W3 v0.1.9 contrast (G-4g constants). Returns a signed
+    /// `Lc` value: positive for dark text on a light background
+    /// (BoW), negative for light text on a dark background (WoB).
+    /// For pass/fail testing, compare `abs(lc)` against a threshold
+    /// — this project uses `> 65`.
+    ///
+    /// Reference: https://github.com/Myndex/apca-w3
+    private func apcaContrast(text: NSColor, background: NSColor) -> Double {
+        let blkThrs = 0.022
+        let blkClmp = 1.414
+        let deltaYmin = 0.0005
+        let loClip = 0.1
+        let loBoWoffset = 0.027
+        let loWoBoffset = 0.027
+        let scaleBoW = 1.14
+        let scaleWoB = 1.14
+        let normBG = 0.56
+        let normTXT = 0.57
+        let revTXT = 0.62
+        let revBG = 0.65
 
-    private func relativeLuminance(_ c: NSColor) -> Double {
-        let r = linearize(Double(c.redComponent))
-        let g = linearize(Double(c.greenComponent))
-        let b = linearize(Double(c.blueComponent))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-    }
-
-    private func linearize(_ channel: Double) -> Double {
-        // sRGB inverse companding per WCAG.
-        if channel <= 0.03928 {
-            return channel / 12.92
+        func softClamp(_ y: Double) -> Double {
+            y > blkThrs ? y : y + pow(blkThrs - y, blkClmp)
         }
-        return pow((channel + 0.055) / 1.055, 2.4)
+
+        let txt = softClamp(screenLuminance(text))
+        let bg = softClamp(screenLuminance(background))
+
+        if abs(bg - txt) < deltaYmin { return 0.0 }
+
+        let sapc: Double
+        let output: Double
+        if bg > txt {
+            sapc = (pow(bg, normBG) - pow(txt, normTXT)) * scaleBoW
+            output = sapc < loClip ? 0.0 : sapc - loBoWoffset
+        } else {
+            sapc = (pow(bg, revBG) - pow(txt, revTXT)) * scaleWoB
+            output = sapc > -loClip ? 0.0 : sapc + loWoBoffset
+        }
+        return output * 100.0
+    }
+
+    /// APCA "screen luminance" Y: sRGB channels raised to the 2.4
+    /// display TRC and weighted by the Rec. 709 coefficients. This
+    /// is the simple-exponent form APCA-W3 uses, not WCAG's
+    /// piecewise inverse companding.
+    private func screenLuminance(_ c: NSColor) -> Double {
+        let r = pow(Double(c.redComponent), 2.4)
+        let g = pow(Double(c.greenComponent), 2.4)
+        let b = pow(Double(c.blueComponent), 2.4)
+        return 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
     }
 }
