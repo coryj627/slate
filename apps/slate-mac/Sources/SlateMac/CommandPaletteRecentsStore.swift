@@ -48,6 +48,13 @@ public final class CommandPaletteRecentsStore {
     /// doesn't exist yet. Malformed JSON is treated as "no recents"
     /// — we never want a corrupt file to prevent the app launching
     /// or the palette opening.
+    ///
+    /// **Dedupes on load.** Our own `add` already removes a prior
+    /// occurrence before insert, but a hand-edited file can contain
+    /// duplicate ids; surfacing both would render the same command
+    /// in Recent twice and cause arrow-nav to cycle the same id
+    /// twice. The dedupe preserves first-seen order so the most-
+    /// recent-first invariant survives external edits.
     public func load() -> [String] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         guard let data = try? Data(contentsOf: fileURL),
@@ -55,10 +62,12 @@ public final class CommandPaletteRecentsStore {
         else {
             return []
         }
-        if decoded.count > Self.maxEntries {
-            return Array(decoded.prefix(Self.maxEntries))
+        var seen = Set<String>()
+        let deduped = decoded.filter { seen.insert($0).inserted }
+        if deduped.count > Self.maxEntries {
+            return Array(deduped.prefix(Self.maxEntries))
         }
-        return decoded
+        return deduped
     }
 
     /// Atomically overwrite the on-disk list with `ids`.

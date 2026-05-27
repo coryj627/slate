@@ -1020,6 +1020,12 @@ final class AppState: ObservableObject {
     /// session view stays internally consistent; the next session
     /// might silently "forget" the entry if the disk write didn't
     /// land, which is acceptable.
+    ///
+    /// Concurrency: `AppState` is `@MainActor`-isolated so this
+    /// method (and the `@Published commandPaletteRecents` write
+    /// inside it) is reachable only from the main actor. Background-
+    /// thread callers must `await` or hop to main — the compiler
+    /// enforces this at the call site.
     func recordCommandInvocation(id: String) {
         // LRU update on the in-memory mirror — same shape the
         // store's `add` produces, so session view matches what

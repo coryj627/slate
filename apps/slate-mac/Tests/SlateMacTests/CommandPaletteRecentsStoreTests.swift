@@ -42,6 +42,21 @@ final class CommandPaletteRecentsStoreTests: XCTestCase {
         XCTAssertEqual(makeStore().load(), [], "malformed JSON must not crash; treat as empty")
     }
 
+    /// Hand-edited file containing duplicate ids must surface as a
+    /// deduped list — surfacing both would render Command twice in
+    /// Recent and let arrow nav cycle the same id twice. Codoki
+    /// follow-up from #326 review.
+    func testLoadDedupesExternallyEditedDuplicates() throws {
+        let withDupes = ["a", "b", "a", "c", "b", "a"]
+        let data = try JSONEncoder().encode(withDupes)
+        try data.write(to: fileURL)
+        XCTAssertEqual(
+            makeStore().load(),
+            ["a", "b", "c"],
+            "dedupe preserves first-seen order"
+        )
+    }
+
     func testLoadCapsExternallyOversizedFile() throws {
         // Simulate someone editing the file by hand and saving 20
         // entries. Loader must hard-cap to maxEntries.
