@@ -924,10 +924,23 @@ final class AppState: ObservableObject {
     /// `SlateCommands.swift` (`SlateCommandID.all`).
     let commandRegistry: CommandRegistry = CommandRegistry()
 
+    /// Persistent store for the palette's Recent section (#316).
+    /// File-backed JSON; in-memory mirror is `commandPaletteRecents`
+    /// below. Failures during persistence are non-fatal — recents
+    /// is convenience, not critical state.
+    private let commandPaletteRecentsStore: CommandPaletteRecentsStore
+
+    /// In-memory snapshot of the recents list, in most-recent-first
+    /// order. Refreshed from `commandPaletteRecentsStore` on init
+    /// and on every successful command invocation via
+    /// `recordCommandInvocation(id:)`.
+    @Published private(set) var commandPaletteRecents: [String] = []
+
     init(
         recentsStore: RecentVaultsStore? = nil,
         externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
-        preferencesStore: PreferencesStore = PreferencesStore()
+        preferencesStore: PreferencesStore = PreferencesStore(),
+        commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil
     ) {
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
@@ -944,6 +957,20 @@ final class AppState: ObservableObject {
         }
         self.externalOpener = externalOpener
         self.preferencesStore = preferencesStore
+
+        // Command palette recents store — same degraded-fallback
+        // pattern as RecentVaultsStore above. Failures here never
+        // crash the app; the palette just renders no Recent section.
+        if let store = commandPaletteRecentsStore {
+            self.commandPaletteRecentsStore = store
+        } else if let store = try? CommandPaletteRecentsStore() {
+            self.commandPaletteRecentsStore = store
+        } else {
+            let fallback = FileManager.default.temporaryDirectory
+                .appendingPathComponent("slate-command-palette-recents-fallback.json")
+            self.commandPaletteRecentsStore = CommandPaletteRecentsStore(fileURL: fallback)
+        }
+        self.commandPaletteRecents = self.commandPaletteRecentsStore.load()
         // Load persisted preferences AFTER the store is set, BEFORE
         // any other init work that might consume them. The didSet
         // observers haven't been installed yet (they only run on
@@ -981,6 +1008,43 @@ final class AppState: ObservableObject {
         // `self` to break the appState → registry → action → appState
         // cycle.
         registerCoreCommands(into: commandRegistry, appState: self)
+    }
+
+    /// Record that a command was invoked through the palette so the
+    /// Recent section (#316) can surface it on next open.
+    ///
+    /// Updates the in-memory mirror unconditionally so the user
+    /// sees the recent during this session even if persistence
+    /// fails; THEN tries to persist. Disk failure → log + carry on
+    /// (recents is convenience, not critical state). The in-memory
+    /// session view stays internally consistent; the next session
+    /// might silently "forget" the entry if the disk write didn't
+    /// land, which is acceptable.
+    ///
+    /// Concurrency: `AppState` is `@MainActor`-isolated so this
+    /// method (and the `@Published commandPaletteRecents` write
+    /// inside it) is reachable only from the main actor. Background-
+    /// thread callers must `await` or hop to main — the compiler
+    /// enforces this at the call site.
+    func recordCommandInvocation(id: String) {
+        // LRU update on the in-memory mirror — same shape the
+        // store's `add` produces, so session view matches what
+        // disk would have if the write succeeds.
+        var updated = commandPaletteRecents
+        updated.removeAll { $0 == id }
+        updated.insert(id, at: 0)
+        if updated.count > CommandPaletteRecentsStore.maxEntries {
+            updated = Array(updated.prefix(CommandPaletteRecentsStore.maxEntries))
+        }
+        commandPaletteRecents = updated
+
+        // Persist. Atomic write; failure leaves the on-disk file
+        // unchanged and the session view ahead of disk.
+        do {
+            try commandPaletteRecentsStore.save(updated)
+        } catch {
+            NSLog("Failed to persist command palette recent '\(id)': \(error)")
+        }
     }
 
     /// Push the current `searchQuery` through the debouncer. Called
