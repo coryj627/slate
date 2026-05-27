@@ -355,6 +355,18 @@ final class AppState: ObservableObject {
     /// `PropertiesPanel`'s header button + Cmd+Shift+R shortcut.
     @Published var isBulkRenameSheetOpen: Bool = false
 
+    /// True when the command palette is presented (Milestone Q
+    /// #313). Opened by `⌘⇧P` from the `SlateMacApp` menu (only
+    /// when a vault is open — see the `.disabled` gate); closed
+    /// by `Esc` (cancel-action button inside the palette). The
+    /// palette registry, fuzzy filter, sections, and recents
+    /// arrive in #314–#316.
+    ///
+    /// Reset to `false` by `closeVault()` so a vault close with
+    /// the palette open doesn't leave the bool stuck (and re-
+    /// trigger the sheet on the next vault open).
+    @Published var isCommandPaletteOpen: Bool = false
+
     /// Latest `RenameReport` from `previewPropertyRename` (dry-run)
     /// or `applyPropertyRename` (applied). The bulk-rename sheet
     /// renders this in its accessible data grid.
@@ -1549,6 +1561,11 @@ final class AppState: ObservableObject {
         isLoadingEmbeds = false
         closeSearchOverlay()
         searchQuery = ""
+        // Reset transient sheet flags so a vault-close mid-palette
+        // doesn't leave the bool stuck (next vault open would
+        // auto-present the empty palette). #313 belt-and-suspenders
+        // with the menu's `.disabled(!isVaultOpen)` gate.
+        isCommandPaletteOpen = false
         currentSession = nil
         currentVaultURL = nil
         files = []

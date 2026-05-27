@@ -120,7 +120,7 @@ final class EditorSyntaxPaletteTests: XCTestCase {
                 fg = NSColor.labelColor.usingColorSpace(.sRGB)!
                 bg = NSColor.textBackgroundColor.usingColorSpace(.sRGB)!
             }
-            let lc = apcaContrast(text: fg, background: bg)
+            let lc = APCAContrast.lc(text: fg, background: bg)
             XCTAssertGreaterThan(
                 abs(lc), 75,
                 "labelColor vs textBackgroundColor under \(appearanceName.rawValue) must clear APCA |Lc| > 75 (got Lc \(lc))"
@@ -148,7 +148,7 @@ final class EditorSyntaxPaletteTests: XCTestCase {
                         .usingColorSpace(.sRGB)!
                     bg = NSColor.textBackgroundColor.usingColorSpace(.sRGB)!
                 }
-                let lc = apcaContrast(text: fg, background: bg)
+                let lc = APCAContrast.lc(text: fg, background: bg)
                 XCTAssertGreaterThan(
                     abs(lc), 75,
                     "\(kind) under \(appearanceName.rawValue) must clear APCA |Lc| > 75 against textBackgroundColor (got Lc \(lc); fg \(rgbDescription(fg)), bg \(rgbDescription(bg)))"
@@ -159,60 +159,5 @@ final class EditorSyntaxPaletteTests: XCTestCase {
 
     private func rgbDescription(_ c: NSColor) -> String {
         String(format: "rgb(%.3f, %.3f, %.3f)", c.redComponent, c.greenComponent, c.blueComponent)
-    }
-
-    // MARK: - Contrast helper
-
-    /// APCA-W3 v0.1.9 contrast (G-4g constants). Returns a signed
-    /// `Lc` value: positive for dark text on a light background
-    /// (BoW), negative for light text on a dark background (WoB).
-    /// For pass/fail testing, compare `abs(lc)` against a threshold
-    /// — this project uses `> 75` (APCA's "small body text" bucket).
-    ///
-    /// Reference: https://github.com/Myndex/apca-w3
-    private func apcaContrast(text: NSColor, background: NSColor) -> Double {
-        let blkThrs = 0.022
-        let blkClmp = 1.414
-        let deltaYmin = 0.0005
-        let loClip = 0.1
-        let loBoWoffset = 0.027
-        let loWoBoffset = 0.027
-        let scaleBoW = 1.14
-        let scaleWoB = 1.14
-        let normBG = 0.56
-        let normTXT = 0.57
-        let revTXT = 0.62
-        let revBG = 0.65
-
-        func softClamp(_ y: Double) -> Double {
-            y > blkThrs ? y : y + pow(blkThrs - y, blkClmp)
-        }
-
-        let txt = softClamp(screenLuminance(text))
-        let bg = softClamp(screenLuminance(background))
-
-        if abs(bg - txt) < deltaYmin { return 0.0 }
-
-        let sapc: Double
-        let output: Double
-        if bg > txt {
-            sapc = (pow(bg, normBG) - pow(txt, normTXT)) * scaleBoW
-            output = sapc < loClip ? 0.0 : sapc - loBoWoffset
-        } else {
-            sapc = (pow(bg, revBG) - pow(txt, revTXT)) * scaleWoB
-            output = sapc > -loClip ? 0.0 : sapc + loWoBoffset
-        }
-        return output * 100.0
-    }
-
-    /// APCA "screen luminance" Y: sRGB channels raised to the 2.4
-    /// display TRC and weighted by the Rec. 709 coefficients. This
-    /// is the simple-exponent form APCA-W3 uses, not WCAG's
-    /// piecewise inverse companding.
-    private func screenLuminance(_ c: NSColor) -> Double {
-        let r = pow(Double(c.redComponent), 2.4)
-        let g = pow(Double(c.greenComponent), 2.4)
-        let b = pow(Double(c.blueComponent), 2.4)
-        return 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
     }
 }
