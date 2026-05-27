@@ -233,10 +233,11 @@ struct CommandPaletteView: View {
     /// Modifier mask: any of these on an arrow key means "let it
     /// through" — Shift+↓ extends text-field selection, Cmd+↓
     /// jumps caret to end-of-text, **Ctrl+Option+↓ is VoiceOver
-    /// Quick Nav** (the one we absolutely must not steal). Only
-    /// bare ↑ / ↓ moves palette selection.
+    /// Quick Nav** (the one we absolutely must not steal), and
+    /// Fn+↓ is macOS Page Down. Only bare ↑ / ↓ moves palette
+    /// selection.
     private static let arrowModifierMask: NSEvent.ModifierFlags =
-        [.shift, .control, .option, .command]
+        [.shift, .control, .option, .command, .function]
 
     private func installArrowKeyMonitor() {
         arrowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
