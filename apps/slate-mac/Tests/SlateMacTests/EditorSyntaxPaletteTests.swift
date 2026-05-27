@@ -12,25 +12,24 @@ import XCTest
 /// rather than WCAG 2.x's relative-luminance ratio. APCA models
 /// perceived lightness contrast at the actual sRGB transfer
 /// function, so it tracks readability on modern displays better
-/// than the 4.5:1 ratio — the project's threshold is `|Lc| > 65`
-/// (between APCA's "small body text" 75 bucket and the "medium
-/// body" 60 bucket; comfortably above the 45 minimum-for-any-text
-/// floor).
+/// than the 4.5:1 ratio — the project's threshold is `|Lc| > 75`
+/// (APCA's "small body text" bucket; comfortably above the 60
+/// "medium body" and 45 "any text" floors).
 ///
-/// The default palette uses Apple's system semantic colours. We
-/// verify both branches measurably and structurally:
+/// The default palette pins per-appearance sRGB pairs (#308) tuned
+/// to clear that bar. We verify both branches measurably and
+/// structurally:
 ///
 /// 1. The `increaseContrast = true` branch returns
 ///    `NSColor.labelColor` for every kind, and that pairing clears
-///    Lc 65 against `textBackgroundColor` in both appearances
+///    Lc 75 against `textBackgroundColor` in both appearances
 ///    (Apple's contractual label/text pairing, measured to catch
 ///    a future appearance shift).
-/// 2. The `increaseContrast = false` branch returns the documented
-///    system colour for each kind (so a future palette change is a
-///    deliberate edit, not an accidental rename), AND every kind's
-///    resolved colour clears Lc 65 against `textBackgroundColor`
-///    in both appearances. System colours that fail this gate need
-///    a per-kind override in the palette.
+/// 2. The `increaseContrast = false` branch returns the pinned
+///    palette colour for each kind (so a future palette change is
+///    a deliberate edit, not an accidental rename), AND every
+///    kind's resolved colour clears Lc 75 against
+///    `textBackgroundColor` in both appearances.
 /// 3. Every kind has a non-nil colour in both branches (no enum
 ///    case left unhandled).
 final class EditorSyntaxPaletteTests: XCTestCase {
@@ -64,27 +63,27 @@ final class EditorSyntaxPaletteTests: XCTestCase {
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .heading, increaseContrast: false),
-            NSColor.systemBlue
+            EditorSyntaxPalette.headingColor
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .setextUnderline, increaseContrast: false),
-            NSColor.systemBlue
+            EditorSyntaxPalette.headingColor
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .codeBlock, increaseContrast: false),
-            NSColor.systemPurple
+            EditorSyntaxPalette.codeColor
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .inlineCode, increaseContrast: false),
-            NSColor.systemPurple
+            EditorSyntaxPalette.codeColor
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .wikilink, increaseContrast: false),
-            NSColor.systemTeal
+            EditorSyntaxPalette.wikilinkColor
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .tag, increaseContrast: false),
-            NSColor.systemPink
+            EditorSyntaxPalette.tagColor
         )
         XCTAssertEqual(
             EditorSyntaxPalette.color(for: .emphasisMarker, increaseContrast: false),
@@ -109,7 +108,7 @@ final class EditorSyntaxPaletteTests: XCTestCase {
     // MARK: - Contrast measurement against textBackgroundColor
 
     /// Smoke check that the IC branch's `labelColor` clears the
-    /// project's APCA `|Lc| > 65` bar against `textBackgroundColor`
+    /// project's APCA `|Lc| > 75` bar against `textBackgroundColor`
     /// in both light and dark mode — Apple guarantees this pairing
     /// but we measure to catch a future appearance change that
     /// would re-introduce the #226 / #302 regression class.
@@ -123,31 +122,22 @@ final class EditorSyntaxPaletteTests: XCTestCase {
             }
             let lc = apcaContrast(text: fg, background: bg)
             XCTAssertGreaterThan(
-                abs(lc), 65,
-                "labelColor vs textBackgroundColor under \(appearanceName.rawValue) must clear APCA |Lc| > 65 (got Lc \(lc))"
+                abs(lc), 75,
+                "labelColor vs textBackgroundColor under \(appearanceName.rawValue) must clear APCA |Lc| > 75 (got Lc \(lc))"
             )
         }
     }
 
     /// Sweep every `SyntaxKind`'s default-mode colour through APCA
     /// against `textBackgroundColor` in both light and dark mode.
-    /// Apple tunes system colours against the standard label/text
-    /// pairing but doesn't certify them at any specific contrast
-    /// bar; this test surfaces which kinds clear the project's
-    /// `|Lc| > 65` gate and which would need a palette override.
+    /// The pinned palette in `EditorSyntaxPalette` (#308) is tuned
+    /// to clear the project's `|Lc| > 75` gate; this test enforces
+    /// the floor and surfaces any drift (palette edit, system-colour
+    /// fallback, etc.) with an actionable per-pair failure.
     ///
     /// Each kind × appearance pair asserts independently so a
     /// single failure reports every offending pair in one run
     /// (kind, appearance, resolved sRGB, computed Lc).
-    ///
-    /// KNOWN-FAILING — tracked by [#308][issue]. Six pairs short:
-    /// `systemBlue` (heading/setextUnderline, both modes),
-    /// `systemPurple` (codeBlock/inlineCode, dark only), `systemPink`
-    /// (tag, both modes), `systemTeal` (wikilink, light only). Left
-    /// failing on `main` as a forcing function until the palette is
-    /// reworked. Do NOT XCTSkip without resolving #308.
-    ///
-    /// [issue]: https://github.com/coryj627/slate/issues/308
     func testDefaultPaletteMeetsAPCAAgainstTextBackground() {
         for appearanceName in [NSAppearance.Name.darkAqua, .aqua] {
             guard let appearance = NSAppearance(named: appearanceName) else { continue }
@@ -160,8 +150,8 @@ final class EditorSyntaxPaletteTests: XCTestCase {
                 }
                 let lc = apcaContrast(text: fg, background: bg)
                 XCTAssertGreaterThan(
-                    abs(lc), 65,
-                    "\(kind) under \(appearanceName.rawValue) must clear APCA |Lc| > 65 against textBackgroundColor (got Lc \(lc); fg \(rgbDescription(fg)), bg \(rgbDescription(bg)))"
+                    abs(lc), 75,
+                    "\(kind) under \(appearanceName.rawValue) must clear APCA |Lc| > 75 against textBackgroundColor (got Lc \(lc); fg \(rgbDescription(fg)), bg \(rgbDescription(bg)))"
                 )
             }
         }
@@ -177,7 +167,7 @@ final class EditorSyntaxPaletteTests: XCTestCase {
     /// `Lc` value: positive for dark text on a light background
     /// (BoW), negative for light text on a dark background (WoB).
     /// For pass/fail testing, compare `abs(lc)` against a threshold
-    /// — this project uses `> 65`.
+    /// — this project uses `> 75` (APCA's "small body text" bucket).
     ///
     /// Reference: https://github.com/Myndex/apca-w3
     private func apcaContrast(text: NSColor, background: NSColor) -> Double {
