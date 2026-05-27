@@ -4,49 +4,53 @@
 import AppKit
 import SwiftUI
 
-/// Modal command palette shell — Milestone Q issue #313.
+/// Modal command palette — Milestone Q.
 ///
-/// Lands the search field + empty results placeholder + dismissal
-/// plumbing. The fuzzy filter (#315), section grouping +
-/// announcements (#316), and menu-bridge population of the registry
-/// (#314) come in follow-up issues; this PR deliberately ships an
-/// empty list so the layout / focus / hotkey contract is reviewable
-/// in isolation.
+/// `#313` shipped the shell. `#314` populated the registry from the
+/// menu surfaces. `#315` (this PR) wires the fuzzy filter, arrow-
+/// key navigation, Enter-to-invoke, and the ActionFailed
+/// announcement path. `#316` is section grouping / recents / live
+/// regions.
 ///
 /// ## Behaviour
 ///
 /// - Opens via `⌘⇧P` (menu wiring in `SlateMacApp`, gated on
 ///   `isVaultOpen`); the search field auto-focuses on appear.
-/// - Closes via `Esc` (`.cancelAction` overlay). Matches the
-///   Xcode / Sublime / TextMate convention — open via chord,
-///   close via Esc. We deliberately don't ship a second hidden
-///   `⌘⇧P` button inside the sheet to "toggle close" because
-///   the behaviour would rest on SwiftUI's responder-chain
-///   routing and can't be verified without XCUITest infra.
-/// - Focus returns to the prior first responder via SwiftUI's
-///   default sheet behaviour.
+/// - Typing filters the command list via a subsequence-with-boost
+///   fuzzy matcher (see `CommandPaletteModel.fuzzyScore`).
+/// - Arrow ↑ / ↓ moves selection with wrap. Modified arrows
+///   (`Shift+↓`, `Cmd+↓`, `Ctrl+Option+↓` for VoiceOver Quick Nav,
+///   etc.) pass through so text-editing chords and VoiceOver
+///   keystrokes keep working.
+/// - `Enter` invokes the selected command. On success the palette
+///   dismisses; on `ActionFailed` / `UnknownId` it **stays open**
+///   and posts an assertive VoiceOver announcement.
+/// - `Esc` dismisses (via `.onExitCommand`).
+/// - Hover updates selection, but mouse-jitter doesn't yank it
+///   away from the user's keyboard-driven choice (debounced).
 ///
 /// ## Colours
 ///
-/// Background is `NSColor.controlBackgroundColor`; text uses
-/// `labelColor` and `secondaryLabelColor`. Both pairings pass the
-/// project's APCA `|Lc| > 75` bar in light and dark mode (verified
-/// by `CommandPaletteViewTests`).
+/// Background is `controlBackgroundColor`; text uses `labelColor`
+/// / `secondaryLabelColor`; selected row uses
+/// `selectedContentBackgroundColor` + `selectedMenuItemTextColor`.
+/// All pairings pass APCA `|Lc| > 75` (verified by
+/// `CommandPaletteViewTests`).
 struct CommandPaletteView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Local search query. Reset on every open — the palette doesn't
-    /// preserve typed text across sessions. Per #315, this will feed
-    /// the fuzzy filter once it lands.
-    @State private var query: String = ""
+    @StateObject private var model = CommandPaletteModel()
 
-    /// Snapshot of the registry's commands taken on `onAppear` so
-    /// `body` doesn't re-fetch on every keystroke (the registry's
-    /// own `list()` docstring asks callers to cache the snapshot
-    /// for the palette's open lifetime). #315 will filter this in
-    /// place; #316 will group by `section`.
-    @State private var commands: [Command] = []
+    @State private var arrowKeyMonitor: Any? = nil
+
+    /// Timestamp of the most recent arrow-key selection change.
+    /// Hover-update only fires when the mouse moves AFTER this —
+    /// prevents stationary-cursor flicker from yanking selection
+    /// back to the row under the pointer while the user is
+    /// arrow-navigating.
+    @State private var lastKeyboardNavAt: Date = .distantPast
 
     @FocusState private var searchFocused: Bool
 
@@ -58,20 +62,35 @@ struct CommandPaletteView: View {
         }
         .frame(minWidth: 560, idealWidth: 560, minHeight: 360, idealHeight: 360)
         .background(Color(nsColor: .controlBackgroundColor))
-        // Esc dismisses via SwiftUI's built-in exit command. Direct
-        // API — no fake button to satisfy the keyboard-shortcut
-        // routing, so the static a11y check (`small-touch-target`,
-        // WCAG 2.5.8) has nothing to flag.
         .onExitCommand { dismiss() }
         .onAppear {
-            // Auto-focus the search field on every open so the user
-            // can start typing immediately.
             searchFocused = true
-            // Snapshot the registry — #314 onward, the palette has
-            // real commands. We don't expect the registry's contents
-            // to mutate while the palette is open (no live re-load
-            // path in V1), so a one-shot snapshot is fine.
-            commands = appState.commandRegistry.list()
+            model.loadCommands(appState.commandRegistry.list())
+            installArrowKeyMonitor()
+        }
+        .onDisappear {
+            removeArrowKeyMonitor()
+        }
+        .onChange(of: model.query) { _ in
+            model.handleQueryChange()
+        }
+        .onChange(of: model.selectedID) { newID in
+            // Polite VoiceOver announcement so screen-reader users
+            // hear what arrow keys are doing — the .isSelected
+            // trait change on a non-focused row doesn't trigger
+            // VO speech on its own.
+            guard let newID,
+                  let command = model.filteredCommands.first(where: { $0.id == newID })
+            else { return }
+            postAccessibilityAnnouncement(
+                "Selected: \(command.label)",
+                priority: .low
+            )
+        }
+        .onChange(of: model.pendingAnnouncement) { announcement in
+            guard let announcement, !announcement.isEmpty else { return }
+            postAccessibilityAnnouncement(announcement, priority: .high)
+            model.clearPendingAnnouncement()
         }
     }
 
@@ -82,14 +101,15 @@ struct CommandPaletteView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 .accessibilityHidden(true)
-            TextField("Search commands", text: $query)
+            TextField("Search commands", text: $model.query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .focused($searchFocused)
                 .accessibilityLabel("Search commands")
-                // Hint only describes wired behaviour. Enter-to-invoke
-                // lands in #315; the hint will gain it then.
-                .accessibilityHint("Type to filter. Press Escape to close.")
+                .accessibilityHint(
+                    "Arrow up and down to move selection. Return runs the selected command."
+                )
+                .onSubmit(invokeSelected)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -97,22 +117,37 @@ struct CommandPaletteView: View {
 
     // MARK: - Results
 
-    /// Renders the registered commands as a scrollable list, or a
-    /// placeholder if the registry is empty (shouldn't happen in
-    /// practice once #314 ships, but defensive — a future Settings
-    /// "disable all" toggle or a fresh-init race could empty it).
-    /// Filtering on `query` is wired in #315; grouping into
-    /// sections + recents lands in #316.
     @ViewBuilder
     private var results: some View {
-        if commands.isEmpty {
-            emptyState
+        let filtered = model.filteredCommands
+        if filtered.isEmpty {
+            if model.commands.isEmpty {
+                emptyState
+            } else {
+                noMatchesState
+            }
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(commands, id: \.id) { command in
-                        commandRow(command)
-                        Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(filtered, id: \.id) { command in
+                            commandRow(command)
+                                .id(command.id)
+                            Divider()
+                        }
+                    }
+                }
+                .onChange(of: model.selectedID) { newID in
+                    // Keep the selected row visible as the user
+                    // arrows past the viewport edge. Skip the
+                    // animation under Reduce Motion (WCAG 2.3.1).
+                    guard let newID else { return }
+                    if reduceMotion {
+                        proxy.scrollTo(newID, anchor: .center)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(newID, anchor: .center)
+                        }
                     }
                 }
             }
@@ -120,16 +155,29 @@ struct CommandPaletteView: View {
     }
 
     private func commandRow(_ command: Command) -> some View {
-        Button {
+        let isSelected = command.id == model.selectedID
+        return Button {
+            // Restore focus to the search field so a subsequent
+            // Enter actually fires onSubmit (red-team finding P2 #4
+            // — click-then-Enter would otherwise no-op).
+            searchFocused = true
             invoke(command)
         } label: {
             HStack(spacing: 12) {
                 Text(command.label)
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .foregroundStyle(
+                        isSelected
+                            ? Color(nsColor: .selectedMenuItemTextColor)
+                            : Color(nsColor: .labelColor)
+                    )
                 Spacer()
                 if let hotkey = command.hotkeyHint {
                     Text(hotkey)
-                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .foregroundStyle(
+                            isSelected
+                                ? Color(nsColor: .selectedMenuItemTextColor)
+                                : Color(nsColor: .secondaryLabelColor)
+                        )
                         .font(.callout)
                         .monospacedDigit()
                         .accessibilityHidden(true)
@@ -137,36 +185,42 @@ struct CommandPaletteView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                isSelected
+                    ? Color(nsColor: .selectedContentBackgroundColor)
+                    : Color.clear
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // VoiceOver reads "<label>, <Modifier> <Modifier> <Key>" so
-        // blind users learn the chord the same way they do from
-        // macOS standard menu items. The chord-glyph translation
-        // (⌘ → "Command", etc.) is necessary because VoiceOver
-        // pronunciation of the raw glyphs is unpredictable.
+        .onHover { hovering in
+            // Hover-update is debounced against recent keyboard
+            // nav so stationary mouse jitter doesn't yank selection
+            // away from arrow-key choices.
+            guard hovering else { return }
+            if Date().timeIntervalSince(lastKeyboardNavAt) > 0.25 {
+                model.selectedID = command.id
+            }
+        }
         .accessibilityLabel(Self.voiceOverLabel(for: command))
         .accessibilityHint(command.accessibilityHint ?? "")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
-    /// Compose the command's label with the spelled-out chord so
-    /// VoiceOver users hear "Save, Command S" the way the macOS
-    /// menu bar does, not just "Save".
+    // MARK: - VoiceOver label
+
     static func voiceOverLabel(for command: Command) -> String {
         guard let hint = command.hotkeyHint, !hint.isEmpty else {
             return command.label
         }
         let chordWords = hint.compactMap { chordGlyphWord[$0] }
-        // Last char of the hint is the literal key (e.g. "S" in "⌘S",
-        // "N" in "⇧⌘N"). Fallback to the whole hint if parsing fails.
         let keyChar = hint.last.flatMap { chordGlyphWord[$0] == nil ? String($0) : nil }
             ?? hint
         let chordSpoken = (chordWords + [keyChar]).joined(separator: " ")
         return "\(command.label), \(chordSpoken)"
     }
 
-    /// Map chord glyphs to spoken modifier names. The key char
-    /// itself (S, N, J, etc.) is appended in `voiceOverLabel`.
     private static let chordGlyphWord: [Character: String] = [
         "⌘": "Command",
         "⇧": "Shift",
@@ -174,27 +228,66 @@ struct CommandPaletteView: View {
         "⌃": "Control",
     ]
 
-    private func invoke(_ command: Command) {
-        // Dismiss the palette first so SwiftUI animates the sheet
-        // closure before any palette-invoked command tries to
-        // present its own sheet (Add Property, Bulk Rename,
-        // Citation Summary, Tasks Review, Template Picker — all
-        // would race the dismissal otherwise). Then defer the
-        // invoke to the next runloop turn.
-        dismiss()
-        let registry = appState.commandRegistry
-        let commandID = command.id
-        DispatchQueue.main.async {
-            do {
-                try registry.invokeById(id: commandID)
-            } catch {
-                // Surface in debug builds — silent swallow in
-                // release is the #315 territory where a live-region
-                // announcement will replace the assertion.
-                assertionFailure("command \(commandID) failed: \(error)")
+    // MARK: - Arrow-key monitor
+
+    /// Modifier mask: any of these on an arrow key means "let it
+    /// through" — Shift+↓ extends text-field selection, Cmd+↓
+    /// jumps caret to end-of-text, **Ctrl+Option+↓ is VoiceOver
+    /// Quick Nav** (the one we absolutely must not steal). Only
+    /// bare ↑ / ↓ moves palette selection.
+    private static let arrowModifierMask: NSEvent.ModifierFlags =
+        [.shift, .control, .option, .command]
+
+    private func installArrowKeyMonitor() {
+        arrowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Up = 126, Down = 125 on macOS virtual key codes.
+            guard event.keyCode == 126 || event.keyCode == 125 else {
+                return event
             }
+            // Pass through any modified arrow chord so text editing
+            // and VoiceOver Quick Nav keep working.
+            if !event.modifierFlags.intersection(Self.arrowModifierMask).isEmpty {
+                return event
+            }
+            lastKeyboardNavAt = Date()
+            if event.keyCode == 126 {
+                model.selectPrevious()
+            } else {
+                model.selectNext()
+            }
+            return nil
         }
     }
+
+    private func removeArrowKeyMonitor() {
+        if let m = arrowKeyMonitor {
+            NSEvent.removeMonitor(m)
+            arrowKeyMonitor = nil
+        }
+    }
+
+    // MARK: - Invoke
+
+    /// Triggered by `onSubmit` (Enter in the search field). Invokes
+    /// the selected command; dismisses only on success.
+    private func invokeSelected() {
+        let outcome = model.invokeSelected(via: appState.commandRegistry)
+        if case .success = outcome {
+            dismiss()
+        }
+        // Other outcomes: model.pendingAnnouncement is set, the
+        // .onChange handler on the View posts it. Palette stays
+        // open per #315 spec.
+    }
+
+    private func invoke(_ command: Command) {
+        let outcome = model.invoke(command, via: appState.commandRegistry)
+        if case .success = outcome {
+            dismiss()
+        }
+    }
+
+    // MARK: - Empty / no-match states
 
     private var emptyState: some View {
         VStack(spacing: 8) {
@@ -212,5 +305,23 @@ struct CommandPaletteView: View {
         .padding(.horizontal, 24)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("No commands available. Open a vault to access the palette.")
+    }
+
+    private var noMatchesState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Text("No matches")
+                .font(.headline)
+                .foregroundStyle(Color(nsColor: .labelColor))
+                .accessibilityAddTraits(.isHeader)
+            Text("No command matches \"\(model.query)\". Try fewer letters or a different word.")
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .multilineTextAlignment(.center)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("No command matches \(model.query). Try fewer letters or a different word.")
     }
 }
