@@ -239,15 +239,33 @@ struct CommandPaletteView: View {
     private static let arrowModifierMask: NSEvent.ModifierFlags =
         [.shift, .control, .option, .command, .function]
 
+    /// Decide whether a `.keyDown` event should pass through the
+    /// monitor unconsumed. Pure function — no `@State` access — so
+    /// the modifier-passthrough contract is unit-testable without
+    /// having to synthesise live `NSEvent`s into the run loop.
+    ///
+    /// Pass through (returns true) when:
+    /// - Key is not ↑ (126) or ↓ (125)
+    /// - Key is ↑ / ↓ but any modifier in `arrowModifierMask` is
+    ///   held (Shift, Ctrl, Option, Cmd, Fn — covers text-field
+    ///   selection, caret-jump, Page-Up/Down, and VoiceOver Quick
+    ///   Nav).
+    ///
+    /// Consume (returns false) only for bare ↑ / ↓.
+    nonisolated static func shouldPassThroughArrow(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard keyCode == 126 || keyCode == 125 else { return true }
+        return !modifierFlags.intersection(arrowModifierMask).isEmpty
+    }
+
     private func installArrowKeyMonitor() {
         arrowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Up = 126, Down = 125 on macOS virtual key codes.
-            guard event.keyCode == 126 || event.keyCode == 125 else {
-                return event
-            }
-            // Pass through any modified arrow chord so text editing
-            // and VoiceOver Quick Nav keep working.
-            if !event.modifierFlags.intersection(Self.arrowModifierMask).isEmpty {
+            if Self.shouldPassThroughArrow(
+                keyCode: event.keyCode,
+                modifierFlags: event.modifierFlags
+            ) {
                 return event
             }
             lastKeyboardNavAt = Date()

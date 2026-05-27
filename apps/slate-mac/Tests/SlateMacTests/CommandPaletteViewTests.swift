@@ -153,6 +153,80 @@ final class CommandPaletteViewTests: XCTestCase {
         }
     }
 
+    // MARK: - Arrow-key modifier passthrough (#315 review follow-up)
+
+    /// Locks in the contract that bare ↑ / ↓ moves palette
+    /// selection while every modified arrow chord passes through
+    /// unconsumed. This is load-bearing for screen-reader users
+    /// (Ctrl+Option+↓ is VoiceOver Quick Nav) and for text-field
+    /// editing inside the search field (Shift+↓ extends, Cmd+↓
+    /// jumps caret, Fn+↓ is Page Down). A regression here would
+    /// silently break a11y; the test exists so the modifier mask
+    /// can't drift without CI flagging it.
+
+    func testBareArrowDownIsConsumed() {
+        XCTAssertFalse(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: []),
+            "bare ↓ must be consumed by the palette monitor"
+        )
+    }
+
+    func testBareArrowUpIsConsumed() {
+        XCTAssertFalse(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 126, modifierFlags: []),
+            "bare ↑ must be consumed by the palette monitor"
+        )
+    }
+
+    func testFnArrowPassesThroughForPageNav() {
+        // macOS treats Fn+↓ / Fn+↑ as Page Down / Page Up.
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: .function),
+            "Fn+↓ (macOS Page Down) must pass through unconsumed"
+        )
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 126, modifierFlags: .function),
+            "Fn+↑ (macOS Page Up) must pass through unconsumed"
+        )
+    }
+
+    func testShiftArrowPassesThroughForSelectionExtend() {
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: .shift),
+            "Shift+↓ (extend text-field selection) must pass through unconsumed"
+        )
+    }
+
+    func testCommandArrowPassesThroughForCaretJump() {
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: .command),
+            "Cmd+↓ (caret to end-of-text) must pass through unconsumed"
+        )
+    }
+
+    func testCtrlOptArrowPassesThroughForVoiceOverQuickNav() {
+        // Ctrl+Option+↓ is VoiceOver Quick Nav — the screen-reader
+        // chord we absolutely cannot intercept. Failing this test
+        // means we just broke VO navigation for blind users.
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: [.control, .option]),
+            "Ctrl+Option+↓ (VoiceOver Quick Nav) MUST pass through"
+        )
+    }
+
+    func testNonArrowKeyPassesThrough() {
+        // Any key that isn't ↑ / ↓ has nothing to do with palette
+        // selection.
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 0 /* 'a' */, modifierFlags: []),
+            "non-arrow keys must always pass through"
+        )
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 36 /* Return */, modifierFlags: []),
+            "Return is handled by the search field's onSubmit, not the monitor"
+        )
+    }
+
     // MARK: - Fuzzy matcher (#315)
 
     func testFuzzyScoreReturnsNilForNonSubsequence() {
