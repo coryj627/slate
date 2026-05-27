@@ -2687,8 +2687,10 @@ impl CommandRegistry {
     /// any future plugin loader MUST check the return value and
     /// reject conflicts at the registration site.
     pub fn register(&self, command: Command, action: Arc<dyn CommandAction>) -> bool {
-        self.inner
-            .register(command.into(), Arc::new(ForeignActionAdapter { foreign: action }))
+        self.inner.register(
+            command.into(),
+            Arc::new(ForeignActionAdapter { foreign: action }),
+        )
     }
 
     /// Return every registered command's metadata, sorted by

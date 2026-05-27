@@ -273,10 +273,22 @@ mod tests {
     #[test]
     fn list_is_stable_sorted_by_section_then_id() {
         let reg = CommandRegistry::new();
-        let _ = reg.register(fixture("z", CommandSection::File), Arc::new(CountingAction::new()));
-        let _ = reg.register(fixture("a", CommandSection::File), Arc::new(CountingAction::new()));
-        let _ = reg.register(fixture("m", CommandSection::View), Arc::new(CountingAction::new()));
-        let _ = reg.register(fixture("b", CommandSection::Plugins), Arc::new(CountingAction::new()));
+        let _ = reg.register(
+            fixture("z", CommandSection::File),
+            Arc::new(CountingAction::new()),
+        );
+        let _ = reg.register(
+            fixture("a", CommandSection::File),
+            Arc::new(CountingAction::new()),
+        );
+        let _ = reg.register(
+            fixture("m", CommandSection::View),
+            Arc::new(CountingAction::new()),
+        );
+        let _ = reg.register(
+            fixture("b", CommandSection::Plugins),
+            Arc::new(CountingAction::new()),
+        );
         let listed = reg.list();
         let ids: Vec<&str> = listed.iter().map(|c| c.id.as_str()).collect();
         // File section (a, z) → View (m) → Plugins (b)
@@ -338,7 +350,10 @@ mod tests {
         reg.invoke_by_id("alpha").unwrap();
         assert_eq!(first.invoked(), 0);
         assert_eq!(second.invoked(), 1);
-        assert_eq!(reg.find_by_id("alpha").unwrap().section, CommandSection::View);
+        assert_eq!(
+            reg.find_by_id("alpha").unwrap().section,
+            CommandSection::View
+        );
     }
 
     /// Regression test for the invoke-while-holding-read-guard

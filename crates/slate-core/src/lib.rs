@@ -37,7 +37,6 @@ pub use search_db::{
 };
 
 pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
-pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use citations::bibliography::{
     load_source as load_bibliography_source, merge_sources as merge_bibliography_sources,
     spawn_debouncer as spawn_bibliography_debouncer,
@@ -51,6 +50,7 @@ pub use citations::render::{
     RenderCache, RenderedCitation,
 };
 pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
+pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
 };
