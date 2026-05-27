@@ -219,28 +219,10 @@ final class SlateCommandsTests: XCTestCase {
     ///    Excludes `.cancelAction` / `.defaultAction` (no `modifiers:`
     ///    argument; regex skips naturally).
     static func extractChords(from text: String) -> Set<String> {
-        // Regex 1: `"X"` keys. `[^"\\]` excludes quote + backslash
-        // so we don't false-match on escape sequences.
-        let quotedKeyRegex = try! NSRegularExpression(
-            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"([^"\\])"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
-        )
-        // Regex 2: special-key constants. Listed explicitly so a
-        // typo in source (`.upArro`) doesn't get scraped as a chord.
-        // Function keys (KeyEquivalent("\u{F704}") style) are
-        // deliberately deferred — no source uses them yet; see
-        // #322's follow-up scope if/when one lands.
-        let specialKeys =
-            "upArrow|downArrow|leftArrow|rightArrow"
-            + "|return|tab|space|escape|delete"
-            + "|clear|home|end|pageUp|pageDown"
-        let specialKeyRegex = try! NSRegularExpression(
-            pattern: #"keyboardShortcut\(\s*\.(\#(specialKeys))\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
-        )
-
         var chords: Set<String> = []
         let range = NSRange(text.startIndex..., in: text)
 
-        quotedKeyRegex.enumerateMatches(in: text, range: range) { match, _, _ in
+        Self.quotedKeyRegex.enumerateMatches(in: text, range: range) { match, _, _ in
             guard let match,
                   let keyRange = Range(match.range(at: 1), in: text),
                   let modsRange = Range(match.range(at: 2), in: text)
@@ -250,7 +232,7 @@ final class SlateCommandsTests: XCTestCase {
             chords.insert(Self.formatChord(key: key, modifiers: mods))
         }
 
-        specialKeyRegex.enumerateMatches(in: text, range: range) { match, _, _ in
+        Self.specialKeyRegex.enumerateMatches(in: text, range: range) { match, _, _ in
             guard let match,
                   let keyRange = Range(match.range(at: 1), in: text),
                   let modsRange = Range(match.range(at: 2), in: text)
@@ -275,22 +257,27 @@ final class SlateCommandsTests: XCTestCase {
     /// or false-pass via an `deliberatelyUnregisteredChords`
     /// match. Keeps the regex list and the glyph table in
     /// lock-step.
+    ///
+    /// SwiftUI's `KeyEquivalent` has no `.enter` — Return is
+    /// `.return`. `.delete` is Backspace; `.deleteForward` is the
+    /// distinct "del" / fn+Delete key. Both are covered.
     private static func glyphForSpecialKey(_ name: String) -> String {
         switch name {
-        case "upArrow":    return "↑"
-        case "downArrow":  return "↓"
-        case "leftArrow":  return "←"
-        case "rightArrow": return "→"
-        case "return":     return "↩"
-        case "tab":        return "⇥"
-        case "space":      return "␣"
-        case "escape":     return "⎋"
-        case "delete":     return "⌫"
-        case "clear":      return "⌧"
-        case "home":       return "↖"
-        case "end":        return "↘"
-        case "pageUp":     return "⇞"
-        case "pageDown":   return "⇟"
+        case "upArrow":       return "↑"
+        case "downArrow":     return "↓"
+        case "leftArrow":     return "←"
+        case "rightArrow":    return "→"
+        case "return":        return "↩"
+        case "tab":           return "⇥"
+        case "space":         return "␣"
+        case "escape":        return "⎋"
+        case "delete":        return "⌫"
+        case "deleteForward": return "⌦"
+        case "clear":         return "⌧"
+        case "home":          return "↖"
+        case "end":           return "↘"
+        case "pageUp":        return "⇞"
+        case "pageDown":      return "⇟"
         default:
             fatalError(
                 "Unknown special key '\(name)' — "
@@ -299,6 +286,45 @@ final class SlateCommandsTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - Compiled regexes (hoisted from extractChords)
+    //
+    // The two patterns compile once at class-load instead of per
+    // call to extractChords(from:). With ~47 files in
+    // Sources/SlateMac/, the prior `try! NSRegularExpression(...)`
+    // inside the function would recompile twice per file — sub-
+    // millisecond but unnecessary.
+
+    /// `keyboardShortcut("X", modifiers: ...)` /
+    /// `keyboardShortcut(KeyEquivalent("X"), modifiers: ...)` —
+    /// `X` is any single non-quote non-backslash char (alphanumerics
+    /// + punctuation). Requires non-empty `modifiers:` to skip
+    /// sheet-dismiss bindings declared with `modifiers: []`.
+    private static let quotedKeyRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(
+            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"([^"\\])"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+        )
+    }()
+
+    /// `keyboardShortcut(.<specialKey>, modifiers: ...)` —
+    /// special-key constants explicitly listed so a typo in source
+    /// (`.upArro`) doesn't get scraped as a chord. Includes
+    /// `.deleteForward` distinct from `.delete` (macOS treats them
+    /// as different keys — Backspace vs the "del" key). Function
+    /// keys (`KeyEquivalent("\u{F704}")` shape) are deferred — no
+    /// source uses them yet.
+    private static let specialKeyRegex: NSRegularExpression = {
+        let specialKeys =
+            "upArrow|downArrow|leftArrow|rightArrow"
+            + "|return|tab|space|escape"
+            + "|delete|deleteForward"
+            + "|clear|home|end|pageUp|pageDown"
+        // swiftlint:disable:next force_try
+        return try! NSRegularExpression(
+            pattern: #"keyboardShortcut\(\s*\.(\#(specialKeys))\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+        )
+    }()
 
     private static func formatChord(key: String, modifiers: String) -> String {
         var glyphs = ""
@@ -492,6 +518,25 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertEqual(
             SlateCommandsTests.extractChords(from: text),
             ["⌘↩"]
+        )
+    }
+
+    func testExtractChordsDistinguishesDeleteFromDeleteForward() {
+        // `.delete` is Backspace (⌫); `.deleteForward` is the
+        // "del" key / fn+Delete (⌦). Different keys, different
+        // glyphs — a future chord using one shouldn't surface as
+        // the other.
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(
+                from: #".keyboardShortcut(.delete, modifiers: .command)"#
+            ),
+            ["⌘⌫"]
+        )
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(
+                from: #".keyboardShortcut(.deleteForward, modifiers: .command)"#
+            ),
+            ["⌘⌦"]
         )
     }
 
