@@ -273,6 +273,10 @@ final class SlateCommandsTests: XCTestCase {
     /// scene without also dropping the palette command — closes
     /// the silent-regression gap the invoke-doesn't-throw test
     /// can't cover.
+    ///
+    /// Uses a regex (`Settings\s*\{`) rather than literal
+    /// `"Settings {"` so a future formatter pass that varies
+    /// whitespace around the brace doesn't false-trip the check.
     @MainActor
     func testSettingsSceneStillExistsInSlateMacApp() async throws {
         let appFile = Self.projectRoot
@@ -282,8 +286,11 @@ final class SlateCommandsTests: XCTestCase {
             .appendingPathComponent("SlateMac")
             .appendingPathComponent("SlateMacApp.swift")
         let text = try String(contentsOf: appFile, encoding: .utf8)
-        XCTAssertTrue(
-            text.contains("Settings {"),
+        let sceneRegex = try NSRegularExpression(pattern: #"\bSettings\s*\{"#)
+        let range = NSRange(text.startIndex..., in: text)
+        let match = sceneRegex.firstMatch(in: text, range: range)
+        XCTAssertNotNil(
+            match,
             "SlateMacApp.swift must declare a `Settings { }` scene "
                 + "so the showSettingsWindow: responder exists for "
                 + "the slate.settings.open palette command. "
