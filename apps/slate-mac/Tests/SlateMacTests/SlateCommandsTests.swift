@@ -845,6 +845,59 @@ final class SlateCommandsTests: XCTestCase {
         )
     }
 
+    /// #345 (from #330 red-team F2): a `.keyboardShortcut(...)` whose
+    /// arguments span multiple lines — e.g. after a `swift-format`
+    /// reflow — must still be scraped. NSRegularExpression's `\s`
+    /// matches newlines (unlike `.`), and the scraper uses `\s*`
+    /// between every token plus `[^\]]+` inside the modifier
+    /// brackets (also newline-tolerant), so multi-line declarations
+    /// already work. This pins that behaviour so a future regex
+    /// change can't silently regress it — which would make the
+    /// drift tests mis-attribute the lost chord as "missing from
+    /// the registry" / an orphan rather than "scraper stopped
+    /// seeing it".
+    func testExtractChordsHandlesMultiLineDeclarations() {
+        let cases: [(label: String, source: String, expected: Set<String>)] = [
+            (
+                "args on separate lines",
+                """
+                .keyboardShortcut(
+                    "x",
+                    modifiers: [.command]
+                )
+                """,
+                ["⌘X"]
+            ),
+            (
+                "KeyEquivalent wrapper split across lines",
+                """
+                .keyboardShortcut(
+                    KeyEquivalent("y"),
+                    modifiers: [.command, .shift]
+                )
+                """,
+                ["⇧⌘Y"]
+            ),
+            (
+                "modifiers array spanning lines",
+                """
+                .keyboardShortcut("z", modifiers: [
+                    .command,
+                    .shift
+                ])
+                """,
+                ["⇧⌘Z"]
+            ),
+        ]
+        for c in cases {
+            XCTAssertEqual(
+                SlateCommandsTests.extractChords(from: c.source),
+                c.expected,
+                "multi-line form '\(c.label)' must still scrape"
+            )
+        }
+    }
+
     /// Recursive directory walk — fixture has a nested subdirectory
     /// holding a `.swift` file with a chord declaration. The old
     /// `contentsOfDirectory(at:)` scraper would silently miss it.
