@@ -542,6 +542,11 @@ final class SlateCommandsTests: XCTestCase {
     /// Uses a regex (`Settings\s*\{`) rather than literal
     /// `"Settings {"` so a future formatter pass that varies
     /// whitespace around the brace doesn't false-trip the check.
+    ///
+    /// #333: the source is run through `SwiftSourceStripping` first
+    /// so a `// TODO: restore the Settings { } scene` comment or a
+    /// `"Settings { ... }"` string literal can't false-pass the
+    /// check. The match must come from real scene-declaration code.
     @MainActor
     func testSettingsSceneStillExistsInSlateMacApp() async throws {
         let appFile = Self.projectRoot
@@ -550,7 +555,32 @@ final class SlateCommandsTests: XCTestCase {
             .appendingPathComponent("Sources")
             .appendingPathComponent("SlateMac")
             .appendingPathComponent("SlateMacApp.swift")
-        let text = try String(contentsOf: appFile, encoding: .utf8)
+        let rawText = try String(contentsOf: appFile, encoding: .utf8)
+        // #333 red-team P3: SwiftSourceStripping deliberately does
+        // NOT model multiline (`"""…"""`) or raw (`#"…"#`) string
+        // literals (see its doc). SlateMacApp.swift has none today,
+        // so the strip below is faithful. Make that assumption
+        // self-enforcing: if a future edit adds one of those
+        // constructs, this fails LOUDLY — prompting a stripper
+        // upgrade — rather than silently risking a false negative
+        // on the scene grep (a mis-modelled string could blank past
+        // a real `Settings {`).
+        //
+        // This is a conservative over-approximation (#348 Codoki):
+        // it also trips if a *comment* merely mentions `"""` / `#"`.
+        // That's an acceptable false alarm — it fails safe (over-
+        // cautious), the message points at the cause, and a comment
+        // referencing those tokens in this tiny app-entry file is
+        // about as unlikely as the construct itself. Refine to a
+        // comment-aware check only if it ever false-fires.
+        XCTAssertFalse(
+            rawText.contains("\"\"\"") || rawText.contains("#\""),
+            "SlateMacApp.swift gained a multiline or raw string literal, which "
+                + "SwiftSourceStripping does not model. Upgrade the stripper "
+                + "(see #333 option 2 — swift-syntax) before relying on the "
+                + "stripped scene grep below."
+        )
+        let text = SwiftSourceStripping.strippingCommentsAndStrings(rawText)
         let sceneRegex = try NSRegularExpression(pattern: #"\bSettings\s*\{"#)
         let range = NSRange(text.startIndex..., in: text)
         let match = sceneRegex.firstMatch(in: text, range: range)
