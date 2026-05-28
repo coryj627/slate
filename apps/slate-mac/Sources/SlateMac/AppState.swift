@@ -1665,6 +1665,63 @@ final class AppState: ObservableObject {
         // auto-present the empty palette). #313 belt-and-suspenders
         // with the menu's `.disabled(!isVaultOpen)` gate.
         isCommandPaletteOpen = false
+        // #328 sheet-flag parity audit. Each `@Published var
+        // is*Open` driving a `.sheet` binding must reset here for
+        // the same reason as `isCommandPaletteOpen`: a vault close
+        // while the sheet is presented would otherwise leave the
+        // bool stuck `true`, and the next vault open would re-
+        // present an empty / stale sheet against the new vault's
+        // state. `isCitationSummaryOpen`, `isTasksReviewOpen`, and
+        // `isSearchOpen` (via `closeSearchOverlay` above) are
+        // handled elsewhere in this method.
+        isAddPropertySheetOpen = false
+        // Bulk-rename: clear the sheet bool plus the in-flight
+        // bookkeeping. A rename task in flight against the old
+        // vault would race the close — the Rust call holds the
+        // SQLite mutex and won't observe the Swift `Task.cancel`
+        // signal until it next checks the `CancelToken`. We
+        // cancel both: the token tells the Rust side to break
+        // out of its row-by-row loop at the next check, and the
+        // Task.cancel makes the Swift-side continuation observe
+        // `Task.isCancelled` on resume (guarded by `performRename`
+        // — #328 red-team P1).
+        isBulkRenameSheetOpen = false
+        renameCancelToken?.cancel()
+        renameCancelToken = nil
+        renameTask?.cancel()
+        renameTask = nil
+        pendingRenameReport = nil
+        isRenameInFlight = false
+        renameError = nil
+        // Property-edit state lives on the same lifecycle as the
+        // Add-Property sheet. `performPropertyEdit` already self-
+        // guards via `loadedFilePath == path` (closeVault zeroes
+        // `selectedFilePath`/`loadedFilePath` below, so the late
+        // write is suppressed), but the published flags + alert
+        // binding would still leak across the close. The alert
+        // matters most: `currentPropertyEditConflict` drives a
+        // `.alert(...)` in MainSplitView; without the reset the
+        // conflict dialog survives onto the welcome screen.
+        propertyEditTask?.cancel()
+        propertyEditTask = nil
+        isEditingProperty = false
+        propertyEditError = nil
+        currentPropertyEditConflict = nil
+        // Template picker: cancel any in-flight picker / select /
+        // create task so they can't write back into the old
+        // session's state, then drop the flow + listed templates
+        // so a re-open against a new vault doesn't show the prior
+        // vault's templates or a half-completed flow.
+        isTemplatePickerOpen = false
+        templatePickerTask?.cancel()
+        templatePickerTask = nil
+        templateSelectionTask?.cancel()
+        templateSelectionTask = nil
+        templateCreateTask?.cancel()
+        templateCreateTask = nil
+        pendingTemplateFlow = .idle
+        templateNoteNameError = nil
+        availableTemplates = []
         currentSession = nil
         currentVaultURL = nil
         files = []
@@ -3666,6 +3723,19 @@ final class AppState: ObservableObject {
             }
         }.value
 
+        // #328 red-team P1: closeVault zeros out the rename-related
+        // state and cancels the token, but the Rust call may have
+        // resolved between the cancel signal arriving and this
+        // continuation resuming on the main actor. Without the
+        // guard, we'd write `pendingRenameReport`/`renameError`
+        // back over the just-zeroed values and post an a11y
+        // announcement against the welcome screen. Mirrors the
+        // `loadedFilePath == path` guard in `performPropertyEdit`.
+        guard !Task.isCancelled, currentSession === session else {
+            isRenameInFlight = false
+            return
+        }
+
         switch outcome {
         case .success(let report):
             pendingRenameReport = report
@@ -3916,6 +3986,11 @@ final class AppState: ObservableObject {
         ) {
             (try? session.listTemplates()) ?? []
         }.value
+        // #328 red-team P1: vault may have been closed mid-list.
+        // Without the guard we'd re-present the picker against the
+        // welcome screen and announce "Template picker opened."
+        // even though closeVault just zeroed everything.
+        guard !Task.isCancelled, currentSession === session else { return }
         availableTemplates = summaries
         isTemplatePickerOpen = true
         announceTemplate(templatePickerOpenAnnouncement(summaries.count))
@@ -3961,6 +4036,11 @@ final class AppState: ObservableObject {
         ) {
             try? session.readText(path: summary.path)
         }.value
+        // #328 red-team P1: vault close mid-read would otherwise
+        // resume here, run `cancelTemplateFlow()`/`pendingTemplateFlow
+        // = .needsName(...)` against the dead session, and re-present
+        // the template flow sheet on the welcome screen.
+        guard !Task.isCancelled, currentSession === session else { return }
         guard let source = sourceResult else {
             cancelTemplateFlow()
             return
@@ -4078,6 +4158,14 @@ final class AppState: ObservableObject {
                 return .failure(.Io(message: error.localizedDescription))
             }
         }.value
+
+        // #328 red-team P1: vault close mid-render-and-save would
+        // otherwise resume here, write `selectedFilePath` to the
+        // dead session, and announce "Created X from Y." on the
+        // welcome screen. The file was already saved to disk
+        // (the detached block ran to completion); the late state
+        // mutation is the only thing we suppress here.
+        guard !Task.isCancelled, currentSession === session else { return }
 
         switch outcome {
         case .success(let rendered):
