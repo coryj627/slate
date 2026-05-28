@@ -285,53 +285,16 @@ struct CommandPaletteView: View {
     /// "Settings…, Command ," (which VoiceOver may elide entirely
     /// when the user's punctuation setting is "None").
     ///
-    /// Walks every character of `hotkeyHint` in order. Modifier
-    /// glyphs (⌘⇧⌥⌃) become their spoken word; punctuation keys
-    /// become their spoken name; alphanumeric keys pass through
-    /// as-is.
+    /// The chord-glyph → spoken-word walk lives in `HotkeySpoken`
+    /// (#332) so the punctuation table stays single-source as more
+    /// consumers arrive. This method owns only the label-composition
+    /// shape (the comma separator, the empty-hint short-circuit).
     static func voiceOverLabel(for command: Command) -> String {
         guard let hint = command.hotkeyHint, !hint.isEmpty else {
             return command.label
         }
-        var spoken: [String] = []
-        for char in hint {
-            if let modifierWord = chordGlyphWord[char] {
-                spoken.append(modifierWord)
-            } else {
-                spoken.append(chordKeyWord[char] ?? String(char))
-            }
-        }
-        return "\(command.label), \(spoken.joined(separator: " "))"
+        return "\(command.label), \(HotkeySpoken.spoken(for: hint))"
     }
-
-    /// Modifier-key glyphs → spoken names.
-    private static let chordGlyphWord: [Character: String] = [
-        "⌘": "Command",
-        "⇧": "Shift",
-        "⌥": "Option",
-        "⌃": "Control",
-    ]
-
-    /// Punctuation keys → spoken names. VoiceOver's default
-    /// punctuation level ("Some") speaks "comma" for ",", but
-    /// users with "None" hear nothing — so a chord ending in
-    /// punctuation like ⌘, would become "Command" with no key
-    /// indicator. Spelling out the punctuation makes the chord
-    /// pronounceable at every VoiceOver punctuation level.
-    private static let chordKeyWord: [Character: String] = [
-        ",": "Comma",
-        ".": "Period",
-        "/": "Slash",
-        "\\": "Backslash",
-        ";": "Semicolon",
-        "'": "Quote",
-        "[": "Left Bracket",
-        "]": "Right Bracket",
-        "-": "Minus",
-        "=": "Equals",
-        "`": "Backtick",
-        " ": "Space",
-    ]
 
     // MARK: - Arrow-key monitor
 
