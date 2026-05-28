@@ -430,9 +430,11 @@ struct CommandPaletteView: View {
 
     // MARK: - Invoke
 
-    /// Triggered by `onSubmit` (Enter in the search field). Invokes
-    /// the selected command; dismisses on success and records the
-    /// command in recents (#316). Stays open on error per #315.
+    /// Triggered by `onSubmit` (Enter in the search field).
+    /// Resolves the currently-selected command and hands off to
+    /// `invoke(_:)` — which is where success-dismissal, recents
+    /// recording, and the stays-open-on-error behaviour actually
+    /// live. No-op if nothing is selected.
     private func invokeSelected() {
         guard let id = model.selectedID,
               let command = model.displayOrder.first(where: { $0.id == id })
@@ -440,6 +442,10 @@ struct CommandPaletteView: View {
         invoke(command)
     }
 
+    /// Run `command` through the registry. On success: record it to
+    /// recents (#316) so it surfaces in the Recent section next
+    /// launch, then dismiss. On failure: stay open and let the
+    /// model's pending announcement surface the error (#315).
     private func invoke(_ command: Command) {
         let outcome = model.invoke(command, via: appState.commandRegistry)
         if case .success = outcome {

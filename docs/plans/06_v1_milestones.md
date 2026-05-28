@@ -84,7 +84,8 @@ Original alpha-scope exclusions. Most of the V1.x items below now have GitHub mi
 - Sync writer (V2).
 - Accessible structured conflict resolution UI beyond file-level (V2 — see `05` §7.3; data plumbing in O).
 - iOS, Windows, Android UI (later platforms — see `05` §3).
-- Themes, dark mode polish, command palette as a first-class surface (no V1.x commitment; natural home is here if testers ask).
+- Themes, dark mode polish — Milestone R (themes/dark-mode polish).
+- Command palette as a first-class surface — **shipped as Milestone Q** (`⌘⇧P`, fuzzy filter, recents, menu-mirroring registry). Was originally "no V1.x commitment; natural home here if testers ask" — testers asked, so it landed early.
 
 ## Risk register
 

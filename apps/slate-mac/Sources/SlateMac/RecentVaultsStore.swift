@@ -50,9 +50,13 @@ public final class RecentVaultsStore {
     /// exist yet. Malformed JSON is treated as "no recent vaults" — we
     /// don't want a corrupt file to prevent the app from launching.
     ///
-    /// The hard cap of `maxEntries` is also enforced on load so an
-    /// externally-modified file can't ship a 50-entry list past the
-    /// store; downstream UI code can trust the invariant unconditionally.
+    /// The hard cap of `maxEntries` is also enforced on load (via a
+    /// trailing `prefix(maxEntries)`) so an externally-modified file
+    /// can't ship a 50-entry list past the store; downstream UI code
+    /// can trust the invariant unconditionally. Unlike
+    /// `CommandPaletteRecentsStore`, there's no load-time dedupe —
+    /// entries are path-keyed and `add` already removes any prior
+    /// entry for the same path, so duplicates don't accumulate.
     ///
     /// **File-size guard, bounded read (#353).** Mirrors the
     /// `CommandPaletteRecentsStore` guard: open the file once and read

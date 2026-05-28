@@ -10,7 +10,12 @@ import Foundation
 /// write, malformed-tolerant load, LRU `add` that moves an existing
 /// entry to the front. Cap is enforced on every load so an
 /// externally-modified file can't push more than `maxEntries`
-/// downstream.
+/// downstream — note the enforcement mechanism differs from
+/// `RecentVaultsStore`: there it's a trailing `prefix(maxEntries)`,
+/// here it's the dedupe loop in `load()` short-circuiting once
+/// `maxEntries` unique ids are collected (these recents are bare
+/// id strings that can legitimately repeat in a hand-edited file,
+/// so dedupe and cap are the same pass).
 ///
 /// Lives at
 /// `~/Library/Application Support/Slate/command-palette-recents.json`
