@@ -417,10 +417,17 @@ final class SlateCommandsTests: XCTestCase {
     /// formatting (`\\` → `\`, `\"` → `"`). Requires non-empty
     /// `modifiers:` to skip sheet-dismiss bindings declared with
     /// `modifiers: []`.
+    ///
+    /// Both escape alternatives are written with a backslash-
+    /// escaped special char for symmetry: `\\\\` matches a literal
+    /// backslash, `\\\"` matches a literal quote. (In ICU a bare
+    /// `"` also matches a quote, so `\\"` would be equivalent — but
+    /// the escaped form keeps the two branches visually parallel
+    /// and the intent unambiguous. #349 review.)
     private static let quotedKeyRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"((?:\\\\|\\"|[^"\\]))"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"((?:\\\\|\\\"|[^"\\]))"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
         )
     }()
 
@@ -704,6 +711,17 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertEqual(
             SlateCommandsTests.extractChords(from: text),
             ["⇧⌘\\"]
+        )
+    }
+
+    func testExtractChordsHandlesEscapedQuoteViaKeyEquivalentWrapper() {
+        // #349 review: exercise the escaped-QUOTE branch through the
+        // KeyEquivalent wrapper too, so both escape branches are
+        // covered through both call forms (bare + wrapper).
+        let text = #".keyboardShortcut(KeyEquivalent("\""), modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘\""]
         )
     }
 
