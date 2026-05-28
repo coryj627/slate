@@ -192,21 +192,29 @@ final class SlateCommandsTests: XCTestCase {
             "or the implicit chord is no longer auto-installed (investigate)."
         )
 
-        // #330 red-team F3 (P2): the two allow-lists must be
-        // disjoint. `deliberatelyUnregisteredChords` is for chords
+        // #330 red-team F3 (P2) + Codoki review on #346: the two
+        // allow-lists must be disjoint on the MENU-REACHABLE
+        // subset. `deliberatelyUnregisteredChords` is for chords
         // that exist in source but are deliberately NOT in the
-        // registry; `chordsImplicitFromSwiftUIScenes` is for chords
-        // that are in the registry but have NO source declaration.
-        // An overlap would mean a chord is somehow both "exists in
-        // source" and "doesn't exist in source", which is a sign
-        // someone added a source-side `keyboardShortcut(",", ...)`
-        // that should retire the implicit-allow-list entry.
+        // registry (sheet-only bindings like TemplatePromptSheet's
+        // `⌘↩`); `chordsImplicitFromSwiftUIScenes` is for chords
+        // that ARE in the registry but have NO source declaration
+        // (auto-installed by SwiftUI scenes).
+        //
+        // Intersecting against raw `menuChords` would false-trip on
+        // a sheet-only declaration colliding with an implicit chord
+        // — e.g. if someone adds `.keyboardShortcut(",", ...)` to
+        // a sheet submit button, the implicit `⌘,` entry is still
+        // needed for the Settings scene; dropping it would break
+        // the orphan check. Intersecting `menuReachableChords`
+        // catches the real regression: a source-side menu-bar-
+        // reachable declaration that retires the implicit entry.
         let overlap = Self.chordsImplicitFromSwiftUIScenes
-            .intersection(menuChords)
+            .intersection(menuReachableChords)
         XCTAssertTrue(
             overlap.isEmpty,
-            "chordsImplicitFromSwiftUIScenes overlaps with source-scraped chords: \(overlap.sorted()). " +
-            "A source-side keyboardShortcut(...) was added for what was previously an implicit chord — drop the now-redundant implicit allow-list entry."
+            "chordsImplicitFromSwiftUIScenes overlaps with menu-reachable source chords: \(overlap.sorted()). " +
+            "A source-side keyboardShortcut(...) was added in a menu-reachable position for what was previously an implicit chord — drop the now-redundant implicit allow-list entry."
         )
     }
 
