@@ -50,8 +50,11 @@ enum HotkeySpoken {
         return parts.joined(separator: " ")
     }
 
-    /// Modifier-key glyphs → spoken names.
-    static let glyphWord: [Character: String] = [
+    /// Modifier-key glyphs → spoken names. `private` — callers go
+    /// through `spoken(for:)`; exposing the tables directly would
+    /// invite a second consumer to walk them itself and drift from
+    /// the canonical composition (Codoki review on #347).
+    private static let glyphWord: [Character: String] = [
         "⌘": "Command",
         "⇧": "Shift",
         "⌥": "Option",
@@ -64,7 +67,8 @@ enum HotkeySpoken {
     /// punctuation like ⌘, would become "Command" with no key
     /// indicator. Spelling out the punctuation makes the chord
     /// pronounceable at every VoiceOver punctuation level.
-    static let keyWord: [Character: String] = [
+    /// `private` for the same reason as `glyphWord` above.
+    private static let keyWord: [Character: String] = [
         ",": "Comma",
         ".": "Period",
         "/": "Slash",

@@ -94,6 +94,13 @@ final class HotkeySpokenTests: XCTestCase {
         XCTAssertEqual(HotkeySpoken.spoken(for: "⌘"), "Command")
     }
 
+    func testDigitKeyPassesThroughUnchanged() {
+        // Digits aren't in either table, so they pass through as
+        // their own string. Pins this against a future "helpfully
+        // spell out the number" change (Codoki review on #347).
+        XCTAssertEqual(HotkeySpoken.spoken(for: "⌘1"), "Command 1")
+    }
+
     func testLowercaseLetterPassesThroughUnchanged() {
         // The helper does NOT uppercase — that's the scraper's job
         // (`extractChords` uppercases before composing the glyph).
