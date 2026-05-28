@@ -332,7 +332,9 @@ final class SlateCommandsTests: XCTestCase {
                   let keyRange = Range(match.range(at: 1), in: text),
                   let modsRange = Range(match.range(at: 2), in: text)
             else { return }
-            let key = String(text[keyRange]).uppercased()
+            // Unescape (#335) BEFORE uppercasing: a `\\` / `\"`
+            // capture must collapse to `\` / `"` first.
+            let key = Self.unescapeQuotedKey(String(text[keyRange])).uppercased()
             let mods = String(text[modsRange])
             chords.insert(Self.formatChord(key: key, modifiers: mods))
         }
@@ -402,15 +404,39 @@ final class SlateCommandsTests: XCTestCase {
 
     /// `keyboardShortcut("X", modifiers: ...)` /
     /// `keyboardShortcut(KeyEquivalent("X"), modifiers: ...)` —
-    /// `X` is any single non-quote non-backslash char (alphanumerics
-    /// + punctuation). Requires non-empty `modifiers:` to skip
-    /// sheet-dismiss bindings declared with `modifiers: []`.
+    /// `X` is one of:
+    /// - an escaped backslash `\\` (the source text for a `\` key)
+    /// - an escaped quote `\"` (the source text for a `"` key)
+    /// - any other single non-quote non-backslash char
+    ///   (alphanumerics + punctuation).
+    ///
+    /// The two escape branches (#335) let the scraper see
+    /// `keyboardShortcut("\\", …)` / `keyboardShortcut("\"", …)`,
+    /// which the old single-char `[^"\\]` class skipped. The
+    /// two-char capture is unescaped in `extractChords` before
+    /// formatting (`\\` → `\`, `\"` → `"`). Requires non-empty
+    /// `modifiers:` to skip sheet-dismiss bindings declared with
+    /// `modifiers: []`.
     private static let quotedKeyRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"([^"\\])"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"((?:\\\\|\\"|[^"\\]))"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
         )
     }()
+
+    /// Unescape a captured quoted-key (#335). The `quotedKeyRegex`
+    /// capture is the raw *source text* between the quotes, so a
+    /// backslash key arrives as the two characters `\\` and a quote
+    /// key as `\"`. Collapse those two escape sequences to the
+    /// single character they denote; every other capture (a lone
+    /// alphanumeric or punctuation char) passes through unchanged.
+    private static func unescapeQuotedKey(_ raw: String) -> String {
+        switch raw {
+        case #"\\"#: return #"\"#  // escaped backslash → one backslash
+        case #"\""#: return "\""    // escaped quote → one quote
+        default: return raw
+        }
+    }
 
     /// `keyboardShortcut(.<specialKey>, modifiers: ...)` —
     /// special-key constants explicitly listed so a typo in source
@@ -643,6 +669,55 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertEqual(
             SlateCommandsTests.extractChords(from: text),
             ["⇧⌘R"]
+        )
+    }
+
+    func testExtractChordsHandlesEscapedBackslashKey() {
+        // #335: `keyboardShortcut("\\", …)` — the source text has
+        // TWO backslash chars between the quotes (a raw string here
+        // reproduces that), denoting a single `\` key. The old
+        // single-char `[^"\\]` class skipped it entirely.
+        let text = #".keyboardShortcut("\\", modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘\\"],  // ⌘ + literal backslash
+            "escaped-backslash key must scrape as ⌘\\ after unescaping"
+        )
+    }
+
+    func testExtractChordsHandlesEscapedQuoteKey() {
+        // #335: `keyboardShortcut("\"", …)` — the source text has
+        // backslash-then-quote between the outer quotes, denoting a
+        // single `"` key.
+        let text = #".keyboardShortcut("\"", modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘\""],  // ⌘ + literal double-quote
+            "escaped-quote key must scrape as ⌘\" after unescaping"
+        )
+    }
+
+    func testExtractChordsHandlesEscapedKeyViaKeyEquivalentWrapper() {
+        // The wrapper form must also unescape — exercises the
+        // `(?:KeyEquivalent\(\s*)?` branch alongside the escape.
+        let text = #".keyboardShortcut(KeyEquivalent("\\"), modifiers: [.command, .shift])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⇧⌘\\"]
+        )
+    }
+
+    func testExtractChordsEscapedKeysCoexistWithOrdinaryKeys() {
+        // A file mixing an ordinary key, an escaped backslash, and
+        // an escaped quote — all three must surface, none clobber.
+        let text = #"""
+            .keyboardShortcut("s", modifiers: .command)
+            .keyboardShortcut("\\", modifiers: .command)
+            .keyboardShortcut("\"", modifiers: .command)
+            """#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘S", "⌘\\", "⌘\""]
         )
     }
 
