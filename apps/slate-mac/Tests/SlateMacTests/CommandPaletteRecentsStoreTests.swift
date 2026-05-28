@@ -131,6 +131,92 @@ final class CommandPaletteRecentsStoreTests: XCTestCase {
         XCTAssertEqual(loaded, Array(overByOne.prefix(cap)))
     }
 
+    // MARK: - File-size guard (#341)
+
+    /// A file strictly larger than `maxFileBytes` is refused before
+    /// the JSON decode — even when its contents ARE valid JSON. The
+    /// only reason an empty list comes back here is the size guard;
+    /// a valid-JSON oversized file proves the guard fires pre-decode
+    /// rather than the malformed-JSON path.
+    func testLoadRefusesFileLargerThanThreshold() throws {
+        let cap = CommandPaletteRecentsStore.maxFileBytes
+        // Valid JSON `["slate.x"]` padded with spaces (legal JSON
+        // whitespace before `]`) to one byte OVER the threshold.
+        let prefix = "[\"slate.x\""  // 10 bytes
+        let suffix = "]"             // 1 byte
+        let padCount = (cap + 1) - prefix.utf8.count - suffix.utf8.count
+        let json = prefix + String(repeating: " ", count: padCount) + suffix
+        try json.data(using: .utf8)!.write(to: fileURL)
+
+        // Sanity: the fixture really is over the threshold and is
+        // itself valid JSON (so the only thing that can reject it
+        // is the size guard).
+        let actualSize = try FileManager.default
+            .attributesOfItem(atPath: fileURL.path)[.size] as! UInt64
+        XCTAssertEqual(Int(actualSize), cap + 1)
+        XCTAssertEqual(try JSONDecoder().decode([String].self, from: json.data(using: .utf8)!), ["slate.x"])
+
+        XCTAssertEqual(
+            makeStore().load(), [],
+            "a file 1 byte over maxFileBytes must be refused before decode, even though its JSON is valid"
+        )
+    }
+
+    /// A file at EXACTLY `maxFileBytes` is accepted (the guard uses
+    /// `>` not `>=`). Proven by decoding to the expected list rather
+    /// than the empty list — distinguishes "guard passed + decoded"
+    /// from "guard rejected".
+    func testLoadAcceptsFileAtExactlyThreshold() throws {
+        let cap = CommandPaletteRecentsStore.maxFileBytes
+        let prefix = "[\"slate.x\""
+        let suffix = "]"
+        let padCount = cap - prefix.utf8.count - suffix.utf8.count
+        let json = prefix + String(repeating: " ", count: padCount) + suffix
+        let data = json.data(using: .utf8)!
+        XCTAssertEqual(data.count, cap, "fixture must be exactly maxFileBytes")
+        try data.write(to: fileURL)
+
+        XCTAssertEqual(
+            makeStore().load(), ["slate.x"],
+            "a file at exactly maxFileBytes must pass the guard and decode normally"
+        )
+    }
+
+    /// Open/read failure path (#352 review). The bounded read opens
+    /// the file with a `FileHandle`; if that open fails on a file
+    /// that passed `fileExists` (e.g. unreadable perms, or a race
+    /// where it's deleted), `load()` must fall to the empty list —
+    /// a palette must never be blocked by an unreadable recents
+    /// file. Exercises the `FileHandle(forReadingFrom:)` failure arm.
+    func testLoadReturnsEmptyWhenFileUnreadable() throws {
+        // A valid file that load() would normally decode...
+        try JSONEncoder().encode(["slate.x"]).write(to: fileURL)
+        // ...made unreadable.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: fileURL.path
+        )
+        defer {
+            // Restore so tearDown can delete it regardless of dir perms.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: fileURL.path
+            )
+        }
+        // Guard against a root test runner, where 0o000 is ignored
+        // and the file stays readable — the failure arm wouldn't be
+        // exercised, so skip rather than assert a false expectation.
+        try XCTSkipIf(
+            FileManager.default.isReadableFile(atPath: fileURL.path),
+            "file still readable (running as root?); can't exercise the open-failure path"
+        )
+
+        XCTAssertEqual(
+            makeStore().load(), [],
+            "an unreadable recents file must load as empty, not crash or block"
+        )
+    }
+
     func testLoadCapsExternallyOversizedFile() throws {
         // Simulate someone editing the file by hand and saving 20
         // entries. Loader must hard-cap to maxEntries.
