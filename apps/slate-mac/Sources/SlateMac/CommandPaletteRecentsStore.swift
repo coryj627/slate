@@ -26,6 +26,15 @@ public final class CommandPaletteRecentsStore {
     /// this point keeps the panel from growing unboundedly.
     public static let maxEntries = 10
 
+    /// Upper bound on the recents file size `load()` will read
+    /// (#341). A well-formed file holds at most `maxEntries` ids of
+    /// ~50 bytes each (including JSON quoting + commas) — under
+    /// 1 KiB. 64 KiB is generously above that while still refusing
+    /// a malformed or hand-crafted huge file before it's read into
+    /// memory and decoded. Files strictly larger than this are
+    /// treated as malformed (→ empty list).
+    public static let maxFileBytes: Int = 1 << 16  // 64 KiB
+
     private let fileURL: URL
     private let fileManager: FileManager
 
@@ -61,12 +70,31 @@ public final class CommandPaletteRecentsStore {
     /// case to ~`maxEntries` iterations even when the input is
     /// huge. Note the worst case is still O(`decoded.count`):
     /// if the file has fewer than `maxEntries` unique ids, the
-    /// loop walks every entry looking for the next unique. The
-    /// JSON decode itself is also unbounded; a true file-size
-    /// guard would have to wrap `Data(contentsOf:)` and is
-    /// deferred to a future hardening pass.
+    /// loop walks every entry looking for the next unique.
+    ///
+    /// **File-size guard (#341).** Before reading, the file's size
+    /// is checked against `maxFileBytes`; anything strictly larger
+    /// is treated as malformed and skipped, so a hand-crafted huge
+    /// file can't be read into memory and decoded into a giant
+    /// `[String]`. The check fails *open* — if the size can't be
+    /// read (missing/odd attributes) we fall through to the normal
+    /// read, since a stat failure on a file that exists is unusual
+    /// and the decode still tolerates malformed input.
     public func load() -> [String] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
+        // Reject oversized files before `Data(contentsOf:)` pulls
+        // the whole thing into memory. Single-user local file, so
+        // this is defensive hardening rather than a live attack
+        // vector (our own `add` caps at `maxEntries`).
+        if let attrs = try? fileManager.attributesOfItem(atPath: fileURL.path),
+           let size = attrs[.size] as? UInt64,
+           size > UInt64(Self.maxFileBytes) {
+            NSLog(
+                "CommandPaletteRecentsStore: recents file is \(size) bytes, "
+                + "over the \(Self.maxFileBytes)-byte threshold; treating as malformed."
+            )
+            return []
+        }
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode([String].self, from: data)
         else {
