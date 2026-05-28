@@ -335,12 +335,35 @@ struct CommandPaletteView: View {
 
     // MARK: - Arrow-key monitor
 
+    /// macOS virtual key codes for the two arrow keys we intercept.
+    /// Values match Carbon's `kVK_UpArrow` (126) / `kVK_DownArrow`
+    /// (125); both have been stable since OS X 10.0 and are part
+    /// of the published HIToolbox ABI, so the literal is safe.
+    /// Declared locally to avoid `import Carbon.HIToolbox` for two
+    /// constants.
+    enum ArrowKey {
+        static let up: UInt16 = 126   // kVK_UpArrow
+        static let down: UInt16 = 125 // kVK_DownArrow
+    }
+
     /// Modifier mask: any of these on an arrow key means "let it
     /// through" — Shift+↓ extends text-field selection, Cmd+↓
     /// jumps caret to end-of-text, **Ctrl+Option+↓ is VoiceOver
     /// Quick Nav** (the one we absolutely must not steal), and
     /// Fn+↓ is macOS Page Down. Only bare ↑ / ↓ moves palette
     /// selection.
+    ///
+    /// Device-dependent flags like `.capsLock` and `.numericPad`
+    /// are deliberately not in the mask. We don't normalize them
+    /// away with `.deviceIndependentFlagsMask` because that mask
+    /// (`0xffff0000UL`) only strips the low 16 bits — the CG-level
+    /// left/right-key disambiguation that NSEvent doesn't surface
+    /// in the first place. `.capsLock` (bit 16) etc. live in the
+    /// high 16 bits and survive that intersection. The chord
+    /// passthrough works correctly because the mask is narrow,
+    /// not because the input is sanitised; the regression tests
+    /// (`testCapsLockOnBareArrowIsStillConsumed`, etc.) lock in
+    /// the narrowness so it can't drift.
     private static let arrowModifierMask: NSEvent.ModifierFlags =
         [.shift, .control, .option, .command, .function]
 
@@ -350,9 +373,9 @@ struct CommandPaletteView: View {
     /// having to synthesise live `NSEvent`s into the run loop.
     ///
     /// Pass through (returns true) when:
-    /// - Key is not ↑ (126) or ↓ (125)
-    /// - Key is ↑ / ↓ but any modifier in `arrowModifierMask` is
-    ///   held (Shift, Ctrl, Option, Cmd, Fn — covers text-field
+    /// - Key is not `ArrowKey.up` / `ArrowKey.down`
+    /// - Key IS an arrow but any modifier in `arrowModifierMask`
+    ///   is held (Shift, Ctrl, Option, Cmd, Fn — covers text-field
     ///   selection, caret-jump, Page-Up/Down, and VoiceOver Quick
     ///   Nav).
     ///
@@ -361,7 +384,7 @@ struct CommandPaletteView: View {
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags
     ) -> Bool {
-        guard keyCode == 126 || keyCode == 125 else { return true }
+        guard keyCode == ArrowKey.up || keyCode == ArrowKey.down else { return true }
         return !modifierFlags.intersection(arrowModifierMask).isEmpty
     }
 
@@ -374,9 +397,13 @@ struct CommandPaletteView: View {
                 return event
             }
             lastKeyboardNavAt = Date()
-            if event.keyCode == 126 {
+            // Explicit else-if rather than bare `else` so a future
+            // widening of shouldPassThroughArrow (e.g. to add
+            // .leftArrow / .rightArrow) doesn't silently route those
+            // keys to selectNext().
+            if event.keyCode == ArrowKey.up {
                 model.selectPrevious()
-            } else {
+            } else if event.keyCode == ArrowKey.down {
                 model.selectNext()
             }
             return nil
