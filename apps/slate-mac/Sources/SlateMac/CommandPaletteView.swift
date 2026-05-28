@@ -397,9 +397,13 @@ struct CommandPaletteView: View {
                 return event
             }
             lastKeyboardNavAt = Date()
+            // Explicit else-if rather than bare `else` so a future
+            // widening of shouldPassThroughArrow (e.g. to add
+            // .leftArrow / .rightArrow) doesn't silently route those
+            // keys to selectNext().
             if event.keyCode == ArrowKey.up {
                 model.selectPrevious()
-            } else {
+            } else if event.keyCode == ArrowKey.down {
                 model.selectNext()
             }
             return nil
