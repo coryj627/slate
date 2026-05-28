@@ -72,32 +72,48 @@ public final class CommandPaletteRecentsStore {
     /// if the file has fewer than `maxEntries` unique ids, the
     /// loop walks every entry looking for the next unique.
     ///
-    /// **File-size guard (#341).** Before reading, the file's size
-    /// is checked against `maxFileBytes`; anything strictly larger
-    /// is treated as malformed and skipped, so a hand-crafted huge
-    /// file can't be read into memory and decoded into a giant
-    /// `[String]`. The check fails *open* — if the size can't be
-    /// read (missing/odd attributes) we fall through to the normal
-    /// read, since a stat failure on a file that exists is unusual
-    /// and the decode still tolerates malformed input.
+    /// **File-size guard (#341), bounded read.** Instead of stat-
+    /// then-read (which leaves a TOCTOU window — the file could grow
+    /// or be swapped between the size check and the read, #352
+    /// review), we open the file once and read at most
+    /// `maxFileBytes + 1` bytes. Reading one byte past the cap lets
+    /// us distinguish "at or under the limit" from "over it" without
+    /// ever allocating more than `maxFileBytes + 1` bytes, even if
+    /// the on-disk file is enormous. A result strictly larger than
+    /// `maxFileBytes` is treated as malformed (→ empty list). There
+    /// is no separate stat, so nothing can change between check and
+    /// use. Single-user local file, so this is defensive hardening
+    /// rather than a live attack vector (our own `add` caps at
+    /// `maxEntries`).
+    ///
+    /// Any open / read failure (including the file being deleted
+    /// after the `fileExists` check) falls to the empty list, same
+    /// as a malformed decode — a corrupt or vanished file must
+    /// never block the palette opening.
     public func load() -> [String] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
-        // Reject oversized files before `Data(contentsOf:)` pulls
-        // the whole thing into memory. Single-user local file, so
-        // this is defensive hardening rather than a live attack
-        // vector (our own `add` caps at `maxEntries`).
-        if let attrs = try? fileManager.attributesOfItem(atPath: fileURL.path),
-           let size = attrs[.size] as? UInt64,
-           size > UInt64(Self.maxFileBytes) {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return []
+        }
+        defer { try? handle.close() }
+        // `read(upToCount:)` on a regular file returns
+        // `min(requested, bytesRemaining)`, so asking for one byte
+        // past the cap yields exactly `maxFileBytes + 1` bytes when
+        // the file is larger — our over-threshold signal — and the
+        // whole file otherwise. (A short read on an oversized file
+        // would still fail safe: the truncated buffer fails JSON
+        // decode below, also → empty list.)
+        guard let data = try? handle.read(upToCount: Self.maxFileBytes + 1) else {
+            return []
+        }
+        if data.count > Self.maxFileBytes {
             NSLog(
-                "CommandPaletteRecentsStore: recents file is \(size) bytes, "
-                + "over the \(Self.maxFileBytes)-byte threshold; treating as malformed."
+                "CommandPaletteRecentsStore: recents file exceeds the "
+                + "\(Self.maxFileBytes)-byte threshold; treating as malformed."
             )
             return []
         }
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([String].self, from: data)
-        else {
+        guard let decoded = try? JSONDecoder().decode([String].self, from: data) else {
             return []
         }
         var seen = Set<String>()

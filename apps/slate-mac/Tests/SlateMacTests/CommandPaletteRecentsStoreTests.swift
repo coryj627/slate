@@ -182,6 +182,41 @@ final class CommandPaletteRecentsStoreTests: XCTestCase {
         )
     }
 
+    /// Open/read failure path (#352 review). The bounded read opens
+    /// the file with a `FileHandle`; if that open fails on a file
+    /// that passed `fileExists` (e.g. unreadable perms, or a race
+    /// where it's deleted), `load()` must fall to the empty list —
+    /// a palette must never be blocked by an unreadable recents
+    /// file. Exercises the `FileHandle(forReadingFrom:)` failure arm.
+    func testLoadReturnsEmptyWhenFileUnreadable() throws {
+        // A valid file that load() would normally decode...
+        try JSONEncoder().encode(["slate.x"]).write(to: fileURL)
+        // ...made unreadable.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: fileURL.path
+        )
+        defer {
+            // Restore so tearDown can delete it regardless of dir perms.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: fileURL.path
+            )
+        }
+        // Guard against a root test runner, where 0o000 is ignored
+        // and the file stays readable — the failure arm wouldn't be
+        // exercised, so skip rather than assert a false expectation.
+        try XCTSkipIf(
+            FileManager.default.isReadableFile(atPath: fileURL.path),
+            "file still readable (running as root?); can't exercise the open-failure path"
+        )
+
+        XCTAssertEqual(
+            makeStore().load(), [],
+            "an unreadable recents file must load as empty, not crash or block"
+        )
+    }
+
     func testLoadCapsExternallyOversizedFile() throws {
         // Simulate someone editing the file by hand and saving 20
         // entries. Loader must hard-cap to maxEntries.
