@@ -55,6 +55,16 @@ public final class CommandPaletteRecentsStore {
     /// in Recent twice and cause arrow-nav to cycle the same id
     /// twice. The dedupe preserves first-seen order so the most-
     /// recent-first invariant survives external edits.
+    ///
+    /// **Short-circuits at `maxEntries`.** Once the deduped result
+    /// reaches the cap, the loop breaks — bounding the typical
+    /// case to ~`maxEntries` iterations even when the input is
+    /// huge. Note the worst case is still O(`decoded.count`):
+    /// if the file has fewer than `maxEntries` unique ids, the
+    /// loop walks every entry looking for the next unique. The
+    /// JSON decode itself is also unbounded; a true file-size
+    /// guard would have to wrap `Data(contentsOf:)` and is
+    /// deferred to a future hardening pass.
     public func load() -> [String] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         guard let data = try? Data(contentsOf: fileURL),
@@ -63,9 +73,17 @@ public final class CommandPaletteRecentsStore {
             return []
         }
         var seen = Set<String>()
-        let deduped = decoded.filter { seen.insert($0).inserted }
-        if deduped.count > Self.maxEntries {
-            return Array(deduped.prefix(Self.maxEntries))
+        var deduped: [String] = []
+        deduped.reserveCapacity(Self.maxEntries)
+        for id in decoded {
+            if seen.insert(id).inserted {
+                deduped.append(id)
+                // `>=` not `==` — defensive. The loop appends one
+                // id per match today, so `==` would suffice, but
+                // any future refactor that batches appends could
+                // overshoot the cap if the check is sharp-edged.
+                if deduped.count >= Self.maxEntries { break }
+            }
         }
         return deduped
     }
