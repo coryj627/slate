@@ -1671,9 +1671,14 @@ final class AppState: ObservableObject {
         // while the sheet is presented would otherwise leave the
         // bool stuck `true`, and the next vault open would re-
         // present an empty / stale sheet against the new vault's
-        // state. `isCitationSummaryOpen`, `isTasksReviewOpen`, and
-        // `isSearchOpen` (via `closeSearchOverlay` above) are
-        // handled elsewhere in this method.
+        // state. `isCitationSummaryOpen` / `isTasksReviewOpen` are
+        // reset further down in this method (search for `= false`),
+        // and `isSearchOpen` via the `closeSearchOverlay()` call
+        // above. The full set is enforced by
+        // `CloseVaultSheetParityTests` — a structural drift test
+        // that scrapes every `@Published var is*Open` and asserts
+        // each is reset here, so a newly-added sheet bool that
+        // misses this method fails CI.
         isAddPropertySheetOpen = false
         // Bulk-rename: clear the sheet bool plus the in-flight
         // bookkeeping. A rename task in flight against the old

@@ -94,8 +94,10 @@ final class MenuCommandAction: CommandAction, @unchecked Sendable {
             // the synchronous shape of `invoke_by_id` on the Rust
             // side. We never invoke from a background thread in
             // current usage (palette button is main-thread), so
-            // this branch is a defensive guard for future callers
-            // (CLI / HTTP API per `05` §8.3).
+            // this branch is a defensive guard for future callers —
+            // the CLI / HTTP API extensibility tiers (V1.x), per
+            // `docs/plans/05_locked_architecture_decisions.md` §10
+            // (Extensibility model).
             DispatchQueue.main.sync {
                 MainActor.assumeIsolated { self.action() }
             }
