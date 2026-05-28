@@ -31,6 +31,21 @@ extension View {
     /// chain can't carry state over from a previous render where it
     /// was present.
     ///
+    /// Example — chain it after the label / hint modifiers, passing
+    /// the selection state directly:
+    ///
+    /// ```swift
+    /// Button { … } label: { … }
+    ///     .accessibilityLabel("Heading")
+    ///     .accessibilityIsSelected(rowIsSelected)
+    /// ```
+    ///
+    /// The current consumers follow this shape: `CommandPaletteView`
+    /// (result row), `TasksReviewView` (filter chip + task toggle),
+    /// and `TasksPanel` (task toggle) — each chains after
+    /// `.accessibilityLabel` / `.accessibilityHint` and passes a
+    /// `Bool` selection state.
+    ///
     /// **Do not inline back to**
     /// `.accessibilityAddTraits(isSelected ? [.isSelected] : [])`
     /// **— see #324 for the rationale.** That pattern works in
