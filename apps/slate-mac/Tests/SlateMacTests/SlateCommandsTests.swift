@@ -131,6 +131,103 @@ final class SlateCommandsTests: XCTestCase {
         )
     }
 
+    /// **Reverse drift check** (#330). The forward test above only
+    /// catches `keyboardShortcut(...)` in source without a matching
+    /// registry entry. This test catches the inverse: a registry
+    /// entry whose `hotkeyHint` doesn't map to any source-side
+    /// shortcut OR any SwiftUI scene that auto-installs one.
+    ///
+    /// Why this matters: before #320 every registry chord came
+    /// from an explicit `keyboardShortcut(...)`, so a one-direction
+    /// check was sufficient. #320 introduced `⌘,` for
+    /// `slate.settings.open`, which SwiftUI auto-installs via the
+    /// `Settings { }` scene — there's no source-side declaration
+    /// for the scraper to find. A future contributor adding a
+    /// `hotkeyHint: "⌘X"` to a registry entry without a matching
+    /// keyboardShortcut (and forgetting the implicit-allow-list
+    /// entry) would ship a palette chord that does nothing from
+    /// the menu bar — a silent UX regression. This test forces
+    /// the matching declaration to exist.
+    @MainActor
+    func testEveryRegistryChordHasASourceOrImplicitMenuBinding() throws {
+        let menuChords = try Self.scrapedMenuChords()
+        let appState = AppState()
+        let registryChords: Set<String> = Set(
+            appState.commandRegistry.list().compactMap(\.hotkeyHint)
+        )
+
+        // #330 red-team F1 (P1): the scrape returns EVERY
+        // `keyboardShortcut(...)` chord in our source, including
+        // sheet-scoped declarations (TemplatePromptSheet's `⌘↩`
+        // submit, PropertyEditorRow's `⌘⌫` delete). Those are NOT
+        // menu-bar-reachable — they live in `deliberatelyUnregisteredChords`
+        // precisely because they're palette-omitted by design.
+        // Without this subtraction, a registry entry mistakenly
+        // bound to `⌘↩` would pass the reverse test because the
+        // scrape sees the sheet-only declaration — defeating the
+        // whole point of the check.
+        let menuReachableChords = menuChords
+            .subtracting(Self.deliberatelyUnregisteredChords)
+        let allKnownChords = menuReachableChords
+            .union(Self.chordsImplicitFromSwiftUIScenes)
+        let orphans = registryChords.subtracting(allKnownChords)
+        XCTAssertTrue(
+            orphans.isEmpty,
+            "Registry has chords with no menu binding (source-reachable or implicit-from-SwiftUI): \(orphans.sorted()). " +
+            "Either add a matching keyboardShortcut(...) declaration in a menu-reachable scope, " +
+            "or — if it's auto-installed by a SwiftUI scene — add the chord to chordsImplicitFromSwiftUIScenes with a comment citing the scene."
+        )
+
+        // Symmetric staleness: an entry in the implicit allow-list
+        // that no registry hotkeyHint claims is dead weight, and
+        // worse: it silently shields the next added chord with the
+        // same string. Mirrors the staleness check on
+        // `deliberatelyUnregisteredChords` above.
+        let staleImplicitEntries = Self.chordsImplicitFromSwiftUIScenes
+            .subtracting(registryChords)
+        XCTAssertTrue(
+            staleImplicitEntries.isEmpty,
+            "chordsImplicitFromSwiftUIScenes has entries with no matching registry chord: \(staleImplicitEntries.sorted()). " +
+            "Either the registry command was removed (drop the allow-list entry) " +
+            "or the implicit chord is no longer auto-installed (investigate)."
+        )
+
+        // #330 red-team F3 (P2): the two allow-lists must be
+        // disjoint. `deliberatelyUnregisteredChords` is for chords
+        // that exist in source but are deliberately NOT in the
+        // registry; `chordsImplicitFromSwiftUIScenes` is for chords
+        // that are in the registry but have NO source declaration.
+        // An overlap would mean a chord is somehow both "exists in
+        // source" and "doesn't exist in source", which is a sign
+        // someone added a source-side `keyboardShortcut(",", ...)`
+        // that should retire the implicit-allow-list entry.
+        let overlap = Self.chordsImplicitFromSwiftUIScenes
+            .intersection(menuChords)
+        XCTAssertTrue(
+            overlap.isEmpty,
+            "chordsImplicitFromSwiftUIScenes overlaps with source-scraped chords: \(overlap.sorted()). " +
+            "A source-side keyboardShortcut(...) was added for what was previously an implicit chord — drop the now-redundant implicit allow-list entry."
+        )
+    }
+
+    /// Chords known to be auto-installed by SwiftUI scene
+    /// declarations rather than by explicit `keyboardShortcut(...)`
+    /// calls in our source. These are real menu chords from the
+    /// user's perspective, but the scraper can't find them.
+    ///
+    /// New entries need a comment naming the scene and the file
+    /// it lives in — keeps the allow-list auditable and forces a
+    /// contributor to verify that the chord IS in fact installed
+    /// by the named scene rather than just assumed.
+    static let chordsImplicitFromSwiftUIScenes: Set<String> = [
+        // SwiftUI's `Settings { }` scene (SlateMacApp.swift) auto-
+        // installs the "Preferences…" menu item under the app
+        // menu with the standard `⌘,` shortcut. There is no
+        // `.keyboardShortcut(...)` declaration for it anywhere
+        // in source — the scene is the source of truth.
+        "⌘,",
+    ]
+
     /// Chords intentionally absent from the registry. New entries
     /// here need a comment explaining why — the drift check defers
     /// to this list rather than silently passing.
