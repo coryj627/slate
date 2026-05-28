@@ -265,7 +265,16 @@ struct CommandPaletteView: View {
         }
         .accessibilityLabel(Self.voiceOverLabel(for: command))
         .accessibilityHint(command.accessibilityHint ?? "")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        // Conditional modifier instead of `.accessibilityAddTraits(
+        // isSelected ? [.isSelected] : [])`. The empty-array branch
+        // theoretically would have to be a no-op, but the `Add` in
+        // the API name leaves doubt about whether SwiftUI clears a
+        // previously-applied trait when the next render passes []
+        // (see #324 red team). The conditional pattern below sidesteps
+        // the question — when isSelected is false, the
+        // `.accessibilityAddTraits(.isSelected)` modifier simply
+        // isn't in the view's modifier chain for that render.
+        .accessibilityIsSelected(isSelected)
     }
 
     // MARK: - VoiceOver label
@@ -445,3 +454,7 @@ struct CommandPaletteView: View {
         .accessibilityLabel("No command matches \(model.query). Try fewer letters or a different word.")
     }
 }
+
+// `accessibilityIsSelected(_:)` View extension lives in
+// `AccessibilityExtensions.swift` so the other call sites
+// (TasksReviewView, TasksPanel) can share one source of truth.
