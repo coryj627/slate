@@ -7,6 +7,13 @@ import SwiftUI
 /// (`CommandPaletteView`, `TasksReviewView`, `TasksPanel`, …). New
 /// helpers go here rather than at file scope so neighbouring
 /// features can adopt them without a cross-file import dependency.
+///
+/// **Visibility:** module-internal (Swift default). Helpers in
+/// this file are not part of the SlateMac module's public API —
+/// they exist to keep accessibility patterns consistent across
+/// the app. If a future module needs the same primitive, copy
+/// the implementation rather than `public`-promoting these and
+/// inviting cross-module coupling on UI a11y semantics.
 
 extension View {
     /// Conditionally add the `.isSelected` accessibility trait —
