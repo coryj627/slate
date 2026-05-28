@@ -38,6 +38,19 @@ enum HotkeySpoken {
     /// hint))"`). Returns an empty string for an empty `hint`, so
     /// the caller's guard against empty hints stays the caller's
     /// responsibility.
+    ///
+    /// **Extending for new special keys** (Codoki review on #347).
+    /// The walk is per-`Character`, so it handles two shapes:
+    /// - **Single-glyph keys** (arrows `↑↓←→`, the modifier glyphs)
+    ///   — add a `keyWord` entry (e.g. `"↑": "Up Arrow"`) and they
+    ///   speak correctly. No registry command uses an arrow chord
+    ///   today, so none are listed.
+    /// - **Multi-character key names** (function keys `"F1"`, `"F12"`)
+    ///   — these are NOT handled by the per-`Character` walk: `"F1"`
+    ///   would iterate as `F`, `1` and speak "F 1". If a chord ever
+    ///   uses a function key, the walk needs to tokenise on key
+    ///   boundaries first rather than per-character. Out of scope
+    ///   until such a chord exists.
     static func spoken(for hint: String) -> String {
         var parts: [String] = []
         for char in hint {
