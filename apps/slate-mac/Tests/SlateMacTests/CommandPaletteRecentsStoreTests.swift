@@ -57,6 +57,80 @@ final class CommandPaletteRecentsStoreTests: XCTestCase {
         )
     }
 
+    /// `load()` short-circuits at `maxEntries` (#327 follow-up).
+    /// A pathologically large hand-edited file should not be fully
+    /// scanned — once the dedupe accumulator reaches the cap, the
+    /// loop breaks. Test fixture: 10x `maxEntries` unique ids;
+    /// expect exactly `maxEntries` returned, and they must be the
+    /// FIRST `maxEntries` unique ids (most-recent-first invariant
+    /// preserved).
+    func testLoadShortCircuitsAtMaxEntriesOnLargeInput() throws {
+        let cap = CommandPaletteRecentsStore.maxEntries
+        let oversized = (0..<(cap * 10)).map { "slate.test.\($0)" }
+        let data = try JSONEncoder().encode(oversized)
+        try data.write(to: fileURL)
+
+        let loaded = makeStore().load()
+        XCTAssertEqual(
+            loaded.count,
+            cap,
+            "load must cap at maxEntries regardless of input size"
+        )
+        // The first `cap` unique ids in the input must be the ones
+        // returned — preserves "most recent first" ordering when
+        // dedupe encounters duplicates later in the input.
+        XCTAssertEqual(
+            loaded,
+            Array(oversized.prefix(cap)),
+            "short-circuit must return the FIRST cap unique ids, not a later window"
+        )
+    }
+
+    /// Combined: large input with duplicates interleaved. Should
+    /// still cap at maxEntries AND dedupe correctly.
+    func testLoadShortCircuitsHandlesDuplicatesInOversizedInput() throws {
+        let cap = CommandPaletteRecentsStore.maxEntries
+        // Pattern: `[0, 0, 1, 1, 2, 2, …]` — every id paired with
+        // an immediate duplicate. The first occurrence is unique;
+        // the second is filtered. Produces unique ids one-per-two-
+        // iterations as the loop progresses.
+        var pattern: [String] = []
+        for i in 0..<(cap * 5) {
+            if i > 0 { pattern.append("slate.test.\(i - 1)") }
+            pattern.append("slate.test.\(i)")
+        }
+        let data = try JSONEncoder().encode(pattern)
+        try data.write(to: fileURL)
+
+        let loaded = makeStore().load()
+        XCTAssertEqual(loaded.count, cap)
+        XCTAssertEqual(Set(loaded).count, cap, "no duplicates in output")
+        // First unique was "slate.test.0", second "slate.test.1", ...
+        XCTAssertEqual(loaded.first, "slate.test.0")
+    }
+
+    /// Boundary: `decoded.count == maxEntries` exactly. Must return
+    /// all of them (no short-circuit overshoot, no missing entries).
+    func testLoadAtExactlyMaxEntriesReturnsAll() throws {
+        let cap = CommandPaletteRecentsStore.maxEntries
+        let exact = (0..<cap).map { "slate.test.\($0)" }
+        let data = try JSONEncoder().encode(exact)
+        try data.write(to: fileURL)
+        XCTAssertEqual(makeStore().load(), exact)
+    }
+
+    /// Boundary: `decoded.count == maxEntries + 1`. Short-circuit
+    /// must drop the LAST id (preserves the first-N-uniques rule).
+    func testLoadAtMaxEntriesPlusOneDropsTheLastID() throws {
+        let cap = CommandPaletteRecentsStore.maxEntries
+        let overByOne = (0...cap).map { "slate.test.\($0)" }
+        let data = try JSONEncoder().encode(overByOne)
+        try data.write(to: fileURL)
+        let loaded = makeStore().load()
+        XCTAssertEqual(loaded.count, cap)
+        XCTAssertEqual(loaded, Array(overByOne.prefix(cap)))
+    }
+
     func testLoadCapsExternallyOversizedFile() throws {
         // Simulate someone editing the file by hand and saving 20
         // entries. Loader must hard-cap to maxEntries.
