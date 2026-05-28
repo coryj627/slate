@@ -160,6 +160,30 @@ final class CommandPaletteViewTests: XCTestCase {
         }
     }
 
+    // MARK: - .isSelected trait accumulation (#324)
+    //
+    // An empirical NSHostingController-based test for SwiftUI
+    // `.isSelected` trait accumulation across renders was attempted
+    // and abandoned: `swift test` doesn't have a real AX consumer
+    // attached, so SwiftUI never populates the AppKit accessibility
+    // metadata layer fully. A positive control (rendering with
+    // selected=true and asserting `accessibilitySelected = true`
+    // on the AX tree) failed — the trait isn't queryable from
+    // `swift test` regardless of the SwiftUI declaration.
+    //
+    // The substantive fix instead lives in `CommandPaletteView.swift`:
+    // the `.accessibilityIsSelected(_:)` View extension uses a
+    // `@ViewBuilder` conditional so the
+    // `.accessibilityAddTraits(.isSelected)` modifier is only in
+    // the view's modifier chain when selected. The `[]` argument
+    // that prompted the original "does this accumulate?" question
+    // doesn't exist anywhere. Correct by construction.
+    //
+    // If a future PR introduces XCUITest infrastructure (a real
+    // SwiftUI accessibility runner), revisit this with a proper
+    // end-to-end assertion. For now, the structural change is the
+    // closure — see #324 PR description for the full reasoning.
+
     // MARK: - Arrow-key modifier passthrough (#315 review follow-up)
 
     /// Locks in the contract that bare ↑ / ↓ moves palette

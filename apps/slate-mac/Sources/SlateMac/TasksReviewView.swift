@@ -118,7 +118,7 @@ struct TasksReviewView: View {
         .accessibilityLabel(
             count.map { "\(filter.displayName), \($0) tasks" } ?? filter.displayName
         )
-        .accessibilityAddTraits(isActive ? [.isSelected] : [])
+        .accessibilityIsSelected(isActive)
         .accessibilityHint("Filter the review to \(filter.displayName.lowercased()) tasks.")
     }
 
@@ -253,7 +253,7 @@ struct TasksReviewView: View {
                     ? "Save \(row.fileName) first. Toggle is disabled while the editor has unsaved changes."
                     : "Toggles the task between open and done."
             )
-            .accessibilityAddTraits(row.task.completed ? [.isSelected] : [])
+            .accessibilityIsSelected(row.task.completed)
 
             Button {
                 appState.openTaskRowInEditor(row)
