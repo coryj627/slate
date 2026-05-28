@@ -150,4 +150,86 @@ final class RecentVaultsStoreTests: XCTestCase {
         let store = RecentVaultsStore(fileURL: file)
         XCTAssertEqual(store.load().count, RecentVaultsStore.maxEntries)
     }
+
+    // MARK: - File-size guard (#353)
+
+    /// A `[RecentVault]` JSON fixture, padded with legal whitespace
+    /// before the closing `]` to an exact byte length. Decodes to a
+    /// single entry `RecentVault(path: "/x", displayName: "x",
+    /// lastOpenedMs: 1)`.
+    private func paddedRecentVaultsJSON(toByteCount target: Int) -> Data {
+        let prefix = #"[{"path":"/x","displayName":"x","lastOpenedMs":1}"#
+        let suffix = "]"
+        let padCount = target - prefix.utf8.count - suffix.utf8.count
+        let json = prefix + String(repeating: " ", count: max(0, padCount)) + suffix
+        return json.data(using: .utf8)!
+    }
+
+    /// A file strictly larger than `maxFileBytes` is refused before
+    /// the decode — even when its contents are valid JSON. A valid-
+    /// JSON oversized file proves the guard fires pre-decode (a valid
+    /// file would otherwise decode to one entry), not via the
+    /// malformed path.
+    func testLoadRefusesFileLargerThanThreshold() throws {
+        let file = tempDir.appendingPathComponent("recent-vaults.json")
+        let data = paddedRecentVaultsJSON(toByteCount: RecentVaultsStore.maxFileBytes + 1)
+        XCTAssertEqual(data.count, RecentVaultsStore.maxFileBytes + 1)
+        // Sanity: the fixture is itself valid JSON, so only the size
+        // guard can reject it.
+        XCTAssertEqual(
+            try JSONDecoder().decode([RecentVault].self, from: data),
+            [RecentVault(path: "/x", displayName: "x", lastOpenedMs: 1)]
+        )
+        try data.write(to: file)
+
+        XCTAssertEqual(
+            RecentVaultsStore(fileURL: file).load(), [],
+            "a file 1 byte over maxFileBytes must be refused before decode, even though its JSON is valid"
+        )
+    }
+
+    /// A file at EXACTLY `maxFileBytes` is accepted (the guard uses
+    /// `>` not `>=`). Proven by decoding to the expected entry rather
+    /// than the empty list.
+    func testLoadAcceptsFileAtExactlyThreshold() throws {
+        let file = tempDir.appendingPathComponent("recent-vaults.json")
+        let data = paddedRecentVaultsJSON(toByteCount: RecentVaultsStore.maxFileBytes)
+        XCTAssertEqual(data.count, RecentVaultsStore.maxFileBytes)
+        try data.write(to: file)
+
+        XCTAssertEqual(
+            RecentVaultsStore(fileURL: file).load(),
+            [RecentVault(path: "/x", displayName: "x", lastOpenedMs: 1)],
+            "a file at exactly maxFileBytes must pass the guard and decode normally"
+        )
+    }
+
+    /// Open/read-failure path: the bounded read opens the file with a
+    /// `FileHandle`; if that fails on a file that passed `fileExists`
+    /// (unreadable perms, or a delete race), `load()` must fall to the
+    /// empty list — the welcome screen must never be blocked by an
+    /// unreadable recents file.
+    func testLoadReturnsEmptyWhenFileUnreadable() throws {
+        let file = tempDir.appendingPathComponent("recent-vaults.json")
+        try JSONEncoder().encode(
+            [RecentVault(path: "/x", displayName: "x", lastOpenedMs: 1)]
+        ).write(to: file)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: file.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: file.path
+            )
+        }
+        try XCTSkipIf(
+            FileManager.default.isReadableFile(atPath: file.path),
+            "file still readable (running as root?); can't exercise the open-failure path"
+        )
+
+        XCTAssertEqual(
+            RecentVaultsStore(fileURL: file).load(), [],
+            "an unreadable recent-vaults file must load as empty, not crash or block"
+        )
+    }
 }

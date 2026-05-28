@@ -15,6 +15,19 @@ import Foundation
 public final class RecentVaultsStore {
     public static let maxEntries = 8
 
+    /// Upper bound on the recent-vaults file size `load()` will read
+    /// (#353, mirroring the #341 guard on `CommandPaletteRecentsStore`).
+    /// A well-formed file holds at most `maxEntries` (8) `RecentVault`
+    /// entries; each is a path (≤ ~1 KiB even for a deep macOS path,
+    /// bounded by `PATH_MAX`), a display name, and a millisecond
+    /// timestamp, plus JSON structure + pretty-print whitespace —
+    /// generously ~1.7 KiB per entry, so a full list is ~14 KiB.
+    /// 64 KiB is ~4× that headroom while still refusing a malformed
+    /// or hand-crafted huge file before it's read into memory and
+    /// decoded into a large `[RecentVault]`. Files larger than this
+    /// are treated as malformed (→ empty list).
+    public static let maxFileBytes: Int = 1 << 16  // 64 KiB
+
     private let fileURL: URL
     private let fileManager: FileManager
 
@@ -40,11 +53,35 @@ public final class RecentVaultsStore {
     /// The hard cap of `maxEntries` is also enforced on load so an
     /// externally-modified file can't ship a 50-entry list past the
     /// store; downstream UI code can trust the invariant unconditionally.
+    ///
+    /// **File-size guard, bounded read (#353).** Mirrors the
+    /// `CommandPaletteRecentsStore` guard: open the file once and read
+    /// at most `maxFileBytes + 1` bytes. A regular-file read returns
+    /// `min(requested, remaining)`, so a result strictly larger than
+    /// `maxFileBytes` means the file is over the limit (→ empty list)
+    /// and we never allocate more than `maxFileBytes + 1` bytes no
+    /// matter how huge the on-disk file is. A single read (rather than
+    /// stat-then-read) means there's no TOCTOU window between a size
+    /// check and the read. Any open/read failure (incl. a delete race
+    /// after `fileExists`) falls to the empty list, same as a
+    /// malformed decode.
     public func load() -> [RecentVault] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
-        guard let data = try? Data(contentsOf: fileURL),
-            let decoded = try? JSONDecoder().decode([RecentVault].self, from: data)
-        else {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return []
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: Self.maxFileBytes + 1) else {
+            return []
+        }
+        if data.count > Self.maxFileBytes {
+            NSLog(
+                "RecentVaultsStore: recent-vaults file exceeds the "
+                + "\(Self.maxFileBytes)-byte threshold; treating as malformed."
+            )
+            return []
+        }
+        guard let decoded = try? JSONDecoder().decode([RecentVault].self, from: data) else {
             return []
         }
         if decoded.count > Self.maxEntries {
