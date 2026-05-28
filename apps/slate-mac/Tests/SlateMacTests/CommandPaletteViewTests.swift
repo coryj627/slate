@@ -197,14 +197,20 @@ final class CommandPaletteViewTests: XCTestCase {
 
     func testBareArrowDownIsConsumed() {
         XCTAssertFalse(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: []),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: []
+            ),
             "bare ↓ must be consumed by the palette monitor"
         )
     }
 
     func testBareArrowUpIsConsumed() {
         XCTAssertFalse(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 126, modifierFlags: []),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.up,
+                modifierFlags: []
+            ),
             "bare ↑ must be consumed by the palette monitor"
         )
     }
@@ -212,25 +218,37 @@ final class CommandPaletteViewTests: XCTestCase {
     func testFnArrowPassesThroughForPageNav() {
         // macOS treats Fn+↓ / Fn+↑ as Page Down / Page Up.
         XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: .function),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: .function
+            ),
             "Fn+↓ (macOS Page Down) must pass through unconsumed"
         )
         XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 126, modifierFlags: .function),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.up,
+                modifierFlags: .function
+            ),
             "Fn+↑ (macOS Page Up) must pass through unconsumed"
         )
     }
 
     func testShiftArrowPassesThroughForSelectionExtend() {
         XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: .shift),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: .shift
+            ),
             "Shift+↓ (extend text-field selection) must pass through unconsumed"
         )
     }
 
     func testCommandArrowPassesThroughForCaretJump() {
         XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: .command),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: .command
+            ),
             "Cmd+↓ (caret to end-of-text) must pass through unconsumed"
         )
     }
@@ -240,7 +258,10 @@ final class CommandPaletteViewTests: XCTestCase {
         // chord we absolutely cannot intercept. Failing this test
         // means we just broke VO navigation for blind users.
         XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(keyCode: 125, modifierFlags: [.control, .option]),
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: [.control, .option]
+            ),
             "Ctrl+Option+↓ (VoiceOver Quick Nav) MUST pass through"
         )
     }
@@ -255,6 +276,50 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertTrue(
             CommandPaletteView.shouldPassThroughArrow(keyCode: 36 /* Return */, modifierFlags: []),
             "Return is handled by the search field's onSubmit, not the monitor"
+        )
+    }
+
+    /// #325 follow-up: device-dependent flags like `.capsLock`
+    /// and `.numericPad` shouldn't affect chord routing. The
+    /// `arrowModifierMask` is deliberately narrow — it doesn't
+    /// contain `.capsLock` or `.numericPad`, so the intersection
+    /// is empty for those flags alone. (We initially tried
+    /// `.deviceIndependentFlagsMask` normalization but the mask is
+    /// `0xffff0000UL` and capsLock/numericPad live in the high 16
+    /// bits, so they survive — the normalization would have been a
+    /// no-op for these flags. The correct mechanism is mask
+    /// narrowness, locked in by these regression tests.)
+    func testCapsLockOnBareArrowIsStillConsumed() {
+        XCTAssertFalse(
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: .capsLock
+            ),
+            "Caps Lock isn't in arrowModifierMask; bare ↓ with caps lock still navigates the palette"
+        )
+    }
+
+    func testNumericPadFlagOnBareArrowIsStillConsumed() {
+        // Arrow keys are sometimes flagged .numericPad on extended
+        // keyboards. Doesn't change semantics — still a bare arrow.
+        XCTAssertFalse(
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.up,
+                modifierFlags: .numericPad
+            ),
+            ".numericPad isn't in arrowModifierMask; bare ↑ with it set still navigates"
+        )
+    }
+
+    func testCapsLockPlusShiftArrowStillPassesThrough() {
+        // Combined: Caps Lock (not in mask) + Shift (in mask).
+        // Shift alone is enough to trip the passthrough.
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(
+                keyCode: CommandPaletteView.ArrowKey.down,
+                modifierFlags: [.capsLock, .shift]
+            ),
+            "Caps + Shift + ↓ — Shift IS in arrowModifierMask; chord passes through"
         )
     }
 
