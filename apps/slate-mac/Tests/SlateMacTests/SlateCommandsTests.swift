@@ -115,6 +115,20 @@ final class SlateCommandsTests: XCTestCase {
             "Add matching commands to registerCoreCommands in SlateCommands.swift, " +
             "or add the chord to deliberatelyUnregisteredChords here with a comment."
         )
+
+        // Catch the inverse: an allow-list entry whose source-side
+        // chord has been removed. Without this, deletes of the
+        // TemplatePromptSheet binding (or any other allow-listed
+        // chord) leave a dead `deliberatelyUnregisteredChords`
+        // entry that silently shields the next added chord.
+        let staleAllowListEntries = Self.deliberatelyUnregisteredChords
+            .subtracting(menuChords)
+        XCTAssertTrue(
+            staleAllowListEntries.isEmpty,
+            "deliberatelyUnregisteredChords has entries with no matching source-side chord: \(staleAllowListEntries.sorted()). " +
+            "Either the chord was removed from the menu source (drop the allow-list entry) " +
+            "or the regex no longer scrapes it (investigate)."
+        )
     }
 
     /// Chords intentionally absent from the registry. New entries
@@ -125,54 +139,200 @@ final class SlateCommandsTests: XCTestCase {
         // palette would be weird UX, and toggling-to-close
         // duplicates the Esc dismissal already wired in #313.
         "⇧⌘P",
+        // TemplatePromptSheet.swift's "commit" button binding.
+        // In-sheet submission action, structurally identical to a
+        // global chord but scoped to the sheet's responder chain
+        // by SwiftUI. Not a menu / palette-worthy command. Picked
+        // up by the broader scraper (#322) — earlier scrapers
+        // missed `.return` entirely because it isn't a quoted
+        // single char.
+        "⌘↩",
+        // PropertyEditorRow.swift's per-row Delete button. Row-
+        // scoped action — deletes one property of the focused
+        // row, not a global "delete property" verb. Picked up by
+        // the #322 scraper's new `.delete` coverage.
+        "⌘⌫",
     ]
 
-    /// Walk every `.swift` source file under `apps/slate-mac/Sources/SlateMac/`,
-    /// extract every `keyboardShortcut("X", modifiers: ...)` chord,
-    /// and return the set of human-readable chord strings (⌘S,
-    /// ⇧⌘N, etc.). Excludes `.cancelAction` / `.defaultAction` /
-    /// `.escape` overloads.
+    /// Walk every `.swift` source file under
+    /// `apps/slate-mac/Sources/SlateMac/` **recursively** (so a
+    /// future contributor adding `Sources/SlateMac/Panels/Foo.swift`
+    /// doesn't silently escape the drift check), extract every
+    /// `keyboardShortcut(...)` chord, and return the set of
+    /// human-readable chord strings (⌘S, ⇧⌘N, ⌘,, ⌘↩, etc.).
+    ///
+    /// Sheet-semantics overloads (`.cancelAction`, `.defaultAction`)
+    /// are excluded — they don't take a `modifiers:` argument so
+    /// the regex naturally skips them. Bare special keys like
+    /// `.escape` / `.return` / arrows WITHOUT modifiers are also
+    /// excluded (same reason). A special key paired with modifiers
+    /// (e.g. `keyboardShortcut(.return, modifiers: [.command])`)
+    /// IS a real chord and gets scraped.
     static func scrapedMenuChords() throws -> Set<String> {
         let sourcesDir = projectRoot
             .appendingPathComponent("apps")
             .appendingPathComponent("slate-mac")
             .appendingPathComponent("Sources")
             .appendingPathComponent("SlateMac")
-        let files = try FileManager.default.contentsOfDirectory(
-            at: sourcesDir,
-            includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "swift" }
+        return try scrapeChordsFromDirectory(sourcesDir)
+    }
 
-        // Matches:  keyboardShortcut("x", modifiers: .command)
-        //           keyboardShortcut("x", modifiers: [.command, .shift])
-        //           keyboardShortcut(KeyEquivalent("r"), modifiers: [.command, .shift])
-        let chordRegex = try NSRegularExpression(
-            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"([a-zA-Z0-9])"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]*\]|\.command|\.shift|\.option|\.control)"#
-        )
-
+    /// Recursive walk over `.swift` files under `dir`, accumulating
+    /// every chord via `extractChords(from:)`. Extracted so unit
+    /// tests can exercise the walker against a temp-dir fixture
+    /// with nested subdirectories.
+    static func scrapeChordsFromDirectory(_ dir: URL) throws -> Set<String> {
         var chords: Set<String> = []
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            let range = NSRange(text.startIndex..., in: text)
-            chordRegex.enumerateMatches(in: text, range: range) { match, _, _ in
-                guard let match,
-                      let keyRange = Range(match.range(at: 1), in: text),
-                      let modsRange = Range(match.range(at: 2), in: text)
-                else { return }
-                let key = String(text[keyRange]).uppercased()
-                let mods = String(text[modsRange])
-                chords.insert(Self.formatChord(key: key, modifiers: mods))
-            }
+        guard let enumerator = FileManager.default.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return chords
+        }
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "swift" else { continue }
+            // Skip symlinks / non-regular files — defensive against
+            // someone dropping a symlink to a .swift file under
+            // Sources/SlateMac/. No current source does this, but
+            // following a symlink to a different file (or worse, a
+            // cycle) would be surprising scraper behaviour.
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            chords.formUnion(extractChords(from: text))
         }
         return chords
     }
 
+    /// Pure: scan `text` for every `keyboardShortcut(...)` chord
+    /// declaration and return the set of human-readable chord
+    /// strings. Two regex passes:
+    ///
+    /// 1. **Quoted single char** — `keyboardShortcut("X", modifiers: ...)`
+    ///    or `keyboardShortcut(KeyEquivalent("X"), modifiers: ...)`.
+    ///    `X` is any single non-quote non-backslash character —
+    ///    covers alphanumerics AND punctuation (`,`, `/`, etc.).
+    /// 2. **Special-key dot-syntax** — `keyboardShortcut(.upArrow,
+    ///    modifiers: ...)` etc. Only the eight constants we plausibly
+    ///    use as chords (arrows + return / tab / space / escape).
+    ///    Excludes `.cancelAction` / `.defaultAction` (no `modifiers:`
+    ///    argument; regex skips naturally).
+    static func extractChords(from text: String) -> Set<String> {
+        var chords: Set<String> = []
+        let range = NSRange(text.startIndex..., in: text)
+
+        Self.quotedKeyRegex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match,
+                  let keyRange = Range(match.range(at: 1), in: text),
+                  let modsRange = Range(match.range(at: 2), in: text)
+            else { return }
+            let key = String(text[keyRange]).uppercased()
+            let mods = String(text[modsRange])
+            chords.insert(Self.formatChord(key: key, modifiers: mods))
+        }
+
+        Self.specialKeyRegex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match,
+                  let keyRange = Range(match.range(at: 1), in: text),
+                  let modsRange = Range(match.range(at: 2), in: text)
+            else { return }
+            let key = Self.glyphForSpecialKey(String(text[keyRange]))
+            let mods = String(text[modsRange])
+            chords.insert(Self.formatChord(key: key, modifiers: mods))
+        }
+
+        return chords
+    }
+
+    /// Translate a SwiftUI `KeyEquivalent` special-key constant
+    /// name to its display glyph. Single source of truth for the
+    /// scraper's special-key formatting.
+    ///
+    /// `fatalError` on unknown input — if anyone widens the
+    /// `specialKeys` regex alternation in `extractChords(from:)`
+    /// without updating this switch, the test crashes loudly
+    /// instead of producing nonsense chord strings like `"⌘home"`
+    /// that would either fail the drift test for the wrong reason
+    /// or false-pass via an `deliberatelyUnregisteredChords`
+    /// match. Keeps the regex list and the glyph table in
+    /// lock-step.
+    ///
+    /// SwiftUI's `KeyEquivalent` has no `.enter` — Return is
+    /// `.return`. `.delete` is Backspace; `.deleteForward` is the
+    /// distinct "del" / fn+Delete key. Both are covered.
+    private static func glyphForSpecialKey(_ name: String) -> String {
+        switch name {
+        case "upArrow":       return "↑"
+        case "downArrow":     return "↓"
+        case "leftArrow":     return "←"
+        case "rightArrow":    return "→"
+        case "return":        return "↩"
+        case "tab":           return "⇥"
+        case "space":         return "␣"
+        case "escape":        return "⎋"
+        case "delete":        return "⌫"
+        case "deleteForward": return "⌦"
+        case "clear":         return "⌧"
+        case "home":          return "↖"
+        case "end":           return "↘"
+        case "pageUp":        return "⇞"
+        case "pageDown":      return "⇟"
+        default:
+            fatalError(
+                "Unknown special key '\(name)' — "
+                + "add a case to glyphForSpecialKey or "
+                + "remove it from the specialKeys regex alternation."
+            )
+        }
+    }
+
+    // MARK: - Compiled regexes (hoisted from extractChords)
+    //
+    // The two patterns compile once at class-load instead of per
+    // call to extractChords(from:). With ~47 files in
+    // Sources/SlateMac/, the prior `try! NSRegularExpression(...)`
+    // inside the function would recompile twice per file — sub-
+    // millisecond but unnecessary.
+
+    /// `keyboardShortcut("X", modifiers: ...)` /
+    /// `keyboardShortcut(KeyEquivalent("X"), modifiers: ...)` —
+    /// `X` is any single non-quote non-backslash char (alphanumerics
+    /// + punctuation). Requires non-empty `modifiers:` to skip
+    /// sheet-dismiss bindings declared with `modifiers: []`.
+    private static let quotedKeyRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(
+            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"([^"\\])"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+        )
+    }()
+
+    /// `keyboardShortcut(.<specialKey>, modifiers: ...)` —
+    /// special-key constants explicitly listed so a typo in source
+    /// (`.upArro`) doesn't get scraped as a chord. Includes
+    /// `.deleteForward` distinct from `.delete` (macOS treats them
+    /// as different keys — Backspace vs the "del" key). Function
+    /// keys (`KeyEquivalent("\u{F704}")` shape) are deferred — no
+    /// source uses them yet.
+    private static let specialKeyRegex: NSRegularExpression = {
+        let specialKeys =
+            "upArrow|downArrow|leftArrow|rightArrow"
+            + "|return|tab|space|escape"
+            + "|delete|deleteForward"
+            + "|clear|home|end|pageUp|pageDown"
+        // swiftlint:disable:next force_try
+        return try! NSRegularExpression(
+            pattern: #"keyboardShortcut\(\s*\.(\#(specialKeys))\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+        )
+    }()
+
     private static func formatChord(key: String, modifiers: String) -> String {
         var glyphs = ""
-        if modifiers.contains(".control") { glyphs += "⌃" }
-        if modifiers.contains(".option")  { glyphs += "⌥" }
-        if modifiers.contains(".shift")   { glyphs += "⇧" }
-        if modifiers.contains(".command") { glyphs += "⌘" }
+        if modifiers.contains(".control")  { glyphs += "⌃" }
+        if modifiers.contains(".option")   { glyphs += "⌥" }
+        if modifiers.contains(".shift")    { glyphs += "⇧" }
+        if modifiers.contains(".command")  { glyphs += "⌘" }
+        if modifiers.contains(".function") { glyphs += "fn+" }
         return glyphs + key
     }
 
@@ -306,6 +466,171 @@ final class SlateCommandsTests: XCTestCase {
     func testInvokingJumpToBibliographyWithNoExpandedCitationIsNoOp() async throws {
         let appState = AppState()
         try appState.commandRegistry.invokeById(id: SlateCommandID.jumpToBibliography)
+    }
+
+    // MARK: - Drift scraper coverage (#322)
+
+    /// Pure-function self-tests of `extractChords(from:)` — the
+    /// regex-level coverage the integration drift test can't
+    /// exercise directly. Without these, a regex regression that
+    /// stops matching e.g. punctuation keys would silently let
+    /// drift-untracked chords ship.
+
+    func testExtractChordsHandlesAlphanumericKey() {
+        let text = #".keyboardShortcut("s", modifiers: .command)"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘S"]
+        )
+    }
+
+    func testExtractChordsHandlesPunctuationKey() {
+        // The case that prompted #322 — `Cmd+,` for Settings was
+        // never scraped by the old `[a-zA-Z0-9]` regex.
+        let text = #".keyboardShortcut(",", modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘,"]
+        )
+    }
+
+    func testExtractChordsHandlesSlashKey() {
+        let text = #".keyboardShortcut("/", modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘/"]
+        )
+    }
+
+    func testExtractChordsHandlesKeyEquivalentWrapped() {
+        // The KeyEquivalent(...) wrapper form, used in PropertiesPanel.
+        let text = #".keyboardShortcut(KeyEquivalent("r"), modifiers: [.command, .shift])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⇧⌘R"]
+        )
+    }
+
+    func testExtractChordsHandlesSpecialKeyWithModifiers() {
+        // `.return` paired with `.command` is a real chord (the
+        // TemplatePromptSheet commit binding).
+        let text = #".keyboardShortcut(.return, modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘↩"]
+        )
+    }
+
+    func testExtractChordsDistinguishesDeleteFromDeleteForward() {
+        // `.delete` is Backspace (⌫); `.deleteForward` is the
+        // "del" key / fn+Delete (⌦). Different keys, different
+        // glyphs — a future chord using one shouldn't surface as
+        // the other.
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(
+                from: #".keyboardShortcut(.delete, modifiers: .command)"#
+            ),
+            ["⌘⌫"]
+        )
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(
+                from: #".keyboardShortcut(.deleteForward, modifiers: .command)"#
+            ),
+            ["⌘⌦"]
+        )
+    }
+
+    func testExtractChordsHandlesArrowKeyWithModifiers() {
+        // Hypothetical: `Cmd+↓` for "jump to bottom".
+        let text = #".keyboardShortcut(.downArrow, modifiers: [.command])"#
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘↓"]
+        )
+    }
+
+    func testExtractChordsSkipsBareSpecialKey() {
+        // `.escape` without modifiers is SwiftUI's sheet-dismiss
+        // binding, not a global menu chord. Empty-array modifiers
+        // also count as "bare" — the regex requires non-empty.
+        let bareCases = [
+            #".keyboardShortcut(.escape, modifiers: [])"#,
+            #".keyboardShortcut(.return, modifiers: [])"#,
+        ]
+        for text in bareCases {
+            XCTAssertTrue(
+                SlateCommandsTests.extractChords(from: text).isEmpty,
+                "bare special key without modifiers must not scrape: \(text)"
+            )
+        }
+    }
+
+    func testExtractChordsSkipsCancelAndDefaultAction() {
+        // The `.cancelAction` / `.defaultAction` overloads don't
+        // take a `modifiers:` argument, so the regex naturally
+        // misses them. Lock in that contract.
+        let semanticCases = [
+            ".keyboardShortcut(.cancelAction)",
+            ".keyboardShortcut(.defaultAction)",
+        ]
+        for text in semanticCases {
+            XCTAssertTrue(
+                SlateCommandsTests.extractChords(from: text).isEmpty,
+                "semantic-role shortcut must not scrape: \(text)"
+            )
+        }
+    }
+
+    func testExtractChordsFindsMultipleChordsInOneFile() {
+        let text = """
+            Button("A") {}.keyboardShortcut("a", modifiers: .command)
+            Button("B") {}.keyboardShortcut("b", modifiers: [.command, .shift])
+            Button("Comma") {}.keyboardShortcut(",", modifiers: [.command])
+            """
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘A", "⇧⌘B", "⌘,"]
+        )
+    }
+
+    /// Recursive directory walk — fixture has a nested subdirectory
+    /// holding a `.swift` file with a chord declaration. The old
+    /// `contentsOfDirectory(at:)` scraper would silently miss it.
+    func testScrapeChordsFromDirectoryWalksRecursively() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-322-scrape-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Top-level .swift
+        try #".keyboardShortcut("a", modifiers: .command)"#.write(
+            to: tempDir.appendingPathComponent("Top.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        // Nested .swift two levels deep
+        let nested = tempDir
+            .appendingPathComponent("Sub")
+            .appendingPathComponent("Deeper")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try #".keyboardShortcut("b", modifiers: [.command, .shift])"#.write(
+            to: nested.appendingPathComponent("Nested.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        // Non-swift file in nested dir — should be ignored
+        try #".keyboardShortcut("Z", modifiers: .command)"#.write(
+            to: nested.appendingPathComponent("ignored.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let chords = try SlateCommandsTests.scrapeChordsFromDirectory(tempDir)
+        XCTAssertEqual(
+            chords,
+            ["⌘A", "⇧⌘B"],
+            "must find top-level + nested .swift; must skip .txt"
+        )
     }
 
     // MARK: - Unknown id
