@@ -242,7 +242,21 @@ final class CloseVaultSheetParityTests: XCTestCase {
     /// Returns the source between `func closeVault()`'s opening
     /// brace and its matching closing brace. Brace-counting walks
     /// the body so nested closures don't trip the search.
-    private func extractCloseVaultBody(_ source: String) throws -> String {
+    ///
+    /// **Strips comments + strings first (#343).** A literal `}` in
+    /// a string (`let s = "}"`) or a comment (`// }`, `/* } */`)
+    /// inside `closeVault()` would otherwise be counted as a real
+    /// closing brace, prematurely ending the extracted body — and
+    /// the drift test would then silently scan a truncated
+    /// substring. Running the source through `SwiftSourceStripping`
+    /// (the same helper the Settings-scene grep uses, from #333)
+    /// blanks those `{`/`}` to spaces while preserving offsets, so
+    /// the counter only ever sees structural braces. The returned
+    /// body is therefore comment/string-blanked too — fine for the
+    /// caller, which only `contains`-checks code substrings like
+    /// `isFooOpen = false` / `closeSearchOverlay()`.
+    private func extractCloseVaultBody(_ rawSource: String) throws -> String {
+        let source = SwiftSourceStripping.strippingCommentsAndStrings(rawSource)
         // Find the signature. `closeVault()` is non-async + takes no
         // args, so the signature is stable.
         guard let sigRange = source.range(of: "func closeVault()") else {
@@ -334,6 +348,38 @@ final class CloseVaultSheetParityTests: XCTestCase {
         XCTAssertFalse(
             body.contains("isWrongOpen = false"),
             "brace-counter must stop at closeVault()'s close, not bleed into the next func"
+        )
+    }
+
+    /// #343: a literal `}` inside a string or comment in the body
+    /// must NOT be counted as closeVault()'s closing brace. Before
+    /// the `SwiftSourceStripping` pre-pass, the `}` in `"…}"` would
+    /// have dropped depth to 0 and truncated the body mid-string —
+    /// and the drift test would then scan a wrong substring. This
+    /// fixture puts a brace in a string literal, a line comment, and
+    /// a block comment, all before the real reset; the extracted
+    /// body must still reach `isFooOpen = false` and stop before the
+    /// next func.
+    func testExtractCloseVaultBodyIgnoresBracesInStringsAndComments() throws {
+        let fixture = """
+            class Foo {
+                func closeVault() {
+                    let label = "a closing brace } inside a string"
+                    // a } in a line comment
+                    /* and a } in a block comment */
+                    isFooOpen = false
+                }
+                func somethingElse() { isWrongOpen = false }
+            }
+            """
+        let body = try extractCloseVaultBody(fixture)
+        XCTAssertTrue(
+            body.contains("isFooOpen = false"),
+            "real reset after the brace-bearing string/comments must be in the body"
+        )
+        XCTAssertFalse(
+            body.contains("isWrongOpen = false"),
+            "a brace inside a string/comment must not prematurely end the body and let the next func bleed in"
         )
     }
 }
