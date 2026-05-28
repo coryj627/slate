@@ -351,6 +351,38 @@ final class CloseVaultSheetParityTests: XCTestCase {
         )
     }
 
+    /// #343 / #354 review: the strip also protects the *signature
+    /// finder*, not just the brace counter. A `func closeVault()`
+    /// mention inside a comment EARLIER in the file would otherwise
+    /// make `range(of: "func closeVault()")` anchor on the comment
+    /// (and then walk the comment's own braces), extracting the
+    /// wrong region. With the strip, the commented mention is
+    /// blanked, so the finder lands on the real declaration.
+    func testExtractCloseVaultBodyLocatesRealSignatureNotCommentedMention() throws {
+        let fixture = """
+            class Foo {
+                // historical: the old func closeVault() { reset one bool } — see #313
+                func closeVault() {
+                    isFooOpen = false
+                }
+                func somethingElse() { isWrongOpen = false }
+            }
+            """
+        let body = try extractCloseVaultBody(fixture)
+        XCTAssertTrue(
+            body.contains("isFooOpen = false"),
+            "must extract the REAL closeVault() body, not anchor on the commented mention earlier in the file"
+        )
+        XCTAssertFalse(
+            body.contains("reset one bool"),
+            "the commented `func closeVault() { … }` must be blanked, not treated as the signature"
+        )
+        XCTAssertFalse(
+            body.contains("isWrongOpen = false"),
+            "must stop at the real closeVault()'s close, not bleed into the next func"
+        )
+    }
+
     /// #343: a literal `}` inside a string or comment in the body
     /// must NOT be counted as closeVault()'s closing brace. Before
     /// the `SwiftSourceStripping` pre-pass, the `}` in `"…}"` would
