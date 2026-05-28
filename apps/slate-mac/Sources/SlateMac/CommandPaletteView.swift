@@ -307,6 +307,41 @@ struct CommandPaletteView: View {
     enum ArrowKey {
         static let up: UInt16 = 126   // kVK_UpArrow
         static let down: UInt16 = 125 // kVK_DownArrow
+
+        /// Logical palette-navigation direction for an intercepted
+        /// arrow key (#339). Only the directions actually wired to
+        /// navigation are modelled — there is intentionally no
+        /// `.left` / `.right` case yet, because the palette doesn't
+        /// navigate horizontally and a dead enum case would be
+        /// untestable speculative generality.
+        ///
+        /// The payoff of routing dispatch through this enum is
+        /// compile-time exhaustiveness: when left/right *do* get a
+        /// palette action, you add the keycode constant, a
+        /// `direction(for:)` arm, and a `case` here — and every
+        /// `switch` over `Direction` that isn't updated becomes a
+        /// build error, so no dispatch site can silently fall
+        /// through. That's the "less error-prone, co-located"
+        /// property Codoki's #338 review asked for, delivered
+        /// without speculative cases.
+        enum Direction {
+            case up
+            case down
+        }
+
+        /// Map a virtual key code to its palette-navigation
+        /// `Direction`, or `nil` if the key isn't one the palette
+        /// navigates with. Single source of truth for "which arrow
+        /// keycodes mean navigation" — both `shouldPassThroughArrow`
+        /// and the monitor dispatch consult it, so the navigable set
+        /// can't drift between the two.
+        static func direction(for keyCode: UInt16) -> Direction? {
+            switch keyCode {
+            case up:   return .up
+            case down: return .down
+            default:   return nil
+            }
+        }
     }
 
     /// Modifier mask: any of these on an arrow key means "let it
@@ -336,18 +371,23 @@ struct CommandPaletteView: View {
     /// having to synthesise live `NSEvent`s into the run loop.
     ///
     /// Pass through (returns true) when:
-    /// - Key is not `ArrowKey.up` / `ArrowKey.down`
-    /// - Key IS an arrow but any modifier in `arrowModifierMask`
-    ///   is held (Shift, Ctrl, Option, Cmd, Fn — covers text-field
-    ///   selection, caret-jump, Page-Up/Down, and VoiceOver Quick
-    ///   Nav).
+    /// - Key is not a navigable arrow (`ArrowKey.direction(for:)`
+    ///   returns `nil`)
+    /// - Key IS a navigable arrow but any modifier in
+    ///   `arrowModifierMask` is held (Shift, Ctrl, Option, Cmd, Fn
+    ///   — covers text-field selection, caret-jump, Page-Up/Down,
+    ///   and VoiceOver Quick Nav).
     ///
-    /// Consume (returns false) only for bare ↑ / ↓.
+    /// Consume (returns false) only for a bare navigable arrow.
+    /// "Navigable" is defined solely by `direction(for:)` (#339), so
+    /// when left/right gain a `Direction` case they automatically
+    /// become consumable here too — the navigable set lives in one
+    /// place.
     nonisolated static func shouldPassThroughArrow(
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags
     ) -> Bool {
-        guard keyCode == ArrowKey.up || keyCode == ArrowKey.down else { return true }
+        guard ArrowKey.direction(for: keyCode) != nil else { return true }
         return !modifierFlags.intersection(arrowModifierMask).isEmpty
     }
 
@@ -360,14 +400,22 @@ struct CommandPaletteView: View {
                 return event
             }
             lastKeyboardNavAt = Date()
-            // Explicit else-if rather than bare `else` so a future
-            // widening of shouldPassThroughArrow (e.g. to add
-            // .leftArrow / .rightArrow) doesn't silently route those
-            // keys to selectNext().
-            if event.keyCode == ArrowKey.up {
+            // Dispatch via the Direction switch (#339). Exhaustive
+            // over `Direction?` today; when a future `.left` /
+            // `.right` case is added to `Direction`, this switch
+            // stops compiling until the new case is handled — so a
+            // new arrow can't silently fall through to the wrong
+            // action. `nil` is the not-a-navigable-arrow case;
+            // `shouldPassThroughArrow` already filtered those out
+            // above, so it's an explicit no-op rather than a path
+            // we expect to hit.
+            switch Self.ArrowKey.direction(for: event.keyCode) {
+            case .up:
                 model.selectPrevious()
-            } else if event.keyCode == ArrowKey.down {
+            case .down:
                 model.selectNext()
+            case nil:
+                break
             }
             return nil
         }

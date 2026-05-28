@@ -323,6 +323,53 @@ final class CommandPaletteViewTests: XCTestCase {
         )
     }
 
+    // MARK: - ArrowKey.direction(for:) (#339)
+    //
+    // The keycode→Direction map is the single source of truth for
+    // "which arrows the palette navigates with". Both
+    // shouldPassThroughArrow and the monitor dispatch consult it,
+    // so pin it directly.
+
+    func testDirectionMapsUpKeycode() {
+        XCTAssertEqual(
+            CommandPaletteView.ArrowKey.direction(for: CommandPaletteView.ArrowKey.up),
+            .up
+        )
+    }
+
+    func testDirectionMapsDownKeycode() {
+        XCTAssertEqual(
+            CommandPaletteView.ArrowKey.direction(for: CommandPaletteView.ArrowKey.down),
+            .down
+        )
+    }
+
+    func testDirectionIsNilForLeftRightAndNonArrowKeys() {
+        // Left (123) / Right (124) are NOT navigable today — they
+        // map to nil, so shouldPassThroughArrow lets them through.
+        // This pins the "no horizontal navigation yet" contract: if
+        // a future change adds .left/.right to Direction, it must
+        // update this test too (and the dispatch switch stops
+        // compiling until the new cases are handled — #339).
+        XCTAssertNil(CommandPaletteView.ArrowKey.direction(for: 123 /* kVK_LeftArrow */))
+        XCTAssertNil(CommandPaletteView.ArrowKey.direction(for: 124 /* kVK_RightArrow */))
+        XCTAssertNil(CommandPaletteView.ArrowKey.direction(for: 0 /* 'a' */))
+        XCTAssertNil(CommandPaletteView.ArrowKey.direction(for: 36 /* Return */))
+    }
+
+    func testDirectionDrivesPassThroughForLeftRight() {
+        // Cross-check: because left/right map to nil, they pass
+        // through the monitor unconsumed (the palette ignores them).
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 123, modifierFlags: []),
+            "bare ← isn't navigable today; must pass through"
+        )
+        XCTAssertTrue(
+            CommandPaletteView.shouldPassThroughArrow(keyCode: 124, modifierFlags: []),
+            "bare → isn't navigable today; must pass through"
+        )
+    }
+
     // MARK: - Fuzzy matcher (#315)
 
     func testFuzzyScoreReturnsNilForNonSubsequence() {
