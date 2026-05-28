@@ -57,10 +57,14 @@ public final class CommandPaletteRecentsStore {
     /// recent-first invariant survives external edits.
     ///
     /// **Short-circuits at `maxEntries`.** Once the deduped result
-    /// reaches the cap, the loop breaks — work is bounded at
-    /// `O(maxEntries)` regardless of input size. A hand-edited
-    /// (or maliciously crafted) file with millions of entries
-    /// stops being scanned after the first `maxEntries` uniques.
+    /// reaches the cap, the loop breaks — bounding the typical
+    /// case to ~`maxEntries` iterations even when the input is
+    /// huge. Note the worst case is still O(`decoded.count`):
+    /// if the file has fewer than `maxEntries` unique ids, the
+    /// loop walks every entry looking for the next unique. The
+    /// JSON decode itself is also unbounded; a true file-size
+    /// guard would have to wrap `Data(contentsOf:)` and is
+    /// deferred to a future hardening pass.
     public func load() -> [String] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         guard let data = try? Data(contentsOf: fileURL),
