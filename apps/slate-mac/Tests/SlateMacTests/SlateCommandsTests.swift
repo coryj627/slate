@@ -5,6 +5,13 @@ import XCTest
 
 @testable import SlateMac
 
+/// Thrown by a drift-test source locator that can't find its
+/// target (#344). Paired with an `XCTFail` carrying the diagnostic;
+/// the throw just exits the `throws` locator. File-private —
+/// `CloseVaultSheetParityTests` declares its own so each drift-test
+/// file stays self-contained.
+private struct DriftLocatorError: Error { let message: String }
+
 /// Tests for the menu→registry bridge (Milestone Q #314).
 ///
 /// The **drift check** (`testEveryDeclaredCommandIDIsRegistered`)
@@ -279,6 +286,23 @@ final class SlateCommandsTests: XCTestCase {
             .appendingPathComponent("slate-mac")
             .appendingPathComponent("Sources")
             .appendingPathComponent("SlateMac")
+        // #344: hard-fail with a precise message if `projectRoot`
+        // resolution broke. Without this, a wrong `sourcesDir` makes
+        // `scrapeChordsFromDirectory` return an empty set, and the
+        // drift tests fail downstream with a misleading "regex may
+        // be broken" / orphan-chord message instead of pointing at
+        // the real cause (the repo layout / path walk-up changed).
+        // A locator that can't find its target must fail loudly, not
+        // let the drift checks run against nothing.
+        guard FileManager.default.fileExists(atPath: sourcesDir.path) else {
+            let message =
+                "Sources/SlateMac not found at \(sourcesDir.path) — projectRoot "
+                + "resolution from \(#filePath) likely broke (repo layout change). "
+                + "The drift scraper has nothing to read; fix projectRoot rather "
+                + "than letting the menu↔registry drift checks pass on an empty scrape."
+            XCTFail(message)
+            throw DriftLocatorError(message: message)
+        }
         return try scrapeChordsFromDirectory(sourcesDir)
     }
 

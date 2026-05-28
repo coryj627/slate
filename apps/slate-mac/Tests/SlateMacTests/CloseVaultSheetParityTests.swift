@@ -5,6 +5,13 @@ import XCTest
 
 @testable import SlateMac
 
+/// Thrown by a drift-test source locator that can't find its
+/// target file (#344). Paired with an `XCTFail` carrying the human-
+/// readable diagnostic; the throw is just control flow to exit a
+/// non-optional-returning locator. File-private — `SlateCommandsTests`
+/// declares its own, so each drift-test file stays self-contained.
+private struct DriftLocatorError: Error { let message: String }
+
 /// Parity audit for `AppState.closeVault()` (#328 follow-up).
 ///
 /// Every `@Published var is...Open: Bool` in `AppState` that drives
@@ -180,11 +187,36 @@ final class CloseVaultSheetParityTests: XCTestCase {
 
     // MARK: - Source scraping helpers
 
+    /// Hard-fails (does NOT skip) when the source-of-truth file
+    /// can't be located (#344). The old `throw XCTSkip` meant a
+    /// repo-layout change that broke the walk-up would silently
+    /// turn the structural drift test into a no-op — green CI, no
+    /// safety net. A locator that can't find its target is a real
+    /// failure: the test that depends on it cannot do its job.
+    ///
+    /// The detection logic lives in the pure, nil-returning
+    /// `findAppStateSwift(startingFrom:)` so it's unit-testable
+    /// without the `XCTFail` here polluting a negative-path test.
     private func locateAppStateSwift() throws -> URL {
-        // Walk up from this file until we hit `apps/slate-mac` and
-        // then point at `Sources/SlateMac/AppState.swift`. Mirrors
-        // the lookup in `SlateCommandsTests.scrapedMenuChords`.
-        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        guard let url = Self.findAppStateSwift(startingFrom: #filePath) else {
+            let message =
+                "Could not locate Sources/SlateMac/AppState.swift walking up "
+                + "from \(#filePath). The repo layout changed or the file moved "
+                + "— fix the locator. This test must NOT silently skip; the "
+                + "closeVault parity drift check depends on reading AppState.swift."
+            XCTFail(message)
+            throw DriftLocatorError(message: message)
+        }
+        return url
+    }
+
+    /// Pure locator: walk up from `startPath` looking for
+    /// `Sources/SlateMac/AppState.swift`. Returns `nil` if not found
+    /// within 10 levels (no side effects, so the failure path is
+    /// testable). Mirrors the lookup in
+    /// `SlateCommandsTests.scrapedMenuChords`.
+    static func findAppStateSwift(startingFrom startPath: String) -> URL? {
+        var cursor = URL(fileURLWithPath: startPath).deletingLastPathComponent()
         for _ in 0..<10 {
             let candidate = cursor.appendingPathComponent("Sources/SlateMac/AppState.swift")
             if FileManager.default.fileExists(atPath: candidate.path) {
@@ -192,7 +224,7 @@ final class CloseVaultSheetParityTests: XCTestCase {
             }
             cursor.deleteLastPathComponent()
         }
-        throw XCTSkip("Could not locate AppState.swift from \(#filePath)")
+        return nil
     }
 
     /// Returns every `@Published var is...Open` declaration's
@@ -328,6 +360,33 @@ final class CloseVaultSheetParityTests: XCTestCase {
             names,
             ["isExplicitOpen", "isInferredOpen", "isInferredTrueOpen"],
             "computed-initializer declarations are deliberately excluded — they aren't simple sheet bools"
+        )
+    }
+
+    // MARK: - Locator (#344)
+
+    /// The locator must actually FIND AppState.swift from this test
+    /// file's real location — the positive path the drift test
+    /// relies on every run.
+    func testFindAppStateSwiftLocatesFromRealTestPath() {
+        let url = CloseVaultSheetParityTests.findAppStateSwift(startingFrom: #filePath)
+        XCTAssertNotNil(url, "locator must find AppState.swift from the real test file path")
+        XCTAssertEqual(url?.lastPathComponent, "AppState.swift")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url?.path ?? ""))
+    }
+
+    /// And it must return `nil` (→ `locateAppStateSwift` hard-fails)
+    /// when the file genuinely isn't reachable — proving the
+    /// not-found detection works WITHOUT tripping the `XCTFail` in
+    /// the throwing wrapper (this exercises the pure finder, so the
+    /// negative case is testable without polluting the run).
+    func testFindAppStateSwiftReturnsNilWhenUnreachable() {
+        let url = CloseVaultSheetParityTests.findAppStateSwift(
+            startingFrom: "/nonexistent/deeply/buried/path/Fixture.swift"
+        )
+        XCTAssertNil(
+            url,
+            "locator must report not-found (nil) so locateAppStateSwift() can hard-fail rather than silently skip"
         )
     }
 
