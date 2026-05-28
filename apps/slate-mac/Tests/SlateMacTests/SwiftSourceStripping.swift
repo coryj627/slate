@@ -58,11 +58,16 @@ enum SwiftSourceStripping {
         var state: State = .code
         var i = 0
 
-        /// Append `c` verbatim if it's a newline, else a space —
-        /// used inside stripped regions to preserve line structure
-        /// while blanking content.
+        /// Append `c` verbatim if it's a newline (LF *or* CR), else
+        /// a space — used inside stripped regions to preserve line
+        /// structure while blanking content. Preserving `\r` as well
+        /// as `\n` keeps CRLF inputs byte-faithful in their line
+        /// terminators rather than degrading `\r\n` to ` \n`
+        /// (Codoki review on #348). Offsets stay stable either way;
+        /// this just keeps the output honest for cross-platform
+        /// sources.
         func appendBlanked(_ c: Character) {
-            result.append(c == "\n" ? c : " ")
+            result.append((c == "\n" || c == "\r") ? c : " ")
         }
 
         while i < n {
@@ -93,7 +98,10 @@ enum SwiftSourceStripping {
                     state = .code
                     result.append(c)  // keep the newline, end the comment
                 } else {
-                    result.append(" ")
+                    // Preserve a `\r` (the CR of a CRLF terminator)
+                    // so `// x\r\n` → `    \r\n` rather than `     \n`;
+                    // the `\n` on the next iteration ends the comment.
+                    appendBlanked(c)
                 }
                 i += 1
 

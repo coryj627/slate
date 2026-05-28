@@ -141,6 +141,25 @@ final class SwiftSourceStrippingTests: XCTestCase {
         )
     }
 
+    func testCRLFCarriageReturnsPreservedInStrippedRegions() {
+        // #348 Codoki: a `\r` inside a stripped region (line comment,
+        // block comment, string) must survive as `\r`, not degrade to
+        // a space — otherwise CRLF sources lose their line terminators.
+        // One `\r\n` in each stripped state + one in code.
+        let src = "code\r\n// line\r\n/* block\r\n*/\r\n\"str\r\n\"\r\nend"
+        let out = strip(src)
+        XCTAssertEqual(
+            out.filter { $0 == "\r" }.count,
+            src.filter { $0 == "\r" }.count,
+            "every CR must be preserved across code, line comment, block comment, and string states"
+        )
+        XCTAssertEqual(
+            out.filter { $0 == "\n" }.count,
+            src.filter { $0 == "\n" }.count
+        )
+        XCTAssertEqual(out.count, src.count, "length still preserved with CRLF")
+    }
+
     // MARK: - No-op on clean code
 
     func testPlainCodeUnchanged() {

@@ -565,6 +565,14 @@ final class SlateCommandsTests: XCTestCase {
         // upgrade — rather than silently risking a false negative
         // on the scene grep (a mis-modelled string could blank past
         // a real `Settings {`).
+        //
+        // This is a conservative over-approximation (#348 Codoki):
+        // it also trips if a *comment* merely mentions `"""` / `#"`.
+        // That's an acceptable false alarm — it fails safe (over-
+        // cautious), the message points at the cause, and a comment
+        // referencing those tokens in this tiny app-entry file is
+        // about as unlikely as the construct itself. Refine to a
+        // comment-aware check only if it ever false-fires.
         XCTAssertFalse(
             rawText.contains("\"\"\"") || rawText.contains("#\""),
             "SlateMacApp.swift gained a multiline or raw string literal, which "
