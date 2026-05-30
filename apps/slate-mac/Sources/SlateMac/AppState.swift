@@ -1010,6 +1010,32 @@ final class AppState: ObservableObject {
         registerCoreCommands(into: commandRegistry, appState: self)
     }
 
+    /// Entry point for the "Show Command Palette…" menu command and
+    /// its `⌘⇧P` shortcut. Opens the palette when a vault is open;
+    /// otherwise posts an accessibility announcement instead of doing
+    /// nothing — pressing `⌘⇧P` on the welcome screen used to be a
+    /// silent no-op (the menu item was `.disabled`), which is a dead
+    /// end for keyboard / VoiceOver users. Found via live debugging.
+    ///
+    /// The palette is a vault-scoped surface: its sheet is only
+    /// mounted by `MainSplitView` (when a vault is open). This method
+    /// must NEVER set `isCommandPaletteOpen = true` while no vault is
+    /// open — with no sheet mounted the flipped bool would do nothing
+    /// now and then auto-present the palette the instant a vault
+    /// opened (the #313 / #328 stuck-bool hazard). Branching here lets
+    /// the View-menu command stay ENABLED on the welcome screen (so
+    /// the keypress gives feedback) while preserving that invariant.
+    func requestCommandPalette() {
+        guard isVaultOpen else {
+            postAccessibilityAnnouncement(
+                "Open a vault to use the command palette.",
+                priority: .high
+            )
+            return
+        }
+        isCommandPaletteOpen = true
+    }
+
     /// Record that a command was invoked through the palette so the
     /// Recent section (#316) can surface it on next open.
     ///
