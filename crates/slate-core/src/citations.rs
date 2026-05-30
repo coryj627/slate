@@ -165,6 +165,15 @@ fn collect_code_ranges(source: &str) -> Vec<(usize, usize)> {
 /// was quadratic on notes with normal inline-code density and took
 /// ~12 s on a 2 MB note (#383).
 fn scan_citations(source: &str, code_ranges: &[(usize, usize)]) -> Vec<CitationReference> {
+    // The cursor below assumes `code_ranges` are sorted by start and
+    // disjoint — guaranteed because `collect_code_ranges` emits them from a
+    // single in-order pulldown pass (inline-code and code-block ranges can't
+    // overlap or nest). Defend the invariant so a future change to the
+    // producer trips here in tests rather than silently mis-skipping.
+    debug_assert!(
+        code_ranges.windows(2).all(|w| w[0].1 <= w[1].0),
+        "scan_citations requires sorted, disjoint code_ranges"
+    );
     let bytes = source.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
