@@ -242,11 +242,6 @@ struct NoteEditorView: NSViewRepresentable {
         var reduceMotion: Bool = false
         private weak var textView: NSTextView?
         private var subscriptions: Set<AnyCancellable> = []
-        /// Cached embed spans for the current buffer state. Refreshed
-        /// by every applied highlight pass (see `scheduleHighlight`) so
-        /// `openEmbedPreviewAtCursor` can answer "what embed is the
-        /// cursor inside" in O(spans) without re-running the scan.
-        private(set) var embedSpans: [EditorEmbedSpan] = []
         /// In-flight debounced re-highlight (#376). Each
         /// `scheduleHighlight` cancels the previous one, so a burst of
         /// keystrokes collapses into a single span computation. Held so
@@ -403,6 +398,18 @@ struct NoteEditorView: NSViewRepresentable {
         /// Mirrors `AppState.runSearch`'s established
         /// `Task { @MainActor } / Task.detached` shape so the post-await
         /// AppKit work is guaranteed on the main thread.
+        ///
+        /// Scope note: this removes the per-*keystroke* stall (the
+        /// classification + sweep no longer happen on the typing path),
+        /// but `applyHighlight` is still O(spans) on the main thread —
+        /// it resets and re-stamps temporary attributes for the whole
+        /// document each pass. For normal notes that's sub-millisecond;
+        /// on a pathologically dense large file (e.g. ~2 MB of markup on
+        /// every line) one debounced apply can still take ~100+ ms.
+        /// Reducing the apply to the changed / visible range is the
+        /// incremental follow-up tracked as #379; this pass deliberately
+        /// recomputes whole-document because `editorHighlightSpans` is
+        /// the whole-document variant.
         func scheduleHighlight(debounced: Bool) {
             highlightTask?.cancel()
             guard let textView else { return }
@@ -458,7 +465,6 @@ struct NoteEditorView: NSViewRepresentable {
             embeds: [EditorEmbedSpan]
         ) {
             guard let textView, let layoutManager = textView.layoutManager else { return }
-            embedSpans = embeds  // cache for Cmd+E (openEmbedPreviewAtCursor)
 
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
             let increaseContrast = NSWorkspace.shared
@@ -530,7 +536,13 @@ struct NoteEditorView: NSViewRepresentable {
                 return false
             }
             let cursor = textView.selectedRange().location
-            if let span = embedSpanContaining(cursor: cursor, in: embedSpans) {
+            // Recompute embeds from the LIVE buffer rather than reusing
+            // the debounced highlight pass's result, so Cmd+E is correct
+            // even immediately after an edit (before the ~40 ms pass
+            // lands). The scan is a cheap regex over the current text, and
+            // Cmd+E is a discrete keypress — no per-keystroke cost here.
+            let embeds = findEditorEmbedSpans(in: textView.string)
+            if let span = embedSpanContaining(cursor: cursor, in: embeds) {
                 let line = oneBasedLineForUTF16Offset(
                     cursor,
                     in: textView.string

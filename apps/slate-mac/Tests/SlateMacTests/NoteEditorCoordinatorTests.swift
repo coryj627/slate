@@ -125,6 +125,32 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         XCTAssertNil(outside, "underline must not bleed past the embed span")
     }
 
+    /// Red-team #376 follow-up: Cmd+E must resolve the embed under the
+    /// cursor against the LIVE buffer, not the debounced highlight pass's
+    /// cached spans. Otherwise typing an embed and immediately hitting
+    /// Cmd+E (before the ~40 ms pass lands) would miss it. Here no
+    /// highlight pass is run at all — the embed is found purely from the
+    /// current `textView.string`.
+    func testCmdEResolvesEmbedFromLiveBufferWithoutHighlightPass() {
+        var captured: String?
+        let (coordinator, textView, _) = makeCoordinator(
+            text: "no embeds yet",
+            previewEmbedAtCursor: { target, _ in captured = target }
+        )
+        // Mutate the buffer directly and place the cursor inside a
+        // freshly-"typed" embed, without scheduling/awaiting a highlight.
+        textView.string = "see ![[FreshNote]] now"
+        textView.setSelectedRange(NSRange(location: 8, length: 0))  // inside FreshNote
+
+        let handled = coordinator.openEmbedPreviewAtCursor()
+
+        XCTAssertTrue(
+            handled,
+            "Cmd+E must find the just-typed embed without waiting for the highlight pass"
+        )
+        XCTAssertEqual(captured, "FreshNote")
+    }
+
     /// Audit [#230](https://github.com/coryj627/slate/issues/230):
     /// `controlAccentColor` is borderline against `textBackgroundColor`
     /// (especially on Graphite + dark mode) — under Increase Contrast

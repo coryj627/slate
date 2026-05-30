@@ -138,42 +138,31 @@ enum EditorSyntaxPalette {
     /// Increase Contrast toggle directly so a unit test can drive both
     /// branches without mocking `NSWorkspace`.
     static func color(for kind: EditorSpanKind, increaseContrast: Bool) -> NSColor? {
-        // Kinds the editor source view never colours. Returning `nil`
-        // here — *before* the Increase Contrast branch — means these
-        // stay in body colour even under IC, rather than collapsing to
-        // labelColor. `emphasis`/`strong`/`strikethrough` cover the
-        // whole run (markers + prose); `link`/`image`/`blockQuote` are
-        // never emitted by `editor_highlightSpans` and are listed only
-        // for switch exhaustiveness.
+        // One exhaustive switch — adding an `EditorSpanKind` is a compile
+        // error here, not a silent fall-through.
+        //
+        // Uncoloured kinds return `nil` regardless of Increase Contrast:
+        // they're not part of the colour cue at all. `emphasis` / `strong`
+        // / `strikethrough` cover the whole run (markers + prose), so
+        // colouring them would dim the prose; `link` / `image` /
+        // `blockQuote` are never emitted by `editorHighlightSpans`.
+        //
+        // Coloured kinds collapse to `labelColor` under Increase Contrast
+        // — colour stops being the cue, but glyph / position still carry
+        // the structure (WCAG 1.4.1).
         switch kind {
         case .emphasis, .strong, .strikethrough, .link, .image, .blockQuote:
             return nil
-        default:
-            break
-        }
-        if increaseContrast {
-            // Single high-contrast colour across the coloured kinds.
-            // Tokens are still semantically tagged (the span layer),
-            // just not colour-coded — correct a11y behaviour: shape /
-            // position carry the structure, not colour alone (WCAG
-            // 1.4.1).
-            return NSColor.labelColor
-        }
-        switch kind {
         case .frontmatter, .comment, .citation:
-            return NSColor.secondaryLabelColor
+            return increaseContrast ? NSColor.labelColor : NSColor.secondaryLabelColor
         case .heading:
-            return headingColor
+            return increaseContrast ? NSColor.labelColor : headingColor
         case .codeFence, .inlineCode, .code:
-            return codeColor
+            return increaseContrast ? NSColor.labelColor : codeColor
         case .wikilink, .embed:
-            return wikilinkColor
+            return increaseContrast ? NSColor.labelColor : wikilinkColor
         case .tag:
-            return tagColor
-        case .emphasis, .strong, .strikethrough, .link, .image, .blockQuote:
-            // Already returned `nil` above; repeated here only so the
-            // switch is exhaustive over `EditorSpanKind`.
-            return nil
+            return increaseContrast ? NSColor.labelColor : tagColor
         }
     }
 
