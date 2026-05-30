@@ -12,16 +12,16 @@
 //!
 //! ## Layered design (composition, not a new parser)
 //!
-//! 1. **Markdown structure** (this layer): walk the same `pulldown-cmark`
-//!    parse that already feeds the render view and the link/task/block
-//!    extractors, emitting spans for headings, emphasis, inline code,
-//!    fenced blocks, links, etc.
-//! 2. **Slate-specific tokens** (`[[wikilink]]`, `![[embed]]`, `#tag`,
-//!    `[@cite]`, `%%comment%%`): folded in from the existing custom
-//!    extractors — added in a later commit.
+//! 1. **Markdown structure** ([`markdown_spans`]): walk the same
+//!    `pulldown-cmark` parse that already feeds the render view and the
+//!    link/task/block extractors.
+//! 2. **Slate-specific tokens** ([`highlight_spans`] folds these in):
+//!    `[[wikilink]]` / `![[embed]]` (reusing [`crate::links`], already
+//!    code-suppressed), `[@cite]` (reusing [`crate::citations`]), and
+//!    dependency-free scanners for `#tag` and `%%comment%%`.
 //! 3. **Fenced-code internals**: reuse [`crate::code`]'s tree-sitter
-//!    token stream — added in a later commit.
-//! 4. **Ranged `highlights(in: range)`** exposed over FFI — later.
+//!    token stream — *added in a later commit*.
+//! 4. **Ranged `highlights(in: range)`** exposed over FFI — *later*.
 //!
 //! ## Coordinates
 //!
@@ -30,11 +30,13 @@
 //! The Swift consumer converts to a UTF-16 `NSRange` at the boundary (it
 //! already performs byte↔UTF-16 conversion for cursor placement).
 
+use crate::citations::extract_citations;
+use crate::links::{extract_links, LinkKind};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 
-/// Classifies one editor span. This commit populates the
-/// markdown-structure kinds; Slate-specific kinds and an inner-code
-/// kind are added by their respective layers (see module docs).
+/// Classifies one editor span. Markdown-structure kinds come from the
+/// CommonMark parse; the Slate-specific kinds come from their
+/// extractors/scanners; an inner-code kind is added by a later layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorSpanKind {
     /// ATX (`#`..`######`) or setext heading. Carries the level 1..=6.
@@ -57,6 +59,18 @@ pub enum EditorSpanKind {
     Image,
     /// `> quote`.
     BlockQuote,
+
+    // --- Slate-specific (Obsidian / Pandoc) tokens, not CommonMark ---
+    /// `[[target]]` wikilink — full syntax including the `[[` … `]]`.
+    Wikilink,
+    /// `![[target]]` embed — full syntax including the leading `!`.
+    Embed,
+    /// Inline `#tag` (not a heading).
+    Tag,
+    /// `[@key]` / `@key` Pandoc citation — full syntax.
+    Citation,
+    /// `%% … %%` Obsidian comment (inline or multi-line).
+    Comment,
 }
 
 /// One classified span over the host source, in UTF-8 byte offsets.
@@ -79,6 +93,41 @@ impl EditorSpan {
     }
 }
 
+/// The full editor highlight span set for `source`: CommonMark
+/// structure plus the Slate-specific tokens, with overlaps resolved by
+/// priority into a flat, non-overlapping, document-ordered list ready
+/// for the UI to stamp.
+///
+/// Overlap policy mirrors the prior Swift `findEditorSyntaxSpans`
+/// coverage scheme: higher-priority spans win, and any span that
+/// intersects an already-accepted one is dropped — so a `#tag` inside a
+/// fenced code block, or any token inside a `%%comment%%`, is not
+/// separately highlighted. Wikilinks and citations already arrive
+/// code-suppressed from their canonical extractors; the tag/comment
+/// scanners rely on this sweep for the same suppression.
+///
+/// `Link`, `Image`, and `BlockQuote` are intentionally excluded: the
+/// prior Swift editor never coloured them, and treating a multi-line
+/// blockquote as one flat span conflicts with highlighting its
+/// contents. They remain available from [`markdown_spans`] as raw
+/// structure for other consumers.
+pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
+    let mut spans: Vec<EditorSpan> = markdown_spans(source)
+        .into_iter()
+        .filter(|s| {
+            !matches!(
+                s.kind,
+                EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote
+            )
+        })
+        .collect();
+    spans.extend(wikilink_spans(source));
+    spans.extend(citation_spans(source));
+    spans.extend(scan_tags(source));
+    spans.extend(scan_comments(source));
+    resolve_overlaps(source, spans)
+}
+
 /// Walk the CommonMark structure of `source` and emit syntax spans in
 /// document order.
 ///
@@ -92,9 +141,8 @@ impl EditorSpan {
 ///   Swift highlight today colours only the markers; reconciling
 ///   marker-only vs. whole-run is a deliberate follow-up at the apply
 ///   layer (#377).
-/// - Slate-specific tokens (`[[…]]`, `![[…]]`, `#tag`, `[@cite]`,
-///   `%%…%%`) and code-block internals are **not** emitted here; they
-///   compose on top in later layers.
+/// - Slate-specific tokens (`[[…]]`, `#tag`, `[@cite]`, `%%…%%`) are
+///   **not** emitted here; [`highlight_spans`] composes them on top.
 pub fn markdown_spans(source: &str) -> Vec<EditorSpan> {
     let mut out: Vec<EditorSpan> = Vec::new();
     let parser =
@@ -117,6 +165,153 @@ pub fn markdown_spans(source: &str) -> Vec<EditorSpan> {
         out.push(EditorSpan::new(trim_trailing_newline(source, range), kind));
     }
     out
+}
+
+/// Wikilink / embed spans, reused from the canonical link extractor
+/// (which already spans the full `[[` … `]]` syntax and suppresses
+/// matches inside code spans). Markdown links/images are skipped here —
+/// they come from [`markdown_spans`].
+fn wikilink_spans(source: &str) -> Vec<EditorSpan> {
+    extract_links(source)
+        .into_iter()
+        .filter(|l| l.kind == LinkKind::Wikilink)
+        .map(|l| EditorSpan {
+            start_byte: l.span_start as u32,
+            end_byte: l.span_end as u32,
+            kind: if l.is_embed {
+                EditorSpanKind::Embed
+            } else {
+                EditorSpanKind::Wikilink
+            },
+        })
+        .collect()
+}
+
+/// Citation spans, reused from the canonical citation extractor (which
+/// skips code spans). The span covers the verbatim `raw` slice.
+fn citation_spans(source: &str) -> Vec<EditorSpan> {
+    extract_citations(source)
+        .into_iter()
+        .map(|c| EditorSpan {
+            start_byte: c.byte_offset,
+            end_byte: c.byte_offset + c.raw.len() as u32,
+            kind: EditorSpanKind::Citation,
+        })
+        .collect()
+}
+
+/// Scan inline `#tag`s: `#` + ASCII letter + `[A-Za-z0-9_/-]*`, not
+/// preceded by a word byte or another `#` (so `# heading`, `##`, and
+/// `word#x` don't match). Rust's `regex` has no lookbehind, so the
+/// preceding-char guard is explicit. Suppression inside code/comments
+/// is handled by the overlap sweep, not here.
+fn scan_tags(source: &str) -> Vec<EditorSpan> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' {
+            let prev_ok = i == 0 || !(is_word_byte(bytes[i - 1]) || bytes[i - 1] == b'#');
+            let next_alpha =
+                matches!(bytes.get(i + 1), Some(&b) if b.is_ascii_alphabetic());
+            if prev_ok && next_alpha {
+                let start = i;
+                i += 1; // consume the `#`
+                while i < bytes.len() && is_tag_byte(bytes[i]) {
+                    i += 1;
+                }
+                out.push(EditorSpan {
+                    start_byte: start as u32,
+                    end_byte: i as u32,
+                    kind: EditorSpanKind::Tag,
+                });
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Scan `%% … %%` comments (inline or multi-line). Non-overlapping:
+/// scanning resumes past each close. An unterminated `%%` is not
+/// emitted (mirrors the prior Swift behaviour).
+fn scan_comments(source: &str) -> Vec<EditorSpan> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'%' && bytes[i + 1] == b'%' {
+            let start = i;
+            let mut j = i + 2;
+            let mut close = None;
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'%' && bytes[j + 1] == b'%' {
+                    close = Some(j + 2);
+                    break;
+                }
+                j += 1;
+            }
+            match close {
+                Some(end) => {
+                    out.push(EditorSpan {
+                        start_byte: start as u32,
+                        end_byte: end as u32,
+                        kind: EditorSpanKind::Comment,
+                    });
+                    i = end;
+                    continue;
+                }
+                None => break, // unterminated `%%` — stop
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Resolve overlaps by priority (Swift `covered`-set parity): accept
+/// spans highest-priority first, dropping any that intersect an
+/// already-accepted span. Returns survivors in document order.
+fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan> {
+    spans.sort_by(|a, b| {
+        priority(&a.kind)
+            .cmp(&priority(&b.kind))
+            .then(a.start_byte.cmp(&b.start_byte))
+    });
+    let mut covered = vec![false; source.len()];
+    let mut accepted: Vec<EditorSpan> = Vec::with_capacity(spans.len());
+    for span in spans {
+        let (s, e) = (span.start_byte as usize, span.end_byte as usize);
+        if s >= e || e > source.len() {
+            continue; // defensive: degenerate or out-of-bounds
+        }
+        if covered[s..e].iter().any(|&c| c) {
+            continue; // intersects a higher-priority span
+        }
+        covered[s..e].fill(true);
+        accepted.push(span);
+    }
+    accepted.sort_by_key(|s| s.start_byte);
+    accepted
+}
+
+/// Priority for overlap resolution (lower = wins). Mirrors the append
+/// order of the prior Swift `findEditorSyntaxSpans`. `Link` / `Image` /
+/// `BlockQuote` are filtered before this runs; they get a low priority
+/// only for match exhaustiveness.
+fn priority(kind: &EditorSpanKind) -> u8 {
+    match kind {
+        EditorSpanKind::CodeFence => 1,
+        EditorSpanKind::Comment => 2,
+        EditorSpanKind::InlineCode => 3,
+        EditorSpanKind::Wikilink | EditorSpanKind::Embed => 4,
+        EditorSpanKind::Heading(_) => 5,
+        EditorSpanKind::Citation => 6,
+        EditorSpanKind::Tag => 7,
+        EditorSpanKind::Emphasis | EditorSpanKind::Strong | EditorSpanKind::Strikethrough => 8,
+        EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote => 9,
+    }
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
@@ -145,6 +340,14 @@ fn trim_trailing_newline(
     range
 }
 
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn is_tag_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'/')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +360,8 @@ mod tests {
     fn first(spans: &[EditorSpan], kind: &EditorSpanKind) -> Option<EditorSpan> {
         spans.iter().find(|s| &s.kind == kind).cloned()
     }
+
+    // --- markdown_spans (layer 1) -------------------------------------
 
     #[test]
     fn atx_heading_carries_level_and_covers_the_line() {
@@ -223,6 +428,7 @@ mod tests {
     #[test]
     fn empty_source_yields_no_spans() {
         assert!(markdown_spans("").is_empty());
+        assert!(highlight_spans("").is_empty());
     }
 
     #[test]
@@ -233,5 +439,86 @@ mod tests {
         let mut sorted = starts.clone();
         sorted.sort_unstable();
         assert_eq!(starts, sorted, "spans should be emitted in document order");
+    }
+
+    // --- highlight_spans (Slate tokens + overlap resolution) ----------
+
+    #[test]
+    fn wikilink_and_embed_are_distinguished() {
+        let src = "see [[Note]] and ![[img.png]] here\n";
+        let spans = highlight_spans(src);
+        assert_eq!(
+            slice(src, &first(&spans, &EditorSpanKind::Wikilink).expect("wikilink")),
+            "[[Note]]"
+        );
+        assert_eq!(
+            slice(src, &first(&spans, &EditorSpanKind::Embed).expect("embed")),
+            "![[img.png]]"
+        );
+    }
+
+    #[test]
+    fn bare_hash_is_a_tag_but_word_hash_is_not() {
+        let src = "#project here, but a#b is not a tag\n";
+        let spans = highlight_spans(src);
+        let tags: Vec<&EditorSpan> =
+            spans.iter().filter(|s| s.kind == EditorSpanKind::Tag).collect();
+        assert_eq!(tags.len(), 1, "exactly one tag, got {tags:?}");
+        assert_eq!(slice(src, tags[0]), "#project");
+    }
+
+    #[test]
+    fn citation_span_covers_the_full_bracket() {
+        let src = "as shown [@smith2020] elsewhere\n";
+        let spans = highlight_spans(src);
+        assert_eq!(
+            slice(src, &first(&spans, &EditorSpanKind::Citation).expect("citation")),
+            "[@smith2020]"
+        );
+    }
+
+    #[test]
+    fn tag_inside_fenced_code_is_suppressed() {
+        let src = "```\n#nottag inside code\n```\n";
+        let spans = highlight_spans(src);
+        assert!(
+            !spans.iter().any(|s| s.kind == EditorSpanKind::Tag),
+            "tag inside a code fence must be masked, got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn comment_masks_inner_tokens() {
+        let src = "%% a **b** and [[c]] %%\n";
+        let spans = highlight_spans(src);
+        let comment = first(&spans, &EditorSpanKind::Comment).expect("comment");
+        assert_eq!(slice(src, &comment), "%% a **b** and [[c]] %%");
+        assert!(
+            !spans
+                .iter()
+                .any(|s| matches!(s.kind, EditorSpanKind::Strong | EditorSpanKind::Wikilink)),
+            "tokens inside a comment must be masked, got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_spans_are_non_overlapping_and_ordered() {
+        let src = "# Title with [[link]]\n\n`code` and #tag and *i* and [@k]\n";
+        let spans = highlight_spans(src);
+        for w in spans.windows(2) {
+            assert!(
+                w[0].end_byte <= w[1].start_byte,
+                "spans overlap or are unordered: {:?} then {:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    #[test]
+    fn unterminated_comment_is_not_emitted() {
+        let src = "text %% open but never closed\n";
+        let spans = highlight_spans(src);
+        assert!(!spans.iter().any(|s| s.kind == EditorSpanKind::Comment));
     }
 }
