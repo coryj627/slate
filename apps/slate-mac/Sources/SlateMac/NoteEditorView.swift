@@ -178,7 +178,7 @@ struct NoteEditorView: NSViewRepresentable {
         // pass still needs a defined value.
         context.coordinator.reduceMotion = reduceMotion
         context.coordinator.attach(textView: textView)
-        context.coordinator.applyEmbedHighlighting()
+        context.coordinator.scheduleHighlight(debounced: false)
         context.coordinator.subscribe(
             scrollAnchorRequest: scrollAnchorRequest,
             lineScrollRequest: lineScrollRequest,
@@ -215,9 +215,16 @@ struct NoteEditorView: NSViewRepresentable {
             // matches AppKit's behavior on reopen.
             let previousRange = textView.selectedRange()
             textView.string = text
+            // Re-establish the dynamic body colour on the freshly-swapped
+            // storage. The highlight overlay is now display-only
+            // (temporary attributes), so it no longer re-stamps the
+            // storage foreground the way the old pass did — without this,
+            // a buffer rebuilt by `string =` could drop back to the nil
+            // `textColor` that reads dim-on-dark (#226/#302).
+            textView.textColor = NSColor.textColor
             let clampedLocation = min(previousRange.location, text.utf16.count)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
-            context.coordinator.applyEmbedHighlighting()
+            context.coordinator.scheduleHighlight(debounced: false)
         }
     }
 
@@ -235,11 +242,17 @@ struct NoteEditorView: NSViewRepresentable {
         var reduceMotion: Bool = false
         private weak var textView: NSTextView?
         private var subscriptions: Set<AnyCancellable> = []
-        /// Cached embed spans for the current buffer state. Updated
-        /// by `applyEmbedHighlighting` on every text change so
+        /// Cached embed spans for the current buffer state. Refreshed
+        /// by every applied highlight pass (see `scheduleHighlight`) so
         /// `openEmbedPreviewAtCursor` can answer "what embed is the
-        /// cursor inside" in O(spans) without re-running the regex.
+        /// cursor inside" in O(spans) without re-running the scan.
         private(set) var embedSpans: [EditorEmbedSpan] = []
+        /// In-flight debounced re-highlight (#376). Each
+        /// `scheduleHighlight` cancels the previous one, so a burst of
+        /// keystrokes collapses into a single span computation. Held so
+        /// `deinit` can cancel a pass that outlived the view — and so
+        /// tests can `await` a deterministic completion.
+        private(set) var highlightTask: Task<Void, Never>?
 
         init(
             text: Binding<String>,
@@ -318,11 +331,18 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         @objc private func systemColorPreferencesChanged() {
-            applyEmbedHighlighting()
+            // Colours (palette + embed underline) are resolved per
+            // appearance / Increase Contrast at apply time, so an
+            // immediate re-highlight repaints with the new values
+            // without waiting for an edit. Spans are unchanged, but
+            // recomputing them off-main is cheap enough not to special-
+            // case (the ranged/colour-only refresh is #379).
+            scheduleHighlight(debounced: false)
         }
 
         deinit {
             NotificationCenter.default.removeObserver(self)
+            highlightTask?.cancel()
         }
 
         /// Underline color for the embed highlight, picked per the
@@ -347,84 +367,149 @@ struct NoteEditorView: NSViewRepresentable {
             increaseContrast ? NSColor.labelColor : NSColor.controlAccentColor
         }
 
-        /// Recompute syntax + embed spans for the current buffer and
-        /// apply attributes:
-        ///
-        /// 1. Re-stamp the entire range with `NSColor.textColor` as the
-        ///    foreground so any previously-applied syntax colour
-        ///    that's been edited past (e.g. the user deleted a `#`
-        ///    that turned a heading back into prose) falls back to
-        ///    the body colour. Same dynamic semantic colour as
-        ///    `attach()` uses — preserves the #226/#302 dark-mode
-        ///    contract.
-        /// 2. Apply syntax foreground colours per kind from
-        ///    `EditorSyntaxPalette` — each per-range stamp REPLACES
-        ///    the body colour on that range. Semantic colours stay
-        ///    dynamic per appearance + honor Increase Contrast via
-        ///    the palette's IC branch.
-        /// 3. Reset and reapply the embed underline (audit #207, #230)
-        ///    to the `![[…]]` spans. This runs after the syntax
-        ///    foreground pass so the embed's wikilink colour is in
-        ///    place underneath the underline.
-        ///
-        /// Audit #207 + #214: the old embed highlight used
-        /// `systemBlue` foreground which measured ~4.0:1 against
-        /// the default editor background (fails WCAG 1.4.3). The
-        /// underline-only approach for embeds stays — only the
-        /// per-kind syntax colours from #296 use foreground, and
-        /// the palette's IC branch collapses everything to
-        /// `labelColor` for guaranteed contrast.
-        ///
-        /// NSTextStorage's attribute layer works even with
-        /// `isRichText = false` — that flag restricts what the user
-        /// can do via the font panel / paste-with-formatting, not
-        /// what we set programmatically. VoiceOver doesn't emit
-        /// colour attributes; the highlight is purely a sighted-
-        /// user affordance, and AT users still hear the raw text.
-        func applySyntaxHighlighting() {
-            guard let textView, let storage = textView.textStorage else { return }
-            let source = textView.string
-            let nsSource = source as NSString
-            let fullRange = NSRange(location: 0, length: nsSource.length)
-            let syntaxSpans = findEditorSyntaxSpans(in: source)
-            let embeds = findEditorEmbedSpans(in: source)
-            embedSpans = embeds
+        /// Debounce interval before a keystroke-triggered re-highlight
+        /// runs. ~40 ms coalesces a burst of typing into one span
+        /// computation while staying well under the threshold where a
+        /// pause reads as lag. The search debouncer in `AppState` uses
+        /// 150 ms; highlighting is cheaper and wants to feel more
+        /// immediate, so it's shorter (#376).
+        private static let highlightDebounceNanos: UInt64 = 40_000_000
 
-            storage.beginEditing()
-            defer { storage.endEditing() }
-            // 1. Re-stamp body colour. Using addAttribute (not
-            // setAttributes) so we don't blow away the font / typing
-            // attributes already on the range.
-            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
-            // 2. Syntax foreground per kind.
-            for span in syntaxSpans {
-                let clamped = NSIntersectionRange(span.range, fullRange)
-                guard clamped.length > 0 else { continue }
-                let color = EditorSyntaxPalette.color(for: span.kind)
-                storage.addAttribute(.foregroundColor, value: color, range: clamped)
-            }
-            // 3. Embed underline (#207, #230). Reset first so spans
-            // typed past lose their underline.
-            storage.removeAttribute(.underlineStyle, range: fullRange)
-            storage.removeAttribute(.underlineColor, range: fullRange)
-            let underlineAttrs: [NSAttributedString.Key: Any] = [
-                .underlineStyle: NSUnderlineStyle.single.rawValue,
-                .underlineColor: embedUnderlineColor,
-            ]
-            for embed in embeds {
-                let clamped = NSIntersectionRange(embed.range, fullRange)
-                if clamped.length > 0 {
-                    storage.addAttributes(underlineAttrs, range: clamped)
+        /// Schedule a re-highlight of the current buffer — the perf core
+        /// of #376.
+        ///
+        /// The old path classified Markdown in Swift (~21 regex passes)
+        /// and stamped `.foregroundColor` over the whole `NSTextStorage`
+        /// **synchronously on every keystroke** (~182 ms at 2 MB, all on
+        /// the main thread). The new path:
+        ///
+        /// 1. **Coalesce + cancel.** Each call cancels the in-flight
+        ///    task, so a burst of keystrokes collapses into one run.
+        /// 2. **Debounce** (`debounced: true`, ~40 ms) on the typing
+        ///    path so nothing computes mid-keystroke. Lifecycle /
+        ///    appearance callbacks pass `debounced: false` for an
+        ///    immediate refresh.
+        /// 3. **Compute off-main.** The canonical spans come from
+        ///    `editorHighlightSpans` (#377/#391) in `slate-core` — no
+        ///    Swift classification — and the byte→UTF-16 conversion plus
+        ///    the embed scan all run in a detached task.
+        /// 4. **Apply on main** as `NSLayoutManager` *temporary
+        ///    attributes* (display-only — no storage edit, so no undo
+        ///    pollution and no storage-edit/relayout cycle per
+        ///    keystroke), guarded by a `textView.string == snapshot`
+        ///    check so a result computed against a since-edited buffer
+        ///    is dropped rather than smeared over the wrong offsets.
+        ///
+        /// Mirrors `AppState.runSearch`'s established
+        /// `Task { @MainActor } / Task.detached` shape so the post-await
+        /// AppKit work is guaranteed on the main thread.
+        func scheduleHighlight(debounced: Bool) {
+            highlightTask?.cancel()
+            guard let textView else { return }
+            let snapshot = textView.string
+            highlightTask = Task { @MainActor [weak self] in
+                if debounced {
+                    try? await Task.sleep(nanoseconds: Self.highlightDebounceNanos)
                 }
+                if Task.isCancelled { return }
+                // Span computation, the O(n) UTF-8→UTF-16 conversion, and
+                // the embed scan are all pure and potentially expensive
+                // on a large note, so they run off the main actor. Only
+                // the attribute application (which must touch AppKit)
+                // comes back to main. `[EditorSpan]` etc. crossing the
+                // detached boundary is fine under the package's Swift 5
+                // concurrency mode — same FFI-over-detached pattern
+                // `AppState` uses throughout.
+                let prepared = await Task.detached(priority: .userInitiated) {
+                    let spans = editorHighlightSpans(text: snapshot)
+                    let mapped = EditorSpanMapping.utf16Spans(from: spans, in: snapshot)
+                    let embeds = findEditorEmbedSpans(in: snapshot)
+                    return (mapped: mapped, embeds: embeds)
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                // Drop a result computed against a buffer the user has
+                // since edited — a newer task is already in flight for
+                // the current text, and these byte offsets no longer
+                // address it.
+                guard self.textView?.string == snapshot else { return }
+                self.applyHighlight(mapped: prepared.mapped, embeds: prepared.embeds)
             }
         }
 
-        /// Back-compat alias for the previous embed-only entry point
-        /// — tests call this name; coordinator code paths inside
-        /// this file have moved to `applySyntaxHighlighting`. Same
-        /// behaviour either way; both run the full syntax + embed
-        /// pass.
-        func applyEmbedHighlighting() { applySyntaxHighlighting() }
+        /// Apply a prepared highlight to the live text view as
+        /// `NSLayoutManager` temporary attributes. Main-actor only —
+        /// every call touches AppKit.
+        ///
+        /// Temporary attributes are a **display overlay**: they don't
+        /// mutate `NSTextStorage`, so there's no undo entry, no
+        /// `textDidChange` re-entrancy, and no per-keystroke
+        /// storage-edit/relayout cycle — the reason this replaces the old
+        /// `storage.addAttribute(… fullRange)` approach (#376). The
+        /// storage keeps a single `NSColor.textColor` foreground run
+        /// (stamped in `attach`), which shows through wherever no
+        /// temporary foreground is set, so un-classified prose stays in
+        /// the dynamic body colour the #226/#302 dark-mode fixes earned.
+        ///
+        /// VoiceOver doesn't read colour/underline attributes; the
+        /// highlight is purely a sighted-user affordance and AT users
+        /// still hear the raw text.
+        private func applyHighlight(
+            mapped: [(range: NSRange, kind: EditorSpanKind)],
+            embeds: [EditorEmbedSpan]
+        ) {
+            guard let textView, let layoutManager = textView.layoutManager else { return }
+            embedSpans = embeds  // cache for Cmd+E (openEmbedPreviewAtCursor)
+
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            let increaseContrast = NSWorkspace.shared
+                .accessibilityDisplayShouldIncreaseContrast
+            let underlineColor = embedUnderlineColor
+
+            // Reset the prior overlay so spans edited past lose their
+            // colour / underline, then re-stamp. Temporary attributes
+            // track storage edits, so a stale colour can linger on a
+            // shifted range until this runs — the full-range removal
+            // collapses it back to body colour first.
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+            layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
+            layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: fullRange)
+
+            // 1. Foreground per canonical kind. `nil` kinds (emphasis /
+            //    strong / strikethrough, plus the never-emitted link /
+            //    image / blockQuote) are skipped so they stay in body
+            //    colour. `code(token:)` spans nest inside their
+            //    `codeFence` — both resolve to `codeColor`, so the
+            //    overlap paints the same colour.
+            for (range, kind) in mapped {
+                let clamped = NSIntersectionRange(range, fullRange)
+                guard clamped.length > 0,
+                    let color = EditorSyntaxPalette.color(
+                        for: kind, increaseContrast: increaseContrast
+                    )
+                else { continue }
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor, value: color, forCharacterRange: clamped
+                )
+            }
+
+            // 2. Embed underline (audit #207, #230) on top of the
+            //    wikilink-family foreground the `embed` kind already
+            //    painted. The Swift embed scan owns this: its NSRanges
+            //    are already UTF-16 and it carries the `.target` Cmd+E
+            //    needs.
+            for embed in embeds {
+                let clamped = NSIntersectionRange(embed.range, fullRange)
+                guard clamped.length > 0 else { continue }
+                layoutManager.addTemporaryAttribute(
+                    .underlineStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    forCharacterRange: clamped
+                )
+                layoutManager.addTemporaryAttribute(
+                    .underlineColor, value: underlineColor, forCharacterRange: clamped
+                )
+            }
+        }
 
         /// Cmd+E entry point — called by `SlateEditorTextView`'s
         /// `performKeyEquivalent(with:)` when the user hits the
@@ -515,12 +600,11 @@ struct NoteEditorView: NSViewRepresentable {
             // which goes through `AppState.updateEditorText` and
             // recomputes `hasUnsavedChanges`.
             text = textView.string
-            // Re-highlight embed spans for the new buffer state.
-            // Cheap to redo from scratch — the regex scan over a
-            // 100k-character buffer is sub-millisecond and AppKit's
-            // editing transactions batch attribute updates without
-            // forcing layout each iteration.
-            applyEmbedHighlighting()
+            // Re-highlight on the debounced background path (#376) so the
+            // keystroke itself never pays for span computation or an
+            // attribute sweep — the old synchronous re-highlight here was
+            // the ~182 ms/keystroke stall at 2 MB.
+            scheduleHighlight(debounced: true)
         }
 
         // MARK: - Scroll routing
