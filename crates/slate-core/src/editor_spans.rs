@@ -178,8 +178,7 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
 ///   **not** emitted here; [`highlight_spans`] composes them on top.
 pub fn markdown_spans(source: &str) -> Vec<EditorSpan> {
     let mut out: Vec<EditorSpan> = Vec::new();
-    let parser =
-        Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
+    let parser = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
     for (event, range) in parser {
         let kind = match event {
             Event::Start(Tag::Heading { level, .. }) => {
@@ -253,8 +252,7 @@ fn scan_tags(source: &str) -> Vec<EditorSpan> {
                 !(is_word_char(p) || p == '#')
             };
             // First tag char must be an ASCII letter (Swift `[A-Za-z]`).
-            let first_ok =
-                matches!(chars.get(k + 1), Some(&(_, fc)) if fc.is_ascii_alphabetic());
+            let first_ok = matches!(chars.get(k + 1), Some(&(_, fc)) if fc.is_ascii_alphabetic());
             if prev_ok && first_ok {
                 let mut j = k + 1;
                 while j < chars.len() && is_tag_char(chars[j].1) {
@@ -526,11 +524,17 @@ mod tests {
         let src = "a **bold** and *italic* here\n";
         let spans = markdown_spans(src);
         assert_eq!(
-            slice(src, &first(&spans, &EditorSpanKind::Strong).expect("strong")),
+            slice(
+                src,
+                &first(&spans, &EditorSpanKind::Strong).expect("strong")
+            ),
             "**bold**"
         );
         assert_eq!(
-            slice(src, &first(&spans, &EditorSpanKind::Emphasis).expect("emphasis")),
+            slice(
+                src,
+                &first(&spans, &EditorSpanKind::Emphasis).expect("emphasis")
+            ),
             "*italic*"
         );
     }
@@ -540,7 +544,10 @@ mod tests {
         let src = "~~gone~~\n";
         let spans = markdown_spans(src);
         assert_eq!(
-            slice(src, &first(&spans, &EditorSpanKind::Strikethrough).expect("strike")),
+            slice(
+                src,
+                &first(&spans, &EditorSpanKind::Strikethrough).expect("strike")
+            ),
             "~~gone~~"
         );
     }
@@ -550,7 +557,10 @@ mod tests {
         let src = "use `x` then\n\n```rust\nlet y = 1;\n```\n";
         let spans = markdown_spans(src);
         assert_eq!(
-            slice(src, &first(&spans, &EditorSpanKind::InlineCode).expect("inline")),
+            slice(
+                src,
+                &first(&spans, &EditorSpanKind::InlineCode).expect("inline")
+            ),
             "`x`"
         );
         let fence = first(&spans, &EditorSpanKind::CodeFence).expect("fence");
@@ -588,7 +598,10 @@ mod tests {
         let src = "see [[Note]] and ![[img.png]] here\n";
         let spans = highlight_spans(src);
         assert_eq!(
-            slice(src, &first(&spans, &EditorSpanKind::Wikilink).expect("wikilink")),
+            slice(
+                src,
+                &first(&spans, &EditorSpanKind::Wikilink).expect("wikilink")
+            ),
             "[[Note]]"
         );
         assert_eq!(
@@ -601,8 +614,10 @@ mod tests {
     fn bare_hash_is_a_tag_but_word_hash_is_not() {
         let src = "#project here, but a#b is not a tag\n";
         let spans = highlight_spans(src);
-        let tags: Vec<&EditorSpan> =
-            spans.iter().filter(|s| s.kind == EditorSpanKind::Tag).collect();
+        let tags: Vec<&EditorSpan> = spans
+            .iter()
+            .filter(|s| s.kind == EditorSpanKind::Tag)
+            .collect();
         assert_eq!(tags.len(), 1, "exactly one tag, got {tags:?}");
         assert_eq!(slice(src, tags[0]), "#project");
     }
@@ -612,7 +627,10 @@ mod tests {
         let src = "as shown [@smith2020] elsewhere\n";
         let spans = highlight_spans(src);
         assert_eq!(
-            slice(src, &first(&spans, &EditorSpanKind::Citation).expect("citation")),
+            slice(
+                src,
+                &first(&spans, &EditorSpanKind::Citation).expect("citation")
+            ),
             "[@smith2020]"
         );
     }
@@ -675,7 +693,10 @@ mod tests {
             .iter()
             .filter(|s| matches!(s.kind, EditorSpanKind::Code(_)))
             .collect();
-        assert!(!code.is_empty(), "expected code-internal tokens, got {spans:?}");
+        assert!(
+            !code.is_empty(),
+            "expected code-internal tokens, got {spans:?}"
+        );
         let slices: Vec<&str> = code.iter().map(|s| slice(src, s)).collect();
         assert!(
             slices.contains(&"let"),
