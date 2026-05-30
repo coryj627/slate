@@ -62,6 +62,24 @@ final class CommandPaletteViewTests: XCTestCase {
         )
     }
 
+    /// `requestCommandPalette()` with no vault open must NOT flip
+    /// `isCommandPaletteOpen` — the palette sheet is only mounted by
+    /// MainSplitView, so flipping the bool on the welcome screen
+    /// would re-present it on the next vault open (#313/#328 hazard).
+    /// It posts an accessibility announcement instead. (The "open a
+    /// vault first" feedback was added after live debugging found
+    /// ⌘⇧P was a silent no-op on the welcome screen.)
+    @MainActor
+    func testRequestCommandPaletteWithNoVaultDoesNotOpen() async {
+        let appState = AppState()
+        XCTAssertFalse(appState.isVaultOpen, "fresh AppState has no vault")
+        appState.requestCommandPalette()
+        XCTAssertFalse(
+            appState.isCommandPaletteOpen,
+            "requestCommandPalette must not open the palette with no vault — only announce"
+        )
+    }
+
     // MARK: - APCA contrast (#313 + #315)
 
     func testLabelColorClearsAPCAAgainstControlBackground() {
@@ -367,6 +385,67 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertTrue(
             CommandPaletteView.shouldPassThroughArrow(keyCode: 124, modifierFlags: []),
             "bare → isn't navigable today; must pass through"
+        )
+    }
+
+    // MARK: - Escape-to-dismiss (live-debugging fix)
+    //
+    // The keyDown monitor intercepts bare Escape because a focused
+    // search field swallows it before `.onExitCommand` fires. These
+    // pin the pure decision; the actual monitor-beats-field-editor
+    // routing is verified live (it can't be reached from XCTest).
+
+    func testIsDismissKeyOnBareEscape() {
+        XCTAssertTrue(
+            CommandPaletteView.isDismissKey(
+                keyCode: CommandPaletteView.escapeKeyCode, modifierFlags: []
+            ),
+            "bare Escape must dismiss the palette"
+        )
+    }
+
+    func testIsDismissKeyIgnoredWithCommandModifier() {
+        // Cmd+Esc is a system chord — don't steal it.
+        XCTAssertFalse(
+            CommandPaletteView.isDismissKey(
+                keyCode: CommandPaletteView.escapeKeyCode, modifierFlags: [.command]
+            )
+        )
+    }
+
+    func testIsDismissKeyIgnoredWithShiftModifier() {
+        XCTAssertFalse(
+            CommandPaletteView.isDismissKey(
+                keyCode: CommandPaletteView.escapeKeyCode, modifierFlags: [.shift]
+            ),
+            "only BARE Escape dismisses"
+        )
+    }
+
+    func testIsDismissKeyFalseForNonEscapeKeys() {
+        // Arrows and ordinary keys must never trigger dismissal.
+        XCTAssertFalse(
+            CommandPaletteView.isDismissKey(
+                keyCode: CommandPaletteView.ArrowKey.down, modifierFlags: []
+            )
+        )
+        XCTAssertFalse(
+            CommandPaletteView.isDismissKey(keyCode: 0 /* 'a' */, modifierFlags: [])
+        )
+        XCTAssertFalse(
+            CommandPaletteView.isDismissKey(keyCode: 36 /* Return */, modifierFlags: [])
+        )
+    }
+
+    func testIsDismissKeyIgnoresDeviceDependentFlags() {
+        // Caps Lock / numeric-pad / fn aren't "real" chord modifiers
+        // (same philosophy as arrowModifierMask) — Escape with them
+        // set still dismisses.
+        XCTAssertTrue(
+            CommandPaletteView.isDismissKey(
+                keyCode: CommandPaletteView.escapeKeyCode, modifierFlags: [.capsLock]
+            ),
+            "Caps Lock isn't a meaningful modifier; bare Escape still dismisses"
         )
     }
 

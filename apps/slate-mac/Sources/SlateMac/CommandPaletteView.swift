@@ -43,7 +43,13 @@ struct CommandPaletteView: View {
 
     @StateObject private var model = CommandPaletteModel()
 
-    @State private var arrowKeyMonitor: Any? = nil
+    /// Local `.keyDown` monitor. Handles ↑/↓ selection navigation
+    /// (#315/#339) AND bare Escape dismissal: a focused search field
+    /// swallows the raw Escape key before SwiftUI's
+    /// `.onExitCommand` fires, so the monitor — which sees the
+    /// keyDown first — intercepts Escape and dismisses. (Cmd-. still
+    /// reaches `.onExitCommand`, but no user discovers that.)
+    @State private var keyDownMonitor: Any? = nil
 
     /// Timestamp of the most recent arrow-key selection change.
     /// Hover-update only fires when the mouse moves AFTER this —
@@ -77,10 +83,10 @@ struct CommandPaletteView: View {
                 appState.commandRegistry.list(),
                 recents: appState.commandPaletteRecents
             )
-            installArrowKeyMonitor()
+            installKeyDownMonitor()
         }
         .onDisappear {
-            removeArrowKeyMonitor()
+            removeKeyDownMonitor()
         }
         .onChange(of: model.query) { _ in
             model.handleQueryChange()
@@ -391,8 +397,71 @@ struct CommandPaletteView: View {
         return !modifierFlags.intersection(arrowModifierMask).isEmpty
     }
 
-    private func installArrowKeyMonitor() {
-        arrowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+    /// Carbon virtual key code for Escape (`kVK_Escape`). Stable
+    /// since OS X 10.0, like the arrow codes above.
+    static let escapeKeyCode: UInt16 = 53
+
+    /// Decide whether a `.keyDown` event is a bare Escape that should
+    /// dismiss the palette. Pure (no `@State`) so it's unit-testable
+    /// without synthesising live `NSEvent`s.
+    ///
+    /// **Why a monitor handles Escape at all.** Dismiss is also wired
+    /// via `.onExitCommand` (which fires for Esc *and* Cmd-.), but a
+    /// focused search field's AppKit field editor swallows the raw
+    /// Escape key as `cancelOperation:` before `.onExitCommand` ever
+    /// sees it — so Esc silently failed to close the palette while
+    /// Cmd-. worked (a dead end no user discovers). The keyDown
+    /// monitor runs before the field editor (same mechanism that
+    /// lets ↑/↓ drive selection while the field has focus), so it
+    /// catches Escape and dismisses. Found via live debugging; the
+    /// responder-chain behaviour is exactly what the #313 unit tests
+    /// couldn't reach.
+    ///
+    /// Only BARE Escape dismisses — any modifier (e.g. a system
+    /// Cmd+Esc) passes through untouched.
+    ///
+    /// The check-set omits `.function` (unlike `arrowModifierMask`,
+    /// which includes it): arrow keys carry `.function` intrinsically —
+    /// they're in the `NSFunctionKey` Unicode range — so the arrow mask
+    /// has to list it, but Escape never carries `.function`. fn+Escape
+    /// therefore still dismisses, which is intentional and harmless.
+    nonisolated static func isDismissKey(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        keyCode == escapeKeyCode
+            && modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+    }
+
+    private func installKeyDownMonitor() {
+        // Idempotent: if SwiftUI fires `.onAppear` again before a
+        // matching `.onDisappear` (re-presentation / view-identity
+        // churn), keep the existing monitor rather than overwriting its
+        // token — an orphaned monitor can never be removed and would
+        // keep swallowing bare Escape app-wide for the rest of the
+        // session (red-team hardening).
+        guard keyDownMonitor == nil else { return }
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // While an input method is composing (marked text in the
+            // field editor), intercept nothing: Escape must reach the
+            // input context to cancel the composition, and ↑/↓ drive the
+            // candidate window. Pass the event through untouched so we
+            // don't strand an IME user mid-composition (red-team).
+            if let editor = event.window?.firstResponder as? NSTextView,
+                editor.hasMarkedText()
+            {
+                return event
+            }
+            // Bare Escape → dismiss. Checked before the arrow logic
+            // because the focused search field would otherwise eat
+            // it (see `isDismissKey`).
+            if Self.isDismissKey(
+                keyCode: event.keyCode,
+                modifierFlags: event.modifierFlags
+            ) {
+                appState.isCommandPaletteOpen = false
+                return nil
+            }
             if Self.shouldPassThroughArrow(
                 keyCode: event.keyCode,
                 modifierFlags: event.modifierFlags
@@ -421,10 +490,10 @@ struct CommandPaletteView: View {
         }
     }
 
-    private func removeArrowKeyMonitor() {
-        if let m = arrowKeyMonitor {
+    private func removeKeyDownMonitor() {
+        if let m = keyDownMonitor {
             NSEvent.removeMonitor(m)
-            arrowKeyMonitor = nil
+            keyDownMonitor = nil
         }
     }
 

@@ -36,16 +36,19 @@ struct SlateMacApp: App {
             // shortcut routing through the sheet's responder chain
             // and can't be unit-tested without XCUITest infra).
             //
-            // Disabled when no vault is open so the chord doesn't
-            // silently flip the bool from the welcome screen (no
-            // sheet is mounted there → the bool would re-trigger
-            // an unwanted sheet on the next vault open).
+            // Stays ENABLED on the welcome screen so ⌘⇧P isn't a
+            // silent no-op there. The vault-scoped guard lives in
+            // `requestCommandPalette()`: it only flips
+            // `isCommandPaletteOpen` when a vault is open (no sheet
+            // is mounted on the welcome screen, so flipping the bool
+            // would re-trigger the palette on the next vault open —
+            // the #313/#328 hazard); otherwise it announces "open a
+            // vault first" so keyboard/VoiceOver users get feedback.
             CommandGroup(after: .sidebar) {
                 Button("Show Command Palette…") {
-                    appState.isCommandPaletteOpen = true
+                    appState.requestCommandPalette()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-                .disabled(!appState.isVaultOpen)
             }
         }
 

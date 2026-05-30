@@ -356,11 +356,13 @@ final class AppState: ObservableObject {
     @Published var isBulkRenameSheetOpen: Bool = false
 
     /// True when the command palette is presented (Milestone Q
-    /// #313). Opened by `⌘⇧P` from the `SlateMacApp` menu (only
-    /// when a vault is open — see the `.disabled` gate); closed
-    /// by `Esc` (cancel-action button inside the palette). The
-    /// palette registry, fuzzy filter, sections, and recents
-    /// arrive in #314–#316.
+    /// #313). Opened by `⌘⇧P` from the `SlateMacApp` menu, routed
+    /// through `requestCommandPalette()` which only flips this when a
+    /// vault is open (the menu item stays enabled on the welcome screen
+    /// so the chord gives feedback instead of being a silent no-op).
+    /// Closed by `Esc` (intercepted by the palette's keyDown monitor)
+    /// or the cancel-action button. The palette registry, fuzzy filter,
+    /// sections, and recents arrive in #314–#316.
     ///
     /// Reset to `false` by `closeVault()` so a vault close with
     /// the palette open doesn't leave the bool stuck (and re-
@@ -1008,6 +1010,32 @@ final class AppState: ObservableObject {
         // `self` to break the appState → registry → action → appState
         // cycle.
         registerCoreCommands(into: commandRegistry, appState: self)
+    }
+
+    /// Entry point for the "Show Command Palette…" menu command and
+    /// its `⌘⇧P` shortcut. Opens the palette when a vault is open;
+    /// otherwise posts an accessibility announcement instead of doing
+    /// nothing — pressing `⌘⇧P` on the welcome screen used to be a
+    /// silent no-op (the menu item was `.disabled`), which is a dead
+    /// end for keyboard / VoiceOver users. Found via live debugging.
+    ///
+    /// The palette is a vault-scoped surface: its sheet is only
+    /// mounted by `MainSplitView` (when a vault is open). This method
+    /// must NEVER set `isCommandPaletteOpen = true` while no vault is
+    /// open — with no sheet mounted the flipped bool would do nothing
+    /// now and then auto-present the palette the instant a vault
+    /// opened (the #313 / #328 stuck-bool hazard). Branching here lets
+    /// the View-menu command stay ENABLED on the welcome screen (so
+    /// the keypress gives feedback) while preserving that invariant.
+    func requestCommandPalette() {
+        guard isVaultOpen else {
+            postAccessibilityAnnouncement(
+                "Open a vault to use the command palette.",
+                priority: .high
+            )
+            return
+        }
+        isCommandPaletteOpen = true
     }
 
     /// Record that a command was invoked through the palette so the
@@ -1663,7 +1691,7 @@ final class AppState: ObservableObject {
         // Reset transient sheet flags so a vault-close mid-palette
         // doesn't leave the bool stuck (next vault open would
         // auto-present the empty palette). #313 belt-and-suspenders
-        // with the menu's `.disabled(!isVaultOpen)` gate.
+        // with the `requestCommandPalette()` open-guard.
         isCommandPaletteOpen = false
         // #328 sheet-flag parity audit. Each `@Published var
         // is*Open` driving a `.sheet` binding must reset here for
