@@ -216,35 +216,44 @@ fn citation_spans(source: &str) -> Vec<EditorSpan> {
         .collect()
 }
 
-/// Scan inline `#tag`s: `#` + ASCII letter + `[A-Za-z0-9_/-]*`, not
-/// preceded by a word byte or another `#` (so `# heading`, `##`, and
-/// `word#x` don't match). Rust's `regex` has no lookbehind, so the
-/// preceding-char guard is explicit. Suppression inside code/comments
-/// is handled by the overlap sweep, not here.
+/// Scan inline `#tag`s: `#` + ASCII letter + Unicode word chars / `-` /
+/// `/`, not preceded by a word char or another `#` (so `# heading`,
+/// `##`, `word#x`, and `café#x` don't match). Mirrors the Swift
+/// `(?<![\w#])#[A-Za-z][\w/-]*` with Unicode-aware `\w` (#385) — Rust's
+/// `regex` has no lookbehind, so the guard is explicit, and we iterate
+/// chars (not bytes) so non-ASCII tag bodies aren't truncated and a
+/// non-ASCII preceding letter still suppresses the match. Suppression
+/// inside code/comments is handled by the overlap sweep, not here.
 fn scan_tags(source: &str) -> Vec<EditorSpan> {
-    let bytes = source.as_bytes();
+    let chars: Vec<(usize, char)> = source.char_indices().collect();
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'#' {
-            let prev_ok = i == 0 || !(is_word_byte(bytes[i - 1]) || bytes[i - 1] == b'#');
-            let next_alpha =
-                matches!(bytes.get(i + 1), Some(&b) if b.is_ascii_alphabetic());
-            if prev_ok && next_alpha {
-                let start = i;
-                i += 1; // consume the `#`
-                while i < bytes.len() && is_tag_byte(bytes[i]) {
-                    i += 1;
+    let mut k = 0;
+    while k < chars.len() {
+        let (idx, c) = chars[k];
+        if c == '#' {
+            let prev_ok = k == 0 || {
+                let p = chars[k - 1].1;
+                !(is_word_char(p) || p == '#')
+            };
+            // First tag char must be an ASCII letter (Swift `[A-Za-z]`).
+            let first_ok =
+                matches!(chars.get(k + 1), Some(&(_, fc)) if fc.is_ascii_alphabetic());
+            if prev_ok && first_ok {
+                let mut j = k + 1;
+                while j < chars.len() && is_tag_char(chars[j].1) {
+                    j += 1;
                 }
+                let end = chars.get(j).map_or(source.len(), |&(b, _)| b);
                 out.push(EditorSpan {
-                    start_byte: start as u32,
-                    end_byte: i as u32,
+                    start_byte: idx as u32,
+                    end_byte: end as u32,
                     kind: EditorSpanKind::Tag,
                 });
+                k = j;
                 continue;
             }
         }
-        i += 1;
+        k += 1;
     }
     out
 }
@@ -357,12 +366,12 @@ fn trim_trailing_newline(
     range
 }
 
-fn is_word_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
-fn is_tag_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'/')
+fn is_tag_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '/')
 }
 
 #[cfg(test)]
@@ -582,6 +591,32 @@ mod tests {
         assert!(
             wl.start_byte >= fm_end && strong.start_byte >= fm_end,
             "body tokens must survive outside frontmatter, got {spans:?}"
+        );
+    }
+
+    // --- Unicode-aware tag scanner (#385) -----------------------------
+
+    #[test]
+    fn unicode_tag_body_is_not_truncated() {
+        let src = "a #café and #naïve here\n";
+        let tags: Vec<String> = highlight_spans(src)
+            .iter()
+            .filter(|s| s.kind == EditorSpanKind::Tag)
+            .map(|s| slice(src, s).to_string())
+            .collect();
+        assert!(tags.contains(&"#café".to_string()), "got {tags:?}");
+        assert!(tags.contains(&"#naïve".to_string()), "got {tags:?}");
+    }
+
+    #[test]
+    fn tag_after_non_ascii_word_is_suppressed() {
+        // `café#x`: the `#` is preceded by `é` (a word char), so — like
+        // Swift's Unicode `(?<!\w)` — it is not a tag.
+        let src = "café#x is not a tag\n";
+        let spans = highlight_spans(src);
+        assert!(
+            !spans.iter().any(|s| s.kind == EditorSpanKind::Tag),
+            "tag after a non-ASCII word must be suppressed, got {spans:?}"
         );
     }
 }
