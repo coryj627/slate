@@ -155,19 +155,28 @@ fn collect_code_ranges(source: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-fn in_any_range(idx: usize, ranges: &[(usize, usize)]) -> bool {
-    ranges.iter().any(|(s, e)| idx >= *s && idx < *e)
-}
-
 /// Top-level scanner: walks bytes once, finding either bracketed or
-/// in-text citations. Skips ranges that overlap code spans.
+/// in-text citations. Skips bytes inside code spans.
+///
+/// `code_ranges` arrive in document order and never overlap (they come
+/// from a single pulldown pass in `collect_code_ranges`), so one
+/// monotonic cursor replaces the former per-byte `any()` scan. That
+/// makes the walk O(n + ranges) instead of O(n × ranges) — the latter
+/// was quadratic on notes with normal inline-code density and took
+/// ~12 s on a 2 MB note (#383).
 fn scan_citations(source: &str, code_ranges: &[(usize, usize)]) -> Vec<CitationReference> {
     let bytes = source.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
+    let mut ci = 0; // cursor into the sorted, disjoint code ranges
     while i < bytes.len() {
-        if in_any_range(i, code_ranges) {
-            i += 1;
+        // Drop code ranges that end at or before `i`.
+        while ci < code_ranges.len() && code_ranges[ci].1 <= i {
+            ci += 1;
+        }
+        // Inside a code range? Jump past the whole range, not byte-by-byte.
+        if ci < code_ranges.len() && i >= code_ranges[ci].0 {
+            i = code_ranges[ci].1;
             continue;
         }
         let b = bytes[i];
@@ -514,6 +523,29 @@ mod tests {
     fn single(refs: &[CitationReference], idx: usize) -> &CitedItem {
         assert_eq!(refs[idx].citations.len(), 1, "expected single CitedItem");
         &refs[idx].citations[0]
+    }
+
+    /// #383 regression: `scan_citations` previously called a linear
+    /// `in_any_range` per byte, making extraction O(doc × inline-code-
+    /// spans). A 2 MB note with normal inline-code density took ~12 s
+    /// (~18 s through the editor highlight). The cursor-based skip is
+    /// ~linear; this guards a generous wall-clock budget the quadratic
+    /// version blew past by several-fold.
+    #[test]
+    fn scan_is_not_quadratic_on_dense_inline_code() {
+        // ~2 MB: ~38k inline-code spans interleaved with ~38k citations —
+        // the (doc-length × range-count) product that drove the old cost.
+        let unit = "Prose with `inline code` and a [@smith2020] cite here.\n\n";
+        let doc = unit.repeat(38_000);
+        let start = std::time::Instant::now();
+        let refs = extract_citations(&doc);
+        let elapsed = start.elapsed();
+        assert_eq!(refs.len(), 38_000, "sanity: one citation per unit");
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "extract_citations took {elapsed:?} on a 2 MB dense doc — \
+             the #383 quadratic may have regressed"
+        );
     }
 
     // --- §6.5 syntax table -------------------------------------------
