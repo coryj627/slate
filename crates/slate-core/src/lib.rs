@@ -17,6 +17,7 @@ pub mod code;
 pub mod commands;
 pub mod db;
 pub mod diagram;
+pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;
 pub mod link_resolver;
