@@ -356,11 +356,13 @@ final class AppState: ObservableObject {
     @Published var isBulkRenameSheetOpen: Bool = false
 
     /// True when the command palette is presented (Milestone Q
-    /// #313). Opened by `⌘⇧P` from the `SlateMacApp` menu (only
-    /// when a vault is open — see the `.disabled` gate); closed
-    /// by `Esc` (cancel-action button inside the palette). The
-    /// palette registry, fuzzy filter, sections, and recents
-    /// arrive in #314–#316.
+    /// #313). Opened by `⌘⇧P` from the `SlateMacApp` menu, routed
+    /// through `requestCommandPalette()` which only flips this when a
+    /// vault is open (the menu item stays enabled on the welcome screen
+    /// so the chord gives feedback instead of being a silent no-op).
+    /// Closed by `Esc` (intercepted by the palette's keyDown monitor)
+    /// or the cancel-action button. The palette registry, fuzzy filter,
+    /// sections, and recents arrive in #314–#316.
     ///
     /// Reset to `false` by `closeVault()` so a vault close with
     /// the palette open doesn't leave the bool stuck (and re-
@@ -1689,7 +1691,7 @@ final class AppState: ObservableObject {
         // Reset transient sheet flags so a vault-close mid-palette
         // doesn't leave the bool stuck (next vault open would
         // auto-present the empty palette). #313 belt-and-suspenders
-        // with the menu's `.disabled(!isVaultOpen)` gate.
+        // with the `requestCommandPalette()` open-guard.
         isCommandPaletteOpen = false
         // #328 sheet-flag parity audit. Each `@Published var
         // is*Open` driving a `.sheet` binding must reset here for

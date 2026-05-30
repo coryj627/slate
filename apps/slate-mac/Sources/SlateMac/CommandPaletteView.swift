@@ -419,6 +419,12 @@ struct CommandPaletteView: View {
     ///
     /// Only BARE Escape dismisses — any modifier (e.g. a system
     /// Cmd+Esc) passes through untouched.
+    ///
+    /// The check-set omits `.function` (unlike `arrowModifierMask`,
+    /// which includes it): arrow keys carry `.function` intrinsically —
+    /// they're in the `NSFunctionKey` Unicode range — so the arrow mask
+    /// has to list it, but Escape never carries `.function`. fn+Escape
+    /// therefore still dismisses, which is intentional and harmless.
     nonisolated static func isDismissKey(
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags
@@ -428,7 +434,24 @@ struct CommandPaletteView: View {
     }
 
     private func installKeyDownMonitor() {
+        // Idempotent: if SwiftUI fires `.onAppear` again before a
+        // matching `.onDisappear` (re-presentation / view-identity
+        // churn), keep the existing monitor rather than overwriting its
+        // token — an orphaned monitor can never be removed and would
+        // keep swallowing bare Escape app-wide for the rest of the
+        // session (red-team hardening).
+        guard keyDownMonitor == nil else { return }
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // While an input method is composing (marked text in the
+            // field editor), intercept nothing: Escape must reach the
+            // input context to cancel the composition, and ↑/↓ drive the
+            // candidate window. Pass the event through untouched so we
+            // don't strand an IME user mid-composition (red-team).
+            if let editor = event.window?.firstResponder as? NSTextView,
+                editor.hasMarkedText()
+            {
+                return event
+            }
             // Bare Escape → dismiss. Checked before the arrow logic
             // because the focused search field would otherwise eat
             // it (see `isDismissKey`).
