@@ -71,6 +71,9 @@ pub enum EditorSpanKind {
     Citation,
     /// `%% … %%` Obsidian comment (inline or multi-line).
     Comment,
+    /// YAML frontmatter block (`---` … `---`) at the start of the note,
+    /// emitted as one span over the whole block.
+    Frontmatter,
 }
 
 /// One classified span over the host source, in UTF-8 byte offsets.
@@ -121,6 +124,19 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
             )
         })
         .collect();
+    // #384: emit one high-priority span over the YAML frontmatter block.
+    // `markdown_spans` runs pulldown on the raw source, so it produces
+    // spurious structure spans (Heading/CodeFence) over the YAML; the
+    // overlap sweep masks them — and any tag/comment the scanners find
+    // inside frontmatter — beneath this Frontmatter span.
+    let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
+    if fm_end > 0 {
+        spans.push(EditorSpan {
+            start_byte: 0,
+            end_byte: fm_end as u32,
+            kind: EditorSpanKind::Frontmatter,
+        });
+    }
     spans.extend(wikilink_spans(source));
     spans.extend(citation_spans(source));
     spans.extend(scan_tags(source));
@@ -302,6 +318,7 @@ fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan>
 /// only for match exhaustiveness.
 fn priority(kind: &EditorSpanKind) -> u8 {
     match kind {
+        EditorSpanKind::Frontmatter => 0,
         EditorSpanKind::CodeFence => 1,
         EditorSpanKind::Comment => 2,
         EditorSpanKind::InlineCode => 3,
@@ -520,5 +537,51 @@ mod tests {
         let src = "text %% open but never closed\n";
         let spans = highlight_spans(src);
         assert!(!spans.iter().any(|s| s.kind == EditorSpanKind::Comment));
+    }
+
+    // --- frontmatter (#384) ------------------------------------------
+
+    #[test]
+    fn frontmatter_emits_one_span_and_masks_internals() {
+        // Red-team #384: `title: Hello` + the closing `---` were mis-read
+        // as a setext heading by the raw-source pulldown pass.
+        let src = "---\ntitle: Hello\nstatus: draft\n---\n\nbody text\n";
+        let spans = highlight_spans(src);
+        let fm: Vec<&EditorSpan> = spans
+            .iter()
+            .filter(|s| s.kind == EditorSpanKind::Frontmatter)
+            .collect();
+        assert_eq!(fm.len(), 1, "exactly one frontmatter span, got {spans:?}");
+        assert_eq!(fm[0].start_byte, 0);
+        let fm_end = fm[0].end_byte;
+        assert!(
+            !spans
+                .iter()
+                .any(|s| s.kind != EditorSpanKind::Frontmatter && s.start_byte < fm_end),
+            "no non-frontmatter span may start inside the frontmatter block, got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn frontmatter_does_not_mask_body_tokens() {
+        let src = "---\ntitle: T\n---\n\nbody [[Link]] and **bold**\n";
+        let spans = highlight_spans(src);
+        let fm_end = spans
+            .iter()
+            .find(|s| s.kind == EditorSpanKind::Frontmatter)
+            .expect("fm")
+            .end_byte;
+        let wl = spans
+            .iter()
+            .find(|s| s.kind == EditorSpanKind::Wikilink)
+            .expect("body wikilink");
+        let strong = spans
+            .iter()
+            .find(|s| s.kind == EditorSpanKind::Strong)
+            .expect("body bold");
+        assert!(
+            wl.start_byte >= fm_end && strong.start_byte >= fm_end,
+            "body tokens must survive outside frontmatter, got {spans:?}"
+        );
     }
 }
