@@ -316,25 +316,30 @@ fn scan_comments(source: &str) -> Vec<EditorSpan> {
 /// from `code.rs`'s tree-sitter highlighting. An overlay: each token
 /// nests inside its `CodeFence` span (see [`highlight_spans`]).
 ///
-/// `extract_code_blocks` keeps only the fence-opener offset, but the
-/// token offsets `highlight_code` returns are relative to the block's
-/// *content*. We re-walk pulldown here to capture each block's content
-/// start in host coordinates, then reuse `highlight_code` for the
-/// tree-sitter work and shift the token offsets into host space.
+/// `highlight_code` returns token offsets relative to the block's
+/// *content* — the concatenation of the block's `Event::Text` payloads.
+/// pulldown **normalizes** that content (CRLF→LF, indentation stripped),
+/// so it is NOT a contiguous copy of the host bytes: a global
+/// `content_start + offset` mapping drifts and can land mid-codepoint on
+/// CRLF/indented blocks. Instead we record a per-Text-event segment
+/// table — each event is a 1:1 run, with the stripped `\r`/indent as
+/// gaps between runs in host space — and translate every token offset
+/// through it, dropping any token whose host range isn't a char boundary.
 fn code_internal_spans(source: &str) -> Vec<EditorSpan> {
     use pulldown_cmark::{CodeBlockKind, TagEnd};
     let mut out = Vec::new();
     let mut in_code = false;
     let mut language: Option<String> = None;
     let mut content = String::new();
-    let mut content_start: Option<usize> = None;
+    // (content_start, host_start, len) per Text event — a 1:1 run.
+    let mut segs: Vec<(usize, usize, usize)> = Vec::new();
     let parser = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
     for (event, range) in parser {
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
                 content.clear();
-                content_start = None;
+                segs.clear();
                 language = match kind {
                     CodeBlockKind::Fenced(tag) => {
                         let t = tag.into_string().trim().to_string();
@@ -348,35 +353,57 @@ fn code_internal_spans(source: &str) -> Vec<EditorSpan> {
                 };
             }
             Event::Text(s) if in_code => {
-                if content_start.is_none() {
-                    content_start = Some(range.start);
-                }
+                segs.push((content.len(), range.start, s.len()));
                 content.push_str(&s);
             }
             Event::End(TagEnd::CodeBlock) if in_code => {
                 in_code = false;
-                let Some(start) = content_start else {
-                    content.clear();
+                if content.is_empty() {
                     language = None;
                     continue;
-                };
+                }
                 let raw = RawCodeBlock {
                     source: std::mem::take(&mut content),
                     language: language.take(),
                     line: 0,
-                    byte_offset: start as u32,
+                    byte_offset: segs.first().map_or(0, |&(_, h, _)| h as u32),
                 };
-                let base = start as u32;
-                out.extend(highlight_code(&raw).tokens.into_iter().map(|tok| EditorSpan {
-                    start_byte: base + tok.start_byte,
-                    end_byte: base + tok.end_byte,
-                    kind: EditorSpanKind::Code(tok.kind),
-                }));
+                for tok in highlight_code(&raw).tokens {
+                    let (Some(s), Some(e)) = (
+                        map_content_to_host(&segs, tok.start_byte as usize),
+                        map_content_to_host(&segs, tok.end_byte as usize),
+                    ) else {
+                        continue;
+                    };
+                    // Guard: only emit sliceable, char-boundary ranges so a
+                    // mapping edge case can never panic a downstream slice.
+                    if s < e && source.is_char_boundary(s) && source.is_char_boundary(e) {
+                        out.push(EditorSpan {
+                            start_byte: s as u32,
+                            end_byte: e as u32,
+                            kind: EditorSpanKind::Code(tok.kind),
+                        });
+                    }
+                }
+                segs.clear();
             }
             _ => {}
         }
     }
     out
+}
+
+/// Translate a content-space byte offset to a host-space byte offset via
+/// the per-Text-event segment table (each `(content_start, host_start,
+/// len)` is a 1:1 run; gaps between runs are pulldown-stripped bytes).
+/// Offsets at the very end of the content map to the last run's host end.
+fn map_content_to_host(segs: &[(usize, usize, usize)], off: usize) -> Option<usize> {
+    for &(cstart, hstart, len) in segs {
+        if off < cstart + len {
+            return Some(hstart + off.saturating_sub(cstart));
+        }
+    }
+    segs.last().map(|&(_, hstart, len)| hstart + len)
 }
 
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
@@ -671,6 +698,40 @@ mod tests {
             assert!(
                 s.start_byte >= fence.start_byte && s.end_byte <= fence.end_byte,
                 "code token {s:?} should nest inside fence {fence:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn code_tokens_handle_crlf_and_non_ascii_without_panicking() {
+        // Red-team #377: pulldown normalizes CRLF→LF, so token offsets
+        // must map through per-line segments, not one global base.
+        let src = "```rust\r\nlet a = 1;\r\nlet café = 2;\r\n```\r\n";
+        let spans = highlight_spans(src);
+        let slices: Vec<&str> = spans
+            .iter()
+            .filter(|s| matches!(s.kind, EditorSpanKind::Code(_)))
+            .map(|s| slice(src, s)) // panics if a span isn't a char boundary
+            .collect();
+        assert!(
+            slices.contains(&"café"),
+            "the café identifier should map to its real host bytes, got {slices:?}"
+        );
+    }
+
+    #[test]
+    fn indented_code_block_tokens_are_char_boundary_safe() {
+        let src = "intro\n\n    let x = \"中\";\n    let y = 2;\n";
+        let spans = highlight_spans(src);
+        for s in spans
+            .iter()
+            .filter(|s| matches!(s.kind, EditorSpanKind::Code(_)))
+        {
+            let _ = slice(src, s); // must be sliceable — no panic
+            assert!(
+                src.is_char_boundary(s.start_byte as usize)
+                    && src.is_char_boundary(s.end_byte as usize),
+                "code span {s:?} is not on char boundaries"
             );
         }
     }
