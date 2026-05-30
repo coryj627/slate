@@ -19,8 +19,9 @@
 //!    `[[wikilink]]` / `![[embed]]` (reusing [`crate::links`], already
 //!    code-suppressed), `[@cite]` (reusing [`crate::citations`]), and
 //!    dependency-free scanners for `#tag` and `%%comment%%`.
-//! 3. **Fenced-code internals**: reuse [`crate::code`]'s tree-sitter
-//!    token stream — *added in a later commit*.
+//! 3. **Fenced-code internals** ([`highlight_spans`] overlays these):
+//!    reuse [`crate::code`]'s tree-sitter tokens, mapped to host offsets
+//!    and nested inside the `CodeFence` span.
 //! 4. **Ranged `highlights(in: range)`** exposed over FFI — *later*.
 //!
 //! ## Coordinates
@@ -31,6 +32,7 @@
 //! already performs byte↔UTF-16 conversion for cursor placement).
 
 use crate::citations::extract_citations;
+use crate::code::{highlight_code, RawCodeBlock, TokenKind};
 use crate::links::{extract_links, LinkKind};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 
@@ -74,6 +76,11 @@ pub enum EditorSpanKind {
     /// YAML frontmatter block (`---` … `---`) at the start of the note,
     /// emitted as one span over the whole block.
     Frontmatter,
+    /// A token *inside* a fenced/indented code block, from `code.rs`'s
+    /// tree-sitter highlighting. An overlay that nests within
+    /// [`EditorSpanKind::CodeFence`] — the one intentional overlap in
+    /// [`highlight_spans`].
+    Code(TokenKind),
 }
 
 /// One classified span over the host source, in UTF-8 byte offsets.
@@ -97,9 +104,12 @@ impl EditorSpan {
 }
 
 /// The full editor highlight span set for `source`: CommonMark
-/// structure plus the Slate-specific tokens, with overlaps resolved by
-/// priority into a flat, non-overlapping, document-ordered list ready
-/// for the UI to stamp.
+/// structure, the Slate-specific tokens, and per-token code-block
+/// internals. Overlaps are resolved by priority into a document-ordered
+/// list; the result is non-overlapping **except** that
+/// [`EditorSpanKind::Code`] tokens nest inside their
+/// [`EditorSpanKind::CodeFence`] container (the apply layer stamps the
+/// fence's base style, then the token colours on top).
 ///
 /// Overlap policy mirrors the prior Swift `findEditorSyntaxSpans`
 /// coverage scheme: higher-priority spans win, and any span that
@@ -141,7 +151,14 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     spans.extend(citation_spans(source));
     spans.extend(scan_tags(source));
     spans.extend(scan_comments(source));
-    resolve_overlaps(source, spans)
+    let mut resolved = resolve_overlaps(source, spans);
+    // Slice 3: overlay per-token code-block internals. Added *after* the
+    // sweep so the CodeFence span still masks markdown/tags elsewhere in
+    // the block, while the tokens themselves nest inside it (the one
+    // intentional overlap) for the apply layer to stamp on top.
+    resolved.extend(code_internal_spans(source));
+    resolved.sort_by_key(|s| s.start_byte);
+    resolved
 }
 
 /// Walk the CommonMark structure of `source` and emit syntax spans in
@@ -295,6 +312,73 @@ fn scan_comments(source: &str) -> Vec<EditorSpan> {
     out
 }
 
+/// Per-token spans for the *internals* of fenced / indented code blocks,
+/// from `code.rs`'s tree-sitter highlighting. An overlay: each token
+/// nests inside its `CodeFence` span (see [`highlight_spans`]).
+///
+/// `extract_code_blocks` keeps only the fence-opener offset, but the
+/// token offsets `highlight_code` returns are relative to the block's
+/// *content*. We re-walk pulldown here to capture each block's content
+/// start in host coordinates, then reuse `highlight_code` for the
+/// tree-sitter work and shift the token offsets into host space.
+fn code_internal_spans(source: &str) -> Vec<EditorSpan> {
+    use pulldown_cmark::{CodeBlockKind, TagEnd};
+    let mut out = Vec::new();
+    let mut in_code = false;
+    let mut language: Option<String> = None;
+    let mut content = String::new();
+    let mut content_start: Option<usize> = None;
+    let parser = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
+    for (event, range) in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                in_code = true;
+                content.clear();
+                content_start = None;
+                language = match kind {
+                    CodeBlockKind::Fenced(tag) => {
+                        let t = tag.into_string().trim().to_string();
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t)
+                        }
+                    }
+                    CodeBlockKind::Indented => None,
+                };
+            }
+            Event::Text(s) if in_code => {
+                if content_start.is_none() {
+                    content_start = Some(range.start);
+                }
+                content.push_str(&s);
+            }
+            Event::End(TagEnd::CodeBlock) if in_code => {
+                in_code = false;
+                let Some(start) = content_start else {
+                    content.clear();
+                    language = None;
+                    continue;
+                };
+                let raw = RawCodeBlock {
+                    source: std::mem::take(&mut content),
+                    language: language.take(),
+                    line: 0,
+                    byte_offset: start as u32,
+                };
+                let base = start as u32;
+                out.extend(highlight_code(&raw).tokens.into_iter().map(|tok| EditorSpan {
+                    start_byte: base + tok.start_byte,
+                    end_byte: base + tok.end_byte,
+                    kind: EditorSpanKind::Code(tok.kind),
+                }));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
 /// spans highest-priority first, dropping any that intersect an
 /// already-accepted span. Returns survivors in document order.
@@ -337,6 +421,9 @@ fn priority(kind: &EditorSpanKind) -> u8 {
         EditorSpanKind::Tag => 7,
         EditorSpanKind::Emphasis | EditorSpanKind::Strong | EditorSpanKind::Strikethrough => 8,
         EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote => 9,
+        // Overlaid after the sweep, so this is never consulted; present
+        // only for match exhaustiveness.
+        EditorSpanKind::Code(_) => 10,
     }
 }
 
@@ -532,11 +619,58 @@ mod tests {
         let src = "# Title with [[link]]\n\n`code` and #tag and *i* and [@k]\n";
         let spans = highlight_spans(src);
         for w in spans.windows(2) {
+            // Code-internal tokens intentionally nest inside CodeFence;
+            // every other span is strictly non-overlapping and ordered.
+            if matches!(w[0].kind, EditorSpanKind::Code(_))
+                || matches!(w[1].kind, EditorSpanKind::Code(_))
+            {
+                continue;
+            }
             assert!(
                 w[0].end_byte <= w[1].start_byte,
                 "spans overlap or are unordered: {:?} then {:?}",
                 w[0],
                 w[1]
+            );
+        }
+    }
+
+    // --- code-block internals (#377 slice 3) -------------------------
+
+    #[test]
+    fn code_block_internals_get_token_spans_at_host_offsets() {
+        let src = "intro\n\n```rust\nlet x = 1;\n```\n";
+        let spans = highlight_spans(src);
+        // The CodeFence container is present...
+        assert!(spans.iter().any(|s| s.kind == EditorSpanKind::CodeFence));
+        // ...and per-token Code spans overlay it at correct host offsets.
+        let code: Vec<&EditorSpan> = spans
+            .iter()
+            .filter(|s| matches!(s.kind, EditorSpanKind::Code(_)))
+            .collect();
+        assert!(!code.is_empty(), "expected code-internal tokens, got {spans:?}");
+        let slices: Vec<&str> = code.iter().map(|s| slice(src, s)).collect();
+        assert!(
+            slices.contains(&"let"),
+            "expected a `let` token at its host offset, got {slices:?}"
+        );
+    }
+
+    #[test]
+    fn code_tokens_nest_inside_the_fence_span() {
+        let src = "```rust\nfn f() {}\n```\n";
+        let spans = highlight_spans(src);
+        let fence = spans
+            .iter()
+            .find(|s| s.kind == EditorSpanKind::CodeFence)
+            .expect("fence");
+        for s in spans
+            .iter()
+            .filter(|s| matches!(s.kind, EditorSpanKind::Code(_)))
+        {
+            assert!(
+                s.start_byte >= fence.start_byte && s.end_byte <= fence.end_byte,
+                "code token {s:?} should nest inside fence {fence:?}"
             );
         }
     }
