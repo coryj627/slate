@@ -2104,6 +2104,88 @@ impl From<core::code::CodeBlock> for CodeBlock {
     }
 }
 
+// Editor syntax-span mirror (#377).
+
+/// Classifies one editor highlight span. Payload variants carry the
+/// heading level / inner code token; the rest are unit variants.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum EditorSpanKind {
+    Heading { level: u8 },
+    Emphasis,
+    Strong,
+    Strikethrough,
+    InlineCode,
+    CodeFence,
+    Link,
+    Image,
+    BlockQuote,
+    Wikilink,
+    Embed,
+    Tag,
+    Citation,
+    Comment,
+    Frontmatter,
+    Code { token: TokenKind },
+}
+
+impl From<core::editor_spans::EditorSpanKind> for EditorSpanKind {
+    fn from(k: core::editor_spans::EditorSpanKind) -> Self {
+        use core::editor_spans::EditorSpanKind as K;
+        match k {
+            K::Heading(level) => EditorSpanKind::Heading { level },
+            K::Emphasis => EditorSpanKind::Emphasis,
+            K::Strong => EditorSpanKind::Strong,
+            K::Strikethrough => EditorSpanKind::Strikethrough,
+            K::InlineCode => EditorSpanKind::InlineCode,
+            K::CodeFence => EditorSpanKind::CodeFence,
+            K::Link => EditorSpanKind::Link,
+            K::Image => EditorSpanKind::Image,
+            K::BlockQuote => EditorSpanKind::BlockQuote,
+            K::Wikilink => EditorSpanKind::Wikilink,
+            K::Embed => EditorSpanKind::Embed,
+            K::Tag => EditorSpanKind::Tag,
+            K::Citation => EditorSpanKind::Citation,
+            K::Comment => EditorSpanKind::Comment,
+            K::Frontmatter => EditorSpanKind::Frontmatter,
+            K::Code(token) => EditorSpanKind::Code {
+                token: token.into(),
+            },
+        }
+    }
+}
+
+/// One editor highlight span over the note's UTF-8 byte offsets.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EditorSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub kind: EditorSpanKind,
+}
+
+impl From<core::editor_spans::EditorSpan> for EditorSpan {
+    fn from(s: core::editor_spans::EditorSpan) -> Self {
+        Self {
+            start_byte: s.start_byte,
+            end_byte: s.end_byte,
+            kind: s.kind.into(),
+        }
+    }
+}
+
+/// Compute the canonical editor highlight spans for a Markdown source
+/// (#377, `05` §1.1/§1.2). Pure — no vault/session needed; the editor
+/// calls this off the main thread (debounced) and stamps the spans as
+/// temporary attributes. Offsets are UTF-8 byte offsets into `text`;
+/// `Code` tokens may nest inside their `CodeFence` span. A ranged /
+/// incremental variant is tracked as #379.
+#[uniffi::export]
+pub fn editor_highlight_spans(text: String) -> Vec<EditorSpan> {
+    core::editor_spans::highlight_spans(&text)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
 // Diagram pipeline mirror.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
