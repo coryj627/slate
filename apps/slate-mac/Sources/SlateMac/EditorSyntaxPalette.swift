@@ -3,7 +3,14 @@
 
 import AppKit
 
-/// Foreground colors per `SyntaxKind` for editor markdown highlighting (#296).
+/// Foreground colors per `EditorSpanKind` for editor markdown
+/// highlighting (#296, re-keyed onto the canonical Rust spans in #376).
+///
+/// `EditorSpanKind` is the FFI-generated span classifier from
+/// `slate-core`'s `editor_highlightSpans` (#377/#391) — the editor no
+/// longer classifies in Swift. This palette is the **apply layer**: it
+/// maps each canonical kind to the foreground the coordinator stamps as
+/// an `NSLayoutManager` temporary attribute.
 ///
 /// Default palette uses custom per-appearance sRGB colours tuned
 /// for APCA `|Lc| > 75` against `NSColor.textBackgroundColor` in
@@ -16,39 +23,52 @@ import AppKit
 /// stable cross-OS appearance. Pinned sRGB pairs are deterministic
 /// and the test suite enforces the Lc 75 floor.
 ///
-/// **Contrast under default prefs:** every kind's resolved colour
-/// clears APCA Lc 75 against `textBackgroundColor` in both
+/// **Contrast under default prefs:** every *coloured* kind's resolved
+/// colour clears APCA Lc 75 against `textBackgroundColor` in both
 /// appearances (measured by `EditorSyntaxPaletteTests`). Under
 /// `accessibilityDisplayShouldIncreaseContrast` we collapse the
-/// whole palette to `NSColor.labelColor` (Apple-guaranteed contrast
+/// coloured kinds to `NSColor.labelColor` (Apple-guaranteed contrast
 /// against the matched background) — colour stops being the cue,
 /// but the underline / position / glyph already carry the structure
 /// (WCAG 1.4.1, Use of Color: shape/position carry the structure,
 /// not colour alone). Same pattern code-block tokens use in
 /// `CodeTokenTheme`.
 ///
+/// **Conservative defaults (#376).** This first cut preserves the
+/// prior editor's visual identity rather than colouring every new
+/// kind the Rust spans expose:
+///
+/// - `emphasis` / `strong` / `strikethrough` → `nil` (not coloured).
+///   The Rust spans cover the whole run *including the prose between
+///   the markers*; colouring it would dim the prose. The prior Swift
+///   highlighter coloured only the markers. A marker-only pass is a
+///   deliberate follow-up (#377) — until then these stay in body
+///   colour.
+/// - `link` / `image` / `blockQuote` → `nil`. `editor_highlightSpans`
+///   never emits these (filtered backend-side); listed only so the
+///   switch is exhaustive.
+/// - all `code` kinds (`codeFence` / `inlineCode` / `code(token:)`)
+///   → one `codeColor`. Per-token editor colouring needs an
+///   APCA-validated `TokenKind` palette (follow-up); for now the code
+///   surface gets one tint, matching the prior behaviour.
+///
 /// **Why these specific kinds get these colours:**
 ///
-/// - `frontmatter`, `commentBlock`, `citation`: `secondaryLabelColor`
+/// - `frontmatter`, `comment`, `citation`: `secondaryLabelColor`
 ///   — Apple's tuned "de-emphasized text" colour. Meets contrast
 ///   against textBackground while signalling "this is meta, not
 ///   prose."
-/// - `heading`, `setextUnderline`: deep blue (light) / pale blue
-///   (dark) — the default accent in Apple's HIG; reads as "primary
-///   structure marker."
-/// - `codeBlock`, `inlineCode`: deep purple (light) / pale purple
-///   (dark) — matches what code highlighters typically use for the
-///   code surface tint.
-/// - `wikilink`: dark teal (light) / pale cyan (dark) — distinct
-///   from code purple, distinct from heading blue.
+/// - `heading`: deep blue (light) / pale blue (dark) — the default
+///   accent in Apple's HIG; reads as "primary structure marker."
+/// - `codeFence`, `inlineCode`, `code`: deep purple (light) / pale
+///   purple (dark) — matches what code highlighters typically use for
+///   the code surface tint.
+/// - `wikilink`, `embed`: dark teal (light) / pale cyan (dark) —
+///   distinct from code purple, distinct from heading blue. The embed
+///   additionally carries the underline cue (audit #207, #230).
 /// - `tag`: deep magenta (light) / peach pink (dark) — distinct
 ///   from everything above; matches what Obsidian / other markdown
 ///   editors converge on for tags.
-/// - `emphasisMarker`: `tertiaryLabelColor` — the markers (`**`,
-///   `_`) are visual noise; de-emphasizing them lets the prose
-///   they wrap stay readable while still signalling "this is
-///   formatting syntax." The text BETWEEN the markers is not
-///   spanned — it stays in body colour.
 enum EditorSyntaxPalette {
 
     // MARK: - Per-kind dynamic colours
@@ -60,7 +80,7 @@ enum EditorSyntaxPalette {
     // lightness/saturation moved. Test:
     // `testDefaultPaletteMeetsAPCAAgainstTextBackground`.
 
-    /// Heading / setext-underline. Hue family: blue.
+    /// Heading. Hue family: blue.
     static let headingColor = dynamicColor(
         name: "slate.editor.heading",
         light: NSColor(srgbRed: 0.00, green: 0.30, blue: 0.75, alpha: 1.0),
@@ -112,30 +132,37 @@ enum EditorSyntaxPalette {
 
     // MARK: - Public mapping
 
-    /// Pure helper — takes the toggle directly so a unit test can
-    /// drive both branches without mocking `NSWorkspace`.
-    static func color(for kind: SyntaxKind, increaseContrast: Bool) -> NSColor {
-        if increaseContrast {
-            // Single high-contrast colour across all kinds. Tokens
-            // are still semantically tagged (via the attribute
-            // layer), just not colour-coded — which is correct a11y
-            // behaviour: shape / position carry the structure, not
-            // colour alone (WCAG 1.4.1).
-            return NSColor.labelColor
-        }
+    /// Foreground colour for an editor span kind, or `nil` when the
+    /// kind is intentionally left in the body text colour (see the
+    /// "Conservative defaults" note on the type). Pure — takes the
+    /// Increase Contrast toggle directly so a unit test can drive both
+    /// branches without mocking `NSWorkspace`.
+    static func color(for kind: EditorSpanKind, increaseContrast: Bool) -> NSColor? {
+        // One exhaustive switch — adding an `EditorSpanKind` is a compile
+        // error here, not a silent fall-through.
+        //
+        // Uncoloured kinds return `nil` regardless of Increase Contrast:
+        // they're not part of the colour cue at all. `emphasis` / `strong`
+        // / `strikethrough` cover the whole run (markers + prose), so
+        // colouring them would dim the prose; `link` / `image` /
+        // `blockQuote` are never emitted by `editorHighlightSpans`.
+        //
+        // Coloured kinds collapse to `labelColor` under Increase Contrast
+        // — colour stops being the cue, but glyph / position still carry
+        // the structure (WCAG 1.4.1).
         switch kind {
-        case .frontmatter, .commentBlock, .citation:
-            return NSColor.secondaryLabelColor
-        case .heading, .setextUnderline:
-            return headingColor
-        case .codeBlock, .inlineCode:
-            return codeColor
-        case .wikilink:
-            return wikilinkColor
+        case .emphasis, .strong, .strikethrough, .link, .image, .blockQuote:
+            return nil
+        case .frontmatter, .comment, .citation:
+            return increaseContrast ? NSColor.labelColor : NSColor.secondaryLabelColor
+        case .heading:
+            return increaseContrast ? NSColor.labelColor : headingColor
+        case .codeFence, .inlineCode, .code:
+            return increaseContrast ? NSColor.labelColor : codeColor
+        case .wikilink, .embed:
+            return increaseContrast ? NSColor.labelColor : wikilinkColor
         case .tag:
-            return tagColor
-        case .emphasisMarker:
-            return NSColor.tertiaryLabelColor
+            return increaseContrast ? NSColor.labelColor : tagColor
         }
     }
 
@@ -143,7 +170,7 @@ enum EditorSyntaxPalette {
     /// `NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast`
     /// directly so the coordinator doesn't have to thread the flag
     /// through every call site.
-    static func color(for kind: SyntaxKind) -> NSColor {
+    static func color(for kind: EditorSpanKind) -> NSColor? {
         color(
             for: kind,
             increaseContrast: NSWorkspace.shared

@@ -34,81 +34,121 @@ final class NoteEditorCoordinatorTests: XCTestCase {
     }
 
     /// Regression for [#226](https://github.com/coryj627/slate/issues/226)
-    /// + scope-expansion #296: `applySyntaxHighlighting` re-stamps
-    /// `NSColor.textColor` on the full range as the body colour, then
-    /// applies per-kind syntax colours on top. Ranges that aren't
-    /// classified by any syntax span MUST retain the dynamic
-    /// `NSColor.textColor` so dark-mode rendering keeps the
-    /// white-on-dark contrast the #226/#302 fixes earned.
+    /// + #296, re-expressed for the #376 temporary-attribute model:
+    /// the highlight overlay paints per-kind foreground as
+    /// `NSLayoutManager` temporary attributes; ranges that aren't
+    /// classified get NO temporary foreground, so the storage base
+    /// (`NSColor.textColor`, stamped by `attach`) shows through. That's
+    /// how un-classified prose keeps the white-on-dark contrast the
+    /// #226/#302 fixes earned — the highlight no longer touches storage
+    /// at all.
     ///
-    /// Fixture: ` !![[target]] ` — characters at offsets [0,6) are
-    /// plain prose ("hello "), the embed `![[target]]` spans
-    /// [6,17), and characters at [17,23) are plain prose (" world").
-    /// The plain-prose ranges must remain `textColor`; the embed
-    /// span gets the wikilink syntax colour (see the dedicated
-    /// embed-highlight test below).
-    func testApplySyntaxHighlightingPreservesBodyTextColorOutsideSpans() {
-        let (coordinator, _, storage) = makeCoordinator(text: "hello ![[target]] world")
-        let fullRange = NSRange(location: 0, length: storage.length)
-        storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+    /// Fixture: `hello ![[target]] world` — [0,6) is prose ("hello "),
+    /// the embed `![[target]]` spans [6,17), and [17,23) is prose
+    /// (" world"). The prose ranges must have no temporary foreground
+    /// AND keep the storage base `textColor`; the embed span gets the
+    /// wikilink colour (see the dedicated embed-highlight test below).
+    func testHighlightLeavesProseInBodyColorOutsideSpans() async {
+        let (coordinator, textView, storage) = makeCoordinator(text: "hello ![[target]] world")
+        let layoutManager = textView.layoutManager!
 
-        coordinator.applySyntaxHighlighting()
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
 
-        // Prose ranges: [0,6) and [17,23). All must keep textColor.
         let proseOffsets: [Int] = Array(0..<6) + Array(17..<storage.length)
         for offset in proseOffsets {
-            let attrs = storage.attributes(at: offset, effectiveRange: nil)
+            XCTAssertNil(
+                layoutManager.temporaryAttribute(
+                    .foregroundColor, atCharacterIndex: offset, effectiveRange: nil
+                ),
+                "prose at offset \(offset) must have no temporary foreground override"
+            )
             XCTAssertEqual(
-                attrs[.foregroundColor] as? NSColor,
+                storage.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor,
                 NSColor.textColor,
-                "non-syntax prose at offset \(offset) must keep dynamic textColor"
+                "storage base colour at offset \(offset) must remain dynamic textColor"
             )
         }
     }
 
     /// Audit [#231](https://github.com/coryj627/slate/issues/231) +
-    /// scope-expansion #296: post-highlighting, classified ranges
-    /// MUST carry the palette colour for their kind — not
-    /// `NSColor.textColor`, and not a stale stamped colour from a
-    /// previous pass. Inside `![[target]]` the wikilink colour
-    /// (`systemTeal` by default; `labelColor` under Increase
-    /// Contrast — see `EditorSyntaxPaletteTests`) is the contract.
-    /// The previous test enforces the inverse for ranges OUTSIDE
-    /// any span.
-    func testApplySyntaxHighlightingStampsWikilinkColorOnEmbedRange() {
-        let (coordinator, _, storage) = makeCoordinator(text: "before ![[target]] after")
-        coordinator.applySyntaxHighlighting()
-        coordinator.applySyntaxHighlighting()  // twice — state must not accumulate
+    /// #296, for #376: post-highlight, classified ranges MUST carry the
+    /// palette colour for their kind as a temporary attribute — not the
+    /// body colour, and not a stale colour from a previous pass. The
+    /// canonical `embed` span maps to the wikilink colour (`labelColor`
+    /// under Increase Contrast — see `EditorSyntaxPaletteTests`). The
+    /// previous test enforces the inverse for ranges OUTSIDE any span.
+    ///
+    /// Runs the pass twice to prove temporary attributes are reset +
+    /// reapplied each time rather than accumulating.
+    func testHighlightStampsWikilinkColorOnEmbedRange() async {
+        let (coordinator, textView, _) = makeCoordinator(text: "before ![[target]] after")
+        let layoutManager = textView.layoutManager!
 
-        // Embed span: offset 7..18 (`![[target]]`). Every offset
-        // inside must carry the wikilink colour from the palette.
-        // Read the palette via the same instance entry point the
-        // highlighter uses (which consults NSWorkspace's IC pref)
-        // so the assertion matches regardless of the test host's
-        // Increase Contrast setting.
-        let expected = EditorSyntaxPalette.color(for: .wikilink)
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+        coordinator.scheduleHighlight(debounced: false)  // twice — must not accumulate
+        await coordinator.highlightTask?.value
+
+        // Embed span: offset 7..18 (`![[target]]`, all ASCII so byte ==
+        // UTF-16). Read the palette via the same instance entry point
+        // the highlighter uses (consults NSWorkspace's IC pref) so the
+        // assertion holds regardless of the host's Increase Contrast.
+        let expected = EditorSyntaxPalette.color(for: .embed)
         for offset in 7..<18 {
-            let attrs = storage.attributes(at: offset, effectiveRange: nil)
             XCTAssertEqual(
-                attrs[.foregroundColor] as? NSColor,
+                layoutManager.temporaryAttribute(
+                    .foregroundColor, atCharacterIndex: offset, effectiveRange: nil
+                ) as? NSColor,
                 expected,
                 "embed span offset \(offset) must carry the wikilink palette colour"
             )
         }
     }
 
-    /// And while we're here, verify the underline does land on the
-    /// embed span — proves the rest of `applyEmbedHighlighting` still
-    /// works after the foreground-strip removal.
-    func testApplyEmbedHighlightingAppliesUnderlineToEmbedSpan() {
-        let (coordinator, _, storage) = makeCoordinator(text: "before ![[target]] after")
+    /// The embed underline lands on the embed span as a temporary
+    /// attribute and doesn't bleed past it.
+    func testHighlightAppliesUnderlineToEmbedSpan() async {
+        let (coordinator, textView, _) = makeCoordinator(text: "before ![[target]] after")
+        let layoutManager = textView.layoutManager!
 
-        coordinator.applyEmbedHighlighting()
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
 
-        let underline = storage.attribute(.underlineStyle, at: 8, effectiveRange: nil)
+        let underline = layoutManager.temporaryAttribute(
+            .underlineStyle, atCharacterIndex: 8, effectiveRange: nil
+        )
         XCTAssertEqual(underline as? Int, NSUnderlineStyle.single.rawValue)
-        let outside = storage.attribute(.underlineStyle, at: 1, effectiveRange: nil)
+        let outside = layoutManager.temporaryAttribute(
+            .underlineStyle, atCharacterIndex: 1, effectiveRange: nil
+        )
         XCTAssertNil(outside, "underline must not bleed past the embed span")
+    }
+
+    /// Red-team #376 follow-up: Cmd+E must resolve the embed under the
+    /// cursor against the LIVE buffer, not the debounced highlight pass's
+    /// cached spans. Otherwise typing an embed and immediately hitting
+    /// Cmd+E (before the ~40 ms pass lands) would miss it. Here no
+    /// highlight pass is run at all — the embed is found purely from the
+    /// current `textView.string`.
+    func testCmdEResolvesEmbedFromLiveBufferWithoutHighlightPass() {
+        var captured: String?
+        let (coordinator, textView, _) = makeCoordinator(
+            text: "no embeds yet",
+            previewEmbedAtCursor: { target, _ in captured = target }
+        )
+        // Mutate the buffer directly and place the cursor inside a
+        // freshly-"typed" embed, without scheduling/awaiting a highlight.
+        textView.string = "see ![[FreshNote]] now"
+        textView.setSelectedRange(NSRange(location: 8, length: 0))  // inside FreshNote
+
+        let handled = coordinator.openEmbedPreviewAtCursor()
+
+        XCTAssertTrue(
+            handled,
+            "Cmd+E must find the just-typed embed without waiting for the highlight pass"
+        )
+        XCTAssertEqual(captured, "FreshNote")
     }
 
     /// Audit [#230](https://github.com/coryj627/slate/issues/230):
@@ -193,25 +233,32 @@ final class NoteEditorCoordinatorTests: XCTestCase {
     /// highlight pass so the underline color refreshes without a
     /// vault reload. Drive the notification directly and assert the
     /// pass ran.
-    func testSystemColorPreferencesNotificationReappliesHighlight() {
-        let (coordinator, _, storage) = makeCoordinator(text: "edge ![[a]] case")
-        coordinator.applyEmbedHighlighting()
+    func testSystemColorPreferencesNotificationReappliesHighlight() async {
+        let (coordinator, textView, _) = makeCoordinator(text: "edge ![[a]] case")
+        let layoutManager = textView.layoutManager!
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
         // Clear the underline so we can detect the re-apply.
-        storage.removeAttribute(
+        layoutManager.removeTemporaryAttribute(
             .underlineStyle,
-            range: NSRange(location: 0, length: storage.length)
+            forCharacterRange: NSRange(location: 0, length: (textView.string as NSString).length)
         )
 
+        // The observer fires synchronously and schedules a fresh
+        // (immediate) highlight; await the task it created.
         NotificationCenter.default.post(
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )
+        await coordinator.highlightTask?.value
 
         // Embed span `![[a]]` starts at offset 5, length 6.
-        let underline = storage.attribute(.underlineStyle, at: 6, effectiveRange: nil)
+        let underline = layoutManager.temporaryAttribute(
+            .underlineStyle, atCharacterIndex: 6, effectiveRange: nil
+        )
         XCTAssertEqual(
             underline as? Int, NSUnderlineStyle.single.rawValue,
-            "accessibility-options notification must re-run applyEmbedHighlighting"
+            "accessibility-options notification must re-run the highlight pass"
         )
     }
 
@@ -358,45 +405,43 @@ final class NoteEditorCoordinatorTests: XCTestCase {
     }
 
     /// Audit [#233](https://github.com/coryj627/slate/issues/233):
-    /// repeated `attach` calls must not stack notification handlers.
-    /// Without the dedup, a coordinator recycled twice would re-run
-    /// `applyEmbedHighlighting` twice for every appearance change,
-    /// which is wasted work and a soft hint that lifecycle hygiene
-    /// is slipping.
-    func testRepeatedAttachDoesNotDoubleFireObservers() {
-        let (coordinator, _, storage) = makeCoordinator(text: "edge ![[a]] case")
+    /// `attach` is a re-bind point — after it, the coordinator must
+    /// target the NEW textView, and the appearance observer (deduped via
+    /// `removeObserver` in `attach`) must re-highlight that new view, not
+    /// the abandoned one. With the #376 overlay this is verified through
+    /// each view's own layout-manager temporary attributes.
+    func testRepeatedAttachRetargetsHighlightToNewTextView() async {
+        let (coordinator, oldTextView, _) = makeCoordinator(text: "edge ![[a]] case")
+        let oldLayoutManager = oldTextView.layoutManager!
         // Re-attach to a fresh textView (simulating SwiftUI handing
         // the same coordinator a new NSView).
         let newTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
         newTextView.string = "edge ![[a]] case"
         coordinator.attach(textView: newTextView)
+        let newLayoutManager = newTextView.layoutManager!
 
-        // Drive the notification once; expect a single re-apply.
-        // (Storage from `makeCoordinator` is no longer the live one;
-        // assert against the new textView's storage.)
-        let newStorage = newTextView.textStorage!
-        newStorage.removeAttribute(
+        // Clear the new view's underline so we can detect the re-apply
+        // the notification triggers.
+        newLayoutManager.removeTemporaryAttribute(
             .underlineStyle,
-            range: NSRange(location: 0, length: newStorage.length)
+            forCharacterRange: NSRange(location: 0, length: (newTextView.string as NSString).length)
         )
         NotificationCenter.default.post(
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )
-        // The originally-attached storage MUST NOT have been
-        // re-highlighted (the coordinator now points at newTextView).
-        let oldStorageUnderline = storage.attribute(
-            .underlineStyle, at: 6, effectiveRange: nil
-        )
+        await coordinator.highlightTask?.value
+
+        // The originally-attached view MUST NOT have been highlighted
+        // (the coordinator now points at newTextView, and the old view
+        // was never highlighted — `attach` doesn't highlight).
         XCTAssertNil(
-            oldStorageUnderline,
-            "after re-attach, observer must target the new textView only — the old one stays untouched"
-        )
-        let newStorageUnderline = newStorage.attribute(
-            .underlineStyle, at: 6, effectiveRange: nil
+            oldLayoutManager.temporaryAttribute(.underlineStyle, atCharacterIndex: 6, effectiveRange: nil),
+            "after re-attach, the observer must target the new textView only — the old one stays untouched"
         )
         XCTAssertEqual(
-            newStorageUnderline as? Int, NSUnderlineStyle.single.rawValue,
+            newLayoutManager.temporaryAttribute(.underlineStyle, atCharacterIndex: 6, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue,
             "re-attached coordinator must apply highlight to the new textView"
         )
     }
