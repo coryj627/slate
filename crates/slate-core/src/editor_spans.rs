@@ -34,7 +34,7 @@
 use crate::citations::extract_citations;
 use crate::code::{highlight_code, RawCodeBlock, TokenKind};
 use crate::links::{extract_links, LinkKind};
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
 
 /// Classifies one editor span. Markdown-structure kinds come from the
 /// CommonMark parse; the Slate-specific kinds come from their
@@ -356,25 +356,39 @@ fn line_is_dashes_delim(source: &str, line_start_byte: usize) -> bool {
     source[line_start_byte..le].trim() == "---"
 }
 
-/// The byte ranges of every **opaque block** — a fenced/indented code
-/// block or an HTML block — in `source`'s own CommonMark parse, in document
-/// order. Both kinds make their interior opaque to the inline parse, the
-/// scanners' overlap sweep, and the code-internals overlay.
-///
-/// HTML blocks are included because CommonMark types 1–5 (`<!--`,
-/// `<script>` / `<style>` / `<pre>`, `<?`, `<![CDATA[`) aren't even closed
-/// by a blank line — only by their specific closer — so an unclosed one
-/// above the window changes whether an in-window `` ``` `` is a fence
-/// (#379 review, CRITICAL #1). Uses pulldown's own block events so the
-/// rules match the extractors exactly (info strings, ≤3-space indent,
-/// `~~~`, unterminated fences, blockquote/list nesting). O(len) but light
-/// (block structure only; no tree-sitter).
-fn opaque_blocks(source: &str) -> Vec<(usize, usize)> {
+/// A discriminant for the **opaque block** kinds whose presence/extent the
+/// window must reproduce: indented code, fenced code, and HTML block. The
+/// kind matters, not just the range: an *empty* fenced block emits a
+/// `CodeFence` but no inner `Code` token, while an indented block over the
+/// same bytes feeds its body to tree-sitter and DOES emit `Code` tokens; an
+/// HTML block emits no span at all. So a window that flips Fenced↔Indented
+/// (or code↔HTML) over the identical byte range still diverges (#379
+/// review, CRITICAL #6 — a `\t`/4-space `` ``` `` that's empty list-content
+/// fence whole-doc but top-level indented code in the window).
+fn opaque_block_kind(tag: &Tag) -> Option<u8> {
+    match tag {
+        Tag::CodeBlock(CodeBlockKind::Indented) => Some(0),
+        Tag::CodeBlock(CodeBlockKind::Fenced(_)) => Some(1),
+        Tag::HtmlBlock => Some(2),
+        _ => None,
+    }
+}
+
+/// Every opaque block in `source`'s own CommonMark parse as `(start, end,
+/// kind)`, in document order. Both code and HTML blocks make their interior
+/// opaque to the inline parse, the scanners' overlap sweep, and the
+/// code-internals overlay. HTML blocks are included because CommonMark
+/// types 1–5 (`<!--`, `<script>`/`<style>`/`<pre>`, `<?`, `<![CDATA[`)
+/// aren't closed by a blank line — only by their specific closer — so an
+/// unclosed one above the window changes whether an in-window `` ``` `` is a
+/// fence (#379 review, CRITICAL #1). Light (block structure only; no
+/// tree-sitter).
+fn opaque_blocks(source: &str) -> Vec<(usize, usize, u8)> {
     Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH)
         .into_offset_iter()
-        .filter_map(|(event, range)| {
-            matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock))
-                .then_some((range.start, range.end))
+        .filter_map(|(event, range)| match event {
+            Event::Start(tag) => opaque_block_kind(&tag).map(|k| (range.start, range.end, k)),
+            _ => None,
         })
         .collect()
 }
@@ -396,54 +410,72 @@ fn opaque_blocks(source: &str) -> Vec<(usize, usize)> {
 /// test. Genuine top-level code that fits the window reproduces exactly, so
 /// it still windows.
 ///
-/// **Lost container context** (`check_container`). An indented window head
-/// that, in the whole-doc parse, sits inside a list item or block quote
-/// opened ABOVE the window loses that container in isolation and reparses
-/// as a top-level block: a continuation paragraph + a following `===`/`---`
-/// becomes an invented setext `Heading` (CRITICAL #5 — invisible to the
-/// block check), an indented continuation becomes indented code (#3), a
-/// list-content fence grows (#4). A non-indented head (a list-marker line,
-/// a column-0 paragraph that ends the list) reparses the same alone, so
-/// it's safe; genuine top-level indented code isn't in a container, so it
-/// windows. Only the RAW framing needs this (the setext `Heading` comes
-/// from `markdown_spans`, which runs on the raw source); the stripped-body
-/// framing governs only wikilink/citation suppression, which list/quote
-/// nesting doesn't change. Both checks share the one whole-doc parse.
+/// **Lost container context** (`check_container`). When the window's first
+/// non-blank line is an indented continuation that, in the whole-doc parse,
+/// sits inside a list item or block quote opened ABOVE the window, that
+/// line loses its container in isolation and reparses as a top-level block:
+/// a continuation paragraph + a following `===`/`---` becomes an invented
+/// setext `Heading` (CRITICAL #5 — invisible to the block check), an
+/// indented continuation becomes indented code (#3), a list-content fence
+/// grows (#4) or flips Fenced→Indented (#6). It's the window's first
+/// *non-blank* line that matters, not `win_start` itself: a loose list puts
+/// blank lines between items, so the window can open on a blank line with
+/// the indented content just below it (#6). A non-indented first line (a
+/// list-marker line, a column-0 paragraph that ends the list) reparses the
+/// same alone, so ordinary list edits still window; genuine top-level
+/// indented code isn't in a container, so it windows. Only the RAW framing
+/// needs this (the setext `Heading` comes from `markdown_spans` on the raw
+/// source); the stripped-body framing governs only wikilink/citation
+/// suppression, which list/quote nesting doesn't change. Both checks share
+/// the one whole-doc parse.
 fn window_diverges(source: &str, win_start: usize, win_end: usize, check_container: bool) -> bool {
-    let mut whole_blocks: Vec<(usize, usize)> = Vec::new();
+    let mut whole_blocks: Vec<(usize, usize, u8)> = Vec::new();
     let mut in_container = false;
     for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
     {
-        match event {
-            Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)
-                if range.start < win_end && win_start < range.end =>
-            {
-                whole_blocks.push((range.start, range.end));
-            }
-            Event::Start(Tag::List(_) | Tag::Item | Tag::BlockQuote)
-                if check_container && range.start < win_start && win_start < range.end =>
+        if let Event::Start(tag) = &event {
+            if let Some(kind) = opaque_block_kind(tag) {
+                if range.start < win_end && win_start < range.end {
+                    whole_blocks.push((range.start, range.end, kind));
+                }
+            } else if check_container
+                && matches!(tag, Tag::List(_) | Tag::Item | Tag::BlockQuote)
+                && range.start < win_start
+                && win_start < range.end
             {
                 in_container = true;
             }
-            _ => {}
         }
     }
-    if check_container && in_container && head_is_indented(source, win_start) {
+    if check_container
+        && in_container
+        && window_first_nonblank_is_indented(source, win_start, win_end)
+    {
         return true;
     }
-    let win_blocks: Vec<(usize, usize)> = opaque_blocks(&source[win_start..win_end])
+    let win_blocks: Vec<(usize, usize, u8)> = opaque_blocks(&source[win_start..win_end])
         .into_iter()
-        .map(|(bs, be)| (bs + win_start, be + win_start))
+        .map(|(bs, be, k)| (bs + win_start, be + win_start, k))
         .collect();
     win_blocks != whole_blocks
 }
 
-/// True when the line at `win_start` (a line start) begins with whitespace
-/// (a space or tab) — i.e. it's an indented continuation, not a marker line
-/// or column-0 block. The signal that distinguishes container *content*
-/// (loses its container alone) from a list-marker / top-level head (safe).
-fn head_is_indented(source: &str, win_start: usize) -> bool {
-    matches!(source.as_bytes().get(win_start), Some(b' ' | b'\t'))
+/// True when the first non-blank line in the window `[win_start, win_end)`
+/// begins with whitespace (a space or tab) — an indented continuation, not
+/// a list-marker line or column-0 block. Skipping leading blank lines is
+/// what makes the container guard catch a window that opens on a loose
+/// list's inter-item blank with the indented content just below (#6).
+fn window_first_nonblank_is_indented(source: &str, win_start: usize, win_end: usize) -> bool {
+    let mut ls = win_start;
+    while ls < win_end {
+        let le = line_end(source, ls);
+        let line = &source[ls..le.min(win_end)];
+        if !line.trim().is_empty() {
+            return line.starts_with(' ') || line.starts_with('\t');
+        }
+        ls = le;
+    }
+    false
 }
 
 /// Walk the CommonMark structure of `source` and emit syntax spans in
@@ -1357,6 +1389,7 @@ mod tests {
             "    [[L]]",
             "  ```",
             "  x\n===", // 2-col list-content line + setext underline (#5)
+            "\n\t```",  // a blank + a tab fence → loose-list double-blank head (#6)
         ];
         let mut checked = 0usize;
         let mut docs = Vec::new();
@@ -1375,8 +1408,8 @@ mod tests {
                 checked += 1;
             }
         }
-        // 14 + 196 + 2744 = 2954 docs; guard the loop actually ran.
-        assert_eq!(docs.len(), 2954);
+        // 15 + 225 + 3375 = 3615 docs; guard the loop actually ran.
+        assert_eq!(docs.len(), 3615);
         assert!(
             checked > 25_000,
             "expected a full per-byte sweep, ran {checked}"
@@ -1485,6 +1518,31 @@ mod tests {
             assert_ranged_matches_whole(src, at..at);
         }
     }
+
+    #[test]
+    fn window_opening_on_a_loose_list_blank_does_not_invent_code_or_heading() {
+        // #379 review, CRITICAL #6 (+ its setext sibling). A loose list puts
+        // blank lines between items, so an edit on the blank makes the window
+        // OPEN on a blank line with the indented list content just below it —
+        // `win_start` is the blank, so a head check at `win_start` alone is
+        // blind to the indented continuation. A tab/4-space `` ``` `` there is
+        // an empty Fenced block (no inner token) in the document but a
+        // top-level Indented block (invented tree-sitter `Code`) in the
+        // window — same byte range, so only a KIND-aware block compare or the
+        // first-non-blank container check catches it. The `===` variant
+        // invents a setext heading the same way.
+        for src in [
+            "- a\n\n\n\t```\n",          // tab fence after a double blank
+            "- a\n\n\n    ```\n",        // 4-space fence after a double blank
+            "- a\n\n\n\t```\ncode\n",    // non-empty: tree-sitter content also flips
+            "- a\n\n\n  x\n===\n",       // setext sibling: invented Heading via blank head
+            "1. a\n\n\n    fn x() {}\n", // ordered list, invented indented code
+        ] {
+            for d in 0..src.len() {
+                assert_ranged_matches_whole(src, d..d);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1519,6 +1577,12 @@ mod range_proptests {
             // with a list marker + blank + a `===`/`---` underline, forms the
             // "invent a setext heading" shape (#379 review, CRITICAL #5).
             Just("  two col [[L]]".to_string()),
+            // Indented fence lines — under a list marker these are empty
+            // Fenced blocks whole-doc but top-level Indented code in a window,
+            // flipping the block kind at the same range (#379 review,
+            // CRITICAL #6).
+            Just("    ```".to_string()),
+            Just("\t```".to_string()),
             // A 2-space-indented fence — list-item content that, paired with
             // a list marker + blank, forms the "grow" shape (#379 review,
             // CRITICAL #4): the window loses the list opener and lets the
