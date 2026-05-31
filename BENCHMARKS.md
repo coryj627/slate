@@ -154,9 +154,37 @@ Three new criterion scenarios establishing baselines for hot paths reshaped in P
 - **NoteContentView first-paint (PR #99)** — SwiftUI layout cost, not Rust-side. Manual Instruments measurement is the right tool when it lands; documenting the protocol in an XCTest is the natural follow-up.
 - **Contention shape for `note_load_bundle`** — needs a tunable mutex-hold primitive on `VaultSession` to make criterion measurements deterministic. The throughput baseline above is the regression target; under contention the bundle's lock-amortization win is strictly larger.
 
+## V1 baseline — 2026-05-31 (ranged editor highlight, #379)
+
+Same machine + toolchain as the 2026-05-17 row (Apple M5 Pro, 18 cores, 48 GB, macOS 26.5 / 25F71, rustc 1.95.0). The fixture is `synthetic_note(N)` in `scan_bench.rs`: frontmatter then repeated mixed blocks (heading, a prose paragraph carrying a wikilink / inline code / bold / tag / citation / link, a blockquote, and a fenced Rust block every 4th block). `bench_editor_highlight_ranged` measures `editor_spans::highlight_spans_in_range` (the #379 ranged API) against the whole-document `highlight_spans` the editor runs today.
+
+| Benchmark | time | vs whole-doc 8 MB |
+|---|---|---|
+| `editor_highlight_ranged/whole_document_8mb` | 548.9 ms | 1× (baseline) |
+| `editor_highlight_ranged/ranged_tail_edit_8mb` | 34.24 ms | **16.0× faster** |
+| `editor_highlight_ranged/ranged_mid_edit/1mb` | 4.30 ms | — |
+| `editor_highlight_ranged/ranged_mid_edit/4mb` | 16.80 ms | — |
+| `editor_highlight_ranged/ranged_mid_edit/8mb` | 34.15 ms | **16.1× faster** |
+
+_Numbers are the 95 % confidence-interval midpoint. Raw output lives in `target/criterion/`._
+
+### Reading the ranged-highlight numbers (and the honest cost model)
+
+The headline is the **absolute drop**: a span recompute around an edit on an 8 MB document falls from **549 ms to 34 ms (~16×)**. The expensive work — 15 tree-sitter grammars over every fence, the four slate scanners, and the O(n) overlap bitmap — is scoped to a blank-line-bounded window around the edit instead of the whole document.
+
+But the ranged path is **not strictly O(edit)**, and the numbers show exactly why:
+
+- **It scales with document size, not edit size.** `ranged_mid_edit` is 4.3 / 16.8 / 34.2 ms at 1 / 4 / 8 MB — very nearly linear in document length. The fence/straddle safety check (`window_cuts_a_code_block`) runs pulldown-cmark over the **whole source** to enumerate code-block ranges before it can prove the window is parseable in isolation. That pulldown pass is the residual O(document) cost. It's cheap per byte (~tens of ms at 8 MB) precisely because it skips tree-sitter and the scanners — but it is not free, and it is not bounded by the edit.
+- **Edit position doesn't matter.** `ranged_tail_edit_8mb` (34.24 ms) is statistically identical to `ranged_mid_edit/8mb` (34.15 ms). Because the light structural scan covers the whole document either way, an edit at the tail costs the same as one in the middle. The `ranged_tail_edit_8mb` row exists to keep this O(document) floor visible rather than hide it behind a best-case mid-document number.
+
+So V1's win is "eliminate the heavy per-fence/per-scanner pass, keep one light whole-document pulldown scan." True O(edit) — where even the structural decision is incremental — needs a cached parse and live buffer state (the stateful `DocumentBuffer`), which is deferred. This bench is the regression target that will make that future win measurable.
+
+This is a Rust-core measurement only. PR 1 adds the API + FFI; the Mac editor still calls the whole-document path until #379 PR 2 wires the ranged call into the `NSTextStorageDelegate` edit loop. The end-to-end keystroke-latency win lands with that PR.
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.
 - After any schema migration that touches the `files` table or its indexes.
 - After any non-trivial change to the `FsVaultProvider` IO surface (`list_dir`, `stat`, `read_file`).
+- After any change to `editor_spans::highlight_spans` / `highlight_spans_in_range`, the scanners they compose, or the ranged safe-window / fallback logic.
 - Before each milestone build that ships to testers — record the numbers in this file as a new dated baseline so regressions are visible.

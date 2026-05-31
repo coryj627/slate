@@ -2195,6 +2195,41 @@ pub fn editor_highlight_spans(text: String) -> Vec<EditorSpan> {
         .collect()
 }
 
+/// Highlight spans recomputed for a window around an edit (#379, `05`
+/// §1.1/§1.2). `spans` authoritatively cover **all** of
+/// `[applied_start, applied_end)` in whole-document UTF-8 byte offsets —
+/// the caller must remove its temporary attributes over that range before
+/// re-adding these. When the window can't be parsed equivalently in
+/// isolation (frontmatter / a straddled fence or `%%` comment / a `---`
+/// at the window head), the core falls back to a whole-document parse and
+/// signals it by returning `applied_start == 0 && applied_end ==
+/// text.len()` with the full span set, so the consumer's apply path stays
+/// uniform. `dirty_*` are UTF-8 byte offsets into the **post-edit** `text`
+/// and are clamped + char-boundary-snapped by the core.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RangedHighlight {
+    pub applied_start: u32,
+    pub applied_end: u32,
+    pub spans: Vec<EditorSpan>,
+}
+
+#[uniffi::export]
+pub fn editor_highlight_spans_in_range(
+    text: String,
+    dirty_start: u32,
+    dirty_end: u32,
+) -> RangedHighlight {
+    let ranged = core::editor_spans::highlight_spans_in_range(
+        &text,
+        dirty_start as usize..dirty_end as usize,
+    );
+    RangedHighlight {
+        applied_start: ranged.applied_range.start as u32,
+        applied_end: ranged.applied_range.end as u32,
+        spans: ranged.spans.into_iter().map(Into::into).collect(),
+    }
+}
+
 // Editor text-buffer conversions (#378, `05` §7.1).
 //
 // Stateless wrappers over the canonical rope `TextBuffer`. They build a
@@ -2232,6 +2267,18 @@ pub fn text_line_to_utf16(text: String, one_based_line: u32) -> u32 {
 #[uniffi::export]
 pub fn text_byte_to_utf16(text: String, byte_offset: u32) -> u32 {
     core::TextBuffer::from_str(&text).byte_to_utf16(byte_offset as usize) as u32
+}
+
+/// UTF-16 code-unit offset into `text` → UTF-8 byte offset (the inverse
+/// of [`text_byte_to_utf16`]). The ranged highlighter (#379 PR 2) needs
+/// it to turn NSTextView's UTF-16 edited range into the byte `dirty`
+/// range `editor_highlight_spans_in_range` expects. Past-the-end clamps
+/// to the buffer length; an offset that lands on the trailing half of a
+/// surrogate pair snaps to the character boundary (see
+/// `TextBuffer::utf16_to_byte`).
+#[uniffi::export]
+pub fn text_utf16_to_byte(text: String, utf16_offset: u32) -> u32 {
+    core::TextBuffer::from_str(&text).utf16_to_byte(utf16_offset as usize) as u32
 }
 
 // Diagram pipeline mirror.
@@ -2866,6 +2913,71 @@ mod tests {
         assert_eq!(text_line_to_utf16(text.clone(), 1), 0);
         // A line past EOF parks at the buffer end (utf16 len = 6).
         assert_eq!(text_line_to_utf16(text, 99), 6);
+    }
+
+    #[test]
+    fn text_utf16_to_byte_inverts_byte_to_utf16_and_clamps() {
+        // Same "a😀\n中b" fixture: 10 bytes, 6 utf16 units.
+        let text = "a😀\n中b".to_string();
+        // utf16 4 (中) → byte 6; the inverse of text_byte_to_utf16(6)==4.
+        assert_eq!(text_utf16_to_byte(text.clone(), 4), 6);
+        assert_eq!(text_utf16_to_byte(text.clone(), 0), 0);
+        // Round-trips at every code-unit boundary.
+        for byte in [0u32, 1, 5, 6, 9, 10] {
+            let u16 = text_byte_to_utf16(text.clone(), byte);
+            assert_eq!(text_utf16_to_byte(text.clone(), u16), byte);
+        }
+        // Past-the-end clamps to the byte length (10).
+        assert_eq!(text_utf16_to_byte(text, 99), 10);
+    }
+
+    // ---------------------------------------------------------------
+    // editor_highlight_spans_in_range (#379) — ranged-highlight FFI:
+    // a window that maps to a doc-space sub-range, and the whole-doc
+    // fallback sentinel. The exhaustive correctness proptest lives in
+    // slate-core; here we only smoke the FFI plumbing + sentinel.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn editor_highlight_spans_in_range_windows_a_middle_paragraph() {
+        let text = "alpha para\n\nbeta has **bold**\n\ngamma para\n".to_string();
+        let dirty = text.find("bold").unwrap() as u32;
+        let ranged = editor_highlight_spans_in_range(text.clone(), dirty, dirty);
+
+        // A blank-bounded middle paragraph: the window neither starts at
+        // byte 0 nor runs to EOF, so this is not the fallback sentinel.
+        assert!(ranged.applied_start > 0);
+        assert!((ranged.applied_end as usize) < text.len());
+
+        // The ranged spans are exactly the whole-document spans that fall
+        // inside the applied window (offsets already in document space).
+        let whole = editor_highlight_spans(text);
+        let expected: Vec<_> = whole
+            .into_iter()
+            .filter(|s| s.start_byte >= ranged.applied_start && s.end_byte <= ranged.applied_end)
+            .collect();
+        assert_eq!(ranged.spans, expected);
+        assert!(
+            ranged
+                .spans
+                .iter()
+                .any(|s| s.kind == EditorSpanKind::Strong),
+            "the windowed **bold** must carry a Strong span"
+        );
+    }
+
+    #[test]
+    fn editor_highlight_spans_in_range_falls_back_inside_frontmatter() {
+        let text = "---\ntitle: x\n---\n\nbody text\n".to_string();
+        let dirty = text.find("title").unwrap() as u32;
+        let ranged = editor_highlight_spans_in_range(text.clone(), dirty, dirty);
+
+        // Editing inside the top-of-document frontmatter can't be windowed
+        // (the composed extractors re-derive it from byte 0), so the core
+        // signals fallback: applied == 0..len with the whole-doc spans.
+        assert_eq!(ranged.applied_start, 0);
+        assert_eq!(ranged.applied_end as usize, text.len());
+        assert_eq!(ranged.spans, editor_highlight_spans(text));
     }
 
     // ---------------------------------------------------------------

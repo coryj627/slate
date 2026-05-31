@@ -161,6 +161,211 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     resolved
 }
 
+/// Result of a range-scoped re-highlight (#379). `spans` are in
+/// **whole-document byte offsets** and authoritatively cover **all** of
+/// `applied_range` — the consumer removes its prior temporary attributes
+/// over `applied_range` (and any earlier window's leftovers) and re-adds
+/// from `spans`. A whole-document **fallback** is signalled by
+/// `applied_range == 0..source.len()` (with `spans == highlight_spans`),
+/// so the apply path is uniform for ranged and full.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RangedHighlight {
+    pub applied_range: std::ops::Range<usize>,
+    pub spans: Vec<EditorSpan>,
+}
+
+/// Re-highlight only a **window around `dirty`**, falling back to a
+/// whole-document parse whenever the window can't be parsed in isolation
+/// (#379). The expensive span work (pulldown + tree-sitter + the scanners
+/// + overlap resolution) then scales with the window, not the document.
+///
+/// Correctness rests on **substring-parse equivalence**: for every
+/// non-fallback case, `highlight_spans(&source[window])` offset by
+/// `window.start` equals the slice of `highlight_spans(source)` that lies
+/// in `applied_range`. That holds only when the window is a
+/// context-independent unit, because [`highlight_spans`] is **not**
+/// context-free in its input — it composes [`crate::links::extract_links`]
+/// / [`crate::citations::extract_citations`], which re-derive YAML
+/// frontmatter from **byte 0 of their input** and suppress tokens inside
+/// it, and it emits a `Frontmatter` span from the same `fm_end`. So the
+/// algorithm snaps to whole lines, extends to **blank-line boundaries**
+/// (unconditional CommonMark block separators), and **falls back** on any
+/// construct whose classification can reach outside such a window: a
+/// `---`-shaped line at the window head, the real top-of-document
+/// frontmatter region, a `` ``` ``/`~~~` fence touch or a window that
+/// opens inside an unclosed fence, or a `%%…%%` comment touch. Fence /
+/// comment detection is **one-sided conservative** — it over-falls-back
+/// rather than ever window-wrong inside a code block or comment. The
+/// `editor_spans` test proptest (random `---`/wikilink/fence sources) is
+/// the arbiter of this invariant.
+///
+/// The fallback structural scan is O(window-prefix) light (a `\n`/marker
+/// byte scan, no pulldown/tree-sitter); the heavy parse is O(window).
+/// True O(edit) (incremental structure) would need a cached parse and is
+/// deferred.
+pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> RangedHighlight {
+    let whole = || RangedHighlight {
+        applied_range: 0..source.len(),
+        spans: highlight_spans(source),
+    };
+
+    // 1. Clamp + snap the dirty range to char boundaries.
+    let d_start = floor_char_boundary(source, dirty.start);
+    let d_end = ceil_char_boundary(source, dirty.end.max(dirty.start));
+
+    // 2. Snap to whole lines, then 3. extend to blank-line boundaries so
+    // the window holds only whole CommonMark blocks.
+    let win_start = extend_up_to_blank(source, line_start(source, d_start));
+    let win_end = extend_down_to_blank(source, line_end(source, d_end));
+
+    // --- Conservative fallbacks (any "yes" → whole-document) ---
+
+    // Real top-of-document frontmatter: any edit in/touching it. (Its
+    // internal lines can be blank, so blank-extension alone can't bound
+    // it; and editing a `---` delimiter reclassifies the boundary.)
+    let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
+    if fm_end > 0 && win_start < fm_end {
+        return whole();
+    }
+    // A `---`-shaped line at the window head would be re-read as a
+    // frontmatter open by the composed extractors (byte-0 anchored), or
+    // could itself be creating frontmatter at byte 0.
+    if line_is_dashes_delim(source, win_start) {
+        return whole();
+    }
+    // Fenced/indented code: any code block that straddles a window edge
+    // (or that the window opens inside) can't be windowed. Use pulldown's
+    // OWN block structure — a hand-rolled ```-toggle scan disagrees with
+    // it on info strings (a closing fence can't carry one), indentation,
+    // and blockquote/list nesting, and would window-wrong.
+    if window_cuts_a_code_block(source, win_start, win_end) {
+        return whole();
+    }
+    // `%%…%%` comments: a `%%` typed in the window, or a window that
+    // intersects an existing comment.
+    if source[win_start..win_end].contains("%%")
+        || scan_comments(source)
+            .iter()
+            .any(|c| (c.start_byte as usize) < win_end && win_start < (c.end_byte as usize))
+    {
+        return whole();
+    }
+
+    // 4. Parse the window in isolation and shift into document space.
+    let mut spans = highlight_spans(&source[win_start..win_end]);
+    let offset = win_start as u32;
+    for s in &mut spans {
+        s.start_byte += offset;
+        s.end_byte += offset;
+    }
+    RangedHighlight {
+        applied_range: win_start..win_end,
+        spans,
+    }
+}
+
+// --- Range-scope helpers (#379) ---------------------------------------
+
+fn floor_char_boundary(source: &str, byte: usize) -> usize {
+    let mut b = byte.min(source.len());
+    while b > 0 && !source.is_char_boundary(b) {
+        b -= 1;
+    }
+    b
+}
+
+fn ceil_char_boundary(source: &str, byte: usize) -> usize {
+    let mut b = byte.min(source.len());
+    while b < source.len() && !source.is_char_boundary(b) {
+        b += 1;
+    }
+    b
+}
+
+/// Byte offset of the start of the line containing `byte` (just past the
+/// previous `\n`, or 0). `byte` must be a char boundary.
+fn line_start(source: &str, byte: usize) -> usize {
+    source[..byte].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// Byte offset just past the end of the line containing `byte` — the byte
+/// after the next `\n`, or `source.len()`. `byte` must be a char boundary.
+fn line_end(source: &str, byte: usize) -> usize {
+    let byte = byte.min(source.len());
+    source[byte..]
+        .find('\n')
+        .map_or(source.len(), |i| byte + i + 1)
+}
+
+/// A blank line is empty or whitespace-only (a CommonMark block
+/// separator). `line_start_byte` must be a line start.
+fn line_is_blank(source: &str, line_start_byte: usize) -> bool {
+    let le = line_end(source, line_start_byte);
+    source[line_start_byte..le].trim().is_empty()
+}
+
+/// Walk `start` (a line start) up to a block boundary — the first line of
+/// the contiguous non-blank run, i.e. just after the nearest blank line
+/// above (or BOF).
+fn extend_up_to_blank(source: &str, start: usize) -> usize {
+    let mut ls = start;
+    while ls > 0 {
+        let prev = line_start(source, ls - 1);
+        if line_is_blank(source, prev) {
+            break;
+        }
+        ls = prev;
+    }
+    ls
+}
+
+/// Walk `end` (a line end) down to a block boundary — the start of the
+/// nearest blank line below (or EOF).
+fn extend_down_to_blank(source: &str, end: usize) -> usize {
+    let mut le = end;
+    while le < source.len() {
+        if line_is_blank(source, le) {
+            break;
+        }
+        le = line_end(source, le);
+    }
+    le
+}
+
+/// Frontmatter-delimiter-shaped line: trims to exactly `---`. Conservative
+/// (ignores leading indentation, which real frontmatter forbids) — a
+/// false positive only over-falls-back.
+fn line_is_dashes_delim(source: &str, line_start_byte: usize) -> bool {
+    let le = line_end(source, line_start_byte);
+    source[line_start_byte..le].trim() == "---"
+}
+
+/// True when a fenced or indented **code block** intersects the window
+/// `[win_start, win_end)` without being fully contained in it — i.e. a
+/// block boundary cuts a window edge, or the window opens inside a block.
+/// Such a window can't be parsed in isolation (the code's classification
+/// depends on the enclosing fence), so it must fall back.
+///
+/// Uses pulldown's own block events over the whole source so the fence
+/// rules match `highlight_spans` exactly (info strings, ≤3-space indent,
+/// `~~~`, unterminated fences, blockquote/list nesting) — the hand-rolled
+/// alternative disagreed and window-wronged on `` ```rust `` close lines.
+/// O(document) but light (block structure only; no tree-sitter).
+fn window_cuts_a_code_block(source: &str, win_start: usize, win_end: usize) -> bool {
+    Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH)
+        .into_offset_iter()
+        .any(|(event, range)| {
+            if matches!(event, Event::Start(Tag::CodeBlock(_))) {
+                let (bs, be) = (range.start, range.end);
+                let intersects = bs < win_end && win_start < be;
+                let contained = win_start <= bs && be <= win_end;
+                intersects && !contained
+            } else {
+                false
+            }
+        })
+}
+
 /// Walk the CommonMark structure of `source` and emit syntax spans in
 /// document order.
 ///
@@ -834,5 +1039,242 @@ mod tests {
             !spans.iter().any(|s| s.kind == EditorSpanKind::Tag),
             "tag after a non-ASCII word must be suppressed, got {spans:?}"
         );
+    }
+
+    // --- Range-scoped highlighting (#379) -----------------------------
+
+    /// Sort key giving a total order over spans (Code(_) tokens nest in
+    /// CodeFence, so (start,end) can tie — break ties on the kind's debug
+    /// form so the comparison is deterministic).
+    fn span_sort_key(s: &EditorSpan) -> (u32, u32, String) {
+        (s.start_byte, s.end_byte, format!("{:?}", s.kind))
+    }
+
+    /// The load-bearing invariant: `highlight_spans_in_range`'s spans
+    /// equal exactly the whole-document spans that fall within its
+    /// `applied_range` (a fallback is the whole document, so the same
+    /// assertion covers it).
+    fn assert_ranged_matches_whole(source: &str, dirty: std::ops::Range<usize>) {
+        let ranged = highlight_spans_in_range(source, dirty.clone());
+        let (a, b) = (ranged.applied_range.start, ranged.applied_range.end);
+        let mut expected: Vec<EditorSpan> = highlight_spans(source)
+            .into_iter()
+            .filter(|s| (s.start_byte as usize) >= a && (s.end_byte as usize) <= b)
+            .collect();
+        let mut got = ranged.spans.clone();
+        expected.sort_by_key(span_sort_key);
+        got.sort_by_key(span_sort_key);
+        assert_eq!(
+            got, expected,
+            "ranged != whole-doc slice; dirty={dirty:?} applied={:?}\nsource={source:?}",
+            ranged.applied_range
+        );
+    }
+
+    fn is_fallback(source: &str, dirty: std::ops::Range<usize>) -> bool {
+        highlight_spans_in_range(source, dirty).applied_range == (0..source.len())
+    }
+
+    #[test]
+    fn ordinary_prose_edit_windows_and_matches() {
+        let src = "# Title\n\nFirst para with [[Link]] and #tag.\n\nSecond para with **bold** word.\n\nThird para here.\n";
+        // Edit in the second paragraph (well away from any construct).
+        let at = src.find("bold").unwrap();
+        let r = highlight_spans_in_range(src, at..at + 4);
+        assert!(
+            r.applied_range != (0..src.len()),
+            "an ordinary prose edit should window, not fall back: {:?}",
+            r.applied_range
+        );
+        assert_ranged_matches_whole(src, at..at + 4);
+    }
+
+    #[test]
+    fn dashes_line_at_window_head_falls_back() {
+        // A `---` block mid-document with a wikilink inside it: a window
+        // starting on the `---` would be re-read as frontmatter and DROP
+        // the wikilink. Must fall back. (The CRITICAL the plan red-team
+        // found.)
+        let src = "intro paragraph\n\n---\nnot: yaml [[Trap]]\n---\n\noutro\n";
+        let trap = src.find("Trap").unwrap();
+        assert!(
+            is_fallback(src, trap..trap + 4),
+            "edit inside a mid-doc --- block must fall back"
+        );
+        assert_ranged_matches_whole(src, trap..trap + 4);
+    }
+
+    #[test]
+    fn edit_inside_a_blank_bounded_fence_matches() {
+        // The whole fence is blank-bounded, so the window captures it and
+        // parses it correctly — a win, no fallback needed.
+        let src = "prose\n\n```rust\nlet x = 1;\nlet y = 2;\n```\n\nmore prose\n";
+        let inside = src.find("y = 2").unwrap();
+        assert_ranged_matches_whole(src, inside..inside + 1);
+    }
+
+    #[test]
+    fn edit_in_a_fence_with_an_internal_blank_falls_back() {
+        // An internal blank line stops blank-extension inside the fence,
+        // so the window would cut the code block → fall back.
+        let src = "prose\n\n```rust\nfn a() {}\n\nfn b() {}\n```\n\ntail\n";
+        let inside = src.find("fn b").unwrap();
+        assert!(
+            is_fallback(src, inside..inside + 1),
+            "a window cutting a code block must fall back"
+        );
+        assert_ranged_matches_whole(src, inside..inside + 1);
+    }
+
+    #[test]
+    fn typing_a_fence_delimiter_recolors_correctly() {
+        // Acceptance (b): typing/editing a ``` must recolor correctly,
+        // whether the new fence is captured by the window or straddles it
+        // (→ whole-doc fallback). The invariant holds either way.
+        for src in [
+            "alpha\n\n```\ncode\n```\n\nbeta\n", // blank-bounded → window
+            "alpha\n\n```\nnow fenced [[L]] #tag\nmore\n", // unclosed → window to EOF
+            "a\n\n```\nx\n\ny\n```\n\nb\n",      // internal blank → straddle → fallback
+        ] {
+            let fence = src.find("```").unwrap();
+            assert_ranged_matches_whole(src, fence..fence + 3);
+        }
+    }
+
+    #[test]
+    fn fence_inside_blockquote_or_indented_never_windows_wrong() {
+        // A `> ```` fence (blockquote-nested) and a 4-space-indented ```:
+        // whichever the conservative scan does, the result must still
+        // match the whole document.
+        let bq = "para\n\n> ```\n> code here\n> ```\n\nafter [[L]] text\n";
+        let at = bq.find("after").unwrap();
+        assert_ranged_matches_whole(bq, at..at + 1);
+        let indented = "para\n\n    ```\n    literal\n\ntail [[L]] here\n";
+        let at2 = indented.find("tail").unwrap();
+        assert_ranged_matches_whole(indented, at2..at2 + 1);
+    }
+
+    #[test]
+    fn frontmatter_content_and_delimiter_edits_match() {
+        let src = "---\ntitle: Hello\nstatus: draft\n---\n\nbody [[Link]] here\n";
+        // Edit YAML content.
+        let val = src.find("Hello").unwrap();
+        assert!(
+            is_fallback(src, val..val + 5),
+            "frontmatter region edit falls back (conservative V1)"
+        );
+        assert_ranged_matches_whole(src, val..val + 5);
+        // Edit the closing delimiter.
+        let close = src.rfind("---").unwrap();
+        assert_ranged_matches_whole(src, close..close + 3);
+        // An edit in the body still windows + matches.
+        let body = src.find("here").unwrap();
+        assert_ranged_matches_whole(src, body..body + 4);
+    }
+
+    #[test]
+    fn comment_open_close_and_inside_match() {
+        let src = "before\n\n%% a note with [[L]] %%\n\nafter\n";
+        let inside = src.find("note").unwrap();
+        assert!(is_fallback(src, inside..inside + 4));
+        assert_ranged_matches_whole(src, inside..inside + 4);
+    }
+
+    #[test]
+    fn blank_line_delete_merging_paragraphs_matches() {
+        // The window is computed on the post-edit source; merging two
+        // paragraphs must still reconstruct correctly.
+        let merged = "one para line\nNOW MERGED second line with [[L]]\n\ntail\n";
+        let at = merged.find("MERGED").unwrap();
+        assert_ranged_matches_whole(merged, at..at + 6);
+    }
+
+    #[test]
+    fn setext_under_multiline_paragraph_matches() {
+        let src = "intro\n\nHeading line one\ncontinued line two\n=====\n\nbody\n";
+        let at = src.find("=====").unwrap();
+        assert_ranged_matches_whole(src, at..at + 5);
+    }
+
+    #[test]
+    fn multibyte_and_crlf_window_edges_match_without_panic() {
+        let mb = "a中b\n\n😀 para with é and [[Lïnk]]\n\nend\n";
+        for i in 0..mb.len() {
+            // dirty at every byte (incl. mid-scalar) must clamp + match.
+            assert_ranged_matches_whole(mb, i..i + 1);
+        }
+        let crlf = "para one\r\n\r\nsecond [[L]] para\r\n\r\nthird\r\n";
+        let at = crlf.find("second").unwrap();
+        assert_ranged_matches_whole(crlf, at..at + 1);
+    }
+
+    #[test]
+    fn edge_cases_clamp_and_match() {
+        for (src, dirty) in [
+            ("", 0..0),
+            ("hello\n", 0..0),
+            ("hello\n", 5..5),
+            ("hello\n", 3..999), // past EOF
+            ("a\n\nb\n", 0..5),  // whole tiny doc
+        ] {
+            assert_ranged_matches_whole(src, dirty);
+        }
+    }
+}
+
+#[cfg(test)]
+mod range_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Generate `source` rich in the shapes that break naive windowing —
+    /// `---` lines, `[[wikilinks]]` / `[@cites]` mid-document, `` ``` ``
+    /// fences, `%%` comments, headings, blanks — then assert
+    /// `highlight_spans_in_range` for an arbitrary dirty range always
+    /// equals the whole-document spans within its `applied_range`. This is
+    /// the arbiter of the substring-parse-equivalence invariant.
+    fn liney_source() -> impl Strategy<Value = String> {
+        let line = prop_oneof![
+            Just("".to_string()),
+            Just("---".to_string()),
+            Just("```".to_string()),
+            Just("```rust".to_string()),
+            Just("~~~".to_string()),
+            Just("# Heading".to_string()),
+            Just("prose with [[Link]] here".to_string()),
+            Just("cite [@key2020] inline".to_string()),
+            Just("%% a comment %%".to_string()),
+            Just("%%".to_string()),
+            Just("a #tag and **bold**".to_string()),
+            Just("    indented line".to_string()),
+            Just("> quoted [[Q]]".to_string()),
+            Just("=====".to_string()),
+            Just("plain text line".to_string()),
+        ];
+        proptest::collection::vec(line, 0..14).prop_map(|lines| {
+            let mut s = lines.join("\n");
+            s.push('\n');
+            s
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(400))]
+
+        #[test]
+        fn ranged_always_matches_whole_doc_slice(src in liney_source(), a in 0usize..200, b in 0usize..200) {
+            let dirty = a.min(b)..a.max(b);
+            let ranged = highlight_spans_in_range(&src, dirty);
+            let (lo, hi) = (ranged.applied_range.start, ranged.applied_range.end);
+            // Equivalence: ranged spans == whole-doc spans inside applied_range.
+            let mut expected: Vec<EditorSpan> = highlight_spans(&src)
+                .into_iter()
+                .filter(|s| (s.start_byte as usize) >= lo && (s.end_byte as usize) <= hi)
+                .collect();
+            let mut got = ranged.spans;
+            expected.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
+            got.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
+            prop_assert_eq!(got, expected, "applied={}..{} src={:?}", lo, hi, src);
+        }
     }
 }

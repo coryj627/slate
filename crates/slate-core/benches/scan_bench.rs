@@ -355,6 +355,111 @@ fn bench_note_load_bundle(c: &mut Criterion) {
     group.finish();
 }
 
+// =====================================================================
+// #379: ranged editor highlight vs whole-document recompute.
+//
+// #376 moved span computation off the keystroke path but still recomputes
+// the WHOLE document every pass (pulldown + 4 slate scanners + 15
+// tree-sitter grammars over every fence + an O(n) overlap bitmap), which
+// is super-linear past ~1 MB. `highlight_spans_in_range` scopes the
+// EXPENSIVE work to a window around the edit.
+//
+// Honest cost framing — the ranged path is **O(prefix structural scan) +
+// O(window expensive parse)**, NOT strictly O(edit): the fence/straddle
+// decision runs pulldown over the whole source to enumerate code blocks,
+// so a tail edit on an 8 MB doc still pays an O(document) light scan. What
+// becomes O(window) is the heavy work (tree-sitter + the scanners + the
+// overlap bitmap). Strict O(edit) needs cached incremental structure (the
+// stateful buffer), which is deferred. The `ranged_tail_edit_8mb` row
+// exists specifically to keep that O(document) light-scan cost visible.
+// =====================================================================
+
+/// Build a ~`target_bytes` synthetic note: frontmatter then repeated mixed
+/// blocks (heading, a prose paragraph carrying a wikilink / inline code /
+/// bold / tag / citation / link, a blockquote, and — every 4th block — a
+/// fenced Rust code block so the whole-document baseline pays the
+/// tree-sitter cost the ranged path skips). ASCII-only, so every byte is a
+/// char boundary and the edit-offset math below needs no snapping.
+fn synthetic_note(target_bytes: usize) -> String {
+    let mut s = String::with_capacity(target_bytes + 512);
+    s.push_str("---\ntitle: Big Note\ntags: [bench, editor]\n---\n\n");
+    let mut i = 0usize;
+    while s.len() < target_bytes {
+        s.push_str(&format!("## Section {i}\n\n"));
+        s.push_str(&format!(
+            "Prose with a [[Wikilink {i}]] and inline `code {i}` plus **bold {i}** and a #tag{i}.\n"
+        ));
+        s.push_str(&format!(
+            "A citation [@source{i}] sits mid-sentence; see [external](https://example.com/{i}).\n\n"
+        ));
+        s.push_str(&format!("> A blockquote line for section {i}.\n\n"));
+        if i.is_multiple_of(4) {
+            s.push_str("```rust\n");
+            s.push_str(&format!("fn section_{i}() -> usize {{ {i} * 2 + 1 }}\n"));
+            s.push_str(&format!("let _ = section_{i}();\n"));
+            s.push_str("```\n\n");
+        }
+        i += 1;
+    }
+    s
+}
+
+/// Byte offset of the prose anchor nearest `frac` through `doc`. Anchoring
+/// on a token that only appears mid-paragraph guarantees the ranged window
+/// lands on a blank-bounded prose block (the windowed fast path) rather
+/// than inside a fence (which would fall back to a whole-document parse
+/// and so wouldn't measure the ranged win). `doc` is ASCII, so `target` is
+/// always a char boundary.
+fn nearest_prose_offset(doc: &str, frac: f64) -> usize {
+    const ANCHOR: &str = "mid-sentence";
+    let target = (((doc.len() as f64) * frac) as usize).min(doc.len());
+    doc[target..]
+        .find(ANCHOR)
+        .map(|i| target + i)
+        .or_else(|| doc[..target].rfind(ANCHOR))
+        .expect("fixture contains the prose anchor")
+}
+
+fn bench_editor_highlight_ranged(c: &mut Criterion) {
+    use slate_core::editor_spans::{highlight_spans, highlight_spans_in_range};
+
+    const MB: usize = 1 << 20;
+    let doc8 = synthetic_note(8 * MB);
+
+    let mut group = c.benchmark_group("editor_highlight_ranged");
+    group.sample_size(10);
+
+    // Baseline: the whole-document recompute the editor runs today.
+    group.bench_function("whole_document_8mb", |b| {
+        b.iter(|| black_box(highlight_spans(black_box(&doc8))));
+    });
+
+    // Worst case for the ranged path's O(prefix) light scan: an edit at
+    // the very tail still scans structure from byte 0, but the expensive
+    // parse stays bounded to the window.
+    let tail = nearest_prose_offset(&doc8, 0.98);
+    group.bench_function("ranged_tail_edit_8mb", |b| {
+        b.iter(|| black_box(highlight_spans_in_range(black_box(&doc8), tail..tail)));
+    });
+
+    // Mid-edit ranged across sizes — the (light) structural scan tracks
+    // document size while the heavy parse stays window-bounded. The 8mb
+    // point is the direct apples-to-apples partner of whole_document_8mb.
+    for &mb in &[1usize, 4, 8] {
+        let doc = synthetic_note(mb * MB);
+        let mid = nearest_prose_offset(&doc, 0.5);
+        group.bench_with_input(
+            BenchmarkId::new("ranged_mid_edit", format!("{mb}mb")),
+            &mb,
+            |b, _| {
+                b.iter(|| black_box(highlight_spans_in_range(black_box(&doc), mid..mid)));
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_first_open_and_scan,
@@ -365,5 +470,6 @@ criterion_group!(
     bench_full_text_search,
     bench_files_with_property,
     bench_note_load_bundle,
+    bench_editor_highlight_ranged,
 );
 criterion_main!(benches);
