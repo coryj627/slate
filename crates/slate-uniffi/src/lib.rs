@@ -289,8 +289,9 @@ impl VaultSession {
         Ok(self.inner.read_text(&path)?)
     }
 
-    /// Save UTF-8 text to a vault path, refresh the index, and append
-    /// a `WholeFileReplace` entry to the file's op-log.
+    /// Save UTF-8 text to a vault path, refresh the index, and append a
+    /// fine-grained `EditBatch` (or a `WholeFileReplace` snapshot) to the
+    /// file's op-log (#378).
     ///
     /// Pass `expected_content_hash = Some(hash)` to detect external
     /// changes between read and save: if the on-disk file no longer
@@ -1584,17 +1585,25 @@ impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
     }
 }
 
-/// Kind of operation recorded in an op-log entry. V1.F only ships
-/// `WholeFileReplace`.
+/// Kind of operation recorded in an op-log entry (#378).
+///
+/// `WholeFileReplace`'s `payload_bytes` is the full file; `EditBatch`'s
+/// is the encoded fine-grained Insert/Delete/Replace op-vector for one
+/// save. The host currently switches on the kind for counting / coarse
+/// display; **decoding an `EditBatch` payload into typed ops is
+/// Rust-internal** until the per-op accessors land (a later step), so
+/// hosts should treat an `EditBatch` payload as opaque for now.
 #[derive(Debug, uniffi::Enum)]
 pub enum OpKind {
     WholeFileReplace,
+    EditBatch,
 }
 
 impl From<core::OpKind> for OpKind {
     fn from(k: core::OpKind) -> Self {
         match k {
             core::OpKind::WholeFileReplace => OpKind::WholeFileReplace,
+            core::OpKind::EditBatch => OpKind::EditBatch,
         }
     }
 }
@@ -3233,6 +3242,32 @@ mod tests {
         assert!(matches!(entries[0].op_kind, OpKind::WholeFileReplace));
         assert_eq!(entries[0].payload_bytes, b"v1");
         assert_eq!(entries[1].payload_bytes, b"v2");
+    }
+
+    #[test]
+    fn read_oplog_surfaces_edit_batch_kind_through_ffi() {
+        // A small edit in a larger note logs a fine-grained EditBatch; the
+        // new kind must cross the FFI (#378).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        let v1 = "# Note\n\nFirst paragraph line here.\nSecond paragraph line here.\n\
+                  Third paragraph line here.\nFourth line here.\n";
+        let r1 = session
+            .save_text("note.md".into(), v1.into(), None)
+            .unwrap();
+        let v2 = v1.replace("Second paragraph line here.", "Second line was CHANGED.");
+        session
+            .save_text("note.md".into(), v2, Some(r1.new_content_hash))
+            .unwrap();
+
+        let entries = session.read_oplog("note.md".into()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0].op_kind, OpKind::WholeFileReplace));
+        assert!(
+            matches!(entries[1].op_kind, OpKind::EditBatch),
+            "a fine-grained edit must surface as EditBatch across the FFI"
+        );
     }
 
     #[test]

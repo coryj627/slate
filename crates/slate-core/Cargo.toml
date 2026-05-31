@@ -19,6 +19,7 @@ yaml-rust2 = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 ropey = { workspace = true }
+similar = { workspace = true }
 
 # --- Milestone K content pipelines (#217 / #218 / #219) ---------------
 # Math: LaTeX → MathML → MathCAT speech + braille. `include-zip`
