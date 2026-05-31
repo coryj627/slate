@@ -78,6 +78,9 @@ pub fn extract_diagram_blocks(source: &str) -> Vec<RawDiagramBlock> {
     let mut in_mermaid = false;
     let mut current_buffer = String::new();
     let mut current_start: Option<usize> = None;
+    // #387: O(n) incremental line numbering — mermaid block starts arrive
+    // in document order, so count newlines once over the source.
+    let mut lines = crate::line_index::LineTracker::new(source);
 
     let parser = MdParser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
     for (event, range) in parser {
@@ -94,7 +97,7 @@ pub fn extract_diagram_blocks(source: &str) -> Vec<RawDiagramBlock> {
                 out.push(RawDiagramBlock {
                     source: std::mem::take(&mut current_buffer),
                     dialect: DiagramDialect::Mermaid,
-                    line: line_of_offset(source, start),
+                    line: lines.line_at(start),
                     byte_offset: start as u32,
                 });
                 in_mermaid = false;
@@ -346,13 +349,6 @@ fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
 /// plain `String` messages.
 fn mermaid_renderer_render(source: &str) -> Result<String, String> {
     mermaid_rs_renderer::render(source).map_err(|e| e.to_string())
-}
-
-fn line_of_offset(source: &str, off: usize) -> u32 {
-    1 + source[..off.min(source.len())]
-        .bytes()
-        .filter(|&b| b == b'\n')
-        .count() as u32
 }
 
 // --- Tests -------------------------------------------------------------

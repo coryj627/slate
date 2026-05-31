@@ -21,6 +21,7 @@ pub mod diff;
 pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;
+mod line_index;
 pub mod link_resolver;
 pub mod links;
 pub mod links_db;

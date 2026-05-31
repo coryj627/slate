@@ -211,6 +211,19 @@ The Rust migration (#376/#377/#388) made the syntax pass **~1.6–2.6× faster**
 
 > Run: `SLATE_BENCH=1 swift test -c release --filter HighlightBenchmarkTests` (debug is ~10× slower and not representative).
 
+## V1 baseline — 2026-05-31 (#387: `extract_code_blocks` made linear)
+
+`code::extract_code_blocks` called `line_of_offset(source, start)` once per block, and `line_of_offset` counted newlines from byte 0 — so extraction was **O(n × blocks)** (~660 ms on a 2 MB note with ~5.7k blocks; the same anti-pattern was in `diagram`/`math`). The fix is an incremental `LineTracker` that counts each newline once over the source as the in-order extractor advances (O(n)). The `extract_code_blocks` criterion group benches the issue's 500/1000/2000/4000-block counts.
+
+| blocks | before (O(n×blocks)) | after (linear) |
+|---|---|---|
+| 500 | 2.7 ms | **0.090 ms** |
+| 1 000 | 8.8 ms | **0.178 ms** |
+| 2 000 | 25.8 ms | **0.358 ms** |
+| 4 000 | 92 ms | **0.709 ms** |
+
+After: doubling the block count ~doubles the time (the "before" column quadrupled). At 4 000 blocks it's **~130× faster**; the 2 MB / ~5.7k-block case drops from ~660 ms to ~1 ms. The "before" column is the #387 issue's measurement on the same machine class. The same `LineTracker` replaced the duplicate quadratic line-numbering in `diagram::extract_diagram_blocks` and `math::extract_math_blocks`.
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.
