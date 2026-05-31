@@ -491,6 +491,63 @@ fn bench_extract_code_blocks(c: &mut Criterion) {
     group.finish();
 }
 
+/// Per-keystroke cost through the stateful `DocBufferState` (#404): apply one
+/// edit delta, then a windowed highlight. Slice A still parses block structure
+/// whole-document inside `highlight_in_range` (the behaviour-preserving
+/// oracle), so the mid/tail rows still grow ~O(n) with document size — this is
+/// the baseline Slice B's incremental structure must flatten. `iter_batched`
+/// clones a pre-built buffer per iteration (O(1) — the rope shares chunks via
+/// `Arc`) so each sample measures one keystroke against a fixed-size document.
+fn bench_doc_buffer_keystroke(c: &mut Criterion) {
+    use slate_core::doc_buffer::DocBufferState;
+    const KB: usize = 1 << 10;
+    const MB: usize = 1 << 20;
+
+    let mut group = c.benchmark_group("doc_buffer_keystroke");
+    group.sample_size(10);
+
+    // Mid-document edit across realistic note sizes. The fixture is ASCII, so
+    // a prose byte offset doubles as the UTF-16 offset the buffer takes.
+    for &(label, bytes) in &[
+        ("10kb", 10 * KB),
+        ("100kb", 100 * KB),
+        ("1mb", MB),
+        ("8mb", 8 * MB),
+    ] {
+        let doc = synthetic_note(bytes);
+        let at = nearest_prose_offset(&doc, 0.5);
+        let base = DocBufferState::new(&doc);
+        group.bench_with_input(BenchmarkId::new("mid", label), &(), |b, _| {
+            b.iter_batched(
+                || base.clone(),
+                |mut buf| {
+                    buf.apply_edit(at, 0, "x");
+                    black_box(buf.highlight_in_range(at, at + 1))
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    // Tail edit at 8 MB — the O(prefix) structural-scan worst case (Slice A
+    // still scans structure from byte 0; Slice B must make this local).
+    let doc8 = synthetic_note(8 * MB);
+    let tail = nearest_prose_offset(&doc8, 0.98);
+    let base8 = DocBufferState::new(&doc8);
+    group.bench_function("tail_8mb", |b| {
+        b.iter_batched(
+            || base8.clone(),
+            |mut buf| {
+                buf.apply_edit(tail, 0, "x");
+                black_box(buf.highlight_in_range(tail, tail + 1))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_first_open_and_scan,
@@ -503,5 +560,6 @@ criterion_group!(
     bench_note_load_bundle,
     bench_editor_highlight_ranged,
     bench_extract_code_blocks,
+    bench_doc_buffer_keystroke,
 );
 criterion_main!(benches);

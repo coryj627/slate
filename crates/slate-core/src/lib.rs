@@ -18,6 +18,7 @@ pub mod commands;
 pub mod db;
 pub mod diagram;
 pub mod diff;
+pub mod doc_buffer;
 pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;

@@ -224,6 +224,20 @@ The Rust migration (#376/#377/#388) made the syntax pass **~1.6–2.6× faster**
 
 After: doubling the block count ~doubles the time (the "before" column quadrupled). At 4 000 blocks it's **~130× faster**; the 2 MB / ~5.7k-block case drops from ~660 ms to ~1 ms. The "before" column is the #387 issue's measurement on the same machine class. The same `LineTracker` replaced the duplicate quadratic line-numbering in `diagram::extract_diagram_blocks` and `math::extract_math_blocks`.
 
+## V1 baseline — 2026-05-31 (#404 Slice A: stateful `DocumentBuffer`, per-keystroke baseline)
+
+Same machine + toolchain as the 2026-05-17 row. `bench_doc_buffer_keystroke` measures **one keystroke through the stateful buffer** — `DocBufferState::apply_edit` (a single-char insert) **plus** `highlight_in_range` (the windowed pass) — against `synthetic_note(N)` at realistic note sizes. A pre-built buffer is cloned per iteration (O(1) — the rope shares chunks via `Arc`), so each sample is one keystroke on a fixed-size document.
+
+| scenario | time | notes |
+|---|---|---|
+| `doc_buffer_keystroke/mid/10kb` | 63.5 µs | — |
+| `doc_buffer_keystroke/mid/100kb` | 530 µs | — |
+| `doc_buffer_keystroke/mid/1mb` | 6.27 ms | — |
+| `doc_buffer_keystroke/mid/8mb` | 62.6 ms | apples-to-apples with `ranged_mid_edit/8mb` (50.4 ms) |
+| `doc_buffer_keystroke/tail_8mb` | 64.2 ms | ≈ mid: the structural scan is whole-doc regardless of edit position |
+
+**This row is the Slice B regression target, and it is deliberately still ~O(n).** Slice A delivers the *foundation* (the stateful rope-backed buffer) + the editor wiring, and it removes the per-keystroke costs the **Swift** side used to pay — the whole-document string marshalled across FFI every pass and the four `TextBuffer::from_str` rope rebuilds for the dirty/applied conversions (now O(log n) on the live rope; see the #375 Swift end-to-end row for what those cost). But the *structural decision* inside `highlight_in_range` is unchanged: it materialises the rope once and calls today's `highlight_spans_in_range`, which parses block structure over the whole document (the `StructureSnapshot` oracle). So the mid rows still scale ~linearly (10 KB → 8 MB is ~63 µs → ~63 ms) and the tail row matches the mid row — exactly the O(prefix) floor #379 documented. Slice B replaces the whole-doc parse with an incrementally maintained `StructureSnapshot`, which is what flattens the mid/tail curve to O(window); this table is what proves it when it lands.
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.

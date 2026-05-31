@@ -215,6 +215,19 @@ pub struct RangedHighlight {
 /// True O(edit) (incremental structure) would need a cached parse and is
 /// deferred.
 pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> RangedHighlight {
+    highlight_spans_in_range_with(source, dirty, &StructureSnapshot::from_source(source))
+}
+
+/// [`highlight_spans_in_range`] with the raw-source block structure injected
+/// — the #404 seam. The free function (and the differential oracle) pass a
+/// freshly parsed [`StructureSnapshot`]; the stateful `DocumentBuffer` will
+/// pass its incrementally maintained one. Behaviour is identical for an equal
+/// snapshot, so the existing invariant proptests gate this refactor.
+pub(crate) fn highlight_spans_in_range_with(
+    source: &str,
+    dirty: std::ops::Range<usize>,
+    raw_structure: &StructureSnapshot,
+) -> RangedHighlight {
     let whole = || RangedHighlight {
         applied_range: 0..source.len(),
         spans: highlight_spans(source),
@@ -254,7 +267,7 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     // isn't list/quote content that would reparse top-level and invent a
     // setext `Heading` the document lacks (#5). `markdown_spans` + the
     // tag/comment scanners run on the RAW source, so check both there.
-    if window_diverges(source, win_start, win_end, true) {
+    if window_diverges(raw_structure, source, win_start, win_end, true) {
         return whole();
     }
     // The link/citation extractors run on the frontmatter-STRIPPED body
@@ -265,7 +278,15 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     // CRITICAL #2). Only the opaque-block half applies (container nesting
     // doesn't change wikilink/citation suppression). `win_start >= fm_end`
     // here (we returned above otherwise), so the offsets never underflow.
-    if fm_end > 0 && window_diverges(body, win_start - fm_end, win_end - fm_end, false) {
+    if fm_end > 0
+        && window_diverges(
+            &StructureSnapshot::from_source(body),
+            body,
+            win_start - fm_end,
+            win_end - fm_end,
+            false,
+        )
+    {
         return whole();
     }
     // `%%…%%` comments: a `%%` typed in the window, or a window that
@@ -404,6 +425,37 @@ fn opaque_blocks(source: &str) -> Vec<(usize, usize, u8)> {
         .collect()
 }
 
+/// The whole-document block structure that [`window_diverges`] consumes:
+/// every opaque block (kind-tagged, see [`opaque_blocks`]) and every
+/// `List`/`Item`/`BlockQuote` container range, in document order. One
+/// CommonMark parse builds it. #404 Slice A rebuilds it per call (the
+/// behaviour-preserving oracle); Slice B's `DocumentBuffer` will maintain it
+/// incrementally so the keystroke path never reparses the whole document.
+pub(crate) struct StructureSnapshot {
+    blocks: Vec<(usize, usize, u8)>,
+    containers: Vec<(usize, usize)>,
+}
+
+impl StructureSnapshot {
+    /// Build from a whole-document CommonMark parse (the oracle path).
+    pub(crate) fn from_source(source: &str) -> Self {
+        let mut blocks = Vec::new();
+        let mut containers = Vec::new();
+        for (event, range) in
+            Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+        {
+            if let Event::Start(tag) = &event {
+                if let Some(kind) = opaque_block_kind(tag) {
+                    blocks.push((range.start, range.end, kind));
+                } else if matches!(tag, Tag::List(_) | Tag::Item | Tag::BlockQuote) {
+                    containers.push((range.start, range.end));
+                }
+            }
+        }
+        Self { blocks, containers }
+    }
+}
+
 /// True when the window `[win_start, win_end)` can't be parsed in isolation
 /// — its result would differ from the whole document's spans within the
 /// window — so it must fall back. This is the general form of all five
@@ -437,33 +489,35 @@ fn opaque_blocks(source: &str) -> Vec<(usize, usize, u8)> {
 /// indented code isn't in a container, so it windows. Only the RAW framing
 /// needs this (the setext `Heading` comes from `markdown_spans` on the raw
 /// source); the stripped-body framing governs only wikilink/citation
-/// suppression, which list/quote nesting doesn't change. Both checks share
-/// the one whole-doc parse.
-fn window_diverges(source: &str, win_start: usize, win_end: usize, check_container: bool) -> bool {
-    let mut whole_blocks: Vec<(usize, usize, u8)> = Vec::new();
-    let mut in_container = false;
-    for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
-    {
-        if let Event::Start(tag) = &event {
-            if let Some(kind) = opaque_block_kind(tag) {
-                if range.start < win_end && win_start < range.end {
-                    whole_blocks.push((range.start, range.end, kind));
-                }
-            } else if check_container
-                && matches!(tag, Tag::List(_) | Tag::Item | Tag::BlockQuote)
-                && range.start < win_start
-                && win_start < range.end
-            {
-                in_container = true;
-            }
-        }
-    }
+/// suppression, which list/quote nesting doesn't change. Both checks read the
+/// same precomputed [`StructureSnapshot`] (#404): Slice A rebuilds it per call
+/// (the oracle), Slice B maintains it incrementally across edits.
+fn window_diverges(
+    structure: &StructureSnapshot,
+    source: &str,
+    win_start: usize,
+    win_end: usize,
+    check_container: bool,
+) -> bool {
+    // Lost container context: the window's first non-blank line is an indented
+    // continuation inside a list/quote opened above `win_start`.
     if check_container
-        && in_container
+        && structure
+            .containers
+            .iter()
+            .any(|&(start, end)| start < win_start && win_start < end)
         && window_first_nonblank_is_indented(source, win_start, win_end)
     {
         return true;
     }
+    // Opaque-block mismatch: the window's own (code/HTML) blocks, shifted to
+    // document space, must EQUAL the whole-doc blocks intersecting the window.
+    let whole_blocks: Vec<(usize, usize, u8)> = structure
+        .blocks
+        .iter()
+        .copied()
+        .filter(|&(start, end, _)| start < win_end && win_start < end)
+        .collect();
     let win_blocks: Vec<(usize, usize, u8)> = opaque_blocks(&source[win_start..win_end])
         .into_iter()
         .map(|(bs, be, k)| (bs + win_start, be + win_start, k))
