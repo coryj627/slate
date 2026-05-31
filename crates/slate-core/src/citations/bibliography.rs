@@ -688,7 +688,6 @@ fn map_item_type_to_csl(item_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     // --- BibTeX --------------------------------------------------------
@@ -968,46 +967,65 @@ mod tests {
 
     // --- Debounce ------------------------------------------------------
 
+    // These two synchronize on the **actual debounced events** (signalled
+    // from the callback over a channel) rather than sleeping a fixed
+    // duration and assuming the window has fired. The previous fixed-sleep
+    // form raced the real timer: under CI load the debouncer thread could be
+    // starved past the next `send`, collapsing two bursts into one event
+    // (observed flake — `left: 1, right: 2`). Waiting for the event removes
+    // the race; the multi-second `recv_timeout` is only a deadlock guard.
+
+    /// Drain any debounced events the thread emitted, with a generous
+    /// deadlock guard — `recv` blocks however long the window + scheduling
+    /// actually takes under load.
+    fn recv_event(rx: &std::sync::mpsc::Receiver<()>, label: &str) {
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("debounced event not received: {label}"));
+    }
+
     #[test]
     fn debouncer_collapses_burst_into_one_event() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let count_clone = count.clone();
-        // Short window so the test is quick but unambiguous.
-        let (tx, handle) = spawn_debouncer_with_callback(Duration::from_millis(80), move || {
-            count_clone.fetch_add(1, Ordering::SeqCst);
+        let (events_tx, events_rx) = std::sync::mpsc::channel::<()>();
+        let (tx, handle) = spawn_debouncer_with_callback(Duration::from_millis(50), move || {
+            events_tx.send(()).unwrap();
         });
-        // Five pulses within 50ms (well under the 80ms window).
+        // Five pulses sent back-to-back (no inter-pulse sleep) are queued in
+        // the channel before the window can elapse, so the debouncer drains
+        // them into a single burst deterministically.
         for _ in 0..5 {
             tx.send(()).unwrap();
-            std::thread::sleep(Duration::from_millis(10));
         }
-        // Wait through the debounce window.
-        std::thread::sleep(Duration::from_millis(150));
-        // Dropping tx signals the loop to exit (with one final flush
-        // if a burst was pending — there shouldn't be after the sleep).
+        recv_event(&events_rx, "the burst");
+        // Dropping the sender exits the loop from its outer `recv()` with no
+        // extra event; after join the callback's `events_tx` is dropped, so
+        // `try_recv` confirms no second event was emitted.
         drop(tx);
         handle.join().unwrap();
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            1,
-            "burst should collapse to one debounced event"
+        assert!(
+            events_rx.try_recv().is_err(),
+            "burst should collapse to exactly one debounced event"
         );
     }
 
     #[test]
     fn debouncer_separated_bursts_emit_separate_events() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let count_clone = count.clone();
-        let (tx, handle) = spawn_debouncer_with_callback(Duration::from_millis(60), move || {
-            count_clone.fetch_add(1, Ordering::SeqCst);
+        let (events_tx, events_rx) = std::sync::mpsc::channel::<()>();
+        let (tx, handle) = spawn_debouncer_with_callback(Duration::from_millis(50), move || {
+            events_tx.send(()).unwrap();
         });
+        // Wait for the first burst's event to FIRE before sending the second
+        // pulse, so the two are guaranteed-separate bursts regardless of how
+        // the scheduler treats the debouncer thread.
         tx.send(()).unwrap();
-        std::thread::sleep(Duration::from_millis(120)); // clears window
+        recv_event(&events_rx, "first burst");
         tx.send(()).unwrap();
-        std::thread::sleep(Duration::from_millis(120));
+        recv_event(&events_rx, "second burst");
         drop(tx);
         handle.join().unwrap();
-        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(
+            events_rx.try_recv().is_err(),
+            "exactly two debounced events — no extra beyond the two bursts"
+        );
     }
 
     #[test]
