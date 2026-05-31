@@ -34,7 +34,7 @@
 use crate::citations::extract_citations;
 use crate::code::{highlight_code, RawCodeBlock, TokenKind};
 use crate::links::{extract_links, LinkKind};
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
 
 /// Classifies one editor span. Markdown-structure kinds come from the
 /// CommonMark parse; the Slate-specific kinds come from their
@@ -159,6 +159,323 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     resolved.extend(code_internal_spans(source));
     resolved.sort_by_key(|s| s.start_byte);
     resolved
+}
+
+/// Result of a range-scoped re-highlight (#379). `spans` are in
+/// **whole-document byte offsets** and authoritatively cover **all** of
+/// `applied_range` — the consumer removes its prior temporary attributes
+/// over `applied_range` (and any earlier window's leftovers) and re-adds
+/// from `spans`. A whole-document **fallback** is signalled by
+/// `applied_range == 0..source.len()` (with `spans == highlight_spans`),
+/// so the apply path is uniform for ranged and full.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RangedHighlight {
+    pub applied_range: std::ops::Range<usize>,
+    pub spans: Vec<EditorSpan>,
+}
+
+/// Re-highlight only a **window around `dirty`**, falling back to a
+/// whole-document parse whenever the window can't be parsed in isolation
+/// (#379). The expensive span work (pulldown + tree-sitter + the scanners
+/// + overlap resolution) then scales with the window, not the document.
+///
+/// Correctness rests on **substring-parse equivalence**: for every
+/// non-fallback case, `highlight_spans(&source[window])` offset by
+/// `window.start` equals the slice of `highlight_spans(source)` that lies
+/// in `applied_range`. That holds only when the window is a
+/// context-independent unit, because [`highlight_spans`] is **not**
+/// context-free in its input — it composes [`crate::links::extract_links`]
+/// / [`crate::citations::extract_citations`], which re-derive YAML
+/// frontmatter from **byte 0 of their input** and suppress tokens inside
+/// it, and it emits a `Frontmatter` span from the same `fm_end`. So the
+/// algorithm snaps to whole lines, extends to **blank-line boundaries**
+/// (unconditional CommonMark block separators), and **falls back** on any
+/// construct whose classification can reach outside such a window: a
+/// `---`-shaped line at the window head, the real top-of-document
+/// frontmatter region, a `` ``` ``/`~~~` fence touch or a window that
+/// opens inside an unclosed fence, or a `%%…%%` comment touch. Fence /
+/// comment detection is **one-sided conservative** — it over-falls-back
+/// rather than ever window-wrong inside a code block or comment. The
+/// `editor_spans` test proptest (random `---`/wikilink/fence sources) is
+/// the arbiter of this invariant.
+///
+/// The fallback structural scan is O(window-prefix) light (a `\n`/marker
+/// byte scan, no pulldown/tree-sitter); the heavy parse is O(window).
+/// True O(edit) (incremental structure) would need a cached parse and is
+/// deferred.
+pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> RangedHighlight {
+    let whole = || RangedHighlight {
+        applied_range: 0..source.len(),
+        spans: highlight_spans(source),
+    };
+
+    // 1. Clamp + snap the dirty range to char boundaries.
+    let d_start = floor_char_boundary(source, dirty.start);
+    let d_end = ceil_char_boundary(source, dirty.end.max(dirty.start));
+
+    // 2. Snap to whole lines, then 3. extend to blank-line boundaries so
+    // the window holds only whole CommonMark blocks.
+    let win_start = extend_up_to_blank(source, line_start(source, d_start));
+    let win_end = extend_down_to_blank(source, line_end(source, d_end));
+
+    // --- Conservative fallbacks (any "yes" → whole-document) ---
+
+    // Real top-of-document frontmatter: any edit in/touching it. (Its
+    // internal lines can be blank, so blank-extension alone can't bound
+    // it; and editing a `---` delimiter reclassifies the boundary.)
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let fm_end = source.len() - body.len();
+    if fm_end > 0 && win_start < fm_end {
+        return whole();
+    }
+    // A `---`-shaped line at the window head would be re-read as a
+    // frontmatter open by the composed extractors (byte-0 anchored), or
+    // could itself be creating frontmatter at byte 0.
+    if line_is_dashes_delim(source, win_start) {
+        return whole();
+    }
+    // The window can be parsed in isolation only when its opaque-block
+    // (code/HTML) structure exactly matches the whole document's within the
+    // window — neither CUT (#1 an unclosed HTML block above the window), nor
+    // GROW (#4 a ≤3-space list-content fence whose list-dedent close is
+    // lost), nor INVENT one (#3 an indented continuation that's top-level
+    // code alone) — and (RAW framing only) when an indented window head
+    // isn't list/quote content that would reparse top-level and invent a
+    // setext `Heading` the document lacks (#5). `markdown_spans` + the
+    // tag/comment scanners run on the RAW source, so check both there.
+    if window_diverges(source, win_start, win_end, true) {
+        return whole();
+    }
+    // The link/citation extractors run on the frontmatter-STRIPPED body
+    // (byte-0 anchored). When real frontmatter is present the strip can
+    // change the body's block structure relative to raw — e.g. it un-pairs a
+    // `~~~`/`` ``` ``/`<!--` so a window the raw parse proves block-clean is
+    // actually inside an open block in the body framing (#379 review,
+    // CRITICAL #2). Only the opaque-block half applies (container nesting
+    // doesn't change wikilink/citation suppression). `win_start >= fm_end`
+    // here (we returned above otherwise), so the offsets never underflow.
+    if fm_end > 0 && window_diverges(body, win_start - fm_end, win_end - fm_end, false) {
+        return whole();
+    }
+    // `%%…%%` comments: a `%%` typed in the window, or a window that
+    // intersects an existing comment.
+    if source[win_start..win_end].contains("%%")
+        || scan_comments(source)
+            .iter()
+            .any(|c| (c.start_byte as usize) < win_end && win_start < (c.end_byte as usize))
+    {
+        return whole();
+    }
+
+    // 4. Parse the window in isolation and shift into document space.
+    let mut spans = highlight_spans(&source[win_start..win_end]);
+    let offset = win_start as u32;
+    for s in &mut spans {
+        s.start_byte += offset;
+        s.end_byte += offset;
+    }
+    RangedHighlight {
+        applied_range: win_start..win_end,
+        spans,
+    }
+}
+
+// --- Range-scope helpers (#379) ---------------------------------------
+
+fn floor_char_boundary(source: &str, byte: usize) -> usize {
+    let mut b = byte.min(source.len());
+    while b > 0 && !source.is_char_boundary(b) {
+        b -= 1;
+    }
+    b
+}
+
+fn ceil_char_boundary(source: &str, byte: usize) -> usize {
+    let mut b = byte.min(source.len());
+    while b < source.len() && !source.is_char_boundary(b) {
+        b += 1;
+    }
+    b
+}
+
+/// Byte offset of the start of the line containing `byte` (just past the
+/// previous `\n`, or 0). `byte` must be a char boundary.
+fn line_start(source: &str, byte: usize) -> usize {
+    source[..byte].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// Byte offset just past the end of the line containing `byte` — the byte
+/// after the next `\n`, or `source.len()`. `byte` must be a char boundary.
+fn line_end(source: &str, byte: usize) -> usize {
+    let byte = byte.min(source.len());
+    source[byte..]
+        .find('\n')
+        .map_or(source.len(), |i| byte + i + 1)
+}
+
+/// A blank line is empty or whitespace-only (a CommonMark block
+/// separator). `line_start_byte` must be a line start.
+fn line_is_blank(source: &str, line_start_byte: usize) -> bool {
+    let le = line_end(source, line_start_byte);
+    source[line_start_byte..le].trim().is_empty()
+}
+
+/// Walk `start` (a line start) up to a block boundary — the first line of
+/// the contiguous non-blank run, i.e. just after the nearest blank line
+/// above (or BOF).
+fn extend_up_to_blank(source: &str, start: usize) -> usize {
+    let mut ls = start;
+    while ls > 0 {
+        let prev = line_start(source, ls - 1);
+        if line_is_blank(source, prev) {
+            break;
+        }
+        ls = prev;
+    }
+    ls
+}
+
+/// Walk `end` (a line end) down to a block boundary — the start of the
+/// nearest blank line below (or EOF).
+fn extend_down_to_blank(source: &str, end: usize) -> usize {
+    let mut le = end;
+    while le < source.len() {
+        if line_is_blank(source, le) {
+            break;
+        }
+        le = line_end(source, le);
+    }
+    le
+}
+
+/// Frontmatter-delimiter-shaped line: trims to exactly `---`. Conservative
+/// (ignores leading indentation, which real frontmatter forbids) — a
+/// false positive only over-falls-back.
+fn line_is_dashes_delim(source: &str, line_start_byte: usize) -> bool {
+    let le = line_end(source, line_start_byte);
+    source[line_start_byte..le].trim() == "---"
+}
+
+/// A discriminant for the **opaque block** kinds whose presence/extent the
+/// window must reproduce: indented code, fenced code, and HTML block. The
+/// kind matters, not just the range: an *empty* fenced block emits a
+/// `CodeFence` but no inner `Code` token, while an indented block over the
+/// same bytes feeds its body to tree-sitter and DOES emit `Code` tokens; an
+/// HTML block emits no span at all. So a window that flips Fenced↔Indented
+/// (or code↔HTML) over the identical byte range still diverges (#379
+/// review, CRITICAL #6 — a `\t`/4-space `` ``` `` that's empty list-content
+/// fence whole-doc but top-level indented code in the window).
+fn opaque_block_kind(tag: &Tag) -> Option<u8> {
+    match tag {
+        Tag::CodeBlock(CodeBlockKind::Indented) => Some(0),
+        Tag::CodeBlock(CodeBlockKind::Fenced(_)) => Some(1),
+        Tag::HtmlBlock => Some(2),
+        _ => None,
+    }
+}
+
+/// Every opaque block in `source`'s own CommonMark parse as `(start, end,
+/// kind)`, in document order. Both code and HTML blocks make their interior
+/// opaque to the inline parse, the scanners' overlap sweep, and the
+/// code-internals overlay. HTML blocks are included because CommonMark
+/// types 1–5 (`<!--`, `<script>`/`<style>`/`<pre>`, `<?`, `<![CDATA[`)
+/// aren't closed by a blank line — only by their specific closer — so an
+/// unclosed one above the window changes whether an in-window `` ``` `` is a
+/// fence (#379 review, CRITICAL #1). Light (block structure only; no
+/// tree-sitter).
+fn opaque_blocks(source: &str) -> Vec<(usize, usize, u8)> {
+    Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH)
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(tag) => opaque_block_kind(&tag).map(|k| (range.start, range.end, k)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when the window `[win_start, win_end)` can't be parsed in isolation
+/// — its result would differ from the whole document's spans within the
+/// window — so it must fall back. This is the general form of all five
+/// #379-review CRITICALs, which split into two divergence families:
+///
+/// **Opaque-block mismatch.** The window's own opaque-block (code/HTML)
+/// ranges, shifted to document space, must EQUAL the whole-doc blocks that
+/// intersect the window. A pure straddle test (`intersects && !contained`)
+/// catches only a block the window *cuts*; equality also catches a block
+/// the window *grows* (CRITICAL #4 — a `≤3`-space list-content fence whose
+/// list-dedent close the window loses) or *invents* (CRITICAL #3 — an
+/// indented continuation that's top-level code alone), and an HTML block
+/// the window reads as a fence (CRITICAL #1). A non-contained whole-doc
+/// block can't equal a window block, so equality subsumes the straddle
+/// test. Genuine top-level code that fits the window reproduces exactly, so
+/// it still windows.
+///
+/// **Lost container context** (`check_container`). When the window's first
+/// non-blank line is an indented continuation that, in the whole-doc parse,
+/// sits inside a list item or block quote opened ABOVE the window, that
+/// line loses its container in isolation and reparses as a top-level block:
+/// a continuation paragraph + a following `===`/`---` becomes an invented
+/// setext `Heading` (CRITICAL #5 — invisible to the block check), an
+/// indented continuation becomes indented code (#3), a list-content fence
+/// grows (#4) or flips Fenced→Indented (#6). It's the window's first
+/// *non-blank* line that matters, not `win_start` itself: a loose list puts
+/// blank lines between items, so the window can open on a blank line with
+/// the indented content just below it (#6). A non-indented first line (a
+/// list-marker line, a column-0 paragraph that ends the list) reparses the
+/// same alone, so ordinary list edits still window; genuine top-level
+/// indented code isn't in a container, so it windows. Only the RAW framing
+/// needs this (the setext `Heading` comes from `markdown_spans` on the raw
+/// source); the stripped-body framing governs only wikilink/citation
+/// suppression, which list/quote nesting doesn't change. Both checks share
+/// the one whole-doc parse.
+fn window_diverges(source: &str, win_start: usize, win_end: usize, check_container: bool) -> bool {
+    let mut whole_blocks: Vec<(usize, usize, u8)> = Vec::new();
+    let mut in_container = false;
+    for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    {
+        if let Event::Start(tag) = &event {
+            if let Some(kind) = opaque_block_kind(tag) {
+                if range.start < win_end && win_start < range.end {
+                    whole_blocks.push((range.start, range.end, kind));
+                }
+            } else if check_container
+                && matches!(tag, Tag::List(_) | Tag::Item | Tag::BlockQuote)
+                && range.start < win_start
+                && win_start < range.end
+            {
+                in_container = true;
+            }
+        }
+    }
+    if check_container
+        && in_container
+        && window_first_nonblank_is_indented(source, win_start, win_end)
+    {
+        return true;
+    }
+    let win_blocks: Vec<(usize, usize, u8)> = opaque_blocks(&source[win_start..win_end])
+        .into_iter()
+        .map(|(bs, be, k)| (bs + win_start, be + win_start, k))
+        .collect();
+    win_blocks != whole_blocks
+}
+
+/// True when the first non-blank line in the window `[win_start, win_end)`
+/// begins with whitespace (a space or tab) — an indented continuation, not
+/// a list-marker line or column-0 block. Skipping leading blank lines is
+/// what makes the container guard catch a window that opens on a loose
+/// list's inter-item blank with the indented content just below (#6).
+fn window_first_nonblank_is_indented(source: &str, win_start: usize, win_end: usize) -> bool {
+    let mut ls = win_start;
+    while ls < win_end {
+        let le = line_end(source, ls);
+        let line = &source[ls..le.min(win_end)];
+        if !line.trim().is_empty() {
+            return line.starts_with(' ') || line.starts_with('\t');
+        }
+        ls = le;
+    }
+    false
 }
 
 /// Walk the CommonMark structure of `source` and emit syntax spans in
@@ -834,5 +1151,517 @@ mod tests {
             !spans.iter().any(|s| s.kind == EditorSpanKind::Tag),
             "tag after a non-ASCII word must be suppressed, got {spans:?}"
         );
+    }
+
+    // --- Range-scoped highlighting (#379) -----------------------------
+
+    /// Sort key giving a total order over spans (Code(_) tokens nest in
+    /// CodeFence, so (start,end) can tie — break ties on the kind's debug
+    /// form so the comparison is deterministic).
+    fn span_sort_key(s: &EditorSpan) -> (u32, u32, String) {
+        (s.start_byte, s.end_byte, format!("{:?}", s.kind))
+    }
+
+    /// The load-bearing invariant: `highlight_spans_in_range`'s spans
+    /// equal exactly the whole-document spans that fall within its
+    /// `applied_range` (a fallback is the whole document, so the same
+    /// assertion covers it).
+    fn assert_ranged_matches_whole(source: &str, dirty: std::ops::Range<usize>) {
+        let ranged = highlight_spans_in_range(source, dirty.clone());
+        let (a, b) = (ranged.applied_range.start, ranged.applied_range.end);
+        let mut expected: Vec<EditorSpan> = highlight_spans(source)
+            .into_iter()
+            .filter(|s| (s.start_byte as usize) >= a && (s.end_byte as usize) <= b)
+            .collect();
+        let mut got = ranged.spans.clone();
+        expected.sort_by_key(span_sort_key);
+        got.sort_by_key(span_sort_key);
+        assert_eq!(
+            got, expected,
+            "ranged != whole-doc slice; dirty={dirty:?} applied={:?}\nsource={source:?}",
+            ranged.applied_range
+        );
+    }
+
+    fn is_fallback(source: &str, dirty: std::ops::Range<usize>) -> bool {
+        highlight_spans_in_range(source, dirty).applied_range == (0..source.len())
+    }
+
+    #[test]
+    fn ordinary_prose_edit_windows_and_matches() {
+        let src = "# Title\n\nFirst para with [[Link]] and #tag.\n\nSecond para with **bold** word.\n\nThird para here.\n";
+        // Edit in the second paragraph (well away from any construct).
+        let at = src.find("bold").unwrap();
+        let r = highlight_spans_in_range(src, at..at + 4);
+        assert!(
+            r.applied_range != (0..src.len()),
+            "an ordinary prose edit should window, not fall back: {:?}",
+            r.applied_range
+        );
+        assert_ranged_matches_whole(src, at..at + 4);
+    }
+
+    #[test]
+    fn dashes_line_at_window_head_falls_back() {
+        // A `---` block mid-document with a wikilink inside it: a window
+        // starting on the `---` would be re-read as frontmatter and DROP
+        // the wikilink. Must fall back. (The CRITICAL the plan red-team
+        // found.)
+        let src = "intro paragraph\n\n---\nnot: yaml [[Trap]]\n---\n\noutro\n";
+        let trap = src.find("Trap").unwrap();
+        assert!(
+            is_fallback(src, trap..trap + 4),
+            "edit inside a mid-doc --- block must fall back"
+        );
+        assert_ranged_matches_whole(src, trap..trap + 4);
+    }
+
+    #[test]
+    fn edit_inside_a_blank_bounded_fence_matches() {
+        // The whole fence is blank-bounded, so the window captures it and
+        // parses it correctly — a win, no fallback needed.
+        let src = "prose\n\n```rust\nlet x = 1;\nlet y = 2;\n```\n\nmore prose\n";
+        let inside = src.find("y = 2").unwrap();
+        assert_ranged_matches_whole(src, inside..inside + 1);
+    }
+
+    #[test]
+    fn edit_in_a_fence_with_an_internal_blank_falls_back() {
+        // An internal blank line stops blank-extension inside the fence,
+        // so the window would cut the code block → fall back.
+        let src = "prose\n\n```rust\nfn a() {}\n\nfn b() {}\n```\n\ntail\n";
+        let inside = src.find("fn b").unwrap();
+        assert!(
+            is_fallback(src, inside..inside + 1),
+            "a window cutting a code block must fall back"
+        );
+        assert_ranged_matches_whole(src, inside..inside + 1);
+    }
+
+    #[test]
+    fn typing_a_fence_delimiter_recolors_correctly() {
+        // Acceptance (b): typing/editing a ``` must recolor correctly,
+        // whether the new fence is captured by the window or straddles it
+        // (→ whole-doc fallback). The invariant holds either way.
+        for src in [
+            "alpha\n\n```\ncode\n```\n\nbeta\n", // blank-bounded → window
+            "alpha\n\n```\nnow fenced [[L]] #tag\nmore\n", // unclosed → window to EOF
+            "a\n\n```\nx\n\ny\n```\n\nb\n",      // internal blank → straddle → fallback
+        ] {
+            let fence = src.find("```").unwrap();
+            assert_ranged_matches_whole(src, fence..fence + 3);
+        }
+    }
+
+    #[test]
+    fn fence_inside_blockquote_or_indented_never_windows_wrong() {
+        // A `> ```` fence (blockquote-nested) and a 4-space-indented ```:
+        // whichever the conservative scan does, the result must still
+        // match the whole document.
+        let bq = "para\n\n> ```\n> code here\n> ```\n\nafter [[L]] text\n";
+        let at = bq.find("after").unwrap();
+        assert_ranged_matches_whole(bq, at..at + 1);
+        let indented = "para\n\n    ```\n    literal\n\ntail [[L]] here\n";
+        let at2 = indented.find("tail").unwrap();
+        assert_ranged_matches_whole(indented, at2..at2 + 1);
+    }
+
+    #[test]
+    fn frontmatter_content_and_delimiter_edits_match() {
+        let src = "---\ntitle: Hello\nstatus: draft\n---\n\nbody [[Link]] here\n";
+        // Edit YAML content.
+        let val = src.find("Hello").unwrap();
+        assert!(
+            is_fallback(src, val..val + 5),
+            "frontmatter region edit falls back (conservative V1)"
+        );
+        assert_ranged_matches_whole(src, val..val + 5);
+        // Edit the closing delimiter.
+        let close = src.rfind("---").unwrap();
+        assert_ranged_matches_whole(src, close..close + 3);
+        // An edit in the body still windows + matches.
+        let body = src.find("here").unwrap();
+        assert_ranged_matches_whole(src, body..body + 4);
+    }
+
+    #[test]
+    fn comment_open_close_and_inside_match() {
+        let src = "before\n\n%% a note with [[L]] %%\n\nafter\n";
+        let inside = src.find("note").unwrap();
+        assert!(is_fallback(src, inside..inside + 4));
+        assert_ranged_matches_whole(src, inside..inside + 4);
+    }
+
+    #[test]
+    fn blank_line_delete_merging_paragraphs_matches() {
+        // The window is computed on the post-edit source; merging two
+        // paragraphs must still reconstruct correctly.
+        let merged = "one para line\nNOW MERGED second line with [[L]]\n\ntail\n";
+        let at = merged.find("MERGED").unwrap();
+        assert_ranged_matches_whole(merged, at..at + 6);
+    }
+
+    #[test]
+    fn setext_under_multiline_paragraph_matches() {
+        let src = "intro\n\nHeading line one\ncontinued line two\n=====\n\nbody\n";
+        let at = src.find("=====").unwrap();
+        assert_ranged_matches_whole(src, at..at + 5);
+    }
+
+    #[test]
+    fn multibyte_and_crlf_window_edges_match_without_panic() {
+        let mb = "a中b\n\n😀 para with é and [[Lïnk]]\n\nend\n";
+        for i in 0..mb.len() {
+            // dirty at every byte (incl. mid-scalar) must clamp + match.
+            assert_ranged_matches_whole(mb, i..i + 1);
+        }
+        let crlf = "para one\r\n\r\nsecond [[L]] para\r\n\r\nthird\r\n";
+        let at = crlf.find("second").unwrap();
+        assert_ranged_matches_whole(crlf, at..at + 1);
+    }
+
+    #[test]
+    fn edge_cases_clamp_and_match() {
+        for (src, dirty) in [
+            ("", 0..0),
+            ("hello\n", 0..0),
+            ("hello\n", 5..5),
+            ("hello\n", 3..999), // past EOF
+            ("a\n\nb\n", 0..5),  // whole tiny doc
+        ] {
+            assert_ranged_matches_whole(src, dirty);
+        }
+    }
+
+    #[test]
+    fn unclosed_html_block_above_window_falls_back() {
+        // #379 review, CRITICAL #1. `<!--` opens a CommonMark HTML block
+        // (type 2) that a blank line does NOT close, so in the whole-doc
+        // parse the `` ``` `` and `#tag` below are inert HTML text (no
+        // CodeFence; the tag scanner still fires). Parsed alone the window
+        // would read `` ``` `` as a real fence that masks the tag. The
+        // opaque-block guard must see the HTML block straddle and fall back.
+        let src = "<!-- x\n\n```\n#tag\n";
+        let dirty = src.find("#tag").unwrap();
+        assert!(
+            is_fallback(src, dirty..dirty),
+            "a window straddling an unclosed HTML block must fall back"
+        );
+        assert_ranged_matches_whole(src, dirty..dirty);
+        // The whole HTML-block opener family, each with an edit below it.
+        for opener in [
+            "<!-- c",
+            "<script>",
+            "<style>",
+            "<pre>",
+            "<?php",
+            "<![CDATA[",
+        ] {
+            let src = format!("{opener}\n\n```\n#tag here\n");
+            let dirty = src.find("#tag").unwrap();
+            assert_ranged_matches_whole(&src, dirty..dirty);
+        }
+    }
+
+    #[test]
+    fn exhaustive_small_docs_over_breaker_alphabet_match() {
+        // Deterministic, COMPLETE coverage of the small-doc space where the
+        // #379-review CRITICALs lived: every 1–3 line document over a
+        // curated alphabet of the breakers (blank lines, `---`, both fence
+        // kinds, an HTML-block opener + closer, a wikilink/blockquote line,
+        // a list marker + an indented continuation, `#tag`, `%%`), checked
+        // at every dirty byte. This is the red-team's own finding
+        // methodology, frozen as a regression guard — all three CRITICALs
+        // (HTML block, frontmatter fence parity, list-continuation indented
+        // code) would have failed it.
+        let alphabet = [
+            "",
+            "---",
+            "```",
+            "~~~",
+            "<!--",
+            "-->",
+            "x [[L]]",
+            "#t",
+            "%% c %%",
+            "> [[Q]]",
+            "- a",
+            "    [[L]]",
+            "  ```",
+            "  x\n===", // 2-col list-content line + setext underline (#5)
+            "\n\t```",  // a blank + a tab fence → loose-list double-blank head (#6)
+        ];
+        let mut checked = 0usize;
+        let mut docs = Vec::new();
+        for &a in &alphabet {
+            docs.push(format!("{a}\n"));
+            for &b in &alphabet {
+                docs.push(format!("{a}\n{b}\n"));
+                for &c in &alphabet {
+                    docs.push(format!("{a}\n{b}\n{c}\n"));
+                }
+            }
+        }
+        for doc in &docs {
+            for d in 0..=doc.len() {
+                assert_ranged_matches_whole(doc, d..d);
+                checked += 1;
+            }
+        }
+        // 15 + 225 + 3375 = 3615 docs; guard the loop actually ran.
+        assert_eq!(docs.len(), 3615);
+        assert!(
+            checked > 25_000,
+            "expected a full per-byte sweep, ran {checked}"
+        );
+    }
+
+    #[test]
+    fn frontmatter_unpairs_a_body_fence_and_window_falls_back() {
+        // #379 review, CRITICAL #2. `---\n~~~\n---` is frontmatter, so the
+        // link/citation extractors parse the body `~~~\n\n> q [[Q]]\n`,
+        // where `~~~` is an UNCLOSED fence that swallows the wikilink. The
+        // raw parse instead sees `~~~…~~~` as a *closed* fence and the
+        // blockquote as top-level (wikilink present). The body-framing
+        // opaque-block check must catch the straddle the raw check misses.
+        let src = "---\n~~~\n---\n~~~\n\n> q [[Q]]\n";
+        let dirty = src.find("[[Q]]").unwrap();
+        assert!(
+            is_fallback(src, dirty..dirty),
+            "a window inside a body fence the frontmatter strip un-paired must fall back"
+        );
+        assert_ranged_matches_whole(src, dirty..dirty);
+    }
+
+    #[test]
+    fn list_continuation_indented_line_does_not_invent_code() {
+        // #379 review, CRITICAL #3. An indented line under a loose list is
+        // a list-item continuation in context (a blank line doesn't close
+        // the list), so the whole-doc parse has NO code block there; parsed
+        // alone the window would read it as a top-level indented code block
+        // and fabricate a CodeFence + tree-sitter tokens. Must fall back.
+        for src in [
+            "- a\n\n    code\n",
+            "1. a\n\n    code [[L]]\n",
+            "- a\n\n    ```\n    body\n    ```\n",
+            "- a\n  - b\n\n        code\n", // nested list, 8-indent
+            "- a\n\n    <div>x</div>\n",
+            "# Setup\n\n1. Install.\n2. Build:\n\n        cargo build\n\n3. Done.\n",
+        ] {
+            let dirty = src.rfind("    ").unwrap() + 4; // inside the indented line
+            assert!(
+                is_fallback(src, dirty..dirty),
+                "a list-continuation indented line must fall back, not invent code: {src:?}"
+            );
+            assert_ranged_matches_whole(src, dirty..dirty);
+        }
+        // Genuine *top-level* indented code (no list/quote container) is NOT
+        // container content, so it windows — its block reproduces exactly in
+        // isolation (the structure check confirms), no over-fallback.
+        let genuine = "para text here\n\n    real_code()\n\nmore prose follows\n";
+        let at = genuine.find("real_code").unwrap();
+        assert!(
+            !is_fallback(genuine, at..at),
+            "genuine top-level indented code should window"
+        );
+        assert_ranged_matches_whole(genuine, at..at);
+        // A 2-space indent is NOT indent-code-shaped, so an ordinary
+        // lightly-indented prose line still windows (no over-fallback creep).
+        let shallow = "intro line\n\n  two-space [[L]] line\n\ntail line\n";
+        let at = shallow.find("two-space").unwrap();
+        assert!(
+            !is_fallback(shallow, at..at),
+            "2-space indent must still window"
+        );
+        assert_ranged_matches_whole(shallow, at..at);
+    }
+
+    #[test]
+    fn list_content_paragraph_window_does_not_invent_setext_heading() {
+        // #379 review, CRITICAL #5 — the setext analogue of #3. A 2–3-column
+        // line under a loose list is list-item content, so a following
+        // `===`/`---` is also list content, NOT a setext underline → no
+        // heading. The isolated window loses the list opener, so the line
+        // becomes a top-level paragraph and the underline invents a Heading.
+        // Invisible to the opaque-block check (a Heading is not a code/HTML
+        // block); caught by the lost-container guard.
+        for src in [
+            "- a\n\n  x\n===\n",
+            "- a\n\n  x\n-----\n",
+            "1. a\n\n   x\n===\n",
+            "* a\n\n  hi [[L]]\n===\n",
+            "---\nt: x\n---\n\n- a\n\n  y\n===\n", // body framing carries the list too
+        ] {
+            let at = src.rfind("\n=").or_else(|| src.rfind("\n-")).unwrap();
+            assert_ranged_matches_whole(src, at..at);
+        }
+    }
+
+    #[test]
+    fn list_content_fence_window_does_not_grow_past_the_list() {
+        // #379 review, CRITICAL #4 — the GROW dual of #3. A 2–3-column
+        // indented fence is list-item content; the dedented line below ends
+        // the list (and the unclosed fence) in the whole document, but the
+        // window — which loses the list opener above the blank — lets the
+        // fence swallow that line (a heading/wikilink gets recolored as code
+        // and dropped). Sub-4 indent dodges any head-indent gate, and the
+        // whole-doc block is window-CONTAINED so a straddle test stays
+        // silent; only structure equality catches the grow.
+        for src in [
+            "- a\n\n  ```\n- b\n",
+            "- a\n\n  ```\n# h\n", // heading masked
+            "1. a\n\n   ```\n2. b\n",
+            "- Step one.\n\n  ```\n  cargo build\n## Done [[Wrap]]\n", // wikilink dropped
+            "> q\n\n  ~~~\n# h\n",                                     // blockquote content fence
+        ] {
+            let at = src.find("```").or_else(|| src.find("~~~")).unwrap() + 3;
+            assert_ranged_matches_whole(src, at..at);
+        }
+    }
+
+    #[test]
+    fn window_opening_on_a_loose_list_blank_does_not_invent_code_or_heading() {
+        // #379 review, CRITICAL #6 (+ its setext sibling). A loose list puts
+        // blank lines between items, so an edit on the blank makes the window
+        // OPEN on a blank line with the indented list content just below it —
+        // `win_start` is the blank, so a head check at `win_start` alone is
+        // blind to the indented continuation. A tab/4-space `` ``` `` there is
+        // an empty Fenced block (no inner token) in the document but a
+        // top-level Indented block (invented tree-sitter `Code`) in the
+        // window — same byte range, so only a KIND-aware block compare or the
+        // first-non-blank container check catches it. The `===` variant
+        // invents a setext heading the same way.
+        for src in [
+            "- a\n\n\n\t```\n",          // tab fence after a double blank
+            "- a\n\n\n    ```\n",        // 4-space fence after a double blank
+            "- a\n\n\n\t```\ncode\n",    // non-empty: tree-sitter content also flips
+            "- a\n\n\n  x\n===\n",       // setext sibling: invented Heading via blank head
+            "1. a\n\n\n    fn x() {}\n", // ordered list, invented indented code
+        ] {
+            for d in 0..src.len() {
+                assert_ranged_matches_whole(src, d..d);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod range_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Generate `source` rich in the shapes that break naive windowing —
+    /// `---` lines, `[[wikilinks]]` / `[@cites]` mid-document, `` ``` ``
+    /// fences, `%%` comments, headings, blanks — then assert
+    /// `highlight_spans_in_range` for an arbitrary dirty range always
+    /// equals the whole-document spans within its `applied_range`. This is
+    /// the arbiter of the substring-parse-equivalence invariant.
+    fn liney_source() -> impl Strategy<Value = String> {
+        let line = prop_oneof![
+            Just("".to_string()),
+            Just("---".to_string()),
+            Just("```".to_string()),
+            Just("```rust".to_string()),
+            Just("~~~".to_string()),
+            Just("# Heading".to_string()),
+            Just("prose with [[Link]] here".to_string()),
+            Just("cite [@key2020] inline".to_string()),
+            Just("bare @key2020 cite".to_string()),
+            Just("%% a comment %%".to_string()),
+            Just("%%".to_string()),
+            Just("a #tag and **bold**".to_string()),
+            Just("    indented line".to_string()),
+            Just("    [[L]] indented".to_string()),
+            Just("\ttab indented".to_string()),
+            // A 2-space-indented prose line — list-item content that, paired
+            // with a list marker + blank + a `===`/`---` underline, forms the
+            // "invent a setext heading" shape (#379 review, CRITICAL #5).
+            Just("  two col [[L]]".to_string()),
+            // Indented fence lines — under a list marker these are empty
+            // Fenced blocks whole-doc but top-level Indented code in a window,
+            // flipping the block kind at the same range (#379 review,
+            // CRITICAL #6).
+            Just("    ```".to_string()),
+            Just("\t```".to_string()),
+            // A 2-space-indented fence — list-item content that, paired with
+            // a list marker + blank, forms the "grow" shape (#379 review,
+            // CRITICAL #4): the window loses the list opener and lets the
+            // fence swallow the dedented line.
+            Just("  ```".to_string()),
+            Just("> quoted [[Q]]".to_string()),
+            // List markers — paired with the indented lines above, these
+            // generate the loose-list + indented-continuation shape whose
+            // window would invent an indented code block (#379 review,
+            // CRITICAL #3).
+            Just("- item".to_string()),
+            Just("1. step".to_string()),
+            Just("=====".to_string()),
+            Just("===".to_string()),
+            Just("plain text line".to_string()),
+            // HTML-block openers (CommonMark types 1–5 aren't closed by a
+            // blank line) + a closer, so the generator can both open an
+            // opaque HTML block above an edit and close one (#379 review).
+            Just("<!-- comment".to_string()),
+            Just("-->".to_string()),
+            Just("<script>".to_string()),
+            Just("<style>".to_string()),
+            Just("<pre>".to_string()),
+            Just("<div>".to_string()),
+        ];
+        proptest::collection::vec(line, 0..16).prop_map(|lines| {
+            let mut s = lines.join("\n");
+            s.push('\n');
+            s
+        })
+    }
+
+    /// Prepend a YAML frontmatter block to a body. The frontmatter strip
+    /// re-anchors the body parse at byte 0 of the body, which can flip the
+    /// fence/HTML parity of everything below it relative to the raw parse
+    /// — the CRITICAL #2 shape (#379 review). The interior lines include a
+    /// lone `~~~`/`` ``` `` so a body fence can be left unclosed.
+    fn frontmatter_prefixed_source() -> impl Strategy<Value = String> {
+        let fm_line = prop_oneof![
+            Just("title: x".to_string()),
+            Just("~~~".to_string()),
+            Just("```".to_string()),
+            Just("tags: [a, b]".to_string()),
+            Just("".to_string()),
+        ];
+        (proptest::collection::vec(fm_line, 0..4), liney_source())
+            .prop_map(|(fm, body)| format!("---\n{}\n---\n{body}", fm.join("\n")))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(600))]
+
+        #[test]
+        fn ranged_always_matches_whole_doc_slice(src in liney_source(), a in 0usize..400, b in 0usize..400) {
+            assert_ranged_invariant(&src, a, b)?;
+        }
+
+        #[test]
+        fn ranged_matches_with_frontmatter_prefix(src in frontmatter_prefixed_source(), a in 0usize..400, b in 0usize..400) {
+            assert_ranged_invariant(&src, a, b)?;
+        }
+    }
+
+    /// The invariant both proptests assert: `highlight_spans_in_range` for
+    /// an arbitrary dirty range equals the whole-document spans within its
+    /// `applied_range` (a Code-kind-aware sort makes the comparison stable
+    /// across the one intentional CodeFence/Code overlap).
+    fn assert_ranged_invariant(src: &str, a: usize, b: usize) -> Result<(), TestCaseError> {
+        let dirty = a.min(b)..a.max(b);
+        let ranged = highlight_spans_in_range(src, dirty);
+        let (lo, hi) = (ranged.applied_range.start, ranged.applied_range.end);
+        let mut expected: Vec<EditorSpan> = highlight_spans(src)
+            .into_iter()
+            .filter(|s| (s.start_byte as usize) >= lo && (s.end_byte as usize) <= hi)
+            .collect();
+        let mut got = ranged.spans;
+        expected.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
+        got.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
+        prop_assert_eq!(got, expected, "applied={}..{} src={:?}", lo, hi, src);
+        Ok(())
     }
 }
