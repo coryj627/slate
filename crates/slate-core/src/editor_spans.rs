@@ -250,6 +250,22 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     if fm_end > 0 && window_cuts_an_opaque_block(body, win_start - fm_end, win_end - fm_end) {
         return whole();
     }
+    // An indented-code-shaped window head (≥4 columns of leading
+    // whitespace) is the one construct a window can INVENT rather than
+    // sever: in document context the line may be a loose-list-item or
+    // blockquote continuation (a blank line doesn't close a loose list) and
+    // carry no code block, or a NESTED indented code block whose indent is
+    // stripped differently than in isolation — but parsed alone it is a
+    // top-level indented code block, so the window fabricates a `CodeFence`
+    // + tree-sitter tokens (or shifts their offsets) the document doesn't
+    // have (#379 review, CRITICAL #3 — the dual of the straddle cases
+    // above). The straddle check can't see it: whole-doc there is either no
+    // block, or a block at different offsets. Genuine *top-level* indented
+    // code would window fine, but it's rare (fenced is the norm) and
+    // falling back is safe, so we don't try to distinguish it.
+    if head_is_indent_code_shaped(source, win_start) {
+        return whole();
+    }
     // `%%…%%` comments: a `%%` typed in the window, or a window that
     // intersects an existing comment.
     if source[win_start..win_end].contains("%%")
@@ -386,6 +402,34 @@ fn window_cuts_an_opaque_block(source: &str, win_start: usize, win_end: usize) -
                 false
             }
         })
+}
+
+/// True when the line at `win_start` (a line start, post blank-extension)
+/// begins with **indented-code indentation** — ≥4 columns of leading
+/// whitespace before any content, counting a tab as advancing to the next
+/// 4-column stop (so a leading tab, 4 spaces, or `   \t` all qualify).
+/// Parsed in isolation such a line is a top-level indented code block; in
+/// document context it may instead be a list/blockquote continuation or a
+/// nested code block, so the window must fall back (#379 review, CRITICAL
+/// #3). A blank line and `win_start == 0` are not indent-shaped — the
+/// latter because with no context above, the window equals the document.
+fn head_is_indent_code_shaped(source: &str, win_start: usize) -> bool {
+    if win_start == 0 {
+        return false;
+    }
+    let end = line_end(source, win_start);
+    let mut col = 0usize;
+    for &b in &source.as_bytes()[win_start..end] {
+        match b {
+            b' ' => col += 1,
+            b'\t' => col += 4 - (col % 4),
+            _ => break, // first content byte (or '\n' on a blank line)
+        }
+        if col >= 4 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Walk the CommonMark structure of `source` and emit syntax spans in
@@ -1279,11 +1323,24 @@ mod tests {
         // #379-review CRITICALs lived: every 1–3 line document over a
         // curated alphabet of the breakers (blank lines, `---`, both fence
         // kinds, an HTML-block opener + closer, a wikilink/blockquote line,
-        // `#tag`, `%%`), checked at every dirty byte. This is the red-team's
-        // own finding methodology, frozen as a regression guard — both
-        // CRITICALs would have failed it.
+        // a list marker + an indented continuation, `#tag`, `%%`), checked
+        // at every dirty byte. This is the red-team's own finding
+        // methodology, frozen as a regression guard — all three CRITICALs
+        // (HTML block, frontmatter fence parity, list-continuation indented
+        // code) would have failed it.
         let alphabet = [
-            "", "---", "```", "~~~", "<!--", "-->", "x [[L]]", "#t", "%% c %%", "> [[Q]]",
+            "",
+            "---",
+            "```",
+            "~~~",
+            "<!--",
+            "-->",
+            "x [[L]]",
+            "#t",
+            "%% c %%",
+            "> [[Q]]",
+            "- a",
+            "    [[L]]",
         ];
         let mut checked = 0usize;
         let mut docs = Vec::new();
@@ -1302,10 +1359,10 @@ mod tests {
                 checked += 1;
             }
         }
-        // 10 + 100 + 1000 = 1110 docs; guard the loop actually ran.
-        assert_eq!(docs.len(), 1110);
+        // 12 + 144 + 1728 = 1884 docs; guard the loop actually ran.
+        assert_eq!(docs.len(), 1884);
         assert!(
-            checked > 15_000,
+            checked > 25_000,
             "expected a full per-byte sweep, ran {checked}"
         );
     }
@@ -1325,6 +1382,47 @@ mod tests {
             "a window inside a body fence the frontmatter strip un-paired must fall back"
         );
         assert_ranged_matches_whole(src, dirty..dirty);
+    }
+
+    #[test]
+    fn list_continuation_indented_line_does_not_invent_code() {
+        // #379 review, CRITICAL #3. An indented line under a loose list is
+        // a list-item continuation in context (a blank line doesn't close
+        // the list), so the whole-doc parse has NO code block there; parsed
+        // alone the window would read it as a top-level indented code block
+        // and fabricate a CodeFence + tree-sitter tokens. Must fall back.
+        for src in [
+            "- a\n\n    code\n",
+            "1. a\n\n    code [[L]]\n",
+            "- a\n\n    ```\n    body\n    ```\n",
+            "- a\n  - b\n\n        code\n", // nested list, 8-indent
+            "- a\n\n    <div>x</div>\n",
+            "# Setup\n\n1. Install.\n2. Build:\n\n        cargo build\n\n3. Done.\n",
+        ] {
+            let dirty = src.rfind("    ").unwrap() + 4; // inside the indented line
+            assert!(
+                is_fallback(src, dirty..dirty),
+                "a list-continuation indented line must fall back, not invent code: {src:?}"
+            );
+            assert_ranged_matches_whole(src, dirty..dirty);
+        }
+        // Genuine top-level indented code conservatively falls back too —
+        // we don't try to distinguish it from a continuation (it's rare and
+        // fallback is safe). The invariant holds either way; this pins that
+        // an indent-shaped head is treated uniformly.
+        let genuine = "para text here\n\n    real_code()\n\nmore prose follows\n";
+        let at = genuine.find("real_code").unwrap();
+        assert!(is_fallback(genuine, at..at));
+        assert_ranged_matches_whole(genuine, at..at);
+        // A 2-space indent is NOT indent-code-shaped, so an ordinary
+        // lightly-indented prose line still windows (no over-fallback creep).
+        let shallow = "intro line\n\n  two-space [[L]] line\n\ntail line\n";
+        let at = shallow.find("two-space").unwrap();
+        assert!(
+            !is_fallback(shallow, at..at),
+            "2-space indent must still window"
+        );
+        assert_ranged_matches_whole(shallow, at..at);
     }
 }
 
@@ -1354,8 +1452,15 @@ mod range_proptests {
             Just("%%".to_string()),
             Just("a #tag and **bold**".to_string()),
             Just("    indented line".to_string()),
+            Just("    [[L]] indented".to_string()),
             Just("\ttab indented".to_string()),
             Just("> quoted [[Q]]".to_string()),
+            // List markers — paired with the indented lines above, these
+            // generate the loose-list + indented-continuation shape whose
+            // window would invent an indented code block (#379 review,
+            // CRITICAL #3).
+            Just("- item".to_string()),
+            Just("1. step".to_string()),
             Just("=====".to_string()),
             Just("===".to_string()),
             Just("plain text line".to_string()),
