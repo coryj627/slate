@@ -282,7 +282,7 @@ fn looks_external(url: &str) -> bool {
 
 /// Scan the raw source for `[[…]]` wikilinks, skipping any whose
 /// opening `[[` falls inside a code range.
-fn scan_wikilinks(source: &str, code_ranges: &[(usize, usize)]) -> Vec<ParsedLink> {
+pub(crate) fn scan_wikilinks(source: &str, code_ranges: &[(usize, usize)]) -> Vec<ParsedLink> {
     let bytes = source.as_bytes();
     let mut links = Vec::new();
     let mut i = 0;
