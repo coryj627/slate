@@ -285,6 +285,96 @@ fn oplog_entry_carries_hashes_and_actor_id() {
 }
 
 #[test]
+fn save_logs_fine_grained_edit_batch_and_reconstructs() {
+    // A note big enough that a one-line edit's diff is smaller than the
+    // whole file → the second (Some-path) save logs an `EditBatch`, and
+    // replaying snapshot+batch reproduces the file byte-for-byte (#378).
+    let (_tmp, session) = make_vault(|_| {});
+    let v1 = "# Title\n\nLine one of the body text.\nLine two of the body text.\n\
+              Line three of the body text.\nLine four of the body text.\n\
+              Line five of the body text.\n";
+    let r1 = session.save_text("note.md", v1, None).unwrap();
+    let v2 = v1.replace("Line two of the body text.", "Line TWO has been changed.");
+    session
+        .save_text("note.md", &v2, Some(&r1.new_content_hash))
+        .unwrap();
+
+    let entries = session.read_oplog("note.md").unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        matches!(entries[0].op_kind, crate::OpKind::WholeFileReplace),
+        "first save of the session is a snapshot"
+    );
+    assert!(
+        matches!(entries[1].op_kind, crate::OpKind::EditBatch),
+        "a small edit in a larger note logs a fine-grained batch, got {:?}",
+        entries[1].op_kind
+    );
+    assert_eq!(
+        crate::oplog::reconstruct_at_tail(&entries).unwrap(),
+        v2,
+        "replaying the log must reproduce the saved file"
+    );
+    assert_eq!(
+        entries[1].content_hash_after,
+        crate::vault::content_hash(v2.as_bytes())
+    );
+}
+
+#[test]
+fn save_identical_content_writes_no_oplog_entry() {
+    let (_tmp, session) = make_vault(|_| {});
+    let v1 = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n";
+    let r1 = session.save_text("note.md", v1, None).unwrap();
+    // Re-save identical content via the Some-path: the diff is empty, so
+    // the op log must not grow.
+    session
+        .save_text("note.md", v1, Some(&r1.new_content_hash))
+        .unwrap();
+    assert_eq!(
+        session.read_oplog("note.md").unwrap().len(),
+        1,
+        "an identical save must not append an op-log entry"
+    );
+}
+
+#[test]
+fn save_reseeds_snapshot_when_disk_diverged_from_the_logged_tail() {
+    // Warm the per-file state with one save, then change the file
+    // out-of-band. The next Some-save (whose caller re-read and passes the
+    // new disk hash) finds cache.last_hash_after != hash_before, so it
+    // must re-anchor with a snapshot rather than append a batch onto a
+    // base it can't replay — and reconstruction still matches.
+    let (tmp, session) = make_vault(|_| {});
+    let v1 = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n";
+    session.save_text("note.md", v1, None).unwrap();
+
+    // External edit: write a different body straight to disk, bypassing
+    // save_text (so the in-memory append state still thinks the tail is v1).
+    let external = "one\nTWO-EXTERNAL\nthree\nfour\nfive\nsix\nseven\neight\n";
+    std::fs::write(tmp.path().join("note.md"), external.as_bytes()).unwrap();
+    let external_hash = crate::vault::content_hash(external.as_bytes());
+
+    // The editor re-reads, sees `external`, and saves a further edit.
+    let v3 = external.replace("three", "THREE");
+    session
+        .save_text("note.md", &v3, Some(&external_hash))
+        .unwrap();
+
+    let entries = session.read_oplog("note.md").unwrap();
+    // [snapshot(v1), snapshot(v3 re-anchor)] — the divergence forced a
+    // fresh snapshot, not a batch against the stale v1 base.
+    assert!(
+        matches!(
+            entries.last().unwrap().op_kind,
+            crate::OpKind::WholeFileReplace
+        ),
+        "a diverged base must re-anchor with a snapshot"
+    );
+    assert_eq!(crate::oplog::reconstruct_at_tail(&entries).unwrap(), v3);
+}
+
+#[test]
 fn read_oplog_returns_empty_for_path_not_in_index() {
     let (_tmp, session) = make_vault(|_| {});
     let entries = session.read_oplog("never-saved.md").unwrap();

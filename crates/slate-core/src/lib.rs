@@ -17,6 +17,7 @@ pub mod code;
 pub mod commands;
 pub mod db;
 pub mod diagram;
+pub mod diff;
 pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;
@@ -53,6 +54,7 @@ pub use citations::render::{
 };
 pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
 pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
+pub use diff::diff_to_ops;
 pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
 };
@@ -62,7 +64,9 @@ pub use frontmatter::{
 pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultIndex};
 pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
-pub use oplog::{OpKind, OpLogEntry};
+pub use oplog::{
+    decode_edit_batch, encode_edit_batch, reconstruct_at_tail, EditOp, OpKind, OpLogEntry,
+};
 pub use tasks::{extract_tasks, TaskItem};
 pub use tasks_db::{TaskFilter, TaskWithLocation};
 pub use templates::{

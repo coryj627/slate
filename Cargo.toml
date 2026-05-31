@@ -36,6 +36,13 @@ trash = "5"
 # stays line content). The UTF-16 / char / byte metrics are not
 # feature-gated, so they remain available.
 ropey = { version = "1.6", default-features = false }
+# similar powers the diff-on-save fine-grained op log (`05` §7.1 / #378):
+# `diff_to_ops` line-diffs old-vs-new content at save time into byte-range
+# Insert/Delete/Replace ops. The `text` feature gates `TextDiff` /
+# `from_lines` (it's in `default`, but we pin it explicitly so a future
+# `default-features = false` can't silently drop the API). The same crate
+# is the substrate for the §7.3 structured-conflict diff later.
+similar = { version = "2", default-features = false, features = ["text"] }
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 # proptest drives the links round-trip integration test
 # (`tests/links_roundtrip.rs`). Used only in dev/test builds.

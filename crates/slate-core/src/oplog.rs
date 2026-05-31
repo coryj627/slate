@@ -8,12 +8,24 @@
 //! than path means a rename — which keeps the same row in SQLite —
 //! does not lose history.
 //!
-//! V1.F records exactly one op kind, `WholeFileReplace`, with the full
-//! new contents as the payload. Per-keystroke ops, structural deltas,
-//! and compaction (see `SessionConfig::oplog_compaction_threshold_*`)
-//! are V1.x concerns; this module's job is to lay down the on-disk
-//! format and the reader so V2's accessible conflict-resolution UI has
-//! something to consume.
+//! Two op kinds are recorded (#378 §7.1):
+//! - `WholeFileReplace` — payload is the full new file; used as the
+//!   periodic **snapshot / replay anchor** (and for the first save of a
+//!   file each session, and for CLI/scripted `None`-hash saves).
+//! - `EditBatch` — payload is the encoded vector of fine-grained
+//!   Insert/Delete/Replace [`EditOp`]s a single save produced (via
+//!   [`crate::diff::diff_to_ops`]). **One entry per save** so a save is
+//!   atomic at the framing layer (a torn save is one bad trailing entry,
+//!   and prefix recovery returns a valid older state — splitting a save
+//!   across N entries would let recovery stop mid-save and replay a
+//!   document that never existed).
+//!
+//! [`reconstruct_at_tail`] materialises the current document by seeding
+//! the last snapshot and replaying every later batch — the read side
+//! for change-tracking / conflict consumers. Compaction *execution*
+//! (see `SessionConfig::oplog_compaction_threshold_*`) is still a V1.x
+//! concern; this module decides snapshot *cadence* against that
+//! threshold but never rewrites or truncates a log.
 //!
 //! # Format
 //!
@@ -27,7 +39,7 @@
 //!   body_len:      u32 LE
 //!   body (body_len bytes):
 //!     timestamp_ms:     i64 LE
-//!     op_kind:          u8 (1 = WholeFileReplace)
+//!     op_kind:          u8 (1 = WholeFileReplace, 2 = EditBatch)
 //!     actor_id_len:     u16 LE
 //!     actor_id_bytes:   actor_id_len bytes (UTF-8)
 //!     hash_before_len:  u16 LE
@@ -83,29 +95,247 @@ const HEADER_LEN: usize = 8;
 const MAX_PLAUSIBLE_BODY_LEN: usize = 64 * 1024 * 1024;
 
 /// Kind of operation recorded in an op-log entry.
+///
+/// Discriminants are **append-only and monotonic**: a reader that meets
+/// a kind it doesn't understand stops and returns the clean prefix
+/// (`try_from_u8` → `None` → `read_oplog` `break`). That degrades
+/// gracefully only because a newer writer appends newer kinds *after*
+/// older ones — a writer must never emit a higher discriminant before a
+/// lower one it would strand. 3..=8 are reserved for the semantic ops
+/// (`SetProperty`, `RemoveProperty`, `InsertHeading`, `MoveListItem`, …)
+/// that land later; `try_from_u8` returns `None` for them until then.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpKind {
     /// Whole-file replace: the payload is the full new file contents.
+    /// Snapshot / replay anchor.
     WholeFileReplace,
+    /// A single save's fine-grained edit ops, encoded as a batch (see
+    /// [`encode_edit_batch`] / [`decode_edit_batch`]).
+    EditBatch,
 }
 
 impl OpKind {
     fn as_u8(self) -> u8 {
         match self {
             OpKind::WholeFileReplace => 1,
+            OpKind::EditBatch => 2,
         }
     }
 
     fn try_from_u8(v: u8) -> Option<Self> {
         match v {
             1 => Some(OpKind::WholeFileReplace),
+            2 => Some(OpKind::EditBatch),
             _ => None,
         }
     }
 }
 
-/// One recorded operation. V1.F always uses `OpKind::WholeFileReplace`
-/// and stores the full new file in `payload_bytes`.
+/// One fine-grained edit within an [`OpKind::EditBatch`]. Offsets are
+/// **UTF-8 byte offsets in the OLD-content space** (the document state
+/// just before the save that produced the batch). No removed/old text is
+/// stored — replay is always forward from a snapshot, so `Delete` /
+/// `Replace` need only the range (matches `05` §7.4's shapes and halves
+/// the payload). Produced by [`crate::diff::diff_to_ops`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditOp {
+    /// Insert `text` at byte `pos`.
+    Insert { pos: usize, text: String },
+    /// Delete the half-open byte range `[start, end)`.
+    Delete { start: usize, end: usize },
+    /// Replace the half-open byte range `[start, end)` with `text`.
+    Replace {
+        start: usize,
+        end: usize,
+        text: String,
+    },
+}
+
+impl EditOp {
+    /// The op's anchor offset in old-content space — the key
+    /// [`reconstruct_at_tail`] sorts a batch by (descending) so earlier
+    /// edits don't shift the offsets of later ones during replay.
+    fn old_offset(&self) -> usize {
+        match self {
+            EditOp::Insert { pos, .. } => *pos,
+            EditOp::Delete { start, .. } | EditOp::Replace { start, .. } => *start,
+        }
+    }
+}
+
+const OP_TAG_INSERT: u8 = 1;
+const OP_TAG_DELETE: u8 = 2;
+const OP_TAG_REPLACE: u8 = 3;
+
+/// Sanity ceiling on an `op_count` field, mirroring
+/// [`MAX_PLAUSIBLE_BODY_LEN`]'s intent: a corrupt count must not drive a
+/// huge pre-allocation before we've validated any op bytes. One op is at
+/// least 9 bytes (tag + u64), so a body can't legitimately carry more
+/// than `MAX_PLAUSIBLE_BODY_LEN / 9` ops.
+const MAX_PLAUSIBLE_OP_COUNT: usize = MAX_PLAUSIBLE_BODY_LEN / 9;
+
+/// Encode a save's edit ops into an [`OpKind::EditBatch`] payload:
+/// `op_count:u32 | [op_tag:u8 | fields]*`. Each text blob is length-
+/// prefixed (`u32`) because ops are packed back-to-back, so a decoder
+/// must know where each op ends:
+/// - Insert: `pos:u64 | text_len:u32 | text`
+/// - Delete: `start:u64 | end:u64`
+/// - Replace: `start:u64 | end:u64 | text_len:u32 | text`
+///
+/// All integers little-endian, matching the rest of the format.
+pub fn encode_edit_batch(ops: &[EditOp]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(ops.len() as u32).to_le_bytes());
+    for op in ops {
+        match op {
+            EditOp::Insert { pos, text } => {
+                buf.push(OP_TAG_INSERT);
+                buf.extend_from_slice(&(*pos as u64).to_le_bytes());
+                buf.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                buf.extend_from_slice(text.as_bytes());
+            }
+            EditOp::Delete { start, end } => {
+                buf.push(OP_TAG_DELETE);
+                buf.extend_from_slice(&(*start as u64).to_le_bytes());
+                buf.extend_from_slice(&(*end as u64).to_le_bytes());
+            }
+            EditOp::Replace { start, end, text } => {
+                buf.push(OP_TAG_REPLACE);
+                buf.extend_from_slice(&(*start as u64).to_le_bytes());
+                buf.extend_from_slice(&(*end as u64).to_le_bytes());
+                buf.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                buf.extend_from_slice(text.as_bytes());
+            }
+        }
+    }
+    buf
+}
+
+/// Decode an [`OpKind::EditBatch`] payload back into its ops. Returns a
+/// descriptive error (never panics) on any malformed/truncated payload,
+/// so a corrupt entry is rejected exactly like any other parse failure.
+pub fn decode_edit_batch(payload: &[u8]) -> Result<Vec<EditOp>, String> {
+    let mut cur = Cursor::new(payload);
+    let count = cur.read_u32()? as usize;
+    if count > MAX_PLAUSIBLE_OP_COUNT {
+        return Err(format!(
+            "implausible op_count {count} (max {MAX_PLAUSIBLE_OP_COUNT})"
+        ));
+    }
+    let mut ops = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        let op = match cur.read_u8()? {
+            OP_TAG_INSERT => {
+                let pos = cur.read_u64()? as usize;
+                let len = cur.read_u32()? as usize;
+                EditOp::Insert {
+                    pos,
+                    text: cur.read_string(len)?,
+                }
+            }
+            OP_TAG_DELETE => EditOp::Delete {
+                start: cur.read_u64()? as usize,
+                end: cur.read_u64()? as usize,
+            },
+            OP_TAG_REPLACE => {
+                let start = cur.read_u64()? as usize;
+                let end = cur.read_u64()? as usize;
+                let len = cur.read_u32()? as usize;
+                EditOp::Replace {
+                    start,
+                    end,
+                    text: cur.read_string(len)?,
+                }
+            }
+            other => return Err(format!("unknown edit-op tag {other}")),
+        };
+        ops.push(op);
+    }
+    cur.expect_eof()?;
+    Ok(ops)
+}
+
+/// Materialise the document represented by `entries` (the in-order result
+/// of [`read_oplog`]): seed the last [`OpKind::WholeFileReplace`]
+/// snapshot, then replay every later [`OpKind::EditBatch`] in order.
+///
+/// Within a batch, ops apply in **descending old-offset order** so an
+/// earlier edit never shifts the offsets a later edit in the same batch
+/// was computed against (the batch's ops are all in one old-content
+/// space; disjoint and document-ordered from the diff). An op whose range
+/// is out of bounds for the running buffer is a corruption signal →
+/// typed error; we do **not** lean on `TextBuffer`'s silent clamping,
+/// which would mask it. An empty log reconstructs to `""`.
+pub fn reconstruct_at_tail(entries: &[OpLogEntry]) -> Result<String, String> {
+    let Some(snapshot_idx) = entries
+        .iter()
+        .rposition(|e| e.op_kind == OpKind::WholeFileReplace)
+    else {
+        if entries.is_empty() {
+            return Ok(String::new());
+        }
+        return Err("op log has edit batches but no snapshot anchor".to_string());
+    };
+
+    let seed = |bytes: &[u8]| -> Result<crate::text_buffer::TextBuffer, String> {
+        std::str::from_utf8(bytes)
+            .map(crate::text_buffer::TextBuffer::from_str)
+            .map_err(|_| "snapshot payload is not valid UTF-8".to_string())
+    };
+
+    let mut buf = seed(&entries[snapshot_idx].payload_bytes)?;
+    for entry in &entries[snapshot_idx + 1..] {
+        match entry.op_kind {
+            // Defensive: a later snapshot (shouldn't occur after rposition
+            // found the last one) re-seeds.
+            OpKind::WholeFileReplace => buf = seed(&entry.payload_bytes)?,
+            OpKind::EditBatch => {
+                let mut ops = decode_edit_batch(&entry.payload_bytes)?;
+                ops.sort_by_key(|op| std::cmp::Reverse(op.old_offset()));
+                for op in &ops {
+                    apply_op(&mut buf, op)?;
+                }
+            }
+        }
+    }
+    Ok(buf.to_string())
+}
+
+/// Apply one op to the running replay buffer, bounds-checking against the
+/// *current* buffer length so a corrupt offset surfaces as an error
+/// rather than being silently clamped by `TextBuffer`.
+fn apply_op(buf: &mut crate::text_buffer::TextBuffer, op: &EditOp) -> Result<(), String> {
+    let len = buf.len_bytes();
+    match op {
+        EditOp::Insert { pos, text } => {
+            if *pos > len {
+                return Err(format!("insert pos {pos} past end {len}"));
+            }
+            buf.insert(*pos, text);
+        }
+        EditOp::Delete { start, end } => {
+            if start > end || *end > len {
+                return Err(format!(
+                    "delete range {start}..{end} out of bounds (len {len})"
+                ));
+            }
+            buf.delete(*start..*end);
+        }
+        EditOp::Replace { start, end, text } => {
+            if start > end || *end > len {
+                return Err(format!(
+                    "replace range {start}..{end} out of bounds (len {len})"
+                ));
+            }
+            buf.replace(*start..*end, text);
+        }
+    }
+    Ok(())
+}
+
+/// One recorded operation. `payload_bytes` is interpreted per `op_kind`:
+/// the full new file for `WholeFileReplace`, or the encoded
+/// [`encode_edit_batch`] op-vector for `EditBatch`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpLogEntry {
     pub timestamp_ms: i64,
@@ -470,6 +700,15 @@ impl<'a> Cursor<'a> {
         let arr = <[u8; 8]>::try_from(slice).unwrap();
         Ok(i64::from_le_bytes(arr))
     }
+    fn read_u64(&mut self) -> Result<u64, String> {
+        let slice = self
+            .buf
+            .get(self.pos..self.pos + 8)
+            .ok_or_else(|| "short read: u64".to_string())?;
+        self.pos += 8;
+        let arr = <[u8; 8]>::try_from(slice).unwrap();
+        Ok(u64::from_le_bytes(arr))
+    }
     fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>, String> {
         let slice = self
             .buf
@@ -480,6 +719,10 @@ impl<'a> Cursor<'a> {
     }
     fn read_str_u16(&mut self) -> Result<String, String> {
         let len = self.read_u16()? as usize;
+        let bytes = self.read_bytes(len)?;
+        String::from_utf8(bytes).map_err(|_| "non-utf8 string field".to_string())
+    }
+    fn read_string(&mut self, len: usize) -> Result<String, String> {
         let bytes = self.read_bytes(len)?;
         String::from_utf8(bytes).map_err(|_| "non-utf8 string field".to_string())
     }
@@ -508,6 +751,241 @@ mod tests {
             content_hash_after: content_hash(payload),
             payload_bytes: payload.to_vec(),
         }
+    }
+
+    // --- EditBatch encode/decode + replay (#378) ---------------------
+
+    fn snapshot_entry(content: &str) -> OpLogEntry {
+        OpLogEntry {
+            timestamp_ms: 1,
+            user_actor_id: "t".into(),
+            op_kind: OpKind::WholeFileReplace,
+            content_hash_before: String::new(),
+            content_hash_after: content_hash(content.as_bytes()),
+            payload_bytes: content.as_bytes().to_vec(),
+        }
+    }
+
+    fn batch_entry(old: &str, new: &str) -> OpLogEntry {
+        OpLogEntry {
+            timestamp_ms: 2,
+            user_actor_id: "t".into(),
+            op_kind: OpKind::EditBatch,
+            content_hash_before: content_hash(old.as_bytes()),
+            content_hash_after: content_hash(new.as_bytes()),
+            payload_bytes: encode_edit_batch(&crate::diff::diff_to_ops(old, new)),
+        }
+    }
+
+    #[test]
+    fn edit_batch_payload_round_trips() {
+        let ops = vec![
+            EditOp::Insert {
+                pos: 0,
+                text: "x".into(),
+            },
+            EditOp::Delete { start: 5, end: 9 },
+            EditOp::Replace {
+                start: 10,
+                end: 12,
+                text: "中".into(),
+            },
+        ];
+        assert_eq!(decode_edit_batch(&encode_edit_batch(&ops)).unwrap(), ops);
+        // Empty batch round-trips too.
+        assert!(decode_edit_batch(&encode_edit_batch(&[]))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn reconstruct_replays_snapshot_plus_batch_for_every_shape() {
+        // The load-bearing invariant: snapshot(old) + batch(old→new)
+        // reconstructs to exactly `new`, across every edit shape.
+        let cases = [
+            ("", "hello\n"),
+            ("a\nb\nc\n", "a\nb\nc\n"),     // identical → empty batch
+            ("a\nb\nc\n", ""),              // delete all
+            ("- [ ] x\n", "- [x] x\n"),     // single-char
+            ("a\n中\nb\n", "a\n中中\nb\n"), // multibyte
+            ("a\r\nb\r\n", "a\r\nB\r\n"),   // CRLF
+            ("x😀y\n", "x😀😀y\n"),         // astral
+            // multi-hunk, non-adjacent (the descending-apply guard):
+            (
+                "one\ntwo\nthree\nfour\nfive\n",
+                "ZERO\none\ntwo\nTHREE\nfour\n",
+            ),
+        ];
+        for (old, new) in cases {
+            let entries = vec![snapshot_entry(old), batch_entry(old, new)];
+            let got = reconstruct_at_tail(&entries).unwrap();
+            assert_eq!(got, new, "case old={old:?} new={new:?}");
+            assert_eq!(
+                content_hash(got.as_bytes()),
+                entries[1].content_hash_after,
+                "reconstructed hash must equal the batch's recorded hash_after"
+            );
+        }
+    }
+
+    #[test]
+    fn reconstruct_replays_sequential_batches() {
+        let v0 = "alpha\nbeta\ngamma\n";
+        let v1 = "alpha\nBETA\ngamma\n";
+        let v2 = "alpha\nBETA\ngamma\ndelta\n";
+        let entries = vec![snapshot_entry(v0), batch_entry(v0, v1), batch_entry(v1, v2)];
+        assert_eq!(reconstruct_at_tail(&entries).unwrap(), v2);
+    }
+
+    #[test]
+    fn reconstruct_handles_insert_after_an_equal_run() {
+        // Regression for the D…E…I diff bug (red-team #378): an insertion
+        // that follows an `Equal` run must anchor *after* it. These cases
+        // silently corrupted the reconstruction before the fix.
+        for (old, new) in [
+            ("a\n\n", "\n\na"),
+            ("Heading\n\n", "\n\nHeading"),
+            ("中\n  \n😀\na", "  \n  \n😀\n😀\na\nb"),
+        ] {
+            let entries = vec![snapshot_entry(old), batch_entry(old, new)];
+            assert_eq!(
+                reconstruct_at_tail(&entries).unwrap(),
+                new,
+                "old={old:?} new={new:?}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        // Capped cases: this is a focused regression for the D…E…I shape,
+        // not exhaustive fuzzing — 64 short newline-heavy pairs cover it,
+        // and keeping the case count low avoids loading the shared test
+        // runner (cargo runs tests in parallel; a heavy proptest can
+        // starve a sibling timing-sensitive test on a 2-core CI box).
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// The load-bearing invariant over random newline/blank-heavy
+        /// content — the shape that provokes `similar`'s D…E…I covers:
+        /// for any (old, new), snapshot(old) + batch(old→new) reconstructs
+        /// to exactly `new`.
+        #[test]
+        fn reconstruct_round_trips_for_arbitrary_liney_edits(
+            old in "[ab \n]{0,32}",
+            new in "[ab \n]{0,32}",
+        ) {
+            let entries = vec![snapshot_entry(&old), batch_entry(&old, &new)];
+            proptest::prop_assert_eq!(reconstruct_at_tail(&entries).unwrap(), new);
+        }
+    }
+
+    #[test]
+    fn reconstruct_uses_the_last_snapshot_as_anchor() {
+        let entries = vec![
+            snapshot_entry("old\n"),
+            batch_entry("old\n", "older\n"),
+            snapshot_entry("fresh\n"),
+        ];
+        assert_eq!(reconstruct_at_tail(&entries).unwrap(), "fresh\n");
+    }
+
+    #[test]
+    fn reconstruct_empty_log_is_empty_string() {
+        assert_eq!(reconstruct_at_tail(&[]).unwrap(), "");
+    }
+
+    #[test]
+    fn reconstruct_rejects_out_of_bounds_op_instead_of_clamping() {
+        let entries = vec![
+            snapshot_entry("short\n"),
+            OpLogEntry {
+                timestamp_ms: 2,
+                user_actor_id: "t".into(),
+                op_kind: OpKind::EditBatch,
+                content_hash_before: String::new(),
+                content_hash_after: String::new(),
+                payload_bytes: encode_edit_batch(&[EditOp::Delete {
+                    start: 100,
+                    end: 200,
+                }]),
+            },
+        ];
+        assert!(
+            reconstruct_at_tail(&entries).is_err(),
+            "an op past the buffer end must be a typed error, not a silent clamp"
+        );
+    }
+
+    #[test]
+    fn append_then_read_round_trips_edit_batch_through_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        append_entry(tmp.path(), 1, &snapshot_entry("a\nb\nc\n")).unwrap();
+        append_entry(tmp.path(), 1, &batch_entry("a\nb\nc\n", "a\nB\nc\n")).unwrap();
+        let entries = read_oplog(tmp.path(), 1).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].op_kind, OpKind::EditBatch);
+        assert_eq!(reconstruct_at_tail(&entries).unwrap(), "a\nB\nc\n");
+    }
+
+    #[test]
+    fn corrupt_trailing_edit_batch_returns_well_formed_prefix() {
+        // Crash-safety is preserved for the new kind: a torn EditBatch
+        // trailing entry leaves the snapshot + earlier batch intact.
+        let tmp = tempfile::tempdir().unwrap();
+        append_entry(tmp.path(), 1, &snapshot_entry("base\n")).unwrap();
+        append_entry(tmp.path(), 1, &batch_entry("base\n", "BASE\n")).unwrap();
+        // Append a framed-looking EditBatch with a bogus oversized body_len.
+        let path = oplog_path(tmp.path(), 1);
+        let mut handle = OpenOptions::new().append(true).open(&path).unwrap();
+        let bogus_len: u32 = (MAX_PLAUSIBLE_BODY_LEN as u32).saturating_add(1);
+        handle.write_all(&bogus_len.to_le_bytes()).unwrap();
+        handle.write_all(b"junk").unwrap();
+        let entries = read_oplog(tmp.path(), 1).unwrap();
+        assert_eq!(entries.len(), 2, "prefix recovery keeps snapshot + batch");
+        assert_eq!(reconstruct_at_tail(&entries).unwrap(), "BASE\n");
+    }
+
+    #[test]
+    fn unknown_future_op_kind_mid_log_truncates_to_prefix() {
+        // Monotonic-kind canary: a well-framed entry with an unknown kind
+        // (7) appearing BEFORE a later EditBatch makes the reader stop at
+        // it and return only the clean prefix — pins the positional
+        // recovery so a future semantic-op writer must append at the tail.
+        let tmp = tempfile::tempdir().unwrap();
+        append_entry(tmp.path(), 1, &snapshot_entry("base\n")).unwrap();
+        append_entry(tmp.path(), 1, &batch_entry("base\n", "BASE\n")).unwrap();
+        forge_raw_entry(&oplog_path(tmp.path(), 1), 7, b"future");
+        append_entry(tmp.path(), 1, &batch_entry("BASE\n", "BASE!\n")).unwrap();
+
+        let entries = read_oplog(tmp.path(), 1).unwrap();
+        assert_eq!(
+            entries.len(),
+            2,
+            "reader stops at the unknown kind 7, dropping it and everything after"
+        );
+        assert!(entries
+            .iter()
+            .all(|e| e.op_kind != OpKind::EditBatch
+                || e.content_hash_after == content_hash(b"BASE\n")));
+    }
+
+    /// Append a well-framed entry with an arbitrary raw `op_kind` byte
+    /// (used to forge a kind no current build understands).
+    fn forge_raw_entry(path: &Path, kind_byte: u8, payload: &[u8]) {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0i64.to_le_bytes()); // timestamp
+        body.push(kind_byte);
+        body.extend_from_slice(&0u16.to_le_bytes()); // actor len 0
+        body.extend_from_slice(&0u16.to_le_bytes()); // hash_before len 0
+        body.extend_from_slice(&0u16.to_le_bytes()); // hash_after len 0
+        body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        body.extend_from_slice(payload);
+        let checksum = body_checksum(&body);
+        let mut handle = OpenOptions::new().append(true).open(path).unwrap();
+        handle
+            .write_all(&(body.len() as u32).to_le_bytes())
+            .unwrap();
+        handle.write_all(&body).unwrap();
+        handle.write_all(&checksum.to_le_bytes()).unwrap();
     }
 
     #[test]

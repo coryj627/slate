@@ -431,10 +431,41 @@ pub struct CslStyleInfo {
 /// Holds the vault provider, the SQLite cache connection, and the
 /// configuration. Drop the session (or call `close`) when done to flush
 /// the database.
+/// In-memory per-file op-log append state for this session (#378). Lets
+/// `save_text_locked` choose snapshot-vs-`EditBatch` in O(1) without
+/// re-reading the log: `last_hash_after` is the whole-doc hash after the
+/// last entry we wrote (the alignment check against disk — if it doesn't
+/// match, an external edit happened and we re-snapshot), and
+/// `bytes_since_snapshot` drives the snapshot cadence. A cache miss (first
+/// save of a file this session) forces a fresh snapshot, so we never read
+/// or trust a pre-existing on-disk log (migration / corrupt-tail / legacy
+/// all collapse to "first save this session snapshots").
+///
+/// Keyed by `files.id`, which is stable across renames (the same row) and
+/// is never reused while the file exists. Were a future code path to
+/// `DELETE` a file row, SQLite could reuse its rowid, and a brand-new file
+/// landing on it would inherit a stale `last_hash_after` — but that simply
+/// fails the alignment check and forces a (harmless) re-snapshot, never
+/// corruption. The map is per-session and not pruned on delete; a
+/// long-lived session holds one small entry per file ever saved.
+#[derive(Debug, Clone)]
+struct OplogAppendState {
+    last_hash_after: String,
+    bytes_since_snapshot: u64,
+}
+
+/// Estimated per-entry on-disk framing overhead (body header + two hex
+/// hashes + actor id + the length/checksum fields) used only to make the
+/// snapshot-cadence accounting (`bytes_since_snapshot`) track real log
+/// growth rather than payload bytes alone. Deliberately generous.
+const OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE: u64 = 256;
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
     config: SessionConfig,
+    /// Per-file op-log append state (#378). See [`OplogAppendState`].
+    oplog_state: Mutex<std::collections::HashMap<i64, OplogAppendState>>,
     /// Runtime-mutable math preferences. Audit #259: changing
     /// `config.math_prefs` at runtime isn't possible because
     /// `config` is owned by the session. UI surfaces (Settings
@@ -486,6 +517,7 @@ impl VaultSession {
             provider,
             conn: Mutex::new(conn),
             config,
+            oplog_state: Mutex::new(std::collections::HashMap::new()),
             math_prefs,
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
@@ -712,33 +744,41 @@ impl VaultSession {
         contents: &str,
         expected_content_hash: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
-        let hash_before = if let Some(expected) = expected_content_hash {
-            let (current_hash, current_mtime_ms) = compute_disk_hash(
-                self.provider.as_ref(),
-                path,
-                self.config.large_file_refuse_bytes,
-            )?;
-            if current_hash != expected {
-                return Err(VaultError::WriteConflict {
-                    current_content_hash: current_hash,
-                    expected_content_hash: expected.to_string(),
-                    current_mtime_ms,
-                });
-            }
-            current_hash
-        } else {
-            // No conflict check: the op-log still wants a
-            // `hash_before` field for future undo / merge UI, but we
-            // don't want to re-read the file just for that. The cached
-            // hash from the previous index pass is good enough.
-            conn.query_row(
-                "SELECT content_hash FROM files WHERE path = ?1",
-                rusqlite::params![path],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .unwrap_or_default()
-        };
+        // `old_contents` is `Some(text)` only on the Some(expected_hash)
+        // path with UTF-8-decodable disk content — the diff-on-save base
+        // (#378). The conflict-check read already happens, so capturing
+        // those bytes costs no extra I/O. The None path (CLI/scripted)
+        // and any non-UTF-8 file leave it `None`, which routes the op-log
+        // append to a `WholeFileReplace` snapshot.
+        let (hash_before, old_contents): (String, Option<String>) =
+            if let Some(expected) = expected_content_hash {
+                let (old_bytes, current_hash, current_mtime_ms) = read_disk_contents_and_hash(
+                    self.provider.as_ref(),
+                    path,
+                    self.config.large_file_refuse_bytes,
+                )?;
+                if current_hash != expected {
+                    return Err(VaultError::WriteConflict {
+                        current_content_hash: current_hash,
+                        expected_content_hash: expected.to_string(),
+                        current_mtime_ms,
+                    });
+                }
+                (current_hash, String::from_utf8(old_bytes).ok())
+            } else {
+                // No conflict check: the cached index hash is good enough
+                // for the entry's `hash_before`, and we don't re-read disk
+                // just to diff — the None path logs a `WholeFileReplace`.
+                let cached = conn
+                    .query_row(
+                        "SELECT content_hash FROM files WHERE path = ?1",
+                        rusqlite::params![path],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .unwrap_or_default();
+                (cached, None)
+            };
 
         // Atomic write happens before the index update so that a
         // subsequent SQLite failure leaves the file on disk in a
@@ -816,25 +856,120 @@ impl VaultSession {
         }
         tx.commit()?;
 
-        // Op-log append: best-effort. A logging-disk hiccup must not
-        // throw away the user's just-saved text.
-        let entry = crate::oplog::OpLogEntry {
-            timestamp_ms: now,
-            user_actor_id: self.config.user_actor_id.clone(),
-            op_kind: crate::oplog::OpKind::WholeFileReplace,
-            content_hash_before: hash_before,
-            content_hash_after: new_hash.clone(),
-            payload_bytes: contents.as_bytes().to_vec(),
-        };
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
-            eprintln!("warning: oplog append failed for file_id={file_id} at {path:?}: {e}");
-        }
+        // Op-log append: best-effort (#378). A logging-disk hiccup must
+        // not throw away the user's just-saved text, so all of the
+        // diff/encode/append work below swallows its errors.
+        self.append_save_to_oplog(
+            file_id,
+            path,
+            &hash_before,
+            &new_hash,
+            contents,
+            old_contents.as_deref(),
+            now,
+        );
 
         Ok(SaveReport {
             new_content_hash: new_hash,
             new_size_bytes: new_stat.size_bytes,
             new_mtime_ms: new_stat.mtime_ms,
         })
+    }
+
+    /// Append this save to the file's op log, choosing between a
+    /// `WholeFileReplace` **snapshot** and a fine-grained `EditBatch`
+    /// using the in-memory [`OplogAppendState`] (#378) — no log read.
+    ///
+    /// Snapshot when: cold cache (first save of this file this session),
+    /// or the cache's `last_hash_after` doesn't match `hash_before` (an
+    /// external edit slipped in — re-anchor), or `old_contents` isn't
+    /// available (None path / non-UTF-8), or the diff would be as large
+    /// as the file (near-total rewrite / a giant single line — keeps the
+    /// entry well under `MAX_PLAUSIBLE_BODY_LEN`), or the bytes since the
+    /// last snapshot would exceed the cadence threshold. An identical
+    /// save (empty diff) writes nothing. Otherwise: one `EditBatch`.
+    ///
+    /// Best-effort throughout: any error logs a warning and returns,
+    /// leaving the (already durable) file save untouched.
+    #[allow(clippy::too_many_arguments)]
+    fn append_save_to_oplog(
+        &self,
+        file_id: i64,
+        path: &str,
+        hash_before: &str,
+        new_hash: &str,
+        new_contents: &str,
+        old_contents: Option<&str>,
+        now: i64,
+    ) {
+        let mut state = self.oplog_state.lock().expect("oplog state mutex");
+        let cached = state.get(&file_id).cloned();
+
+        let snapshot = || crate::oplog::OpLogEntry {
+            timestamp_ms: now,
+            user_actor_id: self.config.user_actor_id.clone(),
+            op_kind: crate::oplog::OpKind::WholeFileReplace,
+            content_hash_before: hash_before.to_string(),
+            content_hash_after: new_hash.to_string(),
+            payload_bytes: new_contents.as_bytes().to_vec(),
+        };
+
+        // (entry, bytes_since_snapshot_after). `None` ⇒ write nothing.
+        let decision: Option<(crate::oplog::OpLogEntry, u64)> = match (old_contents, &cached) {
+            (Some(old), Some(c)) if c.last_hash_after == hash_before => {
+                let ops = crate::diff::diff_to_ops(old, new_contents);
+                if ops.is_empty() {
+                    None // identical content — don't grow the log
+                } else {
+                    let payload = crate::oplog::encode_edit_batch(&ops);
+                    // Count the per-entry framing overhead (body header +
+                    // two hex hashes + actor id + length fields + checksum)
+                    // alongside the payload so the cadence tracks on-disk
+                    // growth, not just payload bytes (red-team).
+                    let projected = c.bytes_since_snapshot
+                        + payload.len() as u64
+                        + OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE;
+                    // Snapshot if the batch isn't smaller than just storing
+                    // the file, or the cadence cap is hit. The size check
+                    // also caps a batch's payload below the file size, so a
+                    // pathological giant-line edit can't approach
+                    // MAX_PLAUSIBLE_BODY_LEN.
+                    if payload.len() as u64 >= new_contents.len() as u64
+                        || projected > self.config.oplog_compaction_threshold_bytes as u64
+                    {
+                        Some((snapshot(), 0))
+                    } else {
+                        let entry = crate::oplog::OpLogEntry {
+                            timestamp_ms: now,
+                            user_actor_id: self.config.user_actor_id.clone(),
+                            op_kind: crate::oplog::OpKind::EditBatch,
+                            content_hash_before: hash_before.to_string(),
+                            content_hash_after: new_hash.to_string(),
+                            payload_bytes: payload,
+                        };
+                        Some((entry, projected))
+                    }
+                }
+            }
+            // Cold cache, misaligned, None path, or non-UTF-8 old → snapshot.
+            _ => Some((snapshot(), 0)),
+        };
+
+        let Some((entry, bytes_since_snapshot)) = decision else {
+            return; // nothing to write (identical save)
+        };
+
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
+            eprintln!("warning: oplog append failed for file_id={file_id} at {path:?}: {e}");
+            return; // leave the cache untouched so the next save re-snapshots
+        }
+        state.insert(
+            file_id,
+            OplogAppendState {
+                last_hash_after: new_hash.to_string(),
+                bytes_since_snapshot,
+            },
+        );
     }
 
     /// Read every well-formed op-log entry recorded for `path`.
@@ -2960,16 +3095,23 @@ fn excerpt_around_key(source: &str, key: &str) -> String {
     lines[start..end].join("\n")
 }
 
-fn compute_disk_hash(
+/// Read the on-disk file and return `(raw_bytes, content_hash, mtime_ms)`.
+///
+/// The hash is computed over the **raw bytes** (never decoded), so the
+/// conflict-check path keeps working for any file including non-UTF-8 —
+/// the bytes are returned so the diff-on-save path can attempt a UTF-8
+/// decode and fall back to a snapshot if it isn't text (#378). A missing
+/// file yields `(empty, "", 0)` — the first-save / NotFound case.
+fn read_disk_contents_and_hash(
     provider: &dyn crate::VaultProvider,
     path: &str,
     limit: u64,
-) -> Result<(String, i64), VaultError> {
+) -> Result<(Vec<u8>, String, i64), VaultError> {
     use std::io;
     let stat = match provider.stat(path) {
         Ok(s) => s,
         Err(VaultError::Io(io_err)) if io_err.kind() == io::ErrorKind::NotFound => {
-            return Ok((String::new(), 0));
+            return Ok((Vec::new(), String::new(), 0));
         }
         Err(e) => return Err(e),
     };
@@ -2986,7 +3128,8 @@ fn compute_disk_hash(
             size: bytes.len() as u64,
         });
     }
-    Ok((crate::vault::content_hash(&bytes), stat.mtime_ms))
+    let hash = crate::vault::content_hash(&bytes);
+    Ok((bytes, hash, stat.mtime_ms))
 }
 
 /// Pull `(name, extension, is_markdown)` from a vault-relative path
