@@ -16,6 +16,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/swift-tests.yml'
+      - 'examples/swift-cli/**'
   push:
     branches: [main]
     paths:
@@ -25,6 +26,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/swift-tests.yml'
+      - 'examples/swift-cli/**'
 
 permissions:
   contents: read
@@ -63,3 +65,10 @@ jobs:
         run: |
           cd apps/slate-mac
           DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug" swift test
+
+      - name: Build + run swift-cli FFI smoke example
+        # The swift-cli example shares the generated VaultError binding; its
+        # `describe(_:)` switch is exhaustive, so a new VaultError variant
+        # that isn't handled fails to compile. Building it here turns that
+        # into a red CI run instead of a silently-rotting example (#390).
+        run: make swift-cli

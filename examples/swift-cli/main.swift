@@ -77,6 +77,12 @@ func describe(_ error: VaultError) -> String {
             "write conflict: file has been modified since it was read (expected \(expected), current \(current))"
     case .MalformedFrontmatter(let path, let reason):
         return "frontmatter at \(path) is malformed: \(reason)"
+    case .BibSourceUnreadable(let path, let reason):
+        return "bibliography source \(path) is unreadable: \(reason)"
+    case .CslStyleUnreadable(let path, let reason):
+        return "CSL style \(path) is unreadable: \(reason)"
+    case .PrefsUnreadable(let path, let reason):
+        return "preferences file \(path) is unreadable: \(reason)"
     }
 }
 
