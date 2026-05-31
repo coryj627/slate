@@ -223,7 +223,8 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     // Real top-of-document frontmatter: any edit in/touching it. (Its
     // internal lines can be blank, so blank-extension alone can't bound
     // it; and editing a `---` delimiter reclassifies the boundary.)
-    let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let fm_end = source.len() - body.len();
     if fm_end > 0 && win_start < fm_end {
         return whole();
     }
@@ -233,12 +234,20 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     if line_is_dashes_delim(source, win_start) {
         return whole();
     }
-    // Fenced/indented code: any code block that straddles a window edge
-    // (or that the window opens inside) can't be windowed. Use pulldown's
-    // OWN block structure — a hand-rolled ```-toggle scan disagrees with
-    // it on info strings (a closing fence can't carry one), indentation,
-    // and blockquote/list nesting, and would window-wrong.
-    if window_cuts_a_code_block(source, win_start, win_end) {
+    // An opaque block (fenced/indented code or an HTML block) that
+    // straddles a window edge can't be windowed. `markdown_spans` and the
+    // tag/comment scanners run on the RAW source, so check it there.
+    if window_cuts_an_opaque_block(source, win_start, win_end) {
+        return whole();
+    }
+    // The link/citation extractors run on the frontmatter-STRIPPED body
+    // (byte-0 anchored). When real frontmatter is present, the strip can
+    // change the body's block structure relative to raw — e.g. it un-pairs
+    // a `~~~`/`` ``` ``/`<!--` so a window the raw parse proves outside any
+    // block is actually inside an open one in the body framing (#379
+    // review, CRITICAL #2). `win_start >= fm_end` here (we returned above
+    // otherwise), so the body-relative offsets never underflow.
+    if fm_end > 0 && window_cuts_an_opaque_block(body, win_start - fm_end, win_end - fm_end) {
         return whole();
     }
     // `%%…%%` comments: a `%%` typed in the window, or a window that
@@ -340,22 +349,35 @@ fn line_is_dashes_delim(source: &str, line_start_byte: usize) -> bool {
     source[line_start_byte..le].trim() == "---"
 }
 
-/// True when a fenced or indented **code block** intersects the window
-/// `[win_start, win_end)` without being fully contained in it — i.e. a
-/// block boundary cuts a window edge, or the window opens inside a block.
-/// Such a window can't be parsed in isolation (the code's classification
-/// depends on the enclosing fence), so it must fall back.
+/// True when an **opaque block** — a fenced/indented code block, or an
+/// HTML block — intersects the window `[win_start, win_end)` without being
+/// fully contained in it (a boundary cuts a window edge, or the window
+/// opens inside the block). Both kinds make their interior opaque to the
+/// inline parse and to the scanners' overlap sweep, and their
+/// classification depends on the enclosing opener, so a window one
+/// straddles can't be parsed in isolation and must fall back.
 ///
-/// Uses pulldown's own block events over the whole source so the fence
-/// rules match `highlight_spans` exactly (info strings, ≤3-space indent,
-/// `~~~`, unterminated fences, blockquote/list nesting) — the hand-rolled
-/// alternative disagreed and window-wronged on `` ```rust `` close lines.
-/// O(document) but light (block structure only; no tree-sitter).
-fn window_cuts_a_code_block(source: &str, win_start: usize, win_end: usize) -> bool {
+/// HTML blocks matter because CommonMark types 1–5 (`<!--`, `<script>` /
+/// `<style>` / `<pre>`, `<?`, `<![CDATA[`) aren't even closed by a blank
+/// line — only by their specific closer. An unclosed `<!--` above the
+/// window makes a `` ``` `` inside it inert in the whole-document parse
+/// (it's HTML text, no `CodeFence`, the `#tag` scanner still fires) but a
+/// real fence when the window is parsed alone (the fence masks the tag).
+/// The guard scanning `Tag::CodeBlock` only would window-wrong there
+/// (#379 review, CRITICAL #1).
+///
+/// Uses pulldown's own block events over `source` so the rules match the
+/// extractors exactly (info strings, ≤3-space indent, `~~~`, unterminated
+/// fences, blockquote/list nesting). O(len) but light (block structure
+/// only; no tree-sitter). The caller runs it over BOTH the raw source (for
+/// `markdown_spans` + the raw scanners) and — when real frontmatter is
+/// present — the frontmatter-stripped body (for the link/citation
+/// extractors, whose fence parity the strip can change; CRITICAL #2).
+fn window_cuts_an_opaque_block(source: &str, win_start: usize, win_end: usize) -> bool {
     Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH)
         .into_offset_iter()
         .any(|(event, range)| {
-            if matches!(event, Event::Start(Tag::CodeBlock(_))) {
+            if matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)) {
                 let (bs, be) = (range.start, range.end);
                 let intersects = bs < win_end && win_start < be;
                 let contained = win_start <= bs && be <= win_end;
@@ -1220,6 +1242,90 @@ mod tests {
             assert_ranged_matches_whole(src, dirty);
         }
     }
+
+    #[test]
+    fn unclosed_html_block_above_window_falls_back() {
+        // #379 review, CRITICAL #1. `<!--` opens a CommonMark HTML block
+        // (type 2) that a blank line does NOT close, so in the whole-doc
+        // parse the `` ``` `` and `#tag` below are inert HTML text (no
+        // CodeFence; the tag scanner still fires). Parsed alone the window
+        // would read `` ``` `` as a real fence that masks the tag. The
+        // opaque-block guard must see the HTML block straddle and fall back.
+        let src = "<!-- x\n\n```\n#tag\n";
+        let dirty = src.find("#tag").unwrap();
+        assert!(
+            is_fallback(src, dirty..dirty),
+            "a window straddling an unclosed HTML block must fall back"
+        );
+        assert_ranged_matches_whole(src, dirty..dirty);
+        // The whole HTML-block opener family, each with an edit below it.
+        for opener in [
+            "<!-- c",
+            "<script>",
+            "<style>",
+            "<pre>",
+            "<?php",
+            "<![CDATA[",
+        ] {
+            let src = format!("{opener}\n\n```\n#tag here\n");
+            let dirty = src.find("#tag").unwrap();
+            assert_ranged_matches_whole(&src, dirty..dirty);
+        }
+    }
+
+    #[test]
+    fn exhaustive_small_docs_over_breaker_alphabet_match() {
+        // Deterministic, COMPLETE coverage of the small-doc space where the
+        // #379-review CRITICALs lived: every 1–3 line document over a
+        // curated alphabet of the breakers (blank lines, `---`, both fence
+        // kinds, an HTML-block opener + closer, a wikilink/blockquote line,
+        // `#tag`, `%%`), checked at every dirty byte. This is the red-team's
+        // own finding methodology, frozen as a regression guard — both
+        // CRITICALs would have failed it.
+        let alphabet = [
+            "", "---", "```", "~~~", "<!--", "-->", "x [[L]]", "#t", "%% c %%", "> [[Q]]",
+        ];
+        let mut checked = 0usize;
+        let mut docs = Vec::new();
+        for &a in &alphabet {
+            docs.push(format!("{a}\n"));
+            for &b in &alphabet {
+                docs.push(format!("{a}\n{b}\n"));
+                for &c in &alphabet {
+                    docs.push(format!("{a}\n{b}\n{c}\n"));
+                }
+            }
+        }
+        for doc in &docs {
+            for d in 0..=doc.len() {
+                assert_ranged_matches_whole(doc, d..d);
+                checked += 1;
+            }
+        }
+        // 10 + 100 + 1000 = 1110 docs; guard the loop actually ran.
+        assert_eq!(docs.len(), 1110);
+        assert!(
+            checked > 15_000,
+            "expected a full per-byte sweep, ran {checked}"
+        );
+    }
+
+    #[test]
+    fn frontmatter_unpairs_a_body_fence_and_window_falls_back() {
+        // #379 review, CRITICAL #2. `---\n~~~\n---` is frontmatter, so the
+        // link/citation extractors parse the body `~~~\n\n> q [[Q]]\n`,
+        // where `~~~` is an UNCLOSED fence that swallows the wikilink. The
+        // raw parse instead sees `~~~…~~~` as a *closed* fence and the
+        // blockquote as top-level (wikilink present). The body-framing
+        // opaque-block check must catch the straddle the raw check misses.
+        let src = "---\n~~~\n---\n~~~\n\n> q [[Q]]\n";
+        let dirty = src.find("[[Q]]").unwrap();
+        assert!(
+            is_fallback(src, dirty..dirty),
+            "a window inside a body fence the frontmatter strip un-paired must fall back"
+        );
+        assert_ranged_matches_whole(src, dirty..dirty);
+    }
 }
 
 #[cfg(test)]
@@ -1243,38 +1349,80 @@ mod range_proptests {
             Just("# Heading".to_string()),
             Just("prose with [[Link]] here".to_string()),
             Just("cite [@key2020] inline".to_string()),
+            Just("bare @key2020 cite".to_string()),
             Just("%% a comment %%".to_string()),
             Just("%%".to_string()),
             Just("a #tag and **bold**".to_string()),
             Just("    indented line".to_string()),
+            Just("\ttab indented".to_string()),
             Just("> quoted [[Q]]".to_string()),
             Just("=====".to_string()),
+            Just("===".to_string()),
             Just("plain text line".to_string()),
+            // HTML-block openers (CommonMark types 1–5 aren't closed by a
+            // blank line) + a closer, so the generator can both open an
+            // opaque HTML block above an edit and close one (#379 review).
+            Just("<!-- comment".to_string()),
+            Just("-->".to_string()),
+            Just("<script>".to_string()),
+            Just("<style>".to_string()),
+            Just("<pre>".to_string()),
+            Just("<div>".to_string()),
         ];
-        proptest::collection::vec(line, 0..14).prop_map(|lines| {
+        proptest::collection::vec(line, 0..16).prop_map(|lines| {
             let mut s = lines.join("\n");
             s.push('\n');
             s
         })
     }
 
+    /// Prepend a YAML frontmatter block to a body. The frontmatter strip
+    /// re-anchors the body parse at byte 0 of the body, which can flip the
+    /// fence/HTML parity of everything below it relative to the raw parse
+    /// — the CRITICAL #2 shape (#379 review). The interior lines include a
+    /// lone `~~~`/`` ``` `` so a body fence can be left unclosed.
+    fn frontmatter_prefixed_source() -> impl Strategy<Value = String> {
+        let fm_line = prop_oneof![
+            Just("title: x".to_string()),
+            Just("~~~".to_string()),
+            Just("```".to_string()),
+            Just("tags: [a, b]".to_string()),
+            Just("".to_string()),
+        ];
+        (proptest::collection::vec(fm_line, 0..4), liney_source())
+            .prop_map(|(fm, body)| format!("---\n{}\n---\n{body}", fm.join("\n")))
+    }
+
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(400))]
+        #![proptest_config(ProptestConfig::with_cases(600))]
 
         #[test]
-        fn ranged_always_matches_whole_doc_slice(src in liney_source(), a in 0usize..200, b in 0usize..200) {
-            let dirty = a.min(b)..a.max(b);
-            let ranged = highlight_spans_in_range(&src, dirty);
-            let (lo, hi) = (ranged.applied_range.start, ranged.applied_range.end);
-            // Equivalence: ranged spans == whole-doc spans inside applied_range.
-            let mut expected: Vec<EditorSpan> = highlight_spans(&src)
-                .into_iter()
-                .filter(|s| (s.start_byte as usize) >= lo && (s.end_byte as usize) <= hi)
-                .collect();
-            let mut got = ranged.spans;
-            expected.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
-            got.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
-            prop_assert_eq!(got, expected, "applied={}..{} src={:?}", lo, hi, src);
+        fn ranged_always_matches_whole_doc_slice(src in liney_source(), a in 0usize..400, b in 0usize..400) {
+            assert_ranged_invariant(&src, a, b)?;
         }
+
+        #[test]
+        fn ranged_matches_with_frontmatter_prefix(src in frontmatter_prefixed_source(), a in 0usize..400, b in 0usize..400) {
+            assert_ranged_invariant(&src, a, b)?;
+        }
+    }
+
+    /// The invariant both proptests assert: `highlight_spans_in_range` for
+    /// an arbitrary dirty range equals the whole-document spans within its
+    /// `applied_range` (a Code-kind-aware sort makes the comparison stable
+    /// across the one intentional CodeFence/Code overlap).
+    fn assert_ranged_invariant(src: &str, a: usize, b: usize) -> Result<(), TestCaseError> {
+        let dirty = a.min(b)..a.max(b);
+        let ranged = highlight_spans_in_range(src, dirty);
+        let (lo, hi) = (ranged.applied_range.start, ranged.applied_range.end);
+        let mut expected: Vec<EditorSpan> = highlight_spans(src)
+            .into_iter()
+            .filter(|s| (s.start_byte as usize) >= lo && (s.end_byte as usize) <= hi)
+            .collect();
+        let mut got = ranged.spans;
+        expected.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
+        got.sort_by_key(|s| (s.start_byte, s.end_byte, format!("{:?}", s.kind)));
+        prop_assert_eq!(got, expected, "applied={}..{} src={:?}", lo, hi, src);
+        Ok(())
     }
 }
