@@ -234,31 +234,16 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     if line_is_dashes_delim(source, win_start) {
         return whole();
     }
-    // An indented-code-shaped window head (≥4 columns of leading whitespace)
-    // can't be windowed: in document context the line may be a loose-list /
-    // blockquote continuation (a blank line doesn't close a loose list)
-    // carrying no code, or a NESTED indented code block whose indent is
-    // stripped differently (different token offsets) than in isolation — yet
-    // parsed alone it's a top-level indented code block (#379 review,
-    // CRITICAL #3, and the nested + indented-HTML-in-list variants whose
-    // block range can coincide with the window's so the structure check
-    // below can't tell them apart). Genuine top-level indented code would
-    // window fine, but it's rare (fenced is the norm) and falling back is
-    // safe, so we don't distinguish it.
-    if head_is_indent_code_shaped(source, win_start) {
-        return whole();
-    }
-    // Opaque blocks (fenced/indented code, HTML blocks) make their interior
-    // opaque to the inline parse + scanners and to the code-internals
-    // overlay, and their extent depends on container context the window may
-    // lose. Beyond the indent-shaped head above, the window can be parsed in
-    // isolation only when the opaque-block structure it produces *exactly
-    // matches* the whole document's within the window — it must neither CUT
-    // a block (one straddles an edge; #1 an unclosed HTML block above the
-    // window) nor GROW one (a ≤3-space-indented list-content fence whose
-    // container-dedent close is lost; #4). `markdown_spans` + the tag/comment
-    // scanners run on the RAW source, so check it there.
-    if window_opaque_structure_diverges(source, win_start, win_end) {
+    // The window can be parsed in isolation only when its opaque-block
+    // (code/HTML) structure exactly matches the whole document's within the
+    // window — neither CUT (#1 an unclosed HTML block above the window), nor
+    // GROW (#4 a ≤3-space list-content fence whose list-dedent close is
+    // lost), nor INVENT one (#3 an indented continuation that's top-level
+    // code alone) — and (RAW framing only) when an indented window head
+    // isn't list/quote content that would reparse top-level and invent a
+    // setext `Heading` the document lacks (#5). `markdown_spans` + the
+    // tag/comment scanners run on the RAW source, so check both there.
+    if window_diverges(source, win_start, win_end, true) {
         return whole();
     }
     // The link/citation extractors run on the frontmatter-STRIPPED body
@@ -266,9 +251,10 @@ pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> 
     // change the body's block structure relative to raw — e.g. it un-pairs a
     // `~~~`/`` ``` ``/`<!--` so a window the raw parse proves block-clean is
     // actually inside an open block in the body framing (#379 review,
-    // CRITICAL #2). `win_start >= fm_end` here (we returned above otherwise),
-    // so the body-relative offsets never underflow.
-    if fm_end > 0 && window_opaque_structure_diverges(body, win_start - fm_end, win_end - fm_end) {
+    // CRITICAL #2). Only the opaque-block half applies (container nesting
+    // doesn't change wikilink/citation suppression). `win_start >= fm_end`
+    // here (we returned above otherwise), so the offsets never underflow.
+    if fm_end > 0 && window_diverges(body, win_start - fm_end, win_end - fm_end, false) {
         return whole();
     }
     // `%%…%%` comments: a `%%` typed in the window, or a window that
@@ -393,73 +379,71 @@ fn opaque_blocks(source: &str) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// True when the opaque-block structure the window `[win_start, win_end)`
-/// produces **in isolation** differs from the whole document's within that
-/// window — so the window can't be parsed standalone and must fall back.
+/// True when the window `[win_start, win_end)` can't be parsed in isolation
+/// — its result would differ from the whole document's spans within the
+/// window — so it must fall back. This is the general form of all five
+/// #379-review CRITICALs, which split into two divergence families:
 ///
-/// This is the general form of the three #379-review CRITICALs, which are
-/// all the same divergence in different directions:
-/// - **cut** — a whole-doc block straddles a window edge (the window sees
-///   only a fragment); e.g. an unclosed HTML block above the window
-///   (CRITICAL #1), or a fence with an internal blank.
-/// - **invent** — the window head is a list-item / blockquote continuation
-///   (a blank line doesn't close a loose list) or a nested code block, but
-///   parsed alone it's a top-level indented code block the document lacks
-///   (CRITICAL #3).
-/// - **grow** — a `≤3`-space-indented fence is list-item content whose
-///   close is the list's dedent; the window, having lost the list opener
-///   above the blank, lets the fence swallow the dedented line (CRITICAL
-///   #4).
+/// **Opaque-block mismatch.** The window's own opaque-block (code/HTML)
+/// ranges, shifted to document space, must EQUAL the whole-doc blocks that
+/// intersect the window. A pure straddle test (`intersects && !contained`)
+/// catches only a block the window *cuts*; equality also catches a block
+/// the window *grows* (CRITICAL #4 — a `≤3`-space list-content fence whose
+/// list-dedent close the window loses) or *invents* (CRITICAL #3 — an
+/// indented continuation that's top-level code alone), and an HTML block
+/// the window reads as a fence (CRITICAL #1). A non-contained whole-doc
+/// block can't equal a window block, so equality subsumes the straddle
+/// test. Genuine top-level code that fits the window reproduces exactly, so
+/// it still windows.
 ///
-/// A pure-`intersects && !contained` straddle test catches only *cut*; this
-/// instead requires the window's own blocks (shifted into document space)
-/// to **equal** the whole-doc blocks that intersect the window, which also
-/// catches *invent* (an extra block) and *grow* (a block at a different
-/// extent). Any whole-doc block that isn't fully contained is a straddle,
-/// so it can't equal a window block and the comparison fails — subsuming
-/// the old test. Genuine top-level code that fits the window reproduces
-/// exactly, so this windows it (less over-fallback than a head-indent
-/// guard).
-fn window_opaque_structure_diverges(source: &str, win_start: usize, win_end: usize) -> bool {
-    let whole: Vec<(usize, usize)> = opaque_blocks(source)
-        .into_iter()
-        .filter(|&(bs, be)| bs < win_end && win_start < be)
-        .collect();
-    let win: Vec<(usize, usize)> = opaque_blocks(&source[win_start..win_end])
+/// **Lost container context** (`check_container`). An indented window head
+/// that, in the whole-doc parse, sits inside a list item or block quote
+/// opened ABOVE the window loses that container in isolation and reparses
+/// as a top-level block: a continuation paragraph + a following `===`/`---`
+/// becomes an invented setext `Heading` (CRITICAL #5 — invisible to the
+/// block check), an indented continuation becomes indented code (#3), a
+/// list-content fence grows (#4). A non-indented head (a list-marker line,
+/// a column-0 paragraph that ends the list) reparses the same alone, so
+/// it's safe; genuine top-level indented code isn't in a container, so it
+/// windows. Only the RAW framing needs this (the setext `Heading` comes
+/// from `markdown_spans`, which runs on the raw source); the stripped-body
+/// framing governs only wikilink/citation suppression, which list/quote
+/// nesting doesn't change. Both checks share the one whole-doc parse.
+fn window_diverges(source: &str, win_start: usize, win_end: usize, check_container: bool) -> bool {
+    let mut whole_blocks: Vec<(usize, usize)> = Vec::new();
+    let mut in_container = false;
+    for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    {
+        match event {
+            Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)
+                if range.start < win_end && win_start < range.end =>
+            {
+                whole_blocks.push((range.start, range.end));
+            }
+            Event::Start(Tag::List(_) | Tag::Item | Tag::BlockQuote)
+                if check_container && range.start < win_start && win_start < range.end =>
+            {
+                in_container = true;
+            }
+            _ => {}
+        }
+    }
+    if check_container && in_container && head_is_indented(source, win_start) {
+        return true;
+    }
+    let win_blocks: Vec<(usize, usize)> = opaque_blocks(&source[win_start..win_end])
         .into_iter()
         .map(|(bs, be)| (bs + win_start, be + win_start))
         .collect();
-    win != whole
+    win_blocks != whole_blocks
 }
 
-/// True when the line at `win_start` (a line start, post blank-extension)
-/// begins with **indented-code indentation** — ≥4 columns of leading
-/// whitespace before any content, counting a tab as advancing to the next
-/// 4-column stop (so a leading tab, 4 spaces, or `   \t` all qualify).
-/// Parsed in isolation such a line is a top-level indented code block; in
-/// document context it may instead be a list/blockquote continuation, a
-/// nested code block (stripped to different content), or an indented HTML
-/// block — and the first two can share the window's block *range*, so
-/// [`window_opaque_structure_diverges`] alone can't catch them. A blank
-/// line and `win_start == 0` are not indent-shaped (the latter because with
-/// no context above, the window equals the document).
-fn head_is_indent_code_shaped(source: &str, win_start: usize) -> bool {
-    if win_start == 0 {
-        return false;
-    }
-    let end = line_end(source, win_start);
-    let mut col = 0usize;
-    for &b in &source.as_bytes()[win_start..end] {
-        match b {
-            b' ' => col += 1,
-            b'\t' => col += 4 - (col % 4),
-            _ => break, // first content byte (or '\n' on a blank line)
-        }
-        if col >= 4 {
-            return true;
-        }
-    }
-    false
+/// True when the line at `win_start` (a line start) begins with whitespace
+/// (a space or tab) — i.e. it's an indented continuation, not a marker line
+/// or column-0 block. The signal that distinguishes container *content*
+/// (loses its container alone) from a list-marker / top-level head (safe).
+fn head_is_indented(source: &str, win_start: usize) -> bool {
+    matches!(source.as_bytes().get(win_start), Some(b' ' | b'\t'))
 }
 
 /// Walk the CommonMark structure of `source` and emit syntax spans in
@@ -1372,6 +1356,7 @@ mod tests {
             "- a",
             "    [[L]]",
             "  ```",
+            "  x\n===", // 2-col list-content line + setext underline (#5)
         ];
         let mut checked = 0usize;
         let mut docs = Vec::new();
@@ -1390,8 +1375,8 @@ mod tests {
                 checked += 1;
             }
         }
-        // 13 + 169 + 2197 = 2379 docs; guard the loop actually ran.
-        assert_eq!(docs.len(), 2379);
+        // 14 + 196 + 2744 = 2954 docs; guard the loop actually ran.
+        assert_eq!(docs.len(), 2954);
         assert!(
             checked > 25_000,
             "expected a full per-byte sweep, ran {checked}"
@@ -1437,13 +1422,15 @@ mod tests {
             );
             assert_ranged_matches_whole(src, dirty..dirty);
         }
-        // Genuine top-level indented code conservatively falls back too (a
-        // ≥4-column head is treated uniformly — we don't distinguish it from
-        // a continuation; it's rare and fallback is safe). The invariant
-        // holds either way.
+        // Genuine *top-level* indented code (no list/quote container) is NOT
+        // container content, so it windows — its block reproduces exactly in
+        // isolation (the structure check confirms), no over-fallback.
         let genuine = "para text here\n\n    real_code()\n\nmore prose follows\n";
         let at = genuine.find("real_code").unwrap();
-        assert!(is_fallback(genuine, at..at));
+        assert!(
+            !is_fallback(genuine, at..at),
+            "genuine top-level indented code should window"
+        );
         assert_ranged_matches_whole(genuine, at..at);
         // A 2-space indent is NOT indent-code-shaped, so an ordinary
         // lightly-indented prose line still windows (no over-fallback creep).
@@ -1454,6 +1441,27 @@ mod tests {
             "2-space indent must still window"
         );
         assert_ranged_matches_whole(shallow, at..at);
+    }
+
+    #[test]
+    fn list_content_paragraph_window_does_not_invent_setext_heading() {
+        // #379 review, CRITICAL #5 — the setext analogue of #3. A 2–3-column
+        // line under a loose list is list-item content, so a following
+        // `===`/`---` is also list content, NOT a setext underline → no
+        // heading. The isolated window loses the list opener, so the line
+        // becomes a top-level paragraph and the underline invents a Heading.
+        // Invisible to the opaque-block check (a Heading is not a code/HTML
+        // block); caught by the lost-container guard.
+        for src in [
+            "- a\n\n  x\n===\n",
+            "- a\n\n  x\n-----\n",
+            "1. a\n\n   x\n===\n",
+            "* a\n\n  hi [[L]]\n===\n",
+            "---\nt: x\n---\n\n- a\n\n  y\n===\n", // body framing carries the list too
+        ] {
+            let at = src.rfind("\n=").or_else(|| src.rfind("\n-")).unwrap();
+            assert_ranged_matches_whole(src, at..at);
+        }
     }
 
     #[test]
@@ -1507,6 +1515,10 @@ mod range_proptests {
             Just("    indented line".to_string()),
             Just("    [[L]] indented".to_string()),
             Just("\ttab indented".to_string()),
+            // A 2-space-indented prose line — list-item content that, paired
+            // with a list marker + blank + a `===`/`---` underline, forms the
+            // "invent a setext heading" shape (#379 review, CRITICAL #5).
+            Just("  two col [[L]]".to_string()),
             // A 2-space-indented fence — list-item content that, paired with
             // a list marker + blank, forms the "grow" shape (#379 review,
             // CRITICAL #4): the window loses the list opener and lets the
