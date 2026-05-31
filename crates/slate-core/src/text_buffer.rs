@@ -152,11 +152,18 @@ impl TextBuffer {
         }
     }
 
-    /// Replace the half-open UTF-8 byte range with `text`.
+    /// Replace the half-open UTF-8 byte range with `text`. The range is
+    /// snapped to char boundaries **once**, so the removal and the
+    /// following insertion anchor at the same position even when `start`
+    /// falls mid-scalar (re-snapping the raw start byte against the
+    /// post-removal rope could otherwise resolve elsewhere).
     pub fn replace(&mut self, byte_range: Range<usize>, text: &str) {
-        let start = byte_range.start;
-        self.delete(byte_range);
-        self.insert(start, text);
+        let start = self.byte_to_char(byte_range.start);
+        let end = self.byte_to_char(byte_range.end);
+        if start < end {
+            self.rope.remove(start..end);
+        }
+        self.rope.insert(start, text);
     }
 }
 
@@ -328,6 +335,30 @@ mod tests {
         assert_eq!(buf.to_string(), ", world");
         buf.replace(0..2, "OK");
         assert_eq!(buf.to_string(), "OKworld");
+    }
+
+    #[test]
+    fn degenerate_and_inverted_deletes_are_no_ops() {
+        let mut buf = TextBuffer::from_str("hello");
+        // Bounds built from values so clippy doesn't const-fold (and
+        // reject) the empty / reversed range literals these deliberately
+        // are — both must be treated as no-ops by the `start < end` guard.
+        let (a, b, c) = (3usize, 4usize, 2usize);
+        buf.delete(a..a); // degenerate (start == end)
+        assert_eq!(buf.to_string(), "hello");
+        buf.delete(b..c); // inverted (start > end)
+        assert_eq!(buf.to_string(), "hello");
+    }
+
+    #[test]
+    fn replace_snaps_a_mid_scalar_start_consistently() {
+        // byte 1 falls mid-中 (bytes 0..3); [1,3) snaps to [char 0, char 1)
+        // = 中. Replacing it with "Y" must yield "Yab" — the removal and
+        // the insertion must anchor at the SAME snapped start (regression
+        // guard for the prior raw-byte re-snap).
+        let mut buf = TextBuffer::from_str("中ab");
+        buf.replace(1..3, "Y");
+        assert_eq!(buf.to_string(), "Yab");
     }
 
     #[test]
