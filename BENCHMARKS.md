@@ -194,10 +194,27 @@ The win depends on what dominates the document:
 
 On a **prose-dominant note** — the common case — pulldown parsing is the bottleneck, so halving the passes cuts ~21%. On a **fence-heavy** doc the cost is dominated by tree-sitter over every fence (unchanged by #388), so the pass-reduction is a small fraction. Either way it's a structural win that most helps the #379 PR 2 keystroke path (which runs `highlight_spans` on the edit window). Prose number is a back-to-back `Instant` timing of the fused `highlight_spans` vs the retained four-pass `highlight_spans_reference` oracle on the same 2 MB fixture; the fence-heavy row is the criterion `whole_document_8mb` midpoint before vs after (within run-to-run noise, trending faster).
 
+## V1 baseline — 2026-05-31 (#375: per-keystroke editor highlight, Swift end-to-end)
+
+The editor's per-keystroke highlight cost, measured **from Swift** through the real entry points the debounced `scheduleHighlight` runs: the Rust `editorHighlightSpans` FFI (the canonical syntax spans, #376/#377 — replacing the retired Swift `findEditorSyntaxSpans`) plus the Swift `findEditorEmbedSpans` overlay. This is the Swift-side complement to the Rust criterion `editor_highlight_ranged` group — it includes the **FFI marshalling** of the span array back into Swift, which the Rust bench doesn't see.
+
+Committed as the `SLATE_BENCH`-gated `HighlightBenchmarkTests` (`XCTSkip` unless `SLATE_BENCH=1`, so normal `swift test` / CI skips it). Same machine as the other rows. **Methodology:** release dylib + `swift test -c release` (representative `-O`); because `Package.swift` hard-links `-L ../../target/debug`, the numbers were taken with release-built `libslate_uniffi` content at that path. Fixture is `representativeMarkdown` — the same mixed shape as the Rust `scan_bench` note.
+
+| size | syntax (`editorHighlightSpans`) | embed (`findEditorEmbedSpans`) | total / keystroke | prior Swift `findEditorSyntaxSpans` (#375 issue) |
+|---|---|---|---|---|
+| 100 KB | 3.6 ms | 0.2 ms | **3.8 ms** | 6.5 ms |
+| 1 MB | 42.7 ms | 2.0 ms | **44.7 ms** | 70.6 ms |
+| 2 MB | 100.8 ms | 4.0 ms | **104.7 ms** | 182 ms |
+| 8 MB | 629.8 ms | 16.2 ms | **646.0 ms** | 1 683 ms |
+
+The Rust migration (#376/#377/#388) made the syntax pass **~1.6–2.6× faster** than the old Swift regex highlighter, and the gap widens with size (the old Swift cost was super-linear). The **FFI marshalling** of the span array is visible but modest — the 8 MB syntax figure (629.8 ms) is the Rust `highlight_spans` (~477 ms by criterion) plus ~150 ms to serialise the span `Vec` across the boundary into Swift. The embed scan (still Swift) is a small constant fraction. Smooth-typing (sub-frame) holds to ~100 KB synchronously; past that the debounced off-main pass + #379's ranged recompute are what keep the keystroke responsive — this baseline is the regression target they must beat.
+
+> Run: `SLATE_BENCH=1 swift test -c release --filter HighlightBenchmarkTests` (debug is ~10× slower and not representative).
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.
 - After any schema migration that touches the `files` table or its indexes.
 - After any non-trivial change to the `FsVaultProvider` IO surface (`list_dir`, `stat`, `read_file`).
-- After any change to `editor_spans::highlight_spans` / `highlight_spans_in_range`, the scanners they compose, or the ranged safe-window / fallback logic.
+- After any change to `editor_spans::highlight_spans` / `highlight_spans_in_range`, the scanners they compose, or the ranged safe-window / fallback logic. Refresh the Swift end-to-end row too via `SLATE_BENCH=1 swift test -c release --filter HighlightBenchmarkTests` (it also catches FFI-marshalling regressions the Rust bench can't).
 - Before each milestone build that ships to testers — record the numbers in this file as a new dated baseline so regressions are visible.
