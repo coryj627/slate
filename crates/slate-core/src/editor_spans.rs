@@ -31,9 +31,15 @@
 //! The Swift consumer converts to a UTF-16 `NSRange` at the boundary (it
 //! already performs byte↔UTF-16 conversion for cursor placement).
 
-use crate::citations::extract_citations;
 use crate::code::{highlight_code, RawCodeBlock, TokenKind};
-use crate::links::{extract_links, LinkKind};
+use crate::links::LinkKind;
+// extract_links / extract_citations are used only by the #[cfg(test)]
+// differential oracles (wikilink_spans / citation_spans); production fuses
+// their work via collect_code_ranges + scan_wikilinks + scan_citations (#388).
+#[cfg(test)]
+use crate::citations::extract_citations;
+#[cfg(test)]
+use crate::links::extract_links;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
 
 /// Classifies one editor span. Markdown-structure kinds come from the
@@ -125,7 +131,11 @@ impl EditorSpan {
 /// contents. They remain available from [`markdown_spans`] as raw
 /// structure for other consumers.
 pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
-    let mut spans: Vec<EditorSpan> = markdown_spans(source)
+    // #388: two pulldown passes, not four. One RAW pass yields the markdown
+    // structure spans + the per-token code internals; one BODY pass feeds
+    // both the wikilink and citation scanners.
+    let (structure, code) = raw_structure_and_code(source);
+    let mut spans: Vec<EditorSpan> = structure
         .into_iter()
         .filter(|s| {
             !matches!(
@@ -135,9 +145,9 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
         })
         .collect();
     // #384: emit one high-priority span over the YAML frontmatter block.
-    // `markdown_spans` runs pulldown on the raw source, so it produces
-    // spurious structure spans (Heading/CodeFence) over the YAML; the
-    // overlap sweep masks them — and any tag/comment the scanners find
+    // `raw_structure_and_code` runs pulldown on the raw source, so it
+    // produces spurious structure spans (Heading/CodeFence) over the YAML;
+    // the overlap sweep masks them — and any tag/comment the scanners find
     // inside frontmatter — beneath this Frontmatter span.
     let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
     if fm_end > 0 {
@@ -147,8 +157,9 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
             kind: EditorSpanKind::Frontmatter,
         });
     }
-    spans.extend(wikilink_spans(source));
-    spans.extend(citation_spans(source));
+    let (wikilinks, citations) = body_link_citation_spans(source);
+    spans.extend(wikilinks);
+    spans.extend(citations);
     spans.extend(scan_tags(source));
     spans.extend(scan_comments(source));
     let mut resolved = resolve_overlaps(source, spans);
@@ -156,7 +167,7 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     // sweep so the CodeFence span still masks markdown/tags elsewhere in
     // the block, while the tokens themselves nest inside it (the one
     // intentional overlap) for the apply layer to stamp on top.
-    resolved.extend(code_internal_spans(source));
+    resolved.extend(code);
     resolved.sort_by_key(|s| s.start_byte);
     resolved
 }
@@ -495,31 +506,156 @@ fn window_first_nonblank_is_indented(source: &str, win_start: usize, win_end: us
 ///   **not** emitted here; [`highlight_spans`] composes them on top.
 pub fn markdown_spans(source: &str) -> Vec<EditorSpan> {
     let mut out: Vec<EditorSpan> = Vec::new();
-    let parser = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
-    for (event, range) in parser {
-        let kind = match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                EditorSpanKind::Heading(heading_level(level))
-            }
-            Event::Start(Tag::Emphasis) => EditorSpanKind::Emphasis,
-            Event::Start(Tag::Strong) => EditorSpanKind::Strong,
-            Event::Start(Tag::Strikethrough) => EditorSpanKind::Strikethrough,
-            Event::Code(_) => EditorSpanKind::InlineCode,
-            Event::Start(Tag::CodeBlock(_)) => EditorSpanKind::CodeFence,
-            Event::Start(Tag::Link { .. }) => EditorSpanKind::Link,
-            Event::Start(Tag::Image { .. }) => EditorSpanKind::Image,
-            Event::Start(Tag::BlockQuote) => EditorSpanKind::BlockQuote,
-            _ => continue,
-        };
-        out.push(EditorSpan::new(trim_trailing_newline(source, range), kind));
+    for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    {
+        if let Some(kind) = structure_span_kind(&event) {
+            out.push(EditorSpan::new(trim_trailing_newline(source, range), kind));
+        }
     }
     out
 }
 
+/// The structure-span kind for one CommonMark event, or `None` if it maps
+/// to no editor span. Factored out so [`markdown_spans`] and the fused
+/// [`raw_structure_and_code`] share one event→kind mapping and can't drift
+/// (#388).
+fn structure_span_kind(event: &Event) -> Option<EditorSpanKind> {
+    Some(match event {
+        Event::Start(Tag::Heading { level, .. }) => EditorSpanKind::Heading(heading_level(*level)),
+        Event::Start(Tag::Emphasis) => EditorSpanKind::Emphasis,
+        Event::Start(Tag::Strong) => EditorSpanKind::Strong,
+        Event::Start(Tag::Strikethrough) => EditorSpanKind::Strikethrough,
+        Event::Code(_) => EditorSpanKind::InlineCode,
+        Event::Start(Tag::CodeBlock(_)) => EditorSpanKind::CodeFence,
+        Event::Start(Tag::Link { .. }) => EditorSpanKind::Link,
+        Event::Start(Tag::Image { .. }) => EditorSpanKind::Image,
+        Event::Start(Tag::BlockQuote) => EditorSpanKind::BlockQuote,
+        _ => return None,
+    })
+}
+
+/// One raw pulldown pass producing BOTH the markdown structure spans and
+/// the per-token code-block internals — fusing what [`markdown_spans`] and
+/// `code_internal_spans` did in two separate passes (#388). The structure
+/// half shares [`structure_span_kind`] with `markdown_spans`; the
+/// code-internal half is the same segment-table token mapping as the
+/// standalone version. Both outputs are pinned byte-identical to the
+/// originals by the `consolidated_matches_reference` proptest.
+fn raw_structure_and_code(source: &str) -> (Vec<EditorSpan>, Vec<EditorSpan>) {
+    use pulldown_cmark::{CodeBlockKind, TagEnd};
+    let mut structure: Vec<EditorSpan> = Vec::new();
+    let mut code: Vec<EditorSpan> = Vec::new();
+    let mut in_code = false;
+    let mut language: Option<String> = None;
+    let mut content = String::new();
+    // (content_start, host_start, len) per Text event — a 1:1 run.
+    let mut segs: Vec<(usize, usize, usize)> = Vec::new();
+    for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    {
+        if let Some(kind) = structure_span_kind(&event) {
+            structure.push(EditorSpan::new(
+                trim_trailing_newline(source, range.clone()),
+                kind,
+            ));
+        }
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                in_code = true;
+                content.clear();
+                segs.clear();
+                language = match kind {
+                    CodeBlockKind::Fenced(tag) => {
+                        let t = tag.into_string().trim().to_string();
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t)
+                        }
+                    }
+                    CodeBlockKind::Indented => None,
+                };
+            }
+            Event::Text(s) if in_code => {
+                segs.push((content.len(), range.start, s.len()));
+                content.push_str(&s);
+            }
+            Event::End(TagEnd::CodeBlock) if in_code => {
+                in_code = false;
+                if content.is_empty() {
+                    language = None;
+                    continue;
+                }
+                let raw = RawCodeBlock {
+                    source: std::mem::take(&mut content),
+                    language: language.take(),
+                    line: 0,
+                    byte_offset: segs.first().map_or(0, |&(_, h, _)| h as u32),
+                };
+                for tok in highlight_code(&raw).tokens {
+                    let (Some(s), Some(e)) = (
+                        map_content_to_host(&segs, tok.start_byte as usize),
+                        map_content_to_host(&segs, tok.end_byte as usize),
+                    ) else {
+                        continue;
+                    };
+                    if s < e && source.is_char_boundary(s) && source.is_char_boundary(e) {
+                        code.push(EditorSpan {
+                            start_byte: s as u32,
+                            end_byte: e as u32,
+                            kind: EditorSpanKind::Code(tok.kind),
+                        });
+                    }
+                }
+                segs.clear();
+            }
+            _ => {}
+        }
+    }
+    (structure, code)
+}
+
+/// One body pulldown pass feeding BOTH the wikilink and citation scanners —
+/// fusing what `wikilink_spans` (via `extract_links`) and `citation_spans`
+/// (via `extract_citations`) did in two separate body passes (#388). The
+/// shared `collect_code_ranges` suppresses tokens inside code identically
+/// for both. Output is byte-identical to those two functions, pinned by the
+/// `consolidated_matches_reference` proptest.
+fn body_link_citation_spans(source: &str) -> (Vec<EditorSpan>, Vec<EditorSpan>) {
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let body_offset = (source.len() - body.len()) as u32;
+    let code_ranges = crate::citations::collect_code_ranges(body);
+    let wikilinks = crate::links::scan_wikilinks(body, &code_ranges)
+        .into_iter()
+        .filter(|l| l.kind == LinkKind::Wikilink)
+        .map(|l| EditorSpan {
+            start_byte: l.span_start as u32 + body_offset,
+            end_byte: l.span_end as u32 + body_offset,
+            kind: if l.is_embed {
+                EditorSpanKind::Embed
+            } else {
+                EditorSpanKind::Wikilink
+            },
+        })
+        .collect();
+    let citations = crate::citations::scan_citations(body, &code_ranges)
+        .into_iter()
+        .map(|c| EditorSpan {
+            start_byte: c.byte_offset + body_offset,
+            end_byte: c.byte_offset + body_offset + c.raw.len() as u32,
+            kind: EditorSpanKind::Citation,
+        })
+        .collect();
+    (wikilinks, citations)
+}
+
 /// Wikilink / embed spans, reused from the canonical link extractor
 /// (which already spans the full `[[` … `]]` syntax and suppresses
-/// matches inside code spans). Markdown links/images are skipped here —
-/// they come from [`markdown_spans`].
+/// matches inside code spans). Markdown links/images are skipped here.
+///
+/// #388: superseded in production by [`body_link_citation_spans`] (which
+/// shares one body pass with citations); kept as the differential oracle
+/// for `consolidated_matches_reference`.
+#[cfg(test)]
 fn wikilink_spans(source: &str) -> Vec<EditorSpan> {
     extract_links(source)
         .into_iter()
@@ -538,6 +674,10 @@ fn wikilink_spans(source: &str) -> Vec<EditorSpan> {
 
 /// Citation spans, reused from the canonical citation extractor (which
 /// skips code spans). The span covers the verbatim `raw` slice.
+///
+/// #388: superseded in production by [`body_link_citation_spans`]; kept as
+/// the differential oracle for `consolidated_matches_reference`.
+#[cfg(test)]
 fn citation_spans(source: &str) -> Vec<EditorSpan> {
     extract_citations(source)
         .into_iter()
@@ -640,6 +780,11 @@ fn scan_comments(source: &str) -> Vec<EditorSpan> {
 /// table — each event is a 1:1 run, with the stripped `\r`/indent as
 /// gaps between runs in host space — and translate every token offset
 /// through it, dropping any token whose host range isn't a char boundary.
+///
+/// #388: the same logic now runs inside [`raw_structure_and_code`] (fused
+/// with the structure pass); this standalone copy is kept as the
+/// differential oracle for `consolidated_matches_reference`.
+#[cfg(test)]
 fn code_internal_spans(source: &str) -> Vec<EditorSpan> {
     use pulldown_cmark::{CodeBlockKind, TagEnd};
     let mut out = Vec::new();
@@ -719,6 +864,39 @@ fn map_content_to_host(segs: &[(usize, usize, usize)], off: usize) -> Option<usi
         }
     }
     segs.last().map(|&(_, hstart, len)| hstart + len)
+}
+
+/// The pre-#388 four-pass implementation of [`highlight_spans`], kept as
+/// the differential oracle: `consolidated_matches_reference` proptests that
+/// the fused two-pass [`highlight_spans`] returns byte-identical output.
+/// Because #388 is a pure perf refactor, any divergence is a bug.
+#[cfg(test)]
+fn highlight_spans_reference(source: &str) -> Vec<EditorSpan> {
+    let mut spans: Vec<EditorSpan> = markdown_spans(source)
+        .into_iter()
+        .filter(|s| {
+            !matches!(
+                s.kind,
+                EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote
+            )
+        })
+        .collect();
+    let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
+    if fm_end > 0 {
+        spans.push(EditorSpan {
+            start_byte: 0,
+            end_byte: fm_end as u32,
+            kind: EditorSpanKind::Frontmatter,
+        });
+    }
+    spans.extend(wikilink_spans(source));
+    spans.extend(citation_spans(source));
+    spans.extend(scan_tags(source));
+    spans.extend(scan_comments(source));
+    let mut resolved = resolve_overlaps(source, spans);
+    resolved.extend(code_internal_spans(source));
+    resolved.sort_by_key(|s| s.start_byte);
+    resolved
 }
 
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
@@ -1153,6 +1331,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn consolidated_matches_reference_exhaustive() {
+        // #388 differential arbiter, deterministic: the fused two-pass
+        // `highlight_spans` must equal the four-pass `highlight_spans_reference`
+        // on every 1–3 line doc over an alphabet that stresses both fused
+        // passes — the code-internal segment mapping (fenced / indented /
+        // CRLF / multibyte) and the shared body code-ranges (inline code +
+        // strikethrough next to wikilinks/citations), plus list nesting.
+        let alphabet = [
+            "",
+            "# H",
+            "```rust",
+            "let x = 1;",
+            "```",
+            "    indented code",
+            "\tlet y = 2;",
+            "prose [[L]] and [@k]",
+            "`inline [[no]]` and ~~x [@no]~~",
+            "- a",
+            "中 café 😀 [[Ω]]",
+            "text\r", // becomes CRLF when joined with '\n'
+            "~~~",
+            "%% c %%",
+        ];
+        let mut docs = 0usize;
+        for &a in &alphabet {
+            for &b in &alphabet {
+                for &c in &alphabet {
+                    let doc = format!("{a}\n{b}\n{c}\n");
+                    assert_eq!(
+                        highlight_spans(&doc),
+                        highlight_spans_reference(&doc),
+                        "fused != reference for {doc:?}"
+                    );
+                    docs += 1;
+                }
+            }
+        }
+        assert_eq!(docs, 14 * 14 * 14);
+    }
+
     // --- Range-scoped highlighting (#379) -----------------------------
 
     /// Sort key giving a total order over spans (Code(_) tokens nest in
@@ -1577,6 +1796,12 @@ mod range_proptests {
             // with a list marker + blank + a `===`/`---` underline, forms the
             // "invent a setext heading" shape (#379 review, CRITICAL #5).
             Just("  two col [[L]]".to_string()),
+            // Inline code + strikethrough next to a wikilink/citation — the
+            // #388 body fusion shares one `collect_code_ranges` (default
+            // opts) between wikilinks and citations, where the link
+            // extractor previously used strikethrough-enabled parsing; this
+            // stresses that the code-range suppression agrees regardless.
+            Just("`code [[L]]` and ~~struck [@k]~~".to_string()),
             // Indented fence lines — under a list marker these are empty
             // Fenced blocks whole-doc but top-level Indented code in a window,
             // flipping the block kind at the same range (#379 review,
@@ -1643,6 +1868,22 @@ mod range_proptests {
         #[test]
         fn ranged_matches_with_frontmatter_prefix(src in frontmatter_prefixed_source(), a in 0usize..400, b in 0usize..400) {
             assert_ranged_invariant(&src, a, b)?;
+        }
+
+        /// #388: the fused two-pass `highlight_spans` must return
+        /// byte-identical output to the pre-refactor four-pass
+        /// `highlight_spans_reference` — a pure perf refactor, so any
+        /// divergence (incl. the body code-range equivalence between the
+        /// shared `collect_code_ranges` and the link extractor's
+        /// strikethrough-enabled pass) is a bug.
+        #[test]
+        fn consolidated_matches_reference(src in liney_source()) {
+            prop_assert_eq!(highlight_spans(&src), highlight_spans_reference(&src), "src={:?}", src);
+        }
+
+        #[test]
+        fn consolidated_matches_reference_with_frontmatter(src in frontmatter_prefixed_source()) {
+            prop_assert_eq!(highlight_spans(&src), highlight_spans_reference(&src), "src={:?}", src);
         }
     }
 

@@ -141,7 +141,15 @@ pub fn extract_citations(source: &str) -> Vec<CitationReference> {
 
 /// Collect inline-code + fenced/indented-code byte ranges so the
 /// citation scanner can skip them. Same pattern as `links::extract_links`.
-fn collect_code_ranges(source: &str) -> Vec<(usize, usize)> {
+///
+/// `pub(crate)` so `editor_spans::highlight_spans` can compute these once
+/// and feed BOTH the wikilink and citation scanners from a single body
+/// pulldown pass (#388) — instead of `extract_links` and `extract_citations`
+/// each parsing the body. Uses default parser options (no strikethrough);
+/// the `links` extractor enables strikethrough, but that only affects inline
+/// `~~text~~`, never `Code`/`CodeBlock` ranges, so the two agree (pinned by
+/// `editor_spans`'s drift-guard test).
+pub(crate) fn collect_code_ranges(source: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let parser = Parser::new(source).into_offset_iter();
     for (event, range) in parser {
@@ -164,7 +172,10 @@ fn collect_code_ranges(source: &str) -> Vec<(usize, usize)> {
 /// makes the walk O(n + ranges) instead of O(n × ranges) — the latter
 /// was quadratic on notes with normal inline-code density and took
 /// ~12 s on a 2 MB note (#383).
-fn scan_citations(source: &str, code_ranges: &[(usize, usize)]) -> Vec<CitationReference> {
+pub(crate) fn scan_citations(
+    source: &str,
+    code_ranges: &[(usize, usize)],
+) -> Vec<CitationReference> {
     // The cursor below assumes `code_ranges` are sorted by start and
     // disjoint — guaranteed because `collect_code_ranges` emits them from a
     // single in-order pulldown pass (inline-code and code-block ranges can't

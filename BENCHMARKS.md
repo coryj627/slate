@@ -181,6 +181,19 @@ So V1's win is "eliminate the heavy per-fence/per-scanner/tree-sitter pass, keep
 
 This is a Rust-core measurement only. PR 1 adds the API + FFI; the Mac editor still calls the whole-document path until #379 PR 2 wires the ranged call into the `NSTextStorageDelegate` edit loop. The end-to-end keystroke-latency win lands with that PR.
 
+## V1 baseline — 2026-05-31 (#388: fuse `highlight_spans`' pulldown passes)
+
+`highlight_spans` was making **four** independent pulldown passes over the source — `markdown_spans` (raw), `extract_links` (body), `extract_citations` (body), `code_internal_spans` (raw). #388 fuses them to **two**: one raw pass yields the structure spans + the per-token code internals; one body pass feeds both the wikilink and citation scanners from a single `collect_code_ranges`. Pure refactor — output is byte-identical (pinned by the `consolidated_matches_reference` proptest, holding at 50k cases).
+
+The win depends on what dominates the document:
+
+| Fixture (2 MB) | reference (4-pass) | fused (2-pass) | speedup |
+|---|---|---|---|
+| **prose-dominant** (headings + paragraphs + wikilinks/cites/tags/bold, no fences) | 103 ms | 81 ms | **1.27×** |
+| fence-heavy (`whole_document_8mb`, a fence every 4th block) | ~501 ms | ~477 ms | ~1.05× |
+
+On a **prose-dominant note** — the common case — pulldown parsing is the bottleneck, so halving the passes cuts ~21%. On a **fence-heavy** doc the cost is dominated by tree-sitter over every fence (unchanged by #388), so the pass-reduction is a small fraction. Either way it's a structural win that most helps the #379 PR 2 keystroke path (which runs `highlight_spans` on the edit window). Prose number is a back-to-back `Instant` timing of the fused `highlight_spans` vs the retained four-pass `highlight_spans_reference` oracle on the same 2 MB fixture; the fence-heavy row is the criterion `whole_document_8mb` midpoint before vs after (within run-to-run noise, trending faster).
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.
