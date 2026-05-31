@@ -543,7 +543,10 @@ struct NoteEditorView: NSViewRepresentable {
             // Cmd+E is a discrete keypress — no per-keystroke cost here.
             let embeds = findEditorEmbedSpans(in: textView.string)
             if let span = embedSpanContaining(cursor: cursor, in: embeds) {
-                let line = oneBasedLineForUTF16Offset(
+                // 1-based source line for the popover header's spatial-
+                // bearing cue (audit #209), via the rope `TextBuffer`
+                // (#378) — was a hand-rolled O(n) `\n` walk.
+                let line = EditorTextConversions.lineForUTF16Offset(
                     cursor,
                     in: textView.string
                 )
@@ -555,25 +558,6 @@ struct NoteEditorView: NSViewRepresentable {
                 priority: .medium
             )
             return false
-        }
-
-        /// Convert a UTF-16 buffer offset to a 1-based line number
-        /// for the popover header's spatial-bearing cue (audit
-        /// #209). Counts `\n` from the start of the buffer up to
-        /// the offset; clamps to last line on overshoot.
-        private func oneBasedLineForUTF16Offset(_ offset: Int, in source: String) -> Int {
-            let utf16 = source.utf16
-            let safeOffset = min(max(offset, 0), utf16.count)
-            var line = 1
-            var idx = utf16.startIndex
-            let end = utf16.index(utf16.startIndex, offsetBy: safeOffset)
-            while idx < end {
-                if utf16[idx] == UInt16(0x0A) {  // `\n`
-                    line += 1
-                }
-                idx = utf16.index(after: idx)
-            }
-            return line
         }
 
         func subscribe(
@@ -702,20 +686,15 @@ struct NoteEditorView: NSViewRepresentable {
         /// the end of the buffer rather than crashing.
         private func placeCursorAtByteOffset(_ offset: Int) {
             guard let textView else { return }
-            let source = textView.string
-            let bytes = source.utf8
-            let safeByteOffset = max(0, min(offset, bytes.count))
-            let byteIdx = bytes.index(bytes.startIndex, offsetBy: safeByteOffset)
-            // A scalar boundary may not coincide with the byte
-            // offset under pathological inputs (the render path's
-            // contract is to land on a UTF-8 boundary, but be
-            // generous on the consumer side). Fall back to the end
-            // of the buffer if conversion fails.
-            let strIdx = byteIdx.samePosition(in: source) ?? source.endIndex
-            let utf16Idx = strIdx.samePosition(in: source.utf16) ?? source.utf16.endIndex
-            let location = source.utf16.distance(
-                from: source.utf16.startIndex,
-                to: utf16Idx
+            // UTF-8 byte offset → UTF-16 location via the rope
+            // `TextBuffer` (#378); the Rust side clamps past-EOF to the
+            // buffer end (preserving the old "park at the end" fallback)
+            // and snaps a mid-scalar offset to a char boundary — was a
+            // hand-rolled `utf8.index`/`samePosition`/`utf16.distance`
+            // walk.
+            let location = EditorTextConversions.utf16LocationForByteOffset(
+                offset,
+                in: textView.string
             )
             let range = NSRange(location: location, length: 0)
             scrollRangeToVisibleRespectingReduceMotion(range)
@@ -724,33 +703,12 @@ struct NoteEditorView: NSViewRepresentable {
 
         private func scrollToLine(_ line: Int) {
             guard let textView else { return }
-            let target = max(1, line)
-            let source = textView.string
-            var lineNumber = 1
-            var currentLineStart = source.startIndex
-            // Walk newline-by-newline. UTF-8 string slicing on
-            // `Swift.String` is O(n) in the worst case; for editor
-            // buffers (typically < 100k characters) this is well
-            // under a frame budget. Avoiding `components(separatedBy:)`
-            // saves the per-line `String` allocations.
-            for index in source.indices {
-                if lineNumber == target {
-                    currentLineStart = index
-                    break
-                }
-                if source[index] == "\n" {
-                    lineNumber += 1
-                }
-            }
-            if lineNumber != target {
-                // Buffer ended before reaching the requested line —
-                // park the caret at the end so the user lands at
-                // something coherent rather than nothing happening.
-                currentLineStart = source.endIndex
-            }
-            let location = source.utf16.distance(
-                from: source.utf16.startIndex,
-                to: currentLineStart.samePosition(in: source.utf16) ?? source.utf16.endIndex
+            // 1-based line → UTF-16 location of its first character via
+            // the rope `TextBuffer` (#378); a line past EOF parks at the
+            // buffer end — was an O(n) `source.indices` newline walk.
+            let location = EditorTextConversions.utf16LocationForLine(
+                line,
+                in: textView.string
             )
             let range = NSRange(location: location, length: 0)
             scrollRangeToVisibleRespectingReduceMotion(range)

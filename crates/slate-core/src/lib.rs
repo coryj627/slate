@@ -31,6 +31,7 @@ pub mod session;
 pub mod tasks;
 pub mod tasks_db;
 pub mod templates;
+pub mod text_buffer;
 pub mod vault;
 
 pub use search_db::{
@@ -68,6 +69,7 @@ pub use templates::{
     extract_template_metadata, render_template_source, RenderedTemplate, TemplateContext,
     TemplateMetadata, TemplatePrompt, TemplateSummary,
 };
+pub use text_buffer::TextBuffer;
 
 pub use session::{
     CancelToken, CslStyleInfo, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging,

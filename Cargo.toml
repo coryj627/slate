@@ -25,6 +25,17 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
+# ropey backs the editor's rope `TextBuffer` (`05` §7.1). Chosen over
+# `crop` specifically for its O(log n) UTF-16 code-unit metric
+# (`len_utf16_cu` / `char_to_utf16_cu` / `utf16_cu_to_char`) — `crop`
+# speaks only bytes/lines, and AppKit's NSTextView is UTF-16-indexed, so
+# the editor's offset/line conversion APIs need the UTF-16 dimension.
+# `default-features = false` drops ropey's `unicode_lines` metric so a
+# line break is **`\n` only** — matching the Swift editor's `== "\n"`
+# counting and the rest of the `\n`-based backend (a CRLF file's `\r`
+# stays line content). The UTF-16 / char / byte metrics are not
+# feature-gated, so they remain available.
+ropey = { version = "1.6", default-features = false }
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 # proptest drives the links round-trip integration test
 # (`tests/links_roundtrip.rs`). Used only in dev/test builds.
