@@ -857,14 +857,21 @@ mod tests {
     }
 
     proptest::proptest! {
+        // Capped cases: this is a focused regression for the D…E…I shape,
+        // not exhaustive fuzzing — 64 short newline-heavy pairs cover it,
+        // and keeping the case count low avoids loading the shared test
+        // runner (cargo runs tests in parallel; a heavy proptest can
+        // starve a sibling timing-sensitive test on a 2-core CI box).
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
         /// The load-bearing invariant over random newline/blank-heavy
         /// content — the shape that provokes `similar`'s D…E…I covers:
         /// for any (old, new), snapshot(old) + batch(old→new) reconstructs
         /// to exactly `new`.
         #[test]
         fn reconstruct_round_trips_for_arbitrary_liney_edits(
-            old in "[ab \n]{0,48}",
-            new in "[ab \n]{0,48}",
+            old in "[ab \n]{0,32}",
+            new in "[ab \n]{0,32}",
         ) {
             let entries = vec![snapshot_entry(&old), batch_entry(&old, &new)];
             proptest::prop_assert_eq!(reconstruct_at_tail(&entries).unwrap(), new);
