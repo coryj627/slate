@@ -2186,6 +2186,45 @@ pub fn editor_highlight_spans(text: String) -> Vec<EditorSpan> {
         .collect()
 }
 
+// Editor text-buffer conversions (#378, `05` §7.1).
+//
+// Stateless wrappers over the canonical rope `TextBuffer`. They build a
+// rope from `text`, convert, and return the UTF-16 / line integer the
+// host needs — replacing the Mac app's hand-rolled O(n) `String` walks
+// (`scrollToLine`, `placeCursorAtByteOffset`, `oneBasedLineForUTF16Offset`)
+// with one O(log n) definition shared with the rest of the backend.
+// These run at human-action cadence (jump-to-line, cursor placement),
+// not per keystroke, so rebuilding the rope per call is well under a
+// frame even at the large-file ceiling. A stateful `DocumentBuffer`
+// holding the rope across edits is the later step (#378 PR 2; it also
+// subsumes the per-keystroke conversion path).
+
+/// UTF-16 code-unit offset into `text` → 1-based line number. Past-the-
+/// end offsets clamp to the last line. Backs the Cmd+E line cue.
+#[uniffi::export]
+pub fn text_utf16_to_line(text: String, utf16_offset: u32) -> u32 {
+    core::TextBuffer::from_str(&text).utf16_to_line(utf16_offset as usize) as u32
+}
+
+/// 1-based line number → UTF-16 code-unit offset of that line's first
+/// character (the `NSRange.location` a "jump to line" scroll needs). A
+/// line past the end parks at the buffer end; a line `< 1` clamps to
+/// line 1. Backs `scrollToLine`.
+#[uniffi::export]
+pub fn text_line_to_utf16(text: String, one_based_line: u32) -> u32 {
+    let buffer = core::TextBuffer::from_str(&text);
+    buffer.byte_to_utf16(buffer.line_to_byte(one_based_line as usize)) as u32
+}
+
+/// UTF-8 byte offset into `text` → UTF-16 code-unit offset (the
+/// `NSRange.location` for parking the caret at e.g. a template's
+/// `{{cursor}}`). Past-the-end clamps to the buffer length. Backs
+/// `placeCursorAtByteOffset`.
+#[uniffi::export]
+pub fn text_byte_to_utf16(text: String, byte_offset: u32) -> u32 {
+    core::TextBuffer::from_str(&text).byte_to_utf16(byte_offset as usize) as u32
+}
+
 // Diagram pipeline mirror.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -2799,6 +2838,26 @@ impl CommandRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------
+    // text_* conversions (#378) — rope-backed offset/line FFI smoke.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn text_conversions_handle_multibyte_and_lines() {
+        // "a😀\n中b": a(1B/1u16) 😀(4B/2u16) \n(1B/1u16) 中(3B/1u16) b.
+        // bytes a=0 😀=1..5 \n=5 中=6..9 b=9 ; len 10 bytes, 6 utf16, 2 lines.
+        let text = "a😀\n中b".to_string();
+        // byte 6 (中) → utf16 4 (a=0, 😀=1..3, \n=3, 中=4).
+        assert_eq!(text_byte_to_utf16(text.clone(), 6), 4);
+        // utf16 4 sits on line 2 (after the \n).
+        assert_eq!(text_utf16_to_line(text.clone(), 4), 2);
+        // line 2's first char (中) is at utf16 4; line 1 at utf16 0.
+        assert_eq!(text_line_to_utf16(text.clone(), 2), 4);
+        assert_eq!(text_line_to_utf16(text.clone(), 1), 0);
+        // A line past EOF parks at the buffer end (utf16 len = 6).
+        assert_eq!(text_line_to_utf16(text, 99), 6);
+    }
 
     // ---------------------------------------------------------------
     // truncate_action_message — trust-boundary truncation for the

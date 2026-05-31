@@ -138,6 +138,12 @@ apps/slate-mac/Sources/slate_uniffiFFI/slate_uniffiFFI.h
 # checks in CI are authoritative; this file is developer-local state.
 .a11y-scores.json
 
+# proptest's persisted failure seeds. Regenerated on demand when a
+# property test fails locally; the behaviours we care about are pinned
+# by explicit named tests (e.g. text_buffer's LF-only line convention),
+# so we don't commit transient seed caches.
+proptest-regressions/
+
 # graphify build output (knowledge graph, HTML viz, audit report,
 # per-file extraction cache, cumulative cost tracker). All
 # regenerable from source via `/graphify` — committing the snapshot
