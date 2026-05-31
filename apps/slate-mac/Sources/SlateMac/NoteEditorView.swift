@@ -168,9 +168,15 @@ struct NoteEditorView: NSViewRepresentable {
         textView.setAccessibilityRole(.textArea)
 
         // Initial buffer sync. Subsequent updates come through
-        // `updateNSView`.
-        if textView.string != text {
-            textView.string = text
+        // `updateNSView`. (The storage delegate isn't attached until
+        // `attach` below, so this initial set fires no dirty-tracking
+        // callback — but route it through the suppression path anyway so
+        // the contract "every programmatic `string =` resets dirt" holds
+        // regardless of attach ordering.)
+        context.coordinator.withSuppressedDirtyTracking {
+            if textView.string != text {
+                textView.string = text
+            }
         }
         // Seed the coordinator with the initial Reduce Motion value
         // — updateNSView will refresh on changes, but the first
@@ -214,7 +220,14 @@ struct NoteEditorView: NSViewRepresentable {
             // content swap the selection is set to the start, which
             // matches AppKit's behavior on reopen.
             let previousRange = textView.selectedRange()
-            textView.string = text
+            // Suppress dirty tracking around the swap — `string =` fires
+            // `didProcessEditing` spanning the whole new buffer, which would
+            // otherwise set `dirtyRange` to the entire 2 MB reload and
+            // degrade the next keystroke to a whole-document recompute
+            // (red-team C3). The swap is repainted whole-doc just below.
+            context.coordinator.withSuppressedDirtyTracking {
+                textView.string = text
+            }
             // Re-establish the dynamic body colour on the freshly-swapped
             // storage. The highlight overlay is now display-only
             // (temporary attributes), so it no longer re-stamps the
@@ -229,7 +242,7 @@ struct NoteEditorView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         @Binding var text: String
         var onSave: () -> Void
         var headings: [Heading] = []
@@ -248,6 +261,25 @@ struct NoteEditorView: NSViewRepresentable {
         /// `deinit` can cancel a pass that outlived the view — and so
         /// tests can `await` a deterministic completion.
         private(set) var highlightTask: Task<Void, Never>?
+
+        /// Accumulated edited region since the last successful highlight
+        /// apply, in **current-buffer UTF-16** coords — the `dirty` range
+        /// the #379 ranged highlighter scopes the recompute to. Maintained
+        /// by `textStorage(_:didProcessEditing:…)` via `shiftAndUnion`
+        /// (conservative: never under-covers). `nil` = nothing dirty → a
+        /// debounced pass falls through to whole-document. Reset to `nil`
+        /// only on a successful whole-doc apply or a buffer swap; a windowed
+        /// apply *subtracts* its applied range (so a net-zero edit burst's
+        /// surplus dirt survives — red-team C4).
+        private var dirtyRange: NSRange?
+
+        /// Re-entrancy guard: `NSTextStorageDelegate.didProcessEditing`
+        /// fires for **programmatic** `string =` swaps too, indistinguishable
+        /// from a keystroke. Set around every programmatic mutation so a
+        /// 2 MB reload doesn't blow `dirtyRange` up to the whole buffer and
+        /// silently degrade the next keystroke to whole-document (red-team
+        /// C3).
+        private var suppressDirtyTracking = false
 
         init(
             text: Binding<String>,
@@ -270,7 +302,17 @@ struct NoteEditorView: NSViewRepresentable {
         /// #226). Observer registration is idempotent — removing
         /// first lets repeated `attach` calls not double-fire.
         func attach(textView: NSTextView) {
+            // Re-point the text-storage delegate to the (possibly new)
+            // view's storage so dirty-range tracking follows the live
+            // buffer (audit #233 re-bind path). Clear the old one first so a
+            // stray edit on a detached view can't extend `dirtyRange` for a
+            // buffer this coordinator no longer shows (red-team M4). Reset
+            // the dirty range — the new buffer is highlighted whole-document
+            // by the `scheduleHighlight(debounced: false)` that follows.
+            self.textView?.textStorage?.delegate = nil
             self.textView = textView
+            textView.textStorage?.delegate = self
+            dirtyRange = nil
 
             // Reset typing attributes + any inherited foreground
             // color so the view starts in a known state. Uses
@@ -370,77 +412,153 @@ struct NoteEditorView: NSViewRepresentable {
         /// immediate, so it's shorter (#376).
         private static let highlightDebounceNanos: UInt64 = 40_000_000
 
-        /// Schedule a re-highlight of the current buffer — the perf core
-        /// of #376.
+        /// `NSTextStorageDelegate` — accumulate the edited region so the
+        /// debounced pass can recompute only a window around it (#379).
+        /// Fires for **every** storage mutation, including programmatic
+        /// `string =` swaps; `suppressDirtyTracking` filters those out so a
+        /// reload doesn't grow `dirtyRange` to the whole buffer (C3).
+        func textStorage(
+            _ textStorage: NSTextStorage,
+            didProcessEditing editedMask: NSTextStorageEditActions,
+            range editedRange: NSRange,
+            changeInLength delta: Int
+        ) {
+            guard editedMask.contains(.editedCharacters), !suppressDirtyTracking else { return }
+            dirtyRange = Self.shiftAndUnion(dirtyRange, editedRange: editedRange, delta: delta)
+        }
+
+        /// Run a programmatic buffer mutation (a `textView.string = …` swap)
+        /// with dirty tracking suppressed, so the synchronous
+        /// `didProcessEditing` it fires isn't mistaken for a keystroke and
+        /// doesn't balloon `dirtyRange` to the whole buffer (red-team C3).
+        /// Resets the dirty range — a swap is always followed by a
+        /// whole-document `scheduleHighlight(debounced: false)`.
+        func withSuppressedDirtyTracking(_ body: () -> Void) {
+            suppressDirtyTracking = true
+            body()
+            suppressDirtyTracking = false
+            dirtyRange = nil
+        }
+
+        /// Fold a new edit into the accumulated dirty range, keeping it in
+        /// the **post-edit** buffer's UTF-16 coords: bounds at/after the
+        /// edit shift by `delta`, then union with `editedRange`.
+        /// Inversion-safe — a large delete can drive a shifted bound past
+        /// another, which must clamp to a non-negative length rather than
+        /// wrap `NSRange.length` (red-team H1). Conservative: over-covers,
+        /// never under-covers.
+        static func shiftAndUnion(_ prior: NSRange?, editedRange: NSRange, delta: Int) -> NSRange {
+            guard let prior else { return editedRange }
+            let editStart = editedRange.location
+            func shift(_ p: Int) -> Int { p >= editStart ? max(editStart, p + delta) : p }
+            let lo = min(shift(prior.location), editedRange.location)
+            let hi = max(shift(prior.location + prior.length), editedRange.location + editedRange.length)
+            return NSRange(location: max(0, lo), length: max(0, hi - lo))
+        }
+
+        /// Remove the applied window from the dirty range after a windowed
+        /// apply, returning the residual dirt outside `applied` (a net-zero
+        /// edit burst can grow `dirty` past what the pass consumed — red-team
+        /// C4), or `nil` when `applied` covers it. A two-sided residual
+        /// collapses to the bounding range (conservative).
+        static func subtract(applied: NSRange, from dirty: NSRange?) -> NSRange? {
+            guard let dirty else { return nil }
+            let dLo = dirty.location, dHi = dirty.location + dirty.length
+            let aLo = applied.location, aHi = applied.location + applied.length
+            if aLo <= dLo && aHi >= dHi { return nil }
+            let hasLeft = dLo < aLo, hasRight = dHi > aHi
+            if hasLeft && hasRight { return dirty }
+            if hasLeft { return NSRange(location: dLo, length: min(dHi, aLo) - dLo) }
+            return NSRange(location: max(dLo, aHi), length: dHi - max(dLo, aHi))
+        }
+
+        /// Schedule a re-highlight of the current buffer (#376/#379).
         ///
-        /// The old path classified Markdown in Swift (~21 regex passes)
-        /// and stamped `.foregroundColor` over the whole `NSTextStorage`
-        /// **synchronously on every keystroke** (~182 ms at 2 MB, all on
-        /// the main thread). The new path:
+        /// Two paths:
+        /// - **`debounced: false`** (initial load, external buffer swap,
+        ///   appearance change) → recompute the **whole document** and reset
+        ///   `dirtyRange`. These aren't typing and must repaint everything.
+        /// - **`debounced: true`** (the typing path) → after a ~40 ms
+        ///   debounce, recompute only a **window** around `dirtyRange` via
+        ///   `editorHighlightSpansInRange` (#379), and apply it windowed.
+        ///   With no accumulated dirt it falls through to whole-document.
         ///
-        /// 1. **Coalesce + cancel.** Each call cancels the in-flight
-        ///    task, so a burst of keystrokes collapses into one run.
-        /// 2. **Debounce** (`debounced: true`, ~40 ms) on the typing
-        ///    path so nothing computes mid-keystroke. Lifecycle /
-        ///    appearance callbacks pass `debounced: false` for an
-        ///    immediate refresh.
-        /// 3. **Compute off-main.** The canonical spans come from
-        ///    `editorHighlightSpans` (#377/#391) in `slate-core` — no
-        ///    Swift classification — and the byte→UTF-16 conversion plus
-        ///    the embed scan all run in a detached task.
-        /// 4. **Apply on main** as `NSLayoutManager` *temporary
-        ///    attributes* (display-only — no storage edit, so no undo
-        ///    pollution and no storage-edit/relayout cycle per
-        ///    keystroke), guarded by a `textView.string == snapshot`
-        ///    check so a result computed against a since-edited buffer
-        ///    is dropped rather than smeared over the wrong offsets.
+        /// Each call cancels the in-flight task (a burst collapses into one
+        /// run). Compute (spans + UTF-16↔byte conversions + embed scan) runs
+        /// off-main via `Task.detached`; only the AppKit apply returns to
+        /// main, guarded by `textView.string == snapshot` so a result against
+        /// a since-edited buffer is dropped rather than smeared over the
+        /// wrong offsets. Mirrors `AppState.runSearch`'s detached shape.
         ///
-        /// Mirrors `AppState.runSearch`'s established
-        /// `Task { @MainActor } / Task.detached` shape so the post-await
-        /// AppKit work is guaranteed on the main thread.
-        ///
-        /// Scope note: this removes the per-*keystroke* stall (the
-        /// classification + sweep no longer happen on the typing path),
-        /// but `applyHighlight` is still O(spans) on the main thread —
-        /// it resets and re-stamps temporary attributes for the whole
-        /// document each pass. For normal notes that's sub-millisecond;
-        /// on a pathologically dense large file (e.g. ~2 MB of markup on
-        /// every line) one debounced apply can still take ~100+ ms.
-        /// Reducing the apply to the changed / visible range is the
-        /// incremental follow-up tracked as #379; this pass deliberately
-        /// recomputes whole-document because `editorHighlightSpans` is
-        /// the whole-document variant.
+        /// `dirtyRange` is cleared only on a **successful** apply (whole-doc
+        /// → `nil`; window → `subtract` its applied range) so a cancelled or
+        /// stale pass never loses an edit's recolor.
         func scheduleHighlight(debounced: Bool) {
             highlightTask?.cancel()
             guard let textView else { return }
             let snapshot = textView.string
+            // Window only on the debounced typing path with accumulated
+            // dirt; otherwise recompute whole-document.
+            let dirty: NSRange? = debounced ? dirtyRange : nil
             highlightTask = Task { @MainActor [weak self] in
                 if debounced {
                     try? await Task.sleep(nanoseconds: Self.highlightDebounceNanos)
                 }
                 if Task.isCancelled { return }
-                // Span computation, the O(n) UTF-8→UTF-16 conversion, and
-                // the embed scan are all pure and potentially expensive
-                // on a large note, so they run off the main actor. Only
-                // the attribute application (which must touch AppKit)
-                // comes back to main. `[EditorSpan]` etc. crossing the
-                // detached boundary is fine under the package's Swift 5
-                // concurrency mode — same FFI-over-detached pattern
-                // `AppState` uses throughout.
                 let prepared = await Task.detached(priority: .userInitiated) {
-                    let spans = editorHighlightSpans(text: snapshot)
-                    let mapped = EditorSpanMapping.utf16Spans(from: spans, in: snapshot)
-                    let embeds = findEditorEmbedSpans(in: snapshot)
-                    return (mapped: mapped, embeds: embeds)
+                    Self.computeHighlight(snapshot: snapshot, dirty: dirty)
                 }.value
                 guard let self, !Task.isCancelled else { return }
-                // Drop a result computed against a buffer the user has
-                // since edited — a newer task is already in flight for
-                // the current text, and these byte offsets no longer
-                // address it.
                 guard self.textView?.string == snapshot else { return }
-                self.applyHighlight(mapped: prepared.mapped, embeds: prepared.embeds)
+                self.applyHighlight(prepared)
+                self.dirtyRange =
+                    dirty == nil
+                    ? nil
+                    : Self.subtract(applied: prepared.appliedUTF16, from: self.dirtyRange)
             }
+        }
+
+        /// A computed highlight ready to stamp: the UTF-16 foreground spans,
+        /// the embed underline spans, and the UTF-16 range the foreground
+        /// spans authoritatively cover (`appliedUTF16` == the whole document
+        /// on a whole-doc or fallback pass).
+        struct PreparedHighlight {
+            let mapped: [(range: NSRange, kind: EditorSpanKind)]
+            let embeds: [EditorEmbedSpan]
+            let appliedUTF16: NSRange
+            let isWholeDocument: Bool
+        }
+
+        /// Off-main span computation. `dirty == nil` (immediate pass)
+        /// recomputes the whole document; otherwise it windows the recompute
+        /// to `dirty` via `editorHighlightSpansInRange` (#379) and reports
+        /// the `applied_range` it covered — the Rust fallback signals itself
+        /// by covering the whole document. The embed scan stays whole-doc
+        /// (cheap regex, correct offsets); `applyHighlight` re-stamps embed
+        /// underlines only within the cleared window.
+        nonisolated static func computeHighlight(snapshot: String, dirty: NSRange?) -> PreparedHighlight {
+            let fullLength = (snapshot as NSString).length
+            let fullRange = NSRange(location: 0, length: fullLength)
+            let embeds = findEditorEmbedSpans(in: snapshot)
+            guard let dirty else {
+                let spans = editorHighlightSpans(text: snapshot)
+                return PreparedHighlight(
+                    mapped: EditorSpanMapping.utf16Spans(from: spans, in: snapshot),
+                    embeds: embeds, appliedUTF16: fullRange, isWholeDocument: true)
+            }
+            let byteStart = EditorTextConversions.byteOffsetForUTF16Location(dirty.location, in: snapshot)
+            let byteEnd = EditorTextConversions.byteOffsetForUTF16Location(
+                dirty.location + dirty.length, in: snapshot)
+            let ranged = editorHighlightSpansInRange(
+                text: snapshot, dirtyStart: UInt32(clamping: byteStart),
+                dirtyEnd: UInt32(clamping: byteEnd))
+            let aLo = EditorTextConversions.utf16LocationForByteOffset(Int(ranged.appliedStart), in: snapshot)
+            let aHi = EditorTextConversions.utf16LocationForByteOffset(Int(ranged.appliedEnd), in: snapshot)
+            let appliedUTF16 = NSRange(location: aLo, length: max(0, aHi - aLo))
+            let whole = appliedUTF16.location == 0 && appliedUTF16.length == fullLength
+            return PreparedHighlight(
+                mapped: EditorSpanMapping.utf16Spans(from: ranged.spans, in: snapshot),
+                embeds: embeds, appliedUTF16: appliedUTF16, isWholeDocument: whole)
         }
 
         /// Apply a prepared highlight to the live text view as
@@ -450,20 +568,27 @@ struct NoteEditorView: NSViewRepresentable {
         /// Temporary attributes are a **display overlay**: they don't
         /// mutate `NSTextStorage`, so there's no undo entry, no
         /// `textDidChange` re-entrancy, and no per-keystroke
-        /// storage-edit/relayout cycle — the reason this replaces the old
-        /// `storage.addAttribute(… fullRange)` approach (#376). The
-        /// storage keeps a single `NSColor.textColor` foreground run
-        /// (stamped in `attach`), which shows through wherever no
-        /// temporary foreground is set, so un-classified prose stays in
-        /// the dynamic body colour the #226/#302 dark-mode fixes earned.
+        /// storage-edit/relayout cycle (#376). The storage keeps a single
+        /// `NSColor.textColor` foreground run (stamped in `attach`), which
+        /// shows through wherever no temporary foreground is set, so
+        /// un-classified prose stays in the dynamic body colour the
+        /// #226/#302 dark-mode fixes earned.
         ///
-        /// VoiceOver doesn't read colour/underline attributes; the
-        /// highlight is purely a sighted-user affordance and AT users
-        /// still hear the raw text.
-        private func applyHighlight(
-            mapped: [(range: NSRange, kind: EditorSpanKind)],
-            embeds: [EditorEmbedSpan]
-        ) {
+        /// #379: a windowed pass clears + re-stamps only `appliedUTF16`,
+        /// **extended to cover any temporary-attribute run straddling its
+        /// edges** — because temp attributes shift-track storage edits, a
+        /// stale colour/underline can stretch past the (blank-bounded)
+        /// window edge, and a remove confined to `appliedUTF16` would strand
+        /// its tail (red-team C1/C2). The current parse's spans are all ⊆
+        /// `appliedUTF16`, so clearing the extension without re-adding there
+        /// is correct, not under-colour. A whole-doc / fallback pass clears
+        /// the full range, as before.
+        ///
+        /// VoiceOver doesn't read colour/underline attributes; the highlight
+        /// is purely a sighted-user affordance and AT users hear the raw
+        /// text — so windowing changes only *which ranges repaint when*, not
+        /// the AX tree.
+        private func applyHighlight(_ prepared: PreparedHighlight) {
             guard let textView, let layoutManager = textView.layoutManager else { return }
 
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
@@ -471,22 +596,25 @@ struct NoteEditorView: NSViewRepresentable {
                 .accessibilityDisplayShouldIncreaseContrast
             let underlineColor = embedUnderlineColor
 
-            // Reset the prior overlay so spans edited past lose their
-            // colour / underline, then re-stamp. Temporary attributes
-            // track storage edits, so a stale colour can linger on a
-            // shifted range until this runs — the full-range removal
-            // collapses it back to body colour first.
-            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
-            layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
-            layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: fullRange)
+            let removeRange =
+                prepared.isWholeDocument
+                ? fullRange
+                : Self.extendToCoverTemporaryRuns(
+                    NSIntersectionRange(prepared.appliedUTF16, fullRange),
+                    layoutManager: layoutManager, within: fullRange)
+
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: removeRange)
+            layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: removeRange)
+            layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: removeRange)
 
             // 1. Foreground per canonical kind. `nil` kinds (emphasis /
             //    strong / strikethrough, plus the never-emitted link /
             //    image / blockQuote) are skipped so they stay in body
-            //    colour. `code(token:)` spans nest inside their
-            //    `codeFence` — both resolve to `codeColor`, so the
-            //    overlap paints the same colour.
-            for (range, kind) in mapped {
+            //    colour. `code(token:)` spans nest inside their `codeFence`
+            //    — both resolve to `codeColor`, so the overlap paints the
+            //    same colour. Spans are ⊆ `removeRange`; clamp to fullRange
+            //    defensively.
+            for (range, kind) in prepared.mapped {
                 let clamped = NSIntersectionRange(range, fullRange)
                 guard clamped.length > 0,
                     let color = EditorSyntaxPalette.color(
@@ -498,13 +626,13 @@ struct NoteEditorView: NSViewRepresentable {
                 )
             }
 
-            // 2. Embed underline (audit #207, #230) on top of the
-            //    wikilink-family foreground the `embed` kind already
-            //    painted. The Swift embed scan owns this: its NSRanges
-            //    are already UTF-16 and it carries the `.target` Cmd+E
-            //    needs.
-            for embed in embeds {
-                let clamped = NSIntersectionRange(embed.range, fullRange)
+            // 2. Embed underline (audit #207, #230). Re-stamp only within
+            //    the cleared window — embeds outside it kept their
+            //    shift-tracked underline (their text is unchanged). On a
+            //    whole-doc pass `removeRange == fullRange`, so all embeds
+            //    re-stamp.
+            for embed in prepared.embeds {
+                let clamped = NSIntersectionRange(embed.range, removeRange)
                 guard clamped.length > 0 else { continue }
                 layoutManager.addTemporaryAttribute(
                     .underlineStyle,
@@ -515,6 +643,47 @@ struct NoteEditorView: NSViewRepresentable {
                     .underlineColor, value: underlineColor, forCharacterRange: clamped
                 )
             }
+        }
+
+        /// Widen `range` to fully include any temporary `.foregroundColor` /
+        /// `.underlineStyle` run that straddles either edge, so a windowed
+        /// remove clears a stale run that shift-tracked partly past the
+        /// window rather than stranding its tail (#379 / red-team C1-C2).
+        /// Runs are span-sized, so the widening is small and local.
+        static func extendToCoverTemporaryRuns(
+            _ range: NSRange, layoutManager: NSLayoutManager, within full: NSRange
+        ) -> NSRange {
+            guard full.length > 0 else { return range }
+            var lo = range.location
+            var hi = range.location + range.length
+            let attrs: [NSAttributedString.Key] = [.foregroundColor, .underlineStyle]
+            // Low edge: probe the char just before `lo`; a temp run there
+            // may extend into `range` — pull `lo` back to the run's start.
+            if lo > 0 && lo <= full.length {
+                for attr in attrs {
+                    var eff = NSRange(location: 0, length: 0)
+                    if layoutManager.temporaryAttribute(
+                        attr, atCharacterIndex: lo - 1, longestEffectiveRange: &eff, in: full) != nil
+                    {
+                        lo = min(lo, eff.location)
+                    }
+                }
+            }
+            // High edge: probe at `hi` (first char outside `range`); a temp
+            // run there may have started inside — push `hi` to the run's end.
+            if hi >= 0 && hi < full.length {
+                for attr in attrs {
+                    var eff = NSRange(location: 0, length: 0)
+                    if layoutManager.temporaryAttribute(
+                        attr, atCharacterIndex: hi, longestEffectiveRange: &eff, in: full) != nil
+                    {
+                        hi = max(hi, eff.location + eff.length)
+                    }
+                }
+            }
+            lo = max(0, lo)
+            hi = min(full.length, hi)
+            return NSRange(location: lo, length: max(0, hi - lo))
         }
 
         /// Cmd+E entry point — called by `SlateEditorTextView`'s
