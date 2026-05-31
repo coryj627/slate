@@ -101,6 +101,23 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
             ])
     }
 
+    func testEmbedUnderlineWindowingMatchesWholeDoc() async {
+        // The prose cases use [[wikilinks]] (no underline); this drives real
+        // ![[embeds]] across scattered passes so the windowed underline
+        // clear/re-stamp path is exercised — shift an embed, create one,
+        // and break one (drops its underline).
+        let doc = "intro ![[Alpha]] here\n\nmiddle plain block\n\ntail ![[Beta]] end\n"
+        await assertWindowedMatchesWholeDoc(
+            initial: doc,
+            editGroups: [
+                [(NSRange(location: doc.utf16Offset(of: "tail"), length: 0), "X ")],
+                [(NSRange(location: doc.utf16Offset(of: "middle"), length: 0), "![[Gamma]] ")],
+                // delete the leading `!` → an embed becomes a plain wikilink,
+                // so its underline must be cleared by the windowed pass.
+                [(NSRange(location: doc.utf16Offset(of: "![[Alpha]]"), length: 1), "")],
+            ])
+    }
+
     func testRecolorByEditingMarkupMatchesWholeDoc() async {
         // Make + break inline markup in different blocks across passes.
         let doc = "alpha bold here\n\nbeta [[L]] gamma\n\ndelta code epsilon\n"
