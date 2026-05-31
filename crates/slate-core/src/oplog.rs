@@ -838,6 +838,40 @@ mod tests {
     }
 
     #[test]
+    fn reconstruct_handles_insert_after_an_equal_run() {
+        // Regression for the D…E…I diff bug (red-team #378): an insertion
+        // that follows an `Equal` run must anchor *after* it. These cases
+        // silently corrupted the reconstruction before the fix.
+        for (old, new) in [
+            ("a\n\n", "\n\na"),
+            ("Heading\n\n", "\n\nHeading"),
+            ("中\n  \n😀\na", "  \n  \n😀\n😀\na\nb"),
+        ] {
+            let entries = vec![snapshot_entry(old), batch_entry(old, new)];
+            assert_eq!(
+                reconstruct_at_tail(&entries).unwrap(),
+                new,
+                "old={old:?} new={new:?}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// The load-bearing invariant over random newline/blank-heavy
+        /// content — the shape that provokes `similar`'s D…E…I covers:
+        /// for any (old, new), snapshot(old) + batch(old→new) reconstructs
+        /// to exactly `new`.
+        #[test]
+        fn reconstruct_round_trips_for_arbitrary_liney_edits(
+            old in "[ab \n]{0,48}",
+            new in "[ab \n]{0,48}",
+        ) {
+            let entries = vec![snapshot_entry(&old), batch_entry(&old, &new)];
+            proptest::prop_assert_eq!(reconstruct_at_tail(&entries).unwrap(), new);
+        }
+    }
+
+    #[test]
     fn reconstruct_uses_the_last_snapshot_as_anchor() {
         let entries = vec![
             snapshot_entry("old\n"),

@@ -35,21 +35,33 @@ pub fn diff_to_ops(old: &str, new: &str) -> Vec<EditOp> {
     let new_off = cumulative_byte_offsets(diff.new_slices());
 
     let mut ops = Vec::new();
+    // Running byte cursor in OLD-content space — where we are after the
+    // ops emitted so far. An `Insert` consumes no old content, so it
+    // anchors HERE; `Equal`/`Delete`/`Replace` advance the cursor past
+    // their old range. Anchoring an Insert at `old_off[old_index]`
+    // instead is WRONG: when `similar` emits an insertion that follows an
+    // `Equal` run (a `D…E…I` cover), it reports `old_index` at the start
+    // of that run, not its end, so the inserted text lands before the
+    // surviving line and `reconstruct_at_tail` produces the wrong
+    // document. (Red-team #378 — verified across 500k diff pairs.)
+    let mut old_cursor = 0usize;
     for op in diff.ops() {
         match *op {
-            DiffOp::Equal { .. } => {}
+            DiffOp::Equal { old_index, len, .. } => old_cursor = old_off[old_index + len],
             DiffOp::Delete {
                 old_index, old_len, ..
-            } => ops.push(EditOp::Delete {
-                start: old_off[old_index],
-                end: old_off[old_index + old_len],
-            }),
+            } => {
+                let end = old_off[old_index + old_len];
+                ops.push(EditOp::Delete {
+                    start: old_off[old_index],
+                    end,
+                });
+                old_cursor = end;
+            }
             DiffOp::Insert {
-                old_index,
-                new_index,
-                new_len,
+                new_index, new_len, ..
             } => ops.push(EditOp::Insert {
-                pos: old_off[old_index],
+                pos: old_cursor,
                 text: new[new_off[new_index]..new_off[new_index + new_len]].to_string(),
             }),
             DiffOp::Replace {
@@ -57,11 +69,15 @@ pub fn diff_to_ops(old: &str, new: &str) -> Vec<EditOp> {
                 old_len,
                 new_index,
                 new_len,
-            } => ops.push(EditOp::Replace {
-                start: old_off[old_index],
-                end: old_off[old_index + old_len],
-                text: new[new_off[new_index]..new_off[new_index + new_len]].to_string(),
-            }),
+            } => {
+                let end = old_off[old_index + old_len];
+                ops.push(EditOp::Replace {
+                    start: old_off[old_index],
+                    end,
+                    text: new[new_off[new_index]..new_off[new_index + new_len]].to_string(),
+                });
+                old_cursor = end;
+            }
         }
     }
     ops

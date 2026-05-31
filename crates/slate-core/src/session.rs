@@ -440,11 +440,25 @@ pub struct CslStyleInfo {
 /// save of a file this session) forces a fresh snapshot, so we never read
 /// or trust a pre-existing on-disk log (migration / corrupt-tail / legacy
 /// all collapse to "first save this session snapshots").
+///
+/// Keyed by `files.id`, which is stable across renames (the same row) and
+/// is never reused while the file exists. Were a future code path to
+/// `DELETE` a file row, SQLite could reuse its rowid, and a brand-new file
+/// landing on it would inherit a stale `last_hash_after` — but that simply
+/// fails the alignment check and forces a (harmless) re-snapshot, never
+/// corruption. The map is per-session and not pruned on delete; a
+/// long-lived session holds one small entry per file ever saved.
 #[derive(Debug, Clone)]
 struct OplogAppendState {
     last_hash_after: String,
     bytes_since_snapshot: u64,
 }
+
+/// Estimated per-entry on-disk framing overhead (body header + two hex
+/// hashes + actor id + the length/checksum fields) used only to make the
+/// snapshot-cadence accounting (`bytes_since_snapshot`) track real log
+/// growth rather than payload bytes alone. Deliberately generous.
+const OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE: u64 = 256;
 
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
@@ -908,7 +922,13 @@ impl VaultSession {
                     None // identical content — don't grow the log
                 } else {
                     let payload = crate::oplog::encode_edit_batch(&ops);
-                    let projected = c.bytes_since_snapshot + payload.len() as u64;
+                    // Count the per-entry framing overhead (body header +
+                    // two hex hashes + actor id + length fields + checksum)
+                    // alongside the payload so the cadence tracks on-disk
+                    // growth, not just payload bytes (red-team).
+                    let projected = c.bytes_since_snapshot
+                        + payload.len() as u64
+                        + OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE;
                     // Snapshot if the batch isn't smaller than just storing
                     // the file, or the cadence cap is hit. The size check
                     // also caps a batch's payload below the file size, so a
