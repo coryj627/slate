@@ -281,6 +281,18 @@ struct NoteEditorView: NSViewRepresentable {
         /// C3).
         private var suppressDirtyTracking = false
 
+        /// Stateful mirror of the live text store (#404). Fed the same edit
+        /// deltas the storage receives (in `textStorage(_:didProcessEditing:…)`)
+        /// and rebuilt wholesale on every programmatic swap
+        /// (`withSuppressedDirtyTracking`) / re-bind (`attach`). The keystroke
+        /// highlight path calls `highlightInRange` on it instead of
+        /// re-marshalling the whole document over FFI per pass, and gets
+        /// O(log n) UTF-16 ↔ byte conversions off the live rope. A length-based
+        /// drift guard in `scheduleHighlight` re-syncs it from the text store if
+        /// a delta is ever missed, so a desync self-heals rather than silently
+        /// mis-colouring.
+        private var documentBuffer: DocumentBuffer?
+
         init(
             text: Binding<String>,
             onSave: @escaping () -> Void,
@@ -313,6 +325,10 @@ struct NoteEditorView: NSViewRepresentable {
             self.textView = textView
             textView.textStorage?.delegate = self
             dirtyRange = nil
+            // (Re)build the mirror buffer from the (possibly new) view's text
+            // (#404). The new buffer is highlighted whole-document by the
+            // `scheduleHighlight(debounced: false)` that follows every attach.
+            documentBuffer = DocumentBuffer(text: textView.string)
 
             // Reset typing attributes + any inherited foreground
             // color so the view starts in a known state. Uses
@@ -425,6 +441,15 @@ struct NoteEditorView: NSViewRepresentable {
         ) {
             guard editedMask.contains(.editedCharacters), !suppressDirtyTracking else { return }
             dirtyRange = Self.shiftAndUnion(dirtyRange, editedRange: editedRange, delta: delta)
+            // Feed the same delta to the mirror buffer (#404). `editedRange` is
+            // post-edit UTF-16 coords, so the replacement text is the storage's
+            // current substring over it; the replaced (pre-edit) length is
+            // `editedRange.length - delta` (delta = new − old, always ≥ 0).
+            let inserted = (textStorage.string as NSString).substring(with: editedRange)
+            documentBuffer?.applyEdit(
+                startUtf16: UInt32(clamping: editedRange.location),
+                oldLenUtf16: UInt32(clamping: editedRange.length - delta),
+                newText: inserted)
         }
 
         /// Run a programmatic buffer mutation (a `textView.string = …` swap)
@@ -438,6 +463,11 @@ struct NoteEditorView: NSViewRepresentable {
             body()
             suppressDirtyTracking = false
             dirtyRange = nil
+            // A programmatic swap is a whole-document replacement, not a delta,
+            // and the suppressed `didProcessEditing` fed none — rebuild the
+            // mirror buffer from the swapped-in text so it stays in lockstep
+            // (#404; the silent-post-reload desync the red-team flagged).
+            if let textView { documentBuffer?.reset(text: textView.string) }
         }
 
         /// Fold a new edit into the accumulated dirty range, keeping it in
@@ -497,16 +527,35 @@ struct NoteEditorView: NSViewRepresentable {
             highlightTask?.cancel()
             guard let textView else { return }
             let snapshot = textView.string
+            // Tier-1 drift guard (#404): the mirror buffer must match the live
+            // text store. A length mismatch means a delta was missed (a
+            // coalesced edit, an IME edge, or a `string =` swap that bypassed
+            // `reset`) — rebuild the buffer from the live text and repaint
+            // whole-document this pass, so a desync self-heals instead of
+            // silently smearing colour onto the wrong offsets.
+            if let buffer = documentBuffer,
+                Int(buffer.lenUtf16()) != (snapshot as NSString).length
+            {
+                buffer.reset(text: snapshot)
+                dirtyRange = nil
+            }
             // Window only on the debounced typing path with accumulated
             // dirt; otherwise recompute whole-document.
             let dirty: NSRange? = debounced ? dirtyRange : nil
+            // Capture `buffer` + `snapshot` as a consistent pair. The only
+            // mutations of this buffer object — the drift-guard `reset` just
+            // above (→ buffer == snapshot) and a reset/attach during a
+            // `string =` swap — are both caught by the `textView.string ==
+            // snapshot` guard below, which drops a result computed against a
+            // mid-flight-reset buffer. That guard is the sole barrier (#404).
+            let buffer = documentBuffer
             highlightTask = Task { @MainActor [weak self] in
                 if debounced {
                     try? await Task.sleep(nanoseconds: Self.highlightDebounceNanos)
                 }
                 if Task.isCancelled { return }
                 let prepared = await Task.detached(priority: .userInitiated) {
-                    Self.computeHighlight(snapshot: snapshot, dirty: dirty)
+                    Self.computeHighlight(buffer: buffer, snapshot: snapshot, dirty: dirty)
                 }.value
                 guard let self, !Task.isCancelled else { return }
                 guard self.textView?.string == snapshot else { return }
@@ -536,24 +585,32 @@ struct NoteEditorView: NSViewRepresentable {
         /// by covering the whole document. The embed scan stays whole-doc
         /// (cheap regex, correct offsets); `applyHighlight` re-stamps embed
         /// underlines only within the cleared window.
-        nonisolated static func computeHighlight(snapshot: String, dirty: NSRange?) -> PreparedHighlight {
+        nonisolated static func computeHighlight(
+            buffer: DocumentBuffer?, snapshot: String, dirty: NSRange?
+        ) -> PreparedHighlight {
             let fullLength = (snapshot as NSString).length
             let fullRange = NSRange(location: 0, length: fullLength)
             let embeds = findEditorEmbedSpans(in: snapshot)
-            guard let dirty else {
+            // The windowed path maps the buffer's byte-offset spans against
+            // `snapshot`, so it runs only when there is accumulated dirt, a live
+            // buffer, and the two lengths agree (≡ the buffer mirrors the text
+            // the spans get applied to). Otherwise — initial load, swap,
+            // appearance refresh, or a transient/real buffer drift — recompute
+            // whole-document from `snapshot`, the reliable source of truth.
+            guard let dirty, let buffer, Int(buffer.lenUtf16()) == fullLength else {
                 let spans = editorHighlightSpans(text: snapshot)
                 return PreparedHighlight(
                     mapped: EditorSpanMapping.utf16Spans(from: spans, in: snapshot),
                     embeds: embeds, appliedUTF16: fullRange, isWholeDocument: true)
             }
-            let byteStart = EditorTextConversions.byteOffsetForUTF16Location(dirty.location, in: snapshot)
-            let byteEnd = EditorTextConversions.byteOffsetForUTF16Location(
-                dirty.location + dirty.length, in: snapshot)
-            let ranged = editorHighlightSpansInRange(
-                text: snapshot, dirtyStart: UInt32(clamping: byteStart),
-                dirtyEnd: UInt32(clamping: byteEnd))
-            let aLo = EditorTextConversions.utf16LocationForByteOffset(Int(ranged.appliedStart), in: snapshot)
-            let aHi = EditorTextConversions.utf16LocationForByteOffset(Int(ranged.appliedEnd), in: snapshot)
+            // Stateful windowed highlight: no whole-string FFI marshal, and the
+            // dirty/applied conversions are O(log n) off the live rope (the four
+            // per-pass `TextBuffer::from_str` rebuilds are gone).
+            let ranged = buffer.highlightInRange(
+                dirtyStartUtf16: UInt32(clamping: dirty.location),
+                dirtyEndUtf16: UInt32(clamping: dirty.location + dirty.length))
+            let aLo = Int(buffer.byteToUtf16(byte: ranged.appliedStart))
+            let aHi = Int(buffer.byteToUtf16(byte: ranged.appliedEnd))
             let appliedUTF16 = NSRange(location: aLo, length: max(0, aHi - aLo))
             let whole = appliedUTF16.location == 0 && appliedUTF16.length == fullLength
             return PreparedHighlight(

@@ -202,6 +202,80 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
             ])
     }
 
+    // MARK: - Stateful buffer lifecycle (#404)
+
+    /// A programmatic whole-document swap (the file-reload path) must rebuild
+    /// the mirror buffer; a subsequent windowed edit then still matches
+    /// whole-doc. Without the `reset` inside `withSuppressedDirtyTracking`, the
+    /// buffer would window against stale text — the silent-post-reload desync.
+    func testReloadMidSequenceRebuildsBufferAndMatches() async {
+        let (coordinator, textView, storage) = makeCoordinator(
+            text: "first **doc** body\n\nsecond para\n")
+        let lm = textView.layoutManager!
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+
+        // A windowed edit on the original buffer.
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "X ")
+        coordinator.scheduleHighlight(debounced: true)
+        await coordinator.highlightTask?.value
+
+        // Simulate a file reload: a suppressed whole-document swap (the
+        // updateNSView path), which must rebuild the mirror buffer.
+        let reloaded = "# Reloaded\n\nbrand new [[Wiki]] body\n\ntail ![[Embed]] line\n"
+        coordinator.withSuppressedDirtyTracking { textView.string = reloaded }
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+
+        // A windowed edit on the reloaded buffer — diverges if the mirror is stale.
+        storage.replaceCharacters(
+            in: NSRange(location: reloaded.utf16Offset(of: "tail"), length: 0), with: "Z ")
+        coordinator.scheduleHighlight(debounced: true)
+        await coordinator.highlightTask?.value
+
+        let len = storage.length
+        let windowedFg = foregroundMap(lm, len)
+        let windowedUl = underlineMap(lm, len)
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+        XCTAssertEqual(windowedFg, foregroundMap(lm, len), "windowed != whole-doc after reload")
+        XCTAssertEqual(windowedUl, underlineMap(lm, len), "underline windowed != whole-doc after reload")
+    }
+
+    /// A missed delta (the mirror buffer not fed an edit the text store got)
+    /// must self-heal: the Tier-1 length guard in `scheduleHighlight` rebuilds
+    /// the buffer from the live text and repaints whole-document, instead of
+    /// windowing against the stale buffer and smearing colour onto wrong
+    /// offsets.
+    func testMissedDeltaSelfHealsViaDriftGuard() async {
+        let (coordinator, textView, storage) = makeCoordinator(
+            text: "alpha **beta** gamma\n\ndelta [[Link]] para\n")
+        let lm = textView.layoutManager!
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+
+        // Force a desync: detach the storage delegate, insert (so the mirror
+        // never sees the delta), reattach. The buffer is now shorter than the
+        // text store by the inserted length.
+        storage.delegate = nil
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "INSERTED ")
+        storage.delegate = coordinator
+
+        // A normal edit now fires `didProcessEditing`, marking dirt and feeding
+        // the still-stale buffer a delta at the wrong relative position — so a
+        // windowed pass would be wrong. The Tier-1 guard must catch the length
+        // mismatch, rebuild from the live text, and repaint whole-document.
+        storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: " END")
+        coordinator.scheduleHighlight(debounced: true)
+        await coordinator.highlightTask?.value
+
+        let len = storage.length
+        let healedFg = foregroundMap(lm, len)
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+        XCTAssertEqual(healedFg, foregroundMap(lm, len), "drift guard must rebuild + repaint correctly")
+    }
+
     // MARK: - Coalescing / subtract math (unit)
 
     func testShiftAndUnionFromNilIsTheEdit() {

@@ -15,11 +15,11 @@ import Foundation
 /// break is `\n` only — the backend and `NSTextView` agree on that).
 ///
 /// Pure and `NSWorkspace`-free (like `EditorSpanMapping`), so it's
-/// unit-testable in isolation. Most run at human-action cadence
-/// (jump-to-line, cursor placement); `byteOffsetForUTF16Location` is the
-/// exception — the #379 ranged highlighter calls it on the debounced
-/// keystroke path to map the editor's dirty UTF-16 range into bytes (one
-/// rope build per debounced burst, not per keystroke).
+/// unit-testable in isolation. These run at human-action cadence
+/// (jump-to-line, cursor placement); the per-keystroke editor highlight
+/// path uses the stateful `DocumentBuffer`'s own O(log n) conversions off
+/// the live rope instead (#404), so no stateless rope rebuild happens while
+/// typing.
 ///
 /// Inputs are clamped to `UInt32` (negatives → 0); the Rust side
 /// additionally saturates any offset to the buffer bounds, so callers
@@ -45,13 +45,4 @@ enum EditorTextConversions {
         Int(textByteToUtf16(text: text, byteOffset: UInt32(clamping: byteOffset)))
     }
 
-    /// UTF-16 location into `text` → UTF-8 byte offset (the inverse of
-    /// `utf16LocationForByteOffset`). The ranged highlighter (#379 PR 2)
-    /// uses it to turn the editor's UTF-16 dirty range into the byte
-    /// `dirty` range `editorHighlightSpansInRange` expects. Past EOF clamps
-    /// to the byte length; a location on a surrogate-pair trailing half
-    /// snaps to the character boundary (Rust `TextBuffer::utf16_to_byte`).
-    static func byteOffsetForUTF16Location(_ utf16Location: Int, in text: String) -> Int {
-        Int(textUtf16ToByte(text: text, utf16Offset: UInt32(clamping: utf16Location)))
-    }
 }

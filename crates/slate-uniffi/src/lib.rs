@@ -2230,6 +2230,81 @@ pub fn editor_highlight_spans_in_range(
     }
 }
 
+/// Stateful editor document buffer (#404). Holds the note's text as a rope
+/// across edits so the macOS editor feeds **edit deltas** (not the whole
+/// string) per keystroke and gets O(log n) UTF-16 ↔ byte conversions + a
+/// windowed highlight without re-marshalling the document. Wraps
+/// [`core::doc_buffer::DocBufferState`] in a `Mutex`: uniffi does **not**
+/// serialize `&self` Object calls, so the lock is what makes a concurrent
+/// `apply_edit` (main thread) and `highlight_in_range` (background Task) safe.
+/// `highlight_in_range` clones the rope (O(1) — `ropey` shares chunks via
+/// `Arc`) under a short lock, then parses the snapshot lock-free, preserving
+/// the editor's immutable-snapshot semantics.
+#[derive(uniffi::Object)]
+pub struct DocumentBuffer {
+    inner: std::sync::Mutex<core::doc_buffer::DocBufferState>,
+}
+
+#[uniffi::export]
+impl DocumentBuffer {
+    /// Build from the full document text (initial load / note switch).
+    #[uniffi::constructor]
+    pub fn new(text: String) -> Arc<Self> {
+        Arc::new(Self {
+            inner: std::sync::Mutex::new(core::doc_buffer::DocBufferState::new(&text)),
+        })
+    }
+
+    /// Apply one UTF-16 edit delta (AppKit `editedRange` + `changeInLength`):
+    /// replace `old_len_utf16` units at `start_utf16` with `new_text`.
+    pub fn apply_edit(&self, start_utf16: u32, old_len_utf16: u32, new_text: String) {
+        self.inner.lock().unwrap().apply_edit(
+            start_utf16 as usize,
+            old_len_utf16 as usize,
+            &new_text,
+        );
+    }
+
+    /// Replace the whole document (reload / programmatic `string =` swap) —
+    /// keeps the buffer in lockstep when the host can't express a single delta.
+    pub fn reset(&self, text: String) {
+        self.inner.lock().unwrap().reset(&text);
+    }
+
+    /// Document length in UTF-16 code units — the host's cheap drift guard: a
+    /// mismatch with the text view's length means a delta was missed, so the
+    /// host re-`reset`s and falls back to a whole-document highlight.
+    pub fn len_utf16(&self) -> u32 {
+        self.inner.lock().unwrap().len_utf16() as u32
+    }
+
+    /// Convert a whole-document UTF-8 byte offset to a UTF-16 offset on the
+    /// live rope (O(log n)) — the host maps an `applied_range` back to UTF-16.
+    pub fn byte_to_utf16(&self, byte: u32) -> u32 {
+        self.inner.lock().unwrap().byte_to_utf16(byte as usize) as u32
+    }
+
+    /// Windowed highlight around a dirty range (UTF-16 in). Snapshots the rope
+    /// under a short lock, then parses lock-free. Returns whole-document UTF-8
+    /// byte offsets in the same [`RangedHighlight`] shape as the stateless
+    /// `editor_highlight_spans_in_range`, with the same fallback contract
+    /// (`applied_start == 0 && applied_end == len` ⇒ whole-document parse).
+    pub fn highlight_in_range(
+        &self,
+        dirty_start_utf16: u32,
+        dirty_end_utf16: u32,
+    ) -> RangedHighlight {
+        let snapshot = self.inner.lock().unwrap().clone();
+        let ranged =
+            snapshot.highlight_in_range(dirty_start_utf16 as usize, dirty_end_utf16 as usize);
+        RangedHighlight {
+            applied_start: ranged.applied_range.start as u32,
+            applied_end: ranged.applied_range.end as u32,
+            spans: ranged.spans.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 // Editor text-buffer conversions (#378, `05` §7.1).
 //
 // Stateless wrappers over the canonical rope `TextBuffer`. They build a
@@ -2978,6 +3053,57 @@ mod tests {
         assert_eq!(ranged.applied_start, 0);
         assert_eq!(ranged.applied_end as usize, text.len());
         assert_eq!(ranged.spans, editor_highlight_spans(text));
+    }
+
+    // ---------------------------------------------------------------
+    // DocumentBuffer (#404) — stateful buffer FFI smoke: a fed delta
+    // updates the length + windows, the stateful highlight matches the
+    // stateless free function, and reset re-syncs to a fresh buffer.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn document_buffer_apply_edit_updates_length_and_windows() {
+        let initial = "alpha para\n\nbeta para\n\ngamma para\n";
+        let buf = DocumentBuffer::new(initial.to_string());
+        assert_eq!(buf.len_utf16(), initial.encode_utf16().count() as u32);
+
+        // Insert into the middle paragraph (ASCII ⇒ UTF-16 == byte offsets).
+        let at = "alpha para\n\nbeta".encode_utf16().count() as u32;
+        buf.apply_edit(at, 0, " EDIT".to_string());
+        let expected = "alpha para\n\nbeta EDIT para\n\ngamma para\n";
+        assert_eq!(buf.len_utf16(), expected.encode_utf16().count() as u32);
+
+        // A blank-bounded middle-paragraph edit windows — not the fallback
+        // sentinel (which always reports applied_start == 0).
+        let ranged = buf.highlight_in_range(at, at + 5);
+        assert!(ranged.applied_start > 0);
+        assert!((ranged.applied_end as usize) < expected.len());
+    }
+
+    #[test]
+    fn document_buffer_highlight_matches_the_stateless_path() {
+        // ASCII ⇒ UTF-16 offsets equal byte offsets, so the same dirty
+        // position feeds the stateful buffer (UTF-16 in) and the stateless
+        // free function (bytes in); the results must be identical.
+        let text = "alpha para\n\nbeta has **bold**\n\ngamma para\n".to_string();
+        let dirty = text.find("bold").unwrap() as u32;
+        let buf = DocumentBuffer::new(text.clone());
+        assert_eq!(
+            buf.highlight_in_range(dirty, dirty),
+            editor_highlight_spans_in_range(text, dirty, dirty)
+        );
+    }
+
+    #[test]
+    fn document_buffer_reset_matches_a_fresh_buffer() {
+        let buf = DocumentBuffer::new("stale\n\ncontents\n".to_string());
+        buf.apply_edit(0, 5, "x".to_string()); // mutate so reset must override
+        let fresh_text = "# New\n\nReset body with **bold**.\n";
+        buf.reset(fresh_text.to_string());
+        let fresh = DocumentBuffer::new(fresh_text.to_string());
+        assert_eq!(buf.len_utf16(), fresh.len_utf16());
+        let n = fresh_text.encode_utf16().count() as u32;
+        assert_eq!(buf.highlight_in_range(0, n), fresh.highlight_in_range(0, n));
     }
 
     // ---------------------------------------------------------------
