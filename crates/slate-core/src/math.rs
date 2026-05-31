@@ -166,6 +166,9 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
     // Pass 2: scan for math delimiters.
     let bytes = source.as_bytes();
     let mut out: Vec<RawMathBlock> = Vec::new();
+    // #387: O(n) incremental line numbering — the scan finds math spans at
+    // non-decreasing `i`, so count newlines once over the source.
+    let mut lines = crate::line_index::LineTracker::new(source);
     let mut i = 0;
     while i < bytes.len() {
         // Skip escaped dollar signs (`\$` -> literal $).
@@ -182,7 +185,7 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
                     out.push(RawMathBlock {
                         source: trimmed.to_string(),
                         display_style: MathDisplayStyle::Block,
-                        line: line_of_offset(source, i),
+                        line: lines.line_at(i),
                         byte_offset: i as u32,
                     });
                 }
@@ -205,7 +208,7 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
                             out.push(RawMathBlock {
                                 source: trimmed.to_string(),
                                 display_style: MathDisplayStyle::Inline,
-                                line: line_of_offset(source, i),
+                                line: lines.line_at(i),
                                 byte_offset: i as u32,
                             });
                         }
@@ -270,13 +273,6 @@ fn find_single_dollar_close(after: &[u8]) -> Option<usize> {
         i += 1;
     }
     None
-}
-
-fn line_of_offset(source: &str, off: usize) -> u32 {
-    1 + source[..off.min(source.len())]
-        .bytes()
-        .filter(|&b| b == b'\n')
-        .count() as u32
 }
 
 // --- Rendering ---------------------------------------------------------

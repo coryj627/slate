@@ -460,6 +460,37 @@ fn bench_editor_highlight_ranged(c: &mut Criterion) {
     group.finish();
 }
 
+// =====================================================================
+// #387: `code::extract_code_blocks` line numbering.
+//
+// It called `line_of_offset(source, start)` once per block, and
+// `line_of_offset` counted newlines from byte 0 — so extraction was
+// O(n × blocks) (~660 ms on a 2 MB note with ~5.7k blocks). The fix
+// (incremental `LineTracker`) makes it linear: doubling the block count
+// should ~double the time, not quadruple it. Benched at the issue's
+// 500/1000/2000/4000 counts so a regression to quadratic is visible.
+// =====================================================================
+
+fn bench_extract_code_blocks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("extract_code_blocks");
+    group.sample_size(20);
+    for &n in &[500usize, 1_000, 2_000, 4_000] {
+        // `n` fenced blocks separated by a prose paragraph, so the source
+        // accumulates many newlines before the late blocks — the worst case
+        // the old per-block re-count paid for.
+        let mut doc = String::with_capacity(n * 96);
+        for i in 0..n {
+            doc.push_str(&format!(
+                "Para {i} with prose to add newlines.\n\n```rust\nfn f{i}() {{ {i} }}\nlet _ = f{i}();\n```\n\n"
+            ));
+        }
+        group.bench_with_input(BenchmarkId::from_parameter(n), &doc, |b, doc| {
+            b.iter(|| black_box(slate_core::code::extract_code_blocks(black_box(doc)).len()));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_first_open_and_scan,
@@ -471,5 +502,6 @@ criterion_group!(
     bench_files_with_property,
     bench_note_load_bundle,
     bench_editor_highlight_ranged,
+    bench_extract_code_blocks,
 );
 criterion_main!(benches);

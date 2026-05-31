@@ -104,6 +104,9 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
     let mut current_buffer = String::new();
     let mut current_start: Option<usize> = None;
     let mut in_code = false;
+    // #387: count newlines once over the source as block starts arrive in
+    // document order, instead of re-counting from byte 0 per block.
+    let mut lines = crate::line_index::LineTracker::new(source);
 
     let parser = MdParser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
     for (event, range) in parser {
@@ -130,7 +133,7 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
                 out.push(RawCodeBlock {
                     source: std::mem::take(&mut current_buffer),
                     language: current_lang.take(),
-                    line: line_of_offset(source, start),
+                    line: lines.line_at(start),
                     byte_offset: start as u32,
                 });
                 in_code = false;
@@ -631,13 +634,6 @@ fn classify_universal(kind: &str) -> Option<TokenKind> {
         | "@" | "\\" | "$" => Some(TokenKind::Punctuation),
         _ => None,
     }
-}
-
-fn line_of_offset(source: &str, off: usize) -> u32 {
-    1 + source[..off.min(source.len())]
-        .bytes()
-        .filter(|&b| b == b'\n')
-        .count() as u32
 }
 
 // --- Tests -------------------------------------------------------------
