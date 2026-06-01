@@ -431,13 +431,20 @@ fn opaque_blocks(source: &str) -> Vec<(usize, usize, u8)> {
 /// CommonMark parse builds it. #404 Slice A rebuilds it per call (the
 /// behaviour-preserving oracle); Slice B's `DocumentBuffer` will maintain it
 /// incrementally so the keystroke path never reparses the whole document.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct StructureSnapshot {
     blocks: Vec<(usize, usize, u8)>,
     containers: Vec<(usize, usize)>,
+    /// Length of the source this was built from. A block/container whose end
+    /// equals `len` is **open** (an unclosed fence/HTML/list ran to EOF) and
+    /// can extend when text is appended — so a clean break can't sit at or
+    /// after its start even though its recorded `end` looks like a boundary.
+    len: usize,
 }
 
 impl StructureSnapshot {
-    /// Build from a whole-document CommonMark parse (the oracle path).
+    /// Build from a whole-document CommonMark parse (the oracle / fallback
+    /// path; also the suffix re-parse in [`updated`](Self::updated)).
     pub(crate) fn from_source(source: &str) -> Self {
         let mut blocks = Vec::new();
         let mut containers = Vec::new();
@@ -452,7 +459,129 @@ impl StructureSnapshot {
                 }
             }
         }
-        Self { blocks, containers }
+        Self {
+            blocks,
+            containers,
+            len: source.len(),
+        }
+    }
+
+    /// A blank line at `r` is a **clean break** — a fresh-parser-state point,
+    /// so parsing `source[r..]` reproduces the whole-document parse restricted
+    /// to `[r..]` even after an edit just below `r` — iff:
+    /// - `r` isn't strictly inside a cached block/container (e.g. a blank line
+    ///   inside a fence), AND
+    /// - the nearest non-blank line above `r` isn't part of an **absorbing**
+    ///   construct: indented code (`k == 0`), an open block (`end == len`, ran
+    ///   to EOF and can extend), or a list/quote container. Those re-absorb a
+    ///   following blank + compatible content, so an edit below `r` could
+    ///   extend them across it; a paragraph / heading / thematic break /
+    ///   closed fence / HTML block does not. (`%%` comments are a slate
+    ///   overlay that doesn't affect pulldown's block parse, so they're
+    ///   irrelevant here and aren't cached.)
+    fn break_is_clean(&self, source: &str, r: usize) -> bool {
+        if self.blocks.iter().any(|&(s, e, _)| s < r && r < e)
+            || self.containers.iter().any(|&(s, e)| s < r && r < e)
+        {
+            return false;
+        }
+        let mut ls = r;
+        while ls > 0 {
+            let prev = line_start(source, ls - 1);
+            if !line_is_blank(source, prev) {
+                let pe = line_end(source, prev);
+                let hits = |s: usize, e: usize| s < pe && prev < e;
+                let absorbing_block = self
+                    .blocks
+                    .iter()
+                    .any(|&(s, e, k)| (k == 0 || e == self.len) && hits(s, e));
+                let absorbing_container = self.containers.iter().any(|&(s, e)| hits(s, e));
+                return !(absorbing_block || absorbing_container);
+            }
+            ls = prev;
+        }
+        true
+    }
+
+    /// The latest **clean break** at or before `at`: the start of a blank
+    /// line that no cached block / container / comment covers — a point
+    /// where pulldown's block state is fresh, so parsing `source[r..]`
+    /// reproduces the whole-document parse restricted to `[r..]`. Returns 0
+    /// (the document start — always a clean break) if none is found above.
+    ///
+    /// Soundness: blank lines are paragraph boundaries, so a clean break is
+    /// never *inside* a paragraph — which is what makes it safe against
+    /// setext underlines (the affected paragraph always starts after the
+    /// break) and lazy continuation. `source[..at]` must equal the source
+    /// `self` was built from (the incremental contract: the prefix above the
+    /// edit is unchanged), so an old clean break is a new clean break.
+    fn clean_break_before(&self, source: &str, at: usize) -> usize {
+        let mut ls = line_start(source, at.min(source.len()));
+        loop {
+            if ls == 0 {
+                return 0;
+            }
+            if line_is_blank(source, ls) && self.break_is_clean(source, ls) {
+                return ls;
+            }
+            ls = line_start(source, ls - 1);
+        }
+    }
+
+    /// Shift every cached range by `by` (suffix re-parse → document space).
+    fn shifted(mut self, by: usize) -> Self {
+        for b in &mut self.blocks {
+            b.0 += by;
+            b.1 += by;
+        }
+        for c in &mut self.containers {
+            c.0 += by;
+            c.1 += by;
+        }
+        self
+    }
+
+    /// Incrementally produce the structure of `new_source` from `self` (the
+    /// pre-edit structure), given the edit began at byte `edit_start` with
+    /// `new_source[..edit_start]` byte-identical to the source `self` was
+    /// built from. #404 Slice B.
+    ///
+    /// Re-parses only the document SUFFIX from a clean break at or before the
+    /// edit and reuses the untouched prefix. **Correct by construction** — the
+    /// suffix part IS a `from_source` parse of `new_source[r..]`, and a clean
+    /// break guarantees that equals the whole-document parse there; the prefix
+    /// is unchanged. The buffer `debug_assert!`s `updated == from_source` on
+    /// every edit. (Phase 1 re-parses to EOF — O(suffix); the reconvergence
+    /// stop that bounds it to O(edit) is layered on next.)
+    pub(crate) fn updated(&self, new_source: &str, edit_start: usize) -> Self {
+        let r = self.clean_break_before(new_source, edit_start);
+        if r == 0 {
+            return Self::from_source(new_source);
+        }
+        let suffix = Self::from_source(&new_source[r..]).shifted(r);
+        // A clean break splits every cached range cleanly (nothing covers r),
+        // so "start < r" keeps exactly the prefix ranges; the suffix re-parse
+        // owns `[r, len)`. Block order stays document order (prefix < r ≤
+        // suffix), which `window_diverges`' equality compare relies on.
+        let mut blocks: Vec<(usize, usize, u8)> = self
+            .blocks
+            .iter()
+            .copied()
+            .filter(|&(s, ..)| s < r)
+            .collect();
+        blocks.extend(suffix.blocks);
+        let mut containers: Vec<(usize, usize)> = self
+            .containers
+            .iter()
+            .copied()
+            .filter(|&(s, _)| s < r)
+            .collect();
+        containers.extend(suffix.containers);
+        Self {
+            blocks,
+            containers,
+            len: new_source.len(),
+        }
     }
 }
 
@@ -1938,6 +2067,100 @@ mod range_proptests {
         #[test]
         fn consolidated_matches_reference_with_frontmatter(src in frontmatter_prefixed_source()) {
             prop_assert_eq!(highlight_spans(&src), highlight_spans_reference(&src), "src={:?}", src);
+        }
+    }
+
+    /// A keystroke-shaped insertion/deletion, biased toward the structural
+    /// breakers (fences, `---`/`===`, `%%`, HTML openers/closers, blanks,
+    /// indents) that flip block classification.
+    fn edit_insert() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just(String::new()),
+            Just("x".to_string()),
+            Just("\n".to_string()),
+            Just("\n\n".to_string()),
+            Just("```\n".to_string()),
+            Just("```rust\n".to_string()),
+            Just("~~~\n".to_string()),
+            Just("---\n".to_string()),
+            Just("===\n".to_string()),
+            Just("%%".to_string()),
+            Just("%% c %%".to_string()),
+            Just("<!-- ".to_string()),
+            Just("-->\n".to_string()),
+            Just("<div>\n".to_string()),
+            Just("# H\n".to_string()),
+            Just("- item\n".to_string()),
+            Just("    indented\n".to_string()),
+            Just("> quote\n".to_string()),
+            Just("[[L]] and [@k]".to_string()),
+        ]
+    }
+
+    /// Snap `byte` up to the next char boundary of `s` (clamped to the end).
+    fn snap_up(s: &str, byte: usize) -> usize {
+        let mut b = byte.min(s.len());
+        while b < s.len() && !s.is_char_boundary(b) {
+            b += 1;
+        }
+        b
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// #404 Slice B census: maintain a `StructureSnapshot` incrementally
+        /// across a SEQUENCE of edits (carrying the incremental result
+        /// forward, so errors compound) and assert it stays byte-identical to
+        /// a from-scratch `from_source` after every edit. This is the gate on
+        /// the clean-break / suffix-reparse / splice machinery — a divergence
+        /// is a structure bug that would mis-window a keystroke.
+        #[test]
+        fn incremental_structure_matches_from_source_over_a_sequence(
+            seed in liney_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..6, edit_insert()), 1..10),
+        ) {
+            let mut source = seed;
+            let mut structure = StructureSnapshot::from_source(&source);
+            for (pct, del, ins) in edits {
+                let pos = snap_up(&source, source.len() * pct / 100);
+                let del_end = snap_up(&source, pos + del);
+                let new_source = format!("{}{}{}", &source[..pos], ins, &source[del_end..]);
+                let incremental = structure.updated(&new_source, pos);
+                let from_scratch = StructureSnapshot::from_source(&new_source);
+                prop_assert_eq!(
+                    &incremental, &from_scratch,
+                    "incremental != from_source\n edit: pos={} del={}..{} ins={:?}\n old={:?}\n new={:?}",
+                    pos, pos, del_end, ins, source, new_source
+                );
+                source = new_source;
+                structure = incremental;
+            }
+        }
+
+        /// The same census seeded with frontmatter — the raw structure must
+        /// still match (the buffer keeps a separate body-framing snapshot;
+        /// this gates the raw one through frontmatter-bearing edits).
+        #[test]
+        fn incremental_structure_matches_with_frontmatter(
+            seed in frontmatter_prefixed_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..6, edit_insert()), 1..10),
+        ) {
+            let mut source = seed;
+            let mut structure = StructureSnapshot::from_source(&source);
+            for (pct, del, ins) in edits {
+                let pos = snap_up(&source, source.len() * pct / 100);
+                let del_end = snap_up(&source, pos + del);
+                let new_source = format!("{}{}{}", &source[..pos], ins, &source[del_end..]);
+                let incremental = structure.updated(&new_source, pos);
+                prop_assert_eq!(
+                    &incremental, &StructureSnapshot::from_source(&new_source),
+                    "incremental != from_source (fm)\n edit: pos={} del={}..{} ins={:?}\n old={:?}\n new={:?}",
+                    pos, pos, del_end, ins, source, new_source
+                );
+                source = new_source;
+                structure = incremental;
+            }
         }
     }
 

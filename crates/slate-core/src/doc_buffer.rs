@@ -16,8 +16,9 @@
 //! incrementally on [`DocBufferState::apply_edit`] so the keystroke path is
 //! truly O(edit).
 
-use crate::editor_spans::{highlight_spans_in_range, RangedHighlight};
+use crate::editor_spans::{highlight_spans_in_range_with, RangedHighlight, StructureSnapshot};
 use crate::text_buffer::TextBuffer;
+use std::sync::Arc;
 
 /// Owned editor-buffer state. Plain Rust (no uniffi) so the edit / convert /
 /// highlight logic is unit-testable without the binding layer. `Clone` is
@@ -27,6 +28,12 @@ use crate::text_buffer::TextBuffer;
 #[derive(Debug, Clone, Default)]
 pub struct DocBufferState {
     buffer: TextBuffer,
+    /// The document's block structure (#404 Slice B), maintained incrementally
+    /// on each [`apply_edit`](Self::apply_edit) so the keystroke highlight path
+    /// never re-parses the whole document. `Arc`-shared so a highlight snapshot
+    /// clones it in O(1) (the buffer's `Clone` is what the FFI layer uses to
+    /// hand the off-main pass a consistent rope + structure pair).
+    structure: Arc<StructureSnapshot>,
 }
 
 impl DocBufferState {
@@ -34,6 +41,7 @@ impl DocBufferState {
     pub fn new(text: &str) -> Self {
         Self {
             buffer: TextBuffer::from_str(text),
+            structure: Arc::new(StructureSnapshot::from_source(text)),
         }
     }
 
@@ -45,6 +53,7 @@ impl DocBufferState {
     /// [`apply_edit`]: Self::apply_edit
     pub fn reset(&mut self, text: &str) {
         self.buffer = TextBuffer::from_str(text);
+        self.structure = Arc::new(StructureSnapshot::from_source(text));
     }
 
     /// The document length in UTF-16 code units. The host compares this to its
@@ -73,6 +82,19 @@ impl DocBufferState {
         let start_byte = self.buffer.utf16_to_byte(start_utf16);
         let end_byte = self.buffer.utf16_to_byte(start_utf16 + old_len_utf16);
         self.buffer.replace(start_byte..end_byte, new_text);
+        // Maintain the cached block structure incrementally (#404 Slice B): the
+        // prefix above `start_byte` is unchanged, so re-parse only the suffix
+        // from a clean break. A `debug_assert!` cross-checks it against a
+        // from-scratch parse on every edit, turning every test that drives the
+        // buffer into a structure-soundness check.
+        let new_source = self.buffer.to_string();
+        let updated = self.structure.updated(&new_source, start_byte);
+        debug_assert_eq!(
+            updated,
+            StructureSnapshot::from_source(&new_source),
+            "#404: incremental structure diverged from from_source (edit_start={start_byte})"
+        );
+        self.structure = Arc::new(updated);
     }
 
     /// Windowed highlight for a dirty range expressed in UTF-16. Materialises
@@ -91,7 +113,7 @@ impl DocBufferState {
         let start_byte = self.buffer.utf16_to_byte(dirty_start_utf16);
         let end_byte = self.buffer.utf16_to_byte(dirty_end_utf16);
         let text = self.buffer.to_string();
-        highlight_spans_in_range(&text, start_byte..end_byte)
+        highlight_spans_in_range_with(&text, start_byte..end_byte, &self.structure)
     }
 }
 
