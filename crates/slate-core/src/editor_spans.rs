@@ -2512,3 +2512,716 @@ mod range_proptests {
         Ok(())
     }
 }
+
+/// #404 Slice B red-team (caveats 1–3 of the reconvergence stop). These
+/// generators deliberately over-sample the three soundness corners the design
+/// flags: (1) open-to-EOF blocks (`e == self.len`) hit by append-near-EOF
+/// edits, (2) blocks whose pulldown end-offset lands exactly on a likely
+/// reconvergence blank `P` with a col-0 line just below, and (3) edits
+/// concentrated at the frontmatter/body boundary and on `---`-shaped lines.
+/// Every test is the same differential: the incremental `updated` (carried
+/// forward across a sequence) must stay byte-identical to a from-scratch
+/// `from_source`, and the body-cache buffer path must match the stateless
+/// ranged highlight end-to-end.
+#[cfg(test)]
+mod redteam_reconvergence {
+    use super::*;
+    use crate::doc_buffer::DocBufferState;
+    use proptest::prelude::*;
+
+    /// Snap `byte` up to the next char boundary of `s` (clamped to the end).
+    fn snap_up(s: &str, byte: usize) -> usize {
+        let mut b = byte.min(s.len());
+        while b < s.len() && !s.is_char_boundary(b) {
+            b += 1;
+        }
+        b
+    }
+
+    /// Apply a byte-range edit (`[start, del_end)` → `ins`) to a `String`.
+    fn splice_str(s: &str, start: usize, del_end: usize, ins: &str) -> String {
+        format!("{}{}{}", &s[..start], ins, &s[del_end..])
+    }
+
+    // ---- Caveat 1 & 2: raw `updated == from_source` over biased sequences ----
+
+    /// Lines that build documents where an unclosed fence / HTML type-1-5 / list
+    /// runs to EOF (caveat 1), and where a closed fence / indented code / list
+    /// can end immediately before a blank that is a prime reconvergence `P`
+    /// followed by a column-0 line (caveat 2). The mix is intentionally
+    /// fence/HTML/list-heavy and blank-heavy so reconvergence points land right
+    /// on block end-offsets.
+    fn caveat12_line() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Blanks: the only reconvergence candidates — over-weighted.
+            6 => Just("".to_string()),
+            // Column-0 plain line: the col-0 "fresh block below P" of cond 3.
+            3 => Just("col0 text".to_string()),
+            3 => Just("# col0 head".to_string()),
+            // Fence open/close — an odd number leaves one open to EOF.
+            3 => Just("```".to_string()),
+            2 => Just("```rust".to_string()),
+            2 => Just("~~~".to_string()),
+            // Indented code / list-content fences that flip kind under a list.
+            2 => Just("    indented".to_string()),
+            1 => Just("\tindented".to_string()),
+            2 => Just("    ```".to_string()),
+            // List markers + indented continuations: open-to-EOF lists + loose
+            // lists whose dedent close can land on a blank P.
+            3 => Just("- item".to_string()),
+            2 => Just("1. step".to_string()),
+            2 => Just("  cont".to_string()),
+            // HTML type-1-5 openers (NOT blank-closed) + closers.
+            2 => Just("<!--".to_string()),
+            1 => Just("-->".to_string()),
+            2 => Just("<script>".to_string()),
+            1 => Just("</script>".to_string()),
+            1 => Just("<pre>".to_string()),
+            1 => Just("<style>".to_string()),
+            // Setext-ish underline + thematic break.
+            1 => Just("===".to_string()),
+            1 => Just("- - -".to_string()),
+            1 => Just("> quote".to_string()),
+            1 => Just("para".to_string()),
+        ]
+    }
+
+    fn caveat12_source() -> impl Strategy<Value = String> {
+        proptest::collection::vec(caveat12_line(), 0..18).prop_map(|lines| {
+            let mut s = lines.join("\n");
+            s.push('\n');
+            s
+        })
+    }
+
+    /// Edits biased to land **near EOF** and to insert/close opaque blocks — the
+    /// shape that makes an open-to-EOF block stop running to EOF (or start), so
+    /// `e == self.len` flips across the edit (caveat 1). `pct` is weighted to
+    /// the tail of the document.
+    fn caveat1_edit() -> impl Strategy<Value = (usize, usize, String)> {
+        let ins = prop_oneof![
+            Just(String::new()),
+            Just("\n".to_string()),
+            Just("\n\n".to_string()),
+            Just("x".to_string()),
+            Just("```\n".to_string()),
+            Just("~~~\n".to_string()),
+            Just("-->\n".to_string()),
+            Just("</script>\n".to_string()),
+            Just("text\n".to_string()),
+            Just("# H\n".to_string()),
+            Just("\n\ncol0\n".to_string()),
+            Just("- i\n".to_string()),
+            Just("    indent\n".to_string()),
+        ];
+        // pct: 60–100, so the edit concentrates in the last ~40% (the EOF
+        // region where open-to-EOF blocks live); del: 0..8 bytes.
+        (60usize..=100, 0usize..8, ins)
+    }
+
+    proptest! {
+        // Default keeps a normal `cargo test` fast; the red-team census runs
+        // this at `PROPTEST_CASES=50000`+ (validated clean to 80k).
+        #![proptest_config(ProptestConfig::with_cases(800))]
+
+        /// Caveat 1 + 2 raw census: carry the incremental structure forward
+        /// across an EOF-biased edit sequence and assert it equals from_source
+        /// after every edit. Over-samples open-to-EOF blocks and end-offset-on-P
+        /// reconvergence shapes the stock `liney_source`/`edit_insert` mix hits
+        /// only rarely.
+        #[test]
+        fn caveat12_incremental_structure_matches_from_source(
+            seed in caveat12_source(),
+            edits in prop::collection::vec(caveat1_edit(), 1..12),
+        ) {
+            let mut source = seed;
+            let mut structure = StructureSnapshot::from_source(&source);
+            for (pct, del, ins) in edits {
+                let pos = snap_up(&source, source.len() * pct / 100);
+                let del_end = snap_up(&source, pos + del);
+                let new_source = splice_str(&source, pos, del_end, &ins);
+                let incremental = structure.updated(&new_source, pos, del_end, ins.len());
+                let from_scratch = StructureSnapshot::from_source(&new_source);
+                prop_assert_eq!(
+                    &incremental, &from_scratch,
+                    "caveat1/2: incremental != from_source\n edit: pos={} del={}..{} ins={:?}\n old={:?}\n new={:?}",
+                    pos, pos, del_end, ins, source, new_source
+                );
+                source = new_source;
+                structure = incremental;
+            }
+        }
+    }
+
+    /// Exhaustive caveat-2 sweep: documents where a fenced / indented / list
+    /// block ends right before a blank, with a col-0 line below — so a
+    /// reconvergence `P` lands exactly on a block end-offset — and an insert at
+    /// every line start. The end-offset-equals-`pd` boundary (`pd == e`, kept by
+    /// the `s >= pd` tail filter but not "covered" by cond 2) is the off-by-one
+    /// the splice could get wrong. A divergence here is a CRITICAL splice bug.
+    #[test]
+    fn caveat2_block_end_on_reconvergence_blank_exhaustive() {
+        // Shapes deliberately ending a block one line above a blank + col-0
+        // line: a closed fence, indented code, a list, an HTML block — each
+        // immediately followed by `\n\n<col0>` so the post-edit reconvergence
+        // blank coincides with the block's end-offset.
+        let shapes = [
+            "p\n\n```\ncode\n```\n\ncol0\n",
+            "p\n\n```\ncode\n```\ncol0\n",
+            "p\n\n    indented\n\ncol0\n",
+            "p\n\n    indented\ncol0\n",
+            "p\n\n- a\n- b\n\ncol0\n",
+            "p\n\n- a\n\n  cont\n\ncol0\n",
+            "p\n\n<!--\nhtml\n-->\n\ncol0\n",
+            "p\n\n<div>\nhtml\n</div>\n\ncol0\n",
+            "p\n\n> quote\n> more\n\ncol0\n",
+            "head\n===\n\n```\nc\n```\n\ncol0\n",
+            // Two consecutive blocks each ending before a blank — P can land on
+            // either end-offset depending on the edit.
+            "a\n\n```\nx\n```\n\nb\n\n```\ny\n```\n\nc\n",
+            // Open-to-EOF block right after a clean break (caveat 1 ∩ 2).
+            "p\n\n```\nopen to eof\n",
+            "p\n\n- a\n  open list to eof\n",
+            "p\n\n<!--\nopen html to eof\n",
+        ];
+        let inserts = [
+            "",
+            "x",
+            "\n",
+            "\n\n",
+            "```\n",
+            "~~~\n",
+            "-->\n",
+            "# H\n",
+            "- i\n",
+            "    indent\n",
+            "\n\ncol0\n",
+            "text",
+            "\ncol0\n",
+        ];
+        let mut checked = 0usize;
+        for doc in shapes {
+            let mut line_starts = vec![0usize];
+            for (i, b) in doc.bytes().enumerate() {
+                if b == b'\n' {
+                    line_starts.push(i + 1);
+                }
+            }
+            for &pos in &line_starts {
+                let structure = StructureSnapshot::from_source(doc);
+                for &ins in &inserts {
+                    // Pure insert.
+                    let new_source = splice_str(doc, pos, pos, ins);
+                    assert_eq!(
+                        structure.updated(&new_source, pos, pos, ins.len()),
+                        StructureSnapshot::from_source(&new_source),
+                        "caveat2 insert: doc={doc:?} pos={pos} ins={ins:?}"
+                    );
+                    checked += 1;
+                    // Replace one line below pos (positive delta, tail shifts).
+                    let del_end = snap_up(
+                        doc,
+                        doc[pos..].find('\n').map_or(doc.len(), |i| pos + i + 1),
+                    );
+                    if del_end > pos {
+                        let new_source = splice_str(doc, pos, del_end, ins);
+                        assert_eq!(
+                            structure.updated(&new_source, pos, del_end, ins.len()),
+                            StructureSnapshot::from_source(&new_source),
+                            "caveat2 replace: doc={doc:?} pos={pos}..{del_end} ins={ins:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 2_000, "expected a full sweep, ran {checked}");
+    }
+
+    // ---- Caveat 3: frontmatter boundary + `---` body lines ----
+
+    /// A frontmatter-seeded source whose body is `caveat12`-rich. Edits will be
+    /// aimed at `fm_end` (the first body byte) and at `---`-shaped lines.
+    fn fm_seeded_source() -> impl Strategy<Value = String> {
+        let fm_line = prop_oneof![
+            Just("title: x".to_string()),
+            Just("tags: [a, b]".to_string()),
+            Just("~~~".to_string()),
+            Just("```".to_string()),
+            Just("".to_string()),
+        ];
+        (proptest::collection::vec(fm_line, 0..4), caveat12_source())
+            .prop_map(|(fm, body)| format!("---\n{}\n---\n{body}", fm.join("\n")))
+    }
+
+    /// Edits that concentrate on the frontmatter/body boundary and `---`-shaped
+    /// content: inserting/deleting a `---` line, typing at the boundary, turning
+    /// a body line into a closing delimiter. `anchor` selects which interesting
+    /// offset to edit at; `ins` biases to `---` and blank shapes.
+    fn caveat3_edit() -> impl Strategy<Value = (usize, String, String)> {
+        // anchor kind: 0=fm_end (first body byte), 1=just before fm_end (inside
+        // the closing ---), 2=byte 0, 3=a "---"/"~~~"/"```" occurrence, 4=EOF.
+        let anchor = 0usize..5;
+        let del = prop_oneof![
+            Just(String::new()),
+            Just("---".to_string()),
+            Just("-".to_string()),
+            Just("\n".to_string()),
+        ];
+        let ins = prop_oneof![
+            Just(String::new()),
+            Just("-".to_string()),
+            Just("---".to_string()),
+            Just("---\n".to_string()),
+            Just("\n---\n".to_string()),
+            Just("x".to_string()),
+            Just("\n".to_string()),
+            Just("title: y\n".to_string()),
+            Just("```\n".to_string()),
+            Just("text\n".to_string()),
+        ];
+        (anchor, del, ins)
+    }
+
+    /// Resolve a `caveat3_edit` anchor to a concrete byte `(start, del_end)` on
+    /// `source`, snapped to char boundaries.
+    fn resolve_caveat3(
+        source: &str,
+        anchor: usize,
+        del: &str,
+        ins_len_hint: usize,
+    ) -> (usize, usize) {
+        let _ = ins_len_hint;
+        let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
+        let start = match anchor {
+            0 => fm_end,
+            1 => fm_end.saturating_sub(4).min(source.len()), // inside closing `---\n`
+            2 => 0,
+            3 => source
+                .find("---")
+                .or_else(|| source.find("~~~"))
+                .or_else(|| source.find("```"))
+                .unwrap_or(0),
+            _ => source.len(),
+        };
+        let start = snap_up(source, start);
+        // Delete `del.len()` bytes if the slice there matches `del` (so we delete
+        // a real `---`/`-`/`\n` when present), else a pure insert.
+        let want = del.len();
+        let del_end =
+            if want > 0 && start + want <= source.len() && &source[start..start + want] == del {
+                start + want
+            } else {
+                start
+            };
+        (start, snap_up(source, del_end))
+    }
+
+    proptest! {
+        // Default keeps a normal `cargo test` fast; crank via `PROPTEST_CASES`.
+        #![proptest_config(ProptestConfig::with_cases(800))]
+
+        /// Caveat 3 raw census: frontmatter-seeded, edits aimed at the boundary
+        /// and `---` lines, carried forward. The RAW `updated` must still equal
+        /// from_source (the raw snapshot doesn't strip frontmatter, but the
+        /// reconvergence stop must survive edits that move `fm_end` / reshape
+        /// `---` delimiters).
+        #[test]
+        fn caveat3_raw_incremental_matches_from_source(
+            seed in fm_seeded_source(),
+            edits in prop::collection::vec(caveat3_edit(), 1..10),
+        ) {
+            let mut source = seed;
+            let mut structure = StructureSnapshot::from_source(&source);
+            for (anchor, del, ins) in edits {
+                let (pos, del_end) = resolve_caveat3(&source, anchor, &del, ins.len());
+                let new_source = splice_str(&source, pos, del_end, &ins);
+                let incremental = structure.updated(&new_source, pos, del_end, ins.len());
+                prop_assert_eq!(
+                    &incremental, &StructureSnapshot::from_source(&new_source),
+                    "caveat3 raw: incremental != from_source\n edit: pos={} del={}..{} ins={:?}\n old={:?}\n new={:?}",
+                    pos, pos, del_end, ins, source, new_source
+                );
+                source = new_source;
+                structure = incremental;
+            }
+        }
+    }
+
+    // ---- Buffer-level end-to-end census (raw + body cache, through FFI shape) ----
+
+    /// Convert a byte offset on `source` to a UTF-16 code-unit offset (the
+    /// coordinate `DocBufferState::apply_edit`/`highlight_in_range` take).
+    fn byte_to_utf16(source: &str, byte: usize) -> usize {
+        source[..byte].encode_utf16().count()
+    }
+
+    /// Drive `DocBufferState::apply_edit` (which maintains BOTH the raw and the
+    /// frontmatter-body structure incrementally) over a sequence, then assert
+    /// its `highlight_in_range` for a dirty range equals the **stateless**
+    /// `highlight_spans_in_range` on the same final text + byte range. This is
+    /// the end-to-end check the design rests on: the cached snapshots must yield
+    /// identical ranged output to a fresh whole-document parse — through the
+    /// Task-B body cache and the CRITICAL #2 body-framing decision that consumes
+    /// it. The `apply_edit` `debug_assert!` independently guards each step's
+    /// structure against from_source.
+    fn assert_buffer_matches_stateless(
+        seed: &str,
+        edits: &[(usize, usize, String)], // (start_byte_pct, del_bytes, ins) on the live text
+        probes: &[usize],                 // dirty-range byte percents to check
+    ) -> Result<(), TestCaseError> {
+        let mut text = seed.to_string();
+        let mut buf = DocBufferState::new(seed);
+        for (pct, del, ins) in edits {
+            let start = snap_up(&text, text.len() * pct / 100);
+            let del_end = snap_up(&text, start + del);
+            // Feed the buffer in UTF-16 (its FFI contract); apply the same edit
+            // to the reference text in bytes.
+            let start_u16 = byte_to_utf16(&text, start);
+            let old_len_u16 = byte_to_utf16(&text, del_end) - start_u16;
+            let new_text = splice_str(&text, start, del_end, ins);
+            buf.apply_edit(start_u16, old_len_u16, ins);
+            text = new_text;
+            prop_assert_eq!(buf.byte_to_utf16(text.len()), text.encode_utf16().count());
+
+            // After every edit, sweep dirty ranges and compare the cached buffer
+            // path to the stateless one on the identical (text, dirty bytes).
+            for &p in probes {
+                let d = snap_up(&text, text.len() * p / 100);
+                let d_u16 = byte_to_utf16(&text, d);
+                let cached = buf.highlight_in_range(d_u16, d_u16);
+                let stateless = highlight_spans_in_range(&text, d..d);
+                prop_assert_eq!(
+                    &cached,
+                    &stateless,
+                    "buffer cached != stateless ranged\n at byte {} (u16 {})\n text={:?}",
+                    d,
+                    d_u16,
+                    text
+                );
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        // Heavier per case (full buffer + stateless ranged highlight each step);
+        // default modest, crank via `PROPTEST_CASES` for the census.
+        #![proptest_config(ProptestConfig::with_cases(400))]
+
+        /// End-to-end buffer census on plain (no-frontmatter) bodies rich in
+        /// caveat-1/2 shapes.
+        #[test]
+        fn buffer_matches_stateless_plain(
+            seed in caveat12_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..6, caveat12_line()), 1..8),
+        ) {
+            let edits: Vec<(usize, usize, String)> =
+                edits.into_iter().map(|(p, d, mut s)| { s.push('\n'); (p, d, s) }).collect();
+            assert_buffer_matches_stateless(&seed, &edits, &[0, 30, 60, 100])?;
+        }
+
+        /// End-to-end buffer census on frontmatter-seeded docs — this is the one
+        /// that exercises the Task-B body cache and its `start_byte >= old_fm_end
+        /// && new_fm_end == old_fm_end` stability guard (caveat 3) against the
+        /// stateless `from_source(body)` framing. Edits at varied offsets,
+        /// including the boundary, are produced by the percent anchor.
+        #[test]
+        fn buffer_matches_stateless_frontmatter(
+            seed in fm_seeded_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..6, caveat12_line()), 1..8),
+        ) {
+            let edits: Vec<(usize, usize, String)> =
+                edits.into_iter().map(|(p, d, mut s)| { s.push('\n'); (p, d, s) }).collect();
+            assert_buffer_matches_stateless(&seed, &edits, &[0, 30, 60, 100])?;
+        }
+    }
+
+    /// Assert `updated` matches `from_source` for one concrete edit, with a
+    /// readable panic. The shared driver for the hand-built attack cases below.
+    fn check_edit(old: &str, start: usize, del_end: usize, ins: &str) {
+        let new_source = splice_str(old, start, del_end, ins);
+        let structure = StructureSnapshot::from_source(old);
+        let incremental = structure.updated(&new_source, start, del_end, ins.len());
+        let from_scratch = StructureSnapshot::from_source(&new_source);
+        assert_eq!(
+            incremental, from_scratch,
+            "updated != from_source\n old={old:?}\n edit: [{start}..{del_end}) += {ins:?}\n new={new_source:?}"
+        );
+    }
+
+    /// Caveat 1, hand-built: an unclosed fence runs to OLD EOF; an append below
+    /// it closes the fence and adds a fresh col-0 block past a blank — the exact
+    /// "open-to-EOF block, then reconverge past it" shape. The OLD `e ==
+    /// self.len` cover rule must not let reconvergence reuse a stale tail.
+    #[test]
+    fn caveat1_unclosed_fence_to_eof_then_append_past_it() {
+        // `\n` is the seam between the existing open fence and the appended
+        // close+blank+col0. Insert at EOF.
+        let old = "intro\n\n```\nstill open\n";
+        check_edit(old, old.len(), old.len(), "more code\n```\n\ncol0 tail\n");
+        // Same, but the append re-opens a *new* fence to EOF after closing the
+        // first — two opaque blocks, the second open-to-new-EOF.
+        check_edit(old, old.len(), old.len(), "x\n```\n\n```\nreopened\n");
+        // Unclosed HTML type-1 (comment) to EOF, then close + col0.
+        let html = "p\n\n<!--\nopen comment\n";
+        check_edit(html, html.len(), html.len(), "more\n-->\n\ncol0\n");
+        // Unclosed <script> (type-1) to EOF, then close + col0.
+        let script = "p\n\n<script>\nopen\n";
+        check_edit(script, script.len(), script.len(), "x\n</script>\n\ncol0\n");
+        // Open list to EOF, append a dedented col-0 block past a blank.
+        let list = "p\n\n- a\n  cont\n";
+        check_edit(list, list.len(), list.len(), "  more\n\ncol0\n");
+    }
+
+    /// Caveat 1, mid-document: an open-to-EOF fence exists, and the edit is
+    /// *above* it (so the tail including the open fence shifts). `e ==
+    /// self.len` on the OLD side still refers to OLD EOF; the splice shifts it
+    /// by delta. Reconvergence must not fire into the open fence.
+    #[test]
+    fn caveat1_edit_above_an_open_to_eof_block() {
+        let old = "one\n\ntwo\n\n```\nopen to eof\n";
+        // Insert a fresh paragraph high up; the open fence shifts down.
+        check_edit(old, 0, 0, "zero\n\n");
+        // Insert a blank line inside the first paragraph region.
+        check_edit(old, 4, 4, "inserted\n\n");
+        // Delete the blank between para one and two (merges them), open fence
+        // still to EOF, shifted.
+        check_edit(old, 3, 5, "");
+    }
+
+    /// Caveat 2, hand-built: a closed fence / indented block / list ends exactly
+    /// where a reconvergence blank P would sit (`pd == e`), with a col-0 line
+    /// below. Cond 2 treats `pd == e` (closed, `e != len`) as NOT covering, so
+    /// reconvergence fires right at the block end — the off-by-one boundary.
+    #[test]
+    fn caveat2_block_end_exactly_on_reconvergence_blank() {
+        // Closed fence, blank, col0 — insert at the very top so the whole tail
+        // shifts and P must re-land on the (shifted) fence end.
+        check_edit("a\n\n```\nc\n```\n\ncol0\n", 0, 0, "PRE\n\n");
+        // Indented code ending right before blank+col0.
+        check_edit("a\n\n    indented\n\ncol0\n", 0, 0, "PRE\n\n");
+        // A list ending right before blank+col0.
+        check_edit("a\n\n- x\n- y\n\ncol0\n", 0, 0, "PRE\n\n");
+        // HTML block ending right before blank+col0.
+        check_edit("a\n\n<!--\nh\n-->\n\ncol0\n", 0, 0, "PRE\n\n");
+        // Insert *inside* the first paragraph (the edit region is the block just
+        // above the fence), so reconvergence must fire at the fence-end blank.
+        check_edit("aaaa\n\n```\nc\n```\n\ncol0\n", 2, 2, "X");
+        // Delete spanning into the blank just after a closed fence (del_end on
+        // the blank line) — stresses pd at the block-end boundary under deletion.
+        check_edit("top\n\n```\nc\n```\n\ncol0 tail\n", 0, 5, "");
+    }
+
+    /// Caveat 2, deletion that lands `pd` one byte off a block end. A deletion
+    /// makes delta negative, so `pd = P - delta > P`; the tail-reuse boundary
+    /// is the most error-prone direction. Sweep small deletions around a closed
+    /// fence followed by a blank + col0.
+    #[test]
+    fn caveat2_deletion_pd_around_block_end() {
+        let base = "head\n\n```\ncode\n```\n\ncol0 body here\n";
+        // Delete 1..=6 bytes at several offsets inside the leading paragraph,
+        // so the fence + its trailing blank shift left by the deletion size and
+        // a reconvergence P must re-land exactly on the shifted fence end.
+        for start in [0usize, 2, 4] {
+            for len in 1..=4usize {
+                let del_end = (start + len).min(base.len());
+                check_edit(base, start, del_end, "");
+                check_edit(base, start, del_end, "z");
+            }
+        }
+    }
+
+    /// Caveat 3, hand-built: edits exactly at the frontmatter/body boundary and
+    /// on `---` lines. The RAW snapshot doesn't strip frontmatter, but `updated`
+    /// must survive a `---` reshape and a boundary insert. (The body-cache path
+    /// is exercised by the buffer tests; this nails the raw `updated`.)
+    #[test]
+    fn caveat3_frontmatter_boundary_and_dashes() {
+        let doc = "---\ntitle: x\n---\n\nbody para\n\nmore\n";
+        let fm_end = doc.len() - crate::frontmatter::body_after_frontmatter(doc).len();
+        // Insert at the first body byte.
+        check_edit(doc, fm_end, fm_end, "new first body\n\n");
+        // Insert just before the closing `---` (inside frontmatter region).
+        check_edit(doc, fm_end - 4, fm_end - 4, "extra: y\n");
+        // Turn the opening `---` into `----` (no longer a delimiter) — fm_end
+        // collapses; the raw structure must re-derive correctly.
+        check_edit(doc, 3, 3, "-");
+        // Insert a `---`-shaped line in the body (a thematic break / setext-ish).
+        let body_para = doc.find("body para").unwrap();
+        check_edit(doc, body_para, body_para, "---\n\n");
+        // Delete the blank between the closing `---` and the body (lazy-merge
+        // risk at the boundary).
+        let blank = doc.find("---\n\n").unwrap() + 3; // the `\n` after closing ---
+        check_edit(doc, blank, blank + 1, "");
+        // A body that itself becomes frontmatter-shaped: doc with no fm, insert
+        // `---\n...\n---\n` at the very top (creates frontmatter at byte 0).
+        let nofm = "hello\n\nworld\n";
+        check_edit(nofm, 0, 0, "---\nt: 1\n---\n");
+    }
+
+    /// Large-tail attack: the chunk starts at `(edit_new_end - r) + 8192` bytes,
+    /// so EVERY small-doc test reaches EOF in the first iteration and the chunk
+    /// is never truncated. This builds docs with a >8 KiB tail past the edit so
+    /// the chunk is genuinely truncated and must regrow — and plants
+    /// reconvergence-relevant structure (open fences, setext underlines, blanks)
+    /// straddling the ~8 KiB truncation boundary, where a truncated `chunk_struct`
+    /// could misclassify a break as clean. Asserts `updated == from_source`.
+    #[test]
+    fn large_tail_truncated_chunk_regrowth() {
+        // A filler line and a paragraph+setext shape, repeated to exceed the
+        // 8 KiB first-chunk size many times over. We vary the gap so the
+        // truncation boundary lands at different points relative to a fence /
+        // setext / blank. With a >8 KiB tail past the edit, the chunk starts
+        // truncated and the doubling loop in `updated` must regrow it before a
+        // far reconvergence point is reachable — the path every small-doc test
+        // skips (verified during red-team: ~4 regrowth iterations per doc).
+        let para_setext = "paragraph line that is reasonably long to eat bytes\n===\n\n";
+        let open_fence_run = "```\nfence body line one that is also fairly long indeed\n```\n\n";
+        for filler_kind in 0..3u8 {
+            let unit = match filler_kind {
+                0 => para_setext,
+                1 => open_fence_run,
+                // Alternating, to mix setext + fence across the boundary.
+                _ => "x [[Link]] and `code` and a #tag here, prose prose\n\n",
+            };
+            // Build a tail well over 8 KiB (so 2–3 chunk doublings happen).
+            let mut tail = String::new();
+            while tail.len() < 20_000 {
+                tail.push_str(unit);
+            }
+            // Put a real reconvergence target (blank + col0) at the very end,
+            // and an open-to-EOF fence just before it in one variant.
+            tail.push_str("\nFINAL col0 block\n");
+
+            for head in ["head\n\n", "a\n\n```\nclosed\n```\n\n"] {
+                let old = format!("{head}{tail}");
+                // Edit near the TOP (so the whole 20 KB tail shifts and the
+                // chunk must cover/ regrow toward a far reconvergence point).
+                check_edit(&old, 0, 0, "PREPENDED PARAGRAPH\n\n");
+                check_edit(&old, head.len(), head.len(), "inserted near head\n\n");
+                // An edit that itself opens a fence to (near) EOF mid-tail.
+                let mid = head.len() + 5_000;
+                let mid = snap_up(&old, mid);
+                check_edit(&old, mid, mid, "```\nnewly opened fence\n");
+                // A deletion near the top (negative delta, big tail shift).
+                check_edit(&old, head.len(), head.len() + 10, "");
+            }
+        }
+    }
+
+    /// Caveat 3 correctness: drive a frontmatter buffer through a sequence of
+    /// BODY edits (each strictly past the frontmatter, so `apply_edit` takes the
+    /// incremental body-cache branch with frontmatter present) and assert
+    /// `highlight_in_range` stays equal to the stateless path throughout. The
+    /// `apply_edit` `debug_assert!` independently cross-checks `body_updated ==
+    /// from_source(new_body)` on every step — so in a debug build this is also a
+    /// hard body-cache structure check.
+    #[test]
+    fn caveat3_body_cache_incremental_branch_exercised() {
+        use crate::doc_buffer::DocBufferState;
+        let mut text =
+            "---\ntitle: T\ntags: [a]\n---\n\n# Head\n\nProse [[L]] and `c`.\n\n```\nfn x(){}\n```\n\n> q [@k]\n\ntail prose here\n"
+                .to_string();
+        let mut buf = DocBufferState::new(&text);
+        // Body-only edits at named anchors (all strictly past the frontmatter).
+        let steps: &[(&str, usize, &str)] = &[
+            ("tail prose", 0, "X "),                    // insert before a word
+            ("# Head", 6, "\n\nnew para after head\n"), // insert a block
+            ("Prose", 0, "the "),                       // before a wikilink
+            ("```\nfn", 3, "rust"),                     // add a fence language
+        ];
+        for &(needle, off, ins) in steps {
+            let at = text.find(needle).expect("anchor") + off;
+            let start_u16 = text[..at].encode_utf16().count();
+            buf.apply_edit(start_u16, 0, ins);
+            text = format!("{}{}{}", &text[..at], ins, &text[at..]);
+            assert_eq!(buf.byte_to_utf16(text.len()), text.encode_utf16().count());
+            // Sweep dirty ranges; cached buffer must equal stateless.
+            for frac in [0usize, 25, 50, 75, 100] {
+                let d = snap_up(&text, text.len() * frac / 100);
+                let d_u16 = text[..d].encode_utf16().count();
+                assert_eq!(
+                    buf.highlight_in_range(d_u16, d_u16),
+                    highlight_spans_in_range(&text, d..d),
+                    "caveat3 body-cache: cached != stateless at byte {d}\n text={text:?}"
+                );
+            }
+        }
+    }
+
+    /// Nested-container straddle: deeply nested lists / block quotes produce
+    /// `containers` entries (List, Item, BlockQuote — parent-before-child in
+    /// document order) whose ranges nest. The splice keeps prefix (`s < r`), mid
+    /// (`s < p`), tail (`s >= pd`) container entries; a clean break `r`/`P` must
+    /// never fall *between* a parent container and its child such that the
+    /// incremental `containers` Vec differs from a fresh parse. Stress nested
+    /// containers with edits at every line start. `from_source` equality (which
+    /// compares the full `containers` Vec) is the arbiter.
+    #[test]
+    fn nested_container_straddle_exhaustive() {
+        let shapes = [
+            // Nested bullet lists (loose, with inter-item blanks where P lands).
+            "- a\n  - b\n    - c\n\ntail\n",
+            "- a\n\n  - b\n\n    - c\n\ncol0\n",
+            // Block quote nesting a list nesting a fence.
+            "> - x\n>   ```\n>   code\n>   ```\n\nafter\n",
+            "> > deep\n> > quote\n\ncol0\n",
+            // Ordered list with indented continuation paragraphs.
+            "1. one\n\n   cont\n\n2. two\n\n   cont2\n\ndone\n",
+            // List item containing a blank-separated sub-paragraph then a col0.
+            "- item\n\n  para in item\n\ntop level\n",
+            // Quote then list then quote — multiple containers across blanks.
+            "> q1\n\n- l1\n\n> q2\n\nend\n",
+            // A list that runs to EOF (open container, e == len) with nesting.
+            "- a\n  - b\n    deep to eof\n",
+        ];
+        let inserts = [
+            "",
+            "x",
+            "\n\n",
+            "  - nested\n",
+            "> q\n",
+            "```\n",
+            "\n\ncol0\n",
+            "    indent\n",
+            "- i\n",
+            "text\n",
+        ];
+        let mut checked = 0usize;
+        for doc in shapes {
+            let mut line_starts = vec![0usize];
+            for (i, b) in doc.bytes().enumerate() {
+                if b == b'\n' {
+                    line_starts.push(i + 1);
+                }
+            }
+            for &pos in &line_starts {
+                let structure = StructureSnapshot::from_source(doc);
+                for &ins in &inserts {
+                    let new_source = splice_str(doc, pos, pos, ins);
+                    assert_eq!(
+                        structure.updated(&new_source, pos, pos, ins.len()),
+                        StructureSnapshot::from_source(&new_source),
+                        "nested insert: doc={doc:?} pos={pos} ins={ins:?}"
+                    );
+                    checked += 1;
+                    let del_end = snap_up(
+                        doc,
+                        doc[pos..].find('\n').map_or(doc.len(), |i| pos + i + 1),
+                    );
+                    if del_end > pos {
+                        let new_source = splice_str(doc, pos, del_end, ins);
+                        assert_eq!(
+                            structure.updated(&new_source, pos, del_end, ins.len()),
+                            StructureSnapshot::from_source(&new_source),
+                            "nested replace: doc={doc:?} pos={pos}..{del_end} ins={ins:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked >= 800, "expected a full sweep, ran {checked}");
+    }
+}

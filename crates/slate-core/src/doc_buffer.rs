@@ -118,6 +118,11 @@ impl DocBufferState {
         // chunk from a clean break to a reconvergence point. A `debug_assert!`
         // cross-checks it against a from-scratch parse on every edit, turning
         // every test that drives the buffer into a structure-soundness check.
+        // The assert is debug-only — in release a divergence would silently
+        // flow into `window_diverges`, so the differential census in
+        // `editor_spans` (`incremental_structure_*`, 100k+ sequences + the
+        // exhaustive single-edit and caveat suites) is the real correctness
+        // guarantee. Do not weaken it.
         let new_source = self.buffer.to_string();
         let updated = self
             .structure
