@@ -238,6 +238,25 @@ Same machine + toolchain as the 2026-05-17 row. `bench_doc_buffer_keystroke` mea
 
 **This row is the Slice B regression target, and it is deliberately still ~O(n).** Slice A delivers the *foundation* (the stateful rope-backed buffer) + the editor wiring, and it removes the per-keystroke costs the **Swift** side used to pay — the whole-document string marshalled across FFI every pass and the four `TextBuffer::from_str` rope rebuilds for the dirty/applied conversions (now O(log n) on the live rope; see the #375 Swift end-to-end row for what those cost). But the *structural decision* inside `highlight_in_range` is unchanged: it materialises the rope once and calls today's `highlight_spans_in_range`, which parses block structure over the whole document (the `StructureSnapshot` oracle). So the mid rows still scale ~linearly (10 KB → 8 MB is ~63 µs → ~63 ms) and the tail row matches the mid row — exactly the O(prefix) floor #379 documented. Slice B replaces the whole-doc parse with an incrementally maintained `StructureSnapshot`, which is what flattens the mid/tail curve to O(window); this table is what proves it when it lands.
 
+## V1 — 2026-05-31 (#404 Slice B: incremental structure + cached frontmatter body — the flatten)
+
+Slice B lands the two structural optimizations the Slice A row above set up as its regression target:
+
+- **Task A — reconvergence-stopped `StructureSnapshot::updated`.** `apply_edit` no longer re-parses the whole document suffix from the clean break. It re-parses only a *bounded chunk* `[r, P)` from the clean break `r ≤ edit_start` to the first **reconvergence point** `P` past the edit (a blank line where the new parse and the shifted old parse provably agree), then splices the untouched prefix (`< r`) and the untouched, byte-shifted old tail (`≥ P`) around it. O(suffix) → O(edit).
+- **Task B — cached frontmatter-body framing.** The ranged highlight runs a second `window_diverges` on the *frontmatter-stripped body* (CRITICAL #2) that previously called `StructureSnapshot::from_source(body)` — an O(document) parse — on every keystroke. `DocBufferState` now caches that body snapshot and maintains it incrementally on `apply_edit` (the same reconvergence machinery, body-local), so a body keystroke never re-parses the body. Frontmatter-touching edits (rare) rebuild it from scratch.
+
+Same `bench_doc_buffer_keystroke` as the Slice A row, re-measured before/after on one machine (an Apple-silicon laptop faster than the 2026-05-17 reference box, so the absolute Slice A "before" numbers here run lower than the canonical row above; the **ratios** are what matter):
+
+| scenario | before (Slice A) | after (Slice B) | speedup |
+|---|---|---|---|
+| `doc_buffer_keystroke/mid/10kb` | 49.4 µs | **39.4 µs** | 1.3× |
+| `doc_buffer_keystroke/mid/100kb` | 404 µs | **86.7 µs** | 4.7× |
+| `doc_buffer_keystroke/mid/1mb` | 5.84 ms | **393 µs** | 14.9× |
+| `doc_buffer_keystroke/mid/8mb` | 48.4 ms | **4.03 ms** | 12.0× |
+| `doc_buffer_keystroke/tail_8mb` | 36.4 ms | **4.05 ms** | 9.0× |
+
+The mid curve is now near-flat: an 8 MB note's keystroke dropped from ~48 ms (canonical box: ~63 ms) to ~4 ms, and `tail_8mb` matches `mid/8mb` (the structural scan is no longer whole-doc, so edit position is irrelevant). The residual ~O(n) — `mid/8mb` is still ~10× `mid/1mb` — is **not** the structure parse any more; it's the two `Rope::to_string()` full materializations (`apply_edit` reads the post-edit text once, `highlight_in_range` once more) plus the whole-document `scan_comments` / `%%` sweep in the ranged comment fallback. Those are inherent to the current `&str`-in / whole-document-coordinates contract of `highlight_spans_in_range`, not the two structural costs this slice removed; flattening them further is a separate change (a rope-native windowed highlight) outside #404. The arbiter is the `incremental_structure_*` differential census (raw + frontmatter) at `PROPTEST_CASES=100000`, plus an exhaustive single-edit reconvergence census and a buffer-level body-cache census — all green.
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.
