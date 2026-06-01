@@ -215,18 +215,29 @@ pub struct RangedHighlight {
 /// True O(edit) (incremental structure) would need a cached parse and is
 /// deferred.
 pub fn highlight_spans_in_range(source: &str, dirty: std::ops::Range<usize>) -> RangedHighlight {
-    highlight_spans_in_range_with(source, dirty, &StructureSnapshot::from_source(source))
+    // The free function has no cached structure: parse the raw snapshot per
+    // call, and pass `None` for the body so the body check re-derives
+    // `from_source(body)` as it always has. The stateful buffer supplies both.
+    highlight_spans_in_range_with(source, dirty, &StructureSnapshot::from_source(source), None)
 }
 
 /// [`highlight_spans_in_range`] with the raw-source block structure injected
 /// — the #404 seam. The free function (and the differential oracle) pass a
-/// freshly parsed [`StructureSnapshot`]; the stateful `DocumentBuffer` will
-/// pass its incrementally maintained one. Behaviour is identical for an equal
-/// snapshot, so the existing invariant proptests gate this refactor.
+/// freshly parsed [`StructureSnapshot`] and `None` for `body_structure`; the
+/// stateful `DocumentBuffer` passes its two incrementally maintained snapshots
+/// (raw + frontmatter-body). Behaviour is identical for equal snapshots, so the
+/// existing invariant proptests gate this refactor.
+///
+/// `body_structure`, when `Some`, MUST be `StructureSnapshot::from_source(&
+/// source[fm_end..])` — the block structure of the frontmatter-stripped body
+/// (its offsets are body-local, i.e. relative to `fm_end`). The buffer caches
+/// it so the per-keystroke path doesn't re-parse the whole body just to run the
+/// CRITICAL #2 un-pairing check; `None` falls back to parsing it here.
 pub(crate) fn highlight_spans_in_range_with(
     source: &str,
     dirty: std::ops::Range<usize>,
     raw_structure: &StructureSnapshot,
+    body_structure: Option<&StructureSnapshot>,
 ) -> RangedHighlight {
     let whole = || RangedHighlight {
         applied_range: 0..source.len(),
@@ -278,16 +289,26 @@ pub(crate) fn highlight_spans_in_range_with(
     // CRITICAL #2). Only the opaque-block half applies (container nesting
     // doesn't change wikilink/citation suppression). `win_start >= fm_end`
     // here (we returned above otherwise), so the offsets never underflow.
-    if fm_end > 0
-        && window_diverges(
-            &StructureSnapshot::from_source(body),
+    // The body snapshot is the per-keystroke frontmatter cost (#404 Task B):
+    // use the buffer's cached one when supplied, else parse it now.
+    if fm_end > 0 {
+        let body_owned;
+        let body_struct = match body_structure {
+            Some(cached) => cached,
+            None => {
+                body_owned = StructureSnapshot::from_source(body);
+                &body_owned
+            }
+        };
+        if window_diverges(
+            body_struct,
             body,
             win_start - fm_end,
             win_end - fm_end,
             false,
-        )
-    {
-        return whole();
+        ) {
+            return whole();
+        }
     }
     // `%%…%%` comments: a `%%` typed in the window, or a window that
     // intersects an existing comment.
@@ -386,6 +407,25 @@ fn extend_down_to_blank(source: &str, end: usize) -> usize {
 fn line_is_dashes_delim(source: &str, line_start_byte: usize) -> bool {
     let le = line_end(source, line_start_byte);
     source[line_start_byte..le].trim() == "---"
+}
+
+/// True when the first non-blank line strictly below the blank line at
+/// `blank_start` begins at **column 0** (its first byte is not `' '`/`'\t'`),
+/// or there is no non-blank line below (EOF). The reconvergence stop (#404)
+/// uses this as cond 3: a column-0 line under a blank is a fresh top-level
+/// block in BOTH the old and the new parse — no indented-code / list / quote
+/// continuation or setext underline from above can reach across the blank into
+/// it — so the parses below the blank are byte-for-byte the same structure.
+fn first_nonblank_below_is_col0(source: &str, blank_start: usize) -> bool {
+    let mut ls = line_end(source, blank_start);
+    while ls < source.len() {
+        if !line_is_blank(source, ls) {
+            let b = source.as_bytes()[ls];
+            return b != b' ' && b != b'\t';
+        }
+        ls = line_end(source, ls);
+    }
+    true
 }
 
 /// A discriminant for the **opaque block** kinds whose presence/extent the
@@ -542,27 +582,181 @@ impl StructureSnapshot {
     }
 
     /// Incrementally produce the structure of `new_source` from `self` (the
-    /// pre-edit structure), given the edit began at byte `edit_start` with
-    /// `new_source[..edit_start]` byte-identical to the source `self` was
-    /// built from. #404 Slice B.
+    /// pre-edit structure), given the edit replaced `[edit_start, edit_old_end)`
+    /// of the old source with `new_text_len` bytes, so `new_source[..edit_start]`
+    /// is byte-identical to the old prefix and `new_source[edit_new_end..]` (with
+    /// `edit_new_end = edit_start + new_text_len`) is byte-identical to the old
+    /// tail `old_source[edit_old_end..]`, merely shifted by
+    /// `delta = new_text_len - (edit_old_end - edit_start)`. #404 Slice B.
     ///
-    /// Re-parses only the document SUFFIX from a clean break at or before the
-    /// edit and reuses the untouched prefix. **Correct by construction** — the
-    /// suffix part IS a `from_source` parse of `new_source[r..]`, and a clean
-    /// break guarantees that equals the whole-document parse there; the prefix
-    /// is unchanged. The buffer `debug_assert!`s `updated == from_source` on
-    /// every edit. (Phase 1 re-parses to EOF — O(suffix); the reconvergence
-    /// stop that bounds it to O(edit) is layered on next.)
-    pub(crate) fn updated(&self, new_source: &str, edit_start: usize) -> Self {
+    /// Re-parses only a BOUNDED chunk around the edit — from a clean break `r ≤
+    /// edit_start` to a **reconvergence point** `P` past the edit where the new
+    /// parse and the (shifted) old parse provably agree — and reuses both the
+    /// untouched prefix (`< r`) and the untouched, shifted tail (`≥ P`). That
+    /// makes the keystroke path O(edit) rather than O(suffix); if no `P` is
+    /// found before EOF it falls back to the Phase-1 whole-suffix re-parse.
+    ///
+    /// **Soundness.** Above `r` the prefix is unchanged. The middle is a real
+    /// `from_source` parse of `new_source[r..chunk_end]`; because `P` is a clean
+    /// break *in that parse* (cond 1), nothing below `P` affects the structure
+    /// in `[r, P)`, so the middle agrees with `from_source(new_source[r..])`
+    /// there. For the tail we reuse `self`'s ranges with `start ≥ pd`
+    /// (`pd = P - delta`) shifted by `+delta`; that is valid iff `P` is *also* a
+    /// clean break in BOTH parses over the identical tail `new_source[P..] ==
+    /// old_source[pd..]`. Cond 2 (no OLD range covers `pd`, including an
+    /// open-to-EOF one) gives "fresh below `pd`" on the old side; cond 3 (the
+    /// first non-blank line below `P` starts at column 0) makes that line a
+    /// fresh top-level block in BOTH old and new regardless of what sits above
+    /// the blank `P` — no indented-code / list / quote / setext construct can
+    /// reach across `P` into it — so the two parses below `P` are byte-for-byte
+    /// the same structure. The buffer `debug_assert!`s `updated == from_source`
+    /// on every edit, and the differential census is the proof.
+    pub(crate) fn updated(
+        &self,
+        new_source: &str,
+        edit_start: usize,
+        edit_old_end: usize,
+        new_text_len: usize,
+    ) -> Self {
         let r = self.clean_break_before(new_source, edit_start);
         if r == 0 {
             return Self::from_source(new_source);
         }
-        let suffix = Self::from_source(&new_source[r..]).shifted(r);
-        // A clean break splits every cached range cleanly (nothing covers r),
-        // so "start < r" keeps exactly the prefix ranges; the suffix re-parse
-        // owns `[r, len)`. Block order stays document order (prefix < r ≤
-        // suffix), which `window_diverges`' equality compare relies on.
+        let delta = new_text_len as isize - (edit_old_end - edit_start) as isize;
+        let edit_new_end = edit_start + new_text_len;
+
+        // Grow a chunk `[r, chunk_end)` until a reconvergence point P appears or
+        // it reaches EOF. The first reach already clears a margin past the edit
+        // so a P just below the edit needs no regrowth in the common case.
+        let mut chunk = (edit_new_end - r) + 8192;
+        loop {
+            let chunk_end = (r + chunk).min(new_source.len());
+            let chunk_end = ceil_char_boundary(new_source, chunk_end);
+            let chunk_text = &new_source[r..chunk_end];
+            let chunk_struct = Self::from_source(chunk_text);
+
+            if let Some(p) = self.reconvergence_point(
+                new_source,
+                &chunk_struct,
+                chunk_text,
+                r,
+                edit_new_end,
+                delta,
+            ) {
+                return self.splice(chunk_struct, r, p, delta, new_source.len());
+            }
+
+            if chunk_end == new_source.len() {
+                // Reached EOF with no reconvergence — the chunk IS the whole
+                // suffix, so splice it as Phase 1 would (prefix `< r` ++ the
+                // shifted suffix), no extra parse.
+                return self.splice_suffix(chunk_struct, r, new_source.len());
+            }
+            chunk = chunk.saturating_mul(2);
+        }
+    }
+
+    /// The first **reconvergence point** `P` strictly past `edit_new_end`: the
+    /// start of a blank line where the freshly-parsed chunk (`chunk_struct` over
+    /// `chunk_text == new_source[r..]`) has a clean break (cond 1), no OLD range
+    /// covers `pd = P - delta` (cond 2), and the first non-blank line below `P`
+    /// in `new_source` begins at column 0 (cond 3). See [`updated`](Self::updated)
+    /// for why those three imply the new and shifted-old parses agree from `P` on.
+    fn reconvergence_point(
+        &self,
+        new_source: &str,
+        chunk_struct: &Self,
+        chunk_text: &str,
+        r: usize,
+        edit_new_end: usize,
+        delta: isize,
+    ) -> Option<usize> {
+        // Scan blank lines within the chunk, in document order, starting just
+        // past the edit. `ls` walks line starts in document (new_source) space;
+        // `chunk_text` is `new_source[r..]`, so a chunk-local offset is `ls - r`.
+        let chunk_end = r + chunk_text.len();
+        let mut ls = line_start(new_source, edit_new_end.min(new_source.len()));
+        // Never reconverge at or before the edit — `P > edit_new_end` keeps `P`
+        // (and `pd`) inside the identical tail region.
+        if ls <= edit_new_end {
+            ls = line_end(new_source, ls);
+        }
+        while ls < chunk_end {
+            if line_is_blank(new_source, ls)
+                && ls > edit_new_end
+                && chunk_struct.break_is_clean(chunk_text, ls - r)
+            {
+                let pd = ls as isize - delta;
+                // Cond 2: pd is in range and no OLD block/container covers it
+                // (an open-to-EOF range, `e == self.len`, can still extend, so
+                // it "covers" pd even when `pd >= e`).
+                let covered = pd < 0
+                    || self
+                        .blocks
+                        .iter()
+                        .any(|&(s, e, _)| (s as isize) < pd && (pd < e as isize || e == self.len))
+                    || self
+                        .containers
+                        .iter()
+                        .any(|&(s, e)| (s as isize) < pd && (pd < e as isize || e == self.len));
+                // Cond 3: the first non-blank line below P starts at column 0.
+                if !covered && first_nonblank_below_is_col0(new_source, ls) {
+                    return Some(ls);
+                }
+            }
+            ls = line_end(new_source, ls);
+        }
+        None
+    }
+
+    /// Splice prefix (`< r`) ++ middle chunk (shifted to `r`, `start < P`) ++
+    /// shifted old tail (`start ≥ pd`, shifted by `+delta`). Block/container
+    /// document order is preserved: prefix `< r ≤` middle `< P ≤` shifted tail.
+    fn splice(&self, chunk_struct: Self, r: usize, p: usize, delta: isize, new_len: usize) -> Self {
+        let pd = (p as isize - delta) as usize;
+        let mid = chunk_struct.shifted(r);
+        let shift_tail = |v: isize| (v + delta) as usize;
+
+        let mut blocks: Vec<(usize, usize, u8)> = self
+            .blocks
+            .iter()
+            .copied()
+            .filter(|&(s, ..)| s < r)
+            .collect();
+        blocks.extend(mid.blocks.into_iter().filter(|&(s, ..)| s < p));
+        blocks.extend(
+            self.blocks
+                .iter()
+                .filter(|&&(s, ..)| s >= pd)
+                .map(|&(s, e, k)| (shift_tail(s as isize), shift_tail(e as isize), k)),
+        );
+
+        let mut containers: Vec<(usize, usize)> = self
+            .containers
+            .iter()
+            .copied()
+            .filter(|&(s, _)| s < r)
+            .collect();
+        containers.extend(mid.containers.into_iter().filter(|&(s, _)| s < p));
+        containers.extend(
+            self.containers
+                .iter()
+                .filter(|&&(s, _)| s >= pd)
+                .map(|&(s, e)| (shift_tail(s as isize), shift_tail(e as isize))),
+        );
+
+        Self {
+            blocks,
+            containers,
+            len: new_len,
+        }
+    }
+
+    /// Phase-1 splice (no reconvergence found): prefix (`< r`) ++ the whole
+    /// re-parsed suffix (`chunk_struct` over `new_source[r..EOF]`, shifted to
+    /// `r`). A clean break at `r` makes "start < r" keep exactly the prefix.
+    fn splice_suffix(&self, suffix: Self, r: usize, new_len: usize) -> Self {
+        let suffix = suffix.shifted(r);
         let mut blocks: Vec<(usize, usize, u8)> = self
             .blocks
             .iter()
@@ -580,7 +774,7 @@ impl StructureSnapshot {
         Self {
             blocks,
             containers,
-            len: new_source.len(),
+            len: new_len,
         }
     }
 }
@@ -2106,6 +2300,141 @@ mod range_proptests {
         b
     }
 
+    /// #404 Task A: deterministic, COMPLETE coverage of the single-edit
+    /// reconvergence-stop space. Mirrors `exhaustive_small_docs_over_breaker_
+    /// alphabet_match` (the #379 windowing census) but for `updated`: take a
+    /// curated set of small docs, insert every breaker at every line-start, and
+    /// assert the incremental `updated` equals a from-scratch `from_source`.
+    /// The proptest samples this space; this nails the single-edit corners it
+    /// might miss (a `P` chosen one line too high, an open-block / list /
+    /// indented-continuation that straddles a candidate `P`, a column-0 vs
+    /// indented line below `P`). A divergence here is a reconvergence-splice bug.
+    #[test]
+    fn exhaustive_single_edit_reconvergence_matches_from_source() {
+        // Breaker lines whose interaction across a blank line is what makes a
+        // reconvergence point sound-or-not: fences (open + close), HTML block
+        // open/close, list markers + indented continuations, setext underline,
+        // `---`, headings, blanks, a `%%`-comment (overlay; must not perturb
+        // pulldown's block parse), prose.
+        let lines = [
+            "",
+            "para",
+            "# H",
+            "```",
+            "```rust",
+            "~~~",
+            "---",
+            "===",
+            "<!--",
+            "-->",
+            "<div>",
+            "- a",
+            "1. b",
+            "    indented",
+            "\ttabbed",
+            "  two",
+            "> q",
+            "%% c %%",
+            "x [[L]]",
+        ];
+        // Curated small docs (1–4 lines) over those breakers, plus a few hand-
+        // built shapes that put an absorbing construct (open fence, loose list,
+        // indented continuation) right where a reconvergence point would land.
+        let mut docs: Vec<String> = Vec::new();
+        for &a in &lines {
+            docs.push(format!("{a}\n"));
+            for &b in &lines {
+                docs.push(format!("{a}\n{b}\n"));
+                for &c in &lines {
+                    docs.push(format!("{a}\n{b}\n{c}\n"));
+                }
+            }
+        }
+        for shape in [
+            "p\n\n```\nopen fence to eof\n",
+            "- a\n\n    list-cont code\n\ntail\n",
+            "- a\n\n\n    loose blank head\n",
+            "p\n\n```\ncode\n```\n\nq\n\n```\ncode2\n```\n\nr\n",
+            "<!--\n\n```\nhtml-masked fence\n",
+            "para one\ncont two\n=====\n\nbody\n",
+            "> q\n\n  ~~~\n# h\n",
+        ] {
+            docs.push(shape.to_string());
+        }
+
+        // Breakers to insert (the edit). A blank, a fence open/close, an HTML
+        // open/close, a list marker, an indented line, `---`/`===`, a heading,
+        // a `%%`, a deletion-ish empty string, and plain text.
+        let inserts = [
+            "",
+            "x",
+            "\n",
+            "\n\n",
+            "```\n",
+            "~~~\n",
+            "<!--\n",
+            "-->\n",
+            "---\n",
+            "===\n",
+            "# H\n",
+            "- i\n",
+            "    indent\n",
+            "> q\n",
+            "%% c %%",
+            "[[L]]",
+        ];
+
+        let mut checked = 0usize;
+        for doc in &docs {
+            // Insert at every line-start (a clean break, if any, sits at or
+            // above the edit; a reconvergence point, if any, sits below it).
+            let mut line_starts = vec![0usize];
+            for (i, b) in doc.bytes().enumerate() {
+                // The byte after each `\n` is a line start (== doc.len() when the
+                // doc ends in `\n`; `updated`/`from_source` both accept EOF).
+                if b == b'\n' {
+                    line_starts.push(i + 1);
+                }
+            }
+            for &pos in &line_starts {
+                let structure = StructureSnapshot::from_source(doc);
+                for &ins in &inserts {
+                    // Pure insertion (del_end == pos): the reconvergence path's
+                    // primary shape, and what keystrokes are.
+                    let new_source = format!("{}{}{}", &doc[..pos], ins, &doc[pos..]);
+                    let incremental = structure.updated(&new_source, pos, pos, ins.len());
+                    assert_eq!(
+                        incremental,
+                        StructureSnapshot::from_source(&new_source),
+                        "insert: doc={doc:?} pos={pos} ins={ins:?}"
+                    );
+                    checked += 1;
+                    // A deletion of one line below `pos`, if present — exercises
+                    // a non-zero positive delta (tail shifts the other way).
+                    let del_end = snap_up(doc, line_end_after(doc, pos));
+                    if del_end > pos {
+                        let new_source = format!("{}{}{}", &doc[..pos], ins, &doc[del_end..]);
+                        let incremental = structure.updated(&new_source, pos, del_end, ins.len());
+                        assert_eq!(
+                            incremental,
+                            StructureSnapshot::from_source(&new_source),
+                            "replace: doc={doc:?} pos={pos}..{del_end} ins={ins:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 200_000, "expected a full sweep, ran {checked}");
+    }
+
+    /// Byte just past the end of the line containing `pos` in `s` (the byte
+    /// after the next `\n`, or `s.len()`). A line-granular delete end for the
+    /// exhaustive single-edit census.
+    fn line_end_after(s: &str, pos: usize) -> usize {
+        s[pos..].find('\n').map_or(s.len(), |i| pos + i + 1)
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(500))]
 
@@ -2126,7 +2455,7 @@ mod range_proptests {
                 let pos = snap_up(&source, source.len() * pct / 100);
                 let del_end = snap_up(&source, pos + del);
                 let new_source = format!("{}{}{}", &source[..pos], ins, &source[del_end..]);
-                let incremental = structure.updated(&new_source, pos);
+                let incremental = structure.updated(&new_source, pos, del_end, ins.len());
                 let from_scratch = StructureSnapshot::from_source(&new_source);
                 prop_assert_eq!(
                     &incremental, &from_scratch,
@@ -2152,7 +2481,7 @@ mod range_proptests {
                 let pos = snap_up(&source, source.len() * pct / 100);
                 let del_end = snap_up(&source, pos + del);
                 let new_source = format!("{}{}{}", &source[..pos], ins, &source[del_end..]);
-                let incremental = structure.updated(&new_source, pos);
+                let incremental = structure.updated(&new_source, pos, del_end, ins.len());
                 prop_assert_eq!(
                     &incremental, &StructureSnapshot::from_source(&new_source),
                     "incremental != from_source (fm)\n edit: pos={} del={}..{} ins={:?}\n old={:?}\n new={:?}",
