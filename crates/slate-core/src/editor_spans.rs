@@ -3664,4 +3664,448 @@ mod redteam_reconvergence {
         }
         assert!(checked >= 800, "expected a full sweep, ran {checked}");
     }
+
+    // ======================================================================
+    // #407 adversarial red-team (caveats 1–3): kept. These bias harder than
+    // the shipping generators toward the three self-flagged corners — the
+    // CommentIndex halo rule (incl. CRLF / multibyte near `%`, long `%` runs,
+    // body-straddle shifts, deletion-joins across a gap), the window-native
+    // fallback identity at a mid-line / CRLF / EOF `fm_end`, and `rope_fm_end`
+    // grow/clamp. A `buffer_matches_stateless` / comment-index divergence here
+    // is CRITICAL.
+    // ======================================================================
+
+    use crate::text_buffer::TextBuffer;
+
+    /// `rope_fm_end` is `pub(super)`? No — it's a private fn in `doc_buffer`.
+    /// Re-derive the oracle boundary here so the frontmatter proptests can pin
+    /// the buffer end-to-end without reaching into `doc_buffer` internals.
+    fn oracle_fm_end(s: &str) -> usize {
+        s.len() - crate::frontmatter::body_after_frontmatter(s).len()
+    }
+
+    /// A `%`-dense line generator: lone `%`, `%%`, `%%%`, `%\n%`-forming
+    /// shapes, multi-line comment bodies, and CRLF/​multibyte content next to
+    /// `%` — the exact neighbours the halo rule reasons about.
+    fn pct_dense_line() -> impl Strategy<Value = String> {
+        prop_oneof![
+            5 => Just("".to_string()),
+            4 => Just("%".to_string()),         // lone percent (halo bait)
+            4 => Just("%%".to_string()),
+            2 => Just("%%%".to_string()),       // odd run
+            2 => Just("%%%%".to_string()),      // even run / empty comment
+            3 => Just("%% c %%".to_string()),
+            2 => Just("a%b".to_string()),       // percent-free but '%'-adjacent bait
+            2 => Just("x%".to_string()),        // trailing lone %
+            2 => Just("%y".to_string()),        // leading lone %
+            2 => Just("café%%".to_string()),    // multibyte immediately left of %%
+            2 => Just("%%café".to_string()),    // multibyte immediately right of %%
+            2 => Just("a\r".to_string()),       // bare CR (content) before a join
+            1 => Just("%%\r".to_string()),      // CR right after %%
+            2 => Just("plain prose".to_string()),
+            1 => Just("# head".to_string()),
+            1 => Just("```".to_string()),
+        ]
+    }
+
+    fn pct_dense_source() -> impl Strategy<Value = String> {
+        proptest::collection::vec(pct_dense_line(), 0..16).prop_map(|lines| {
+            let mut s = lines.join("\n");
+            s.push('\n');
+            s
+        })
+    }
+
+    /// Comment-mutating insert text incl. multibyte + CRLF the shipping
+    /// `comment_edit_ins` omits — a `%` glued to a multibyte char, a CR, an
+    /// astral scalar adjacent to `%`.
+    fn pct_dense_ins() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just(String::new()),
+            Just("%".to_string()),
+            Just("%%".to_string()),
+            Just("%%%".to_string()),
+            Just("é%".to_string()),     // multibyte then %
+            Just("%é".to_string()),     // % then multibyte
+            Just("😀%".to_string()),    // astral then %
+            Just("\r".to_string()),     // bare CR
+            Just("\r\n%%".to_string()), // CRLF then %%
+            Just("%% x %%".to_string()),
+            Just("x".to_string()),
+            Just("\n".to_string()),
+        ]
+    }
+
+    proptest! {
+        // Crank via PROPTEST_CASES; default modest.
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// CRITICAL gate, harder generator: a `%`-dense doc + `%`-dense edits
+        /// (multibyte / CRLF near `%`, odd `%` runs) driven through BOTH the
+        /// `&str` `CommentIndex::apply_edit` AND the live-rope path (a
+        /// `TextBuffer` fed the identical edit), each asserted byte-identical to
+        /// a from-scratch `scan_comment_ranges`. Carries the index forward so a
+        /// shift/re-scan error compounds. The rope arm exercises `byte_at` /
+        /// `slice_to_string` on the rope — the halo reads the shipping `&str`
+        /// census never touches.
+        #[test]
+        fn pct_dense_comment_index_str_and_rope_match_scan(
+            seed in pct_dense_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..5, pct_dense_ins()), 1..14),
+        ) {
+            let mut source = seed;
+            let mut idx_str = CommentIndex::from_source(&source);
+            let mut idx_rope = CommentIndex::from_source(&source);
+            let mut buf = TextBuffer::from_str(&source);
+            for (pct, del, ins) in edits {
+                let start = snap_up(&source, source.len() * pct / 100);
+                let del_end = snap_up(&source, start + del);
+                let deleted = source[start..del_end].to_string();
+                let new_source = splice_str(&source, start, del_end, &ins);
+
+                // `&str` arm.
+                idx_str.apply_edit(&new_source, start, &deleted, &ins);
+                // Rope arm: mutate a real rope, then maintain the index off it.
+                buf.replace(start..del_end, &ins);
+                idx_rope.apply_edit(&buf, start, &deleted, &ins);
+
+                let scan = CommentIndex::from_source(&new_source);
+                prop_assert_eq!(
+                    &idx_str, &scan,
+                    "str CommentIndex != scan\n edit [{}..{}) ins={:?}\n old={:?}\n new={:?}",
+                    start, del_end, ins, source, new_source
+                );
+                prop_assert_eq!(
+                    &idx_rope, &scan,
+                    "rope CommentIndex != scan\n edit [{}..{}) ins={:?}\n old={:?}\n new={:?}",
+                    start, del_end, ins, source, new_source
+                );
+                prop_assert_eq!(buf.to_string(), new_source.clone(), "rope text drift");
+                source = new_source;
+            }
+        }
+
+        /// CRITICAL end-to-end gate on `%`-dense docs: the buffer's
+        /// window-native `highlight_in_range` (consuming the incremental,
+        /// rope-fed comment index) must stay byte-identical to the stateless
+        /// oracle after every `%`-dense edit. This is the path the index feeds.
+        #[test]
+        fn pct_dense_buffer_matches_stateless(
+            seed in pct_dense_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..5, pct_dense_ins()), 1..10),
+        ) {
+            let edits: Vec<(usize, usize, String)> = edits.into_iter().collect();
+            assert_buffer_matches_stateless(&seed, &edits, &[0, 20, 40, 60, 80, 100])?;
+        }
+    }
+
+    /// CRITICAL exhaustive: every `%`-mutating token inserted/deleted at EVERY
+    /// char-boundary offset of small `%`-shaped docs, on BOTH the `&str` and the
+    /// rope index, each vs a from-scratch scan. Directly nails the halo seam:
+    /// a `%` typed against a `%`, deleting one `%` of a `%%`, a body-straddle
+    /// shrink/grow, a deletion that joins two `%` across a gap.
+    #[test]
+    fn pct_index_exhaustive_str_and_rope() {
+        let docs = [
+            "%% a %%\n",
+            "%%%%\n",
+            "%%%\n",
+            "a%b%c\n",   // lone %s with gaps — deletion can join them
+            "%a%b%c%\n", // alternating
+            "x %% mid %% y\n",
+            "%% open\nbody\nclose %%\n",
+            "pre %\n% post\n",  // split %% across a newline
+            "café %% x %% ☃\n", // multibyte around a comment
+            "%\n%\n%\n",        // lone %s on their own lines
+            "%%a%%b%%\n",       // back-to-back comments, then trailing %%
+        ];
+        let toks = ["", "%", "%%", "%%%", "x", "é", "😀", "\r", "\n"];
+        let mut checked = 0usize;
+        for doc in docs {
+            let offsets: Vec<usize> = (0..=doc.len())
+                .filter(|&o| doc.is_char_boundary(o))
+                .collect();
+            for &pos in &offsets {
+                for &ins in &toks {
+                    // Pure insert + delete-1..=3 then insert, snapped.
+                    let plans: Vec<(usize, usize)> = std::iter::once((pos, pos))
+                        .chain((1..=3usize).map(|d| (pos, snap_up(doc, (pos + d).min(doc.len())))))
+                        .collect();
+                    for (start, del_end) in plans {
+                        if del_end < start {
+                            continue;
+                        }
+                        let deleted = &doc[start..del_end];
+                        let new_source = splice_str(doc, start, del_end, ins);
+                        let scan = CommentIndex::from_source(&new_source);
+
+                        let mut s = CommentIndex::from_source(doc);
+                        s.apply_edit(&new_source, start, deleted, ins);
+                        assert_eq!(s, scan, "str: doc={doc:?} [{start}..{del_end}) ins={ins:?}");
+
+                        let mut buf = TextBuffer::from_str(doc);
+                        buf.replace(start..del_end, ins);
+                        let mut r = CommentIndex::from_source(doc);
+                        r.apply_edit(&buf, start, deleted, ins);
+                        assert_eq!(
+                            r, scan,
+                            "rope: doc={doc:?} [{start}..{del_end}) ins={ins:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 4_000, "expected a full sweep, ran {checked}");
+    }
+
+    /// CRITICAL: a body-straddle shift sweep — insert/delete non-`%` text
+    /// STRICTLY inside a comment body (so the index takes the `straddle ⇒ shift
+    /// only the end` branch, not a re-scan) and confirm the cached index still
+    /// equals a fresh scan. The branch the halo rule's correctness most depends
+    /// on, isolated.
+    #[test]
+    fn comment_body_straddle_shift_is_exact() {
+        // One comment with a multi-char body; edits land strictly between the
+        // delimiters and contain no `%`, so neither halo fires.
+        let docs = [
+            "%% abcdef %%\n",
+            "lead %% body here %% trail\n",
+            "%% one %%\n%% two has a longer body %%\n", // two comments; edit the 2nd body
+            "x %% αβγ multibyte body δεζ %% y\n",
+        ];
+        for doc in docs {
+            // Find a comment body interior offset (3 bytes past the first `%%`).
+            let open = doc.find("%%").expect("open");
+            let body0 = open + 2; // first body byte
+                                  // Insert non-% text at several interior offsets and delete a byte.
+            for step in 1..6usize {
+                let at = snap_up(doc, (body0 + step).min(doc.len()));
+                // Don't let the offset reach the close delimiter region; clamp
+                // to a few bytes before the end.
+                if at + 2 >= doc.len() {
+                    continue;
+                }
+                for ins in ["Z", "longer insert", "", "中"] {
+                    // Pure insert (grows body).
+                    let new1 = splice_str(doc, at, at, ins);
+                    let mut i1 = CommentIndex::from_source(doc);
+                    i1.apply_edit(&new1, at, "", ins);
+                    assert_eq!(
+                        i1,
+                        CommentIndex::from_source(&new1),
+                        "straddle insert: doc={doc:?} at={at} ins={ins:?}"
+                    );
+                    // Delete one interior byte (shrinks body) — only if non-%.
+                    let del_end = snap_up(doc, at + 1);
+                    if del_end > at && !doc[at..del_end].contains('%') {
+                        let new2 = splice_str(doc, at, del_end, ins);
+                        let mut i2 = CommentIndex::from_source(doc);
+                        i2.apply_edit(&new2, at, &doc[at..del_end], ins);
+                        assert_eq!(
+                            i2,
+                            CommentIndex::from_source(&new2),
+                            "straddle replace: doc={doc:?} [{at}..{del_end}) ins={ins:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Caveat 2: window-native fallback identity at awkward fm_end ----
+
+    /// Frontmatter generator whose CLOSING (and sometimes opening) delimiter is
+    /// awkward: trailing whitespace (`--- \n`, `---\t\n`), CRLF (`---\r\n`),
+    /// `---` at EOF with no newline, unclosed frontmatter, plus a caveat-rich
+    /// body. These are exactly the shapes that put `fm_end` mid-line or make the
+    /// body offset (`win_start - fm_end`) subtle.
+    fn awkward_frontmatter_source() -> impl Strategy<Value = String> {
+        let open = prop_oneof![
+            Just("---\n".to_string()),
+            Just("--- \n".to_string()),
+            Just("---\t\n".to_string()),
+            Just("---\r\n".to_string()),
+        ];
+        let fm_body = prop_oneof![
+            Just("title: x".to_string()),
+            Just("tags: [a, b]".to_string()),
+            Just("~~~".to_string()),
+            Just("```".to_string()),
+            Just("".to_string()),
+            Just("k: \"v\"".to_string()),
+        ];
+        let close = prop_oneof![
+            Just("---\n".to_string()),
+            Just("--- \n".to_string()),
+            Just("---\t\n".to_string()),
+            Just("---\r\n".to_string()),
+            Just("---".to_string()), // EOF, no newline (body becomes empty)
+        ];
+        (
+            open,
+            proptest::collection::vec(fm_body, 0..3),
+            close,
+            caveat12_source(),
+        )
+            .prop_map(|(open, fm, close, body)| format!("{open}{}\n{close}{body}", fm.join("\n")))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// CRITICAL: an awkward-frontmatter doc (mid-line / CRLF / EOF closing
+        /// delimiter) driven through a body-edit sequence; after every edit the
+        /// buffer's window-native `highlight_in_range` must equal the stateless
+        /// `highlight_spans_in_range` at probes across the doc. Exercises the
+        /// `fm_end`-mid-line `RopeWindow` clamp, the `win_start - fm_end` body
+        /// offset, and the `win_start == fm_end` boundary, end-to-end.
+        #[test]
+        fn awkward_frontmatter_buffer_matches_stateless(
+            seed in awkward_frontmatter_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..6, caveat12_line()), 1..9),
+        ) {
+            let edits: Vec<(usize, usize, String)> =
+                edits.into_iter().map(|(p, d, mut s)| { s.push('\n'); (p, d, s) }).collect();
+            assert_buffer_matches_stateless(&seed, &edits, &[0, 20, 40, 60, 80, 100])?;
+        }
+
+        /// CRITICAL: `rope_fm_end` (via the buffer) must agree with the oracle
+        /// boundary on awkward-frontmatter docs AND after a body-edit sequence —
+        /// i.e. the buffer's cached `fm_end` never drifts from
+        /// `len - body_after_frontmatter(text).len()`. Checked indirectly: if
+        /// `fm_end` drifted, the body framing would mis-offset and the windowed
+        /// highlight would diverge — but assert the boundary explicitly too via a
+        /// fresh `DocBufferState` whose highlight must match the carried one.
+        #[test]
+        fn awkward_frontmatter_cached_equals_fresh(
+            seed in awkward_frontmatter_source(),
+            edits in prop::collection::vec((0usize..=100, 0usize..6, caveat12_line()), 1..9),
+        ) {
+            let mut text = seed;
+            let mut buf = DocBufferState::new(&text);
+            for (pct, del, mut ins) in edits {
+                ins.push('\n');
+                let start = snap_up(&text, text.len() * pct / 100);
+                let del_end = snap_up(&text, start + del);
+                let start_u16 = text[..start].encode_utf16().count();
+                let old_len_u16 = text[..del_end].encode_utf16().count() - start_u16;
+                buf.apply_edit(start_u16, old_len_u16, &ins);
+                text = splice_str(&text, start, del_end, &ins);
+                let fresh = DocBufferState::new(&text);
+                for p in [0usize, 25, 50, 75, 100] {
+                    let d = snap_up(&text, text.len() * p / 100);
+                    let d_u16 = text[..d].encode_utf16().count();
+                    prop_assert_eq!(
+                        buf.highlight_in_range(d_u16, d_u16),
+                        fresh.highlight_in_range(d_u16, d_u16),
+                        "cached != fresh after awkward-fm edit; text={:?}", text
+                    );
+                }
+            }
+        }
+    }
+
+    /// CRITICAL hand-built: `highlight_window` fallback identity at a mid-line /
+    /// CRLF / EOF `fm_end`, plus a `%%` whose delimiters straddle the window
+    /// edge. Compares the buffer's windowed highlight to the stateless oracle at
+    /// every char-boundary probe — the most direct test of the window-native
+    /// fallback order + body offset.
+    #[test]
+    fn window_native_fallback_identity_hand_built() {
+        let docs = [
+            // Trailing-space close → fm_end mid-line.
+            "---\ntitle: t\n--- \n\n# H\n\nprose [[L]] and `c`\n\ntail\n",
+            // Tab-space close.
+            "---\na: 1\n---\t\n\nbody para\n\nmore para\n",
+            // CRLF close.
+            "---\r\nk: v\r\n---\r\n\r\nbody\r\n\r\nmore\r\n",
+            // `---` at EOF with no newline (body empty, fm_end == len).
+            "---\nk: v\n---",
+            // Unclosed frontmatter (no close) → fm_end == 0, whole doc is body.
+            "---\nunclosed: yes\n\nbody-ish line\n\nmore\n",
+            // A multi-line `%%` comment whose delimiters sit OUTSIDE a blank-
+            // bounded window the cursor lands in.
+            "---\nt: x\n---\n\n%%\n\ncomment body in its own block\n\n%%\n\nafter\n",
+            // Frontmatter + a fence in the body that the strip could un-pair.
+            "---\nf: ~~~\n---\n\n~~~\ncode\n~~~\n\ntail\n",
+        ];
+        for text in docs {
+            let buf = DocBufferState::new(text);
+            let probes: Vec<usize> = (0..=text.len())
+                .filter(|&o| text.is_char_boundary(o))
+                .collect();
+            for &d in &probes {
+                let d_u16 = text[..d].encode_utf16().count();
+                assert_eq!(
+                    buf.highlight_in_range(d_u16, d_u16),
+                    highlight_spans_in_range(text, d..d),
+                    "window-native != stateless at byte {d}\n text={text:?}"
+                );
+            }
+        }
+    }
+
+    // ---- Caveat 3: rope_fm_end grow/clamp vs the oracle ----
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// CRITICAL: the buffer's frontmatter boundary (observed through
+        /// `highlight_in_range`'s correctness, and asserted directly by
+        /// re-deriving the oracle) must equal `len - body_after_frontmatter`
+        /// for ANY frontmatter shape — incl. unclosed, EOF-no-newline, CRLF,
+        /// trailing-ws delimiters. Build a `DocBufferState`, then assert that
+        /// for a no-op edit its highlight matches a fresh buffer's and that the
+        /// oracle boundary is what the body framing assumes (probed via a window
+        /// that opens exactly at `fm_end`).
+        #[test]
+        fn rope_fm_end_equals_oracle_for_any_frontmatter(
+            seed in awkward_frontmatter_source(),
+        ) {
+            let text = seed;
+            let buf = DocBufferState::new(&text);
+            let fm_end = oracle_fm_end(&text);
+            // A window opening exactly at fm_end is the tightest probe of the
+            // body offset; its windowed highlight must match the oracle.
+            let d_u16 = text[..fm_end].encode_utf16().count();
+            prop_assert_eq!(
+                buf.highlight_in_range(d_u16, d_u16),
+                highlight_spans_in_range(&text, fm_end..fm_end),
+                "fm_end probe diverged; fm_end={} text={:?}", fm_end, text
+            );
+        }
+    }
+
+    /// CRITICAL: `rope_fm_end` (reached through `DocBufferState`) must resolve a
+    /// closing delimiter that lands exactly on / straddling the 8 KiB head-chunk
+    /// boundary, and frontmatter larger than the first head chunk, byte-for-byte
+    /// with the oracle. Builds frontmatter whose close sits at offsets sweeping
+    /// across 8192, then asserts the windowed highlight at `fm_end` matches the
+    /// stateless oracle (which would diverge if the boundary were wrong).
+    #[test]
+    fn rope_fm_end_chunk_boundary_sweep() {
+        for target in [
+            8180usize, 8189, 8190, 8191, 8192, 8193, 8200, 16380, 16384, 16390,
+        ] {
+            // Pad the frontmatter body to push the closing `---` near `target`.
+            let mut src = String::from("---\n");
+            while src.len() < target.saturating_sub(4) {
+                src.push_str("k: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\n");
+            }
+            src.push_str("---\n\nbody starts here\n\nsecond para\n");
+            let buf = DocBufferState::new(&src);
+            let fm_end = oracle_fm_end(&src);
+            assert!(
+                fm_end > 0,
+                "frontmatter must be detected for target={target}"
+            );
+            let d_u16 = src[..fm_end].encode_utf16().count();
+            assert_eq!(
+                buf.highlight_in_range(d_u16, d_u16),
+                highlight_spans_in_range(&src, fm_end..fm_end),
+                "8KiB-boundary fm_end diverged at target={target} fm_end={fm_end}"
+            );
+        }
+    }
 }
