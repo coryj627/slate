@@ -165,6 +165,100 @@ impl TextBuffer {
         }
         self.rope.insert(start, text);
     }
+
+    // --- Rope-native line navigation (#407) --------------------------
+    //
+    // These mirror the `\n`-counting line helpers in `crate::editor_spans`
+    // (`line_start` / `line_end` / `line_is_blank` / `extend_*_to_blank`)
+    // but walk the rope's line metric in O(log n) per step instead of
+    // materialising the document and doing `str::rfind` / `find`. The
+    // semantics are pinned byte-for-byte against the `&str` versions by
+    // `rope_line_nav_matches_str_helpers` so the window the stateful buffer
+    // walks is identical to the one the stateless oracle computes — #407
+    // makes the keystroke highlight materialise only that window, never the
+    // whole document.
+
+    /// Byte offset of the start of the line containing `byte` (just past the
+    /// previous `\n`, or 0). `byte` is clamped to the buffer length.
+    pub fn line_start_byte(&self, byte: usize) -> usize {
+        let byte = byte.min(self.rope.len_bytes());
+        self.rope.line_to_byte(self.rope.byte_to_line(byte))
+    }
+
+    /// Byte offset just past the end of the line containing `byte` — the byte
+    /// after the next `\n` at or after `byte`, or the buffer length. `byte`
+    /// is clamped to the buffer length.
+    pub fn line_end_byte(&self, byte: usize) -> usize {
+        let byte = byte.min(self.rope.len_bytes());
+        self.rope.line_to_byte(self.rope.byte_to_line(byte) + 1)
+    }
+
+    /// True when the line starting at `line_start_byte` (a line start) is
+    /// empty or whitespace-only — a CommonMark block separator. Matches
+    /// `source[ls..le].trim().is_empty()`: a line is blank iff every char
+    /// (including its trailing `\n`) is `char::is_whitespace`.
+    pub fn line_is_blank(&self, line_start_byte: usize) -> bool {
+        let le = self.line_end_byte(line_start_byte);
+        self.rope
+            .byte_slice(line_start_byte..le)
+            .chars()
+            .all(|c| c.is_whitespace())
+    }
+
+    /// Walk `start` (a line start) up to a block boundary — the first line of
+    /// the contiguous non-blank run, i.e. just after the nearest blank line
+    /// above (or BOF). Mirrors `editor_spans::extend_up_to_blank`.
+    pub fn extend_up_to_blank(&self, start: usize) -> usize {
+        let mut ls = start;
+        while ls > 0 {
+            let prev = self.line_start_byte(ls - 1);
+            if self.line_is_blank(prev) {
+                break;
+            }
+            ls = prev;
+        }
+        ls
+    }
+
+    /// Walk `end` (a line end) down to a block boundary — the start of the
+    /// nearest blank line below (or EOF). Mirrors
+    /// `editor_spans::extend_down_to_blank`.
+    pub fn extend_down_to_blank(&self, end: usize) -> usize {
+        let mut le = end;
+        while le < self.rope.len_bytes() {
+            if self.line_is_blank(le) {
+                break;
+            }
+            le = self.line_end_byte(le);
+        }
+        le
+    }
+
+    /// Materialise the half-open UTF-8 byte `range` as an owned `String`.
+    /// The bounds are clamped to the buffer and snapped to char boundaries
+    /// (so a mid-scalar bound widens to include the whole char). #407 uses
+    /// this to pull out **only the highlight window**, never the whole
+    /// document, on the per-keystroke path.
+    pub fn byte_slice_to_string(&self, range: Range<usize>) -> String {
+        let len = self.rope.len_bytes();
+        let start = self.byte_to_byte_boundary(range.start.min(len));
+        let end = self.byte_to_byte_boundary(range.end.min(len)).max(start);
+        self.rope.byte_slice(start..end).to_string()
+    }
+
+    /// Snap a byte offset down to the nearest char boundary (the start of the
+    /// char it falls in). Composes the rope's byte↔char metrics in O(log n).
+    fn byte_to_byte_boundary(&self, byte: usize) -> usize {
+        self.rope.char_to_byte(self.rope.byte_to_char(byte))
+    }
+
+    /// The raw byte at `byte_idx` (O(log n)). Used by the rope-native
+    /// reconvergence scan (#407) to test a line's first byte for indentation
+    /// without materialising the line. Panics if `byte_idx >= len_bytes()`,
+    /// like `ropey::Rope::byte` — callers only read in-bounds line starts.
+    pub fn byte(&self, byte_idx: usize) -> u8 {
+        self.rope.byte(byte_idx)
+    }
 }
 
 impl std::fmt::Display for TextBuffer {
@@ -415,6 +509,82 @@ mod proptests {
             for (byte, _) in s.char_indices() {
                 let naive_line = s[..byte].matches('\n').count() + 1;
                 prop_assert_eq!(buf.byte_to_line(byte), naive_line);
+            }
+        }
+
+        /// #407: the rope-native line navigation must agree byte-for-byte with
+        /// the `&str` line helpers the stateless highlight oracle uses, at every
+        /// char boundary (and one-past-the-end). If these ever diverge, the
+        /// stateful buffer would materialise a different window than the oracle
+        /// computes — exactly the byte-clean equivalence the census protects.
+        #[test]
+        fn rope_line_nav_matches_str_helpers(s in "(\\PC|\n|\r| ){0,400}") {
+            let buf = TextBuffer::from_str(&s);
+
+            // Reference `&str` helpers, copied from `editor_spans` semantics.
+            let line_start = |byte: usize| s[..byte].rfind('\n').map_or(0, |i| i + 1);
+            let line_end = |byte: usize| {
+                let byte = byte.min(s.len());
+                s[byte..].find('\n').map_or(s.len(), |i| byte + i + 1)
+            };
+            let line_is_blank =
+                |ls: usize| s[ls..line_end(ls)].trim().is_empty();
+            let extend_up = |start: usize| {
+                let mut ls = start;
+                while ls > 0 {
+                    let prev = line_start(ls - 1);
+                    if line_is_blank(prev) {
+                        break;
+                    }
+                    ls = prev;
+                }
+                ls
+            };
+            let extend_down = |end: usize| {
+                let mut le = end;
+                while le < s.len() {
+                    if line_is_blank(le) {
+                        break;
+                    }
+                    le = line_end(le);
+                }
+                le
+            };
+
+            let boundaries = s
+                .char_indices()
+                .map(|(b, _)| b)
+                .chain(std::iter::once(s.len()));
+            for byte in boundaries {
+                let ls = line_start(byte);
+                let le = line_end(byte);
+                prop_assert_eq!(buf.line_start_byte(byte), ls, "line_start @ {}", byte);
+                prop_assert_eq!(buf.line_end_byte(byte), le, "line_end @ {}", byte);
+                // Blank-ness is defined on line starts.
+                prop_assert_eq!(
+                    buf.line_is_blank(ls),
+                    line_is_blank(ls),
+                    "line_is_blank @ {}",
+                    ls
+                );
+                // Window extension from this line start / line end.
+                prop_assert_eq!(buf.extend_up_to_blank(ls), extend_up(ls), "extend_up @ {}", ls);
+                prop_assert_eq!(
+                    buf.extend_down_to_blank(le),
+                    extend_down(le),
+                    "extend_down @ {}",
+                    le
+                );
+                // The materialised window equals the slice.
+                let win_start = extend_up(ls);
+                let win_end = extend_down(le);
+                prop_assert_eq!(
+                    buf.byte_slice_to_string(win_start..win_end),
+                    s[win_start..win_end].to_string(),
+                    "byte_slice @ {}..{}",
+                    win_start,
+                    win_end
+                );
             }
         }
     }

@@ -193,6 +193,20 @@ pub fn body_after_frontmatter(source: &str) -> &str {
         .unwrap_or(rest)
 }
 
+/// True when `source` begins with a frontmatter **opening** delimiter line
+/// (`---` + optional trailing whitespace + `\n`, after an optional UTF-8 BOM)
+/// — the necessary precondition for any frontmatter block, independent of
+/// whether a closing delimiter exists. Reads only the first line.
+///
+/// The #407 rope-native `apply_edit` uses this to decide, after materialising
+/// only a bounded head, whether a `fm_end == 0` result is final (no opener ⇒
+/// no frontmatter, stable under any edit below) or whether it must keep
+/// scanning further for a closing delimiter (opener present, close not yet
+/// seen in the materialised head).
+pub fn starts_with_opening_delimiter(source: &str) -> bool {
+    strip_opening_delimiter(source).is_some()
+}
+
 /// Returns the source slice past the opening `---` line if and only
 /// if the file starts with one (byte 0 must be `-`, or a UTF-8 BOM
 /// followed by `-`).
