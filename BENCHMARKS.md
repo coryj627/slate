@@ -257,6 +257,22 @@ Same `bench_doc_buffer_keystroke` as the Slice A row, re-measured before/after o
 
 The mid curve is now near-flat: an 8 MB note's keystroke dropped from ~48 ms (canonical box: ~63 ms) to ~4 ms, and `tail_8mb` matches `mid/8mb` (the structural scan is no longer whole-doc, so edit position is irrelevant). The residual ~O(n) — `mid/8mb` is still ~10× `mid/1mb` — is **not** the structure parse any more; it's the two `Rope::to_string()` full materializations (`apply_edit` reads the post-edit text once, `highlight_in_range` once more) plus the whole-document `scan_comments` / `%%` sweep in the ranged comment fallback. Those are inherent to the current `&str`-in / whole-document-coordinates contract of `highlight_spans_in_range`, not the two structural costs this slice removed; flattening them further is a separate change (a rope-native windowed highlight) outside #404. The arbiter is the `incremental_structure_*` differential census (raw + frontmatter) at `PROPTEST_CASES=100000`, plus an exhaustive single-edit reconvergence census and a buffer-level body-cache census — all green.
 
+## V1 — 2026-05-31 (#407: rope-native windowed highlight — the flatten, finished)
+
+#404 Slice B made the *structural decision* incremental but left the residual ~O(n) the row above names. #407 removes it: the keystroke path now materializes only what it touches.
+
+- **Window-native highlight.** `window_diverges` + a new `highlight_window` take the **window text** (not the whole source); `highlight_in_range` rope-walks the window bounds and materializes only `[win_start..win_end]`. Whole-doc fallback (frontmatter-touch / `---`-head / straddle / `%%`) is the rare path.
+- **Rope-native `apply_edit`.** `updated` is generic over a `DocText` trait, so the incremental re-lex materializes only its bounded chunk — no `Rope::to_string()` on the **main thread** (where `apply_edit` runs in the editor).
+- **Incremental comment index.** A cached `%%…%%` range set, maintained per-edit (re-scan only when a `%` is in the inserted/deleted text or the 1-char edit halo, else shift), replaces the per-keystroke whole-document `scan_comments`.
+
+| scenario | before (Slice B) | after (#407) | speedup |
+|---|---|---|---|
+| `doc_buffer_keystroke/mid/1mb` | 392.9 µs | 80.7 µs | 4.9× |
+| `doc_buffer_keystroke/mid/8mb` | 4.38 ms | **244.7 µs** | **~18×** |
+| `doc_buffer_keystroke/tail_8mb` | 4.26 ms | **252.3 µs** | **~17×** |
+
+The mid curve is now **flat**: `mid/8mb` (245 µs) is ~3× `mid/1mb` (was ~11×), and the only remaining sub-linear growth is the `updated` splice rebuilding the (short) structure `Vec`s — O(block-count), a tiny constant, not a per-byte cost. Cumulatively from Slice A, an 8 MB note's keystroke went **62 ms → 245 µs (~250×)**. Output is unchanged — the gate is the `buffer_matches_stateless` census (window-native `highlight_in_range` == the stateless `highlight_spans_in_range`, byte-identical) + a `comment_index == scan_comments` census, both at `PROPTEST_CASES=100000`/200k, plus the red-team's `%`-dense + awkward-frontmatter + `rope_fm_end`-boundary suites.
+
 ## When to rerun
 
 - After any change to `VaultSession::from_filesystem`, `scan_initial`, or `list_files`.
