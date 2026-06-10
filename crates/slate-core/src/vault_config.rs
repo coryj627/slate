@@ -115,13 +115,17 @@ pub(crate) fn parse_root_vault_config(
 ///   (the style picker chains default + additional, and a duplicate
 ///   entry would double-list it).
 fn map_citations_section(obj: &serde_json::Map<String, serde_json::Value>) -> CitationsPrefs {
-    let csl_directory = obj.get("csl_directory").and_then(|v| v.as_str());
+    let csl_directory = obj
+        .get("csl_directory")
+        .and_then(|v| v.as_str())
+        .map(str::trim);
 
     let mut sources = Vec::new();
     if let Some(bib) = obj
         .get("bibliography")
         .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
     {
         let format = if Path::new(bib)
             .extension()
@@ -142,7 +146,8 @@ fn map_citations_section(obj: &serde_json::Map<String, serde_json::Value>) -> Ci
     let default_style = obj
         .get("cite_style")
         .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(|s| style_path(s, csl_directory));
 
     let additional_styles = obj
@@ -151,6 +156,8 @@ fn map_citations_section(obj: &serde_json::Map<String, serde_json::Value>) -> Ci
         .map(|arr| {
             arr.iter()
                 .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
                 .map(|s| style_path(s, csl_directory))
                 .filter(|p| Some(p) != default_style.as_ref())
                 .collect()
@@ -276,6 +283,28 @@ mod tests {
         let cfg = parse_root_vault_config(r#"{ "vault": { "version": 1 } }"#, "x").unwrap();
         assert!(cfg.citations.is_none());
         assert!(cfg.templates_directory.is_none());
+    }
+
+    #[test]
+    fn whitespace_around_paths_and_styles_is_trimmed() {
+        // Codoki PR #427: untrimmed values caused format
+        // misdetection ("refs.JSON ") and unresolvable styles
+        // ("ieee " → "ieee .csl").
+        let cfg = parse_root_vault_config(
+            r#"{ "citations": {
+                "bibliography": " refs.JSON ",
+                "cite_style": " ieee ",
+                "available_styles": [" apa ", "  "],
+                "csl_directory": " csl "
+            } }"#,
+            "x",
+        )
+        .unwrap();
+        let c = cfg.citations.unwrap();
+        assert_eq!(c.sources[0].path, "refs.JSON");
+        assert_eq!(c.sources[0].format, BibFormat::CslJson);
+        assert_eq!(c.default_style.as_deref(), Some("csl/ieee.csl"));
+        assert_eq!(c.additional_styles, vec!["csl/apa.csl".to_string()]);
     }
 
     #[test]
