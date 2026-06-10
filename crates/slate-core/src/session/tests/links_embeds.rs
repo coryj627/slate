@@ -391,6 +391,34 @@ fn resolve_embed_block_returns_anchored_byte_range() {
 }
 
 #[test]
+fn resolve_embed_obsidian_block_ref_returns_anchored_byte_range() {
+    // `![[target#^block]]` -- Obsidian's canonical block-ref syntax
+    // (#413). Must resolve as a Block embed, not fail with "heading
+    // wasn't found" from parsing `#^block` as a heading path.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "target.md",
+            b"first paragraph\n\nsecond paragraph ^my-block\n\nthird paragraph\n",
+        )
+        .unwrap();
+        p.write_file("host.md", b"![[target#^my-block]]\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let resolution = session
+        .resolve_embed("host.md", "target#^my-block")
+        .unwrap();
+    match resolution {
+        crate::EmbedResolution::Block { block_id, text, .. } => {
+            assert_eq!(block_id, "my-block");
+            assert!(text.contains("second paragraph"));
+            assert!(!text.contains("first paragraph"));
+        }
+        other => panic!("expected Block for #^ syntax, got {other:?}"),
+    }
+}
+
+#[test]
 fn resolve_embed_image_returns_bytes_and_mime() {
     let png_bytes: [u8; 16] = [
         0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0, 0, 0, 0,

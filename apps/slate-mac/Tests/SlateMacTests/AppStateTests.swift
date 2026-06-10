@@ -915,6 +915,41 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    func testBlockEmbedResolutionReachableUnderBothAuthoredSpellings() async throws {
+        // #413: the canonical Obsidian block-ref form `![[t#^id]]`
+        // and the legacy bare form `![[t^id]]` must BOTH hit the
+        // resolution cache — the editor's Cmd+E path looks up the
+        // authored text verbatim, so a `#^` embed whose resolution
+        // is keyed only as `t^id` would silently miss (red-team
+        // High on the #413 fix).
+        let vault = tempDir.appendingPathComponent("embed-blockref-vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("See ![[target#^step-2]] here.\n".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+        try Data("first\n\nsecond paragraph ^step-2\n\nthird\n".utf8)
+            .write(to: vault.appendingPathComponent("target.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "host.md"
+        await state.linksLoadTask?.value
+
+        let composed = state.currentNoteEmbedResolutions["target^step-2"]
+        let authored = state.currentNoteEmbedResolutions["target#^step-2"]
+        XCTAssertNotNil(composed, "composed (FFI round-trip) key must resolve")
+        XCTAssertNotNil(authored, "authored #^ key must resolve — Cmd+E looks this up verbatim")
+        if case .block(_, let blockId, _) = composed {
+            XCTAssertEqual(blockId, "step-2")
+        } else {
+            XCTFail("Expected Block resolution, got \(String(describing: composed))")
+        }
+        XCTAssertEqual(
+            state.currentNoteEmbedResolutions.count, 2,
+            "one embed, two spellings, same resolution"
+        )
+    }
+
     func testSelectionChangeClearsEmbedCache() async throws {
         let vault = tempDir.appendingPathComponent("embed-clear-vault")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)

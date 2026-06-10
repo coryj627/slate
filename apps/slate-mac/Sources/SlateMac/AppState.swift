@@ -2097,9 +2097,25 @@ final class AppState: ObservableObject {
         // Snapshot the embed targets from the just-loaded links.
         // We pass these into the detached task so a selection
         // change can't race the snapshot against a partial refresh.
-        let embedTargets: [String] = currentOutgoingLinks
+        //
+        // Each entry carries the composed cache key plus any alias
+        // spellings the same embed can be looked up under. Block
+        // anchors have two authored forms — the canonical Obsidian
+        // `target#^id` and the legacy bare `target^id` (#413) — and
+        // the editor's Cmd+E path looks up the AUTHORED text between
+        // `![[` and `]]`, so the resolution must be reachable under
+        // both. The composed key uses the bare form (the FFI
+        // round-trip contract); the `#^` form is registered as an
+        // alias of the same resolution.
+        let embedTargets: [(key: String, aliases: [String])] = currentOutgoingLinks
             .filter { $0.isEmbed }
-            .map(embedTargetKey)
+            .map { link in
+                let key = embedTargetKey(link)
+                if let anchor = link.targetAnchor, anchor.kind == "block" {
+                    return (key, ["\(link.targetRaw)#^\(anchor.text)"])
+                }
+                return (key, [])
+            }
         if embedTargets.isEmpty {
             currentNoteEmbedResolutions = [:]
             embedsLoadError = nil
@@ -2112,23 +2128,27 @@ final class AppState: ObservableObject {
             await Task.detached(priority: .userInitiated) {
                 var out: [String: EmbedResolution] = [:]
                 for target in embedTargets {
+                    let resolution: EmbedResolution
                     do {
-                        let resolution = try session.resolveEmbed(
+                        resolution = try session.resolveEmbed(
                             hostPath: path,
-                            target: target
+                            target: target.key
                         )
-                        out[target] = resolution
                     } catch let error as VaultError {
                         // Per-embed failure: synthesize an
                         // Unresolved entry instead of bailing out
                         // of the whole batch (audit #202).
-                        out[target] = .unresolved(
+                        resolution = .unresolved(
                             reason: .readError(message: Self.humanReadableVaultError(error))
                         )
                     } catch {
-                        out[target] = .unresolved(
+                        resolution = .unresolved(
                             reason: .readError(message: error.localizedDescription)
                         )
+                    }
+                    out[target.key] = resolution
+                    for alias in target.aliases {
+                        out[alias] = resolution
                     }
                 }
                 return out
