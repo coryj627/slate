@@ -367,8 +367,26 @@ struct NoteEditorView: NSViewRepresentable {
             // a guaranteed-pass underline.
             //
             // Remove first so repeated attach calls don't stack
-            // notification handlers.
-            NotificationCenter.default.removeObserver(self)
+            // notification handlers. MUST be per-name removals: a
+            // blanket `removeObserver(self)` also tears down the
+            // NSText.didChangeNotification subscription AppKit
+            // registered on this coordinator when it became the
+            // text view's delegate (`textView.delegate =` in
+            // `makeNSView` runs before `attach`). With that
+            // subscription gone, `textDidChange` never fires, the
+            // buffer→`updateEditorText` sync dies, `hasUnsavedChanges`
+            // stays false, and ⌘S — gated on the dirty flag — is
+            // silently inert: the #409 data-loss bug.
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil
+            )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSNotification.Name("AppleAquaColorVariantChanged"),
+                object: nil
+            )
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(systemColorPreferencesChanged),
