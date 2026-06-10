@@ -48,6 +48,17 @@ func findTextArea(_ el: AXUIElement, containing needle: String, depth: Int = 0) 
     return nil
 }
 
+// Fail fast when the invoking process lacks Accessibility trust —
+// untrusted AX calls silently return empty data, which would
+// otherwise surface as a misleading "no windows" (Codoki PR #425).
+if !AXIsProcessTrusted() {
+    FileHandle.standardError.write(
+        Data(
+            "Accessibility access not granted; enable it for the invoking terminal and retry.\n"
+                .utf8))
+    exit(1)
+}
+
 let args = CommandLine.arguments
 guard args.count >= 3 else {
     FileHandle.standardError.write(Data("usage: ax-set-caret <AppName> <substring> [delta]\n".utf8))
