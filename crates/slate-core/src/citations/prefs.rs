@@ -27,29 +27,44 @@ pub struct CitationsPrefs {
     pub additional_styles: Vec<String>,
 }
 
-/// Read `<vault>/.slate/prefs.json` if it exists. Returns an empty
-/// `CitationsPrefs` when:
+/// Read the citation prefs for a vault, across both config surfaces
+/// (#411):
 ///
-/// - The file doesn't exist.
-/// - The file exists but has no `bibliography` key (the file may
-///   carry other prefs for unrelated subsystems).
+/// 1. `<vault>/.slate/prefs.json` — if it exists AND carries a
+///    `bibliography` key, it is authoritative (the app-written,
+///    machine-local choice), even when that key configures zero
+///    sources.
+/// 2. Otherwise `<vault>/slate.json` `citations` — the vault-shipped
+///    declarative config (the contract the demo vault documents in
+///    its README). Mapped through [`crate::vault_config`].
+/// 3. Neither present → default-empty prefs.
 ///
-/// Returns [`VaultError::PrefsUnreadable`] when the file exists but
-/// can't be opened OR its JSON doesn't parse. Unknown top-level keys
-/// are silently ignored for forward compatibility.
+/// Returns [`VaultError::PrefsUnreadable`] when either file exists
+/// but can't be opened OR its JSON doesn't parse. Unknown top-level
+/// keys are silently ignored for forward compatibility.
 pub fn read_citations_prefs(vault_root: &Path) -> Result<CitationsPrefs, VaultError> {
     let path = vault_root.join(".slate").join("prefs.json");
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(CitationsPrefs::default()),
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => {
+            if let Some(prefs) = parse_citations_prefs_opt(&contents, &path.display().to_string())?
+            {
+                return Ok(prefs);
+            }
+            // prefs.json exists but is silent about citations (it may
+            // carry other subsystems' prefs) — fall through to the
+            // vault-shipped config.
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             return Err(VaultError::PrefsUnreadable {
                 path: path.display().to_string(),
                 reason: e.to_string(),
             });
         }
-    };
-    parse_citations_prefs(&contents, &path.display().to_string())
+    }
+    Ok(crate::vault_config::read_root_vault_config(vault_root)
+        .citations
+        .unwrap_or_default())
 }
 
 /// Parse a JSON string into [`CitationsPrefs`]. Public for tests
@@ -59,13 +74,26 @@ pub fn parse_citations_prefs(
     contents: &str,
     path_for_error: &str,
 ) -> Result<CitationsPrefs, VaultError> {
+    Ok(parse_citations_prefs_opt(contents, path_for_error)?.unwrap_or_default())
+}
+
+/// Like [`parse_citations_prefs`], but distinguishes "no
+/// `bibliography` key" (`None`) from "`bibliography` key present"
+/// (`Some`, possibly with zero sources). The read path needs the
+/// distinction for #411 precedence: an explicit `bibliography` key
+/// in prefs.json always wins; a prefs.json that's silent about
+/// citations must not mask the vault-shipped `slate.json` config.
+fn parse_citations_prefs_opt(
+    contents: &str,
+    path_for_error: &str,
+) -> Result<Option<CitationsPrefs>, VaultError> {
     let value: serde_json::Value =
         serde_json::from_str(contents).map_err(|e| VaultError::PrefsUnreadable {
             path: path_for_error.to_string(),
             reason: format!("JSON parse error: {e}"),
         })?;
     let Some(bib) = value.get("bibliography") else {
-        return Ok(CitationsPrefs::default());
+        return Ok(None);
     };
     let bib = bib.as_object().ok_or_else(|| VaultError::PrefsUnreadable {
         path: path_for_error.to_string(),
@@ -94,11 +122,11 @@ pub fn parse_citations_prefs(
         })
         .unwrap_or_default();
 
-    Ok(CitationsPrefs {
+    Ok(Some(CitationsPrefs {
         sources,
         default_style,
         additional_styles,
-    })
+    }))
 }
 
 fn parse_one_source(value: &serde_json::Value) -> Option<BibliographySource> {
@@ -188,6 +216,100 @@ mod tests {
             VaultError::PrefsUnreadable { path, .. } => assert_eq!(path, "fixture"),
             other => panic!("expected PrefsUnreadable, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn root_slate_json_used_when_prefs_json_missing() {
+        // #411: vault ships its config at the root as `slate.json`
+        // (demo-vault contract) and has no `.slate/prefs.json`.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("slate.json"),
+            r#"{ "citations": { "bibliography": "library.bib", "cite_style": "ieee",
+                 "available_styles": ["ieee", "apa"], "csl_directory": "csl" } }"#,
+        )
+        .unwrap();
+        let prefs = read_citations_prefs(dir.path()).unwrap();
+        assert_eq!(prefs.sources.len(), 1);
+        assert_eq!(prefs.sources[0].path, "library.bib");
+        assert_eq!(prefs.default_style.as_deref(), Some("csl/ieee.csl"));
+        assert_eq!(prefs.additional_styles, vec!["csl/apa.csl".to_string()]);
+    }
+
+    #[test]
+    fn root_slate_json_used_when_prefs_json_silent_on_bibliography() {
+        // prefs.json exists for other subsystems but has no
+        // `bibliography` key -- it must not mask the vault config.
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".slate")).unwrap();
+        std::fs::write(
+            dir.path().join(".slate").join("prefs.json"),
+            r#"{ "ui": { "theme": "dark" } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("slate.json"),
+            r#"{ "citations": { "bibliography": "refs.bib" } }"#,
+        )
+        .unwrap();
+        let prefs = read_citations_prefs(dir.path()).unwrap();
+        assert_eq!(prefs.sources.len(), 1);
+        assert_eq!(prefs.sources[0].path, "refs.bib");
+    }
+
+    #[test]
+    fn prefs_json_bibliography_wins_over_root_slate_json() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".slate")).unwrap();
+        std::fs::write(
+            dir.path().join(".slate").join("prefs.json"),
+            r#"{ "bibliography": { "sources": [{ "path": "mine.bib" }] } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("slate.json"),
+            r#"{ "citations": { "bibliography": "vault.bib" } }"#,
+        )
+        .unwrap();
+        let prefs = read_citations_prefs(dir.path()).unwrap();
+        assert_eq!(prefs.sources.len(), 1);
+        assert_eq!(
+            prefs.sources[0].path, "mine.bib",
+            "app-written prefs are authoritative"
+        );
+    }
+
+    #[test]
+    fn explicit_empty_bibliography_in_prefs_masks_root_config() {
+        // An explicit (even empty) `bibliography` key in prefs.json is
+        // the user's app-side choice -- the vault config must not
+        // resurrect sources behind their back.
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".slate")).unwrap();
+        std::fs::write(
+            dir.path().join(".slate").join("prefs.json"),
+            r#"{ "bibliography": { "sources": [] } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("slate.json"),
+            r#"{ "citations": { "bibliography": "vault.bib" } }"#,
+        )
+        .unwrap();
+        let prefs = read_citations_prefs(dir.path()).unwrap();
+        assert!(prefs.sources.is_empty());
+    }
+
+    #[test]
+    fn malformed_root_slate_json_degrades_to_default_when_prefs_absent() {
+        // Red-team M1: foreign-authored slate.json must never block
+        // vault open — a parse failure degrades to empty prefs. The
+        // app-written prefs.json keeps its typed-error policy
+        // (covered by malformed_json_returns_prefs_unreadable).
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("slate.json"), "{nope").unwrap();
+        let prefs = read_citations_prefs(dir.path()).unwrap();
+        assert_eq!(prefs, CitationsPrefs::default());
     }
 
     #[test]

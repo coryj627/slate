@@ -1600,8 +1600,17 @@ final class AppState: ObservableObject {
                     await self?.applyBibliographyPrefs(persistedPrefs)
                 }
             } else {
+                // #411: no app-written sources. The session's
+                // EFFECTIVE config may carry vault-shipped sources
+                // from the root slate.json — the Rust side already
+                // applied the precedence rules (an explicit-empty
+                // prefs.json bibliography masks the vault config, a
+                // silent one falls through to it). Adopt without
+                // persisting: prefs.json stays untouched until the
+                // user edits in Settings, so the vault file remains
+                // the live source of truth.
                 Task { [weak self] in
-                    await self?.refreshAvailableCslStyles()
+                    await self?.adoptSessionCitationsConfig()
                 }
             }
         } catch let error as VaultError {
@@ -2337,6 +2346,35 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Adopt the session's effective citations config (#411): the
+    /// merged `.slate/prefs.json` ⊕ vault-root `slate.json` view the
+    /// Rust core resolved at open. Publishes it to the Settings
+    /// surface and pushes sources into the bibliography index
+    /// WITHOUT writing prefs.json — vault-shipped config must not be
+    /// frozen into the app-written file by the mere act of opening
+    /// the vault (red-team C1 on #411 found the previous gap: the
+    /// merged config was passive and the demo vault still showed
+    /// zero resolved citations).
+    func adoptSessionCitationsConfig() async {
+        guard let session = currentSession else { return }
+        let effective = session.citationsPrefs()
+        guard !effective.sources.isEmpty else {
+            await refreshAvailableCslStyles()
+            return
+        }
+        bibliographyPrefs = BibliographyPrefs(
+            sources: effective.sources,
+            defaultStyle: effective.defaultStyle,
+            additionalStyles: effective.additionalStyles
+        )
+        if let defaultPath = effective.defaultStyle, !defaultPath.isEmpty {
+            activeStyleId =
+                (defaultPath as NSString).lastPathComponent
+                .replacingOccurrences(of: ".csl", with: "")
+        }
+        await pushBibliographySources(effective.sources)
+    }
+
     /// Persist `newPrefs` to disk AND push the new sources through
     /// the session (so the in-memory `bibliography_entries` table
     /// matches what the user just configured). Called by every
@@ -2357,8 +2395,17 @@ final class AppState: ObservableObject {
         // Push sources to the session. Warnings (malformed entries,
         // missing files) flow back via `bibliographyLoadError` for
         // surfacing in the Settings UI.
+        await pushBibliographySources(newPrefs.sources)
+    }
+
+    /// Push `sources` into the session's bibliography index and
+    /// refresh every downstream surface (entries, styles, current
+    /// note's citation renders). Shared by the Settings mutation
+    /// path (`applyBibliographyPrefs`) and the vault-config adopt
+    /// path (`adoptSessionCitationsConfig`) — the only difference
+    /// between those is whether prefs.json gets written first.
+    private func pushBibliographySources(_ sources: [BibliographySource]) async {
         guard let session = currentSession else { return }
-        let sources = newPrefs.sources
         let result: Result<[BibLoadWarning], VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {

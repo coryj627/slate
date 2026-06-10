@@ -657,6 +657,20 @@ impl VaultSession {
     /// Replace the active bibliography sources, reload entries, and
     /// bump the renderer's `BibIndex` version so any cached renders
     /// are invalidated implicitly.
+    /// The session's effective citations prefs (#411): the merged
+    /// view across `.slate/prefs.json` and the vault-root
+    /// `slate.json`, exactly as `from_filesystem` resolved them.
+    /// Passive data — pushing sources into the bibliography index
+    /// still happens via `set_bibliography_sources`.
+    pub fn citations_prefs(&self) -> CitationsPrefs {
+        let p = &self.inner.config().citations_prefs;
+        CitationsPrefs {
+            sources: p.sources.iter().cloned().map(Into::into).collect(),
+            default_style: p.default_style.clone(),
+            additional_styles: p.additional_styles.clone(),
+        }
+    }
+
     pub fn set_bibliography_sources(
         &self,
         sources: Vec<BibliographySource>,
@@ -2465,6 +2479,28 @@ impl From<BibliographySource> for core::BibliographySource {
             watch: s.watch,
         }
     }
+}
+
+impl From<core::BibliographySource> for BibliographySource {
+    fn from(s: core::BibliographySource) -> Self {
+        Self {
+            path: s.path,
+            format: s.format.into(),
+            watch: s.watch,
+        }
+    }
+}
+
+/// Effective citation preferences for the open vault, merged across
+/// both config surfaces (#411): `.slate/prefs.json` where it speaks,
+/// the vault-root `slate.json` otherwise. Exposed so the app can
+/// seed its bibliography state from the vault-shipped config at
+/// open time without re-implementing the precedence rules.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CitationsPrefs {
+    pub sources: Vec<BibliographySource>,
+    pub default_style: Option<String>,
+    pub additional_styles: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]

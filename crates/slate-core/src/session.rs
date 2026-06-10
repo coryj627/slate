@@ -545,9 +545,32 @@ impl VaultSession {
         if root.join("Templates").is_dir() {
             config.templates_dir = Some("Templates".to_string());
         }
-        // Load Milestone-L citations prefs from `.slate/prefs.json`.
-        // Missing file is fine (default-empty prefs); a malformed
-        // file surfaces as `VaultError::PrefsUnreadable`.
+        // Vault-shipped config (#411): a root `slate.json` may pin the
+        // templates directory explicitly — an explicit declaration
+        // beats the convention auto-detect above. Only honored when
+        // the named directory actually exists, so a stale config
+        // can't silently point templates at nothing.
+        let root_cfg = crate::vault_config::read_root_vault_config(&root);
+        if let Some(dir) = root_cfg.templates_directory.as_ref().filter(|d| {
+            // Red-team L1: only honor clean vault-relative paths.
+            // `root.join` would happily accept `..` segments and
+            // absolute paths (join replaces on absolute), and those
+            // later hard-error in `list_templates` instead of
+            // falling back — config must degrade, not break the
+            // template picker.
+            let p = std::path::Path::new(d.as_str());
+            p.is_relative()
+                && p.components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+                && root.join(d.as_str()).is_dir()
+        }) {
+            config.templates_dir = Some(dir.clone());
+        }
+        // Citations prefs across both config surfaces (#411):
+        // `.slate/prefs.json` wins where it speaks; the vault-shipped
+        // root `slate.json` fills in otherwise. Missing files are
+        // fine (default-empty prefs); a malformed file surfaces as
+        // `VaultError::PrefsUnreadable`.
         config.citations_prefs = crate::citations::prefs::read_citations_prefs(&root)?;
         let provider = Arc::new(FsVaultProvider::new(root));
         Self::open(provider, config)
