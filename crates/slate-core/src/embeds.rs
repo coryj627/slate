@@ -171,15 +171,18 @@ fn bytes_contain_token(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// Parse the embed target string into the note prefix + optional
 /// anchor. `Foo` → (`Foo`, None); `Foo#H` → (`Foo`, Some(Heading));
-/// `Foo^id` → (`Foo`, Some(Block)). `#` wins over `^` if both are
-/// present (Obsidian's convention — embed syntax doesn't combine
-/// the two).
+/// `Foo#^id` → (`Foo`, Some(Block)) — Obsidian's canonical block-ref
+/// syntax (#413); `Foo^id` → (`Foo`, Some(Block)) — the bare legacy
+/// form M10 shipped with. A `#` not immediately followed by `^` is a
+/// heading anchor, including `Foo#H^x` (Obsidian reads that as a
+/// heading with a literal `^x` suffix).
 pub(crate) fn parse_embed_target(target: &str) -> (&str, Option<EmbedAnchor<'_>>) {
     if let Some(idx) = target.find('#') {
-        return (
-            &target[..idx],
-            Some(EmbedAnchor::Heading(&target[idx + 1..])),
-        );
+        let rest = &target[idx + 1..];
+        if let Some(block_id) = rest.strip_prefix('^') {
+            return (&target[..idx], Some(EmbedAnchor::Block(block_id)));
+        }
+        return (&target[..idx], Some(EmbedAnchor::Heading(rest)));
     }
     if let Some(idx) = target.find('^') {
         return (&target[..idx], Some(EmbedAnchor::Block(&target[idx + 1..])));
@@ -345,6 +348,24 @@ mod tests {
         let (prefix, anchor) = parse_embed_target("Foo Bar#H1");
         assert_eq!(prefix, "Foo Bar");
         assert_eq!(anchor, Some(EmbedAnchor::Heading("H1")));
+    }
+
+    #[test]
+    fn parse_target_splits_on_obsidian_block_anchor() {
+        // `#^` is Obsidian's canonical block-ref form (#413) — it
+        // must parse as a Block anchor, never Heading("^id").
+        let (prefix, anchor) = parse_embed_target("Whipped cream#^method-step-2");
+        assert_eq!(prefix, "Whipped cream");
+        assert_eq!(anchor, Some(EmbedAnchor::Block("method-step-2")));
+    }
+
+    #[test]
+    fn parse_target_heading_with_caret_suffix_stays_heading() {
+        // Obsidian reads `note#heading^x` as a heading anchor with a
+        // literal `^x` suffix — only an immediate `#^` is a block ref.
+        let (prefix, anchor) = parse_embed_target("Note#Section^tail");
+        assert_eq!(prefix, "Note");
+        assert_eq!(anchor, Some(EmbedAnchor::Heading("Section^tail")));
     }
 
     #[test]

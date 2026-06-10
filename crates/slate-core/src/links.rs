@@ -385,12 +385,22 @@ fn split_wikilink_body(body: &str) -> (String, Option<String>, Option<LinkAnchor
     // Heading-style anchor takes priority over block-ref because
     // Obsidian treats `[[note#heading^block]]` as a heading anchor
     // with a literal `^block` suffix — we mirror that by checking
-    // `#` first.
+    // `#` first. The one exception: `#` immediately followed by `^`
+    // is Obsidian's canonical block-ref syntax (`[[note#^block]]`,
+    // #413) and parses as a Block anchor, same as the bare
+    // `[[note^block]]` legacy form.
     let (target, anchor) = if let Some(idx) = target_segment.find('#') {
         let target = target_segment[..idx].trim().to_string();
         let anchor_raw = target_segment[idx + 1..].trim().to_string();
         let anchor = if anchor_raw.is_empty() {
             None
+        } else if let Some(block_raw) = anchor_raw.strip_prefix('^') {
+            let block = block_raw.trim();
+            if block.is_empty() {
+                None
+            } else {
+                Some(LinkAnchor::Block(block.to_string()))
+            }
         } else {
             Some(LinkAnchor::Heading(anchor_raw))
         };
@@ -469,6 +479,51 @@ mod tests {
             links[0].anchor,
             Some(LinkAnchor::Block("abc123".to_string()))
         );
+    }
+
+    #[test]
+    fn wikilink_with_obsidian_block_anchor() {
+        // `[[note#^block]]` is Obsidian's canonical block-ref syntax
+        // (#413) — must parse as a Block anchor, never
+        // Heading("^block").
+        let links = extract_links("[[Whipped cream#^method-step-2]]");
+        assert_eq!(links.len(), 1);
+        assert_eq!(target(&links[0]), "Whipped cream");
+        assert_eq!(
+            links[0].anchor,
+            Some(LinkAnchor::Block("method-step-2".to_string()))
+        );
+    }
+
+    #[test]
+    fn embed_with_obsidian_block_anchor() {
+        let links = extract_links("![[Whipped cream#^method-step-2]]");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_embed);
+        assert_eq!(
+            links[0].anchor,
+            Some(LinkAnchor::Block("method-step-2".to_string()))
+        );
+    }
+
+    #[test]
+    fn wikilink_heading_with_caret_suffix_stays_heading() {
+        // Obsidian: `#heading^x` is a heading anchor with a literal
+        // `^x` suffix. Only an immediate `#^` is a block ref.
+        let links = extract_links("[[Alpha#Intro^tail]]");
+        assert_eq!(
+            links[0].anchor,
+            Some(LinkAnchor::Heading("Intro^tail".to_string()))
+        );
+    }
+
+    #[test]
+    fn wikilink_bare_hash_caret_parses_as_no_anchor() {
+        // Degenerate `[[Alpha#^]]` — empty block id collapses to no
+        // anchor, mirroring the existing empty-heading behavior.
+        let links = extract_links("[[Alpha#^]]");
+        assert_eq!(target(&links[0]), "Alpha");
+        assert_eq!(links[0].anchor, None);
     }
 
     #[test]

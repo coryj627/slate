@@ -127,6 +127,11 @@ final class MilestoneJIntegrationTests: XCTestCase {
             "target",
             "target#Heading One",
             "target^block-1",
+            // #413: block resolutions register under BOTH authored
+            // spellings — the composed legacy form and the canonical
+            // Obsidian `#^` form — so the editor's verbatim Cmd+E
+            // lookup hits either way.
+            "target#^block-1",
             "image.png",
             "missing",
             "deep1",
@@ -239,10 +244,22 @@ final class MilestoneJIntegrationTests: XCTestCase {
         // the cursor lands inside it — that's the path the Cmd+E
         // popover takes.
         let spans = findEditorEmbedSpans(in: hostBody)
+        // #413: the cache may hold MORE keys than the buffer has
+        // spans (block resolutions register under both authored
+        // spellings), so the contract is: spans cover every authored
+        // reference, and every span's verbatim target hits the cache
+        // — the exact lookup Cmd+E performs.
         XCTAssertEqual(
-            Set(spans.map(\.target)), expectedKeys,
-            "editor spans should match the embed cache keys 1:1"
+            Set(spans.map(\.target)),
+            expectedKeys.subtracting(["target#^block-1"]),
+            "editor spans must surface exactly the authored `![[…]]` references"
         )
+        for span in spans {
+            XCTAssertNotNil(
+                resolutions[span.target],
+                "every editor span must hit the embed cache verbatim (Cmd+E contract): \(span.target)"
+            )
+        }
         for span in spans {
             let midCursor = span.range.location + span.range.length / 2
             XCTAssertEqual(
@@ -275,8 +292,8 @@ final class MilestoneJIntegrationTests: XCTestCase {
 
         let trimmedResolutions = state.currentNoteEmbedResolutions
         XCTAssertEqual(
-            trimmedResolutions.count, 5,
-            "removing one `![[…]]` from host.md must drop one resolution"
+            trimmedResolutions.count, 6,
+            "removing one `![[…]]` from host.md must drop one resolution (block embeds carry a #413 alias key)"
         )
         XCTAssertNil(
             trimmedResolutions["missing"],
