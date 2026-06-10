@@ -84,7 +84,13 @@ These six cost the most time on the first run. Internalize before scripting.
 - **Recover editor focus: palette round-trip.** `keys p cmd shift` then `key 53` (Esc) — the palette restores focus to the prior first responder and VO announces it ("Note content for <file>. edit text"). Works whenever the editor was the last responder; otherwise Tab once from the window (Tab 1 reaches the editor after a search-open).
 - **Select a file row deterministically (plumbing, not evidence):** AX-set `selected` on the matching row of the Files sidebar outline (match on the row's static-text concatenation). Selection opens the note. Use only to position; collect evidence via VO afterward.
 - **Open the vault from the welcome screen:** focus lands on "Open Vault…" at launch (VO announces it with its hint). `key 49` (Space) → panel announces "Choose a folder of Markdown files to open as a vault." → `key 5 cmd shift` (Go to Folder) → type the vault path → Return → click/act the panel's "Open" button (`button "Open" of splitter group 1 of window "Open vault"`).
-- **Caret placement inside the editor:** AX-write `AXSelectedTextRange {offset, 0}` (compute the offset of a target substring in the buffer value). Reliable for parking the caret inside a token (embeds, citations) without arrow-walking wrapped lines.
+- **Caret placement inside the editor: use `scripts/ax-set-caret.swift`, NEVER System Events.** System Events' `set value of attribute "AXSelectedTextRange" of … to {offset, 0}` **silently no-ops** — the AppleScript list never marshals into an AXValue CFRange, and SE's read-back of the same attribute is garbage, so a "verify" through SE confirms nothing. This exact trap produced the false finding behind #412: the caret stayed at end-of-document, and Cmd+E truthfully announced "No embed at cursor" for a caret that was never inside the embed (raw-AX probe 2026-06-10: app-side `AXUIElementSetAttributeValue` succeeds and the caret moves; the same write through SE leaves it untouched). Park carets with:
+
+  ```sh
+  swift scripts/ax-set-caret.swift SlateMac "![[Whipped cream]]" 5
+  ```
+
+  which sets the caret via raw `AXUIElementSetAttributeValue` (the API VoiceOver itself uses) and exits non-zero unless an **independent raw-AX read-back** confirms the caret landed at the requested offset. Treat a non-zero exit as "caret not parked" and stop — do not proceed to assert on caret-dependent behavior.
 
 ## 5. Mutation hygiene
 
@@ -152,7 +158,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 ### J — Embeds (M10)
 1. Open `Linear algebra lecture 3.md`; walk to **"Embeds, 1 entry"** → **"Embedded note: learning/Linear algebra lecture 2.md"** disclosure with the embedded content readable inside and **"Jump to source: <path> button"**.
 2. `Apple pie.md` exercises all three forms: whole-note (resolves), block-ref `#^method-step-2` (baseline FAIL: **"Unresolved embed: … The heading wasn't found"** — #413), markdown image (baseline FAIL: alt text dropped, only `AXHelp="Embedded image: pie.svg"` — #414).
-3. Cmd+E preview: park the caret inside `![[…]]` (AXSelectedTextRange), `keys e cmd` — baseline always **"No embed at cursor."** (#412); off-embed Cmd+E announcing that string is correct behavior.
+3. Cmd+E preview: park the caret inside `![[…]]` with `swift scripts/ax-set-caret.swift SlateMac "![[<target>]]" 5` (§4 — System Events CANNOT set the caret; the 2026-06-10 "always No embed at cursor" finding (#412) was this harness trap, not an app bug: the caret was still at end-of-document). With the caret genuinely inside the embed, `keys e cmd` must announce the preview popover ("Preview for …"); **"No embed at cursor."** is correct only when the caret is genuinely outside every embed. Markdown images (`![alt](src)`) are out of Cmd+E scope by design — the fallback announcement on an image line is correct behavior (pinned by `EmbedPreviewCmdEIntegrationTests`).
 
 ### K — Math / code / Mermaid (M11) — baseline FAIL #410, re-run after wiring
 1. `Math sampler.md`: caret onto the display-math line — must speak MathCAT speech ("the sum from i equals 0 to n…"), **not** raw `$$\sum_{i=0}^{n}…$$` (baseline: raw).
