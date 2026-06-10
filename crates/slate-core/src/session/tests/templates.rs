@@ -26,6 +26,65 @@ fn templates_dir_autodetected_when_templates_folder_exists() {
 }
 
 #[test]
+fn templates_dir_honors_root_slate_json_directory() {
+    // #411: `slate.json` `templates.directory` overrides the
+    // Obsidian-convention auto-detect.
+    let (_tmp2, session) = make_templates_vault(|root| {
+        std::fs::create_dir(root.join("Templates")).unwrap();
+        std::fs::create_dir(root.join("tpl")).unwrap();
+        std::fs::write(
+            root.join("slate.json"),
+            r#"{ "templates": { "directory": "tpl" } }"#,
+        )
+        .unwrap();
+    });
+    assert_eq!(session.config.templates_dir.as_deref(), Some("tpl"));
+}
+
+#[test]
+fn templates_dir_rejects_traversal_and_absolute_overrides() {
+    // Red-team L1: `..` and absolute paths pass a naive
+    // `root.join(...).is_dir()` gate, then hard-error later in
+    // `list_templates` — config must degrade to the auto-detect
+    // instead.
+    let outside = tempfile::tempdir().unwrap();
+    let escape = format!(
+        r#"{{ "templates": {{ "directory": "../{}" }} }}"#,
+        outside.path().file_name().unwrap().to_str().unwrap()
+    );
+    let (_t1, s1) = make_templates_vault(|root| {
+        std::fs::create_dir(root.join("Templates")).unwrap();
+        std::fs::write(root.join("slate.json"), escape.clone()).unwrap();
+    });
+    assert_eq!(s1.config.templates_dir.as_deref(), Some("Templates"));
+
+    let abs = format!(
+        r#"{{ "templates": {{ "directory": "{}" }} }}"#,
+        outside.path().display()
+    );
+    let (_t2, s2) = make_templates_vault(|root| {
+        std::fs::create_dir(root.join("Templates")).unwrap();
+        std::fs::write(root.join("slate.json"), abs.clone()).unwrap();
+    });
+    assert_eq!(s2.config.templates_dir.as_deref(), Some("Templates"));
+}
+
+#[test]
+fn templates_dir_ignores_root_slate_json_when_directory_missing() {
+    // A stale `templates.directory` pointing at nothing must not
+    // shadow the working auto-detect.
+    let (_tmp2, session) = make_templates_vault(|root| {
+        std::fs::create_dir(root.join("Templates")).unwrap();
+        std::fs::write(
+            root.join("slate.json"),
+            r#"{ "templates": { "directory": "gone" } }"#,
+        )
+        .unwrap();
+    });
+    assert_eq!(session.config.templates_dir.as_deref(), Some("Templates"));
+}
+
+#[test]
 fn templates_dir_stays_none_when_no_templates_folder() {
     let (_tmp, session) = make_vault(|_| {});
     assert_eq!(session.config.templates_dir, None);

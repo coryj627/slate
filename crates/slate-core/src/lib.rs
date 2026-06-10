@@ -36,6 +36,7 @@ pub mod tasks_db;
 pub mod templates;
 pub mod text_buffer;
 pub mod vault;
+mod vault_config;
 
 pub use search_db::{
     full_text_search, QueryHit, QueryResultSet, SearchScope, SNIPPET_HIT_END, SNIPPET_HIT_START,

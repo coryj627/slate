@@ -57,6 +57,41 @@ fn from_filesystem_reads_prefs_json_when_present() {
 }
 
 #[test]
+fn from_filesystem_reads_root_slate_json_when_no_prefs_json() {
+    // #411: the demo-vault contract -- config shipped at the vault
+    // root as `slate.json`, no `.slate/prefs.json` at all.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::write(
+        root.join("slate.json"),
+        r#"{
+          "citations": {
+            "bibliography": "library.bib",
+            "cite_style": "ieee",
+            "available_styles": ["ieee", "chicago-author-date", "apa"],
+            "csl_directory": "csl"
+          }
+        }"#,
+    )
+    .unwrap();
+    fs::write(root.join("library.bib"), bib_fixture()).unwrap();
+
+    let session = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    let prefs = &session.config().citations_prefs;
+    assert_eq!(prefs.sources.len(), 1);
+    assert_eq!(prefs.sources[0].path, "library.bib");
+    assert_eq!(prefs.default_style.as_deref(), Some("csl/ieee.csl"));
+    assert_eq!(prefs.additional_styles.len(), 2);
+
+    // The whole point of #411: the bibliography actually loads.
+    session
+        .set_bibliography_sources(prefs.sources.clone())
+        .unwrap();
+    let entries = session.get_bibliography_entries().unwrap();
+    assert_eq!(entries.len(), 2, "library.bib entries must be indexed");
+}
+
+#[test]
 fn from_filesystem_returns_default_prefs_when_no_prefs_file() {
     let (_tmp, session) = make_vault(|_p| {});
     assert!(session.config().citations_prefs.sources.is_empty());
