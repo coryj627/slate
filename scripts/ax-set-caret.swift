@@ -11,16 +11,18 @@
 // 2026-06-10 VO feature test parked carets that way, the caret never
 // moved, and Cmd+E truthfully reported "No embed at cursor" — filed
 // as #412 against an app path that was working all along. Raw
-// AXUIElementSetAttributeValue works (and is what VoiceOver itself
-// uses), so harness caret-parking MUST go through this helper.
+// AXUIElementSetAttributeValue works (the raw AX interface assistive
+// clients drive), so harness caret-parking MUST go through this
+// helper.
 //
 // Usage:
 //   swift scripts/ax-set-caret.swift <AppName> <substring> [delta]
 //
-// Finds the frontmost window's first AXTextArea whose value contains
-// <substring>, sets the caret to (substring UTF-16 offset + delta,
-// length 0), then prints the INDEPENDENTLY READ-BACK caret position.
-// Exit 0 only if the read-back matches the requested offset.
+// Scans the app's windows (front to back) for the first AXTextArea
+// whose value contains <substring>, sets the caret to (substring
+// UTF-16 offset + delta, length 0), then prints the INDEPENDENTLY
+// READ-BACK caret position. Exit 0 only if the read-back matches the
+// requested offset.
 //
 // Requires Accessibility permission for the invoking terminal.
 
@@ -81,9 +83,17 @@ guard let ta = textArea else {
 
 var valRef: CFTypeRef?
 AXUIElementCopyAttributeValue(ta, kAXValueAttribute as CFString, &valRef)
-let ns = (valRef as! String) as NSString
+guard let value = valRef as? String else {
+    FileHandle.standardError.write(Data("text area value unreadable on re-read\n".utf8))
+    exit(1)
+}
+let ns = value as NSString
 let found = ns.range(of: needle)
-let target = found.location + delta
+guard found.location != NSNotFound else {
+    FileHandle.standardError.write(Data("substring vanished between find and re-read\n".utf8))
+    exit(1)
+}
+let target = min(max(0, found.location + delta), ns.length)
 var range = CFRange(location: target, length: 0)
 guard let axVal = AXValueCreate(.cfRange, &range) else { exit(1) }
 let setErr = AXUIElementSetAttributeValue(ta, kAXSelectedTextRangeAttribute as CFString, axVal)

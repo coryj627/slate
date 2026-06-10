@@ -90,7 +90,7 @@ These six cost the most time on the first run. Internalize before scripting.
   swift scripts/ax-set-caret.swift SlateMac "![[Whipped cream]]" 5
   ```
 
-  which sets the caret via raw `AXUIElementSetAttributeValue` (the API VoiceOver itself uses) and exits non-zero unless an **independent raw-AX read-back** confirms the caret landed at the requested offset. Treat a non-zero exit as "caret not parked" and stop — do not proceed to assert on caret-dependent behavior.
+  which sets the caret via raw `AXUIElementSetAttributeValue` (the raw AX interface assistive clients drive) and exits non-zero unless an **independent raw-AX read-back** confirms the caret landed at the requested offset. Treat a non-zero exit as "caret not parked" and stop — do not proceed to assert on caret-dependent behavior.
 
 ## 5. Mutation hygiene
 
@@ -158,7 +158,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 ### J — Embeds (M10)
 1. Open `Linear algebra lecture 3.md`; walk to **"Embeds, 1 entry"** → **"Embedded note: learning/Linear algebra lecture 2.md"** disclosure with the embedded content readable inside and **"Jump to source: <path> button"**.
 2. `Apple pie.md` exercises all three forms: whole-note (resolves), block-ref `#^method-step-2` (baseline FAIL: **"Unresolved embed: … The heading wasn't found"** — #413), markdown image (baseline FAIL: alt text dropped, only `AXHelp="Embedded image: pie.svg"` — #414).
-3. Cmd+E preview: park the caret inside `![[…]]` with `swift scripts/ax-set-caret.swift SlateMac "![[<target>]]" 5` (§4 — System Events CANNOT set the caret; the 2026-06-10 "always No embed at cursor" finding (#412) was this harness trap, not an app bug: the caret was still at end-of-document). With the caret genuinely inside the embed, `keys e cmd` must announce the preview popover ("Preview for …"); **"No embed at cursor."** is correct only when the caret is genuinely outside every embed. Markdown images (`![alt](src)`) are out of Cmd+E scope by design — the fallback announcement on an image line is correct behavior (pinned by `EmbedPreviewCmdEIntegrationTests`).
+3. Cmd+E preview: park the caret inside `![[…]]` with `swift scripts/ax-set-caret.swift SlateMac "![[<target>]]" 5` (§4 — System Events CANNOT set the caret; the 2026-06-10 "always No embed at cursor" finding (#412) was this harness trap, not an app bug: the caret was still at end-of-document). With the caret genuinely inside the embed, `keys e cmd` must open the preview popover — VO speaks its accessibility label **"Embed preview for <target>, source line N."** (the visual header reads "Preview for `<target>`" but VO announces the AX label; `wait-phrase "Embed preview for"` is the correct match). **"No embed at cursor."** is correct only when the *insertion point* is genuinely outside every embed — note that reading a line with the VO cursor does NOT move the insertion point, so Cmd+E after a VO-cursor-only walk truthfully reports no embed. Markdown images (`![alt](src)`) are out of Cmd+E scope by design — the fallback announcement on an image line is correct behavior (pinned by `EmbedPreviewCmdEIntegrationTests`).
 
 ### K — Math / code / Mermaid (M11) — baseline FAIL #410, re-run after wiring
 1. `Math sampler.md`: caret onto the display-math line — must speak MathCAT speech ("the sum from i equals 0 to n…"), **not** raw `$$\sum_{i=0}^{n}…$$` (baseline: raw).
