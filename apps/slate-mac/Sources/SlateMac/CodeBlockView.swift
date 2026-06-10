@@ -173,7 +173,9 @@ enum CodeTokenTheme {
 
 // MARK: - Content (NSTextView wrapped)
 
-private struct CodeBlockContent: NSViewRepresentable {
+// Internal (not private) so the #416 contrast-leg regression test
+// can drive the Coordinator directly.
+struct CodeBlockContent: NSViewRepresentable {
     let block: CodeBlock
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -240,8 +242,11 @@ private struct CodeBlockContent: NSViewRepresentable {
         context.coordinator.block = block
 
         // Re-render token colors when the user toggles Increase
-        // Contrast at runtime (audit #252 H1).
-        NotificationCenter.default.addObserver(
+        // Contrast at runtime (audit #252 H1). #416: registered on
+        // NSWorkspace.shared.notificationCenter — the center this
+        // notification is actually posted to; the previous
+        // default-center registration never fired.
+        NSWorkspace.shared.notificationCenter.addObserver(
             context.coordinator,
             selector: #selector(Coordinator.systemContrastChanged),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
@@ -261,6 +266,8 @@ private struct CodeBlockContent: NSViewRepresentable {
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         NotificationCenter.default.removeObserver(coordinator)
+        // #416: the contrast observer lives on the workspace center.
+        NSWorkspace.shared.notificationCenter.removeObserver(coordinator)
     }
 }
 

@@ -377,17 +377,27 @@ struct NoteEditorView: NSViewRepresentable {
             // buffer→`updateEditorText` sync dies, `hasUnsavedChanges`
             // stays false, and ⌘S — gated on the dirty flag — is
             // silently inert: the #409 data-loss bug.
-            NotificationCenter.default.removeObserver(
+            // #416: register on the centers these notifications are
+            // ACTUALLY posted to. accessibilityDisplayOptionsDidChange
+            // is posted to NSWorkspace.shared.notificationCenter (per
+            // the SDK header), and accent-color changes arrive as
+            // NSColor.systemColorsDidChangeNotification on the default
+            // center — the previous default-center registration of the
+            // workspace name (plus the distributed-only
+            // "AppleAquaColorVariantChanged" name) never fired, so
+            // mid-session Increase Contrast / accent toggles didn't
+            // repaint until the next edit.
+            NSWorkspace.shared.notificationCenter.removeObserver(
                 self,
                 name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
                 object: nil
             )
             NotificationCenter.default.removeObserver(
                 self,
-                name: NSNotification.Name("AppleAquaColorVariantChanged"),
+                name: NSColor.systemColorsDidChangeNotification,
                 object: nil
             )
-            NotificationCenter.default.addObserver(
+            NSWorkspace.shared.notificationCenter.addObserver(
                 self,
                 selector: #selector(systemColorPreferencesChanged),
                 name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
@@ -396,7 +406,7 @@ struct NoteEditorView: NSViewRepresentable {
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(systemColorPreferencesChanged),
-                name: NSNotification.Name("AppleAquaColorVariantChanged"),
+                name: NSColor.systemColorsDidChangeNotification,
                 object: nil
             )
         }
@@ -413,6 +423,10 @@ struct NoteEditorView: NSViewRepresentable {
 
         deinit {
             NotificationCenter.default.removeObserver(self)
+            // #416: the contrast observer lives on the workspace
+            // center; the default-center blanket removal above does
+            // not touch it.
+            NSWorkspace.shared.notificationCenter.removeObserver(self)
             highlightTask?.cancel()
         }
 
