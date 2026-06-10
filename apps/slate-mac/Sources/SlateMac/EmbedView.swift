@@ -141,14 +141,7 @@ struct EmbedView: View {
         // shell as the other variants so sighted users see the
         // "Embedded image: <…>" title and everyone gets a
         // Jump-to-source affordance.
-        // Audit #198: an empty-string alt collapsed to a label of
-        // `"Embedded image: "` — treat empty the same as nil.
-        let trimmedAlt = alt?.trimmingCharacters(in: .whitespaces)
-        let altText: String? =
-            (trimmedAlt?.isEmpty == false) ? trimmedAlt : nil
-        let descriptor =
-            altText ?? (targetPath as NSString).lastPathComponent
-        let title = "Embedded image: \(descriptor)"
+        let title = Self.imageEmbedTitle(targetPath: targetPath, alt: alt)
         return EmbedDisclosure(
             label: title,
             jumpToSourceAction: jumpToSourceAction,
@@ -166,6 +159,20 @@ struct EmbedView: View {
                 imageDecodeFailureView(mime: mime)
             }
         }
+    }
+
+    /// AT/visible title for an image embed. The author's alt text is
+    /// the description (WCAG 1.1.1, #419 — "alt text becomes the AT
+    /// label" per M10); the filename is only the fallback.
+    /// Audit #198: an empty/whitespace alt collapses to the filename,
+    /// never to "Embedded image: ".
+    static func imageEmbedTitle(targetPath: String, alt: String?) -> String {
+        let trimmedAlt = alt?.trimmingCharacters(in: .whitespaces)
+        let altText: String? =
+            (trimmedAlt?.isEmpty == false) ? trimmedAlt : nil
+        let descriptor =
+            altText ?? (targetPath as NSString).lastPathComponent
+        return "Embedded image: \(descriptor)"
     }
 
     private func imageDecodeFailureView(mime: String) -> some View {

@@ -485,6 +485,53 @@ fn resolve_embed_heading_not_found_carries_target_path() {
 }
 
 #[test]
+fn resolve_embed_markdown_image_carries_alt_text() {
+    // #419 (WCAG 1.1.1): `![alt](src)` — the author's alt text must
+    // ride the Image resolution so AT hears the description, not
+    // the filename.
+    let png_bytes: [u8; 16] = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0, 0, 0, 0,
+    ];
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("attachments/pie.png", &png_bytes).unwrap();
+        p.write_file(
+            "host.md",
+            b"![A simple line drawing of a pie](attachments/pie.png)\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let resolution = session
+        .resolve_embed("host.md", "attachments/pie.png")
+        .unwrap();
+    match resolution {
+        crate::EmbedResolution::Image { alt, .. } => {
+            assert_eq!(alt.as_deref(), Some("A simple line drawing of a pie"));
+        }
+        other => panic!("expected Image, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_embed_wikilink_image_without_alt_has_none() {
+    // `![[cover.png]]` has no alt; the Swift layer falls back to the
+    // filename descriptor (audit #198 contract).
+    let png_bytes: [u8; 16] = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0, 0, 0, 0,
+    ];
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("cover.png", &png_bytes).unwrap();
+        p.write_file("host.md", b"![[cover.png]]\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    match session.resolve_embed("host.md", "cover.png").unwrap() {
+        crate::EmbedResolution::Image { alt, .. } => assert_eq!(alt, None),
+        other => panic!("expected Image, got {other:?}"),
+    }
+}
+
+#[test]
 fn resolve_embed_block_not_found_carries_block_id() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("target.md", b"paragraph\n").unwrap();
