@@ -157,14 +157,22 @@ struct MathSettingsTab: View {
     ///    hoisted form so a future visitor doesn't re-inline it
     ///    and re-trip the type-checker.
     ///
-    /// Full `String(localized:)` / `.xcstrings` migration is
-    /// deferred until i18n infrastructure lands (issue #264 notes).
-    private static let mathFooterText: String =
-        "Changes apply immediately to math in the read pane. "
-        + "Speech style controls how math is read aloud (ClearSpeak: "
-        + "intuitive; MathSpeak: precise / verbatim). Verbosity sets "
-        + "how detailed the spoken math is. Braille code switches "
-        + "between Nemeth and UEB encodings."
+    /// Routed through `String(localized:)` (#264) so the copy picks
+    /// up translations automatically once string catalogs land; with
+    /// no catalogs present it round-trips the literal unchanged.
+    /// Single multiline literal (not `+` concatenation) because
+    /// `String.LocalizationValue` needs one literal for key
+    /// extraction. Internal (not private) so the round-trip test can
+    /// assert the copy survives the localization layer.
+    static let mathFooterText: String = String(
+        localized: """
+            Changes apply immediately to math in the read pane. \
+            Speech style controls how math is read aloud (ClearSpeak: \
+            intuitive; MathSpeak: precise / verbatim). Verbosity sets \
+            how detailed the spoken math is. Braille code switches \
+            between Nemeth and UEB encodings.
+            """
+    )
 }
 
 /// Renders a sample formula via the same MathView the read pane uses,
@@ -197,6 +205,17 @@ struct MathLivePreview: View {
         )
     }
 
+    /// Visible status line under the preview. Single interpolated
+    /// literal so the copy is localization-routed (red-team #264 F1
+    /// — the previous `+`-concat bypassed LocalizedStringKey) while
+    /// staying out of the view body for the type-checker budget.
+    private var statusText: String {
+        String(
+            localized:
+                "Currently: speech style \(appState.mathPrefs.speechStyle.displayName), verbosity \(appState.mathPrefs.verbosity.displayName), braille code \(appState.mathPrefs.brailleCode.displayName)."
+        )
+    }
+
     /// Style-derived placeholder speech so the live preview actually
     /// changes when the user flips the picker. Full ClearSpeak /
     /// MathSpeak strings differ in cadence + identifier expansion;
@@ -206,24 +225,29 @@ struct MathLivePreview: View {
         let head: String
         switch appState.mathPrefs.speechStyle {
         case .clearSpeak:
-            head = "The sum from i equals 0 to n of i squared over 2"
+            head = String(localized: "The sum from i equals 0 to n of i squared over 2")
         case .mathSpeak:
-            head = "sum from i equals 0 to n of fraction i squared over 2 end fraction"
+            head = String(
+                localized: "sum from i equals 0 to n of fraction i squared over 2 end fraction"
+            )
         }
         switch appState.mathPrefs.verbosity {
         case .terse:
             return head
         case .medium:
-            return "\(head)."
+            return String(localized: "\(head).")
         case .verbose:
-            return "Math expression. \(head). End math."
+            return String(localized: "Math expression. \(head). End math.")
         }
     }
 
     private var previewBraille: String {
+        // The braille CELLS aren't localizable, but these are
+        // placeholder descriptions of them (real braille arrives via
+        // MathCAT at note-load), so they route like any other copy.
         switch appState.mathPrefs.brailleCode {
-        case .nemeth: return "Sample Nemeth braille for the formula"
-        case .ueb: return "Sample UEB braille for the formula"
+        case .nemeth: return String(localized: "Sample Nemeth braille for the formula")
+        case .ueb: return String(localized: "Sample UEB braille for the formula")
         }
     }
 
@@ -239,12 +263,12 @@ struct MathLivePreview: View {
             // the visible Text directly, and an earlier version
             // diverged AT label from visible text which read
             // confusingly back-to-back during continuous-read.
-            Text(
-                "Currently: speech style "
-                    + "\(appState.mathPrefs.speechStyle.displayName), "
-                    + "verbosity \(appState.mathPrefs.verbosity.displayName), "
-                    + "braille code \(appState.mathPrefs.brailleCode.displayName)."
-            )
+            // Red-team #264 F1: a `+`-concat types as String and
+            // falls through to Text's verbatim (StringProtocol)
+            // overload — it is NOT localization-routed, unlike a
+            // single (optionally interpolated) literal. Route it
+            // explicitly.
+            Text(statusText)
             // Audit #262 M3: `.foregroundStyle(.secondary)` drops
             // below 4.5:1 against the form background. Promote to
             // `.primary` and rely on `.font(.caption)` size to
@@ -330,25 +354,32 @@ struct CodeSettingsTab: View {
     /// See `MathSettingsTab.mathFooterText` for the full rationale
     /// — same shape (static let, hoisted out of the view body to
     /// keep the Swift 5.10 type checker under its time budget on
-    /// the CI macOS runner). Future `String(localized:)` migration
-    /// tracked by issue #264.
-    private static let codeFooterText: String =
-        "Affects the preamble screen readers hear before a code block. "
-        + "\"Preamble only\" reads \"Code block, <language>, N lines.\" "
-        + "\"Preamble + first line\" adds the signature/first non-blank "
-        + "line. \"Preamble + all tokens\" reads every token (useful for "
-        + "braille display work). Font and color preferences land later."
+    /// the CI macOS runner). Routed through `String(localized:)`
+    /// (#264); single multiline literal for key extraction; internal
+    /// for the round-trip test.
+    static let codeFooterText: String = String(
+        localized: """
+            Affects the preamble screen readers hear before a code block. \
+            "Preamble only" reads "Code block, <language>, N lines." \
+            "Preamble + first line" adds the signature/first non-blank \
+            line. "Preamble + all tokens" reads every token (useful for \
+            braille display work). Font and color preferences land later.
+            """
+    )
 
     private var previewPreamble: String {
         switch appState.codePrefs.verbosity {
         case .preambleOnly:
-            return "Code block, rust, 5 lines."
+            return String(localized: "Code block, rust, 5 lines.")
         case .preambleFirstLine:
-            return "Code block, rust, 5 lines. First line: fn main() {"
+            return String(localized: "Code block, rust, 5 lines. First line: fn main() {")
         case .preambleAllTokens:
-            return
-                "Code block, rust, 5 lines. Tokens: keyword fn, identifier main, "
-                + "punctuation (, ), {, return, …"
+            return String(
+                localized: """
+                    Code block, rust, 5 lines. Tokens: keyword fn, identifier main, \
+                    punctuation (, ), {, return, …
+                    """
+            )
         }
     }
 }
@@ -492,6 +523,8 @@ struct BibliographySettingsTab: View {
         }
     }
 
+    /// Format names are proper nouns (BibTeX / BibLaTeX / CSL-JSON)
+    /// — deliberately NOT localization-routed (#264 sweep exemption).
     private func formatLabel(_ format: BibFormat) -> String {
         switch format {
         case .bibTeX: return "BibTeX"
@@ -583,7 +616,7 @@ struct BibliographySettingsTab: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = []
-        panel.message = "Choose a .bib or .json bibliography file"
+        panel.message = String(localized: "Choose a .bib or .json bibliography file")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let relPath = vaultRelative(url) ?? url.path
         let format = inferFormat(from: url)
@@ -599,7 +632,7 @@ struct BibliographySettingsTab: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a .csl Citation Style Language file"
+        panel.message = String(localized: "Choose a .csl Citation Style Language file")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let relPath = vaultRelative(url) ?? url.path
         var prefs = appState.bibliographyPrefs
