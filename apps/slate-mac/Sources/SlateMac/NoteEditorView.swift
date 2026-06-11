@@ -923,7 +923,17 @@ struct NoteEditorView: NSViewRepresentable {
         func scrollToHeadingAnchor(_ anchor: String) -> Bool {
             guard let textView else { return false }
             guard let heading = headings.first(where: { $0.anchorId == anchor })
-            else { return false }
+            else {
+                // Red-team F3: with the request-site announcement
+                // gone, a silent bail here would make the activation
+                // fully mute. Shouldn't occur (sidebar + coordinator
+                // share one headings source), but if it does, say so.
+                postAccessibilityAnnouncement(
+                    "Could not find that heading.",
+                    priority: .medium
+                )
+                return false
+            }
             let ns = textView.string as NSString
 
             // Primary: backend byte offset → UTF-16 location.
@@ -940,7 +950,27 @@ struct NoteEditorView: NSViewRepresentable {
             if location < ns.length {
                 let lineRange = ns.lineRange(for: NSRange(location: location, length: 0))
                 let line = ns.substring(with: lineRange)
-                if line.contains(heading.text) || line.trimmingCharacters(in: .whitespaces).hasPrefix("#") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                // Red-team F2: require the heading's OWN level marker
+                // ("## " for level 2), not any "#" — a stale offset
+                // landing on a different heading must not announce
+                // the requested one.
+                let atxMarker = String(repeating: "#", count: Int(heading.level)) + " "
+                // Red-team F1: setext headings put the TEXT on the
+                // offset line with an ===/--- underline on the next —
+                // accept when the underline is there, so markup-bearing
+                // setext headings scroll too.
+                var isSetext = false
+                let nextLineStart = lineRange.location + lineRange.length
+                if nextLineStart < ns.length {
+                    let nextRange = ns.lineRange(
+                        for: NSRange(location: nextLineStart, length: 0))
+                    let next = ns.substring(with: nextRange)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    isSetext = !next.isEmpty
+                        && next.allSatisfy { $0 == "=" || $0 == "-" }
+                }
+                if line.contains(heading.text) || trimmed.hasPrefix(atxMarker) || isSetext {
                     range = NSRange(location: location, length: 0)
                 }
             }
