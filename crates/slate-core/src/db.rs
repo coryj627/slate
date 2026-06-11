@@ -107,6 +107,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "citations: bibliography_entries + file_citations (Milestone L)",
         sql: include_str!("../migrations/013_citations.sql"),
     },
+    Migration {
+        description: "headings: byte_offset column for position-based outline scroll (#431)",
+        sql: include_str!("../migrations/014_headings_byte_offset.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

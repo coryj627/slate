@@ -202,6 +202,13 @@ pub struct Heading {
     pub text: String,
     pub ordinal: u32,
     pub anchor_id: String,
+    /// Byte offset of the heading's start in the ORIGINAL source
+    /// (frontmatter included), so UI surfaces can scroll/park by
+    /// position instead of searching for the rendered text — which
+    /// misses headings containing inline markup (`## A **bold**
+    /// heading` renders as "A bold heading" and never matches the
+    /// raw buffer; #431).
+    pub byte_offset: u32,
 }
 
 /// Read a Markdown file from disk and return its headings in document order.
@@ -240,20 +247,30 @@ pub fn extract_headings(source: &str) -> Vec<Heading> {
     // common plain-Markdown path takes one extra branch and nothing
     // else.
     let body = crate::frontmatter::body_after_frontmatter(source);
-    let parser = Parser::new(body);
-    let mut raw: Vec<(u8, String)> = Vec::new();
+    // Offsets from the parser are body-relative; headings live in
+    // the original file, so add the frontmatter prefix length back.
+    // `body_after_frontmatter` returns a tail slice of `source`.
+    let frontmatter_len = source.len() - body.len();
+    let parser = Parser::new(body).into_offset_iter();
+    let mut raw: Vec<(u8, String, u32)> = Vec::new();
     let mut current_level: Option<u8> = None;
+    let mut current_start: usize = 0;
     let mut current_text = String::new();
 
-    for event in parser {
+    for (event, range) in parser {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 current_level = Some(heading_level_to_u8(level));
+                current_start = frontmatter_len + range.start;
                 current_text.clear();
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(level) = current_level.take() {
-                    raw.push((level, std::mem::take(&mut current_text)));
+                    raw.push((
+                        level,
+                        std::mem::take(&mut current_text),
+                        u32::try_from(current_start).unwrap_or(u32::MAX),
+                    ));
                 }
             }
             Event::Text(s) | Event::Code(s) if current_level.is_some() => {
@@ -266,7 +283,7 @@ pub fn extract_headings(source: &str) -> Vec<Heading> {
     let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     raw.into_iter()
         .enumerate()
-        .map(|(idx, (level, text))| {
+        .map(|(idx, (level, text, byte_offset))| {
             let base = slugify(&text);
             let counter = seen.entry(base.clone()).or_insert(0);
             *counter += 1;
@@ -280,6 +297,7 @@ pub fn extract_headings(source: &str) -> Vec<Heading> {
                 text,
                 ordinal: idx as u32,
                 anchor_id,
+                byte_offset,
             }
         })
         .collect()
@@ -338,7 +356,42 @@ mod tests {
             text: text.into(),
             ordinal,
             anchor_id: anchor.into(),
+            byte_offset: 0,
         }
+    }
+
+    /// Zero out byte offsets for shape-comparisons against the
+    /// `h()` fixtures — offset correctness has its own dedicated
+    /// test below.
+    fn sans_offsets(mut v: Vec<Heading>) -> Vec<Heading> {
+        for heading in &mut v {
+            heading.byte_offset = 0;
+        }
+        v
+    }
+
+    #[test]
+    fn extract_headings_records_file_relative_byte_offsets() {
+        // #431: offsets must locate the heading in the ORIGINAL
+        // source — including inline-markup headings whose rendered
+        // text never matches the raw buffer, and frontmatter-bearing
+        // files where parser offsets are body-relative.
+        let src = "# Plain\n\nbody\n\n## A **bold** heading\n";
+        let hs = extract_headings(src);
+        assert_eq!(hs.len(), 2);
+        assert_eq!(hs[0].byte_offset, 0);
+        let bold_at = src.find("## A **bold**").unwrap() as u32;
+        assert_eq!(hs[1].byte_offset, bold_at);
+        assert_eq!(hs[1].text, "A bold heading");
+
+        let with_fm = "---\ntitle: X\n---\n\n# First\n";
+        let hs2 = extract_headings(with_fm);
+        assert_eq!(hs2.len(), 1);
+        assert_eq!(
+            hs2[0].byte_offset,
+            with_fm.find("# First").unwrap() as u32,
+            "frontmatter prefix must be added back to body-relative offsets"
+        );
     }
 
     #[test]
@@ -346,7 +399,7 @@ mod tests {
         let source = "# First\n\n## Second\n\n### Third\n";
         let headings = extract_headings(source);
         assert_eq!(
-            headings,
+            sans_offsets(headings),
             vec![
                 h(1, "First", 0, "first"),
                 h(2, "Second", 1, "second"),
@@ -359,14 +412,17 @@ mod tests {
     fn ignores_non_heading_content() {
         let source = "Some text.\n\n# Heading\n\nMore text.\n";
         let headings = extract_headings(source);
-        assert_eq!(headings, vec![h(1, "Heading", 0, "heading")]);
+        assert_eq!(sans_offsets(headings), vec![h(1, "Heading", 0, "heading")]);
     }
 
     #[test]
     fn includes_inline_code_text_in_headings() {
         let source = "# Use `cargo test`\n";
         let headings = extract_headings(source);
-        assert_eq!(headings, vec![h(1, "Use cargo test", 0, "use-cargo-test")]);
+        assert_eq!(
+            sans_offsets(headings),
+            vec![h(1, "Use cargo test", 0, "use-cargo-test")]
+        );
     }
 
     #[test]
@@ -434,7 +490,10 @@ mod tests {
             # Real Heading\n\n\
             body text\n";
         let headings = extract_headings(source);
-        assert_eq!(headings, vec![h(1, "Real Heading", 0, "real-heading")]);
+        assert_eq!(
+            sans_offsets(headings),
+            vec![h(1, "Real Heading", 0, "real-heading")]
+        );
     }
 
     #[test]
@@ -448,7 +507,7 @@ mod tests {
             paragraph after\n";
         let headings = extract_headings(source);
         assert_eq!(
-            headings,
+            sans_offsets(headings),
             vec![h(2, "Body Setext Heading", 0, "body-setext-heading")]
         );
     }
@@ -463,7 +522,10 @@ mod tests {
         let headings = extract_headings(source);
         // The leading `---` is an isolated horizontal rule from
         // pulldown-cmark's POV; the H1 still extracts cleanly.
-        assert_eq!(headings, vec![h(1, "Real Heading", 0, "real-heading")]);
+        assert_eq!(
+            sans_offsets(headings),
+            vec![h(1, "Real Heading", 0, "real-heading")]
+        );
     }
 
     #[test]
@@ -477,7 +539,7 @@ mod tests {
             # Second\n";
         let headings = extract_headings(source);
         assert_eq!(
-            headings,
+            sans_offsets(headings),
             vec![h(1, "First", 0, "first"), h(1, "Second", 1, "second"),]
         );
     }
@@ -488,7 +550,7 @@ mod tests {
         let source = "# Just a heading\n\nbody\n## Sub\n";
         let headings = extract_headings(source);
         assert_eq!(
-            headings,
+            sans_offsets(headings),
             vec![
                 h(1, "Just a heading", 0, "just-a-heading"),
                 h(2, "Sub", 1, "sub"),

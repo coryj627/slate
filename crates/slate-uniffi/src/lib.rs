@@ -27,6 +27,10 @@ pub struct Heading {
     pub text: String,
     pub ordinal: u32,
     pub anchor_id: String,
+    /// Byte offset of the heading's start in the original source
+    /// (#431) — lets the UI scroll by position instead of searching
+    /// for rendered text that may not match the raw buffer.
+    pub byte_offset: u32,
 }
 
 impl From<core::Heading> for Heading {
@@ -36,6 +40,7 @@ impl From<core::Heading> for Heading {
             text: h.text,
             ordinal: h.ordinal,
             anchor_id: h.anchor_id,
+            byte_offset: h.byte_offset,
         }
     }
 }
