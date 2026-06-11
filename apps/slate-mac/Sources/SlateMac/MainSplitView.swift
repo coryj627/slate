@@ -173,7 +173,14 @@ struct MainSplitView: View {
                 } label: {
                     Label("Search", systemImage: "magnifyingglass")
                 }
-                .keyboardShortcut("f", modifiers: .command)
+                // #422: ⌘F moved to the menu bar ("Search Vault…").
+                // The toolbar registration proved dead with sidebar
+                // focus (VO test); the menu equivalent works because
+                // nothing claims bare ⌘F in the key-window sweep
+                // (which AppKit runs BEFORE the menu — see the note
+                // in SlateMacApp). Two registrations of the same
+                // equivalent would be ambiguous, so the toolbar
+                // button is click/AX-activate only.
                 .accessibilityHint(
                     "Opens the search overlay. Cmd+F to toggle, Esc to close."
                 )

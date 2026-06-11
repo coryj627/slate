@@ -49,6 +49,22 @@ struct SlateMacApp: App {
                     appState.requestCommandPalette()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+
+                // #422 (F-E1): Cmd+F lived only on the toolbar
+                // button's keyboardShortcut, which proved
+                // unreachable with focus in the sidebar (VO test).
+                // AppKit's actual order is key-window sweep FIRST,
+                // menu bar LAST — this works because nothing in the
+                // app claims bare ⌘F during the sweep (no find
+                // bar/panel is enabled; grep keyboardShortcut). If a
+                // future change enables NSTextView's find bar, IT
+                // will win ⌘F with editor focus and this menu item
+                // needs revisiting. Vault-scoped guard pattern as
+                // the palette item above (requestSearchOverlay).
+                Button("Search Vault…") {
+                    appState.requestSearchOverlay()
+                }
+                .keyboardShortcut("f", modifiers: [.command])
             }
         }
 

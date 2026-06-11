@@ -1018,9 +1018,15 @@ final class AppState: ObservableObject {
         // criteria and is short enough that typing feels live but
         // long enough that fast typists don't fire one query per
         // keystroke.
+        // #422 red-team F1: NO removeDuplicates here. Its dedup
+        // memory is pipeline-lifetime, so the overlay's
+        // reopen-with-retained-query re-arm emitted the same string
+        // and was silently swallowed — the re-arm was dead code.
+        // Announcement dedup lives at the view (searchSummary
+        // removeDuplicates); re-running an identical 150ms-debounced
+        // query is cheap.
         searchQuerySubject
             .debounce(for: .milliseconds(150), scheduler: DispatchQueue.main)
-            .removeDuplicates()
             .sink { [weak self] query in
                 self?.runSearch(query: query)
             }
@@ -1108,6 +1114,20 @@ final class AppState: ObservableObject {
     /// the user back at the same results. When closing, we cancel
     /// the in-flight query so the worker doesn't keep churning
     /// after the user has moved on.
+    /// Menu-driven entry point (#422): same behavior as the toolbar
+    /// toggle, but guarded for the welcome screen — the menu item is
+    /// reachable with no vault open, where the overlay has no host.
+    /// Mirrors `requestCommandPalette()`'s guard + feedback pattern.
+    func requestSearchOverlay() {
+        guard isVaultOpen else {
+            postAccessibilityAnnouncement(
+                "Open a vault first. Search works inside a vault."
+            )
+            return
+        }
+        toggleSearchOverlay()
+    }
+
     func toggleSearchOverlay() {
         if isSearchOpen {
             closeSearchOverlay()

@@ -42,6 +42,14 @@ struct SearchOverlay: View {
         case result(Int)
     }
 
+    /// #422 (F-E2): local keyDown monitor for Return-on-row. SwiftUI
+    /// .plain Buttons on macOS activate with Space but not Return —
+    /// the runbook's most surprising no-op ("Return on a focused
+    /// result row is a no-op; Space activates"). Same local-monitor
+    /// idiom as CommandPaletteView; installed on appear, removed on
+    /// disappear so it can't leak past the overlay's lifetime.
+    @State private var returnKeyMonitor: Any? = nil
+
     var body: some View {
         VStack(spacing: 0) {
             field
@@ -60,6 +68,22 @@ struct SearchOverlay: View {
             // Defer focus until the next runloop tick so the
             // .focused binding has been wired up by SwiftUI.
             DispatchQueue.main.async { focus = .field }
+            installReturnKeyMonitor()
+            // #422 (F-E1 adjacent): closeSearchOverlay keeps
+            // searchQuery (so Cmd+F → Esc → Cmd+F lands back where
+            // the user was) but resets searchState to .idle — on
+            // reopen the retained query sat in the field with no
+            // results until the user edited it. That idle-with-text
+            // shape is also the closest reproducible cousin of the
+            // VO test's unconfirmed "first query sat in the field"
+            // observation. Re-arm the search whenever the overlay
+            // opens with a non-empty query.
+            if !appState.searchQuery.isEmpty {
+                appState.bumpSearchQuery()
+            }
+        }
+        .onDisappear {
+            removeReturnKeyMonitor()
         }
         // Polite live region — but only when the summary string
         // actually differs from the last announcement. Subscribing to
@@ -269,6 +293,47 @@ struct SearchOverlay: View {
             "Selected: \(filename(for: rows[idx].path))",
             priority: .medium
         )
+    }
+
+    /// #422 (F-E2): Return activates the focused result row, with
+    /// parity to Space and to Return-on-the-field. Only intercepts
+    /// the bare Return key while a result row has focus — the field
+    /// keeps its native onSubmit, IME composition passes through
+    /// untouched (same guard as the palette monitor), and every
+    /// other key falls through.
+    private func installReturnKeyMonitor() {
+        guard returnKeyMonitor == nil else { return }
+        returnKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if let editor = event.window?.firstResponder as? NSTextView,
+                editor.hasMarkedText()
+            {
+                return event
+            }
+            // 36 = Return, 76 = keypad Enter (field onSubmit accepts
+            // both; row parity should too — red-team F5).
+            guard event.keyCode == 36 || event.keyCode == 76,
+                event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+                // Red-team F2: the monitor is app-wide; with the
+                // command palette sheet up over an open search
+                // overlay, a Return meant for the palette field
+                // would otherwise be hijacked into a result
+                // activation (the parent window keeps its
+                // firstResponder during sheets).
+                !appState.isCommandPaletteOpen,
+                case .result(let idx) = focus,
+                case .results(let rows, _) = appState.searchState,
+                rows.indices.contains(idx)
+            else { return event }
+            appState.openSearchResult(rows[idx])
+            return nil
+        }
+    }
+
+    private func removeReturnKeyMonitor() {
+        if let monitor = returnKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            returnKeyMonitor = nil
+        }
     }
 
     private func filename(for path: String) -> String {
