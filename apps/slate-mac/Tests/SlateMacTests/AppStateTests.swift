@@ -2106,7 +2106,9 @@ final class AppStateTests: XCTestCase {
         from state: AppState
     ) -> (subscription: AnyCancellable, captured: () -> [Int]) {
         var captured: [Int] = []
-        let sub = state.cursorByteOffsetRequest.sink { offset in
+        // compactMap: the subject is now CurrentValueSubject<Int?, _>
+        // (#421 replay-on-subscribe); nil is "no pending park".
+        let sub = state.cursorByteOffsetRequest.compactMap { $0 }.sink { offset in
             captured.append(offset)
         }
         return (sub, { captured })

@@ -957,6 +957,23 @@ struct NoteEditorView: NSViewRepresentable {
             let range = NSRange(location: location, length: 0)
             scrollRangeToVisibleRespectingReduceMotion(range)
             textView.setSelectedRange(range)
+            // #421 (F-H1): focus follows the parked caret. The
+            // create-from-template flow left keyboard focus on the
+            // window — a caret position the user can't type at is
+            // half a feature. Red-team F1: the replay-on-subscribe
+            // delivery runs synchronously inside makeNSView, where
+            // textView.window is still nil — a bare `window?` grab
+            // silently no-ops in exactly the template-create path.
+            // Defer one main-queue tick when the view isn't in a
+            // window yet; by then SwiftUI's commit has inserted it.
+            if let window = textView.window {
+                window.makeFirstResponder(textView)
+            } else {
+                DispatchQueue.main.async { [weak textView] in
+                    guard let textView else { return }
+                    textView.window?.makeFirstResponder(textView)
+                }
+            }
         }
 
         private func scrollToLine(_ line: Int) {

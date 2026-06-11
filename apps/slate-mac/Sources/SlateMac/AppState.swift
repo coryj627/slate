@@ -773,7 +773,28 @@ final class AppState: ObservableObject {
     /// flow to honor a rendered template's `{{cursor}}` marker.
     /// Indexed in UTF-8 bytes — `NoteEditorView`'s coordinator
     /// converts to UTF-16 before talking to `NSTextView`.
-    let cursorByteOffsetRequest = PassthroughSubject<Int, Never>()
+    /// #421 (F-H1): a CurrentValueSubject, NOT a PassthroughSubject —
+    /// the create-from-template flow sends the `{{cursor}}` offset
+    /// right after the note load resolves, which can be a runloop
+    /// tick BEFORE SwiftUI materializes the editor and subscribes.
+    /// A passthrough drops that event silently and the caret lands
+    /// at end-of-text (the VO test's finding); the current-value
+    /// replay delivers it on subscribe. `nil` = no pending park;
+    /// NoteContentView compactMaps it away and clears the value on
+    /// delivery so re-attaching the editor later doesn't re-park.
+    let cursorByteOffsetRequest = CurrentValueSubject<Int?, Never>(nil)
+    // NOTE: delivery implies first-responder transfer to the editor
+    // (placeCursorAtByteOffset) — a future sender inherits that
+    // focus-stealing semantic; scope it deliberately.
+
+    /// Clear any pending `{{cursor}}` park. Called on delivery (via
+    /// NoteContentView's handleEvents) and on selection change so a
+    /// stale offset can never park the caret in a different note.
+    func clearPendingCursorByteOffset() {
+        if cursorByteOffsetRequest.value != nil {
+            cursorByteOffsetRequest.send(nil)
+        }
+    }
 
     /// One-shot channel for "scroll the content pane to this heading
     /// anchor." `OutlineSidebar` sends; `NoteContentView` subscribes
@@ -1227,6 +1248,9 @@ final class AppState: ObservableObject {
         }
         noteLoadTask?.cancel()
         noteLoadTask = nil
+        // #421: a pending {{cursor}} park belongs to the note that
+        // requested it — never let it ride into a different note.
+        clearPendingCursorByteOffset()
         linksLoadTask?.cancel()
         linksLoadTask = nil
         tasksLoadTask?.cancel()
@@ -4271,8 +4295,16 @@ final class AppState: ObservableObject {
         case .success(let rendered):
             pendingTemplateFlow = .idle
             templateNoteNameError = nil
+            // #421 (F-H1): .high, not .medium — the create
+            // announcement is immediately followed by
+            // selectedFilePath changing, whose "Showing <file>."
+            // announcement supersedes an in-flight medium one before
+            // VO finishes it. High makes the completed user action
+            // win; the picker-open/cancel messages stay .medium
+            // (red-team scoping note).
             announceTemplate(
-                "Created \(filename(of: relativePath)) from \(template.name)."
+                "Created \(filename(of: relativePath)) from \(template.name).",
+                priority: .high
             )
             // Open the new file. SwiftUI propagates the binding
             // change → `handleSelectionChange` kicks off a fresh
@@ -4296,6 +4328,10 @@ final class AppState: ObservableObject {
                         self.selectedFilePath == relativePath
                     else { return }
                     self.cursorByteOffsetRequest.send(Int(offset))
+                    // Focus follows content (F-H1): the caret park
+                    // alone leaves keyboard focus on the window; the
+                    // coordinator makes the editor first responder
+                    // when it handles this request.
                 }
             }
         case .failure(let error):
@@ -4386,9 +4422,12 @@ final class AppState: ObservableObject {
     /// bus and capture it for the test target. Same shape as
     /// `announceScan` but without the per-second rate guard —
     /// template events are user-driven and never rapid-fire.
-    private func announceTemplate(_ message: String) {
+    private func announceTemplate(
+        _ message: String,
+        priority: NSAccessibilityPriorityLevel = .medium
+    ) {
         templateAnnouncementLastMessage = message
-        postAccessibilityAnnouncement(message, priority: .medium)
+        postAccessibilityAnnouncement(message, priority: priority)
     }
 
     // MARK: - Private
