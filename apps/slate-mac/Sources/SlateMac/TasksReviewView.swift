@@ -318,7 +318,7 @@ struct TasksReviewView: View {
         if let rec = row.task.recurrence, !rec.isEmpty {
             parts.append("Repeats \(rec)")
         }
-        parts.append(row.task.completed ? "Done task." : "Open task.")
+        parts.append(row.task.statusPhrase)
         return parts.joined(separator: ". ")
     }
 
