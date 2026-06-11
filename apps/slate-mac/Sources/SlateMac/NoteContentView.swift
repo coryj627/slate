@@ -136,7 +136,14 @@ struct NoteContentView: View {
             onSave: { [appState] in appState.saveCurrentNote() },
             scrollAnchorRequest: appState.scrollAnchorRequest.eraseToAnyPublisher(),
             lineScrollRequest: appState.lineScrollRequest.eraseToAnyPublisher(),
-            cursorByteOffsetRequest: appState.cursorByteOffsetRequest.eraseToAnyPublisher(),
+            cursorByteOffsetRequest: appState.cursorByteOffsetRequest
+                .compactMap { $0 }
+                .handleEvents(receiveOutput: { [appState] _ in
+                    // One-shot: clear on delivery so a later editor
+                    // re-attach doesn't replay a stale park (#421).
+                    appState.clearPendingCursorByteOffset()
+                })
+                .eraseToAnyPublisher(),
             previewEmbedAtCursor: { [appState] target, line in
                 appState.requestEmbedPreview(target: target, sourceLine: line)
             }
