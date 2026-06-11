@@ -92,6 +92,11 @@ struct SearchOverlay: View {
                         + "Return activates the top result. "
                         + "Tab moves to the results list."
                 )
+                // #418 (F-A1): tabbing/arrowing through result rows
+                // is silent — announce the focused row (hoisted to a
+                // method; an inline closure here tripped the Swift
+                // type-checker budget, the PR #263 failure mode).
+                .onChange(of: focus) { announceFocusedResult($0) }
                 .onChange(of: appState.searchQuery) { _ in
                     appState.bumpSearchQuery()
                 }
@@ -248,6 +253,22 @@ struct SearchOverlay: View {
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
         return "\(filename(for: hit.path)): \(cleanSnippet)"
+    }
+
+    /// #418 (F-A1): speak the focused result row. The focus engine
+    /// moves through these custom .plain buttons silently; announce
+    /// the filename — the full row label (with snippet) stays on the
+    /// element for VO-cursor interaction without forcing every focus
+    /// hop through a paragraph of snippet speech.
+    private func announceFocusedResult(_ newFocus: FocusTarget?) {
+        guard case .result(let idx) = newFocus else { return }
+        guard case .results(let rows, _) = appState.searchState,
+            rows.indices.contains(idx)
+        else { return }
+        postAccessibilityAnnouncement(
+            "Selected: \(filename(for: rows[idx].path))",
+            priority: .medium
+        )
     }
 
     private func filename(for path: String) -> String {

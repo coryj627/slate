@@ -108,9 +108,13 @@ struct CommandPaletteView: View {
             guard let newID,
                   let command = model.displayOrder.first(where: { $0.id == newID })
             else { return }
+            // #418 (F-A1): was .low — anything else speaking (typing
+            // echoes, filter-count announcements) superseded it and
+            // the VO test heard nothing while arrowing. Medium is
+            // the politeness floor that actually survives.
             postAccessibilityAnnouncement(
                 "Selected: \(command.label)",
-                priority: .low
+                priority: .medium
             )
         }
         .onChange(of: model.pendingAnnouncement) { announcement in
