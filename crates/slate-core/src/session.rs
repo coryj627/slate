@@ -1052,8 +1052,9 @@ impl VaultSession {
         &self,
         host_path: &str,
         target: &str,
+        alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        self.resolve_embed_at_depth(host_path, target, 0)
+        self.resolve_embed_at_depth(host_path, target, 0, alt)
     }
 
     fn resolve_embed_at_depth(
@@ -1061,6 +1062,7 @@ impl VaultSession {
         host_path: &str,
         target: &str,
         depth: u32,
+        alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
         use crate::embeds::{parse_embed_target, EmbedAnchor};
 
@@ -1077,7 +1079,7 @@ impl VaultSession {
         // host path through so relative-folder resolution stays
         // symmetric with the note-target branch (Codoki PR #190).
         if crate::embeds::looks_like_image(note_name) {
-            return self.resolve_image_embed(host_path, target, note_name);
+            return self.resolve_image_embed(host_path, target, note_name, alt);
         }
 
         // Note target: snapshot the file index, run link_resolver,
@@ -1136,6 +1138,7 @@ impl VaultSession {
         host_path: &str,
         raw_target: &str,
         note_name: &str,
+        alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
         // Same path-resolution strategy as note targets: snapshot
         // the file index and run the link_resolver. `looks_like_image`
@@ -1161,23 +1164,13 @@ impl VaultSession {
                 }
             }
         };
-        // #419: markdown image embeds carry the author's alt text as
-        // the link's display text (`![alt](src)`), but the resolver
-        // only receives the raw target — so AT users were getting a
-        // filename instead of the description (WCAG 1.1.1, VO test
-        // F-J3). Look the alt up from the host's parsed links: first
-        // embed whose raw target matches. Multiple same-src embeds
-        // share the first occurrence's alt until per-occurrence
-        // resolution exists — better than dropping it for all.
-        let alt = self.read_text(host_path).ok().and_then(|text| {
-            crate::extract_links(&text).into_iter().find_map(|l| {
-                if l.is_embed && l.target_raw == raw_target {
-                    l.display_text
-                } else {
-                    None
-                }
-            })
-        });
+        // #433: the alt arrives as an argument — threaded from the
+        // link's persisted display_text (top level: the Swift caller
+        // passes its OutgoingLink's displayText; nested:
+        // resolve_nested_embeds passes the freshly-parsed link's
+        // display_text per occurrence). #419's interim re-read +
+        // re-parse of the host per image is gone, and nested alt is
+        // now per-occurrence by construction.
         match self.read_attachment(&target_path) {
             Ok(att) => Ok(crate::EmbedResolution::Image {
                 target_path,
@@ -1308,8 +1301,12 @@ impl VaultSession {
                 Some(crate::LinkAnchor::Block(b)) => format!("{}^{b}", link.target_raw),
                 None => link.target_raw.clone(),
             };
-            let resolution =
-                self.resolve_embed_at_depth(host_path, &target_with_anchor, next_depth)?;
+            let resolution = self.resolve_embed_at_depth(
+                host_path,
+                &target_with_anchor,
+                next_depth,
+                link.display_text.clone(),
+            )?;
             out.push(crate::NestedEmbed {
                 raw_target: target_with_anchor,
                 byte_offset_in_parent: link.span_start as u32,

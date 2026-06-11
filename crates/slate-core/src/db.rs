@@ -111,6 +111,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "headings: byte_offset column for position-based outline scroll (#431)",
         sql: include_str!("../migrations/014_headings_byte_offset.sql"),
     },
+    Migration {
+        description: "links: display_text column so image alt rides the links query (#433)",
+        sql: include_str!("../migrations/015_links_display_text.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -496,6 +500,58 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mtime, 0, "migration 014 must force the slow path");
+    }
+
+    #[test]
+    fn migration_015_wipes_links_and_resets_mtime_for_display_text_backfill() {
+        // Same upgrade shape as 012/014: pre-015 caches keep NULL
+        // display_text for unchanged files; the invalidation body
+        // must wipe links and zero mtimes so the next slow-path
+        // scan rewrites rows with the authored display text (#433).
+        let mut conn = fresh_db();
+        migrate(&mut conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/baz.md', 'baz.md', 'md', 100, 1700000000000,
+               1700000000000, 'ghi789', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        let file_id: i64 = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = 'notes/baz.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO links (
+                source_file_id, ordinal, target_path, target_raw, target_anchor,
+                kind, is_embed, is_external, snippet, span_start, span_end
+             ) VALUES (?1, 0, NULL, 'pic.png', NULL, 'markdown', 1, 0, '', 0, 10)",
+            rusqlite::params![file_id],
+        )
+        .unwrap();
+
+        conn.execute_batch("UPDATE files SET mtime_ms = 0; DELETE FROM links;")
+            .unwrap();
+
+        let links: u32 = conn
+            .query_row("SELECT COUNT(*) FROM links", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(links, 0, "migration 015 must wipe cached links");
+        let mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'notes/baz.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mtime, 0, "migration 015 must force the slow path");
     }
 
     #[test]

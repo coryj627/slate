@@ -2167,14 +2167,18 @@ final class AppState: ObservableObject {
         // both. The composed key uses the bare form (the FFI
         // round-trip contract); the `#^` form is registered as an
         // alias of the same resolution.
-        let embedTargets: [(key: String, aliases: [String])] = currentOutgoingLinks
+        let embedTargets: [(key: String, aliases: [String], alt: String?)] =
+            currentOutgoingLinks
             .filter { $0.isEmbed }
             .map { link in
                 let key = embedTargetKey(link)
+                // #433: the link's authored display text — for image
+                // embeds, the alt — rides along so the resolver no
+                // longer re-reads the host to recover it.
                 if let anchor = link.targetAnchor, anchor.kind == "block" {
-                    return (key, ["\(link.targetRaw)#^\(anchor.text)"])
+                    return (key, ["\(link.targetRaw)#^\(anchor.text)"], link.displayText)
                 }
-                return (key, [])
+                return (key, [], link.displayText)
             }
         if embedTargets.isEmpty {
             currentNoteEmbedResolutions = [:]
@@ -2192,7 +2196,8 @@ final class AppState: ObservableObject {
                     do {
                         resolution = try session.resolveEmbed(
                             hostPath: path,
-                            target: target.key
+                            target: target.key,
+                            alt: target.alt
                         )
                     } catch let error as VaultError {
                         // Per-embed failure: synthesize an
@@ -2206,6 +2211,15 @@ final class AppState: ObservableObject {
                             reason: .readError(message: error.localizedDescription)
                         )
                     }
+                    // Same-src duplicates: the cache is keyed on
+                    // target, so multiple occurrences overwrite in
+                    // ordinal order and share the LAST one's
+                    // resolution (incl. its alt). Per-occurrence alt
+                    // exists at the resolution layer (#433) — nested
+                    // embeds get it structurally; surfacing it at
+                    // top level needs per-occurrence cache keys, a
+                    // UI-contract change deferred with rationale on
+                    // the issue.
                     out[target.key] = resolution
                     for alias in target.aliases {
                         out[alias] = resolution

@@ -323,7 +323,7 @@ fn resolve_embed_returns_full_note_with_body_only() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "target").unwrap();
+    let resolution = session.resolve_embed("host.md", "target", None).unwrap();
     match resolution {
         crate::EmbedResolution::FullNote {
             target_path,
@@ -352,7 +352,7 @@ fn resolve_embed_section_runs_until_next_same_level_heading() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "target#H2").unwrap();
+    let resolution = session.resolve_embed("host.md", "target#H2", None).unwrap();
     match resolution {
         crate::EmbedResolution::Section { heading, text, .. } => {
             assert_eq!(heading, "H2");
@@ -378,7 +378,9 @@ fn resolve_embed_block_returns_anchored_byte_range() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "target^my-block").unwrap();
+    let resolution = session
+        .resolve_embed("host.md", "target^my-block", None)
+        .unwrap();
     match resolution {
         crate::EmbedResolution::Block { block_id, text, .. } => {
             assert_eq!(block_id, "my-block");
@@ -406,7 +408,7 @@ fn resolve_embed_obsidian_block_ref_returns_anchored_byte_range() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let resolution = session
-        .resolve_embed("host.md", "target#^my-block")
+        .resolve_embed("host.md", "target#^my-block", None)
         .unwrap();
     match resolution {
         crate::EmbedResolution::Block { block_id, text, .. } => {
@@ -429,7 +431,7 @@ fn resolve_embed_image_returns_bytes_and_mime() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "cover.png").unwrap();
+    let resolution = session.resolve_embed("host.md", "cover.png", None).unwrap();
     match resolution {
         crate::EmbedResolution::Image {
             target_path,
@@ -451,7 +453,7 @@ fn resolve_embed_target_not_found_surfaces_unresolved() {
         p.write_file("host.md", b"![[missing]]\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let r = session.resolve_embed("host.md", "missing").unwrap();
+    let r = session.resolve_embed("host.md", "missing", None).unwrap();
     assert!(matches!(
         r,
         crate::EmbedResolution::Unresolved {
@@ -468,7 +470,9 @@ fn resolve_embed_heading_not_found_carries_target_path() {
         p.write_file("host.md", b"![[target#Missing]]\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let r = session.resolve_embed("host.md", "target#Missing").unwrap();
+    let r = session
+        .resolve_embed("host.md", "target#Missing", None)
+        .unwrap();
     match r {
         crate::EmbedResolution::Unresolved {
             reason:
@@ -486,9 +490,10 @@ fn resolve_embed_heading_not_found_carries_target_path() {
 
 #[test]
 fn resolve_embed_markdown_image_carries_alt_text() {
-    // #419 (WCAG 1.1.1): `![alt](src)` — the author's alt text must
-    // ride the Image resolution so AT hears the description, not
-    // the filename.
+    // #419 (WCAG 1.1.1) → #433: the author's alt text rides the
+    // Image resolution. Post-#433 the alt arrives as an ARGUMENT
+    // (threaded from the link's persisted display_text) instead of
+    // a per-image re-read of the host.
     let png_bytes: [u8; 16] = [
         0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0, 0, 0, 0,
     ];
@@ -503,7 +508,11 @@ fn resolve_embed_markdown_image_carries_alt_text() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let resolution = session
-        .resolve_embed("host.md", "attachments/pie.png")
+        .resolve_embed(
+            "host.md",
+            "attachments/pie.png",
+            Some("A simple line drawing of a pie".to_string()),
+        )
         .unwrap();
     match resolution {
         crate::EmbedResolution::Image { alt, .. } => {
@@ -511,6 +520,91 @@ fn resolve_embed_markdown_image_carries_alt_text() {
         }
         other => panic!("expected Image, got {other:?}"),
     }
+
+    // And the persisted side of the contract: the scanner stores the
+    // link's display_text, so the Swift caller HAS the alt in hand
+    // from the outgoing-links query it already runs.
+    let links = session.outgoing_links("host.md").unwrap();
+    let img = links
+        .iter()
+        .find(|l| l.target_raw == "attachments/pie.png")
+        .expect("image link indexed");
+    assert_eq!(
+        img.display_text.as_deref(),
+        Some("A simple line drawing of a pie")
+    );
+}
+
+#[test]
+fn wikilink_image_alias_becomes_alt_when_threaded() {
+    // #433 N3: `![[img.png|caption]]` — the alias rides display_text
+    // through the links table; threading it as alt must surface it
+    // (matches Obsidian's alt convention, preserved from the #419
+    // audit's bonus finding).
+    let png_bytes: [u8; 16] = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0, 0, 0, 0,
+    ];
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("photo.png", &png_bytes).unwrap();
+        p.write_file("host.md", b"![[photo.png|A captioned photo]]\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let links = session.outgoing_links("host.md").unwrap();
+    let img = links.iter().find(|l| l.is_embed).expect("embed indexed");
+    assert_eq!(img.display_text.as_deref(), Some("A captioned photo"));
+
+    let resolution = session
+        .resolve_embed("host.md", "photo.png", img.display_text.clone())
+        .unwrap();
+    match resolution {
+        crate::EmbedResolution::Image { alt, .. } => {
+            assert_eq!(alt.as_deref(), Some("A captioned photo"));
+        }
+        other => panic!("expected Image, got {other:?}"),
+    }
+}
+
+#[test]
+fn nested_image_embeds_carry_per_occurrence_alt() {
+    // #433: nested resolution threads each parsed link's own
+    // display_text — two same-src images with different alts must
+    // not share the first occurrence's alt (the documented #419
+    // caveat this fix removes for nested embeds).
+    let png_bytes: [u8; 16] = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0, 0, 0, 0,
+    ];
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("pic.png", &png_bytes).unwrap();
+        p.write_file(
+            "inner.md",
+            b"![first view](pic.png)\n\n![second view](pic.png)\n",
+        )
+        .unwrap();
+        p.write_file("host.md", b"![[inner]]\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let resolution = session.resolve_embed("host.md", "inner", None).unwrap();
+    let crate::EmbedResolution::FullNote { nested, .. } = resolution else {
+        panic!("expected FullNote");
+    };
+    let alts: Vec<Option<String>> = nested
+        .iter()
+        .map(|n| match &n.resolution {
+            crate::EmbedResolution::Image { alt, .. } => alt.clone(),
+            other => panic!("expected Image, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        alts,
+        vec![
+            Some("first view".to_string()),
+            Some("second view".to_string())
+        ],
+        "each occurrence must carry its own alt"
+    );
 }
 
 #[test]
@@ -525,7 +619,7 @@ fn resolve_embed_wikilink_image_without_alt_has_none() {
         p.write_file("host.md", b"![[cover.png]]\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    match session.resolve_embed("host.md", "cover.png").unwrap() {
+    match session.resolve_embed("host.md", "cover.png", None).unwrap() {
         crate::EmbedResolution::Image { alt, .. } => assert_eq!(alt, None),
         other => panic!("expected Image, got {other:?}"),
     }
@@ -538,7 +632,9 @@ fn resolve_embed_block_not_found_carries_block_id() {
         p.write_file("host.md", b"![[target^missing]]\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let r = session.resolve_embed("host.md", "target^missing").unwrap();
+    let r = session
+        .resolve_embed("host.md", "target^missing", None)
+        .unwrap();
     match r {
         crate::EmbedResolution::Unresolved {
             reason: crate::EmbedUnresolvedReason::BlockNotFound { block_id, .. },
@@ -561,7 +657,7 @@ fn resolve_embed_recursion_bottoms_out_at_depth_three() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let r = session.resolve_embed("host.md", "a").unwrap();
+    let r = session.resolve_embed("host.md", "a", None).unwrap();
     // a (depth 0) → FullNote with nested b (depth 1) →
     // FullNote with nested c (depth 2) → FullNote with nested
     // d (depth 3) → DepthLimitReached.
@@ -621,7 +717,7 @@ fn nested_embed_byte_offset_lands_inside_parent_text() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let r = session.resolve_embed("host.md", "a").unwrap();
+    let r = session.resolve_embed("host.md", "a", None).unwrap();
     let (text, nested) = match r {
         crate::EmbedResolution::FullNote { text, nested, .. } => (text, nested),
         other => panic!("expected FullNote, got {other:?}"),

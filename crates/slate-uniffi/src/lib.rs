@@ -579,8 +579,13 @@ impl VaultSession {
         &self,
         host_path: String,
         target: String,
+        alt: Option<String>,
     ) -> Result<EmbedResolution, VaultError> {
-        let resolution = self.inner.resolve_embed(&host_path, &target)?;
+        // #433: `alt` is the authored display text of the link being
+        // resolved (image embeds: the alt text). Threading it from
+        // the caller's OutgoingLink replaces the per-image host
+        // re-read #419 shipped with.
+        let resolution = self.inner.resolve_embed(&host_path, &target, alt)?;
         Ok(resolution.into())
     }
 
@@ -1043,6 +1048,8 @@ pub struct OutgoingLink {
     pub is_unresolved: bool,
     pub snippet: String,
     pub ordinal: u32,
+    /// Authored display text (`![alt](src)` → the alt; `[[t|d]]` → d).
+    pub display_text: Option<String>,
 }
 
 impl From<core::OutgoingLink> for OutgoingLink {
@@ -1059,6 +1066,7 @@ impl From<core::OutgoingLink> for OutgoingLink {
             is_unresolved: l.is_unresolved,
             snippet: l.snippet,
             ordinal: l.ordinal,
+            display_text: l.display_text,
         }
     }
 }
