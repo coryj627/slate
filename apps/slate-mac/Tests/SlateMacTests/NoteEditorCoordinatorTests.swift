@@ -245,8 +245,13 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         )
 
         // The observer fires synchronously and schedules a fresh
-        // (immediate) highlight; await the task it created.
-        NotificationCenter.default.post(
+        // (immediate) highlight; await the task it created. #416:
+        // post on NSWorkspace.shared.notificationCenter — the center
+        // AppKit actually delivers this notification on. (The old
+        // version posted on NotificationCenter.default, which masked
+        // the dead default-center registration this test now guards
+        // against.)
+        NSWorkspace.shared.notificationCenter.post(
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )
@@ -259,6 +264,36 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             underline as? Int, NSUnderlineStyle.single.rawValue,
             "accessibility-options notification must re-run the highlight pass"
+        )
+    }
+
+    /// #416 second leg: accent-color changes arrive as
+    /// `NSColor.systemColorsDidChangeNotification` on the DEFAULT
+    /// center — the highlight must re-run for those too (the old
+    /// "AppleAquaColorVariantChanged" name was distributed-center
+    /// only and never fired).
+    func testSystemColorsDidChangeReappliesHighlight() async {
+        let (coordinator, textView, _) = makeCoordinator(text: "edge ![[a]] case")
+        let layoutManager = textView.layoutManager!
+        coordinator.scheduleHighlight(debounced: false)
+        await coordinator.highlightTask?.value
+        layoutManager.removeTemporaryAttribute(
+            .underlineStyle,
+            forCharacterRange: NSRange(location: 0, length: (textView.string as NSString).length)
+        )
+
+        NotificationCenter.default.post(
+            name: NSColor.systemColorsDidChangeNotification,
+            object: nil
+        )
+        await coordinator.highlightTask?.value
+
+        let underline = layoutManager.temporaryAttribute(
+            .underlineStyle, atCharacterIndex: 6, effectiveRange: nil
+        )
+        XCTAssertEqual(
+            underline as? Int, NSUnderlineStyle.single.rawValue,
+            "system-colors notification must re-run the highlight pass"
         )
     }
 
@@ -426,7 +461,9 @@ final class NoteEditorCoordinatorTests: XCTestCase {
             .underlineStyle,
             forCharacterRange: NSRange(location: 0, length: (newTextView.string as NSString).length)
         )
-        NotificationCenter.default.post(
+        // #416: post on the workspace center — where AppKit actually
+        // delivers this notification.
+        NSWorkspace.shared.notificationCenter.post(
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )

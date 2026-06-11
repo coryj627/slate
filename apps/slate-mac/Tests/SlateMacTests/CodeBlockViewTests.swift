@@ -211,4 +211,47 @@ final class CodeBlockViewTests: XCTestCase {
         )
         XCTAssertEqual(effectiveRange.length, 1)
     }
+
+    /// #416 (red-team Low-1): the contrast observer is registered on
+    /// NSWorkspace.shared.notificationCenter — this pins that a post
+    /// on the REAL center re-applies token colors. Mirrors the
+    /// NoteEditorView guard; fails if the registration ever drifts
+    /// back to NotificationCenter.default.
+    @MainActor
+    func testWorkspaceContrastNotificationReappliesTokenColors() {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+        let block = CodeBlock(
+            source: "fn main() {}",
+            language: "rust",
+            tokens: [],
+            semanticSpans: [],
+            line: 1,
+            byteOffset: 0
+        )
+        let coordinator = CodeBlockContent.Coordinator()
+        coordinator.textView = textView
+        coordinator.block = block
+        NSWorkspace.shared.notificationCenter.addObserver(
+            coordinator,
+            selector: #selector(CodeBlockContent.Coordinator.systemContrastChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+        defer {
+            NSWorkspace.shared.notificationCenter.removeObserver(coordinator)
+        }
+        // Blank the storage; the observer must rebuild it from the block.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
+        XCTAssertEqual(textView.string, "")
+
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+
+        XCTAssertEqual(
+            textView.string, "fn main() {}",
+            "workspace-center contrast notification must re-apply the attributed source"
+        )
+    }
 }
