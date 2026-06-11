@@ -190,10 +190,11 @@ struct TasksPanel: View {
 
     /// Compose the VoiceOver row label. Reads:
     /// `"<status>. <text>. Due <date>. Priority <level>. Open task."`
-    /// — per the accessibility checkpoints in #113.
+    /// — per the accessibility checkpoints in #113. Status phrasing
+    /// distinguishes `[/]` / `[-]` (#423).
     private func rowAccessibilityLabel(_ task: TaskItem) -> String {
         var parts: [String] = []
-        parts.append(task.completed ? "Done" : "Open")
+        parts.append(task.statusWord)
         parts.append(task.text)
         if let dueMs = task.dueMs {
             parts.append("Due \(Self.formatDueDate(dueMs))")
@@ -204,7 +205,7 @@ struct TasksPanel: View {
         if let rec = task.recurrence, !rec.isEmpty {
             parts.append("Repeats \(rec)")
         }
-        parts.append(task.completed ? "Done task." : "Open task.")
+        parts.append(task.statusPhrase)
         return parts.joined(separator: ". ")
     }
 
