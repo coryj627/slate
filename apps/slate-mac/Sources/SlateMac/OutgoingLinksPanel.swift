@@ -7,13 +7,18 @@ import SwiftUI
 /// note — resolved internal, unresolved internal, and external —
 /// in document order. Bound to `AppState.currentOutgoingLinks`.
 ///
-/// Default state is collapsed because outgoing-links list is more
-/// useful as an audit (Cmd+expand) than a permanently-open sidebar
-/// element; per the acceptance criteria this gets revisited after
-/// tester feedback.
+/// Default state is EXPANDED (#424) — the collapsed default hid
+/// every entry from a VoiceOver walk (only the count was announced),
+/// which the 2026-06-10 VO feature test flagged as F-C2. This is the
+/// tester-feedback revisit the original acceptance criteria
+/// promised; it also restores consistency with every sibling panel.
 struct OutgoingLinksPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = false
+    // #424 (F-C2): expanded by default — a collapsed disclosure
+    // hides its entries from a VoiceOver walk entirely (only the
+    // count is announced), so link entries were invisible until a
+    // sighted-style expand. Matches EmbedsPanel's default.
+    @State private var isExpanded = true
 
     var body: some View {
         if appState.selectedFilePath == nil {

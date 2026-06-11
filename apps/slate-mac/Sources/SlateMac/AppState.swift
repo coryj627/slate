@@ -1571,7 +1571,14 @@ final class AppState: ObservableObject {
     private func navigate(to path: String, kind: String) {
         selectedFilePath = path
         let filename = (path as NSString).lastPathComponent
-        postAccessibilityAnnouncement("\(kind) \(filename).")
+        // #424 (F-C1): .high — the selection change this just
+        // triggered posts its own announcements ("Showing <file>.",
+        // "Outline, N headings.") which superseded this medium one
+        // before VO spoke it; the VO test heard ONLY the indirect
+        // outline cue. High priority makes the activation
+        // confirmation win; the outline count then follows with the
+        // structure info.
+        postAccessibilityAnnouncement("\(kind) \(filename).", priority: .high)
         lastActivatedLinkOutcome = .openedInternal(path)
     }
 
