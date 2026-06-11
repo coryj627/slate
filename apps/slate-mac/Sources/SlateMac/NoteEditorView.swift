@@ -907,29 +907,97 @@ struct NoteEditorView: NSViewRepresentable {
             Self.scrollRangeToVisible(range, in: textView, reduceMotion: reduceMotion)
         }
 
-        private func scrollToHeadingAnchor(_ anchor: String) {
-            guard let textView else { return }
+        /// #431: position-based scroll with an honest announcement
+        /// contract. The old shape searched the buffer for the
+        /// heading's RENDERED text — which silently fails for
+        /// headings with inline markup (`## A **bold** heading`
+        /// renders as "A bold heading" and never matches the raw
+        /// bytes) — while the activation announcement claimed
+        /// success unconditionally. Now: the backend's byte offset
+        /// is the primary target (exact, per-occurrence,
+        /// markup-proof), the text search remains only as a
+        /// fallback for offsets gone stale against an unsaved edit,
+        /// and the announcement is posted HERE — success or honest
+        /// failure — not at the request site.
+        @discardableResult
+        func scrollToHeadingAnchor(_ anchor: String) -> Bool {
+            guard let textView else { return false }
             guard let heading = headings.first(where: { $0.anchorId == anchor })
-            else { return }
-            // First occurrence of the heading text within the
-            // buffer. Markdown headings repeat the text as raw
-            // characters ("# Heading"), so finding the heading
-            // string is almost always the right scroll target.
-            // The anchor-id dedup logic (`heading-2`, `heading-3`)
-            // means duplicates differ by suffix, but the raw
-            // heading text in the source repeats verbatim — picking
-            // the first match here is approximate when a heading
-            // text appears twice. Outline-sidebar testers can flag
-            // a per-occurrence anchor mapping if it matters; for
-            // V1.F the first-match heuristic matches what most
-            // users would expect from VoiceOver-driven outline
-            // navigation.
+            else {
+                // Red-team F3: with the request-site announcement
+                // gone, a silent bail here would make the activation
+                // fully mute. Shouldn't occur (sidebar + coordinator
+                // share one headings source), but if it does, say so.
+                postAccessibilityAnnouncement(
+                    "Could not find that heading.",
+                    priority: .medium
+                )
+                return false
+            }
             let ns = textView.string as NSString
-            let needle = heading.text as String
-            let range = ns.range(of: needle)
-            guard range.location != NSNotFound else { return }
+
+            // Primary: backend byte offset → UTF-16 location.
+            // Validate it actually lands on the heading's first
+            // character (its level-marker `#` or the heading text
+            // for setext) — an unsaved edit shifts offsets, and a
+            // blind scroll to a stale position would be a quieter
+            // version of the same lie #431 is about.
+            let location = EditorTextConversions.utf16LocationForByteOffset(
+                Int(heading.byteOffset),
+                in: textView.string
+            )
+            var range = NSRange(location: NSNotFound, length: 0)
+            if location < ns.length {
+                let lineRange = ns.lineRange(for: NSRange(location: location, length: 0))
+                let line = ns.substring(with: lineRange)
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                // Red-team F2: require the heading's OWN level marker
+                // ("## " for level 2), not any "#" — a stale offset
+                // landing on a different heading must not announce
+                // the requested one.
+                let atxMarker = String(repeating: "#", count: Int(heading.level)) + " "
+                // Red-team F1: setext headings put the TEXT on the
+                // offset line with an ===/--- underline on the next —
+                // accept when the underline is there, so markup-bearing
+                // setext headings scroll too.
+                var isSetext = false
+                let nextLineStart = lineRange.location + lineRange.length
+                if nextLineStart < ns.length {
+                    let nextRange = ns.lineRange(
+                        for: NSRange(location: nextLineStart, length: 0))
+                    let next = ns.substring(with: nextRange)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    isSetext = !next.isEmpty
+                        && next.allSatisfy { $0 == "=" || $0 == "-" }
+                }
+                if line.contains(heading.text) || trimmed.hasPrefix(atxMarker) || isSetext {
+                    range = NSRange(location: location, length: 0)
+                }
+            }
+            // Fallback: rendered-text search (pre-#431 behavior) for
+            // stale offsets. Still misses inline-markup headings —
+            // but only in the stale-offset window before the next
+            // save refreshes them.
+            if range.location == NSNotFound {
+                let candidate = ns.range(of: heading.text)
+                if candidate.location != NSNotFound {
+                    range = NSRange(location: candidate.location, length: 0)
+                }
+            }
+            guard range.location != NSNotFound else {
+                postAccessibilityAnnouncement(
+                    "Could not scroll to \(heading.text).",
+                    priority: .medium
+                )
+                return false
+            }
             scrollRangeToVisibleRespectingReduceMotion(range)
-            textView.setSelectedRange(NSRange(location: range.location, length: 0))
+            textView.setSelectedRange(range)
+            postAccessibilityAnnouncement(
+                "Scrolled to \(heading.text).",
+                priority: .medium
+            )
+            return true
         }
 
         /// Park the caret at the byte offset (UTF-8) supplied by the

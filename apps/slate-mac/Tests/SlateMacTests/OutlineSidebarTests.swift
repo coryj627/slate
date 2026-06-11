@@ -15,7 +15,8 @@ final class OutlineSidebarTests: XCTestCase {
             level: 3,
             text: "Second H3 with siblings",
             ordinal: 4,
-            anchorId: "second-h3-with-siblings"
+            anchorId: "second-h3-with-siblings",
+            byteOffset: 240
         )
         XCTAssertEqual(
             OutlineSidebar.rowAccessibilityLabel(for: heading),
@@ -24,7 +25,7 @@ final class OutlineSidebarTests: XCTestCase {
     }
 
     func testRowLabelForTopLevelHeading() {
-        let heading = Heading(level: 1, text: "Title", ordinal: 0, anchorId: "title")
+        let heading = Heading(level: 1, text: "Title", ordinal: 0, anchorId: "title", byteOffset: 0)
         XCTAssertEqual(
             OutlineSidebar.rowAccessibilityLabel(for: heading),
             "Level 1 heading: Title"

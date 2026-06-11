@@ -2739,8 +2739,8 @@ fn replace_headings(
         return Ok(());
     }
     let mut stmt = tx.prepare_cached(
-        "INSERT INTO headings (file_id, ordinal, level, text, anchor_id)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO headings (file_id, ordinal, level, text, anchor_id, byte_offset)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
     for heading in headings {
         stmt.execute(rusqlite::params![
@@ -2749,6 +2749,7 @@ fn replace_headings(
             heading.level as i64,
             heading.text,
             heading.anchor_id,
+            heading.byte_offset as i64,
         ])?;
     }
     Ok(())
@@ -2869,7 +2870,7 @@ fn get_file_metadata_impl(
     // selection in the UI, and the headings SELECT is the same
     // statement each time. Caching avoids the prepare-step overhead.
     let mut stmt = conn.prepare_cached(
-        "SELECT ordinal, level, text, anchor_id
+        "SELECT ordinal, level, text, anchor_id, byte_offset
          FROM headings WHERE file_id = ?1
          ORDER BY ordinal ASC",
     )?;
@@ -2880,6 +2881,7 @@ fn get_file_metadata_impl(
                 level: row.get::<_, i64>(1)? as u8,
                 text: row.get::<_, String>(2)?,
                 anchor_id: row.get::<_, String>(3)?,
+                byte_offset: row.get::<_, i64>(4)? as u32,
             })
         })?
         .collect();

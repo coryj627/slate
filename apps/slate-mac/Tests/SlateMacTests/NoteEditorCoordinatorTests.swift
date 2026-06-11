@@ -439,6 +439,68 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         )
     }
 
+    /// #431: outline activation must scroll by the backend's byte
+    /// offset — the rendered-text search silently failed for
+    /// inline-markup headings while the announcement claimed
+    /// success. The coordinator now returns the truth.
+    func testScrollToHeadingAnchorUsesByteOffsetForInlineMarkupHeading() {
+        let text = "# Plain\n\nbody text here\n\n## A **bold** heading\n\ntail\n"
+        let (coordinator, textView, _) = makeCoordinator(text: text)
+        let ns = text as NSString
+        let offset = ns.range(of: "## A **bold**").location  // ASCII → byte == utf16
+        coordinator.headings = [
+            Heading(level: 1, text: "Plain", ordinal: 0, anchorId: "plain", byteOffset: 0),
+            Heading(
+                level: 2,
+                text: "A bold heading",  // rendered text ≠ raw buffer
+                ordinal: 1,
+                anchorId: "a-bold-heading",
+                byteOffset: UInt32(offset)
+            ),
+        ]
+
+        let ok = coordinator.scrollToHeadingAnchor("a-bold-heading")
+
+        XCTAssertTrue(ok, "offset-based scroll must succeed where text search cannot")
+        XCTAssertEqual(
+            textView.selectedRange().location, offset,
+            "caret must park at the heading's real position"
+        )
+    }
+
+    /// Stale offset (unsaved edits shifted the buffer) falls back to
+    /// the rendered-text search when that still matches.
+    func testScrollToHeadingAnchorFallsBackToTextSearchOnStaleOffset() {
+        let text = "intro\n\n# Findable\n\nbody\n"
+        let (coordinator, textView, _) = makeCoordinator(text: text)
+        let real = (text as NSString).range(of: "# Findable").location
+        coordinator.headings = [
+            // Offset points mid-body (stale), but the line there
+            // doesn't carry the heading text → fallback kicks in.
+            Heading(level: 1, text: "Findable", ordinal: 0, anchorId: "findable",
+                    byteOffset: UInt32((text as NSString).length - 2))
+        ]
+
+        let ok = coordinator.scrollToHeadingAnchor("findable")
+
+        XCTAssertTrue(ok)
+        // Fallback finds the heading TEXT ("Findable"), which sits
+        // inside the heading line — close enough to scroll/park.
+        let parked = textView.selectedRange().location
+        XCTAssertTrue(
+            parked >= real && parked <= real + 2,
+            "fallback must park at the heading text (got \(parked), heading at \(real))"
+        )
+    }
+
+    /// Unknown anchor → false, no crash (the honest-failure path; the
+    /// announcement itself is fire-and-forget).
+    func testScrollToHeadingAnchorReturnsFalseForUnknownAnchor() {
+        let (coordinator, _, _) = makeCoordinator(text: "# Only\n")
+        coordinator.headings = []
+        XCTAssertFalse(coordinator.scrollToHeadingAnchor("ghost"))
+    }
+
     /// Audit [#233](https://github.com/coryj627/slate/issues/233):
     /// `attach` is a re-bind point — after it, the coordinator must
     /// target the NEW textView, and the appearance observer (deduped via

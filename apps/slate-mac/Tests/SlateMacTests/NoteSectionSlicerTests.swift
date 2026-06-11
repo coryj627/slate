@@ -19,7 +19,8 @@ final class NoteSectionSlicerTests: XCTestCase {
             level: level,
             text: text,
             ordinal: ordinal,
-            anchorId: anchorId ?? text.lowercased().replacingOccurrences(of: " ", with: "-")
+            anchorId: anchorId ?? text.lowercased().replacingOccurrences(of: " ", with: "-"),
+            byteOffset: 0
         )
     }
 
@@ -99,8 +100,8 @@ final class NoteSectionSlicerTests: XCTestCase {
             body of section
             """
         let headings = [
-            Heading(level: 1, text: "Top", ordinal: 0, anchorId: "top"),
-            Heading(level: 2, text: "Section", ordinal: 1, anchorId: "section"),
+            Heading(level: 1, text: "Top", ordinal: 0, anchorId: "top", byteOffset: 0),
+            Heading(level: 2, text: "Section", ordinal: 1, anchorId: "section", byteOffset: 0),
         ]
         let sections = sliceIntoSections(text: text, headings: headings)
         XCTAssertEqual(sections.count, 2)
@@ -115,7 +116,7 @@ final class NoteSectionSlicerTests: XCTestCase {
     func testSlicePreambleStartsAtLineOne() {
         let text = "preamble line one\npreamble line two\n# Real\nbody"
         let headings = [
-            Heading(level: 1, text: "Real", ordinal: 0, anchorId: "real"),
+            Heading(level: 1, text: "Real", ordinal: 0, anchorId: "real", byteOffset: 0),
         ]
         let sections = sliceIntoSections(text: text, headings: headings)
         XCTAssertEqual(sections.count, 2)

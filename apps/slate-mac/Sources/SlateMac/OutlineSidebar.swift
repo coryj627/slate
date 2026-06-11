@@ -89,18 +89,13 @@ struct OutlineSidebar: View {
 
     private func row(for heading: Heading) -> some View {
         Button {
+            // #431: the announcement moved INTO the scroll consumer
+            // (NoteEditorView.scrollToHeadingAnchor) so it fires on
+            // actual success — or honestly reports failure — instead
+            // of unconditionally claiming "Scrolled to" before three
+            // silent bail paths (#420 first added it here; #431's
+            // red-team audit caught the false-success window).
             appState.requestScrollToHeading(anchor: heading.anchorId)
-            // #420 (F-B3): the scroll itself is silent and keyboard
-            // focus stays in the panel — without an announcement a
-            // VO user gets no confirmation the activation did
-            // anything. "Scrolled to", not "Moved to": focus does
-            // NOT relocate (same verb as the tasks flow's "Scrolled
-            // to <file>, line N." and this row's own hint). Polite
-            // priority so it doesn't clip navigation speech.
-            postAccessibilityAnnouncement(
-                "Scrolled to \(heading.text).",
-                priority: .medium
-            )
         } label: {
             HStack(spacing: 0) {
                 // Two spaces per level (after h1) gives a visible
