@@ -72,16 +72,18 @@ struct MathBlocksPanel: View {
     @State private var isExpanded = true
 
     var body: some View {
-        // Red-team HIGH-1: the gate must keep the panel visible when
-        // a load FAILED with no stale blocks — otherwise the error
-        // row is dead code and "pipeline crashed" is
-        // indistinguishable from "no math in this note" for a blind
-        // user. (EmbedsPanel's gate is decoupled from its pipeline
-        // flags; these three gates must consider the error
-        // explicitly.)
+        // Red-team HIGH-1 + Codoki #428: the gate must keep the
+        // panel visible when a load FAILED with no stale blocks
+        // (otherwise the error row is dead code and "pipeline
+        // crashed" is indistinguishable from "no math here" for a
+        // blind user) AND while a load is in flight (otherwise the
+        // loading row is unreachable on initial load and progress
+        // never surfaces to AT). Loads are local SQLite reads, so
+        // the no-blocks flash is millisecond-scale.
         if appState.selectedFilePath == nil
             || (appState.currentNoteMathBlocks.isEmpty
-                && appState.mathBlocksLoadError == nil)
+                && appState.mathBlocksLoadError == nil
+                && !appState.isLoadingMathBlocks)
         {
             EmptyView()
         } else {
@@ -146,7 +148,9 @@ struct CodeBlocksPanel: View {
 
     var body: some View {
         if appState.selectedFilePath == nil
-            || (panelBlocks.isEmpty && appState.codeBlocksLoadError == nil)
+            || (panelBlocks.isEmpty
+                && appState.codeBlocksLoadError == nil
+                && !appState.isLoadingCodeBlocks)
         {
             EmptyView()
         } else {
@@ -199,7 +203,8 @@ struct DiagramsPanel: View {
     var body: some View {
         if appState.selectedFilePath == nil
             || (appState.currentNoteDiagramBlocks.isEmpty
-                && appState.diagramBlocksLoadError == nil)
+                && appState.diagramBlocksLoadError == nil
+                && !appState.isLoadingDiagramBlocks)
         {
             EmptyView()
         } else {
