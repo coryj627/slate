@@ -54,6 +54,14 @@ struct FileListSidebar: View {
                     OutgoingLinksPanel()
                     BacklinksPanel()
                     EmbedsPanel()
+                    // Milestone K surfaces (#410): math / code /
+                    // diagram pipelines for the selected note, after
+                    // embeds (same "what does this note contain"
+                    // family), before tasks (interaction-dense, kept
+                    // last).
+                    MathBlocksPanel()
+                    CodeBlocksPanel()
+                    DiagramsPanel()
                     TasksPanel()
                 }
             }

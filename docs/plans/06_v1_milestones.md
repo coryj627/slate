@@ -1,6 +1,6 @@
 # 06 — V1 Milestone Decomposition (read+edit Mac alpha)
 
-**Status (2026-05-25):** ✅ Alpha milestones A–F shipped (read+edit Mac alpha). ✅ Post-alpha tester-driven milestones G–J shipped (tasks, templates, property editing, embeds). 🟡 V1.x milestones K–P open on GitHub: content pipelines (K), citations (L), sync diagnostics + CLI (M), Bases (N), local history + change tracking (O), Graph view (P). Per-milestone close dates are in the tables below; live scope lives on the GitHub Milestones (links inline).
+**Status (2026-06-10):** ✅ Alpha milestones A–F shipped (read+edit Mac alpha). ✅ Post-alpha tester-driven milestones G–J shipped (tasks, templates, property editing, embeds). ✅ K (content pipelines) and L (citations) closed on GitHub — K's user-facing surfaces landed with #410 (sidebar panels routing MathCAT speech / code preambles / diagram descriptions); L's config contract was fixed by #411 (vault-shipped `slate.json` honored). 🟡 V1.x milestones M–P open: sync diagnostics + CLI (M), Bases (N), local history + change tracking (O), Graph view (P). Per-milestone close dates are in the tables below; live scope lives on the GitHub Milestones (links inline).
 
 **Strategic goal of the alpha phase:** the 4 committed AT-user testers have a Mac app they can use against their own existing Obsidian vaults, with their own screen readers, to do all four primary read-and-write workflows. The phase shipped six progressively-richer builds, not one big drop at the end.
 
@@ -32,14 +32,14 @@ Added after A–F based on tester pull during the alpha. Not in the original pla
 | I — Property editing | [milestone 9](https://github.com/coryj627/slate/milestone/9) | ✅ Shipped (2026-05-25) |
 | J — Embeds in the content view | [milestone 10](https://github.com/coryj627/slate/milestone/10) | ✅ Shipped (2026-05-25) |
 
-### V1.x (K–P) — open
+### V1.x (K–P)
 
-The full V1.x scope per `05_locked_architecture_decisions.md`. Ordering between K–P is not fixed; tester feedback during K–M will sharpen N's defaults, and O/P can ship in either order.
+The full V1.x scope per `05_locked_architecture_decisions.md`. K and L are closed; ordering between M–P is not fixed; tester feedback during M will sharpen N's defaults, and O/P can ship in either order.
 
 | Milestone | GitHub | Notes |
 |---|---|---|
-| K — Content pipelines (math, code, Mermaid) | [milestone 11](https://github.com/coryj627/slate/milestone/11) | Implements `05` §6.2–6.4. |
-| L — Citations + bibliography | [milestone 12](https://github.com/coryj627/slate/milestone/12) | Implements `05` §6.5. Defer-the-whole-milestone clause if no tester is actively citing. |
+| K — Content pipelines (math, code, Mermaid) | [milestone 11](https://github.com/coryj627/slate/milestone/11) | ✅ Closed. Data path #257; user-facing sidebar surfaces #410. Implements `05` §6.2–6.4 (inline NSTextAttachment rendering stays deferred to V1.x). |
+| L — Citations + bibliography | [milestone 12](https://github.com/coryj627/slate/milestone/12) | ✅ Closed. Implements `05` §6.5; vault-shipped `slate.json` config contract fixed by #411. |
 | M — Sync detection + diagnostics + CLI v1 | [milestone 13](https://github.com/coryj627/slate/milestone/13) | Implements `05` §7.2 phase 1 + §8.3 Tier 2 (CLI). Local HTTP API ships separately later. |
 | N — Bases v1 | [milestone 14](https://github.com/coryj627/slate/milestone/14) | Implements `05` §8. Biggest scope item in V1.x; recommended after K–M. |
 | O — Local history + change tracking | [milestone 15](https://github.com/coryj627/slate/milestone/15) | Implements `05` §7.5, §8.9, and `03` §11. Consumes F's op-log infra + N's Bases AST. |
