@@ -113,7 +113,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 
 ### B — Read + heading navigation (M2)
 1. Search-open `Heading depth test.md`; Tab once → **"Note content for Heading depth test.md. edit text Insertion at …"**; arrow through lines — each speaks its visual line.
-2. Right-sidebar Outline tab → `vo-into` the list: entries speak heading text; activating one scrolls.
+2. Right-sidebar Outline tab → `vo-into` the list: rows speak **"Level N heading: <text>"** (#420 — the trait alone is not voiced for Button rows); activating one scrolls and announces **"Scrolled to <heading>."** (focus stays in the panel by design).
 3. Baseline FAILs to re-check: entries do **not** speak "Level N" (trait-only, #414) and activation is silent.
 
 ### C — Backlinks + outgoing links (M3)
