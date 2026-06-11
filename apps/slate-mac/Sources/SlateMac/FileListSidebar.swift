@@ -14,6 +14,9 @@ import SwiftUI
 struct FileListSidebar: View {
     @EnvironmentObject private var appState: AppState
     @State private var didAnnounceCount = false
+    /// Keyboard focus on the file list — gates the #418 selection
+    /// announcements to list-driven changes only.
+    @FocusState private var fileListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -129,6 +132,30 @@ struct FileListSidebar: View {
             row(for: file)
         }
         .listStyle(.sidebar)
+        .focused($fileListFocused)
+        // #418 (F-A1): keyboard selection in the list is silent —
+        // VO speaks only side-effect live regions ("Outline, N
+        // headings.") and a blind user can't tell which file is
+        // selected while arrowing. Announce the selection, but ONLY
+        // when the list itself has keyboard focus: programmatic
+        // selection changes (search-open's "Opened <file>, line N",
+        // template create's "Created <file>…", the dirty-gate
+        // rollback) carry their own announcements and must not
+        // double-speak. Same "Selected:" phrasing as the command
+        // palette.
+        .onChange(of: appState.selectedFilePath) { newPath in
+            guard fileListFocused, let newPath else { return }
+            // Red-team note: the dirty-gate rollback re-sets the
+            // selection asynchronously while the "Save changes?"
+            // alert presents — announcing the rollback on top of the
+            // prompt is chatter the user didn't ask for.
+            guard appState.pendingNavigation == nil else { return }
+            guard let file = appState.files.first(where: { $0.path == newPath }) else { return }
+            postAccessibilityAnnouncement(
+                "Selected: \(file.name)",
+                priority: .medium
+            )
+        }
     }
 
     /// Determinate progress strip rendered above the file list while a
