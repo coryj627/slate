@@ -1161,12 +1161,29 @@ impl VaultSession {
                 }
             }
         };
+        // #419: markdown image embeds carry the author's alt text as
+        // the link's display text (`![alt](src)`), but the resolver
+        // only receives the raw target — so AT users were getting a
+        // filename instead of the description (WCAG 1.1.1, VO test
+        // F-J3). Look the alt up from the host's parsed links: first
+        // embed whose raw target matches. Multiple same-src embeds
+        // share the first occurrence's alt until per-occurrence
+        // resolution exists — better than dropping it for all.
+        let alt = self.read_text(host_path).ok().and_then(|text| {
+            crate::extract_links(&text).into_iter().find_map(|l| {
+                if l.is_embed && l.target_raw == raw_target {
+                    l.display_text
+                } else {
+                    None
+                }
+            })
+        });
         match self.read_attachment(&target_path) {
             Ok(att) => Ok(crate::EmbedResolution::Image {
                 target_path,
                 bytes: att.bytes,
                 mime: att.mime,
-                alt: None,
+                alt,
             }),
             Err(VaultError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 Ok(crate::EmbedResolution::Unresolved {

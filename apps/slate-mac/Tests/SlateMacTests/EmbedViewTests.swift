@@ -93,6 +93,35 @@ final class EmbedViewTests: XCTestCase {
 
     // MARK: - depth constant
 
+    /// #419 (WCAG 1.1.1): the author's alt text IS the AT
+    /// description for image embeds; the filename is only a
+    /// fallback (and empty/whitespace alt falls back too — audit
+    /// #198 contract).
+    func testImageEmbedTitleUsesAltTextWhenPresent() {
+        XCTAssertEqual(
+            EmbedView.imageEmbedTitle(
+                targetPath: "attachments/pie.svg",
+                alt: "A simple line drawing of a pie"
+            ),
+            "Embedded image: A simple line drawing of a pie"
+        )
+    }
+
+    func testImageEmbedTitleFallsBackToFilename() {
+        XCTAssertEqual(
+            EmbedView.imageEmbedTitle(targetPath: "attachments/pie.svg", alt: nil),
+            "Embedded image: pie.svg"
+        )
+        XCTAssertEqual(
+            EmbedView.imageEmbedTitle(targetPath: "a/b/cover.png", alt: "   "),
+            "Embedded image: cover.png"
+        )
+        XCTAssertEqual(
+            EmbedView.imageEmbedTitle(targetPath: "x.png", alt: ""),
+            "Embedded image: x.png"
+        )
+    }
+
     func testEmbedDepthLimitMatchesBackendConstant() {
         // The Swift-side guard is defense-in-depth against a
         // misbehaving backend. Pin the constant so any future bump
