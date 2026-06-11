@@ -858,7 +858,8 @@ final class AppStateTests: XCTestCase {
             isExternal: false,
             isUnresolved: false,
             snippet: "",
-            ordinal: 0
+            ordinal: 0,
+            displayText: nil
         )
         XCTAssertEqual(state.embedTargetKey(plain), "target")
 
@@ -871,7 +872,8 @@ final class AppStateTests: XCTestCase {
             isExternal: false,
             isUnresolved: false,
             snippet: "",
-            ordinal: 1
+            ordinal: 1,
+            displayText: nil
         )
         XCTAssertEqual(state.embedTargetKey(headingAnchor), "target#Section A")
 
@@ -884,7 +886,8 @@ final class AppStateTests: XCTestCase {
             isExternal: false,
             isUnresolved: false,
             snippet: "",
-            ordinal: 2
+            ordinal: 2,
+            displayText: nil
         )
         XCTAssertEqual(state.embedTargetKey(blockAnchor), "target^my-block")
     }
@@ -1691,7 +1694,8 @@ final class AppStateTests: XCTestCase {
             isExternal: isExternal,
             isUnresolved: isUnresolved,
             snippet: "",
-            ordinal: 0
+            ordinal: 0,
+            displayText: nil
         )
     }
 
