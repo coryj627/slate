@@ -18,10 +18,15 @@ repository = "https://github.com/coryj627/slate"
 rust-version = "1.89"
 
 [workspace.dependencies]
-pulldown-cmark = { version = "0.10", default-features = false }
-thiserror = "1"
-uniffi = { version = "0.28", features = ["cli"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+thiserror = "2"
+uniffi = { version = "0.31", features = ["cli"] }
+# Held at 0.39 rather than 0.40: rusqlite 0.40 pulls libsqlite3-sys
+# 0.38.1, whose build script uses the still-unstable `cfg_select!`
+# macro and fails to compile on the pinned stable toolchain. 0.39
+# (libsqlite3-sys 0.37, bundled SQLite ~3.50) is the highest that
+# builds today; revisit 0.40 once a newer stable stabilizes cfg_select.
+rusqlite = { version = "0.39", features = ["bundled"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
@@ -42,8 +47,8 @@ ropey = { version = "1.6", default-features = false }
 # `from_lines` (it's in `default`, but we pin it explicitly so a future
 # `default-features = false` can't silently drop the API). The same crate
 # is the substrate for the §7.3 structured-conflict diff later.
-similar = { version = "2", default-features = false, features = ["text"] }
-criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+similar = { version = "3", default-features = false, features = ["text"] }
+criterion = { version = "0.8", default-features = false, features = ["html_reports"] }
 # proptest drives the links round-trip integration test
 # (`tests/links_roundtrip.rs`). Used only in dev/test builds.
 proptest = { version = "1", default-features = false, features = ["std"] }

@@ -31,8 +31,8 @@ pub fn diff_to_ops(old: &str, new: &str) -> Vec<EditOp> {
     // Line slices retain their trailing `\n`, so concatenating them
     // reproduces `old`/`new` exactly and the cumulative offsets are real
     // byte positions.
-    let old_off = cumulative_byte_offsets(diff.old_slices());
-    let new_off = cumulative_byte_offsets(diff.new_slices());
+    let old_off = cumulative_byte_offsets(diff.iter_old_slices());
+    let new_off = cumulative_byte_offsets(diff.iter_new_slices());
 
     let mut ops = Vec::new();
     // Running byte cursor in OLD-content space — where we are after the
@@ -85,10 +85,12 @@ pub fn diff_to_ops(old: &str, new: &str) -> Vec<EditOp> {
 
 /// `offs[i]` = byte offset of line `i`'s start; `offs[lines.len()]` =
 /// total byte length. Lets a line-index range map to a byte range.
-fn cumulative_byte_offsets(lines: &[&str]) -> Vec<usize> {
-    let mut offs = Vec::with_capacity(lines.len() + 1);
+/// Takes an iterator of line slices (`similar` 3.0 exposes these via
+/// `iter_old_slices()` / `iter_new_slices()`; the old `old_slices()` /
+/// `new_slices()` slice-returning methods were removed).
+fn cumulative_byte_offsets<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<usize> {
+    let mut offs = vec![0usize];
     let mut acc = 0usize;
-    offs.push(0);
     for line in lines {
         acc += line.len();
         offs.push(acc);

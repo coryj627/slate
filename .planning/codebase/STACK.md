@@ -26,9 +26,9 @@
 ## Frameworks
 
 **Core (Rust):**
-- `pulldown-cmark` 0.10 — Markdown parsing (event-stream model, used in links, code, templates)
-- `rusqlite` 0.31 (bundled SQLite) — embedded per-vault SQLite database
-- `uniffi` 0.28 — FFI binding generator; produces Swift bindings from Rust annotated API
+- `pulldown-cmark` 0.13 — Markdown parsing (event-stream model, used in links, code, templates)
+- `rusqlite` 0.39 (bundled SQLite) — embedded per-vault SQLite database
+- `uniffi` 0.31 — FFI binding generator; produces Swift bindings from Rust annotated API
 - `tree-sitter` 0.26 — incremental code-block parsing for syntax analysis
 - `mathcat` 0.7.6-beta.4 — LaTeX → MathML → speech + braille (NVDA-derived, `include-zip` feature bundles rules)
 - `pulldown-latex` 0.7 — LaTeX → MathML conversion
@@ -39,7 +39,7 @@
 - `chrono` 0.4 — date/time formatting for `{{date}}`/`{{time}}` template substitution
 - `yaml-rust2` 0.11 — YAML frontmatter parsing (successor to deprecated `serde_yaml`)
 - `serde_json` 1 — property value serialization / JSON round-trips
-- `thiserror` 1 — error type derivation throughout `slate-core` and `slate-uniffi`
+- `thiserror` 2 — error type derivation throughout `slate-core` and `slate-uniffi`
 - `libc` 0.2 (Unix only) — `O_NOFOLLOW` symlink-escape defence in templates flow
 
 **Core (Swift):**
@@ -51,7 +51,7 @@
 - `SwiftDraw` 0.27.0 — renders SVG content to AppKit (used by `MermaidView.swift`)
 
 **Testing:**
-- Rust: built-in `cargo test` + `criterion` 0.5 benchmarking framework
+- Rust: built-in `cargo test` + `criterion` 0.8 benchmarking framework
 - Swift: XCTest (`apps/slate-mac/Tests/SlateMacTests/`)
 - Property-based: `proptest` 1 (Rust, dev-dependency, links round-trip integration tests)
 
@@ -65,8 +65,8 @@
 ## Key Dependencies
 
 **Critical:**
-- `rusqlite` 0.31 (bundled) — embeds SQLite 3 directly; no external DB daemon required. WAL mode, NORMAL sync, in-memory temp store, foreign keys enabled per `crates/slate-core/src/db.rs`
-- `uniffi` 0.28 — the sole mechanism bridging Rust (slate-core) to Swift (SlateMac); regenerated on every build via `uniffi-bindgen`
+- `rusqlite` 0.39 (bundled) — embeds SQLite 3 directly; no external DB daemon required. WAL mode, NORMAL sync, in-memory temp store, foreign keys enabled per `crates/slate-core/src/db.rs`
+- `uniffi` 0.31 — the sole mechanism bridging Rust (slate-core) to Swift (SlateMac); regenerated on every build via `uniffi-bindgen`
 - `mathcat` 0.7.6-beta.4 — uses thread-local state internally; all calls are serialized through a dedicated Rust worker thread (see `crates/slate-core/src/math.rs`)
 - `tree-sitter` 0.26 + 15 compiled-in grammars — syntax analysis for code blocks; grammars are statically linked, not dynamically loaded
 

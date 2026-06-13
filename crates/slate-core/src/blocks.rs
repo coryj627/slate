@@ -196,7 +196,7 @@ fn collect_block_ranges(source: &str) -> Vec<BlockRange> {
                 }
                 depth += 1;
             }
-            Event::Start(Tag::BlockQuote) => {
+            Event::Start(Tag::BlockQuote(_)) => {
                 if depth == 0 {
                     current_kind = Some(BlockKind::BlockQuote);
                     current_start = range.start;
@@ -205,7 +205,7 @@ fn collect_block_ranges(source: &str) -> Vec<BlockRange> {
             }
             Event::End(TagEnd::Paragraph)
             | Event::End(TagEnd::Item)
-            | Event::End(TagEnd::BlockQuote) => {
+            | Event::End(TagEnd::BlockQuote(_)) => {
                 depth -= 1;
                 if depth == 0
                     && let Some(kind) = current_kind.take()
