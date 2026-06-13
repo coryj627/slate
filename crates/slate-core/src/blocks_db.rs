@@ -12,9 +12,9 @@
 //! turn a `(target_file_id, block_id)` pair into the block's byte range
 //! + kind, which the resolver then reads from disk.
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::{extract_blocks, BlockKind, VaultError};
+use crate::{BlockKind, VaultError, extract_blocks};
 
 /// Atomically replace every `blocks` row for `file_id` with the
 /// anchors extracted from `markdown_source`.

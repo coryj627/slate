@@ -39,42 +39,42 @@ pub mod vault;
 mod vault_config;
 
 pub use search_db::{
-    full_text_search, QueryHit, QueryResultSet, SearchScope, SNIPPET_HIT_END, SNIPPET_HIT_START,
+    QueryHit, QueryResultSet, SNIPPET_HIT_END, SNIPPET_HIT_START, SearchScope, full_text_search,
 };
 
-pub use blocks::{extract_blocks, BlockAnchor, BlockKind};
+pub use blocks::{BlockAnchor, BlockKind, extract_blocks};
 pub use citations::bibliography::{
+    Author, BibEntry, BibFormat, BibIndex, BibLoadWarning, BibliographyChangeSink,
+    BibliographySource, DEFAULT_DEBOUNCE, KeyCollision, LoadResult,
     load_source as load_bibliography_source, merge_sources as merge_bibliography_sources,
     spawn_debouncer as spawn_bibliography_debouncer,
-    spawn_debouncer_with_callback as spawn_bibliography_debouncer_with_callback, Author, BibEntry,
-    BibFormat, BibIndex, BibLoadWarning, BibliographyChangeSink, BibliographySource, KeyCollision,
-    LoadResult, DEFAULT_DEBOUNCE,
+    spawn_debouncer_with_callback as spawn_bibliography_debouncer_with_callback,
 };
-pub use citations::prefs::{parse_citations_prefs, read_citations_prefs, CitationsPrefs};
+pub use citations::prefs::{CitationsPrefs, parse_citations_prefs, read_citations_prefs};
 pub use citations::render::{
-    load_style as load_csl_style, render_citation, style_from_xml as csl_style_from_xml, CslStyle,
-    RenderCache, RenderedCitation,
+    CslStyle, RenderCache, RenderedCitation, load_style as load_csl_style, render_citation,
+    style_from_xml as csl_style_from_xml,
 };
-pub use citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
+pub use citations::{CitationMode, CitationReference, CitedItem, Locator, extract_citations};
 pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use diff::diff_to_ops;
 pub use embeds::{
-    AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, NestedEmbed, MAX_EMBED_DEPTH,
+    AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, MAX_EMBED_DEPTH, NestedEmbed,
 };
 pub use frontmatter::{
-    extract_frontmatter, frontmatter_range, Property, PropertyParseWarning, PropertyValue,
+    Property, PropertyParseWarning, PropertyValue, extract_frontmatter, frontmatter_range,
 };
-pub use link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink, VaultIndex};
-pub use links::{extract_links, LinkAnchor, LinkKind, ParsedLink};
+pub use link_resolver::{InMemoryVaultIndex, ResolvedLink, VaultIndex, resolve_link};
+pub use links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{
-    decode_edit_batch, encode_edit_batch, reconstruct_at_tail, EditOp, OpKind, OpLogEntry,
+    EditOp, OpKind, OpLogEntry, decode_edit_batch, encode_edit_batch, reconstruct_at_tail,
 };
-pub use tasks::{extract_tasks, TaskItem};
+pub use tasks::{TaskItem, extract_tasks};
 pub use tasks_db::{TaskFilter, TaskWithLocation};
 pub use templates::{
-    extract_template_metadata, render_template_source, RenderedTemplate, TemplateContext,
-    TemplateMetadata, TemplatePrompt, TemplateSummary,
+    RenderedTemplate, TemplateContext, TemplateMetadata, TemplatePrompt, TemplateSummary,
+    extract_template_metadata, render_template_source,
 };
 pub use text_buffer::TextBuffer;
 
@@ -84,8 +84,8 @@ pub use session::{
     SaveReport, ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
-    content_hash, DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider,
-    VaultProvider, WatchHandle,
+    DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
+    WatchHandle, content_hash,
 };
 
 use std::path::Path;

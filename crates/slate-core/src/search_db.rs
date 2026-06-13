@@ -25,8 +25,8 @@
 
 use rusqlite::Connection;
 
-use crate::session::CancelToken;
 use crate::VaultError;
+use crate::session::CancelToken;
 
 /// What corner of the vault to search.
 ///

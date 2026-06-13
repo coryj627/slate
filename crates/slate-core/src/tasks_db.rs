@@ -7,11 +7,11 @@
 //! exclusively by the scanner's slow path (and by `save_text`); the
 //! query side serves the Mac Tasks panel + vault-wide review view.
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 
-use crate::session::{Page, Paging};
-use crate::tasks::{extract_tasks, TaskItem};
 use crate::VaultError;
+use crate::session::{Page, Paging};
+use crate::tasks::{TaskItem, extract_tasks};
 
 /// One task plus the file it lives in, for the vault-wide review
 /// view. The path + file_name are joined in so the UI doesn't pay a

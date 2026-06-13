@@ -31,7 +31,7 @@
 //! The Swift consumer converts to a UTF-16 `NSRange` at the boundary (it
 //! already performs byte↔UTF-16 conversion for cursor placement).
 
-use crate::code::{highlight_code, RawCodeBlock, TokenKind};
+use crate::code::{RawCodeBlock, TokenKind, highlight_code};
 use crate::links::LinkKind;
 // extract_links / extract_citations are used only by the #[cfg(test)]
 // differential oracles (wikilink_spans / citation_spans); production fuses
@@ -1093,11 +1093,7 @@ fn raw_structure_and_code(source: &str) -> (Vec<EditorSpan>, Vec<EditorSpan>) {
                 language = match kind {
                     CodeBlockKind::Fenced(tag) => {
                         let t = tag.into_string().trim().to_string();
-                        if t.is_empty() {
-                            None
-                        } else {
-                            Some(t)
-                        }
+                        if t.is_empty() { None } else { Some(t) }
                     }
                     CodeBlockKind::Indented => None,
                 };
@@ -1439,11 +1435,7 @@ fn code_internal_spans(source: &str) -> Vec<EditorSpan> {
                 language = match kind {
                     CodeBlockKind::Fenced(tag) => {
                         let t = tag.into_string().trim().to_string();
-                        if t.is_empty() {
-                            None
-                        } else {
-                            Some(t)
-                        }
+                        if t.is_empty() { None } else { Some(t) }
                     }
                     CodeBlockKind::Indented => None,
                 };
@@ -3878,7 +3870,7 @@ mod redteam_reconvergence {
             // Find a comment body interior offset (3 bytes past the first `%%`).
             let open = doc.find("%%").expect("open");
             let body0 = open + 2; // first body byte
-                                  // Insert non-% text at several interior offsets and delete a byte.
+            // Insert non-% text at several interior offsets and delete a byte.
             for step in 1..6usize {
                 let at = snap_up(doc, (body0 + step).min(doc.len()));
                 // Don't let the offset reach the close delimiter region; clamp

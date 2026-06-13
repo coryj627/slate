@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
-use crate::citations::bibliography::{BibFormat, BibliographySource};
 use crate::VaultError;
+use crate::citations::bibliography::{BibFormat, BibliographySource};
 
 /// Top-level `.slate/prefs.json` shape that V1 understands. The
 /// `bibliography` section is optional — its absence means "no

@@ -1565,8 +1565,7 @@ mod tests {
         // through `set_property_in_source` untouched. This is the
         // load-bearing guarantee: editing frontmatter never disturbs
         // note content.
-        let src =
-            "---\ntitle: Old\n---\n# Heading\n\nParagraph with **bold** and `code`.\n\n- list item\n";
+        let src = "---\ntitle: Old\n---\n# Heading\n\nParagraph with **bold** and `code`.\n\n- list item\n";
         let body = &src["---\ntitle: Old\n---\n".len()..];
         let out =
             set_property_in_source(src, "title", &PropertyValue::Text("New".to_string())).unwrap();

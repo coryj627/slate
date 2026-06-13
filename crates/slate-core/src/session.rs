@@ -29,9 +29,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db;
-use crate::vault::{content_hash, EntryKind, FsVaultProvider, VaultProvider};
 use crate::VaultError;
+use crate::db;
+use crate::vault::{EntryKind, FsVaultProvider, VaultProvider, content_hash};
 
 // --- Configuration ---
 
@@ -1064,7 +1064,7 @@ impl VaultSession {
         depth: u32,
         alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        use crate::embeds::{parse_embed_target, EmbedAnchor};
+        use crate::embeds::{EmbedAnchor, parse_embed_target};
 
         if depth >= crate::MAX_EMBED_DEPTH {
             return Ok(crate::EmbedResolution::Unresolved {
@@ -1557,21 +1557,21 @@ impl VaultSession {
                 // describes the state we acted on, not a possibly-
                 // different state on disk.
                 let current_hash = crate::vault::content_hash(contents.as_bytes());
-                if let Some(expected) = expected_content_hash {
-                    if current_hash != expected {
-                        // mtime is best-effort metadata for the caller's
-                        // change tracking; if the file's been deleted
-                        // out from under us between read and now, fall
-                        // back to 0 rather than failing the whole call
-                        // on a missing-file stat.
-                        let current_mtime_ms =
-                            self.provider.stat(path).map(|s| s.mtime_ms).unwrap_or(0);
-                        return Err(VaultError::WriteConflict {
-                            current_content_hash: current_hash,
-                            expected_content_hash: expected.to_string(),
-                            current_mtime_ms,
-                        });
-                    }
+                if let Some(expected) = expected_content_hash
+                    && current_hash != expected
+                {
+                    // mtime is best-effort metadata for the caller's
+                    // change tracking; if the file's been deleted
+                    // out from under us between read and now, fall
+                    // back to 0 rather than failing the whole call
+                    // on a missing-file stat.
+                    let current_mtime_ms =
+                        self.provider.stat(path).map(|s| s.mtime_ms).unwrap_or(0);
+                    return Err(VaultError::WriteConflict {
+                        current_content_hash: current_hash,
+                        expected_content_hash: expected.to_string(),
+                        current_mtime_ms,
+                    });
                 }
                 let stat = self.provider.stat(path)?;
                 return Ok(SaveReport {
@@ -1659,10 +1659,9 @@ impl VaultSession {
                  WHERE p.key = ?1
                  ORDER BY files.path COLLATE BINARY ASC",
             )?;
-            let rows = stmt
-                .query_map(rusqlite::params![old_key], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
+
+            stmt.query_map(rusqlite::params![old_key], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
         };
 
         let mut report = RenameReport {

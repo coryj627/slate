@@ -45,7 +45,7 @@
 //! Keeping the dependency at the trait boundary lets us write hermetic
 //! tests against an in-memory vec without spinning up a session.
 
-use crate::links::{looks_external_for_resolver, LinkAnchor};
+use crate::links::{LinkAnchor, looks_external_for_resolver};
 
 /// Vault-relative paths the resolver can match against. Paths use
 /// forward slashes regardless of platform.

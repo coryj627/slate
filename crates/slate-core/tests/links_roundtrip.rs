@@ -18,7 +18,7 @@ use std::collections::HashSet;
 
 use proptest::prelude::*;
 use slate_core::{
-    extract_links, CancelToken, FsVaultProvider, Paging, VaultProvider, VaultSession,
+    CancelToken, FsVaultProvider, Paging, VaultProvider, VaultSession, extract_links,
 };
 
 /// One link to include in a generated markdown body. Mirrors the three
@@ -73,12 +73,12 @@ fn body_from_specs(specs: &[LinkSpec]) -> String {
 fn write_resolvable_targets(provider: &FsVaultProvider, specs: &[LinkSpec]) {
     let mut written: HashSet<String> = HashSet::new();
     for spec in specs {
-        if let LinkSpec::Resolvable(name) = spec {
-            if written.insert(name.clone()) {
-                provider
-                    .write_file(&format!("{name}.md"), b"# stub\n")
-                    .unwrap();
-            }
+        if let LinkSpec::Resolvable(name) = spec
+            && written.insert(name.clone())
+        {
+            provider
+                .write_file(&format!("{name}.md"), b"# stub\n")
+                .unwrap();
         }
     }
 }

@@ -5,7 +5,7 @@
 ## Languages
 
 **Primary:**
-- Rust (edition 2021, min 1.89) — core engine, parsing, database, FFI (`crates/slate-core/`, `crates/slate-uniffi/`)
+- Rust (edition 2024, min 1.89) — core engine, parsing, database, FFI (`crates/slate-core/`, `crates/slate-uniffi/`)
 - Swift 6.3.2 — macOS SwiftUI application (`apps/slate-mac/Sources/SlateMac/`)
 
 **Secondary:**
@@ -20,7 +20,7 @@
 - No server-side runtime; entirely local desktop application
 
 **Package Manager:**
-- Rust: Cargo (workspace resolver v2), lockfile at `Cargo.lock`
+- Rust: Cargo (workspace resolver v3), lockfile at `Cargo.lock`
 - Swift: Swift Package Manager, lockfile at `apps/slate-mac/Package.resolved`
 
 ## Frameworks

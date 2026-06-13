@@ -35,9 +35,9 @@
 
 use std::path::Path;
 
+use crate::VaultError;
 use crate::citations::bibliography::{BibFormat, BibliographySource};
 use crate::citations::prefs::CitationsPrefs;
-use crate::VaultError;
 
 /// The slice of `<vault>/slate.json` V1 understands.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

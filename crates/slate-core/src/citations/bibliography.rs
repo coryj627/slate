@@ -20,8 +20,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -341,7 +341,7 @@ fn resolve_source_path(path: &str, vault_root: &Path) -> PathBuf {
 }
 
 fn load_biblatex(contents: &str, source_path: &str) -> LoadResult {
-    use hayagriva::io::{from_biblatex_str, BibLaTeXError};
+    use hayagriva::io::{BibLaTeXError, from_biblatex_str};
 
     let mut warnings = Vec::new();
     let mut entries = Vec::new();

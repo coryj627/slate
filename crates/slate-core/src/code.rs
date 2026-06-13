@@ -346,15 +346,15 @@ fn capture_semantic(node: Node, source: &[u8], out: &mut Vec<SemanticSpan>) {
         _ => None,
     };
     let Some(kind) = semantic_kind else { return };
-    if let Some(name_node) = node.child_by_field_name("name") {
-        if let Ok(name) = name_node.utf8_text(source) {
-            out.push(SemanticSpan {
-                start_byte: name_node.start_byte() as u32,
-                end_byte: name_node.end_byte() as u32,
-                kind,
-                name: name.to_string(),
-            });
-        }
+    if let Some(name_node) = node.child_by_field_name("name")
+        && let Ok(name) = name_node.utf8_text(source)
+    {
+        out.push(SemanticSpan {
+            start_byte: name_node.start_byte() as u32,
+            end_byte: name_node.end_byte() as u32,
+            kind,
+            name: name.to_string(),
+        });
     }
 }
 

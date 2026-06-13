@@ -229,9 +229,9 @@ use std::sync::Arc;
 fn is_allowed_status_char(c: char) -> bool {
     let b = c as u32;
     (0x20..=0x7E).contains(&b) && c != '[' && c != ']' && c != '\t' // 0x09 — already outside the range, but the
-                                                                    // intent here is to be explicit about WHY
-                                                                    // it's rejected so a future widening of the
-                                                                    // range doesn't accidentally re-admit it.
+    // intent here is to be explicit about WHY
+    // it's rejected so a future widening of the
+    // range doesn't accidentally re-admit it.
 }
 
 /// FFI-exposed vault session. Wraps `slate_core::VaultSession`.

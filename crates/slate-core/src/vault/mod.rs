@@ -41,7 +41,7 @@
 mod fs;
 mod provider;
 
-pub use fs::{content_hash, FsVaultProvider};
+pub use fs::{FsVaultProvider, content_hash};
 pub use provider::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, VaultProvider, WatchHandle,
 };

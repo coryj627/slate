@@ -267,14 +267,12 @@ fn looks_external(url: &str) -> bool {
         // ALPHA-first rule additionally rules out filenames whose
         // pre-colon segment is digit-leading like `2024:report.md`.
         let mut scheme_chars = scheme.chars();
-        if let Some(first) = scheme_chars.next() {
-            if scheme.len() >= 2
-                && first.is_ascii_alphabetic()
-                && scheme_chars
-                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
-            {
-                return true;
-            }
+        if let Some(first) = scheme_chars.next()
+            && scheme.len() >= 2
+            && first.is_ascii_alphabetic()
+            && scheme_chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
+            return true;
         }
     }
     false
@@ -291,13 +289,12 @@ pub(crate) fn scan_wikilinks(source: &str, code_ranges: &[(usize, usize)]) -> Ve
             && bytes[i + 1] == b'['
             && !is_escaped_at(bytes, i)
             && !in_any_range(i, code_ranges)
+            && let Some(parsed) = try_parse_wikilink(source, bytes, i)
         {
-            if let Some(parsed) = try_parse_wikilink(source, bytes, i) {
-                let span_end = parsed.span_end;
-                links.push(parsed);
-                i = span_end;
-                continue;
-            }
+            let span_end = parsed.span_end;
+            links.push(parsed);
+            i = span_end;
+            continue;
         }
         i += 1;
     }

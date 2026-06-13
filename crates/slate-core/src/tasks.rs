@@ -609,8 +609,7 @@ mod tests {
     fn ignores_task_shaped_lines_inside_details_blocks() {
         // <details> is a common Obsidian collapse pattern; tasks
         // inside should not leak into the panel either.
-        let src =
-            "<details>\n<summary>Old TODO</summary>\n- [ ] historical task\n</details>\n\n- [ ] active task\n";
+        let src = "<details>\n<summary>Old TODO</summary>\n- [ ] historical task\n</details>\n\n- [ ] active task\n";
         let tasks = extract_tasks(src);
         assert_eq!(tasks.len(), 1, "got: {tasks:?}");
         assert_eq!(tasks[0].text, "active task");
