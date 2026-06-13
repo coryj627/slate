@@ -8,12 +8,12 @@
 //! the table. The query side serves the backlinks panel, outgoing-
 //! links panel, and unresolved-links audit (issues #51, #52).
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 
-use crate::link_resolver::{resolve_link, InMemoryVaultIndex, ResolvedLink};
-use crate::links::{extract_links, LinkAnchor, LinkKind};
-use crate::session::{Page, Paging};
 use crate::VaultError;
+use crate::link_resolver::{InMemoryVaultIndex, ResolvedLink, resolve_link};
+use crate::links::{LinkAnchor, LinkKind, extract_links};
+use crate::session::{Page, Paging};
 
 /// One outgoing link from a source file (the file being queried) —
 /// includes resolved, unresolved, and external links so the UI can

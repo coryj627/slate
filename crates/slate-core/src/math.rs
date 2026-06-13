@@ -177,21 +177,23 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
             continue;
         }
         // Display math: `$$ … $$`.
-        if i + 1 < bytes.len() && &bytes[i..i + 2] == b"$$" && !in_code(i) {
-            if let Some(end_rel) = find_double_dollar_close(&bytes[i + 2..]) {
-                let inner = &source[i + 2..i + 2 + end_rel];
-                let trimmed = inner.trim();
-                if !trimmed.is_empty() {
-                    out.push(RawMathBlock {
-                        source: trimmed.to_string(),
-                        display_style: MathDisplayStyle::Block,
-                        line: lines.line_at(i),
-                        byte_offset: i as u32,
-                    });
-                }
-                i += 2 + end_rel + 2; // past the closing `$$`
-                continue;
+        if i + 1 < bytes.len()
+            && &bytes[i..i + 2] == b"$$"
+            && !in_code(i)
+            && let Some(end_rel) = find_double_dollar_close(&bytes[i + 2..])
+        {
+            let inner = &source[i + 2..i + 2 + end_rel];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                out.push(RawMathBlock {
+                    source: trimmed.to_string(),
+                    display_style: MathDisplayStyle::Block,
+                    line: lines.line_at(i),
+                    byte_offset: i as u32,
+                });
             }
+            i += 2 + end_rel + 2; // past the closing `$$`
+            continue;
         }
         // Inline math: `$…$`. Open only when the next char is a
         // non-space non-digit (suppresses `$50` etc., matching pandoc).
@@ -200,21 +202,19 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
             if next_idx < bytes.len() {
                 let nb = bytes[next_idx];
                 let opens = nb != b' ' && nb != b'\t' && nb != b'\n' && !nb.is_ascii_digit();
-                if opens {
-                    if let Some(end_rel) = find_single_dollar_close(&bytes[next_idx..]) {
-                        let inner = &source[next_idx..next_idx + end_rel];
-                        let trimmed = inner.trim();
-                        if !trimmed.is_empty() {
-                            out.push(RawMathBlock {
-                                source: trimmed.to_string(),
-                                display_style: MathDisplayStyle::Inline,
-                                line: lines.line_at(i),
-                                byte_offset: i as u32,
-                            });
-                        }
-                        i = next_idx + end_rel + 1;
-                        continue;
+                if opens && let Some(end_rel) = find_single_dollar_close(&bytes[next_idx..]) {
+                    let inner = &source[next_idx..next_idx + end_rel];
+                    let trimmed = inner.trim();
+                    if !trimmed.is_empty() {
+                        out.push(RawMathBlock {
+                            source: trimmed.to_string(),
+                            display_style: MathDisplayStyle::Inline,
+                            line: lines.line_at(i),
+                            byte_offset: i as u32,
+                        });
                     }
+                    i = next_idx + end_rel + 1;
+                    continue;
                 }
             }
         }
@@ -486,7 +486,7 @@ pub fn render_math(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
 /// parser failure rather than propagating an error — `render_math`
 /// already routes around an empty MathML by emitting a stub speech.
 fn latex_to_mathml(latex: &str) -> String {
-    use pulldown_latex::{mathml::push_mathml, RenderConfig, Storage};
+    use pulldown_latex::{RenderConfig, Storage, mathml::push_mathml};
     let storage = Storage::new();
     let parser = pulldown_latex::Parser::new(latex, &storage);
     let mut out = String::new();

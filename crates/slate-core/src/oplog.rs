@@ -793,9 +793,11 @@ mod tests {
         ];
         assert_eq!(decode_edit_batch(&encode_edit_batch(&ops)).unwrap(), ops);
         // Empty batch round-trips too.
-        assert!(decode_edit_batch(&encode_edit_batch(&[]))
-            .unwrap()
-            .is_empty());
+        assert!(
+            decode_edit_batch(&encode_edit_batch(&[]))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -962,10 +964,10 @@ mod tests {
             2,
             "reader stops at the unknown kind 7, dropping it and everything after"
         );
-        assert!(entries
-            .iter()
-            .all(|e| e.op_kind != OpKind::EditBatch
-                || e.content_hash_after == content_hash(b"BASE\n")));
+        assert!(
+            entries.iter().all(|e| e.op_kind != OpKind::EditBatch
+                || e.content_hash_after == content_hash(b"BASE\n"))
+        );
     }
 
     /// Append a well-framed entry with an arbitrary raw `op_kind` byte

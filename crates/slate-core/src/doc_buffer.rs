@@ -21,7 +21,7 @@
 //! window-cannot-isolate fallback.
 
 use crate::editor_spans::{
-    highlight_spans, highlight_window, CommentIndex, RangedHighlight, StructureSnapshot,
+    CommentIndex, RangedHighlight, StructureSnapshot, highlight_spans, highlight_window,
 };
 use crate::text_buffer::TextBuffer;
 use std::sync::Arc;
@@ -366,7 +366,7 @@ fn rope_fm_end(buf: &TextBuffer) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor_spans::{highlight_spans, EditorSpan};
+    use crate::editor_spans::{EditorSpan, highlight_spans};
 
     /// Apply a UTF-16 `(start, old_len, new)` delta to a `String` the way
     /// [`DocBufferState::apply_edit`] applies it to the rope — the independent

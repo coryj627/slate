@@ -21,13 +21,13 @@ use std::sync::{Mutex, OnceLock};
 
 use hayagriva::citationberg::{IndependentStyle, Locale};
 use hayagriva::{
-    citationberg, BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem,
-    CitationRequest, LocatorPayload, SpecificLocator,
+    BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem, CitationRequest,
+    LocatorPayload, SpecificLocator, citationberg,
 };
 
+use crate::VaultError;
 use crate::citations::bibliography::{BibEntry, BibIndex};
 use crate::citations::{CitationMode, CitationReference, CitedItem, Locator};
-use crate::VaultError;
 
 /// A loaded Citation Style Language file. `id` is what the user types
 /// into the style picker / config (typically the basename without
@@ -175,10 +175,10 @@ fn build_speech_text(
     let mut leading_prefix: Option<String> = None;
 
     for (idx, (item, entry)) in resolved.iter().enumerate() {
-        if idx == 0 {
-            if let Some(p) = &item.prefix {
-                leading_prefix = Some(p.clone());
-            }
+        if idx == 0
+            && let Some(p) = &item.prefix
+        {
+            leading_prefix = Some(p.clone());
         }
         parts.push(speech_for_item(item, *entry, mode));
     }
@@ -490,11 +490,11 @@ impl RenderCache {
         }
         let value = render_citation(reference, bib, style);
         let mut inner = self.inner.lock().unwrap();
-        if inner.map.len() >= self.cap {
-            if let Some(oldest) = inner.order.first().cloned() {
-                inner.map.remove(&oldest);
-                inner.order.remove(0);
-            }
+        if inner.map.len() >= self.cap
+            && let Some(oldest) = inner.order.first().cloned()
+        {
+            inner.map.remove(&oldest);
+            inner.order.remove(0);
         }
         inner.map.insert(key.clone(), value.clone());
         inner.order.push(key);
@@ -532,7 +532,7 @@ impl Default for RenderCache {
 mod tests {
     use super::*;
     use crate::citations::bibliography::{Author, BibEntry};
-    use crate::citations::{extract_citations, CitationMode, CitedItem};
+    use crate::citations::{CitationMode, CitedItem, extract_citations};
 
     fn bib_entry(key: &str, family: &str, given: Option<&str>, year: Option<i32>) -> BibEntry {
         let raw_csl_json = serde_json::json!({

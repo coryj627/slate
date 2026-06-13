@@ -207,13 +207,14 @@ pub(crate) fn scan_citations(
                 i = end;
                 continue;
             }
-        } else if b == b'@' && is_intext_start(bytes, i) {
-            if let Some(parsed) = try_parse_intext(source, bytes, i) {
-                let end = parsed.byte_offset as usize + parsed.raw.len();
-                out.push(parsed);
-                i = end;
-                continue;
-            }
+        } else if b == b'@'
+            && is_intext_start(bytes, i)
+            && let Some(parsed) = try_parse_intext(source, bytes, i)
+        {
+            let end = parsed.byte_offset as usize + parsed.raw.len();
+            out.push(parsed);
+            i = end;
+            continue;
         }
         i += 1;
     }

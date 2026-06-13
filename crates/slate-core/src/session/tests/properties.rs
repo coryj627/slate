@@ -722,10 +722,12 @@ fn rename_property_cancellation_stops_subsequent_files() {
     // Pre-cancelled: every file lands in failed with Cancelled.
     assert!(report.affected.is_empty());
     assert_eq!(report.failed.len(), 5);
-    assert!(report
-        .failed
-        .iter()
-        .all(|f| f.kind == RenameFailureKind::Cancelled));
+    assert!(
+        report
+            .failed
+            .iter()
+            .all(|f| f.kind == RenameFailureKind::Cancelled)
+    );
     // Nothing was written.
     for i in 0..5 {
         let raw = session.read_text(&format!("note{i}.md")).unwrap();

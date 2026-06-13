@@ -207,14 +207,14 @@ fn collect_block_ranges(source: &str) -> Vec<BlockRange> {
             | Event::End(TagEnd::Item)
             | Event::End(TagEnd::BlockQuote) => {
                 depth -= 1;
-                if depth == 0 {
-                    if let Some(kind) = current_kind.take() {
-                        out.push(BlockRange {
-                            kind,
-                            byte_start: current_start,
-                            byte_end: range.end,
-                        });
-                    }
+                if depth == 0
+                    && let Some(kind) = current_kind.take()
+                {
+                    out.push(BlockRange {
+                        kind,
+                        byte_start: current_start,
+                        byte_end: range.end,
+                    });
                 }
             }
             _ => {}

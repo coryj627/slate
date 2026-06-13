@@ -8,12 +8,12 @@
 //! `get_file_metadata`'s `properties` field and the
 //! `files_with_property` audit / search API.
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 use serde_json::Value as JsonValue;
 
-use crate::frontmatter::{extract_frontmatter, Property, PropertyValue};
-use crate::session::{FileSummary, Page, Paging};
 use crate::VaultError;
+use crate::frontmatter::{Property, PropertyValue, extract_frontmatter};
+use crate::session::{FileSummary, Page, Paging};
 
 const KIND_TEXT: &str = "text";
 const KIND_NUMBER: &str = "number";

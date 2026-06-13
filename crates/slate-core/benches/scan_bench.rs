@@ -19,10 +19,10 @@
 
 use std::fs;
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
 use slate_core::{
-    extract_tasks, CancelToken, FileFilter, Paging, SearchScope, TaskFilter, VaultSession,
+    CancelToken, FileFilter, Paging, SearchScope, TaskFilter, VaultSession, extract_tasks,
 };
 
 mod common;

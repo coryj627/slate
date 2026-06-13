@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/slate-core",
     "crates/slate-uniffi",
@@ -7,7 +7,7 @@ members = [
 
 [workspace.package]
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["Cory Joseph <cj@startingblind.com>"]
 repository = "https://github.com/coryj627/slate"

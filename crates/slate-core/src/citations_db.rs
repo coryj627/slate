@@ -19,11 +19,11 @@
 //! encoding is `0=Bracketed`, `1=InText`, `2=SuppressAuthor` —
 //! mirrored in `mode_to_int` / `mode_from_int`.
 
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 
-use crate::citations::bibliography::{Author, BibEntry};
-use crate::citations::{extract_citations, CitationMode, CitationReference, CitedItem, Locator};
 use crate::VaultError;
+use crate::citations::bibliography::{Author, BibEntry};
+use crate::citations::{CitationMode, CitationReference, CitedItem, Locator, extract_citations};
 
 /// Extract citations from `markdown_source` and replace every cached
 /// row for `source_file_id` in one transaction. Empty source body
@@ -310,11 +310,12 @@ pub fn get_bibliography_entry(
          FROM bibliography_entries WHERE key = ?1",
     )?;
     let mut rows = stmt.query_map(params![key], row_to_entry)?;
-    if let Some(r) = rows.next() {
-        Ok(Some(r?))
-    } else {
-        Ok(None)
-    }
+    // `transpose()` turns `Option<Result<_>>` into `Result<Option<_>>`
+    // so `?` surfaces a row-decode error. Written without `if let` to
+    // sidestep the Rust 2024 if-let temporary-scope rescope: `rows`
+    // borrows `stmt`, and the explicit form keeps the drop timing
+    // obvious regardless of edition.
+    Ok(rows.next().transpose()?)
 }
 
 /// Case-insensitive substring search on title + authors_json. No

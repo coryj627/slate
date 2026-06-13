@@ -30,10 +30,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::format::{strftime::StrftimeItems, Item};
+use chrono::format::{Item, strftime::StrftimeItems};
 use chrono::{DateTime, Utc};
 
-use crate::frontmatter::{self, extract_frontmatter, PropertyValue};
+use crate::frontmatter::{self, PropertyValue, extract_frontmatter};
 
 // --- Types ---------------------------------------------------------
 
@@ -195,26 +195,28 @@ pub fn render_template_source(source: &str, context: &TemplateContext) -> Render
     let mut i = 0;
     while i < source.len() {
         // Look for `{{...}}` at this position.
-        if i + 1 < source.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
-            if let Some(rel) = source[i + 2..].find("}}") {
-                let body = &source[i + 2..i + 2 + rel];
-                let end = i + 2 + rel + 2;
-                match substitute(body, context, &label_to_key) {
-                    Some(Substitution::Text(s)) => out.push_str(&s),
-                    Some(Substitution::Cursor) => {
-                        if cursor_offset.is_none() {
-                            cursor_offset = Some(out.len());
-                        }
-                        // Substituted with empty string either way.
+        if i + 1 < source.len()
+            && bytes[i] == b'{'
+            && bytes[i + 1] == b'{'
+            && let Some(rel) = source[i + 2..].find("}}")
+        {
+            let body = &source[i + 2..i + 2 + rel];
+            let end = i + 2 + rel + 2;
+            match substitute(body, context, &label_to_key) {
+                Some(Substitution::Text(s)) => out.push_str(&s),
+                Some(Substitution::Cursor) => {
+                    if cursor_offset.is_none() {
+                        cursor_offset = Some(out.len());
                     }
-                    None => {
-                        // Unknown — preserve the original marker.
-                        out.push_str(&source[i..end]);
-                    }
+                    // Substituted with empty string either way.
                 }
-                i = end;
-                continue;
+                None => {
+                    // Unknown — preserve the original marker.
+                    out.push_str(&source[i..end]);
+                }
             }
+            i = end;
+            continue;
         }
         // No `{{` match at this position. Advance one char.
         let c = source[i..].chars().next().expect("loop invariant");
@@ -296,18 +298,20 @@ fn scan_prompt_labels(source: &str) -> Vec<String> {
     let bytes = source.as_bytes();
     let mut i = 0;
     while i < source.len() {
-        if i + 1 < source.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
-            if let Some(rel) = source[i + 2..].find("}}") {
-                let body = &source[i + 2..i + 2 + rel];
-                let end = i + 2 + rel + 2;
-                if let Some(label) = body.strip_prefix("prompt:") {
-                    if !label.is_empty() {
-                        out.push(label.to_string());
-                    }
-                }
-                i = end;
-                continue;
+        if i + 1 < source.len()
+            && bytes[i] == b'{'
+            && bytes[i + 1] == b'{'
+            && let Some(rel) = source[i + 2..].find("}}")
+        {
+            let body = &source[i + 2..i + 2 + rel];
+            let end = i + 2 + rel + 2;
+            if let Some(label) = body.strip_prefix("prompt:")
+                && !label.is_empty()
+            {
+                out.push(label.to_string());
             }
+            i = end;
+            continue;
         }
         let c = source[i..].chars().next().expect("loop invariant");
         i += c.len_utf8();
@@ -356,12 +360,12 @@ fn slug(label: &str) -> String {
 pub(crate) fn description_from_source(source: &str) -> Option<String> {
     let (props, _warnings) = extract_frontmatter(source);
     for p in &props {
-        if p.key.eq_ignore_ascii_case("description") {
-            if let PropertyValue::Text(text) = &p.value {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    return Some(truncate_chars(trimmed, 120));
-                }
+        if p.key.eq_ignore_ascii_case("description")
+            && let PropertyValue::Text(text) = &p.value
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(truncate_chars(trimmed, 120));
             }
         }
     }
