@@ -18,8 +18,11 @@
 //! ~20 minutes on a modern laptop.
 
 use std::fs;
+// criterion 0.8 deprecated its `black_box` re-export in favour of the
+// std one (it always uses `std::hint::black_box` internally now).
+use std::hint::black_box;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use slate_core::{
     CancelToken, FileFilter, Paging, SearchScope, TaskFilter, VaultSession, extract_tasks,

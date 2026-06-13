@@ -633,7 +633,7 @@ impl StructureSnapshot {
             if let Event::Start(tag) = &event {
                 if let Some(kind) = opaque_block_kind(tag) {
                     blocks.push((range.start, range.end, kind));
-                } else if matches!(tag, Tag::List(_) | Tag::Item | Tag::BlockQuote) {
+                } else if matches!(tag, Tag::List(_) | Tag::Item | Tag::BlockQuote(_)) {
                     containers.push((range.start, range.end));
                 }
             }
@@ -1056,7 +1056,7 @@ fn structure_span_kind(event: &Event) -> Option<EditorSpanKind> {
         Event::Start(Tag::CodeBlock(_)) => EditorSpanKind::CodeFence,
         Event::Start(Tag::Link { .. }) => EditorSpanKind::Link,
         Event::Start(Tag::Image { .. }) => EditorSpanKind::Image,
-        Event::Start(Tag::BlockQuote) => EditorSpanKind::BlockQuote,
+        Event::Start(Tag::BlockQuote(_)) => EditorSpanKind::BlockQuote,
         _ => return None,
     })
 }
