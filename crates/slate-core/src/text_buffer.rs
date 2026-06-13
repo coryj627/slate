@@ -20,11 +20,12 @@
 //! - **1-based lines** — what the outline / task / "jump to line"
 //!   affordances speak.
 //!
-//! `ropey` works natively in bytes, chars, and lines, and carries a
-//! UTF-16 code-unit metric (the reason it's picked over `crop`); UTF-16
-//! ↔ byte conversion composes through the char metric, still O(log n).
-//! Lines are **0-based** inside `ropey`; this type presents **1-based**
-//! lines at its surface to match the host contract.
+//! `ropey` 2.0 indexes natively in bytes and carries a UTF-16 code-unit
+//! metric (the reason it's picked over `crop`); byte ↔ UTF-16 conversion
+//! is a direct O(log n) metric (`byte_to_utf16_idx` / `utf16_to_byte_idx`).
+//! Lines are **0-based** inside `ropey` and counted with `LineType::LF`
+//! (LF-only, per `05` §7.1); this type presents **1-based** lines at its
+//! surface to match the host contract.
 //!
 //! ## Defensive clamping
 //!
@@ -35,7 +36,7 @@
 
 use std::ops::Range;
 
-use ropey::Rope;
+use ropey::{LineType, Rope};
 
 /// A rope-backed document buffer with O(log n) offset / line
 /// conversions. Cheap to clone (ropey shares structure copy-on-write).
@@ -67,19 +68,19 @@ impl TextBuffer {
 
     /// Length in UTF-8 bytes.
     pub fn len_bytes(&self) -> usize {
-        self.rope.len_bytes()
+        self.rope.len()
     }
 
     /// Length in UTF-16 code units (what `NSTextStorage.length` reports).
     pub fn len_utf16(&self) -> usize {
-        self.rope.len_utf16_cu()
+        self.rope.len_utf16()
     }
 
     /// Number of lines, counting a trailing newline as opening one more
     /// (empty) line — `ropey`'s convention, so an empty buffer is 1 line
-    /// and `"a\n"` is 2.
+    /// and `"a\n"` is 2. LF-only (`LineType::LF`).
     pub fn len_lines(&self) -> usize {
-        self.rope.len_lines()
+        self.rope.len_lines(LineType::LF)
     }
 
     // --- byte <-> char (the bridge the others compose through) -------
@@ -87,35 +88,38 @@ impl TextBuffer {
     /// UTF-8 byte offset → char index. A mid-scalar byte snaps to the
     /// char it falls inside; past-the-end clamps to the char count.
     pub fn byte_to_char(&self, byte: usize) -> usize {
-        self.rope.byte_to_char(byte.min(self.rope.len_bytes()))
+        self.rope.byte_to_char_idx(byte.min(self.rope.len()))
     }
 
     /// Char index → UTF-8 byte offset. Clamps past-the-end.
     pub fn char_to_byte(&self, char_idx: usize) -> usize {
-        self.rope.char_to_byte(char_idx.min(self.rope.len_chars()))
+        self.rope
+            .char_to_byte_idx(char_idx.min(self.rope.len_chars()))
     }
 
     // --- byte <-> UTF-16 --------------------------------------------
 
     /// UTF-8 byte offset → UTF-16 code-unit offset (for an `NSRange`).
+    /// Direct byte↔UTF-16 metric in ropey 2.0; a mid-scalar byte snaps
+    /// to the char it falls inside.
     pub fn byte_to_utf16(&self, byte: usize) -> usize {
-        self.rope.char_to_utf16_cu(self.byte_to_char(byte))
+        self.rope.byte_to_utf16_idx(byte.min(self.rope.len()))
     }
 
     /// UTF-16 code-unit offset → UTF-8 byte offset. A code unit landing
     /// inside a surrogate pair snaps to the char it belongs to.
     pub fn utf16_to_byte(&self, utf16: usize) -> usize {
-        let char_idx = self
-            .rope
-            .utf16_cu_to_char(utf16.min(self.rope.len_utf16_cu()));
-        self.rope.char_to_byte(char_idx)
+        self.rope
+            .utf16_to_byte_idx(utf16.min(self.rope.len_utf16()))
     }
 
     // --- byte <-> 1-based line --------------------------------------
 
     /// UTF-8 byte offset → **1-based** line number.
     pub fn byte_to_line(&self, byte: usize) -> usize {
-        self.rope.byte_to_line(byte.min(self.rope.len_bytes())) + 1
+        self.rope
+            .byte_to_line_idx(byte.min(self.rope.len()), LineType::LF)
+            + 1
     }
 
     /// **1-based** line number → UTF-8 byte offset of that line's first
@@ -123,8 +127,10 @@ impl TextBuffer {
     /// "jump to line" past EOF parks the caret at the end, matching the
     /// prior Swift behaviour); a line `< 1` clamps to line 1.
     pub fn line_to_byte(&self, one_based_line: usize) -> usize {
-        let zero_based = one_based_line.saturating_sub(1).min(self.rope.len_lines());
-        self.rope.line_to_byte(zero_based)
+        let zero_based = one_based_line
+            .saturating_sub(1)
+            .min(self.rope.len_lines(LineType::LF));
+        self.rope.line_to_byte_idx(zero_based, LineType::LF)
     }
 
     /// UTF-16 code-unit offset → **1-based** line number. Composition of
@@ -137,16 +143,18 @@ impl TextBuffer {
     // --- Edits (foundation for the stateful buffer; byte-indexed) ----
 
     /// Insert `text` at a UTF-8 byte offset (snapped to a char boundary).
+    /// ropey 2.0 `insert` is byte-indexed and panics off a char boundary,
+    /// so the offset is snapped first.
     pub fn insert(&mut self, byte: usize, text: &str) {
-        let char_idx = self.byte_to_char(byte);
-        self.rope.insert(char_idx, text);
+        let byte = self.byte_to_byte_boundary(byte);
+        self.rope.insert(byte, text);
     }
 
     /// Delete the half-open UTF-8 byte range (each end snapped to a char
     /// boundary). A degenerate or inverted range is a no-op.
     pub fn delete(&mut self, byte_range: Range<usize>) {
-        let start = self.byte_to_char(byte_range.start);
-        let end = self.byte_to_char(byte_range.end);
+        let start = self.byte_to_byte_boundary(byte_range.start);
+        let end = self.byte_to_byte_boundary(byte_range.end);
         if start < end {
             self.rope.remove(start..end);
         }
@@ -158,8 +166,8 @@ impl TextBuffer {
     /// falls mid-scalar (re-snapping the raw start byte against the
     /// post-removal rope could otherwise resolve elsewhere).
     pub fn replace(&mut self, byte_range: Range<usize>, text: &str) {
-        let start = self.byte_to_char(byte_range.start);
-        let end = self.byte_to_char(byte_range.end);
+        let start = self.byte_to_byte_boundary(byte_range.start);
+        let end = self.byte_to_byte_boundary(byte_range.end);
         if start < end {
             self.rope.remove(start..end);
         }
@@ -181,16 +189,20 @@ impl TextBuffer {
     /// Byte offset of the start of the line containing `byte` (just past the
     /// previous `\n`, or 0). `byte` is clamped to the buffer length.
     pub fn line_start_byte(&self, byte: usize) -> usize {
-        let byte = byte.min(self.rope.len_bytes());
-        self.rope.line_to_byte(self.rope.byte_to_line(byte))
+        let byte = byte.min(self.rope.len());
+        self.rope
+            .line_to_byte_idx(self.rope.byte_to_line_idx(byte, LineType::LF), LineType::LF)
     }
 
     /// Byte offset just past the end of the line containing `byte` — the byte
     /// after the next `\n` at or after `byte`, or the buffer length. `byte`
     /// is clamped to the buffer length.
     pub fn line_end_byte(&self, byte: usize) -> usize {
-        let byte = byte.min(self.rope.len_bytes());
-        self.rope.line_to_byte(self.rope.byte_to_line(byte) + 1)
+        let byte = byte.min(self.rope.len());
+        self.rope.line_to_byte_idx(
+            self.rope.byte_to_line_idx(byte, LineType::LF) + 1,
+            LineType::LF,
+        )
     }
 
     /// True when the line starting at `line_start_byte` (a line start) is
@@ -200,7 +212,7 @@ impl TextBuffer {
     pub fn line_is_blank(&self, line_start_byte: usize) -> bool {
         let le = self.line_end_byte(line_start_byte);
         self.rope
-            .byte_slice(line_start_byte..le)
+            .slice(line_start_byte..le)
             .chars()
             .all(|c| c.is_whitespace())
     }
@@ -225,7 +237,7 @@ impl TextBuffer {
     /// `editor_spans::extend_down_to_blank`.
     pub fn extend_down_to_blank(&self, end: usize) -> usize {
         let mut le = end;
-        while le < self.rope.len_bytes() {
+        while le < self.rope.len() {
             if self.line_is_blank(le) {
                 break;
             }
@@ -240,16 +252,19 @@ impl TextBuffer {
     /// this to pull out **only the highlight window**, never the whole
     /// document, on the per-keystroke path.
     pub fn byte_slice_to_string(&self, range: Range<usize>) -> String {
-        let len = self.rope.len_bytes();
-        let start = self.byte_to_byte_boundary(range.start.min(len));
-        let end = self.byte_to_byte_boundary(range.end.min(len)).max(start);
-        self.rope.byte_slice(start..end).to_string()
+        let start = self.byte_to_byte_boundary(range.start);
+        let end = self.byte_to_byte_boundary(range.end).max(start);
+        self.rope.slice(start..end).to_string()
     }
 
     /// Snap a byte offset down to the nearest char boundary (the start of the
-    /// char it falls in). Composes the rope's byte↔char metrics in O(log n).
+    /// char it falls in), clamping past-the-end to the buffer length first.
+    /// Composes the rope's byte↔char metrics in O(log n). Clamping here keeps
+    /// the byte-indexed `insert`/`remove`/`slice` callers panic-safe (ropey
+    /// 2.0 asserts in-bounds, char-boundary indices).
     fn byte_to_byte_boundary(&self, byte: usize) -> usize {
-        self.rope.char_to_byte(self.rope.byte_to_char(byte))
+        let byte = byte.min(self.rope.len());
+        self.rope.char_to_byte_idx(self.rope.byte_to_char_idx(byte))
     }
 
     /// The raw byte at `byte_idx` (O(log n)). Used by the rope-native

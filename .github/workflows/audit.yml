@@ -1,0 +1,59 @@
+# Supply-chain security gate: scans the resolved dependency graph for
+# known RustSec advisories. Fails the build on *vulnerabilities*;
+# unmaintained-crate warnings are reported but don't fail the gate.
+#
+# Cargo.lock isn't tracked in this repo (see .gitignore), so the lockfile
+# is resolved fresh before auditing. Runs on a cheap Linux runner — the
+# audit only inspects the dependency graph, which is platform-independent,
+# so it doesn't need the macos-14 toolchain pin the build workflows use.
+
+name: Security audit
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - '.github/workflows/audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - '.github/workflows/audit.yml'
+  schedule:
+    # Weekly, so a newly-disclosed advisory against an unchanged pinned
+    # dependency is still caught without waiting for a manifest edit.
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install cargo-audit
+        # Pin the scanner version (matching the repo's pin-everything
+        # convention) for reproducible runs. The advisory database is
+        # still fetched fresh on every run, so pinning the tool doesn't
+        # reduce coverage — newly-disclosed advisories are still caught.
+        # Bump deliberately.
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Resolve lockfile
+        # Cargo.lock is not committed; generate it so the audit has a
+        # concrete dependency graph to scan.
+        run: cargo generate-lockfile
+
+      - name: cargo audit
+        # Non-zero exit on RustSec vulnerabilities fails the gate.
+        # Unmaintained-crate warnings (e.g. transitive paste / yaml-rust)
+        # are informational and do not fail the build.
+        run: cargo audit

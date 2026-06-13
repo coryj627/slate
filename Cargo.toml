@@ -30,17 +30,23 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
-# ropey backs the editor's rope `TextBuffer` (`05` §7.1). Chosen over
-# `crop` specifically for its O(log n) UTF-16 code-unit metric
-# (`len_utf16_cu` / `char_to_utf16_cu` / `utf16_cu_to_char`) — `crop`
+# ropey 2.0 (beta) backs the editor's rope `TextBuffer` (`05` §7.1).
+# Chosen over `crop` for its O(log n) UTF-16 code-unit metric
+# (`len_utf16` / `byte_to_utf16_idx` / `utf16_to_byte_idx`) — `crop`
 # speaks only bytes/lines, and AppKit's NSTextView is UTF-16-indexed, so
 # the editor's offset/line conversion APIs need the UTF-16 dimension.
-# `default-features = false` drops ropey's `unicode_lines` metric so a
-# line break is **`\n` only** — matching the Swift editor's `== "\n"`
-# counting and the rest of the `\n`-based backend (a CRLF file's `\r`
-# stays line content). The UTF-16 / char / byte metrics are not
-# feature-gated, so they remain available.
-ropey = { version = "1.6", default-features = false }
+# 2.0 made indexing byte-native and moved every non-byte metric behind a
+# cargo feature: we enable `metric_chars` (char-boundary snapping),
+# `metric_utf16` (the UTF-16 dimension above), and `metric_lines_lf` —
+# the last makes the **`\n`-only** line semantics explicit (passing
+# `LineType::LF` per call) instead of the old `default-features = false`
+# trick, matching the Swift editor's `== "\n"` counting and the rest of
+# the `\n`-based backend (a CRLF file's `\r` stays line content).
+ropey = { version = "2.0.0-beta.1", default-features = false, features = [
+    "metric_chars",
+    "metric_utf16",
+    "metric_lines_lf",
+] }
 # similar powers the diff-on-save fine-grained op log (`05` §7.1 / #378):
 # `diff_to_ops` line-diffs old-vs-new content at save time into byte-range
 # Insert/Delete/Replace ops. The `text` feature gates `TextDiff` /
