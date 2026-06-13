@@ -40,7 +40,12 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        # Pin the scanner version (matching the repo's pin-everything
+        # convention) for reproducible runs. The advisory database is
+        # still fetched fresh on every run, so pinning the tool doesn't
+        # reduce coverage — newly-disclosed advisories are still caught.
+        # Bump deliberately.
+        run: cargo install cargo-audit --locked --version 0.22.2
 
       - name: Resolve lockfile
         # Cargo.lock is not committed; generate it so the audit has a
