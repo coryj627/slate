@@ -189,6 +189,13 @@ struct NoteEditorView: NSViewRepresentable {
             // {{cursor}} park, if any, arrives later via
             // `cursorByteOffsetRequest` and overrides this.
             textView.setSelectedRange(NSRange(location: 0, length: 0))
+            // Setting the selection doesn't move the viewport. Scroll the
+            // top into view so the caret is actually visible on entry. A
+            // freshly-built NSTextView is already scrolled to the top, so
+            // this is a no-op in the common case — but it's cheap insurance,
+            // and scrolling to offset 0 never animates, so there's no
+            // Reduce Motion (WCAG 2.3.1) concern.
+            textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         }
         // Seed the coordinator with the initial Reduce Motion value
         // — updateNSView will refresh on changes, but the first
