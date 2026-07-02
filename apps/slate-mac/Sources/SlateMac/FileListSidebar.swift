@@ -14,6 +14,16 @@ import SwiftUI
 struct FileListSidebar: View {
     @EnvironmentObject private var appState: AppState
     @State private var didAnnounceCount = false
+    /// Local mirror of `appState.selectedFilePath` that the `List`'s
+    /// selection binds to. The list must NOT bind `selectedFilePath`
+    /// directly: doing so writes that `@Published` from inside SwiftUI's
+    /// update transaction, and its willSet cascade (handleSelectionChange
+    /// → ~15 `@Published` writes) then trips "Publishing changes from
+    /// within view updates … undefined behavior", which made the note
+    /// load only ~50/50. We assign `selectedFilePath` from `.onChange`
+    /// instead (a post-update, safe mutation point) and mirror
+    /// programmatic changes back here to keep the highlight in sync.
+    @State private var listSelection: String?
     /// Keyboard focus on the file list — gates the #418 selection
     /// announcements to list-driven changes only.
     @FocusState private var fileListFocused: Bool
@@ -128,11 +138,29 @@ struct FileListSidebar: View {
     }
 
     private var fileList: some View {
-        List(appState.files, id: \.path, selection: $appState.selectedFilePath) { file in
+        // Binds to the local `listSelection`, not `appState.selectedFilePath`
+        // directly — see the `listSelection` doc comment for why (avoids
+        // the "publishing within view updates" UB that made note loads
+        // flaky). The list highlight updates synchronously as the user
+        // arrows/clicks; `selectedFilePath` (and its note-load cascade)
+        // is assigned from the `.onChange` below, after the update pass.
+        List(appState.files, id: \.path, selection: $listSelection) { file in
             row(for: file)
         }
         .listStyle(.sidebar)
         .focused($fileListFocused)
+        // Seed the mirror if a selection already exists when the sidebar
+        // mounts (e.g. re-entering the vault view with a file open).
+        .onAppear { listSelection = appState.selectedFilePath }
+        // User-driven selection: push it onto AppState here, outside the
+        // list's update transaction, so handleSelectionChange runs in a
+        // well-defined context. The guard prevents a write-back loop with
+        // the mirror `.onChange` below.
+        .onChange(of: listSelection) { newPath in
+            if appState.selectedFilePath != newPath {
+                appState.selectedFilePath = newPath
+            }
+        }
         // #418 (F-A1): keyboard selection in the list is silent —
         // VO speaks only side-effect live regions ("Outline, N
         // headings.") and a blind user can't tell which file is
@@ -144,6 +172,13 @@ struct FileListSidebar: View {
         // double-speak. Same "Selected:" phrasing as the command
         // palette.
         .onChange(of: appState.selectedFilePath) { newPath in
+            // Mirror programmatic selection changes back onto the list
+            // highlight (search-open, template-create, dirty-gate
+            // rollback). Guarded so it doesn't fight the user-driven
+            // write above.
+            if listSelection != newPath {
+                listSelection = newPath
+            }
             guard fileListFocused, let newPath else { return }
             // Red-team note: the dirty-gate rollback re-sets the
             // selection asynchronously while the "Save changes?"
