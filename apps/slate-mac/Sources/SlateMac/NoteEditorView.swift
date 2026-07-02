@@ -177,6 +177,25 @@ struct NoteEditorView: NSViewRepresentable {
             if textView.string != text {
                 textView.string = text
             }
+            // NSTextView leaves the insertion point at the END of the
+            // buffer after a `string =` swap. Pin it to the start so
+            // VoiceOver enters the editor at the top of the note (and a
+            // sighted caret starts at line 1) instead of the bottom.
+            // `updateNSView`'s external-swap path sets the selection
+            // explicitly (clamped to the prior location); the initial
+            // mount — which is what runs on every file selection, since
+            // the editor is torn down and rebuilt — needs its own reset
+            // because there's no prior selection to preserve. A pending
+            // {{cursor}} park, if any, arrives later via
+            // `cursorByteOffsetRequest` and overrides this.
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            // Setting the selection doesn't move the viewport. Scroll the
+            // top into view so the caret is actually visible on entry. A
+            // freshly-built NSTextView is already scrolled to the top, so
+            // this is a no-op in the common case — but it's cheap insurance,
+            // and scrolling to offset 0 never animates, so there's no
+            // Reduce Motion (WCAG 2.3.1) concern.
+            textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         }
         // Seed the coordinator with the initial Reduce Motion value
         // — updateNSView will refresh on changes, but the first

@@ -1007,8 +1007,35 @@ final class AppState: ObservableObject {
         // when the same path is rebound (e.g. by SwiftUI list
         // diffing). The closure runs on the main actor since the
         // class is @MainActor.
+        // The note-load cascade below (handleSelectionChange → ~15
+        // `@Published` writes) must NOT run inside a SwiftUI update
+        // transaction, or it trips a flood of "Publishing changes from
+        // within view updates is not allowed, this will cause undefined
+        // behavior" — and, per that warning, real UB: the note loaded
+        // only intermittently (~50/50). Confirmed via lldb: frame #21
+        // ObjectLocation.set(_:transaction:) → selectedFilePath.setter →
+        // this sink → handleSelectionChange. Two transaction-context
+        // writers are neutralised so the sink can stay synchronous:
+        //
+        // 1. The file list. It no longer binds `List(selection:)` to this
+        //    property directly (which wrote it mid-transaction); it holds
+        //    a local `@State` selection and assigns `selectedFilePath`
+        //    from `.onChange` — a post-update, safe mutation point. See
+        //    FileListSidebar.
+        // 2. Init. `.dropFirst()` skips the value Combine replays to a new
+        //    subscriber (the initial `nil`), which would otherwise fire
+        //    handleSelectionChange(nil) inside the StateObject's creation
+        //    pass — the same UB on already-empty state. Safe to drop:
+        //    there's nothing to load or clear at init.
+        //
+        // The sink stays SYNCHRONOUS (no `.receive(on:)`): the direct,
+        // programmatic writers — search-open, template-create, the
+        // dirty-gate rollback, and the XCTest suite — depend on
+        // `handleSelectionChange` (hence `noteLoadTask`) running
+        // synchronously on assignment.
         $selectedFilePath
             .removeDuplicates()
+            .dropFirst()
             .sink { [weak self] path in
                 self?.handleSelectionChange(to: path)
             }
