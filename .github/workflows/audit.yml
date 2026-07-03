@@ -47,27 +47,38 @@ jobs:
 
       - name: Enforce advisory-ignore review-by date
         # An accepted-risk ignore in .cargo/audit.toml must be timeboxed,
-        # not permanent (Codoki review on #481). When the file has active
-        # ignores, fail once the `review-by:` date has passed so the ignore
-        # is re-evaluated — removed if a fix shipped (see #480), or the date
-        # bumped with fresh justification. Runs on the weekly cron too, so a
-        # stale ignore surfaces even without a PR.
+        # not permanent (Codoki review on #481). When active (uncommented)
+        # ignores exist, fail if ANY `review-by:` date has passed — or if
+        # none is present at all. Robust to both one-per-line and inline
+        # `ignore = ["RUSTSEC-..."]` array forms, and to multiple dated
+        # ignore blocks. Runs on the weekly cron too, so a stale ignore
+        # surfaces without a PR.
         run: |
-          if [ ! -f .cargo/audit.toml ] || ! grep -qE '^[[:space:]]*"RUSTSEC-' .cargo/audit.toml; then
-            echo "No active advisory ignores — timebox check skipped."
-            exit 0
+          f=.cargo/audit.toml
+          if [ ! -f "$f" ]; then
+            echo "No $f — timebox check skipped."; exit 0
           fi
-          review_by="$(grep -oE 'review-by:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}' .cargo/audit.toml | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
-          if [ -z "$review_by" ]; then
-            echo "::error::.cargo/audit.toml has active ignores but no 'review-by:' date — every ignore must be timeboxed."
-            exit 1
+          # Detect active ignores by stripping TOML line-comments first, so
+          # this matches "RUSTSEC-..." whether listed one-per-line or inside
+          # an inline array, and never trips on commented-out mentions.
+          if ! sed 's/#.*//' "$f" | grep -qE '"RUSTSEC-'; then
+            echo "No active advisory ignores — timebox check skipped."; exit 0
           fi
           today="$(date -u +%Y-%m-%d)"
-          if [[ "$today" > "$review_by" ]]; then
-            echo "::error::advisory-ignore review-by date ($review_by) has passed. Re-evaluate the ignores in .cargo/audit.toml (see #480): remove any now-fixable advisory, or bump review-by with justification."
-            exit 1
+          found=0; stale=0
+          while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            found=1
+            if [[ "$today" > "$d" ]]; then
+              echo "::error::advisory-ignore review-by date ($d) has passed — re-evaluate $f (see #480): remove any now-fixable advisory, or bump review-by with justification."
+              stale=1
+            fi
+          done < <(grep -oE 'review-by:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')
+          if [ "$found" -eq 0 ]; then
+            echo "::error::$f has active advisory ignores but no 'review-by:' date — every ignore must be timeboxed."; exit 1
           fi
-          echo "Advisory ignores valid — review-by $review_by, today $today."
+          if [ "$stale" -eq 1 ]; then exit 1; fi
+          echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
 
       - name: Install cargo-audit
         # Pin the scanner version (matching the repo's pin-everything
