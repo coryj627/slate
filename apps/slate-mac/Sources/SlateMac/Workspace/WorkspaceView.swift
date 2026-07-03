@@ -32,8 +32,12 @@ private struct SplitNodeView: View {
             TabGroupView(group: group)
         case .split(let branch):
             // U1-3 replaces this with SplitContainerView (dividers, weights,
-            // focus routing). Unreachable in U1-4: the mirror never splits.
-            SplitNodeView(node: branch.children[0])
+            // focus routing). Unreachable in U1-4 (the mirror never splits),
+            // and I4 guarantees ≥ 2 children — but a defensive path must not
+            // be able to trap, so render the first child if any, else nothing.
+            if let first = branch.children.first {
+                SplitNodeView(node: first)
+            }
         }
     }
 }
