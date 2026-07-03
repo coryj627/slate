@@ -285,6 +285,8 @@ struct FileListSidebar: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(file.name), modified \(relativeDate(for: file.mtimeMs))")
+        .accessibilityHint(
+            "Opens the note. Open-in-new-tab and split actions are in the context menu.")
         .help(file.path)
         // U1-5 (#457): open-in targets. The context menu is the keyboard-
         // discoverable path (VoiceOver actions rotor picks these up);
