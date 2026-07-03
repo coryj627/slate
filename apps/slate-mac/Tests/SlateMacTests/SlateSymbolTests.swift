@@ -29,7 +29,7 @@ final class SlateSymbolTests: XCTestCase {
         "arrow.down.right.and.arrow.up.left", "ellipsis", "xmark.circle.fill",
         "plus.circle", "rectangle.2.swap", "checkmark.square", "square",
         "plus", "xmark", "rectangle.split.2x1", "book", "pencil",
-        "folder", "folder.fill",
+        "folder", "folder.fill", "chevron.right",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated

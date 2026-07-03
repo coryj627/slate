@@ -94,7 +94,7 @@ final class ContentBlockPanelsTests: XCTestCase {
 
     /// Red-team MEDIUM-1 on #410: the pipeline tests above pass even
     /// when no view consumes the panels (they pin inputs, not the
-    /// consumer). This pins the WIRING: `FileListSidebar`'s panel
+    /// consumer). This pins the WIRING: `FileTreeSidebar`'s panel
     /// stack must instantiate all three #410 panels, after
     /// `EmbedsPanel` and before `TasksPanel`. Same source-structural
     /// technique as `CloseVaultSheetParityTests` (walk up from
@@ -106,7 +106,7 @@ final class ContentBlockPanelsTests: XCTestCase {
         var sidebar: URL?
         for _ in 0..<8 {
             let candidate = cursor.appendingPathComponent(
-                "Sources/SlateMac/FileListSidebar.swift"
+                "Sources/SlateMac/FileTreeSidebar.swift"
             )
             if FileManager.default.fileExists(atPath: candidate.path) {
                 sidebar = candidate
@@ -116,7 +116,7 @@ final class ContentBlockPanelsTests: XCTestCase {
         }
         let url = try XCTUnwrap(
             sidebar,
-            "Could not locate Sources/SlateMac/FileListSidebar.swift from \(#filePath)"
+            "Could not locate Sources/SlateMac/FileTreeSidebar.swift from \(#filePath)"
         )
         let source = try String(contentsOf: url, encoding: .utf8)
 
