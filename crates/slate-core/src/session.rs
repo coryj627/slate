@@ -230,6 +230,27 @@ pub struct NoteLoadBundle {
     pub properties: Vec<crate::Property>,
 }
 
+// --- Note parts bundle ---
+
+/// Everything the U3 tab-open path needs to render a note as body-only
+/// text plus a frontmatter widget, in one read + one hash (#469, U3-5).
+///
+/// `fm_source` and `body` are [`crate::split_note`]'s output — the
+/// frontmatter source (bytes between the `---` delimiters, `""` when
+/// absent) and the Markdown body. `content_hash` is over the **whole
+/// file** (the same value `save_text`/`save_composed` conflict-check
+/// against — the editor holds the body but the hash chain is whole-file,
+/// so a composed save can detect an external edit to either half).
+/// `mtime_ms` is the file's last-modified time for the caller's
+/// change-tracking, matching [`SaveReport::new_mtime_ms`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotePartsBundle {
+    pub fm_source: String,
+    pub body: String,
+    pub content_hash: String,
+    pub mtime_ms: i64,
+}
+
 // --- Save report ---
 
 /// Result of a successful `save_text`. Carries the post-save state the
@@ -1653,6 +1674,123 @@ impl VaultSession {
         }
 
         self.save_text_locked(&mut conn, path, &new_contents, expected_content_hash)
+    }
+
+    /// Read a note split into `{ fm_source, body }` plus the whole-file
+    /// content hash and mtime — the U3 tab-open call (#469, U3-5).
+    ///
+    /// One read, one hash. The body-only editor buffer is populated from
+    /// `body`; the properties widget from `fm_source`; the hash chain
+    /// stays whole-file so a later [`save_composed`](Self::save_composed)
+    /// can conflict-detect an external edit to *either* half.
+    ///
+    /// Uses [`read_text`](Self::read_text) for the read, so the same
+    /// size-cap, `InvalidUtf8`, and path-validation guarantees apply. The
+    /// split reuses `body_after_frontmatter`'s boundary via
+    /// [`crate::split_note`] — there is no second delimiter parser.
+    pub fn read_note_parts(&self, path: &str) -> Result<NotePartsBundle, VaultError> {
+        // `read_text` doesn't touch the connection mutex, so no lock is
+        // needed here — this is a pure read, like `read_text` itself.
+        let contents = self.read_text(path)?;
+        let content_hash = crate::vault::content_hash(contents.as_bytes());
+        let mtime_ms = self.provider.stat(path)?.mtime_ms;
+        let parts = crate::split_note(&contents);
+        Ok(NotePartsBundle {
+            fm_source: parts.fm_source,
+            body: parts.body,
+            content_hash,
+            mtime_ms,
+        })
+    }
+
+    /// Compose `fm_source ⊕ body` and save through the **existing**
+    /// `save_text` machinery — conflict detection, atomic write, index
+    /// refresh, op-log append (#469, U3-5). No second write path.
+    ///
+    /// This is the body-only editor's save: the widget hands the current
+    /// frontmatter source, the editor hands the body, and
+    /// [`crate::compose_note`] joins them into the whole-file bytes
+    /// `save_text` writes. `expected_content_hash` is the whole-file hash
+    /// from [`read_note_parts`](Self::read_note_parts) or the previous
+    /// [`SaveReport`], so an external edit to either the frontmatter or
+    /// the body since the read is caught as `WriteConflict`.
+    ///
+    /// The composed form is canonical (`---\n{fm}\n---\n{body}`, or
+    /// `body` alone when `fm_source` is empty). A note whose frontmatter
+    /// was authored with a non-canonical delimiter shape (trailing
+    /// whitespace, CRLF delimiters, a leading BOM) is normalized on the
+    /// first composed save — the byte-exact pass-through reconstruction
+    /// lives in [`crate::NoteParts::compose`], which the host uses when
+    /// it needs to preserve the authored shape without a round trip.
+    pub fn save_composed(
+        &self,
+        path: &str,
+        fm_source: &str,
+        body: &str,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        validate_save_path(path)?;
+        let composed = crate::compose_note(fm_source, body);
+        // Size check mirrors `save_text` — enforce the refuse threshold at
+        // this call site too, before we take the connection lock.
+        if composed.len() as u64 > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: composed.len() as u64,
+            });
+        }
+        self.save_text(path, &composed, expected_content_hash.as_deref())
+    }
+
+    /// Replace a note's frontmatter source wholesale — the U3-4
+    /// show-source YAML commit path (#469, plumbing for #468).
+    ///
+    /// `fm_source` is validated first: it must be empty or parse as a
+    /// YAML mapping ([`crate::validate_frontmatter_source`]), else
+    /// `MalformedFrontmatter` is returned with a line/column message and
+    /// **nothing is written** (the UI keeps the user's draft). On success
+    /// the note's **current body is read fresh** and recomposed with the
+    /// new frontmatter, then saved through `save_text` — so an in-flight
+    /// body edit isn't clobbered and the whole-file hash chain is
+    /// preserved.
+    ///
+    /// Unlike [`set_property`](Self::set_property), the frontmatter is
+    /// stored **verbatim** (no round trip through the YAML emitter): the
+    /// user's authored comments, anchors, and formatting survive, because
+    /// this is the source-of-truth-editing surface, not a per-key mutation.
+    pub fn set_frontmatter_source(
+        &self,
+        path: &str,
+        fm_source: &str,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        validate_save_path(path)?;
+
+        // Validate BEFORE any read/write so a malformed draft is a pure,
+        // non-destructive error — the file is never touched on failure.
+        crate::validate_frontmatter_source(fm_source)
+            .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
+
+        // Acquire the mutex before the read so a concurrent `save_text`
+        // can't slip between our body read and our compose+save — same
+        // shape as `set_property` / `toggle_task_status` (#135).
+        let mut conn = self.conn.lock().expect("session connection mutex");
+
+        // Read the CURRENT body so a live body edit isn't dropped, then
+        // recompose with the validated frontmatter. `read_text` doesn't
+        // touch the connection, so it's safe inside this critical section.
+        let contents = self.read_text(path)?;
+        let body = crate::split_note(&contents).body;
+        let composed = crate::compose_note(fm_source, &body);
+
+        if composed.len() as u64 > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: composed.len() as u64,
+            });
+        }
+
+        self.save_text_locked(&mut conn, path, &composed, expected_content_hash.as_deref())
     }
 
     /// Rename a YAML frontmatter property across every file in the
@@ -3606,6 +3744,9 @@ mod tests {
 
     #[path = "save.rs"]
     mod save;
+
+    #[path = "composed.rs"]
+    mod composed;
 
     #[path = "templates.rs"]
     mod templates;

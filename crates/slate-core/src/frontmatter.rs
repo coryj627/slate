@@ -193,6 +193,226 @@ pub fn body_after_frontmatter(source: &str) -> &str {
         .unwrap_or(rest)
 }
 
+/// A note split into its frontmatter source and its Markdown body — the
+/// data model the U3 editor stands on (the editor buffer holds
+/// `body` only; the properties widget owns `fm_source`), landed by #469.
+///
+/// `fm_source` is the **exact bytes between the delimiters** (no `---`),
+/// and `""` when the note has no well-formed frontmatter — the public
+/// contract [`split_note`]/[`compose_note`] round-trip against.
+///
+/// The two private `open`/`close` fields capture the exact delimiter
+/// bytes [`split_note`] consumed (the opening line incl. any BOM and
+/// trailing whitespace; the closing `---` line incl. its line ending or
+/// its absence at EOF). They exist solely so [`NoteParts::compose`] can
+/// reconstruct the original file **byte-for-byte** for a pass-through
+/// save — `body_after_frontmatter`'s boundary tolerates `--- \n`
+/// openers, CRLF closers, a leading BOM, and a missing final newline,
+/// and none of those survive a fixed `---\n…---\n` template. Keeping
+/// them private preserves the public two-field shape the Swift side
+/// (`NoteDocument.fmSource`/`bodyText`) mirrors while making the
+/// round-trip law exact regardless of authored delimiter shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteParts {
+    /// Exact bytes between the `---` delimiters (trailing newline of the
+    /// last YAML line included), or `""` when there is no frontmatter.
+    pub fm_source: String,
+    /// The Markdown body — everything after the closing delimiter line,
+    /// or the whole file when there is no frontmatter.
+    pub body: String,
+    /// Opening-delimiter bytes consumed from byte 0 (`\u{FEFF}?---<ws>*\n`),
+    /// or `""` when there is no frontmatter. Private: reconstruction only.
+    open: String,
+    /// Closing-delimiter bytes (`---` + `\r\n`/`\n`/nothing-at-EOF), or
+    /// `""` when there is no frontmatter. Private: reconstruction only.
+    close: String,
+}
+
+impl NoteParts {
+    /// Reconstruct the source this `NoteParts` was split from, byte for
+    /// byte. This is the pass-through save path: `split_note(s).compose()
+    /// == s` for every `s` (the round-trip law), because `open`/`close`
+    /// carry the exact delimiter bytes the split consumed.
+    #[must_use]
+    pub fn compose(&self) -> String {
+        let mut out = String::with_capacity(
+            self.open.len() + self.fm_source.len() + self.close.len() + self.body.len(),
+        );
+        out.push_str(&self.open);
+        out.push_str(&self.fm_source);
+        out.push_str(&self.close);
+        out.push_str(&self.body);
+        out
+    }
+}
+
+/// Split a note into `{ fm_source, body }` at the frontmatter boundary.
+///
+/// Total: **any** input splits. When `source` has well-formed
+/// frontmatter (per [`frontmatter_range`] — the single source of truth
+/// for the boundary, reused here so there is never a second delimiter
+/// parser), `fm_source` is the exact bytes between the delimiters and
+/// `body` is everything after the closing delimiter line. Otherwise
+/// `fm_source == ""` and `body == source` (the plain-Markdown fast
+/// path, and the mid-edit "opener but no close" shape both land here —
+/// `frontmatter_range` returns `None` for both).
+///
+/// The returned [`NoteParts`] round-trips byte-exact via
+/// [`NoteParts::compose`]; see that method and the type docs for why the
+/// delimiter bytes are captured privately.
+#[must_use]
+pub fn split_note(source: &str) -> NoteParts {
+    let Some(range) = frontmatter_range(source) else {
+        // No frontmatter: everything is body; nothing to reconstruct
+        // around. `compose()` then returns `body` unchanged.
+        return NoteParts {
+            fm_source: String::new(),
+            body: source.to_string(),
+            open: String::new(),
+            close: String::new(),
+        };
+    };
+    // `range` is `body_start..closing_line_start`. Byte 0..body_start is
+    // the opening delimiter (BOM + `---` + trailing ws + `\n`); the slice
+    // `range` is `fm_source`. The closing delimiter is `---` plus its
+    // line ending, computed exactly as `body_after_frontmatter` strips
+    // it, so `open ⊕ fm_source ⊕ close ⊕ body == source`.
+    let open = source[..range.start].to_string();
+    let fm_source = source[range.clone()].to_string();
+    let after_body = &source[range.end..];
+    // `after_body` starts with `---` by construction (that's what
+    // `frontmatter_range` located). Consume it plus one CRLF or LF, or
+    // nothing if the file ended at the delimiter — mirroring
+    // `body_after_frontmatter` precisely.
+    let rest = after_body
+        .strip_prefix("---")
+        .expect("frontmatter_range guarantees a closing `---` at range.end");
+    let body = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))
+        .unwrap_or(rest);
+    let close_len = after_body.len() - body.len();
+    NoteParts {
+        fm_source,
+        body: body.to_string(),
+        open,
+        close: source[range.end..range.end + close_len].to_string(),
+    }
+}
+
+/// Compose a frontmatter source and a body back into a note, applying
+/// the **canonical** delimiter shape.
+///
+/// - `fm_source == ""` → the note has no frontmatter; returns `body`
+///   unchanged (no delimiters synthesized).
+/// - `fm_source != ""` → emits `---\n{fm}\n---\n{body}`, where `{fm}` is
+///   `fm_source` with any trailing newlines collapsed (the closing
+///   delimiter owns the newline that ends the block). CRLF authored
+///   *inside* the frontmatter is preserved per-line — only the trailing
+///   run at the very end is trimmed.
+///
+/// This is the path a caller takes when the frontmatter text **changed**
+/// relative to the loaded [`NoteParts`] (e.g. the properties widget wrote
+/// new YAML): it normalizes the delimiter/newline shape rather than
+/// trying to preserve a shape that no longer corresponds to authored
+/// bytes. A pure pass-through save — body edited, frontmatter untouched
+/// — should go through [`NoteParts::compose`] instead, which is
+/// byte-exact. When `fm_source` is already in canonical shape (a single
+/// trailing `\n`, LF delimiters, no BOM — the form
+/// [`set_property_in_source`]/`emit_hash_body` produce), the two agree.
+#[must_use]
+pub fn compose_note(fm_source: &str, body: &str) -> String {
+    if fm_source.is_empty() {
+        return body.to_string();
+    }
+    // Collapse the trailing newline run so the emitted `---` closing line
+    // sits flush — the delimiter owns that separator. `trim_end_matches`
+    // over both `\n` and `\r` handles an authored `…\r\n` or `…\n` tail
+    // without disturbing interior CRLF line breaks.
+    let fm_trimmed = fm_source.trim_end_matches(['\n', '\r']);
+    let mut out = String::with_capacity(fm_trimmed.len() + body.len() + 9);
+    out.push_str("---\n");
+    out.push_str(fm_trimmed);
+    out.push('\n');
+    out.push_str("---\n");
+    out.push_str(body);
+    out
+}
+
+/// Validate that `fm_source` is acceptable frontmatter to store: either
+/// empty (the note will carry no frontmatter) or a single YAML document
+/// that parses as a **mapping** (Obsidian's frontmatter contract). On
+/// failure returns [`FrontmatterEditError::MalformedFrontmatter`] with a
+/// line/column-bearing message and — critically — the caller writes
+/// nothing (the show-source YAML toggle keeps the user's draft on a
+/// parse error, DoD §F).
+///
+/// Unlike [`set_property_in_source`], this does **not** round-trip the
+/// text through yaml-rust2's emitter: `set_frontmatter_source` stores the
+/// user's authored YAML verbatim, so comments, anchors, and formatting
+/// are preserved (they're the source of truth, not a re-emitted view).
+/// Validation is therefore parse-only — we confirm the shape, we don't
+/// rewrite it.
+///
+/// An empty-but-present block (whitespace/comments only, parsing to
+/// `Null`/`BadValue`) is accepted: it's a valid empty mapping the user
+/// may be mid-authoring, and storing it verbatim loses nothing.
+pub fn validate_frontmatter_source(fm_source: &str) -> Result<(), FrontmatterEditError> {
+    if fm_source.is_empty() {
+        return Ok(());
+    }
+    let docs = YamlLoader::load_from_str(fm_source).map_err(|e| {
+        // `ScanError`'s Display already reads
+        // "<info> at byte N line L column C" — surface it verbatim so the
+        // UI can show the user exactly where their YAML broke.
+        FrontmatterEditError::MalformedFrontmatter(format!("YAML parse error: {e}"))
+    })?;
+    // Corruption guards (Codoki #500 + principal review). The written block
+    // must READ BACK as itself: `split_note(compose_note(fm, body))` must
+    // return exactly `fm`. Two ways an accepted-by-YAML block can violate
+    // that and silently truncate on the NEXT load:
+    //   1. Multi-document YAML — the interior `---` separator line is a
+    //      closing delimiter to the note scanner.
+    //   2. A line the scanner reads as a closing delimiter inside a SINGLE
+    //      document (e.g. a `---` line as block-scalar content) — legal
+    //      YAML, still corrupts the note. The re-split identity check below
+    //      is the total guard; the multi-doc check first gives the clearer
+    //      message for the common case.
+    if docs.len() > 1 {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "frontmatter must be a single YAML document (an interior '---' \
+             line would be read as the closing delimiter)"
+                .to_string(),
+        ));
+    }
+    // Re-split identity: the block must read back as itself. `fm_source`
+    // includes the final line's `\n` (bytes between delimiters) and
+    // `compose_note` re-normalizes the tail, so compare both sides with
+    // trailing newlines trimmed — a delimiter-look-alike line truncates the
+    // reread block, which this catches regardless of tail shape.
+    let reread = split_note(&compose_note(fm_source, ""));
+    if reread.fm_source.trim_end_matches(['\n', '\r']) != fm_source.trim_end_matches(['\n', '\r']) {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "frontmatter contains a line that would be read as the closing \
+             '---' delimiter; quote or indent it"
+                .to_string(),
+        ));
+    }
+    match docs.into_iter().next() {
+        Some(Yaml::Hash(_)) => Ok(()),
+        // A block that parses to nothing / null / a bad scalar is an
+        // acceptable empty mapping — same tolerance as `parse_hash`'s
+        // empty-frontmatter starting point, minus the comments-only guard
+        // (verbatim storage preserves comments here, so there's nothing to
+        // silently drop).
+        None | Some(Yaml::Null) | Some(Yaml::BadValue) => Ok(()),
+        Some(other) => Err(FrontmatterEditError::MalformedFrontmatter(format!(
+            "frontmatter must be a YAML mapping; got {}",
+            yaml_type_name(&other)
+        ))),
+    }
+}
+
 /// True when `source` begins with a frontmatter **opening** delimiter line
 /// (`---` + optional trailing whitespace + `\n`, after an optional UTF-8 BOM)
 /// — the necessary precondition for any frontmatter block, independent of
@@ -1925,5 +2145,215 @@ mod tests {
             tags.value,
             PropertyValue::TagList(vec!["leading".to_string()])
         );
+    }
+
+    // --- split_note / compose_note (#469, U3-5) ----------------------
+
+    /// The load-bearing invariant: `split_note(s).compose() == s` for
+    /// every input, and `fm_source ⊕ …` matches what the reader path
+    /// (`body_after_frontmatter`) sees for the body. This is the
+    /// pass-through-save byte-exactness the editor relies on.
+    fn assert_round_trip(s: &str) {
+        let parts = split_note(s);
+        assert_eq!(
+            parts.compose(),
+            s,
+            "round-trip law violated for {s:?}: parts = {parts:?}"
+        );
+        // The split's body must equal the reader's body — the two
+        // definitions of "the Markdown body" cannot diverge.
+        assert_eq!(
+            parts.body,
+            body_after_frontmatter(s),
+            "split body disagrees with body_after_frontmatter for {s:?}"
+        );
+    }
+
+    #[test]
+    fn split_note_exhaustive_delimiter_fixtures_round_trip() {
+        // The spec's exhaustive delimiter edge-case set. Each must
+        // round-trip byte-exact through split → compose.
+        let fixtures = [
+            // Plain body, no frontmatter.
+            "",
+            "# just a body\n",
+            "# body\nno trailing newline",
+            // Normal frontmatter.
+            "---\nkey: value\n---\nbody\n",
+            "---\ntitle: Hi\nauthor: Cory\n---\n# Heading\n\nText.\n",
+            // Empty frontmatter block (`---\n---`).
+            "---\n---\nbody\n",
+            "---\n---\n",
+            // Frontmatter-only file (no body at all).
+            "---\nkey: value\n---\n",
+            "---\nkey: value\n---",
+            // No trailing newline anywhere.
+            "---\nkey: value\n---\nbody",
+            // `---` at EOF: closing delimiter with no newline after it.
+            "---\na: 1\n---",
+            // CRLF throughout.
+            "---\r\nkey: value\r\n---\r\nbody\r\n",
+            "---\r\nkey: value\r\n---\r\n",
+            // Mixed: CRLF frontmatter, LF body.
+            "---\r\nkey: value\r\n---\nbody\n",
+            // Trailing whitespace on the opening / closing delimiter
+            // lines (both tolerated by the boundary scanner).
+            "--- \nkey: value\n--- \nbody\n",
+            "---\t\nkey: value\n---\t\nbody\n",
+            // Leading UTF-8 BOM, with and without frontmatter.
+            "\u{FEFF}---\nkey: value\n---\nbody\n",
+            "\u{FEFF}# body only\n",
+            // `---` INSIDE the body (thematic break) — must NOT be
+            // mistaken for a second delimiter; the first close wins.
+            "---\na: 1\n---\nbefore\n\n---\n\nafter\n",
+            // Frontmatter-like block MID-file (not at byte 0) → no
+            // frontmatter at all; the whole thing is body.
+            "intro\n---\nkey: value\n---\nrest\n",
+            // Opener but no close (mid-edit): no frontmatter, all body.
+            "---\nstill writing\nno close yet\n",
+            // Blank frontmatter body line.
+            "---\n\n---\nbody\n",
+            // Unicode inside frontmatter and body.
+            "---\nプロジェクト: 値\n---\n本文テキスト\n",
+        ];
+        for s in fixtures {
+            assert_round_trip(s);
+        }
+    }
+
+    #[test]
+    fn split_note_fm_source_is_bytes_between_delimiters() {
+        let parts = split_note("---\nkey: value\n---\nbody\n");
+        assert_eq!(parts.fm_source, "key: value\n");
+        assert_eq!(parts.body, "body\n");
+        // No frontmatter → empty fm_source, body is the whole file.
+        let parts = split_note("# no fm\n");
+        assert_eq!(parts.fm_source, "");
+        assert_eq!(parts.body, "# no fm\n");
+    }
+
+    #[test]
+    fn compose_note_empty_fm_returns_body_unchanged() {
+        assert_eq!(compose_note("", "body\n"), "body\n");
+        assert_eq!(compose_note("", ""), "");
+        assert_eq!(compose_note("", "# H\n\ntext"), "# H\n\ntext");
+    }
+
+    #[test]
+    fn compose_note_canonical_shape_for_changed_fm() {
+        // The "fm changed" path emits the normalized `---\n{fm}\n---\n`.
+        assert_eq!(
+            compose_note("key: value", "body\n"),
+            "---\nkey: value\n---\nbody\n"
+        );
+        // A trailing newline in the fm text is collapsed (delimiter owns
+        // it) — no blank line before the closing `---`.
+        assert_eq!(
+            compose_note("key: value\n", "body\n"),
+            "---\nkey: value\n---\nbody\n"
+        );
+        // Multiple trailing newlines all collapse.
+        assert_eq!(
+            compose_note("key: value\n\n\n", "body\n"),
+            "---\nkey: value\n---\nbody\n"
+        );
+    }
+
+    #[test]
+    fn compose_note_agrees_with_canonical_split_parts() {
+        // When fm_source is ALREADY in canonical shape (single trailing
+        // \n, LF delimiters, no BOM — the emit_hash_body form), the free
+        // composer and the byte-exact reconstruction agree.
+        let canonical = "---\nkey: value\n---\nbody\n";
+        let parts = split_note(canonical);
+        assert_eq!(compose_note(&parts.fm_source, &parts.body), canonical);
+        assert_eq!(parts.compose(), canonical);
+    }
+
+    #[test]
+    fn compose_note_preserves_interior_crlf_trims_only_trailing() {
+        // CRLF authored on an interior fm line survives; only the
+        // trailing newline run is trimmed before the closing delimiter.
+        assert_eq!(
+            compose_note("a: 1\r\nb: 2\r\n", "body"),
+            "---\na: 1\r\nb: 2\n---\nbody"
+        );
+    }
+
+    #[test]
+    fn validate_frontmatter_source_accepts_mapping_and_empty() {
+        assert!(validate_frontmatter_source("").is_ok());
+        assert!(validate_frontmatter_source("key: value").is_ok());
+        assert!(validate_frontmatter_source("a: 1\nb: 2\n").is_ok());
+        // Comments-only / whitespace-only parse to null → accepted here
+        // (verbatim storage preserves the comments).
+        assert!(validate_frontmatter_source("# just a comment\n").is_ok());
+        assert!(validate_frontmatter_source("   \n").is_ok());
+    }
+
+    #[test]
+    fn validate_frontmatter_source_rejects_non_mapping() {
+        // A bare sequence is not a mapping.
+        let err = validate_frontmatter_source("- a\n- b\n").unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(msg.contains("mapping"), "got {msg:?}");
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
+        // A bare scalar is not a mapping.
+        assert!(matches!(
+            validate_frontmatter_source("just a string").unwrap_err(),
+            FrontmatterEditError::MalformedFrontmatter(_)
+        ));
+    }
+
+    #[test]
+    fn validate_frontmatter_source_rejects_multi_document_yaml() {
+        // Codoki #500: an interior `---` document separator would be read
+        // as the CLOSING delimiter on the next load, truncating the block.
+        let err = validate_frontmatter_source("title: a\n---\ntitle: b\n").unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(msg.contains("single YAML document"), "got {msg:?}");
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_frontmatter_source_rejects_delimiter_lookalike_in_scalar() {
+        // Principal review on #500: a `---` line as BLOCK-SCALAR CONTENT is
+        // a single, legal YAML document — multi-doc rejection alone misses
+        // it — but the scanner would still read that line as the closing
+        // delimiter. The re-split identity guard catches it.
+        let fm = "note: |\n  first\n---\n  second\n";
+        let err = validate_frontmatter_source(fm).unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(msg.contains("closing"), "got {msg:?}");
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
+        // Indented `---` inside the scalar is fine — the scanner only
+        // recognizes a column-0 delimiter line.
+        validate_frontmatter_source("note: |\n  first\n  ---\n  second\n")
+            .expect("indented --- is content, not a delimiter");
+    }
+
+    #[test]
+    fn validate_frontmatter_source_reports_line_column_on_bad_yaml() {
+        // Unbalanced quote — the message must carry the location so the
+        // show-source UI can point the user at the break.
+        let err = validate_frontmatter_source("key: \"unterminated\nother: 1\n").unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(
+                    msg.contains("line") && msg.contains("column"),
+                    "expected a line/column-bearing message, got {msg:?}"
+                );
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
     }
 }

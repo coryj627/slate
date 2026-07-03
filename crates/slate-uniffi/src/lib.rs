@@ -329,6 +329,62 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// Read a note split into `{ fm_source, body }` plus the whole-file
+    /// content hash and mtime — the U3 tab-open call (#469, U3-5).
+    ///
+    /// The body-only editor buffer is populated from `body`; the
+    /// properties widget from `fm_source`. The hash is over the WHOLE
+    /// file, so a later `save_composed` conflict-detects an external edit
+    /// to either half. One read, one hash.
+    pub fn read_note_parts(&self, path: String) -> Result<NotePartsBundle, VaultError> {
+        Ok(self.inner.read_note_parts(&path)?.into())
+    }
+
+    /// Compose `fm_source ⊕ body` and save through the same machinery as
+    /// `save_text` — conflict detection, atomic write, index refresh,
+    /// op-log append (#469, U3-5).
+    ///
+    /// The body-only editor's save: the widget hands the current
+    /// frontmatter source, the editor hands the body.
+    /// `expected_content_hash` is the whole-file hash from
+    /// `read_note_parts` (or a prior `SaveReport`), so an external edit to
+    /// either half since the read is caught as `WriteConflict`. Empty
+    /// `fm_source` writes the body with no `---` block.
+    pub fn save_composed(
+        &self,
+        path: String,
+        fm_source: String,
+        body: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let report = self
+            .inner
+            .save_composed(&path, &fm_source, &body, expected_content_hash)?;
+        Ok(report.into())
+    }
+
+    /// Replace a note's frontmatter source wholesale — the U3-4
+    /// show-source YAML commit path.
+    ///
+    /// `fm_source` must be empty or parse as a YAML mapping, else
+    /// `MalformedFrontmatter` is returned with a line/column message and
+    /// nothing is written (the UI keeps the user's draft). On success the
+    /// current body is read fresh and recomposed with the new
+    /// frontmatter, so an in-flight body edit isn't clobbered. Unlike
+    /// `set_property`, the frontmatter is stored verbatim — comments and
+    /// formatting survive.
+    pub fn set_frontmatter_source(
+        &self,
+        path: String,
+        fm_source: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let report = self
+            .inner
+            .set_frontmatter_source(&path, &fm_source, expected_content_hash)?;
+        Ok(report.into())
+    }
+
     /// Return every well-formed op-log entry recorded for `path`.
     ///
     /// Empty result if the path isn't indexed yet or has never been
@@ -1162,6 +1218,29 @@ impl From<core::Page<core::Backlink>> for BacklinkPage {
             items: p.items.into_iter().map(Into::into).collect(),
             next_cursor: p.next_cursor,
             total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// A note split into frontmatter source + body plus the whole-file
+/// content hash and mtime — the U3 tab-open payload (#469, U3-5).
+/// Mirrors `slate_core::NotePartsBundle`. The Swift side maps this to
+/// `NoteDocument.fmSource` / `bodyText`.
+#[derive(uniffi::Record)]
+pub struct NotePartsBundle {
+    pub fm_source: String,
+    pub body: String,
+    pub content_hash: String,
+    pub mtime_ms: i64,
+}
+
+impl From<core::NotePartsBundle> for NotePartsBundle {
+    fn from(b: core::NotePartsBundle) -> Self {
+        Self {
+            fm_source: b.fm_source,
+            body: b.body,
+            content_hash: b.content_hash,
+            mtime_ms: b.mtime_ms,
         }
     }
 }

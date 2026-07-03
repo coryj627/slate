@@ -63,7 +63,8 @@ pub use embeds::{
     AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, MAX_EMBED_DEPTH, NestedEmbed,
 };
 pub use frontmatter::{
-    Property, PropertyParseWarning, PropertyValue, extract_frontmatter, frontmatter_range,
+    NoteParts, Property, PropertyParseWarning, PropertyValue, compose_note, extract_frontmatter,
+    frontmatter_range, split_note, validate_frontmatter_source,
 };
 pub use link_resolver::{InMemoryVaultIndex, ResolvedLink, VaultIndex, resolve_link};
 pub use links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
@@ -81,9 +82,9 @@ pub use text_buffer::TextBuffer;
 
 pub use session::{
     CancelToken, CslStyleInfo, DirListing, DirNodeSummary, FileFilter, FileMetadata, FileSummary,
-    NoteLoadBundle, Page, Paging, RenameAffected, RenameFailed, RenameFailureKind, RenameReport,
-    RenameSkipReason, RenameSkipped, SaveReport, ScanProgress, ScanProgressListener, ScanReport,
-    SessionConfig, VaultSession,
+    NoteLoadBundle, NotePartsBundle, Page, Paging, RenameAffected, RenameFailed, RenameFailureKind,
+    RenameReport, RenameSkipReason, RenameSkipped, SaveReport, ScanProgress, ScanProgressListener,
+    ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
