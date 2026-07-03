@@ -12,8 +12,10 @@ import SwiftUI
 ///     `names` = `(v7, fallback)`. On macOS 26+ (SF Symbols 7) we return the
 ///     `v7` glyph; on the macOS 15–25 floor we return the `fallback`. The
 ///     `fallback` MUST be a symbol that exists on macOS 15 — enforced by
-///     `SlateSymbolTests.testEveryFallbackLoadsOnMinimumOS`, which loads each
-///     one via `NSImage(systemSymbolName:)` on the CI runner. Today most roles
+///     `SlateSymbolTests.testEveryFallbackIsFloorSafe` (an OS-independent
+///     check against a curated macOS-15-safe fixture) plus
+///     `testEveryFallbackLoadsOnCurrentOS` (loads each via
+///     `NSImage(systemSymbolName:)`). Today most roles
 ///     use one glyph on both paths; the split exists so adopting a v7-only
 ///     glyph later is a one-line change that can't regress older macOS.
 ///

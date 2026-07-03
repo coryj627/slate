@@ -146,24 +146,35 @@ final class SlateSymbolTests: XCTestCase {
             .deletingLastPathComponent()  // slate-mac
             .appendingPathComponent("Sources/SlateMac")
         let fm = FileManager.default
-        let files =
-            try fm.contentsOfDirectory(at: sourcesDir, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "swift" }
-        XCTAssertFalse(files.isEmpty, "No Swift sources found at \(sourcesDir.path).")
+        // Recurse so a symbol reintroduced under a future subfolder (e.g.
+        // Sources/SlateMac/Views/) is still caught (Codex re-review).
+        guard let walker = fm.enumerator(at: sourcesDir, includingPropertiesForKeys: nil) else {
+            return XCTFail("Could not enumerate \(sourcesDir.path).")
+        }
 
         // The layer legitimately names raw symbols; generated FFI code never
         // uses SwiftUI but is excluded defensively.
         let allowed: Set<String> = ["SlateSymbol.swift", "slate_uniffi.swift"]
-        for file in files where !allowed.contains(file.lastPathComponent) {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            XCTAssertFalse(
-                text.contains("Image(systemName:"),
-                "\(file.lastPathComponent) uses a raw Image(systemName:) — route it through SlateSymbol."
+        // Regexes (not substring) so `Image( systemName:`, `Image.init(systemName:`,
+        // and spaced `systemImage :` are all caught.
+        let rawImage = try NSRegularExpression(pattern: #"Image\s*(?:\.init)?\s*\(\s*systemName\s*:"#)
+        let rawLabel = try NSRegularExpression(pattern: #"systemImage\s*:"#)
+
+        var scanned = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            if allowed.contains(url.lastPathComponent) { continue }
+            scanned += 1
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let range = NSRange(text.startIndex..., in: text)
+            XCTAssertNil(
+                rawImage.firstMatch(in: text, range: range),
+                "\(url.lastPathComponent) uses a raw Image(systemName:) — route it through SlateSymbol."
             )
-            XCTAssertFalse(
-                text.contains("systemImage:"),
-                "\(file.lastPathComponent) uses a raw systemImage: — route it through SlateSymbol."
+            XCTAssertNil(
+                rawLabel.firstMatch(in: text, range: range),
+                "\(url.lastPathComponent) uses a raw systemImage: — route it through SlateSymbol."
             )
         }
+        XCTAssertGreaterThan(scanned, 0, "No Swift sources scanned under \(sourcesDir.path).")
     }
 }
