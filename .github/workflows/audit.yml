@@ -3,9 +3,9 @@
 # unmaintained-crate warnings are reported but don't fail the gate.
 #
 # Cargo.lock isn't tracked in this repo (see .gitignore), so the lockfile
-# is resolved fresh before auditing. Runs on a cheap Linux runner — the
+# is resolved fresh before auditing. Runs on a Namespace Linux runner — the
 # audit only inspects the dependency graph, which is platform-independent,
-# so it doesn't need the macos-15 toolchain pin the build workflows use.
+# so it doesn't need the macOS pin the Swift build uses.
 
 name: Security audit
 
@@ -38,7 +38,7 @@ permissions:
 jobs:
   audit:
     name: cargo audit
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-default
     permissions:
       contents: read
     steps:
