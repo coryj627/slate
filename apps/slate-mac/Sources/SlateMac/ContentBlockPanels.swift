@@ -271,9 +271,8 @@ private struct ContentBlocksErrorRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            SlateSymbol.warning.decorative
                 .foregroundStyle(.orange)
-                .accessibilityHidden(true)
             Text(verbatim: message)
                 .font(.caption)
                 .foregroundStyle(.primary)

@@ -105,8 +105,7 @@ struct SearchOverlay: View {
 
     private var field: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .accessibilityHidden(true)
+            SlateSymbol.search.decorative
             TextField("Search vault…", text: $appState.searchQuery)
                 .textFieldStyle(.plain)
                 .focused($focus, equals: .field)
@@ -136,8 +135,7 @@ struct SearchOverlay: View {
             Button {
                 appState.closeSearchOverlay()
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .accessibilityHidden(true)
+                SlateSymbol.clearSearch.decorative
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close search")

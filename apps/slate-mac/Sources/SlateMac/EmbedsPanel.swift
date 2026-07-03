@@ -57,9 +57,8 @@ struct EmbedsPanel: View {
             .accessibilityLabel("Resolving embeds.")
         } else if let err = appState.embedsLoadError {
             HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
+                SlateSymbol.warning.decorative
                     .foregroundStyle(.orange)
-                    .accessibilityHidden(true)
                 Text(verbatim: "Could not resolve embeds: \(err)")
                     .font(.caption)
                     .foregroundStyle(.primary)
@@ -93,9 +92,8 @@ struct EmbedsPanel: View {
                 // batch). Show a placeholder so the panel still
                 // accounts for every embed link.
                 HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "ellipsis")
+                    SlateSymbol.moreActions.decorative
                         .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
                     Text(verbatim: "Embed not yet resolved: \(key)")
                         .font(.callout)
                         .foregroundStyle(.secondary)

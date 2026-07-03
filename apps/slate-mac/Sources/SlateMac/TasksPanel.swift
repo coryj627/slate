@@ -132,7 +132,7 @@ struct TasksPanel: View {
             // system-styled toggle below via `.toggleStyle`. SF
             // Symbol changes by completion state but the label
             // (and AX trait) carries the actual semantics.
-            Image(systemName: task.completed ? "checkmark.square" : "square")
+            (task.completed ? SlateSymbol.taskComplete : SlateSymbol.taskIncomplete).decorative
                 .imageScale(.large)
         }
         .buttonStyle(.plain)
