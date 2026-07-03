@@ -79,6 +79,14 @@ I3. An empty group exists **only** when it is the root (single-group empty works
 I4. Every `.split` has ≥ 2 children; children of a split never repeat the parent axis
     (same-axis children are flattened into the parent on insert).
 I5. `weights.count == children.count`, every weight ≥ 0.15, `Σ == 1 ± 1e-9`.
+    Corollary (capacity, census-found during U1-1): the workspace holds at most
+    ⌊1/0.15⌋ = **6 groups total**; `split` rejects (nil, model unchanged) at the
+    cap. The cap is global — not per-axis — because collapsing a cross-axis
+    intermediary MERGES same-axis branches on normalize, so a per-axis
+    split-time check still admitted 7-child branches whose floor is
+    unsatisfiable. With ≤ 6 groups, every branch's floor is satisfiable
+    unconditionally. (UI consequence for U1-3/U1-5: split affordances disable
+    at 6 panes with a help explanation.)
 I6. No two tabs share a `TabID`; no two groups share a `GroupID` (global uniqueness).
 I7. Focus resolvability: `activeGroup.activeTabID` is non-nil whenever any tab exists
     anywhere in the tree.
