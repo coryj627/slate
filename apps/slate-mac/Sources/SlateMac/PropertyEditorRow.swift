@@ -120,9 +120,8 @@ struct PropertyEditorRow: View {
             Text("This removes the `\(property.key)` key from the note's frontmatter.")
         }
         // Reset draft when the property updates from disk (e.g.
-        // after a successful commit or external reload). macOS 13
-        // target → the single-parameter onChange signature.
-        .onChange(of: property) { newValue in
+        // after a successful commit or external reload).
+        .onChange(of: property) { _, newValue in
             draft = PropertyEditDraft.from(property: newValue)
             inputValidationError = nil
         }

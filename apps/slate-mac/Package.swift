@@ -12,7 +12,10 @@ import PackageDescription
 let package = Package(
     name: "SlateMac",
     platforms: [
-        .macOS(.v13),
+        // String form (not `.v15`) so the bump doesn't require
+        // swift-tools-version 6.0 — which would also flip on Swift 6
+        // language mode. Targeting macOS 15 is all we want here.
+        .macOS("15.0"),
     ],
     products: [
         .executable(name: "SlateMac", targets: ["SlateMac"]),

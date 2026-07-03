@@ -37,7 +37,7 @@ jobs:
     # Pin to a specific runner image (rather than `macos-latest`) so
     # GitHub's image rollovers don't silently swap Xcode/SDK versions
     # under us. Bump deliberately when picking up a new Apple toolchain.
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: read
     steps:

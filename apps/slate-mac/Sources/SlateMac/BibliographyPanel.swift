@@ -50,7 +50,7 @@ struct BibliographyPanel: View {
                 await appState.loadBibliographyEntries()
             }
         }
-        .onChange(of: appState.pendingBibliographyKeyFocus) { newKey in
+        .onChange(of: appState.pendingBibliographyKeyFocus) { _, newKey in
             // Cmd+J from an expanded citation routes here. Switch to
             // the Entries segment and let the search field do the
             // filtering — `bibliographySearchText` is already set by

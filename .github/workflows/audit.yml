@@ -5,7 +5,7 @@
 # Cargo.lock isn't tracked in this repo (see .gitignore), so the lockfile
 # is resolved fresh before auditing. Runs on a cheap Linux runner — the
 # audit only inspects the dependency graph, which is platform-independent,
-# so it doesn't need the macos-14 toolchain pin the build workflows use.
+# so it doesn't need the macos-15 toolchain pin the build workflows use.
 
 name: Security audit
 

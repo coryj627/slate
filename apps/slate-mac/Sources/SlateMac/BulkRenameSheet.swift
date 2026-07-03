@@ -47,7 +47,7 @@ struct BulkRenameSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Old property key")
                         .focused($focusedField, equals: .oldKey)
-                        .onChange(of: oldKey) { _ in invalidatePreview() }
+                        .onChange(of: oldKey) { invalidatePreview() }
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("New key")
@@ -56,7 +56,7 @@ struct BulkRenameSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("New property key")
                         .focused($focusedField, equals: .newKey)
-                        .onChange(of: newKey) { _ in invalidatePreview() }
+                        .onChange(of: newKey) { invalidatePreview() }
                 }
             }
 

@@ -242,11 +242,12 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         // SwiftUI's `Settings { ... }` scene auto-installs the
         // "Slate ▸ Settings…" menu item + ⌘, chord and registers
         // an `NSApplication` responder for `showSettingsWindow:`.
-        // macOS 13 (our deployment target) has no public API to
-        // open that window programmatically, so we send the same
-        // selector the menu item does. `@Environment(\.openSettings)`
-        // is the macOS 14+ replacement; tracked as a future cleanup
-        // when the deployment target bumps.
+        // We send the same selector the menu item does.
+        // `@Environment(\.openSettings)` (macOS 14+) is the SwiftUI
+        // replacement, but it's only reachable from a View's
+        // environment — this command action runs in the registry,
+        // outside any View — and the selector path also dodges the
+        // test-runner `NSApp`-nil crash described below, so it stays.
         //
         // Uses `NSApplication.shared` rather than the `NSApp`
         // global. They reference the same singleton — but `NSApp`

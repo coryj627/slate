@@ -68,7 +68,7 @@ struct NoteContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: appState.currentNoteText) { _ in
+        .onChange(of: appState.currentNoteText) {
             announceIfNeeded()
         }
         .onAppear {

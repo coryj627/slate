@@ -166,11 +166,13 @@ struct WelcomeView: View {
 
 /// Post a polite VoiceOver announcement at the app level.
 ///
-/// SwiftUI's `AccessibilityNotification.Announcement` was added in
-/// macOS 14; the app targets macOS 13, so this routes through AppKit's
-/// `NSAccessibility.post` with `.announcementRequested`. Posting against
-/// `NSApp` rather than a specific window lets the announcement fire even
-/// before the main window has been keyed.
+/// Routes through AppKit's `NSAccessibility.post` with
+/// `.announcementRequested` rather than SwiftUI's
+/// `AccessibilityNotification.Announcement`. Posting against `NSApp`
+/// rather than a specific window lets the announcement fire even
+/// before the main window has been keyed — and keeps the test-runner
+/// guard below workable. Both reasons stand at the macOS 15 floor, so
+/// this stays AppKit even though the SwiftUI API is now available.
 ///
 /// In a unit-test runner there's no `NSApp` (no run loop, no app
 /// shared instance) — calling through anyway crashes with an

@@ -120,8 +120,8 @@ struct SearchOverlay: View {
                 // is silent — announce the focused row (hoisted to a
                 // method; an inline closure here tripped the Swift
                 // type-checker budget, the PR #263 failure mode).
-                .onChange(of: focus) { announceFocusedResult($0) }
-                .onChange(of: appState.searchQuery) { _ in
+                .onChange(of: focus) { _, newFocus in announceFocusedResult(newFocus) }
+                .onChange(of: appState.searchQuery) {
                     appState.bumpSearchQuery()
                 }
                 .onSubmit {
