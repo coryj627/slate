@@ -67,4 +67,18 @@ enum APCAContrast {
         let b = pow(Double(c.blueComponent), 2.4)
         return 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
     }
+
+    /// APCA `Lc` for a token pairing resolved in a specific appearance (#451).
+    /// `text`/`background` may be dynamic colors; both are resolved to sRGB
+    /// under `appearance` (via `performAsCurrentDrawingAppearance`) before
+    /// measuring, so the same pairing can be checked in Aqua and DarkAqua.
+    static func lc(text: NSColor, background: NSColor, for appearance: NSAppearance) -> Double {
+        var result = 0.0
+        appearance.performAsCurrentDrawingAppearance {
+            let t = text.usingColorSpace(.sRGB) ?? text
+            let b = background.usingColorSpace(.sRGB) ?? background
+            result = lc(text: t, background: b)
+        }
+        return result
+    }
 }
