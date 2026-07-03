@@ -150,6 +150,13 @@ struct RightPaneView: View {
             )
             .frame(width: 40)
         }
+        // The COLUMN needs a name for VoiceOver's pane navigation
+        // (⌘⌥arrows between split-view columns) — without it, focus lands on
+        // a mangled NSHostingView type name (the issue the old detail
+        // column's "Sidebar" label existed to fix). "Panels" matches the
+        // leaf vocabulary; the rail and each leaf carry their own labels.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Panels")
     }
 
     /// The mounted-ZStack retention pattern, carried over VERBATIM (rationale
