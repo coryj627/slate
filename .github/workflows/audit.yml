@@ -38,7 +38,10 @@ permissions:
 jobs:
   audit:
     name: cargo audit
-    runs-on: namespace-profile-x64-fast
+    # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
+    # cargo-audit is a Rust tool, so this needs a profile with the Rust
+    # toolchain preinstalled; arm64-fast ships cargo, x64-fast does not.
+    runs-on: namespace-profile-arm64-fast
     permissions:
       contents: read
     steps:
@@ -81,13 +84,17 @@ jobs:
           echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
 
       - name: Cache cargo (Namespace NVMe cache)
-        # Cache ~/.cargo (registry + the installed cargo-audit binary) on the
-        # x64-fast NVMe volume so the pinned-version install is a no-op on a hit.
+        # Cache the installed cargo-audit binary AND the registry on the
+        # arm64-fast NVMe volume so the pinned-version `cargo install` is a
+        # no-op on a hit and `cargo generate-lockfile` skips re-fetching the
+        # index. Uses explicit `path:` (not the `rust` preset) so the cached
+        # set is unambiguous — the `rust` preset targets ~/.cargo/registry +
+        # target/ and would not include ~/.cargo/bin where the tool lands.
         uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
         with:
-          cache: rust
           path: |
             ~/.cargo/bin
+            ~/.cargo/registry
 
       - name: Install cargo-audit
         # Pin the scanner version (matching the repo's pin-everything
