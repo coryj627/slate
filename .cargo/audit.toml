@@ -8,6 +8,12 @@
 # there is no available fix — each entry MUST have a tracking issue
 # and a concrete removal condition. Do not add to this list to silence
 # a fixable advisory; upgrade the dependency instead.
+#
+# Each ignore is TIMEBOXED, not permanent: CI (.github/workflows/audit.yml)
+# FAILS once the review-by date below passes, forcing the ignore to be
+# removed (if a fix shipped — see #480) or the date bumped with fresh
+# justification. An accepted-risk exception must never become silent debt.
+# review-by: 2026-10-03
 
 [advisories]
 ignore = [
