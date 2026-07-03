@@ -5,21 +5,19 @@ on:
 permissions:
   contents: read
 jobs:
-  arm64:
-    runs-on: namespace-profile-arm64-fast
+  mac:
+    runs-on: namespace-profile-mac-actions
     steps:
-      - run: 'echo "arch: $(uname -m)  os: $(uname -s)  nproc: $(nproc)"'
+      - run: |
+          echo "arch:  $(uname -m)  os: $(uname -s) $(sw_vers -productVersion 2>/dev/null)"
+          echo "xcode: $(xcodebuild -version 2>/dev/null | tr '\n' ' ' || echo MISSING)"
+          echo "swift: $(swift --version 2>/dev/null | head -1 || echo MISSING)"
+          echo "cargo: $(cargo --version 2>/dev/null || echo MISSING)"
+          echo "rustc: $(rustc --version 2>/dev/null || echo MISSING)"
+          echo "brew:  $(brew --version 2>/dev/null | head -1 || echo MISSING)"
+          echo "cpu:   $(sysctl -n hw.ncpu)  mem: $(( $(sysctl -n hw.memsize) / 1073741824 ))Gi"
       - name: cache probe
         uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
         with:
-          cache: rust
-      - run: echo "arm64-fast + caching OK"
-  x64:
-    runs-on: namespace-profile-x64-fast
-    steps:
-      - run: 'echo "arch: $(uname -m)  os: $(uname -s)  nproc: $(nproc)"'
-      - name: cache probe
-        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
-        with:
-          cache: rust
-      - run: echo "x64-fast + caching OK"
+          cache: swiftpm
+      - run: echo "mac-actions + caching OK"
