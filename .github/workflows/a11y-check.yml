@@ -41,10 +41,10 @@ env:
 jobs:
   a11y-check:
     name: SwiftUI Accessibility Check
-    # Pin to a specific runner image (rather than `macos-latest`) so
-    # GitHub's image rollovers don't silently change the Swift
-    # toolchain a11y-check is built with. Bump deliberately.
-    runs-on: macos-15
+    # Namespace macOS runner (mac-actions — Apple Silicon, Xcode 26.3 /
+    # Swift 6.2.4). Builds the a11y-check tool from source (cached), then runs
+    # it over the SwiftUI sources.
+    runs-on: namespace-profile-mac-actions
     # actions: read is only needed by codeql-action/upload-sarif within
     # this job; scoping it here keeps the workflow-level grant minimal.
     permissions:
