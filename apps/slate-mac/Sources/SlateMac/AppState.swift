@@ -439,6 +439,54 @@ final class AppState: ObservableObject {
         activateTab(target)
     }
 
+    // MARK: - Workspace persistence (U1-6, #458)
+
+    /// Debounced layout save: any model mutation schedules a write 500ms
+    /// out (coalescing bursts); vault close and app termination save
+    /// immediately. Set up from init.
+    func wireWorkspacePersistence() {
+        workspace.$model
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.saveWorkspaceLayout()
+            }
+            .store(in: &subscriptions)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.saveWorkspaceLayout()
+            }
+        }
+    }
+
+    func saveWorkspaceLayout() {
+        guard let vaultURL = currentVaultURL else { return }
+        let store = WorkspaceStore(vaultRoot: vaultURL)
+        do {
+            try store.save(WorkspaceStore.snapshot(of: workspace.model))
+        } catch {
+            // Layout persistence must never interrupt the user; the next
+            // clean save wins.
+            fputs("Slate: workspace.json save failed: \(error)\n", stderr)
+        }
+    }
+
+    func restoreWorkspaceLayout() {
+        guard let vaultURL = currentVaultURL else { return }
+        let store = WorkspaceStore(vaultRoot: vaultURL)
+        guard let snapshot = store.load(),
+            let restored = WorkspaceStore.model(from: snapshot),
+            !restored.isEmpty
+        else { return }
+        workspace.adopt(restored)
+        if let tab = workspace.model.activeGroup.activeTabID {
+            activateTab(tab)
+        }
+    }
+
     // MARK: - Open-in targets (U1-5, #457)
 
     /// Where a navigation opens its document.
@@ -1418,6 +1466,7 @@ final class AppState: ObservableObject {
         // `self` to break the appState → registry → action → appState
         // cycle.
         registerCoreCommands(into: commandRegistry, appState: self)
+        wireWorkspacePersistence()
     }
 
     /// Entry point for the "Show Command Palette…" menu command and
@@ -2111,6 +2160,10 @@ final class AppState: ObservableObject {
             scanAnnouncementLastMessage = nil
             scanAnnouncementLastFiredAt = .distantPast
             recordOpened(url: url)
+            // U1-6 (#458): restore the persisted workspace layout. Tabs
+            // load lazily; a missing file surfaces the existing per-tab
+            // load-error state rather than being dropped.
+            restoreWorkspaceLayout()
             scanTask?.cancel()
             scanTask = Task { [weak self] in
                 await self?.loadFiles()
@@ -2261,6 +2314,9 @@ final class AppState: ObservableObject {
     }
 
     func closeVault() {
+        // U1-6: persist the layout FIRST — the teardown below clears
+        // `currentVaultURL`, and the save is a no-op once it's gone.
+        saveWorkspaceLayout()
         scanTask?.cancel()
         scanTask = nil
         noteLoadTask?.cancel()
