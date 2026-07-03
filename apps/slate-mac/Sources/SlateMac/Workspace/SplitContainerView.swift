@@ -66,11 +66,26 @@ struct SplitContainerView: View {
                     width: axis == .horizontal ? length : nil,
                     height: axis == .vertical ? length : nil)
             if index < branch.children.count - 1 {
-                DividerHandle(axis: axis) { delta in
-                    dragDivider(at: index, delta: delta, contentLength: contentLength)
-                } onEnd: {
-                    dragWeights = nil
-                }
+                DividerHandle(
+                    axis: axis,
+                    leadingFraction: weights[index] / max(weights[index] + weights[index + 1], 1e-9),
+                    onDrag: { delta in
+                        dragDivider(at: index, delta: delta, contentLength: contentLength)
+                    },
+                    onEnd: { dragWeights = nil },
+                    onAdjust: { step in
+                        // VoiceOver adjustable action: shift a resize-step of
+                        // the PAIR's span between the two neighbors — the
+                        // same math as a drag of that distance.
+                        let pair = (dragWeights ?? branch.weights)[index]
+                            + (dragWeights ?? branch.weights)[index + 1]
+                        dragDivider(
+                            at: index,
+                            delta: CGFloat(step * WorkspaceModel.resizeStep * pair)
+                                * contentLength,
+                            contentLength: contentLength)
+                        dragWeights = nil
+                    })
             }
         }
     }
@@ -103,13 +118,26 @@ struct SplitContainerView: View {
     }
 }
 
-/// The 1pt divider line inside an 8pt grab zone. Cursor feedback on hover;
-/// hidden from accessibility (resize is command-driven for AT users —
-/// `slate.workspace.growPane` / `shrinkPane`).
+/// The 1pt divider line inside an 8pt grab zone.
+///
+/// A REAL accessibility element, not a hidden one: VoiceOver reaches it as
+/// an adjustable "Pane divider" — swipe up/down (the adjustable-element
+/// gesture) resizes the adjacent panes in `WorkspaceModel.resizeStep`
+/// increments, the same math as a pointer drag. The Grow/Shrink Pane
+/// commands remain the keyboard path; this gives VO users the direct,
+/// spatial equivalent of the drag.
+///
+/// Pointer feedback via `pointerStyle` (macOS 15 floor) — declarative, no
+/// NSCursor push/pop stack to imbalance (Codoki #494).
 private struct DividerHandle: View {
     let axis: SplitBranch.Axis
+    /// The leading neighbor's share of the pair, for the AX value.
+    let leadingFraction: Double
     let onDrag: (CGFloat) -> Void
     let onEnd: () -> Void
+    /// VoiceOver adjustable action: +1 grows the leading pane one step,
+    /// -1 shrinks it.
+    let onAdjust: (Double) -> Void
 
     @State private var lastTranslation: CGFloat = 0
 
@@ -121,14 +149,11 @@ private struct DividerHandle: View {
                 height: axis == .vertical ? 1 : nil)
             .contentShape(
                 Rectangle().inset(by: -4))
-            .onHover { hovering in
-                if hovering {
-                    (axis == .horizontal
-                        ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
+            .pointerStyle(
+                axis == .horizontal
+                    ? .frameResize(position: .trailing, directions: [.inward, .outward])
+                    : .frameResize(position: .bottom, directions: [.inward, .outward])
+            )
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
@@ -143,6 +168,17 @@ private struct DividerHandle: View {
                         onEnd()
                     }
             )
-            .accessibilityHidden(true)
+            .accessibilityElement()
+            .accessibilityLabel("Pane divider")
+            .accessibilityValue(
+                "\(Int((leadingFraction * 100).rounded())) percent to the "
+                    + (axis == .horizontal ? "left pane" : "top pane"))
+            .accessibilityHint(
+                "Resizes the adjacent panes. Adjust up to grow the "
+                    + (axis == .horizontal ? "left" : "top")
+                    + " pane, down to shrink it.")
+            .accessibilityAdjustableAction { direction in
+                onAdjust(direction == .increment ? 1 : -1)
+            }
     }
 }
