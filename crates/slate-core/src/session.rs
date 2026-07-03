@@ -2226,6 +2226,26 @@ impl VaultSession {
         Ok(raws.iter().map(crate::diagram::render_diagram).collect())
     }
 
+    /// Ordered whole-document block segmentation for the reading view
+    /// (U3-1, #465). Reads the note fresh, then delegates to the pure
+    /// [`crate::reading::reading_blocks_source`] — the reading view
+    /// renders each returned block (existing Math/Code/Diagram views for
+    /// specialized kinds, the inline pipeline for paragraph-family kinds).
+    /// Frontmatter is excluded from the walk but block offsets are rebased
+    /// onto the whole source so an editor can map a block back to a caret.
+    ///
+    /// U3-2 renders the *live* editor buffer directly via
+    /// [`crate::reading::reading_blocks_source`] (exposed on the uniffi
+    /// surface as `reading_blocks_source`); this path is the disk read
+    /// for the initial open.
+    pub fn reading_blocks(
+        &self,
+        path: &str,
+    ) -> Result<Vec<crate::reading::ReadingBlock>, VaultError> {
+        let source = self.read_text(path)?;
+        Ok(crate::reading::reading_blocks_source(&source))
+    }
+
     /// Accessor for the underlying config. Useful for hosts that want to
     /// surface the cache directory location.
     pub fn config(&self) -> &SessionConfig {
@@ -3759,4 +3779,7 @@ mod tests {
 
     #[path = "citations.rs"]
     mod citations;
+
+    #[path = "reading.rs"]
+    mod reading;
 }
