@@ -92,6 +92,19 @@ struct BacklinksPanel: View {
         )
         .accessibilityHint("Opens the source note.")
         .help(backlink.sourcePath)
+        // U1-5 (#457): keyboard-discoverable open-in targets (rotor
+        // actions); ⌘-click on the row is the pointer shortcut.
+        .contextMenu {
+            Button("Open") {
+                appState.openFile(backlink.sourcePath, target: .currentTab)
+            }
+            Button("Open in New Tab") {
+                appState.openFile(backlink.sourcePath, target: .newTab)
+            }
+            Button("Open in Split") {
+                appState.openFile(backlink.sourcePath, target: .newSplit(.horizontal))
+            }
+        }
     }
 
     private func filename(for path: String) -> String {

@@ -46,6 +46,8 @@ enum SlateCommandID {
     static let growPane = "slate.workspace.growPane"
     static let shrinkPane = "slate.workspace.shrinkPane"
     static let closePane = "slate.workspace.closePane"
+    static let openInNewTab = "slate.workspace.openInNewTab"
+    static let openInSplit = "slate.workspace.openInSplit"
 
     // Vault
     static let openVault = "slate.vault.open"
@@ -86,6 +88,8 @@ enum SlateCommandID {
         growPane,
         shrinkPane,
         closePane,
+        openInNewTab,
+        openInSplit,
         openVault,
         closeVault,
         save,
@@ -333,6 +337,28 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .view,
         hint: "Close the focused pane's tabs, prompting for unsaved changes."
     ) { [weak appState] in appState?.closeActivePane() }
+
+    register(
+        SlateCommandID.openInNewTab,
+        label: "Open Selected File in New Tab",
+        section: .view,
+        hint: "Open the sidebar's selected file in a new tab."
+    ) { [weak appState] in
+        if let path = appState?.selectedFilePath {
+            appState?.openFile(path, target: .newTab)
+        }
+    }
+
+    register(
+        SlateCommandID.openInSplit,
+        label: "Open Selected File in Split",
+        section: .view,
+        hint: "Open the sidebar's selected file in a new split pane."
+    ) { [weak appState] in
+        if let path = appState?.selectedFilePath {
+            appState?.openFile(path, target: .newSplit(.horizontal))
+        }
+    }
 
     // ----- Vault -----
 

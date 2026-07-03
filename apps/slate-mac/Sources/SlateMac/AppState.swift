@@ -439,6 +439,74 @@ final class AppState: ObservableObject {
         activateTab(target)
     }
 
+    // MARK: - Open-in targets (U1-5, #457)
+
+    /// Where a navigation opens its document.
+    enum OpenTarget: Equatable {
+        /// Replace the active tab's item (the pre-tabs behavior; the dirty
+        /// gate applies exactly as before).
+        case currentTab
+        /// A new tab in the focused group (⌘-click); reuses an existing tab
+        /// for the same path in that group rather than duplicating.
+        case newTab
+        /// A new split pane showing the document (falls back to `.newTab`
+        /// at the 6-pane capacity, announced by the split path).
+        case newSplit(SplitBranch.Axis)
+    }
+
+    /// The single navigation entry point (U1-5). Every open path — sidebar
+    /// row, backlink/outgoing-link/embed activation, search result, palette
+    /// command — routes here with an explicit target.
+    func openFile(_ path: String, target: OpenTarget) {
+        switch target {
+        case .currentTab:
+            if selectedFilePath != path {
+                selectedFilePath = path
+            }
+        case .newTab:
+            if let existing = workspace.activeGroupTab(forPath: path) {
+                activateTab(existing.id)
+                return
+            }
+            // Park the outgoing buffer while the fields still describe it,
+            // then create + activate the tab; `activateTab` loads the new
+            // path (its snapshot guard blocks a double-park: the fields no
+            // longer match the new active tab).
+            workspace.snapshotActiveTab(
+                text: currentNoteText, baseline: savedBaselineText,
+                contentHash: currentNoteContentHash,
+                hasUnsavedChanges: hasUnsavedChanges,
+                saveError: saveError, saveConflict: currentSaveConflict,
+                loadedFilePath: loadedFilePath)
+            let id = workspace.openTab(.markdown(path: path))
+            activateTab(id)
+        case .newSplit(let axis):
+            let paneCount = workspace.model.groupsInOrder.count
+            splitActivePane(axis: axis)
+            if workspace.model.groupsInOrder.count == paneCount {
+                // Split rejected (capacity / empty) — the document still
+                // deserves to open somewhere visible.
+                openFile(path, target: .newTab)
+                return
+            }
+            // The new pane holds a duplicate of the previous document;
+            // retarget it (same funnel as a sidebar click in that pane).
+            if selectedFilePath != path {
+                selectedFilePath = path
+            }
+        }
+    }
+
+    /// Pointer sugar: ⌘-click on any navigation affordance opens in a new
+    /// tab. Reads the CURRENT AppKit event, so it must be called
+    /// synchronously from the click's action.
+    func openTargetFromCurrentEvent() -> OpenTarget {
+        if NSApp?.currentEvent?.modifierFlags.contains(.command) == true {
+            return .newTab
+        }
+        return .currentTab
+    }
+
     // MARK: - Split panes (U1-3, #455)
 
     /// ⌘\ / ⌘⌥\. Duplicate-active-item split; focus lands in the new pane
@@ -1572,7 +1640,16 @@ final class AppState: ObservableObject {
         // user's edits. Park the requested destination in
         // `pendingNavigation` and let the "Save changes?" alert
         // route the actual transition.
-        if hasUnsavedChanges, path != loadedFilePath {
+        //
+        // U1-5 refinement: when the dirty buffer's file is ALSO open in
+        // another tab, replacing THIS tab's item cannot lose the edits —
+        // the sibling tab holds the same buffer (parked snapshots are
+        // mirrored on every keystroke). No prompt in that case.
+        let dirtyBufferSurvivesElsewhere =
+            loadedFilePath.map { loaded in
+                workspace.model.allTabs.filter { $0.item == .markdown(path: loaded) }.count > 1
+            } ?? false
+        if hasUnsavedChanges, path != loadedFilePath, !dirtyBufferSurvivesElsewhere {
             pendingNavigation = .selectFile(path)
             // Roll the selection back so the file list re-highlights
             // the dirty file while the alert is up. The async hop is
@@ -1845,9 +1922,12 @@ final class AppState: ObservableObject {
         // the content area before the file load completes.
         closeSearchOverlay()
 
-        let wasAlreadyOpen = selectedFilePath == hit.path
+        // U1-5: honor a live ⌘ modifier (row ⌘-click or ⌘Return through
+        // the overlay's key monitor — both leave NSApp.currentEvent set).
+        let target = openTargetFromCurrentEvent()
+        let wasAlreadyOpen = selectedFilePath == hit.path && target == .currentTab
         if !wasAlreadyOpen {
-            selectedFilePath = hit.path
+            openFile(hit.path, target: target)
         }
         // Snapshot the in-flight load up front so the Task closure
         // doesn't have to reach back through `self?.` before its
@@ -1960,7 +2040,7 @@ final class AppState: ObservableObject {
             lastActivatedLinkOutcome = .unresolved(link.targetRaw)
             return
         }
-        navigate(to: path, kind: "Opened")
+        navigate(to: path, kind: "Opened", target: openTargetFromCurrentEvent())
     }
 
     /// Activate a backlink row from the BacklinksPanel — navigates
@@ -1968,15 +2048,19 @@ final class AppState: ObservableObject {
     /// resolved (the query joins on resolved target_path), so this
     /// is the simple `navigate(to:)` path.
     func openBacklink(_ backlink: Backlink) {
-        navigate(to: backlink.sourcePath, kind: "Opened backlink to")
+        navigate(
+            to: backlink.sourcePath, kind: "Opened backlink to",
+            target: openTargetFromCurrentEvent())
     }
 
     /// Shared post-activation step: update `selectedFilePath` (which
     /// the file-list selection binding + the note-load observer both
     /// pick up) and post an immediate audio confirmation so the user
     /// hears that the click worked before the content load finishes.
-    private func navigate(to path: String, kind: String) {
-        selectedFilePath = path
+    private func navigate(
+        to path: String, kind: String, target: OpenTarget = .currentTab
+    ) {
+        openFile(path, target: target)
         let filename = (path as NSString).lastPathComponent
         // #424 (F-C1): .high — the selection change this just
         // triggered posts its own announcements ("Showing <file>.",

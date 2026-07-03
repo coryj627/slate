@@ -108,6 +108,22 @@ struct OutgoingLinksPanel: View {
         .accessibilityLabel(accessibilityLabel(for: link))
         .accessibilityHint(accessibilityHint(for: link))
         .help(link.targetRaw)
+        // U1-5 (#457): open-in targets for RESOLVED internal links only —
+        // external links open in the browser and unresolved ones don't
+        // navigate, so neither earns tab/split variants.
+        .contextMenu {
+            if let path = link.targetPath, !link.isExternal {
+                Button("Open") {
+                    appState.openFile(path, target: .currentTab)
+                }
+                Button("Open in New Tab") {
+                    appState.openFile(path, target: .newTab)
+                }
+                Button("Open in Split") {
+                    appState.openFile(path, target: .newSplit(.horizontal))
+                }
+            }
+        }
     }
 
     private func accessibilityHint(for link: OutgoingLink) -> String {

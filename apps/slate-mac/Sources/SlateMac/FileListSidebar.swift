@@ -155,6 +155,17 @@ struct FileListSidebar: View {
         // well-defined context. The guard prevents a write-back loop with
         // the mirror `.onChange` below.
         .onChange(of: listSelection) { _, newPath in
+            // U1-5: ⌘-click opens in a new tab. The modifier is read off
+            // the live AppKit event (only set for pointer-driven changes);
+            // the highlight then reverts to the mirror (the CURRENT tab
+            // did not change files — a new tab was created).
+            if let newPath, appState.openTargetFromCurrentEvent() == .newTab {
+                appState.openFile(newPath, target: .newTab)
+                if listSelection != appState.selectedFilePath {
+                    listSelection = appState.selectedFilePath
+                }
+                return
+            }
             if appState.selectedFilePath != newPath {
                 appState.selectedFilePath = newPath
             }
@@ -275,6 +286,20 @@ struct FileListSidebar: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(file.name), modified \(relativeDate(for: file.mtimeMs))")
         .help(file.path)
+        // U1-5 (#457): open-in targets. The context menu is the keyboard-
+        // discoverable path (VoiceOver actions rotor picks these up);
+        // ⌘-click is the pointer shortcut for "Open in New Tab".
+        .contextMenu {
+            Button("Open") {
+                appState.openFile(file.path, target: .currentTab)
+            }
+            Button("Open in New Tab") {
+                appState.openFile(file.path, target: .newTab)
+            }
+            Button("Open in Split") {
+                appState.openFile(file.path, target: .newSplit(.horizontal))
+            }
+        }
     }
 
     // MARK: - Helpers
