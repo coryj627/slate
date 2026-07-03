@@ -130,43 +130,49 @@ splits partition by weights along their axis). Neighbor = the group whose rect i
 in the given direction with edge overlap ≥ 1pt-equivalent (ties → larger overlap, then
 top/left-most). This is pure geometry on the model — censusable without a view.
 
-### `NoteDocument` (U1-2) — one open markdown document
+### `NoteDocument` (U1-2) — parked per-tab state (ARCHITECTURE REVISED during U1-2)
 
-Extraction target for AppState's single-note state (gap G4). `final class NoteDocument:
-ObservableObject, Identifiable`:
+**Amendment (2026-07-03, principal decision).** The original plan — extract AppState's
+~35 note-scoped `@Published` fields into `NoteDocument` and forward — would repoint the
+assertion targets of a large fraction of the existing suite, violating this spec's own
+"assertions unmodified" constraint, and would move load/save/conflict machinery that
+carries months of red-team history. Revised architecture, identical observable
+semantics, fraction of the blast radius:
 
-- Identity: `let tabID: TabID`, `let path: String` (vault-relative; path is immutable —
-  a rename/move closes+reopens or retargets via U2's rewrite, see u2_spec §U2-6).
-- Content: `@Published text`, `savedBaselineText`, `contentHash`,
-  `hasUnsavedChanges` (derived exactly as today: `text != baseline`),
-  `isSaving`, `saveError`, `saveConflict: SaveConflict?`.
-- Collections (moved from AppState 1:1, same names minus `current` prefix): `headings`,
-  `outgoingLinks`, `backlinks`, `tasks`, `mathBlocks`, `codeBlocks`, `diagramBlocks`,
-  `citations`, `embedResolutions`, each with its `isLoading*`/`*LoadError` pair and load
-  `Task` handles (cancellation on tab close — `deinit`/`close()` cancels all).
-- Scroll routing: each document owns its `scrollAnchorRequest` / `lineScrollRequest` /
-  `cursorByteOffsetRequest` publishers (moved from AppState) so a request can never land
-  in another tab's editor.
-- Behavior methods move with their state: `load()`, `save()` (today's
-  `saveCurrentNote`/`performSave` with the same detached-task + return-path-guard
-  discipline), conflict resolution trio, `updateEditorText(_:)`.
+- **AppState's existing single-note fields ARE the active document.** No field moves.
+  Every load/save/conflict/announcement path stays byte-identical.
+- `final class NoteDocument: ObservableObject` is the **parked state of an inactive
+  tab**: `{path, text, baselineText, contentHash, hasUnsavedChanges, saveError,
+  saveConflict, hasLoaded}` (`@Published text/hasUnsavedChanges` so U1-3's unfocused
+  panes can render it live).
+- **Tab switch = snapshot ⊕ restore**: outgoing tab's fields snapshot into its
+  `NoteDocument` (O(1), copy-on-write strings); incoming tab restores its parked fields
+  and re-fires the async collection loads (headings/links/tasks/blocks/citations reload
+  exactly as today's note-to-note switch does — the #90 stale-until-loaded discipline —
+  but without the disk read for text). A tab never opened loads from disk via the
+  unchanged `handleSelectionChange` path.
+- **Same file in two tabs**: `updateEditorText` mirrors the new text (CoW assign, O(1))
+  into every same-path parked document, so a duplicate pane renders current content.
+- `activeDocument` as a projection is unnecessary: panels/toolbar keep binding
+  `appState.current*` — which is by construction the focused tab's state. U4's leaf
+  contract ("leaves describe the focused document") holds unchanged.
+- The full extraction remains possible later if a real need appears (none of U3–U5
+  requires it; U3's `fmSource`/`bodyText` ride the same snapshot).
 
-`AppState` keeps: session/vault lifecycle, scan, file list, search, palette, template
-flow, settings/prefs, bibliography (vault-scoped, not note-scoped), property-edit +
-bulk-rename state (vault-scoped sheets), and gains:
+**Data flow:** the sidebar keeps assigning `selectedFilePath`; the `$selectedFilePath`
+sink → `handleSelectionChange` remains the single loader. That method gains the
+workspace steps, in order: (1) if the incoming path is a *different tab* in the active
+group → snapshot outgoing, restore incoming, skip the dirty gate (per-tab dirty is the
+point of tabs); (2) otherwise the dirty gate fires exactly as today (the transition
+would replace the active tab's buffer); (3) accepted selections snapshot the outgoing
+tab, then mirror into the model (`replaceActiveTabItem` — the U1-4 line), then restore-
+or-load. Tab-switch commands assign `selectedFilePath` and let the sink do the rest —
+one funnel, no second loader. Tab close gates on that tab's dirty state (parked or
+active) with the Save/Discard/Cancel alert; vault close aggregates over all tabs.
 
-```swift
-@Published private(set) var workspace: WorkspaceState
-var activeDocument: NoteDocument?   // workspace.document(for: workspace.model.activeGroup.activeTabID)
-```
-
-**Compatibility during migration:** the existing single-note `@Published` fields become
-computed forwarders to `activeDocument` where reads dominate; writes route through
-`activeDocument`. Panels rebind to `appState.activeDocument` (they re-render on active
-tab change via `objectWillChange` chaining: `WorkspaceState` re-publishes the active
-document's `objectWillChange` while it is active). The dirty-navigation gate
-(`pendingNavigation`) generalizes: switching **tabs** never prompts (each tab keeps its
-own dirty buffer — that's the point of tabs); the gate fires only where a document would
+`AppState` keeps everything it has today and gains only `let workspace: WorkspaceState`
+(already landed in U1-4). The dirty-navigation gate generalizes: switching **tabs**
+never prompts; the gate fires only where a document would
 be **discarded**: closing a dirty tab, closing the vault, or replacing the current tab's
 item in-place (single-click open into the active tab, U1-5).
 
