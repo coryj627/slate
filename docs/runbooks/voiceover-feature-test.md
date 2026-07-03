@@ -78,6 +78,15 @@ These six cost the most time on the first run. Internalize before scripting.
 5. **Walk conditionally, never by fixed step-count.** Panel stacks reorder and resize per note (properties/backlinks/tasks counts change the walk length). Anchor with `vo-first`, walk with a substring stop condition, and expect disclosure groups to be collapsed (the Outgoing-links group starts collapsed; `vo-act` on its heading expands it — the heading announces its count either way).
 6. **Keyboard selection is silent at HEAD** (file list, palette results, search results — issue #414). Arrow keys move selection without VO announcing the row; only side-effect live regions speak ("Outline, N headings."). Drive row-level assertions through the VO cursor (`vo-into` + `vo-move down`), which reads rows correctly.
 
+## 3b. Dynamic Type & Reduce Motion (behavioral, cross-cutting)
+
+These are **behavioral** checks that unit tests can't do (the `\.dynamicTypeSize` override isn't honored by headless `ImageRenderer`/`NSHostingView`, and animation timing isn't observable from XCTest) and that `a11y-check` only catches as *static* anti-patterns (`fixed-font-size`, `line-limit-1`, `animation-missing-reduce-motion`). Run them manually on every new U1–U5 surface — a surface can pass those static rules and still truncate at XXL or animate under Reduce Motion.
+
+1. **Dynamic Type reflow.** System Settings → Accessibility → Display → **Text size**, raise to the largest step (or the app's largest supported size). Walk each new surface: text must **reflow/wrap, never truncate or clip**; controls stay reachable; no horizontal-scroll trap. Reset after.
+2. **Reduce Motion.** System Settings → Accessibility → Display → **Reduce Motion** ON. Trigger every animated transition on the surface (sheet present/dismiss, scroll-to-anchor, expand/collapse, mode/tab switch): motion must be **removed or replaced with a crossfade**, never a large translate/scale. Confirm the view reads `@Environment(\.accessibilityReduceMotion)` and honors it. Reset after.
+
+Report PASS/FAIL per surface alongside the VO paths in §7.
+
 ## 4. Navigation primitives (the paths that work)
 
 - **Open any note: search-open.** Focus the editor region (see next bullet), `keys f cmd`, type a phrase unique to the target note (pull one from the note via grep), `wait-phrase "returned"`, then `key 36` — **Return on the field activates the top result** and announces `"Opened <file>, line N: …"`. This is the workhorse; it replaced fragile list walking entirely. (Return on a focused result *row* is a no-op — Space activates rows; #414.)

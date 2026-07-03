@@ -14,21 +14,26 @@ import XCTest
 /// **What this covers (and what it deliberately doesn't).** The DoD's §D
 /// (dark + light + APCA) is unit-testable and lives here: contrast is measured
 /// in both appearances, and each surface is rendered in both appearances as a
-/// smoke test. What is NOT reliably unit-testable — and is therefore left to
-/// the `a11y-check` static gate (run in CI over all of `Sources/SlateMac`, so
-/// new component families are scanned automatically) and the VoiceOver
-/// feature-test runbook (`docs/runbooks/voiceover-feature-test.md`):
-///   - VoiceOver label/trait presence and reading/focus order — there is no
-///     public API to read a rendered SwiftUI accessibility tree from XCTest;
-///   - Reduce-Motion animation behaviour;
-///   - Dynamic Type reflow — the `\.dynamicTypeSize` environment override is
-///     NOT honored by headless `ImageRenderer`/`NSHostingView` (measured: a
-///     token-styled surface renders at an identical size at `.large` and
-///     `.accessibility5`), so a unit assertion can't distinguish a scaling
-///     view from a fixed-size one. `a11y-check` covers the fixed-size-font
-///     anti-pattern statically instead.
-/// This split is honest by design: a fake assertion that couldn't actually
-/// verify its claim would give false confidence.
+/// smoke test — driving BOTH SwiftUI's `\.colorScheme` and AppKit's
+/// appearance so a dark-only view branch is actually exercised.
+///
+/// What is NOT unit-testable here is caught only PARTIALLY by two other
+/// gates — neither fully verifies runtime behaviour, so the residual is a
+/// known manual step, not "covered by automation":
+///   - `a11y-check` (CI, over all of `Sources/SlateMac` — new files scanned
+///     automatically): STATIC anti-patterns only — a missing accessibility
+///     label, a `lineLimit(1)`, a fixed-point font size, an animation with no
+///     Reduce-Motion guard. It does NOT verify that text actually reflows at
+///     XXL, or that an animation is actually suppressed under Reduce Motion.
+///   - The VoiceOver feature-test runbook (`docs/runbooks/voiceover-feature-
+///     test.md`, §3b): MANUAL behavioural checks for Dynamic Type reflow and
+///     Reduce-Motion, plus VoiceOver label/trait/reading-order — the things
+///     with no XCTest-introspectable surface (no public API to read a rendered
+///     SwiftUI AX tree; the `\.dynamicTypeSize` override isn't honored by
+///     headless `ImageRenderer`/`NSHostingView`, measured: identical size at
+///     `.large` and `.accessibility5`; animation timing isn't observable).
+/// Automated behavioural reflow/animation testing remains an open gap. This
+/// split is honest by design: a fake assertion would give false confidence.
 enum PresentationReady {
 
     static let appearanceNames: [NSAppearance.Name] = [.aqua, .darkAqua]
@@ -88,7 +93,7 @@ enum PresentationReady {
         for name in appearanceNames {
             let size = renderedSize(view, appearance: name)
             XCTAssertTrue(
-                size.width.isFinite && size.height.isFinite && size.height > 0,
+                size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0,
                 "View failed to render under \(name.rawValue) (size \(size)).",
                 file: file, line: line)
         }
@@ -98,12 +103,17 @@ enum PresentationReady {
 
     /// Rendered content size (points) via `ImageRenderer`, under `name`. Used to
     /// prove the surface actually renders (non-nil image, non-empty size) in a
-    /// given appearance.
+    /// given appearance. Drives BOTH levels of "appearance": SwiftUI's
+    /// `\.colorScheme` (so a view branch keyed off `@Environment(\.colorScheme)`
+    /// actually runs for this mode — the `NSAppearance` wrapper alone only
+    /// resolves AppKit dynamic colors) and AppKit's current appearance.
     @MainActor
     private static func renderedSize(
         _ view: some View, appearance name: NSAppearance.Name
     ) -> CGSize {
-        let renderer = ImageRenderer(content: view.frame(width: 320))
+        let scheme: ColorScheme = (name == .darkAqua) ? .dark : .light
+        let renderer = ImageRenderer(
+            content: view.environment(\.colorScheme, scheme).frame(width: 320))
         renderer.scale = 1  // 1 pt == 1 px
         var size = CGSize.zero
         NSAppearance(named: name)?.performAsCurrentDrawingAppearance {
