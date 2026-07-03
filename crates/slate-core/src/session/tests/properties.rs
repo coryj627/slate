@@ -634,6 +634,9 @@ impl crate::VaultProvider for RaceOnFirstReadProvider {
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         self.inner.rename(from, to)
     }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
     fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
         self.inner.stat(relative)
     }

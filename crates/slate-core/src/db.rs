@@ -119,6 +119,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "dirs: first-class directory index for the file tree (#459)",
         sql: include_str!("../migrations/016_dirs.sql"),
     },
+    Migration {
+        description: "structural_ops: journal for folder/file mutations + undo (#460)",
+        sql: include_str!("../migrations/017_structural_ops.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

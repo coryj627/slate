@@ -54,6 +54,13 @@ pub trait VaultProvider: Send + Sync {
     /// Rename or move a file within the vault.
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError>;
 
+    /// Create a directory (and any missing parents) at a vault-relative
+    /// path. Idempotent: an already-existing directory is Ok — the caller
+    /// (U2-2 `create_folder`) enforces its own collision policy against
+    /// the index, where case-insensitivity is decided; the provider only
+    /// guarantees the directory exists afterwards.
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError>;
+
     /// Cheap metadata: size, mtime, kind.
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError>;
 

@@ -213,6 +213,11 @@ impl VaultProvider for FsVaultProvider {
         }
     }
 
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        std::fs::create_dir_all(&path).map_err(VaultError::from)
+    }
+
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         let from_path = self.resolve_for_mutation(from)?;
         let to_path = self.resolve_for_mutation(to)?;
