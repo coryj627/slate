@@ -80,16 +80,6 @@ jobs:
           if [ "$stale" -eq 1 ]; then exit 1; fi
           echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
 
-      - name: Cache cargo (Namespace NVMe cache)
-        # Cache ~/.cargo (registry + the installed cargo-audit binary) on the
-        # Namespace NVMe volume so the pinned-version install is a no-op on a
-        # cache hit instead of recompiling cargo-audit every run.
-        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
-        with:
-          cache: rust
-          path: |
-            ~/.cargo/bin
-
       - name: Install cargo-audit
         # Pin the scanner version (matching the repo's pin-everything
         # convention) for reproducible runs. The advisory database is
