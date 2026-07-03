@@ -4231,77 +4231,24 @@ impl VaultSession {
             return (Vec::new(), Vec::new());
         }
 
-        // Post-move index + candidate set, in one lock scope. Candidates:
-        // sources of inbound links to moved files (target_path already
-        // updated to NEW paths by tx1) ∪ moved markdown files that carry
-        // links (their own resolution context changed).
-        let (index, candidates) = {
-            let all_paths: Vec<String> = {
-                let mut stmt = conn.prepare("SELECT path FROM files").expect("prepare");
-                let rows = stmt
-                    .query_map([], |row| row.get::<_, String>(0))
-                    .expect("query");
-                rows.collect::<Result<Vec<_>, _>>().expect("collect")
-            };
-            let mut candidates = std::collections::BTreeSet::new();
-            // Stem-based sweep (census-found, seed 2): a move can flip the
-            // resolution of any basename link SHARING A STEM with a moved
-            // file — including links that resolved to an UNMOVED file the
-            // newcomer now shadows by proximity. target_raw stems are the
-            // complete over-approximation (qualified forms end in the stem
-            // too); the planner then decides per link, so over-inclusion
-            // costs only a plan, never an edit.
-            {
-                let stem_of = |s: &str| -> String {
-                    let name = s.rsplit('/').next().unwrap_or(s);
-                    let mut stem = name;
-                    for ext in [".md", ".markdown", ".mdown", ".mkd"] {
-                        if let Some(candidate) = stem.strip_suffix(ext) {
-                            stem = candidate;
-                            break;
-                        }
-                    }
-                    stem.to_lowercase()
-                };
-                let moved_stems: std::collections::HashSet<String> =
-                    moved.iter().map(|(old, _)| stem_of(old)).collect();
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT DISTINCT f.path, l.target_raw FROM links l
-                         JOIN files f ON f.id = l.source_file_id
-                         WHERE l.is_external = 0",
-                    )
-                    .expect("prepare");
-                let rows = stmt
-                    .query_map([], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })
-                    .expect("query");
-                for row in rows {
-                    let (source, target_raw) = row.expect("row");
-                    if moved_stems.contains(&stem_of(&target_raw)) {
-                        candidates.insert(source);
-                    }
-                }
+        // This path is best-effort by design (the move already stands): a
+        // DB error here must never panic the process (Codoki #503). It
+        // surfaces LOUDLY instead — an empty rewrite set plus a sweep-level
+        // failure entry, so the report can't read as "nothing needed
+        // rewriting".
+        let (index, candidates) = match collect_rewrite_candidates(conn, moved) {
+            Ok(pair) => pair,
+            Err(e) => {
+                return (
+                    Vec::new(),
+                    vec![RewriteFailure {
+                        path: "*".to_string(),
+                        kind: RewriteFailureKind::Other(format!(
+                            "link-rewrite candidate sweep failed: {e}"
+                        )),
+                    }],
+                );
             }
-            {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT f.path FROM files f
-                         WHERE f.path = ?1 AND f.is_markdown = 1
-                           AND EXISTS (SELECT 1 FROM links l WHERE l.source_file_id = f.id)",
-                    )
-                    .expect("prepare");
-                for (_, new) in moved {
-                    let rows = stmt
-                        .query_map(rusqlite::params![new], |row| row.get::<_, String>(0))
-                        .expect("query");
-                    for row in rows {
-                        candidates.insert(row.expect("row"));
-                    }
-                }
-            }
-            (crate::InMemoryVaultIndex::new(all_paths), candidates)
         };
 
         let mut rewritten = Vec::new();
@@ -4441,6 +4388,72 @@ impl VaultSession {
         self.save_text_locked(&mut conn, path, &contents, Some(expected_current))
             .map(|_| ())
     }
+}
+
+/// Post-move index + candidate set for the link-rewrite pass (U2-3).
+/// Candidates: any source with an internal link whose `target_raw` STEM
+/// matches a moved file's stem (census-found over-approximation — a move
+/// can flip bystander basename links by proximity; over-inclusion costs a
+/// plan, never an edit) ∪ moved markdown files that carry links.
+fn collect_rewrite_candidates(
+    conn: &Connection,
+    moved: &[(String, String)],
+) -> Result<
+    (
+        crate::InMemoryVaultIndex,
+        std::collections::BTreeSet<String>,
+    ),
+    VaultError,
+> {
+    let all_paths: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT path FROM files")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let stem_of = |s: &str| -> String {
+        let name = s.rsplit('/').next().unwrap_or(s);
+        let mut stem = name;
+        for ext in [".md", ".markdown", ".mdown", ".mkd"] {
+            if let Some(candidate) = stem.strip_suffix(ext) {
+                stem = candidate;
+                break;
+            }
+        }
+        stem.to_lowercase()
+    };
+    let moved_stems: std::collections::HashSet<String> =
+        moved.iter().map(|(old, _)| stem_of(old)).collect();
+    let mut candidates = std::collections::BTreeSet::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT f.path, l.target_raw FROM links l
+             JOIN files f ON f.id = l.source_file_id
+             WHERE l.is_external = 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (source, target_raw) = row?;
+            if moved_stems.contains(&stem_of(&target_raw)) {
+                candidates.insert(source);
+            }
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT f.path FROM files f
+             WHERE f.path = ?1 AND f.is_markdown = 1
+               AND EXISTS (SELECT 1 FROM links l WHERE l.source_file_id = f.id)",
+        )?;
+        for (_, new) in moved {
+            let rows = stmt.query_map(rusqlite::params![new], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                candidates.insert(row?);
+            }
+        }
+    }
+    Ok((crate::InMemoryVaultIndex::new(all_paths), candidates))
 }
 
 /// Final path component (files or folders; input is a validated relative
