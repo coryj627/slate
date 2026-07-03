@@ -60,24 +60,36 @@ enum Tokens {
         static let surfaceSecondary = Color(nsColor: .tokenSurfaceSecondary)
         static let textPrimary = Color(nsColor: .tokenTextPrimary)
         static let textSecondary = Color(nsColor: .tokenTextSecondary)
-        static let accent = Color(nsColor: .tokenAccent)
-        static let onAccent = Color(nsColor: .tokenOnAccent)
-        static let destructive = Color(nsColor: .tokenDestructive)
-        static let onDestructive = Color(nsColor: .tokenOnDestructive)
+        // Accent/destructive are split into FILL vs TEXT so the two can never
+        // be confused (Codex review): `accentFill` is a control background that
+        // `onAccentFill` text sits on; `accentText` is an accent-colored
+        // foreground (a link/label) that sits on `surface`. Each is contrast-
+        // tuned for its own direction and gated below.
+        static let accentFill = Color(nsColor: .tokenAccentFill)
+        static let onAccentFill = Color(nsColor: .tokenOnAccentFill)
+        static let accentText = Color(nsColor: .tokenAccentText)
+        static let destructiveFill = Color(nsColor: .tokenDestructiveFill)
+        static let onDestructiveFill = Color(nsColor: .tokenOnDestructiveFill)
+        static let destructiveText = Color(nsColor: .tokenDestructiveText)
         static let selection = Color(nsColor: .tokenSelection)
         static let separator = Color(nsColor: .tokenSeparator)
     }
 
-    /// Text-on-surface + control (text-on-fill) pairings that MUST clear APCA
-    /// `|Lc| > 75` in both appearances. `DesignTokensTests` iterates this — a new
-    /// role that carries text is added here so its contrast is enforced.
+    /// Every pairing that carries text MUST clear APCA `|Lc| > 75` in both
+    /// appearances — foreground text roles over BOTH surfaces, and text-on-fill
+    /// for the control fills. `DesignTokensTests` iterates this; a new
+    /// text-carrying role is added here so its contrast can't go unchecked.
     static let contrastPairings: [(name: String, text: NSColor, surface: NSColor)] = [
         ("textPrimary on surface", .tokenTextPrimary, .tokenSurface),
         ("textPrimary on surfaceSecondary", .tokenTextPrimary, .tokenSurfaceSecondary),
         ("textSecondary on surface", .tokenTextSecondary, .tokenSurface),
         ("textSecondary on surfaceSecondary", .tokenTextSecondary, .tokenSurfaceSecondary),
-        ("onAccent on accent", .tokenOnAccent, .tokenAccent),
-        ("onDestructive on destructive", .tokenOnDestructive, .tokenDestructive),
+        ("accentText on surface", .tokenAccentText, .tokenSurface),
+        ("accentText on surfaceSecondary", .tokenAccentText, .tokenSurfaceSecondary),
+        ("destructiveText on surface", .tokenDestructiveText, .tokenSurface),
+        ("destructiveText on surfaceSecondary", .tokenDestructiveText, .tokenSurfaceSecondary),
+        ("onAccentFill on accentFill", .tokenOnAccentFill, .tokenAccentFill),
+        ("onDestructiveFill on destructiveFill", .tokenOnDestructiveFill, .tokenDestructiveFill),
     ]
 }
 
@@ -107,17 +119,25 @@ extension NSColor {
     static let tokenTextSecondary = tokenDynamic(
         light: srgb(0.34, 0.34, 0.36), dark: srgb(0.82, 0.82, 0.84))
 
-    // Accent (fixed, not the user's control-accent, so contrast is deterministic)
-    static let tokenAccent = tokenDynamic(
+    // Accent — fixed (not the user's control-accent) so contrast is
+    // deterministic. FILL (control background, white text on it) vs TEXT
+    // (accent-colored foreground on `surface`) are separate roles: a
+    // colored foreground that clears APCA |Lc|>75 must be dark in light mode
+    // and near-pale in dark mode, so it can't share values with the fill.
+    static let tokenAccentFill = tokenDynamic(
         light: srgb(0.00, 0.34, 0.78), dark: srgb(0.16, 0.45, 0.85))
-    static let tokenOnAccent = tokenDynamic(
+    static let tokenOnAccentFill = tokenDynamic(
         light: srgb(1.00, 1.00, 1.00), dark: srgb(1.00, 1.00, 1.00))
+    static let tokenAccentText = tokenDynamic(
+        light: srgb(0.031, 0.271, 0.627), dark: srgb(0.780, 0.870, 0.990))
 
-    // Destructive
-    static let tokenDestructive = tokenDynamic(
+    // Destructive — same FILL vs TEXT split.
+    static let tokenDestructiveFill = tokenDynamic(
         light: srgb(0.72, 0.00, 0.05), dark: srgb(0.80, 0.20, 0.22))
-    static let tokenOnDestructive = tokenDynamic(
+    static let tokenOnDestructiveFill = tokenDynamic(
         light: srgb(1.00, 1.00, 1.00), dark: srgb(1.00, 1.00, 1.00))
+    static let tokenDestructiveText = tokenDynamic(
+        light: srgb(0.659, 0.00, 0.078), dark: srgb(0.960, 0.800, 0.810))
 
     // Non-text roles (selection fill, hairline separator). These are decorative
     // dividers/highlights redundant with spacing and selection state, so they

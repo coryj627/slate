@@ -47,8 +47,10 @@ final class DesignTokensTests: XCTestCase {
             ("surfaceSecondary", .tokenSurfaceSecondary),
             ("textPrimary", .tokenTextPrimary),
             ("textSecondary", .tokenTextSecondary),
-            ("accent", .tokenAccent),
-            ("destructive", .tokenDestructive),
+            ("accentFill", .tokenAccentFill),
+            ("accentText", .tokenAccentText),
+            ("destructiveFill", .tokenDestructiveFill),
+            ("destructiveText", .tokenDestructiveText),
             ("selection", .tokenSelection),
             ("separator", .tokenSeparator),
         ]
