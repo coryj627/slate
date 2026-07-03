@@ -73,6 +73,12 @@ serde_json = "1"
 # get the timestamp from the caller (`TemplateContext::now_ms`), so
 # pulling in the OS timezone database would be dead weight.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# unicode-normalization gives the file-tree API a deterministic NFC sort
+# key (#459): `list_dir_children` sorts each level case-insensitively on
+# `name`'s NFC form, so a decomposed (NFD) and precomposed (NFC) spelling
+# of the same name land adjacent and in a stable order. Already resolved
+# transitively (via `idna`); pinning it as a direct dep is cheap.
+unicode-normalization = "0.1"
 
 [profile.dev]
 # Faster incremental builds during development.
