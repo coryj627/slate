@@ -42,6 +42,12 @@ struct NoteEditorView: NSViewRepresentable {
     /// the editor announces its purpose (e.g. "Editor for foo.md")
     /// rather than the generic "edit text" fallback.
     let accessibilityLabel: String
+    /// False renders the buffer read-only (U1-3 unfocused panes): full
+    /// editor visuals — font, highlighting, selection-for-copy — but no
+    /// text input, no caret parking, and no first-responder claim on
+    /// mount. The binding's setter never fires (AppKit blocks edits at
+    /// the `isEditable` gate), so no dirty-tracking path exists.
+    var isEditable: Bool = true
     /// Cmd+S handler. Invoked by the `NSTextView` subclass when the
     /// user presses ⌘S inside the editor. Routes to
     /// `AppState.saveCurrentNote()` at the call site.
@@ -121,10 +127,10 @@ struct NoteEditorView: NSViewRepresentable {
         // substitutions are wrong: a typed `"foo"` should stay as
         // ASCII double-quotes, and `--` should stay as two ASCII
         // hyphens.
-        textView.isEditable = true
+        textView.isEditable = isEditable
         textView.isSelectable = true
         textView.isRichText = false
-        textView.allowsUndo = true
+        textView.allowsUndo = isEditable
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false

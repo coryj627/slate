@@ -37,6 +37,15 @@ enum SlateCommandID {
     static let previousTab = "slate.workspace.previousTab"
     static let moveTabLeft = "slate.workspace.moveTabLeft"
     static let moveTabRight = "slate.workspace.moveTabRight"
+    static let splitRight = "slate.workspace.splitRight"
+    static let splitDown = "slate.workspace.splitDown"
+    static let focusPaneLeft = "slate.workspace.focusPaneLeft"
+    static let focusPaneRight = "slate.workspace.focusPaneRight"
+    static let focusPaneAbove = "slate.workspace.focusPaneAbove"
+    static let focusPaneBelow = "slate.workspace.focusPaneBelow"
+    static let growPane = "slate.workspace.growPane"
+    static let shrinkPane = "slate.workspace.shrinkPane"
+    static let closePane = "slate.workspace.closePane"
 
     // Vault
     static let openVault = "slate.vault.open"
@@ -68,6 +77,15 @@ enum SlateCommandID {
         previousTab,
         moveTabLeft,
         moveTabRight,
+        splitRight,
+        splitDown,
+        focusPaneLeft,
+        focusPaneRight,
+        focusPaneAbove,
+        focusPaneBelow,
+        growPane,
+        shrinkPane,
+        closePane,
         openVault,
         closeVault,
         save,
@@ -242,6 +260,79 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌃⌘→",
         hint: "Reorder the active tab one position right."
     ) { [weak appState] in appState?.moveActiveTabRight() }
+
+    // ----- Split panes (U1-3, #455) -----
+
+    register(
+        SlateCommandID.splitRight,
+        label: "Split Right",
+        section: .view,
+        hotkey: "⌘\\",
+        hint: "Split the focused pane side-by-side; the new pane shows the same note."
+    ) { [weak appState] in appState?.splitActivePane(axis: .horizontal) }
+
+    register(
+        SlateCommandID.splitDown,
+        label: "Split Down",
+        section: .view,
+        hotkey: "⌥⌘\\",
+        hint: "Split the focused pane top-and-bottom; the new pane shows the same note."
+    ) { [weak appState] in appState?.splitActivePane(axis: .vertical) }
+
+    register(
+        SlateCommandID.focusPaneLeft,
+        label: "Focus Pane Left",
+        section: .view,
+        hotkey: "⌥⌘←",
+        hint: "Move focus to the pane to the left."
+    ) { [weak appState] in appState?.focusPane(.left) }
+
+    register(
+        SlateCommandID.focusPaneRight,
+        label: "Focus Pane Right",
+        section: .view,
+        hotkey: "⌥⌘→",
+        hint: "Move focus to the pane to the right."
+    ) { [weak appState] in appState?.focusPane(.right) }
+
+    register(
+        SlateCommandID.focusPaneAbove,
+        label: "Focus Pane Above",
+        section: .view,
+        hotkey: "⌥⌘↑",
+        hint: "Move focus to the pane above."
+    ) { [weak appState] in appState?.focusPane(.up) }
+
+    register(
+        SlateCommandID.focusPaneBelow,
+        label: "Focus Pane Below",
+        section: .view,
+        hotkey: "⌥⌘↓",
+        hint: "Move focus to the pane below."
+    ) { [weak appState] in appState?.focusPane(.down) }
+
+    register(
+        SlateCommandID.growPane,
+        label: "Grow Pane",
+        section: .view,
+        hotkey: "⌥⌘=",
+        hint: "Make the focused pane larger."
+    ) { [weak appState] in appState?.growFocusedPane() }
+
+    register(
+        SlateCommandID.shrinkPane,
+        label: "Shrink Pane",
+        section: .view,
+        hotkey: "⌥⌘-",
+        hint: "Make the focused pane smaller."
+    ) { [weak appState] in appState?.shrinkFocusedPane() }
+
+    register(
+        SlateCommandID.closePane,
+        label: "Close Pane",
+        section: .view,
+        hint: "Close the focused pane's tabs, prompting for unsaved changes."
+    ) { [weak appState] in appState?.closeActivePane() }
 
     // ----- Vault -----
 
