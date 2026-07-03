@@ -82,9 +82,7 @@ struct FileListSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")
-        // Two-arg .onChange(of:_:) is macOS 14+; sticking with the
-        // one-arg form so the app keeps its declared macOS 13 minimum.
-        .onChange(of: appState.isScanning) { scanning in
+        .onChange(of: appState.isScanning) { _, scanning in
             // Announce once the scan finishes — at that point `files`
             // has been populated and N items is the count VoiceOver
             // should hear.
@@ -96,7 +94,7 @@ struct FileListSidebar: View {
                 )
             }
         }
-        .onChange(of: appState.currentVaultURL) { _ in
+        .onChange(of: appState.currentVaultURL) {
             // Each new vault gets its own count announcement.
             didAnnounceCount = false
         }
@@ -156,7 +154,7 @@ struct FileListSidebar: View {
         // list's update transaction, so handleSelectionChange runs in a
         // well-defined context. The guard prevents a write-back loop with
         // the mirror `.onChange` below.
-        .onChange(of: listSelection) { newPath in
+        .onChange(of: listSelection) { _, newPath in
             if appState.selectedFilePath != newPath {
                 appState.selectedFilePath = newPath
             }
@@ -171,7 +169,7 @@ struct FileListSidebar: View {
         // rollback) carry their own announcements and must not
         // double-speak. Same "Selected:" phrasing as the command
         // palette.
-        .onChange(of: appState.selectedFilePath) { newPath in
+        .onChange(of: appState.selectedFilePath) { _, newPath in
             // Mirror programmatic selection changes back onto the list
             // highlight (search-open, template-create, dirty-gate
             // rollback). Guarded so it doesn't fight the user-driven

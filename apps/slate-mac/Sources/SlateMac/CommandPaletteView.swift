@@ -88,10 +88,10 @@ struct CommandPaletteView: View {
         .onDisappear {
             removeKeyDownMonitor()
         }
-        .onChange(of: model.query) { _ in
+        .onChange(of: model.query) {
             model.handleQueryChange()
         }
-        .onChange(of: model.selectedID) { newID in
+        .onChange(of: model.selectedID) { _, newID in
             // Suppress the initial selection announcement at open
             // time — with Recent at the top the first row is non-
             // alphabetical and announcing it before the user
@@ -117,12 +117,12 @@ struct CommandPaletteView: View {
                 priority: .medium
             )
         }
-        .onChange(of: model.pendingAnnouncement) { announcement in
+        .onChange(of: model.pendingAnnouncement) { _, announcement in
             guard let announcement, !announcement.isEmpty else { return }
             postAccessibilityAnnouncement(announcement, priority: .high)
             model.clearPendingAnnouncement()
         }
-        .onChange(of: model.filterAnnouncement) { announcement in
+        .onChange(of: model.filterAnnouncement) { _, announcement in
             // Filter-change announcement (#316). `.medium` priority
             // (default) so per-keystroke announcements coalesce
             // gracefully — VoiceOver supersedes the in-flight one
@@ -190,7 +190,7 @@ struct CommandPaletteView: View {
                     }
                 }
                 .listStyle(.inset)
-                .onChange(of: model.selectedID) { newID in
+                .onChange(of: model.selectedID) { _, newID in
                     // Keep the selected row visible as the user
                     // arrows past the viewport edge. Skip the
                     // animation under Reduce Motion (WCAG 2.3.1).

@@ -1,7 +1,7 @@
 # Rust CI for slate-core + slate-uniffi.
 #
 # Mirrors what `make ci` runs locally, plus a bench-compile step so
-# benchmark code can't silently rot. Runs on macos-14 (matching the
+# benchmark code can't silently rot. Runs on macos-15 (matching the
 # other Mac-flavored workflows) for toolchain consistency.
 
 name: Rust
@@ -30,7 +30,7 @@ jobs:
     # Pin to a specific runner image (rather than `macos-latest`) so
     # GitHub's image rollovers don't silently change the toolchain.
     # Bump deliberately. Matches swift-tests.yml and a11y-check.yml.
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: read
     steps:

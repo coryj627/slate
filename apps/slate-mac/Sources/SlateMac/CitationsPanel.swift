@@ -42,10 +42,10 @@ struct CitationsPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Citations")
-        .onChange(of: appState.currentNoteCitations) { _ in
+        .onChange(of: appState.currentNoteCitations) {
             announceIfNeeded()
         }
-        .onChange(of: appState.selectedFilePath) { _ in
+        .onChange(of: appState.selectedFilePath) {
             // Re-arm the announcement so the next file gets its own
             // count read out, even if the citation list is the same
             // length.

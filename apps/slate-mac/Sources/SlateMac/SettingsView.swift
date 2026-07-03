@@ -72,7 +72,7 @@ struct MathSettingsTab: View {
                 // "selected" state. If VO instead announces the
                 // whole shell as one stop, swap `.contain` for
                 // `.combine` and re-test — there's a known SwiftUI
-                // shape ambiguity here on macOS 13/14.
+                // segmented-Picker shape ambiguity to watch here.
                 Picker("Speech style", selection: $appState.mathPrefs.speechStyle) {
                     ForEach(MathSpeechStyle.allCases, id: \.self) { style in
                         Text(style.displayName).tag(style)

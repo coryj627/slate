@@ -44,7 +44,7 @@ jobs:
     # Pin to a specific runner image (rather than `macos-latest`) so
     # GitHub's image rollovers don't silently change the Swift
     # toolchain a11y-check is built with. Bump deliberately.
-    runs-on: macos-14
+    runs-on: macos-15
     # actions: read is only needed by codeql-action/upload-sarif within
     # this job; scoping it here keeps the workflow-level grant minimal.
     permissions:

@@ -34,10 +34,10 @@ struct OutlineSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Outline")
-        .onChange(of: appState.currentNoteHeadings) { _ in
+        .onChange(of: appState.currentNoteHeadings) {
             announceIfNeeded()
         }
-        .onChange(of: appState.selectedFilePath) { _ in
+        .onChange(of: appState.selectedFilePath) {
             // Re-arm the announcement so the next selected file gets
             // its own count read out, even if the heading list happens
             // to be the same length.
