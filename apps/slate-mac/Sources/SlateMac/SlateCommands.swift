@@ -26,6 +26,18 @@ enum SlateCommandID {
     // View
     static let toggleSearch = "slate.view.toggleSearch"
 
+    // Workspace tabs (U1-2, #454). Registered under the View section —
+    // CommandSection is an FFI enum; adding a `.workspace` case is a
+    // cross-language change deferred to U1-5's registry pass. ⌘1…⌘9
+    // ordinal selection is menu-only by design (nine palette rows for one
+    // gesture would be noise; Next/Previous cover palette navigation).
+    static let newTab = "slate.workspace.newTab"
+    static let closeTab = "slate.workspace.closeTab"
+    static let nextTab = "slate.workspace.nextTab"
+    static let previousTab = "slate.workspace.previousTab"
+    static let moveTabLeft = "slate.workspace.moveTabLeft"
+    static let moveTabRight = "slate.workspace.moveTabRight"
+
     // Vault
     static let openVault = "slate.vault.open"
     static let closeVault = "slate.vault.close"
@@ -50,6 +62,12 @@ enum SlateCommandID {
         newFromTemplate,
         jumpToBibliography,
         toggleSearch,
+        newTab,
+        closeTab,
+        nextTab,
+        previousTab,
+        moveTabLeft,
+        moveTabRight,
         openVault,
         closeVault,
         save,
@@ -174,6 +192,56 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌘F",
         hint: "Toggle the vault-wide search overlay."
     ) { [weak appState] in appState?.toggleSearchOverlay() }
+
+    // ----- Workspace tabs (U1-2, #454) -----
+
+    register(
+        SlateCommandID.newTab,
+        label: "New Tab",
+        section: .view,
+        hotkey: "⌘T",
+        hint: "Open the current note in a new tab."
+    ) { [weak appState] in appState?.newTab() }
+
+    register(
+        SlateCommandID.closeTab,
+        label: "Close Tab",
+        section: .view,
+        hotkey: "⌘W",
+        hint: "Close the active tab. Prompts if it has unsaved changes."
+    ) { [weak appState] in appState?.requestCloseTab() }
+
+    register(
+        SlateCommandID.nextTab,
+        label: "Show Next Tab",
+        section: .view,
+        hotkey: "⇧⌘]",
+        hint: "Activate the tab to the right, wrapping at the end."
+    ) { [weak appState] in appState?.selectNextTab() }
+
+    register(
+        SlateCommandID.previousTab,
+        label: "Show Previous Tab",
+        section: .view,
+        hotkey: "⇧⌘[",
+        hint: "Activate the tab to the left, wrapping at the start."
+    ) { [weak appState] in appState?.selectPreviousTab() }
+
+    register(
+        SlateCommandID.moveTabLeft,
+        label: "Move Tab Left",
+        section: .view,
+        hotkey: "⌃⌘←",
+        hint: "Reorder the active tab one position left."
+    ) { [weak appState] in appState?.moveActiveTabLeft() }
+
+    register(
+        SlateCommandID.moveTabRight,
+        label: "Move Tab Right",
+        section: .view,
+        hotkey: "⌃⌘→",
+        hint: "Reorder the active tab one position right."
+    ) { [weak appState] in appState?.moveActiveTabRight() }
 
     // ----- Vault -----
 

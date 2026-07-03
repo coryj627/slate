@@ -69,6 +69,21 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.allTabs.count, 1)
     }
 
+    func testOpenAllowDuplicateBypassesDedupWithinGroup() {
+        var model = WorkspaceModel()
+        let first = model.openTab(md("a.md"))
+        let dup = model.openTab(md("a.md"), allowDuplicate: true)
+        XCTAssertNotEqual(first, dup, "explicit duplicate creates a second tab")
+        XCTAssertEqual(model.allTabs.count, 2)
+        XCTAssertEqual(model.activeGroup.activeTabID, dup)
+        assertValid(model)
+        // Navigation-open still dedups — it selects one of the existing
+        // tabs rather than opening a third.
+        let third = model.openTab(md("a.md"))
+        XCTAssertEqual(model.allTabs.count, 2)
+        XCTAssertTrue(third == first || third == dup)
+    }
+
     func testOpenAllowsSameItemAcrossGroups() {
         var model = twoGroupFixture()
         // Fixture: group1 [a, b], group2 [c] (split duplicated b then we

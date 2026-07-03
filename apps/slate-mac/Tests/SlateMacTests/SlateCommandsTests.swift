@@ -264,6 +264,12 @@ final class SlateCommandsTests: XCTestCase {
         // row, not a global "delete property" verb. Picked up by
         // the #322 scraper's new `.delete` coverage.
         "⌘⌫",
+        // SlateMacApp.swift's "Close Window" (U1-2, #454): the
+        // explicit stand-in for the window's implicit ⌘W after
+        // "Close Tab" claimed that chord. A window action routed
+        // to performClose:, not a vault verb — the palette's own
+        // host window would be the thing being closed.
+        "⇧⌘W",
     ]
 
     /// Walk every `.swift` source file under

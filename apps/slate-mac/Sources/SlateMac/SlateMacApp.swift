@@ -26,6 +26,71 @@ struct SlateMacApp: App {
                     appState.pickAndOpenVault()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
+
+                Divider()
+
+                // Workspace tab lifecycle (U1-2, #454). Menu items beat the
+                // window's implicit ⌘W (performClose:) in AppKit's key-
+                // equivalent order, which is exactly the override we want
+                // inside a vault; Close Window remains reachable at ⌘⇧W.
+                // Disabled (not hidden) without a vault so the shortcuts
+                // aren't silent no-ops on the welcome screen.
+                Button("New Tab") {
+                    appState.newTab()
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+                .disabled(!appState.isVaultOpen || appState.workspace.activeTab == nil)
+
+                Button("Close Tab") {
+                    appState.requestCloseTab()
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+                .disabled(!appState.isVaultOpen || appState.workspace.activeTab == nil)
+
+                Button("Close Window") {
+                    NSApplication.shared.keyWindow?.performClose(nil)
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+            }
+            // Tab navigation lives under View alongside the palette/search
+            // items — one menu for "where am I looking" commands.
+            CommandGroup(after: .toolbar) {
+                Button("Show Next Tab") {
+                    appState.selectNextTab()
+                }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Show Previous Tab") {
+                    appState.selectPreviousTab()
+                }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Move Tab Left") {
+                    appState.moveActiveTabLeft()
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.control, .command])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Move Tab Right") {
+                    appState.moveActiveTabRight()
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.control, .command])
+                .disabled(!appState.isVaultOpen)
+
+                Divider()
+
+                // ⌘1…⌘9 select tab N (9 = last, macOS convention).
+                ForEach(1..<10, id: \.self) { ordinal in
+                    Button("Tab \(ordinal == 9 ? "9 (Last)" : String(ordinal))") {
+                        appState.selectTab(ordinal: ordinal)
+                    }
+                    .keyboardShortcut(
+                        KeyEquivalent(Character("\(ordinal)")), modifiers: [.command]
+                    )
+                    .disabled(!appState.isVaultOpen)
+                }
             }
             // Command palette — Milestone Q #313. The menu item
             // provides both the ⌘⇧P chord and the discoverable
