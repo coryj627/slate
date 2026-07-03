@@ -367,6 +367,37 @@ pub fn validate_frontmatter_source(fm_source: &str) -> Result<(), FrontmatterEdi
         // UI can show the user exactly where their YAML broke.
         FrontmatterEditError::MalformedFrontmatter(format!("YAML parse error: {e}"))
     })?;
+    // Corruption guards (Codoki #500 + principal review). The written block
+    // must READ BACK as itself: `split_note(compose_note(fm, body))` must
+    // return exactly `fm`. Two ways an accepted-by-YAML block can violate
+    // that and silently truncate on the NEXT load:
+    //   1. Multi-document YAML — the interior `---` separator line is a
+    //      closing delimiter to the note scanner.
+    //   2. A line the scanner reads as a closing delimiter inside a SINGLE
+    //      document (e.g. a `---` line as block-scalar content) — legal
+    //      YAML, still corrupts the note. The re-split identity check below
+    //      is the total guard; the multi-doc check first gives the clearer
+    //      message for the common case.
+    if docs.len() > 1 {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "frontmatter must be a single YAML document (an interior '---' \
+             line would be read as the closing delimiter)"
+                .to_string(),
+        ));
+    }
+    // Re-split identity: the block must read back as itself. `fm_source`
+    // includes the final line's `\n` (bytes between delimiters) and
+    // `compose_note` re-normalizes the tail, so compare both sides with
+    // trailing newlines trimmed — a delimiter-look-alike line truncates the
+    // reread block, which this catches regardless of tail shape.
+    let reread = split_note(&compose_note(fm_source, ""));
+    if reread.fm_source.trim_end_matches(['\n', '\r']) != fm_source.trim_end_matches(['\n', '\r']) {
+        return Err(FrontmatterEditError::MalformedFrontmatter(
+            "frontmatter contains a line that would be read as the closing \
+             '---' delimiter; quote or indent it"
+                .to_string(),
+        ));
+    }
     match docs.into_iter().next() {
         Some(Yaml::Hash(_)) => Ok(()),
         // A block that parses to nothing / null / a bad scalar is an
@@ -2275,6 +2306,39 @@ mod tests {
             validate_frontmatter_source("just a string").unwrap_err(),
             FrontmatterEditError::MalformedFrontmatter(_)
         ));
+    }
+
+    #[test]
+    fn validate_frontmatter_source_rejects_multi_document_yaml() {
+        // Codoki #500: an interior `---` document separator would be read
+        // as the CLOSING delimiter on the next load, truncating the block.
+        let err = validate_frontmatter_source("title: a\n---\ntitle: b\n").unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(msg.contains("single YAML document"), "got {msg:?}");
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_frontmatter_source_rejects_delimiter_lookalike_in_scalar() {
+        // Principal review on #500: a `---` line as BLOCK-SCALAR CONTENT is
+        // a single, legal YAML document — multi-doc rejection alone misses
+        // it — but the scanner would still read that line as the closing
+        // delimiter. The re-split identity guard catches it.
+        let fm = "note: |\n  first\n---\n  second\n";
+        let err = validate_frontmatter_source(fm).unwrap_err();
+        match err {
+            FrontmatterEditError::MalformedFrontmatter(msg) => {
+                assert!(msg.contains("closing"), "got {msg:?}");
+            }
+            other => panic!("expected MalformedFrontmatter, got {other:?}"),
+        }
+        // Indented `---` inside the scalar is fine — the scanner only
+        // recognizes a column-0 delimiter line.
+        validate_frontmatter_source("note: |\n  first\n  ---\n  second\n")
+            .expect("indented --- is content, not a delimiter");
     }
 
     #[test]
