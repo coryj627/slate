@@ -284,6 +284,14 @@ final class AppState: ObservableObject {
         if id == workspace.model.activeGroup.activeTabID, loadedFilePath == path {
             return
         }
+        // Codoki #492 (High): a save-then-close scope must not outlive its
+        // tab context. If the user switches away while that save is in
+        // flight, the success branch correctly skips the close (active-tab
+        // guard) — but leaving the marker set would close the tab on a
+        // LATER unrelated save. Clear it on any switch away.
+        if let pending = pendingTabCloseAfterSave, pending != id {
+            pendingTabCloseAfterSave = nil
+        }
         isActivatingTab = true
         defer { isActivatingTab = false }
         workspace.snapshotActiveTab(
@@ -1505,6 +1513,10 @@ final class AppState: ObservableObject {
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
             loadedFilePath: loadedFilePath)
+        // Same save-then-close scope rule as activateTab (Codoki #492):
+        // replacing the active tab's item in place also ends the scope —
+        // the pending close would otherwise target a different document.
+        pendingTabCloseAfterSave = nil
         cancelNoteScopedWork()
         clearActiveNoteFields()
         // Workspace model update (U1-4 mirror; tab switches took the

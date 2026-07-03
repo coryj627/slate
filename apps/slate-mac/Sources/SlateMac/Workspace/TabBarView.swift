@@ -99,6 +99,8 @@ struct TabBarView: View {
                 Self.accessibilityValue(index: index, count: group.tabs.count, isDirty: dirty)
             )
             .accessibilityAddTraits(active ? [.isSelected] : [])
+            .accessibilityHint(
+                "Activates this tab. Close, reorder, and split actions are in the context menu.")
 
             Button {
                 appState.requestCloseTab(tab.id)

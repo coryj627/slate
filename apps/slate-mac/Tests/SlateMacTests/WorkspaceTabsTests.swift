@@ -208,6 +208,38 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(state.workspace.model.allTabs.count, 2)
     }
 
+    func testPendingCloseAfterSaveDoesNotLeakAcrossTabSwitch() async throws {
+        // Codoki #492 (High): choose Save on the close prompt, switch tabs
+        // before the save lands, come back, save again — the tab must NOT
+        // close on that later unrelated save.
+        let (state, _) = try await makeOpenState()
+        await openSecondFile(state, path: "beta.md")
+        state.updateEditorText("# beta.md\ndirty")
+        let betaTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+
+        state.requestCloseTab()
+        state.resolveTabCloseSave()
+        // Switch away BEFORE awaiting the in-flight save (the save's
+        // main-actor continuation can't run until we yield).
+        state.selectPreviousTab()
+        await state.saveTask?.value
+        await state.noteLoadTask?.value
+
+        XCTAssertEqual(
+            state.workspace.model.allTabs.count, 2,
+            "close skipped — the user moved on mid-save")
+        XCTAssertNil(state.pendingTabCloseAfterSave, "scope cleared on switch")
+
+        // Return to beta and do an ordinary save: the tab must survive.
+        state.selectTab(id: betaTab)
+        state.updateEditorText("# beta.md\nlater edit")
+        state.saveCurrentNote()
+        await state.saveTask?.value
+        XCTAssertEqual(
+            state.workspace.model.allTabs.count, 2,
+            "a later unrelated save must not close the tab")
+    }
+
     // MARK: Vault-close aggregation
 
     func testVaultCloseAggregatesParkedDirtyTabs() async throws {
