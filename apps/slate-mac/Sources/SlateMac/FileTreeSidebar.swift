@@ -37,7 +37,10 @@ struct TreeNode: Identifiable, Equatable {
         /// A directory; `childDirCount`/`childFileCount` are its immediate
         /// (non-recursive) child counts, straight from `DirNodeSummary`.
         case directory(childDirCount: Int, childFileCount: Int)
-        case file
+        /// A file; `mtimeMs` rides along from the tree API's `FileSummary`
+        /// so the row never scans `AppState.files` (O(n) per row × visible
+        /// rows was a measurable render cost on 10k vaults).
+        case file(mtimeMs: Int64)
     }
 
     var id: NodeID { nodeID }
@@ -363,7 +366,7 @@ final class FileTreeViewModel: ObservableObject {
                     path: file.path,
                     name: file.name,
                     depth: depth,
-                    kind: .file
+                    kind: .file(mtimeMs: file.mtimeMs)
                 ))
         }
         return out
@@ -770,14 +773,14 @@ struct FileTreeSidebar: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.name)
                     .foregroundStyle(.primary)
-                Text("Modified \(relativeDate(for: mtime(for: node)))")
+                Text("Modified \(relativeDate(for: mtime(of: node)))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(for: node)))")
+        .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
         .help(node.path)
     }
 
@@ -968,12 +971,13 @@ struct FileTreeSidebar: View {
         return nil
     }
 
-    /// The mtime for a file node, read from `AppState.files` (the tree API's
-    /// `FileSummary` also carries it, but `AppState.files` is the already-loaded
-    /// source the flat list used, so the cell stays byte-identical). Falls back
-    /// to 0 (epoch) if the file isn't in the flat list — it will still render.
-    private func mtime(for node: TreeNode) -> Int64 {
-        appState.files.first(where: { $0.path == node.path })?.mtimeMs ?? 0
+    /// The mtime a file node carries from the tree API. Reading it off the
+    /// node (not `AppState.files`) matters: a per-row linear scan of a 10k
+    /// file list × ~50 visible rows was O(500k) string compares per render
+    /// pass (principal review of the U2-4 implementation).
+    private func mtime(of node: TreeNode) -> Int64 {
+        if case .file(let mtimeMs) = node.kind { return mtimeMs }
+        return 0
     }
 
     /// Indent width for a row at `depth`: `Tokens.Spacing.md` per level.
