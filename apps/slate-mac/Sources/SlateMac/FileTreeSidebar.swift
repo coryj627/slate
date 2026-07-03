@@ -781,7 +781,23 @@ struct FileTreeSidebar: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
+        .accessibilityHint(
+            "Opens the note. Open-in-new-tab and split actions are in the context menu.")
         .help(node.path)
+        // U1-5 (#457), ported through the U2-4 rename: open-in targets.
+        // The context menu is the keyboard-discoverable path (VoiceOver
+        // actions rotor); ⌘-click is the pointer shortcut for a new tab.
+        .contextMenu {
+            Button("Open") {
+                appState.openFile(node.path, target: .currentTab)
+            }
+            Button("Open in New Tab") {
+                appState.openFile(node.path, target: .newTab)
+            }
+            Button("Open in Split") {
+                appState.openFile(node.path, target: .newSplit(.horizontal))
+            }
+        }
     }
 
     /// Inline "Loading…" row shown under a folder whose children are being
