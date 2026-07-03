@@ -27,7 +27,14 @@
 - **Tests:** APCA Lc ≥ 75 for every text-on-surface and control pairing in **both** light and dark; snapshot of a token catalog view in both appearances.
 - **Acceptance:** a documented token catalog; the tightest contrast pairs pass Lc ≥ 75 measured in both modes.
 
-### U0-4 · Test: extend a11y + contrast + appearance snapshot harness for U1–U5 `test` `a11y`
-- Helpers to snapshot a view in light **and** dark and assert APCA on the rendered result; a reusable "presentation-ready" test bundle (VoiceOver label presence, focus-order, Dynamic Type reflow at an XXL size, Reduce Motion path).
-- Wire into the a11y-inspect baseline so new component families are covered from their first commit.
-- **Acceptance:** a single test entry point U1–U5 issues call to assert their surface against DoD §D/§E; documented in the milestone spec.
+### U0-4 · Test: presentation-ready test harness for U1–U5 `test` `a11y` ✅ shipped
+Shipped as `PresentationReady` (`apps/slate-mac/Tests/SlateMacTests/PresentationReady.swift`) — the single entry point U1–U5 surface tests call to hold themselves to the program DoD. Assertions:
+- `assertContrastFloor(_:)` — every `(text, surface)` pairing clears APCA `|Lc| > 75` in **both** Aqua and DarkAqua (DoD §D). Backed by the `APCAContrast.lc(text:background:for:)` per-appearance extension.
+- `assertResolvesDistinctlyPerAppearance(_:)` — each dynamic color resolves to a different value light vs dark (no appearance leak).
+- `assertRendersInBothAppearances(_:)` — the view renders to a finite, non-empty size in both appearances (headless via `ImageRenderer`; catches per-appearance crashes / failed renders).
+
+**Honest coverage boundary.** What is **not** unit-testable is caught only *partially* by two other gates — neither fully verifies runtime behaviour, so the residual is a known **manual** step, not "covered by automation":
+- **`a11y-check`** (CI, over all of `Sources/SlateMac`, so new component families are scanned automatically — the "wire into the a11y baseline" requirement): **static anti-patterns only** — missing accessibility label, `lineLimit(1)`, fixed-point font size, animation lacking a Reduce-Motion guard. It does **not** verify that text actually reflows at XXL or that an animation is actually suppressed under Reduce Motion.
+- **VoiceOver feature-test runbook** (`docs/runbooks/voiceover-feature-test.md` §3b, added here): **manual** behavioural checks for Dynamic Type reflow and Reduce-Motion, plus VoiceOver label/trait/reading-order — the parts with no XCTest-introspectable surface (no public API to read a rendered SwiftUI AX tree; the `\.dynamicTypeSize` override isn't honored by headless `ImageRenderer`/`NSHostingView`, measured: identical size at `.large` and `.accessibility5`; animation timing isn't observable).
+
+**Automated behavioural reflow/animation testing remains an open gap** (manual runbook only). The harness deliberately does not fake those assertions. Exercised by `PresentationReadyTests` (render smoke + a contrast negative control proving the check has teeth) and by `DesignTokensTests` (token correctness through the same harness).
