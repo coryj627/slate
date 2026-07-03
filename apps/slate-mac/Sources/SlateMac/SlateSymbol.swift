@@ -57,6 +57,11 @@ enum SlateSymbol: CaseIterable {
     case editingMode
     case folder
     case folderOpen
+    /// Outline leaf in the right-pane rail (U4-1, #470). The other nine leaf
+    /// roles either already exist (`.citationSummary`/`.bibliography`/`.math`/
+    /// `.code`, reused by the rail) or land with U4-2 when their leaves gain
+    /// content — the rail only renders leaves whose content is registered.
+    case outline
     /// Row disclosure triangle for the file tree (U2-4, #462). Rendered
     /// `decorative` and rotated by the row per expand state; the folder row's
     /// AX value states expanded/collapsed, so the glyph itself is unlabeled.
@@ -98,6 +103,7 @@ enum SlateSymbol: CaseIterable {
         case .folder: return "Folder"
         case .folderOpen: return "Open folder"
         case .disclosure: return "Disclosure"
+        case .outline: return "Outline"
         }
     }
 
@@ -138,6 +144,7 @@ enum SlateSymbol: CaseIterable {
         case .folder: return ("folder", "folder")
         case .folderOpen: return ("folder.fill", "folder.fill")
         case .disclosure: return ("chevron.right", "chevron.right")
+        case .outline: return ("list.bullet.indent", "list.bullet.indent")
         }
     }
 
