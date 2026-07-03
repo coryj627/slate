@@ -439,6 +439,94 @@ final class AppState: ObservableObject {
         activateTab(target)
     }
 
+    // MARK: - Split panes (U1-3, #455)
+
+    /// ⌘\ / ⌘⌥\. Duplicate-active-item split; focus lands in the new pane
+    /// (the duplicate shares the active document's file, so the active
+    /// fields remain valid — no funnel hop needed; the model split already
+    /// moved group focus).
+    func splitActivePane(axis: SplitBranch.Axis) {
+        // Park the outgoing pane's buffer FIRST: after the split the
+        // original tab is unfocused and renders from its parked document —
+        // without this it would show the never-visited placeholder.
+        workspace.snapshotActiveTab(
+            text: currentNoteText, baseline: savedBaselineText,
+            contentHash: currentNoteContentHash,
+            hasUnsavedChanges: hasUnsavedChanges,
+            saveError: saveError, saveConflict: currentSaveConflict,
+            loadedFilePath: loadedFilePath)
+        guard let newGroup = workspace.split(workspace.model.activeGroupID, axis: axis)
+        else {
+            let reason =
+                workspace.isAtPaneCapacity
+                ? "Pane limit reached — a seventh pane could not stay visible."
+                : "Nothing to split — open a note first."
+            postAccessibilityAnnouncement(reason, priority: .medium)
+            return
+        }
+        announcePaneFocus(newGroup, prefix: "Split. ")
+    }
+
+    /// ⌘⌥arrows. Spatial focus move; activating the neighbor's active tab
+    /// swaps the document through the identity funnel.
+    func focusPane(_ direction: WorkspaceModel.Direction) {
+        guard let target = workspace.focusNeighbor(direction) else { return }
+        if let tab = workspace.model.group(target)?.activeTabID {
+            activateTab(tab)
+        }
+        announcePaneFocus(target)
+    }
+
+    /// ⌘⌥= / ⌘⌥-.
+    func growFocusedPane() { adjustFocusedPane(by: WorkspaceModel.resizeStep) }
+    func shrinkFocusedPane() { adjustFocusedPane(by: -WorkspaceModel.resizeStep) }
+
+    private func adjustFocusedPane(by delta: Double) {
+        guard workspace.hasSplits else {
+            postAccessibilityAnnouncement("No split panes to resize.", priority: .medium)
+            return
+        }
+        workspace.adjustFocusedPaneWeight(by: delta)
+        if let fraction = workspace.focusedPaneFraction {
+            postAccessibilityAnnouncement(
+                "Pane resized, \(Int((fraction * 100).rounded())) percent.",
+                priority: .medium)
+        }
+    }
+
+    /// Palette-only "Close Pane": close the focused pane's tabs one at a
+    /// time through the standard close gates. A dirty tab halts the sweep
+    /// with its Save/Discard/Cancel alert; re-invoking after resolution
+    /// continues. Closing the last tab collapses the pane (the model rule),
+    /// which is also the shortcut-free keyboard path.
+    func closeActivePane() {
+        guard workspace.hasSplits else { return }
+        let group = workspace.model.activeGroup
+        for tab in group.tabs.reversed() {
+            let dirty =
+                tab.id == group.activeTabID
+                ? hasUnsavedChanges
+                : (workspace.document(for: tab.id)?.hasUnsavedChanges ?? false)
+            if dirty {
+                pendingTabClose = tab.id
+                return
+            }
+            performCloseTab(tab.id)
+            if workspace.model.group(group.id) == nil { return }
+        }
+    }
+
+    private func announcePaneFocus(_ groupID: GroupID, prefix: String = "") {
+        guard let group = workspace.model.group(groupID),
+            let ordinal = workspace.model.ordinal(of: groupID)
+        else { return }
+        let total = workspace.model.groupsInOrder.count
+        let title = group.activeTab.map { filename(of: workspace.tabPath($0)) } ?? "empty"
+        postAccessibilityAnnouncement(
+            "\(prefix)Editor pane \(ordinal) of \(total), \(title).",
+            priority: .medium)
+    }
+
     private func announceActiveTab(prefix: String) {
         guard let tab = workspace.activeTab else { return }
         let group = workspace.model.activeGroup

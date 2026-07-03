@@ -91,6 +91,57 @@ struct SlateMacApp: App {
                     )
                     .disabled(!appState.isVaultOpen)
                 }
+
+                Divider()
+
+                // Split panes (U1-3, #455).
+                Button("Split Right") {
+                    appState.splitActivePane(axis: .horizontal)
+                }
+                .keyboardShortcut("\\", modifiers: [.command])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Split Down") {
+                    appState.splitActivePane(axis: .vertical)
+                }
+                .keyboardShortcut("\\", modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Focus Pane Left") {
+                    appState.focusPane(.left)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Focus Pane Right") {
+                    appState.focusPane(.right)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Focus Pane Above") {
+                    appState.focusPane(.up)
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Focus Pane Below") {
+                    appState.focusPane(.down)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Grow Pane") {
+                    appState.growFocusedPane()
+                }
+                .keyboardShortcut("=", modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
+                Button("Shrink Pane") {
+                    appState.shrinkFocusedPane()
+                }
+                .keyboardShortcut("-", modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
             }
             // Command palette — Milestone Q #313. The menu item
             // provides both the ⌘⇧P chord and the discoverable

@@ -180,4 +180,61 @@ final class WorkspaceState: ObservableObject {
         model = WorkspaceModel()
         documents = [:]
     }
+
+    // MARK: Splits (U1-3)
+
+    /// Split `groupID` along `axis` (duplicate-active-item semantics — the
+    /// model's default). Returns the new group, or nil when the model
+    /// rejects (empty group / at the 6-pane capacity).
+    @discardableResult
+    func split(_ groupID: GroupID, axis: SplitBranch.Axis) -> GroupID? {
+        let created = model.split(groupID, axis: axis)
+        assert(model.validate().isEmpty)
+        return created
+    }
+
+    var isAtPaneCapacity: Bool {
+        model.groupsInOrder.count >= WorkspaceModel.maxGroups
+    }
+
+    var hasSplits: Bool {
+        model.groupsInOrder.count > 1
+    }
+
+    func focusGroup(_ id: GroupID) {
+        model.focusGroup(id)
+    }
+
+    @discardableResult
+    func focusNeighbor(_ direction: WorkspaceModel.Direction) -> GroupID? {
+        let target = model.focusNeighbor(direction)
+        assert(model.validate().isEmpty)
+        return target
+    }
+
+    /// Divider drag commit (U1-3): weights for the split containing
+    /// `groupID`, clamped by the model.
+    func setWeights(_ weights: [Double], forSplitContaining groupID: GroupID) {
+        model.setWeights(weights, forSplitContaining: groupID)
+        assert(model.validate().isEmpty)
+    }
+
+    /// Keyboard resize (⌘⌥= / ⌘⌥-).
+    func adjustFocusedPaneWeight(by delta: Double) {
+        model.setWeight(delta: delta, for: model.activeGroupID)
+        assert(model.validate().isEmpty)
+    }
+
+    /// The fraction of its split axis the focused pane currently occupies —
+    /// for the resize announcement ("Pane resized, N percent").
+    var focusedPaneFraction: Double? {
+        guard hasSplits else { return nil }
+        let rects = model.groupRects()
+        guard let rect = rects[model.activeGroupID] else { return nil }
+        // Announce the dominant (most-recently-resized) dimension: the one
+        // that differs most from an even share.
+        return max(rect.width, rect.height) == 1
+            ? min(rect.width, rect.height)
+            : max(rect.width, rect.height)
+    }
 }

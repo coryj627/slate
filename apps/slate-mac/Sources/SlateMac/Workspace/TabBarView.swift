@@ -18,6 +18,10 @@ import SwiftUI
 struct TabBarView: View {
     @EnvironmentObject private var appState: AppState
     let group: TabGroupNode
+    /// True when this group is the focused pane (U1-3) — or the only pane.
+    /// Drives the strip's focus indicator: a 2pt accent top border, paired
+    /// with the active tab's bolded title (never color alone).
+    var isFocusedGroup: Bool = true
 
     var body: some View {
         HStack(spacing: 0) {
@@ -41,6 +45,17 @@ struct TabBarView: View {
         }
         .frame(height: 30)
         .background(Tokens.ColorRole.surfaceSecondary)
+        // Focused-pane indicator (U1-3): the strip of the focused group
+        // carries a 2pt accent top border. Never the only cue — the pane's
+        // AX label + the active tab's bolded title travel with it.
+        .overlay(alignment: .top) {
+            if isFocusedGroup {
+                Rectangle()
+                    .fill(Tokens.ColorRole.accentFill)
+                    .frame(height: 2)
+                    .accessibilityHidden(true)
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tabs")
     }
@@ -120,14 +135,6 @@ struct TabBarView: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(active ? Tokens.ColorRole.surface : Color.clear)
         )
-        .overlay(alignment: .top) {
-            if active {
-                Rectangle()
-                    .fill(Tokens.ColorRole.accentFill)
-                    .frame(height: 2)
-                    .accessibilityHidden(true)
-            }
-        }
         .contextMenu {
             Button("Close Tab") { appState.requestCloseTab(tab.id) }
             Button("Move Tab Left") {
@@ -138,6 +145,17 @@ struct TabBarView: View {
                 appState.selectTab(id: tab.id)
                 appState.moveActiveTabRight()
             }
+            Divider()
+            Button("Split Right") {
+                appState.selectTab(id: tab.id)
+                appState.splitActivePane(axis: .horizontal)
+            }
+            .disabled(appState.workspace.isAtPaneCapacity)
+            Button("Split Down") {
+                appState.selectTab(id: tab.id)
+                appState.splitActivePane(axis: .vertical)
+            }
+            .disabled(appState.workspace.isAtPaneCapacity)
         }
     }
 
