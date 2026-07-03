@@ -1,0 +1,18 @@
+# TEMPORARY smoke test to verify the Namespace runner connection.
+# Removed before this branch merges.
+name: NSC smoke
+on:
+  push:
+    branches: [chore/namespace-ci]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: namespace-profile-default
+    steps:
+      - name: Report runner
+        run: |
+          echo "uname: $(uname -a)"
+          echo "nproc: $(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          echo "namespace runner reached ✓"
