@@ -186,13 +186,21 @@ moved/renamed folder).
    - Resolves to the same file id → **no text edit**. If its `target_path` column is
      stale (file moved), update the column only.
    - Would dangle or resolve to a *different* file id → **rewrite the target text** to
-     the minimal form pinning the original target:
-     * wikilink/embed → the new **vault path without extension** if that's unambiguous,
-       else with extension (folder-qualified pin; resolver rule 1 guarantees exactness);
-       alias (`|…`), anchor (`#…`/`^…`), embed `!` all carried over unchanged.
-     * markdown link → recomputed **relative path** from the (possibly moved) source's
-       new directory to the target's new path, percent-encoding preserved as authored
-       where the path segments are unchanged, standard encoding for new segments.
+     the minimal form pinning the original target, via **verified candidate forms** —
+     each candidate is checked through the production resolver, never assumed:
+     * wikilink/embed → extensionless vault path → path with extension → vault-rooted
+       `/`-prefixed forms (the exact form for ROOT-LEVEL files, whose bare path is a
+       basename to the resolver — census-found); alias (`|…`), anchor (`#…`/`^…`),
+       embed `!` all carried over unchanged (target-segment splice, never a reform).
+     * markdown link → the **vault path** (with extension), angle-bracket-wrapped when
+       the authored form was wrapped OR the pin contains whitespace.
+       **AMENDED during part-1 implementation (PR #497):** the original "recomputed
+       relative path + %20 encoding" instruction assumed CommonMark source-relative
+       semantics; Slate's resolver is vault-rooted/basename and does **not**
+       percent-decode — relative recomputation is churn and `%20` would dangle. A
+       side effect of the same finding: the resolver's leading-`/` handling was
+       basename-fallback for root files (contradicting its own docs); fixed to
+       rooted-exact in the same PR.
 4. **Apply text edits** per affected file: descending-span-order splice (the
    rename-property pattern), then `save_text(path, new_contents,
    expected_content_hash = hash-at-collection-time)`. A `WriteConflict` (external edit
