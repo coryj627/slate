@@ -339,4 +339,44 @@ final class SidebarUtilityBarTests: XCTestCase {
         XCTFail("Could not locate SidebarUtilityBar.swift from \(#filePath)")
         return ""
     }
+    func testAbortedSaveAllDropsParkedSwitchTarget() async throws {
+        // Switch with multiple dirty tabs → Save All → a save CONFLICTS →
+        // the chain aborts with the vault open. The parked switch target
+        // must drop, or a later plain Close Vault would surprise-open the
+        // other vault (the U1-2 scope-leak class).
+        let vaultA = try makeVault("A")
+        try "# two\n".write(
+            to: vaultA.appendingPathComponent("two.md"), atomically: true, encoding: .utf8)
+        let vaultB = try makeVault("B")
+        let state = makeState()
+        state.openVault(at: vaultA)
+        await state.scanTask?.value
+
+        // Two tabs, both dirty: note.md active-dirty, two.md parked-dirty.
+        state.selectedFilePath = "two.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("# two\ndirty two")
+        state.newTab()
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("# note\ndirty note")
+        // External edit → the active save will conflict.
+        try "external".write(
+            to: vaultA.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
+
+        state.switchToRecent(
+            RecentVault(path: vaultB.path, displayName: "B", lastOpenedMs: 0))
+        XCTAssertNotNil(state.pendingVaultClose, "multi-dirty prompt engaged")
+        state.resolveVaultCloseSaveAll()
+        await state.vaultCloseSaveAllTask?.value
+
+        XCTAssertNotNil(state.currentSession, "vault stayed open on conflict")
+        XCTAssertNil(
+            state.pendingVaultSwitchTarget,
+            "aborted Save All must drop the parked switch target")
+        XCTAssertEqual(
+            state.currentVaultURL?.path, vaultA.path,
+            "no surprise switch after the abort")
+    }
+
 }

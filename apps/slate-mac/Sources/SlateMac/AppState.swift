@@ -2382,6 +2382,12 @@ final class AppState: ObservableObject {
                     self.saveCurrentNote()
                     await self.saveTask?.value
                     if self.currentSaveConflict != nil || self.saveError != nil {
+                        // U4-3: an aborted Save All also aborts an in-flight
+                        // vault switch — the vault stays open, so a stale
+                        // parked target would make a LATER plain Close Vault
+                        // surprise-open the other vault (the same leak class
+                        // as the U1-2 save-then-close scope).
+                        self.pendingVaultSwitchTarget = nil
                         return  // standard dialog owns recovery; vault stays open
                     }
                 }
