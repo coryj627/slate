@@ -209,6 +209,21 @@ fn strip_one_trailing_newline(s: &str) -> &str {
 
 // --- Task-line shape ---
 
+/// The single-character task status of `line` if it matches the task
+/// pattern, else `None`. Thin wrapper over [`parse_task_line`] exposing
+/// just the status char — the canonical task-line grammar (bullet +
+/// whitespace + `[<char>]` + space-or-EOL) stays defined in one place.
+///
+/// Reused by `reading::reading_blocks_source` so the reading view's
+/// list-item task detection can't drift from the Tasks panel's: both
+/// derive the status char from `parse_task_line`. `pulldown-cmark`'s
+/// own `TaskListMarker` only recognises `[ ]` / `[x]` / `[X]`, so a
+/// reading view that trusted it would miss every project-specific
+/// status char (`[/]`, `[-]`, …) the panel supports.
+pub(crate) fn task_status_char(line: &str) -> Option<char> {
+    parse_task_line(line).map(|(status_char, _)| status_char)
+}
+
 /// Returns `Some((status_char, body))` if `line` matches the task
 /// pattern `^\s*[-*+] \[(.)\](?: .*)?$`. The trailing space after
 /// `]` is required when text follows but tolerated as missing when

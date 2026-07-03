@@ -30,6 +30,7 @@ pub mod links_db;
 pub mod math;
 pub mod oplog;
 pub mod properties_db;
+pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod tasks;
@@ -72,6 +73,7 @@ pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{
     EditOp, OpKind, OpLogEntry, decode_edit_batch, encode_edit_batch, reconstruct_at_tail,
 };
+pub use reading::{ReadingBlock, ReadingBlockKind, reading_blocks_source};
 pub use tasks::{TaskItem, extract_tasks};
 pub use tasks_db::{TaskFilter, TaskWithLocation};
 pub use templates::{

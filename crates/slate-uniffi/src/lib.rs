@@ -721,6 +721,20 @@ impl VaultSession {
             .collect())
     }
 
+    /// Ordered whole-document block segmentation for the reading view
+    /// (U3-1, #465). Reads `path`, returns each top-level block in
+    /// document order with whole-source byte offsets + the exact slice.
+    /// The pure `reading_blocks_source` free function is the live-buffer
+    /// variant (U3-2) — this one is the initial disk read.
+    pub fn reading_blocks(&self, path: String) -> Result<Vec<ReadingBlock>, VaultError> {
+        Ok(self
+            .inner
+            .reading_blocks(&path)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     /// Swap the session's math preferences at runtime. Settings UI
     /// (#224) drives this when the user changes a Picker — the
     /// next `get_math_blocks` call renders with the new prefs.
@@ -2578,6 +2592,98 @@ impl From<core::diagram::DiagramBlock> for DiagramBlock {
             byte_offset: b.byte_offset,
         }
     }
+}
+
+// --- Reading-view block segmentation mirror (U3-1, #465) --------------
+
+/// FFI mirror of [`core::reading::ReadingBlockKind`]. Payload variants
+/// flatten to named fields per the uniffi enum-mirror convention (same
+/// shape as `EditorSpanKind` / `DiagramRenderStatus`). `task` is the
+/// list-item status char as a `String` — uniffi has no `char` type, and
+/// a 1-char string is what Swift wants for the checkbox glyph anyway;
+/// `None` (not a task) maps to an absent optional.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum ReadingBlockKind {
+    Heading {
+        level: u8,
+    },
+    Paragraph,
+    ListItem {
+        depth: u8,
+        ordered: bool,
+        task: Option<String>,
+    },
+    BlockQuote {
+        depth: u8,
+    },
+    CodeFence {
+        language: String,
+    },
+    MathBlock,
+    Diagram {
+        dialect: String,
+    },
+    Table,
+    ThematicBreak,
+    Html,
+}
+
+impl From<core::reading::ReadingBlockKind> for ReadingBlockKind {
+    fn from(k: core::reading::ReadingBlockKind) -> Self {
+        use core::reading::ReadingBlockKind as K;
+        match k {
+            K::Heading { level } => ReadingBlockKind::Heading { level },
+            K::Paragraph => ReadingBlockKind::Paragraph,
+            K::ListItem {
+                depth,
+                ordered,
+                task,
+            } => ReadingBlockKind::ListItem {
+                depth,
+                ordered,
+                task: task.map(|c| c.to_string()),
+            },
+            K::BlockQuote { depth } => ReadingBlockKind::BlockQuote { depth },
+            K::CodeFence { language } => ReadingBlockKind::CodeFence { language },
+            K::MathBlock => ReadingBlockKind::MathBlock,
+            K::Diagram { dialect } => ReadingBlockKind::Diagram { dialect },
+            K::Table => ReadingBlockKind::Table,
+            K::ThematicBreak => ReadingBlockKind::ThematicBreak,
+            K::Html => ReadingBlockKind::Html,
+        }
+    }
+}
+
+/// One ordered reading block. `byte_start`/`byte_end` index the **whole
+/// source** (frontmatter offset included); `source` is the exact slice.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ReadingBlock {
+    pub kind: ReadingBlockKind,
+    pub byte_start: u64,
+    pub byte_end: u64,
+    pub source: String,
+}
+
+impl From<core::reading::ReadingBlock> for ReadingBlock {
+    fn from(b: core::reading::ReadingBlock) -> Self {
+        Self {
+            kind: b.kind.into(),
+            byte_start: b.byte_start,
+            byte_end: b.byte_end,
+            source: b.source,
+        }
+    }
+}
+
+/// Segment `source` into ordered reading blocks — pure, no IO (U3-2
+/// live-buffer entry point). Reading mode renders the editor's in-memory
+/// body directly, so unsaved edits are visible without a disk round-trip.
+#[uniffi::export]
+pub fn reading_blocks_source(source: String) -> Vec<ReadingBlock> {
+    core::reading::reading_blocks_source(&source)
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }
 
 // =====================================================================
