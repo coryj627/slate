@@ -181,6 +181,17 @@ final class WorkspaceState: ObservableObject {
         documents = [:]
     }
 
+    /// Session restore (U1-6): adopt a rebuilt model wholesale. The caller
+    /// (WorkspaceStore.model(from:)) has already validated; the assert is
+    /// the belt-and-suspenders. Parked documents start empty — tabs load
+    /// lazily on first activation, missing files surface the existing
+    /// per-tab load-error state.
+    func adopt(_ restored: WorkspaceModel) {
+        assert(restored.validate().isEmpty)
+        model = restored
+        documents = [:]
+    }
+
     // MARK: Splits (U1-3)
 
     /// Split `groupID` along `axis` (duplicate-active-item semantics — the
