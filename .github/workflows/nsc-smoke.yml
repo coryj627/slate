@@ -6,10 +6,15 @@ on:
 permissions:
   contents: read
 jobs:
-  macos-probe:
-    runs-on: namespace-profile-macos
+  toolchain-probe:
+    runs-on: namespace-profile-default
     steps:
       - run: |
-          echo "uname: $(uname -a)"
-          echo "xcode: $(xcodebuild -version 2>/dev/null | head -1 || echo none)"
-          echo "namespace macOS runner reached ✓"
+          echo "cargo:  $(cargo --version 2>/dev/null || echo MISSING)"
+          echo "rustc:  $(rustc --version 2>/dev/null || echo MISSING)"
+          echo "rustup: $(rustup --version 2>/dev/null || echo MISSING)"
+          echo "git:    $(git --version 2>/dev/null || echo MISSING)"
+          echo "gh:     $(gh --version 2>/dev/null | head -1 || echo MISSING)"
+          echo "node:   $(node --version 2>/dev/null || echo MISSING)"
+          echo "os:     $(cat /etc/os-release 2>/dev/null | grep PRETTY | cut -d= -f2)"
+          echo "nproc:  $(nproc)  mem: $(free -h | awk '/Mem:/{print $2}')"
