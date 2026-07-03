@@ -1,0 +1,29 @@
+# cargo-audit configuration for the "Security audit" CI gate
+# (.github/workflows/audit.yml). cargo-audit auto-discovers this file
+# at .cargo/audit.toml relative to the workspace root.
+#
+# Policy: the gate fails on RustSec *vulnerabilities* and reports
+# *unmaintained* crates as non-failing warnings. The `ignore` list
+# below is for vulnerabilities we have consciously accepted because
+# there is no available fix — each entry MUST have a tracking issue
+# and a concrete removal condition. Do not add to this list to silence
+# a fixable advisory; upgrade the dependency instead.
+
+[advisories]
+ignore = [
+    # quick-xml 0.38.4 — two high-severity (7.5) DoS advisories, pulled
+    # in transitively via hayagriva -> citationberg -> quick-xml. Both
+    # are fixed in quick-xml >= 0.41.0, but citationberg pins
+    # `quick-xml = "^0.38.1"` and NO released citationberg/hayagriva
+    # (checked through hayagriva 0.10.1 / citationberg 0.7.0) uses
+    # quick-xml 0.41 yet — so there is no upgrade path today.
+    #
+    # Practical exposure is low: quick-xml here only parses user-supplied
+    # CSL style XML in a local single-user app (attacker == the user).
+    #
+    # Tracking + removal criteria: https://github.com/coryj627/slate/issues/480
+    # Remove BOTH IDs once citationberg ships quick-xml >= 0.41 and we
+    # bump hayagriva (verify with `cargo tree -i quick-xml`).
+    "RUSTSEC-2026-0194", # quadratic runtime on duplicate start-tag attributes (CPU DoS)
+    "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation in NsReader (memory DoS)
+]
