@@ -19,6 +19,13 @@ final class WorkspaceState: ObservableObject {
 
     @Published private(set) var model = WorkspaceModel()
 
+    /// The right-pane leaf currently shown by `RightPaneView` (U4-1, #470).
+    /// Window-level view state, not part of the tab model, so it lives here
+    /// beside `model` rather than inside it. Persisted through
+    /// `workspace.json` (`WorkspaceStore.Snapshot.activeLeaf`); an absent or
+    /// unknown stored value restores to `.outline` (see AppState restore).
+    @Published var activeLeaf: Leaf = .outline
+
     /// Parked state for tabs that are not the active tab of the active
     /// group. The ACTIVE tab's state lives in AppState's fields; its entry
     /// here is stale while active and overwritten on park.
@@ -175,10 +182,13 @@ final class WorkspaceState: ObservableObject {
     }
 
     /// Vault close / vault switch: drop every tab and parked document. The
-    /// model returns to the single-empty-root state (I3).
+    /// model returns to the single-empty-root state (I3). The active leaf
+    /// resets to the default (U4-1) so a freshly-opened vault starts on
+    /// Outline until its own `workspace.json` restores a remembered leaf.
     func reset() {
         model = WorkspaceModel()
         documents = [:]
+        activeLeaf = .outline
     }
 
     /// Session restore (U1-6): adopt a rebuilt model wholesale. The caller

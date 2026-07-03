@@ -452,6 +452,16 @@ final class AppState: ObservableObject {
                 self?.saveWorkspaceLayout()
             }
             .store(in: &subscriptions)
+        // U4-1 (#470): the active right-pane leaf persists too. Same debounced
+        // path as `$model` — a leaf switch coalesces with any concurrent layout
+        // churn into one write.
+        workspace.$activeLeaf
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.saveWorkspaceLayout()
+            }
+            .store(in: &subscriptions)
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil,
             queue: .main
@@ -466,7 +476,9 @@ final class AppState: ObservableObject {
         guard let vaultURL = currentVaultURL else { return }
         let store = WorkspaceStore(vaultRoot: vaultURL)
         do {
-            try store.save(WorkspaceStore.snapshot(of: workspace.model))
+            try store.save(
+                WorkspaceStore.snapshot(
+                    of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue))
         } catch {
             // Layout persistence must never interrupt the user; the next
             // clean save wins.
@@ -477,8 +489,13 @@ final class AppState: ObservableObject {
     func restoreWorkspaceLayout() {
         guard let vaultURL = currentVaultURL else { return }
         let store = WorkspaceStore(vaultRoot: vaultURL)
-        guard let snapshot = store.load(),
-            let restored = WorkspaceStore.model(from: snapshot),
+        guard let snapshot = store.load() else { return }
+        // Restore the active leaf independently of the tab model: an unknown or
+        // absent token (or a leaf not yet registered) falls back to `.outline`
+        // (Leaf.init(persisted:)). Assigning before the empty-model guard means
+        // the remembered panel survives even a vault reopened with no tabs.
+        workspace.activeLeaf = Leaf(persisted: snapshot.activeLeaf)
+        guard let restored = WorkspaceStore.model(from: snapshot),
             !restored.isEmpty
         else { return }
         workspace.adopt(restored)
@@ -1309,6 +1326,14 @@ final class AppState: ObservableObject {
     /// Most recent message passed to `postAccessibilityAnnouncement`.
     /// Same role as `scanAnnouncementCount` — for tests only.
     private(set) var scanAnnouncementLastMessage: String?
+
+    /// Times `loadBibliographyEntries` has run its fetch since the current
+    /// vault opened. Internal, for tests only (the UI never reads it): the
+    /// U4-1 leaf-retention test asserts a Bibliography leaf kept mounted
+    /// across leaf switches does NOT re-fetch — the load-fire spy that proves
+    /// the mounted-ZStack retention actually holds. Same role/convention as
+    /// `scanAnnouncementCount`.
+    private(set) var bibliographyLoadCount: Int = 0
 
     /// Most recent message passed through the template-flow
     /// announcement helper (`announceTemplate`). Same role as
@@ -2159,6 +2184,7 @@ final class AppState: ObservableObject {
             scanAnnouncementCount = 0
             scanAnnouncementLastMessage = nil
             scanAnnouncementLastFiredAt = .distantPast
+            bibliographyLoadCount = 0
             recordOpened(url: url)
             // U1-6 (#458): restore the persisted workspace layout. Tabs
             // load lazily; a missing file surfaces the existing per-tab
@@ -3181,6 +3207,10 @@ final class AppState: ObservableObject {
             unresolvedCitations = []
             return
         }
+        // Load-fire spy (tests only): counts real fetches so the U4-1
+        // leaf-retention test can prove a mounted Bibliography leaf doesn't
+        // re-fetch on leaf switch.
+        bibliographyLoadCount += 1
         isLoadingBibliography = true
         defer { isLoadingBibliography = false }
 

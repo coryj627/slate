@@ -53,6 +53,17 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(WorkspaceStore.model(from: loaded), model)
     }
 
+    /// U4-1 (#470): the active right-pane leaf persists in the same snapshot
+    /// and survives the disk round-trip.
+    func testDiskRoundTripCarriesActiveLeaf() throws {
+        let store = WorkspaceStore(vaultRoot: tempDir)
+        let model = depthThreeModel()
+        try store.save(WorkspaceStore.snapshot(of: model, activeLeaf: "bibliography"))
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.activeLeaf, "bibliography")
+        XCTAssertEqual(WorkspaceStore.model(from: loaded), model, "layout unaffected")
+    }
+
     func testCensusPersistRestoreIdentity() {
         struct SplitMix64: RandomNumberGenerator {
             var state: UInt64

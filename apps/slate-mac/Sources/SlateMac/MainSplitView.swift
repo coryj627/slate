@@ -31,22 +31,6 @@ struct MainSplitView: View {
         case editor
     }
 
-    /// Active right-sidebar tab. Replaced `TabView`'s implicit
-    /// selection with explicit state so the tab strip renders as
-    /// a single segmented control (Picker) instead of macOS
-    /// SwiftUI's default tab style — that default draws a
-    /// vertical separator between adjacent *unselected* tabs and
-    /// hides it under the selected pill, producing an asymmetric
-    /// look (e.g. divider visible between Citations and
-    /// Bibliography but not between Outline and Citations when
-    /// Outline is selected). The Picker style renders identical
-    /// dividers between every segment regardless of selection.
-    @State private var sidebarTab: SidebarTab = .outline
-
-    enum SidebarTab: Hashable, CaseIterable {
-        case outline, citations, bibliography
-    }
-
     var body: some View {
         // Staged composition (U1-2): the previous single modifier
         // chain exceeded the type-checker's budget as alerts grew.
@@ -73,13 +57,14 @@ struct MainSplitView: View {
                 .accessibilityLabel("Note content pane")
                 .accessibilityFocused($alertFocusReturn, equals: .editor)
         } detail: {
-            // Extracted subview (U1-2): MainSplitView.body sits at the
-            // type-checker's practical limit, and the workspace close-gate
-            // alerts below need to live in THIS struct (next to the
-            // @AccessibilityFocusState they assign) for both the AX
-            // behavior and the a11y-check gate. U4 replaces this column
-            // with the leaf rail wholesale.
-            DetailSidebarColumn(sidebarTab: $sidebarTab)
+            // The right pane (U4-1, #470): the active leaf's content + the
+            // trailing icon rail, replacing the old segmented-picker detail
+            // column. Extracted as its own view (like the column it replaced)
+            // because MainSplitView.body sits at the type-checker's practical
+            // limit, and the workspace close-gate alerts below must live in
+            // THIS struct next to the @AccessibilityFocusState they assign
+            // (for both the AX behavior and the a11y-check gate).
+            RightPaneView(workspace: appState.workspace)
         }
         .navigationTitle(vaultTitle)
         .toolbar { mainToolbar }
@@ -585,58 +570,5 @@ struct MainSplitView: View {
 
     private var vaultTitle: String {
         appState.currentVaultURL?.lastPathComponent ?? "Vault"
-    }
-}
-
-/// The detail column: segmented picker over Outline / Citations /
-/// Bibliography with the mounted-ZStack retention pattern. Extracted from
-/// `MainSplitView.body` (U1-2) purely for type-checker budget — behavior,
-/// comments, and the retention rationale are verbatim from the original.
-/// U4 replaces this column with the leaf rail.
-///
-/// Retention: keep every panel mounted via `ZStack`, with `.opacity` +
-/// `.allowsHitTesting` + `.accessibilityHidden` gating which one is visible.
-/// A `switch` over the tab would destroy and re-create panels per switch,
-/// silently regressing: `BibliographyPanel.segment` reset, re-fired
-/// `loadBibliographyEntries` IO, and `announcedFilePath` re-announcements.
-/// Hidden panels stay in the hierarchy purely for state retention;
-/// `accessibilityHidden(true)` + `allowsHitTesting(false)` keep VoiceOver
-/// and pointer focus scoped to the visible one.
-struct DetailSidebarColumn: View {
-    @Binding var sidebarTab: MainSplitView.SidebarTab
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Picker(.segmented) instead of `TabView` so the strip renders
-            // uniform dividers regardless of selection (Milestone L #279).
-            Picker("Sidebar tab", selection: $sidebarTab) {
-                Text("Outline").tag(MainSplitView.SidebarTab.outline)
-                Text("Citations").tag(MainSplitView.SidebarTab.citations)
-                Text("Bibliography").tag(MainSplitView.SidebarTab.bibliography)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
-            .accessibilityLabel("Sidebar tab")
-
-            ZStack {
-                OutlineSidebar()
-                    .opacity(sidebarTab == .outline ? 1 : 0)
-                    .allowsHitTesting(sidebarTab == .outline)
-                    .accessibilityHidden(sidebarTab != .outline)
-                CitationsPanel()
-                    .opacity(sidebarTab == .citations ? 1 : 0)
-                    .allowsHitTesting(sidebarTab == .citations)
-                    .accessibilityHidden(sidebarTab != .citations)
-                BibliographyPanel()
-                    .opacity(sidebarTab == .bibliography ? 1 : 0)
-                    .allowsHitTesting(sidebarTab == .bibliography)
-                    .accessibilityHidden(sidebarTab != .bibliography)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .accessibilityLabel("Sidebar")
     }
 }
