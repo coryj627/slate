@@ -130,13 +130,21 @@ pub fn resolve_link(
     // we match that. Multiple `../` is out of scope at this layer —
     // wiki/markdown links pointing at parent directories of the vault
     // aren't supported by the indexer.
+    //
+    // `rooted` (a leading `/` or `./`) is VAULT-ROOTED EXACT — no basename
+    // fallback. Before U2-3 the flag was stripped and lost, so `/foo` on a
+    // ROOT-LEVEL file (no `/` left after stripping) fell through to the
+    // basename scan and could tie-break to a DIFFERENT deep file — which
+    // also made root files unpinnable by any authored text (the U2-3
+    // referential-stability census found this, seed 164).
+    let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
     let normalized = trimmed
         .strip_prefix("./")
         .or_else(|| trimmed.strip_prefix('/'))
         .unwrap_or(trimmed);
-    // Folder-qualified path: contains `/`. Try exact (literal),
-    // then add each Markdown extension if the input has no extension.
-    if normalized.contains('/') {
+    // Qualified (contains `/`) or explicitly rooted: exact match only —
+    // literal, then each Markdown extension if the input has none.
+    if rooted || normalized.contains('/') {
         if let Some(hit) = find_exact(normalized, index) {
             return ResolvedLink::Resolved {
                 target_path: hit,
@@ -278,6 +286,52 @@ fn final_component(path: &str) -> &str {
 /// extension variants.
 fn has_extension(name: &str) -> bool {
     final_component(name).contains('.')
+}
+
+#[cfg(test)]
+mod rooted_semantics_tests {
+    use super::*;
+
+    fn index(paths: &[&str]) -> InMemoryVaultIndex {
+        InMemoryVaultIndex::new(paths.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn leading_slash_is_vault_rooted_exact_for_root_files() {
+        // Two n9s; the deep one wins the basename tie-break from a deep
+        // source. `/n9` must pin the ROOT file regardless (U2-3 census,
+        // seed 164 — pre-fix the slash was stripped and fell through to
+        // the basename scan).
+        let idx = index(&["n9.md", "dest2/n9.md", "dest2/src.md"]);
+        assert_eq!(
+            resolve_link("/n9", None, "dest2/src.md", &idx),
+            ResolvedLink::Resolved {
+                target_path: "n9.md".into(),
+                anchor: None
+            }
+        );
+        assert_eq!(
+            resolve_link("/n9.md", None, "dest2/src.md", &idx),
+            ResolvedLink::Resolved {
+                target_path: "n9.md".into(),
+                anchor: None
+            }
+        );
+    }
+
+    #[test]
+    fn rooted_miss_is_unresolved_not_basename_fallback() {
+        // `/ghost` names a missing ROOT file; a deep basename match must
+        // NOT hijack it (vault-rooted means exactly that).
+        let idx = index(&["deep/ghost.md", "src.md"]);
+        assert_eq!(
+            resolve_link("/ghost", None, "src.md", &idx),
+            ResolvedLink::Unresolved {
+                target_raw: "/ghost".into(),
+                anchor: None
+            }
+        );
+    }
 }
 
 #[cfg(test)]

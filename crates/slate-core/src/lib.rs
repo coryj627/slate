@@ -24,6 +24,7 @@ pub mod embeds;
 pub mod frontmatter;
 mod line_index;
 pub mod link_resolver;
+pub mod link_rewrite;
 pub mod links;
 pub mod links_db;
 pub mod math;
