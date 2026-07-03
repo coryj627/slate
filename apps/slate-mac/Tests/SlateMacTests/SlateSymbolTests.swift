@@ -7,24 +7,54 @@ import XCTest
 @testable import SlateMac
 
 /// Guards the `SlateSymbol` icon layer (#450):
-///  - every fallback glyph actually exists on the macOS 15 floor,
+///  - every fallback glyph is known-safe on the macOS 15 floor (OS-independent
+///    fixture) AND loads on the current OS,
 ///  - resolution is total and valid on both the v7 and fallback paths,
 ///  - the v7/fallback split is genuinely exercised,
-///  - the toolbar migration didn't change which glyph renders, and
-///  - every role's default label is a clean VoiceOver name.
+///  - the toolbar migration didn't change which glyph renders,
+///  - every role's default label is a clean VoiceOver name, and
+///  - no view bypasses the layer with a raw SF Symbol string.
 final class SlateSymbolTests: XCTestCase {
 
-    /// The safety guarantee: on the macOS 15–25 range we render the
-    /// `fallback`, so every fallback MUST resolve to a real system symbol on
-    /// the minimum OS. `NSImage(systemSymbolName:)` returns nil for a symbol
-    /// the running OS doesn't ship — the CI runner is the floor, so this
-    /// catches a fallback that only exists on a newer OS.
-    func testEveryFallbackLoadsOnMinimumOS() {
+    /// SF Symbols verified present on the macOS 15.0 floor (all predate
+    /// macOS 14). This is the checked-in fixture the fallback path is held to,
+    /// so the floor guarantee doesn't depend on which OS the tests run on
+    /// (Codex review: an `NSImage` load check alone passes on a macOS 26
+    /// runner even for a v7-only name). Adding a new fallback forces a
+    /// conscious entry here.
+    private static let knownMacOS15SafeSymbols: Set<String> = [
+        "square.and.arrow.down", "magnifyingglass", "doc.badge.plus", "checklist",
+        "quote.bubble.fill", "books.vertical", "function",
+        "chevron.left.forwardslash.chevron.right", "exclamationmark.triangle.fill",
+        "arrow.down.right.and.arrow.up.left", "ellipsis", "xmark.circle.fill",
+        "plus.circle", "rectangle.2.swap", "checkmark.square", "square",
+        "plus", "xmark", "rectangle.split.2x1", "book", "pencil",
+        "folder", "folder.fill",
+    ]
+
+    /// Floor guarantee, OS-independent: every fallback is in the curated
+    /// macOS-15-safe fixture. A fallback accidentally set to a v7/macOS-26-only
+    /// name fails here regardless of the runner OS.
+    func testEveryFallbackIsFloorSafe() {
+        for symbol in SlateSymbol.allCases {
+            let fallback = SlateSymbol.symbolName(for: symbol, macOS26: false)
+            XCTAssertTrue(
+                Self.knownMacOS15SafeSymbols.contains(fallback),
+                "Fallback '\(fallback)' for \(symbol) is not in the macOS-15-safe fixture. "
+                    + "Verify it exists on macOS 15.0 and add it to knownMacOS15SafeSymbols."
+            )
+        }
+    }
+
+    /// Runtime check on the current OS. On the macOS 15 CI runner this is a
+    /// true floor check; paired with `testEveryFallbackIsFloorSafe` the
+    /// guarantee holds on any runner.
+    func testEveryFallbackLoadsOnCurrentOS() {
         for symbol in SlateSymbol.allCases {
             let name = SlateSymbol.symbolName(for: symbol, macOS26: false)
             XCTAssertNotNil(
                 NSImage(systemSymbolName: name, accessibilityDescription: nil),
-                "Fallback SF Symbol '\(name)' for \(symbol) does not exist on this (floor) OS."
+                "Fallback SF Symbol '\(name)' for \(symbol) failed to load on this OS."
             )
         }
     }
@@ -102,6 +132,38 @@ final class SlateSymbolTests: XCTestCase {
                     "\(symbol) title '\(title)' contains the role word '\(word)'."
                 )
             }
+        }
+    }
+
+    /// The labeled/decorative builders are the only supported way to render a
+    /// symbol; forbid raw `Image(systemName:)` / `systemImage:` anywhere in the
+    /// app sources except the layer itself, so a future view can't silently
+    /// reintroduce an unlabeled glyph (Codex review). Source-level lint.
+    func testNoRawSFSymbolsOutsideLayer() throws {
+        let sourcesDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .appendingPathComponent("Sources/SlateMac")
+        let fm = FileManager.default
+        let files =
+            try fm.contentsOfDirectory(at: sourcesDir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        XCTAssertFalse(files.isEmpty, "No Swift sources found at \(sourcesDir.path).")
+
+        // The layer legitimately names raw symbols; generated FFI code never
+        // uses SwiftUI but is excluded defensively.
+        let allowed: Set<String> = ["SlateSymbol.swift", "slate_uniffi.swift"]
+        for file in files where !allowed.contains(file.lastPathComponent) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertFalse(
+                text.contains("Image(systemName:"),
+                "\(file.lastPathComponent) uses a raw Image(systemName:) — route it through SlateSymbol."
+            )
+            XCTAssertFalse(
+                text.contains("systemImage:"),
+                "\(file.lastPathComponent) uses a raw systemImage: — route it through SlateSymbol."
+            )
         }
     }
 }

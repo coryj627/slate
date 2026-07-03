@@ -56,8 +56,10 @@ enum SlateSymbol: CaseIterable {
     case folder
     case folderOpen
 
-    /// The resolved SF Symbol name for the running OS.
-    var systemName: String {
+    /// The resolved SF Symbol name for the running OS. `private` so call
+    /// sites can't reach past the labeled/decorative builders to name a raw
+    /// symbol (only the builders below, in this file, use it).
+    private var systemName: String {
         Self.symbolName(for: self, macOS26: Self.isMacOS26Available)
     }
 
