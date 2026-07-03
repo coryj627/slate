@@ -28,18 +28,15 @@ struct SettingsView: View {
             TabView {
                 MathSettingsTab()
                     .tabItem {
-                        Label("Math", systemImage: "function")
+                        SlateSymbol.math.label()
                     }
                 CodeSettingsTab()
                     .tabItem {
-                        Label(
-                            "Code",
-                            systemImage: "chevron.left.forwardslash.chevron.right"
-                        )
+                        SlateSymbol.code.label()
                     }
                 BibliographySettingsTab()
                     .tabItem {
-                        Label("Bibliography", systemImage: "books.vertical")
+                        SlateSymbol.bibliography.label()
                     }
             }
         }

@@ -189,9 +189,8 @@ struct EmbedView: View {
         let message =
             "Could not decode image. MIME: \(mime). The file may be corrupt or an unsupported codec."
         return HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            SlateSymbol.warning.decorative
                 .foregroundStyle(.orange)
-                .accessibilityHidden(true)
             Text(verbatim: message)
                 .font(.caption)
                 .foregroundStyle(.primary)
@@ -207,9 +206,8 @@ struct EmbedView: View {
         // Same shape as imageDecodeFailureView — color isn't the
         // only cue.
         return HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            SlateSymbol.warning.decorative
                 .foregroundStyle(.orange)
-                .accessibilityHidden(true)
             Text(verbatim: visible)
                 .font(.callout)
                 .foregroundStyle(.primary)
@@ -232,9 +230,8 @@ struct EmbedView: View {
             "Open the source note directly to see embeds nested beyond depth \(Self.embedDepthLimit)."
         let visible = "\(head) \(remediation)"
         return HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "arrow.down.right.and.arrow.up.left")
+            SlateSymbol.expandInline.decorative
                 .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
             Text(verbatim: visible)
                 .font(.callout)
                 .foregroundStyle(.primary)

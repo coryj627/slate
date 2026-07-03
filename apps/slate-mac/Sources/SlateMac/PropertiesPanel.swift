@@ -55,7 +55,7 @@ struct PropertiesPanel: View {
             Button {
                 appState.isAddPropertySheetOpen = true
             } label: {
-                Image(systemName: "plus.circle")
+                SlateSymbol.addProperty.decorative
             }
             .buttonStyle(.borderless)
             .help("Add property")
@@ -64,7 +64,7 @@ struct PropertiesPanel: View {
             Button {
                 appState.isBulkRenameSheetOpen = true
             } label: {
-                Image(systemName: "rectangle.2.swap")
+                SlateSymbol.bulkRename.decorative
             }
             .buttonStyle(.borderless)
             .help("Rename property across the vault")

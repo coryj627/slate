@@ -155,7 +155,7 @@ struct MainSplitView: View {
                 Button {
                     appState.saveCurrentNote()
                 } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
+                    SlateSymbol.save.label()
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(
@@ -171,7 +171,7 @@ struct MainSplitView: View {
                 Button {
                     appState.toggleSearchOverlay()
                 } label: {
-                    Label("Search", systemImage: "magnifyingglass")
+                    SlateSymbol.search.label()
                 }
                 // #422: ⌘F moved to the menu bar ("Search Vault…").
                 // The toolbar registration proved dead with sidebar
@@ -189,7 +189,7 @@ struct MainSplitView: View {
                 Button {
                     appState.openTemplatePicker()
                 } label: {
-                    Label("New from Template", systemImage: "doc.badge.plus")
+                    SlateSymbol.newFromTemplate.label()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .accessibilityHint(
@@ -200,7 +200,7 @@ struct MainSplitView: View {
                 Button {
                     appState.openTasksReview()
                 } label: {
-                    Label("Tasks Review", systemImage: "checklist")
+                    SlateSymbol.tasksReview.label()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(appState.currentSession == nil)
@@ -215,7 +215,7 @@ struct MainSplitView: View {
                 Button {
                     appState.isCitationSummaryOpen = true
                 } label: {
-                    Label("Citation Summary", systemImage: "quote.bubble.fill")
+                    SlateSymbol.citationSummary.label()
                 }
                 .keyboardShortcut("j", modifiers: [.command, .shift])
                 .disabled(appState.selectedFilePath == nil)
@@ -230,7 +230,7 @@ struct MainSplitView: View {
                 Button {
                     appState.jumpToBibliographyFromExpandedCitation()
                 } label: {
-                    Label("Jump to Bibliography", systemImage: "books.vertical")
+                    SlateSymbol.bibliography.label("Jump to Bibliography")
                 }
                 .keyboardShortcut("j", modifiers: .command)
                 .disabled(appState.expandedCitation == nil)

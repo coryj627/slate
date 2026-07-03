@@ -242,7 +242,7 @@ struct TasksReviewView: View {
             Button {
                 appState.toggleVaultTask(row)
             } label: {
-                Image(systemName: row.task.completed ? "checkmark.square" : "square")
+                (row.task.completed ? SlateSymbol.taskComplete : SlateSymbol.taskIncomplete).decorative
                     .imageScale(.large)
             }
             .buttonStyle(.plain)

@@ -140,9 +140,8 @@ struct CommandPaletteView: View {
 
     private var searchField: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
+            SlateSymbol.search.decorative
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                .accessibilityHidden(true)
             TextField("Search commands", text: $model.query)
                 .textFieldStyle(.plain)
                 .font(.title3)
