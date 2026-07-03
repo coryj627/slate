@@ -57,6 +57,10 @@ enum SlateSymbol: CaseIterable {
     case editingMode
     case folder
     case folderOpen
+    /// Row disclosure triangle for the file tree (U2-4, #462). Rendered
+    /// `decorative` and rotated by the row per expand state; the folder row's
+    /// AX value states expanded/collapsed, so the glyph itself is unlabeled.
+    case disclosure
 
     /// The resolved SF Symbol name for the running OS. `private` so call
     /// sites can't reach past the labeled/decorative builders to name a raw
@@ -93,6 +97,7 @@ enum SlateSymbol: CaseIterable {
         case .editingMode: return "Editing mode"
         case .folder: return "Folder"
         case .folderOpen: return "Open folder"
+        case .disclosure: return "Disclosure"
         }
     }
 
@@ -132,6 +137,7 @@ enum SlateSymbol: CaseIterable {
         case .editingMode: return ("square.and.pencil", "pencil")
         case .folder: return ("folder", "folder")
         case .folderOpen: return ("folder.fill", "folder.fill")
+        case .disclosure: return ("chevron.right", "chevron.right")
         }
     }
 

@@ -1423,7 +1423,7 @@ final class AppState: ObservableObject {
         //    property directly (which wrote it mid-transaction); it holds
         //    a local `@State` selection and assigns `selectedFilePath`
         //    from `.onChange` — a post-update, safe mutation point. See
-        //    FileListSidebar.
+        //    FileTreeSidebar.
         // 2. Init. `.dropFirst()` skips the value Combine replays to a new
         //    subscriber (the initial `nil`), which would otherwise fire
         //    handleSelectionChange(nil) inside the StateObject's creation

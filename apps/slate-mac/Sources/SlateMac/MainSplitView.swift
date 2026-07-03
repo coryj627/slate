@@ -62,7 +62,7 @@ struct MainSplitView: View {
         // mangled NSHostingView type names that the Accessibility
         // Inspector flagged with "Element has no description".
         NavigationSplitView {
-            FileListSidebar()
+            FileTreeSidebar()
                 .accessibilityLabel("Files sidebar")
         } content: {
             // U1-4 (#456): the center column is the workspace region.
