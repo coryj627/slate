@@ -48,6 +48,14 @@ struct MainSplitView: View {
     }
 
     var body: some View {
+        // Staged composition (U1-2): the previous single modifier
+        // chain exceeded the type-checker's budget as alerts grew.
+        // Each stage is a separately-inferred expression; behavior is
+        // identical (modifier order preserved: core → alerts → sheets).
+        splitViewWithSheets
+    }
+
+    private var splitViewCore: some View {
         // Each column gets its own .accessibilityLabel so VoiceOver
         // announces meaningful names when the user navigates between
         // panes (Cmd+Opt+arrow on macOS) instead of falling back to the
@@ -65,197 +73,16 @@ struct MainSplitView: View {
                 .accessibilityLabel("Note content pane")
                 .accessibilityFocused($alertFocusReturn, equals: .editor)
         } detail: {
-            // Sidebar tabs (Milestone L #279 adds Citations alongside
-            // Outline). Both panels read from `AppState`'s
-            // currently-loaded note state, so switching tabs is free
-            // — no extra IO. Default tab is Outline because that's
-            // what was there before Milestone L; Citations earns its
-            // tab only on notes that actually cite something.
-            //
-            // Picker(.segmented) instead of `TabView` so the tab
-            // strip renders uniformly. AppKit's TabView default on
-            // macOS draws a vertical separator between adjacent
-            // *unselected* tabs and lets the selected pill occlude
-            // its neighbours' dividers, which surfaces visually as
-            // asymmetric dividers (the original Outline-selected
-            // shape only showed a divider between Citations and
-            // Bibliography). VoiceOver gets the same semantics — a
-            // segmented control with three named options — and
-            // arrow-key navigation between segments is built in.
-            VStack(spacing: 0) {
-                Picker("Sidebar tab", selection: $sidebarTab) {
-                    Text("Outline").tag(SidebarTab.outline)
-                    Text("Citations").tag(SidebarTab.citations)
-                    Text("Bibliography").tag(SidebarTab.bibliography)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-                .accessibilityLabel("Sidebar tab")
-
-                // Keep every panel mounted via `ZStack`, with
-                // `.opacity` + `.allowsHitTesting` + `.accessibilityHidden`
-                // gating which one is visible. `TabView`'s prior
-                // semantics retained per-panel `@State` across tab
-                // switches; a `switch` over `sidebarTab` would
-                // destroy and re-create the view on every switch,
-                // which silently regresses:
-                //
-                //   - `BibliographyPanel.segment` (entries vs.
-                //     unresolved) resets to `.entries` on every
-                //     visit.
-                //   - `BibliographyPanel.hasLoaded` resets to
-                //     `false`, re-firing the `loadBibliographyEntries`
-                //     fetch on each tab return (wasted IO).
-                //   - `OutlineSidebar` / `CitationsPanel`
-                //     `announcedFilePath` resets, causing
-                //     VoiceOver to re-announce the file every
-                //     time the user comes back to the tab.
-                //
-                // `accessibilityHidden(true)` plus
-                // `allowsHitTesting(false)` keep VoiceOver +
-                // pointer focus scoped to the visible panel — the
-                // hidden ones stay in the view hierarchy purely
-                // for state retention.
-                ZStack {
-                    OutlineSidebar()
-                        .opacity(sidebarTab == .outline ? 1 : 0)
-                        .allowsHitTesting(sidebarTab == .outline)
-                        .accessibilityHidden(sidebarTab != .outline)
-                    CitationsPanel()
-                        .opacity(sidebarTab == .citations ? 1 : 0)
-                        .allowsHitTesting(sidebarTab == .citations)
-                        .accessibilityHidden(sidebarTab != .citations)
-                    BibliographyPanel()
-                        .opacity(sidebarTab == .bibliography ? 1 : 0)
-                        .allowsHitTesting(sidebarTab == .bibliography)
-                        .accessibilityHidden(sidebarTab != .bibliography)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .accessibilityLabel("Sidebar")
+            // Extracted subview (U1-2): MainSplitView.body sits at the
+            // type-checker's practical limit, and the workspace close-gate
+            // alerts below need to live in THIS struct (next to the
+            // @AccessibilityFocusState they assign) for both the AX
+            // behavior and the a11y-check gate. U4 replaces this column
+            // with the leaf rail wholesale.
+            DetailSidebarColumn(sidebarTab: $sidebarTab)
         }
         .navigationTitle(vaultTitle)
-        .toolbar {
-            // Save status indicator: a Modified/Saved label that
-            // VoiceOver reads when the toolbar focus lands on it.
-            // Hidden when no note is loaded so the toolbar doesn't
-            // claim "Saved" against an empty editor.
-            if appState.loadedFilePath != nil {
-                ToolbarItem(placement: .automatic) {
-                    Text(appState.hasUnsavedChanges ? "Modified" : "Saved")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel(
-                            appState.hasUnsavedChanges
-                                ? "Modified. Unsaved changes in the editor."
-                                : "Saved. Editor matches the on-disk file."
-                        )
-                }
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.saveCurrentNote()
-                } label: {
-                    SlateSymbol.save.label()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(
-                    appState.loadedFilePath == nil
-                        || appState.isSaving
-                        || !appState.hasUnsavedChanges
-                )
-                .accessibilityHint(
-                    "Save the current note to disk. Cmd+S."
-                )
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.toggleSearchOverlay()
-                } label: {
-                    SlateSymbol.search.label()
-                }
-                // #422: ⌘F moved to the menu bar ("Search Vault…").
-                // The toolbar registration proved dead with sidebar
-                // focus (VO test); the menu equivalent works because
-                // nothing claims bare ⌘F in the key-window sweep
-                // (which AppKit runs BEFORE the menu — see the note
-                // in SlateMacApp). Two registrations of the same
-                // equivalent would be ambiguous, so the toolbar
-                // button is click/AX-activate only.
-                .accessibilityHint(
-                    "Opens the search overlay. Cmd+F to toggle, Esc to close."
-                )
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.openTemplatePicker()
-                } label: {
-                    SlateSymbol.newFromTemplate.label()
-                }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-                .accessibilityHint(
-                    "Opens the template picker. Cmd+Shift+N. Esc closes."
-                )
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.openTasksReview()
-                } label: {
-                    SlateSymbol.tasksReview.label()
-                }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-                .disabled(appState.currentSession == nil)
-                .accessibilityHint(
-                    "Opens the vault-wide tasks review. Cmd+Shift+T. Esc closes."
-                )
-            }
-            // Milestone L #282: Citation Summary. Cmd+Shift+J opens
-            // the sheet showing N citations / M unique sources for
-            // the current note. Disabled with no note selected.
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.isCitationSummaryOpen = true
-                } label: {
-                    SlateSymbol.citationSummary.label()
-                }
-                .keyboardShortcut("j", modifiers: [.command, .shift])
-                .disabled(appState.selectedFilePath == nil)
-                .accessibilityHint(
-                    "Opens the citation summary for the current note. Cmd+Shift+J. Esc closes."
-                )
-            }
-            // Milestone L #282: Jump to bibliography from the
-            // currently-expanded citation. Cmd+J. Active only when
-            // a citation popover is open.
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    appState.jumpToBibliographyFromExpandedCitation()
-                } label: {
-                    SlateSymbol.bibliography.label("Jump to Bibliography")
-                }
-                .keyboardShortcut("j", modifiers: .command)
-                .disabled(appState.expandedCitation == nil)
-                .accessibilityHint(
-                    "Filters the Bibliography sidebar to the citation's key. Cmd+J."
-                )
-            }
-            ToolbarItem(placement: .automatic) {
-                Button("Close Vault") {
-                    // Shared with the palette's slate.vault.close
-                    // registration (#314) so both surfaces post the
-                    // same VoiceOver announcement on clean close
-                    // and route the dirty path through the same
-                    // "Save changes?" prompt.
-                    appState.closeVaultFromUserAction()
-                }
-                .accessibilityHint(
-                    "Returns to the welcome screen. Prompts to save if the editor has unsaved changes."
-                )
-            }
-        }
+        .toolbar { mainToolbar }
         .overlay(alignment: .top) {
             if appState.isSearchOpen {
                 SearchOverlay()
@@ -278,6 +105,10 @@ struct MainSplitView: View {
         //    user can think about it. Per issue #64: "accidental
         //    Return doesn't lose data" — Cancel as the cancel-role
         //    means the platform routes keyboard dismissal here.
+    }
+
+    private var splitViewWithAlerts: some View {
+        splitViewCore
         .alert(
             "File changed externally",
             isPresented: writeConflictPresented,
@@ -347,6 +178,66 @@ struct MainSplitView: View {
                 "Save changes to \(name)?"
             )
         }
+        // Tab-close gate (U1-2, #454). Same three-button shape as the
+        // navigation gate above so VoiceOver users learn one mental model;
+        // scoped to the tab being closed. Lives inline (not in a modifier)
+        // so the focus-return assignment sits next to the
+        // @AccessibilityFocusState it targets — required for the AX
+        // behavior and verified by the a11y-check gate.
+        .alert(
+            "Save changes?",
+            isPresented: pendingTabClosePresented,
+            presenting: appState.pendingTabClose
+        ) { _ in
+            Button("Save") {
+                appState.resolveTabCloseSave()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint("Save the note, then close its tab.")
+            Button("Discard", role: .destructive) {
+                appState.resolveTabCloseDiscard()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint("Throw away unsaved changes and close the tab.")
+            Button("Cancel", role: .cancel) {
+                appState.resolveTabCloseCancel()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint("Keep the tab open. Unsaved changes remain.")
+        } message: { tabID in
+            let name = appState.workspace.model.tab(tabID)
+                .map { filename(of: appState.workspace.tabPath($0)) } ?? "this note"
+            Text("Save changes to \(name) before closing its tab?")
+        }
+        // Vault-close gate with multiple dirty tabs (U1-2). The single-
+        // dirty-tab case routes through the navigation gate, unchanged
+        // from pre-tab behavior.
+        .alert(
+            "Save changes to \(appState.pendingVaultClose ?? 0) notes?",
+            isPresented: pendingVaultClosePresented,
+            presenting: appState.pendingVaultClose
+        ) { _ in
+            Button("Save All") {
+                appState.resolveVaultCloseSaveAll()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint(
+                "Save every tab with unsaved changes, then close the vault.")
+            Button("Discard All", role: .destructive) {
+                appState.resolveVaultCloseDiscardAll()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint("Throw away all unsaved changes and close the vault.")
+            Button("Cancel", role: .cancel) {
+                appState.resolveVaultCloseCancel()
+                alertFocusReturn = .editor
+            }
+            .accessibilityHint("Keep the vault open. Unsaved changes remain.")
+        } message: { count in
+            Text(
+                "\(count) open tabs have unsaved changes. Save them all before closing the vault?"
+            )
+        }
         // Property-edit conflict alert. Mirrors the editor-save
         // conflict alert above but scopes the message + actions to
         // a single key edit (Milestone I / #168). Same three-button
@@ -382,6 +273,10 @@ struct MainSplitView: View {
                 "\(filename(of: conflict.path)) was modified outside the editor while you were editing the `\(conflict.key)` property. Choose how to resolve."
             )
         }
+    }
+
+    private var splitViewWithSheets: some View {
+        splitViewWithAlerts
         .sheet(isPresented: $appState.isTemplatePickerOpen) {
             TemplatePicker()
                 .environmentObject(appState)
@@ -538,11 +433,210 @@ struct MainSplitView: View {
         )
     }
 
+
+    /// Toolbar contents, extracted from `body` for type-checker budget
+    /// (U1-2) — the close-gate alerts must stay inline in `body` next to
+    /// `alertFocusReturn`, so the toolbar is what moves. Content verbatim.
+    @ToolbarContentBuilder
+    private var mainToolbar: some ToolbarContent {
+            // Save status indicator: a Modified/Saved label that
+            // VoiceOver reads when the toolbar focus lands on it.
+            // Hidden when no note is loaded so the toolbar doesn't
+            // claim "Saved" against an empty editor.
+            if appState.loadedFilePath != nil {
+                ToolbarItem(placement: .automatic) {
+                    Text(appState.hasUnsavedChanges ? "Modified" : "Saved")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(
+                            appState.hasUnsavedChanges
+                                ? "Modified. Unsaved changes in the editor."
+                                : "Saved. Editor matches the on-disk file."
+                        )
+                }
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.saveCurrentNote()
+                } label: {
+                    SlateSymbol.save.label()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(
+                    appState.loadedFilePath == nil
+                        || appState.isSaving
+                        || !appState.hasUnsavedChanges
+                )
+                .accessibilityHint(
+                    "Save the current note to disk. Cmd+S."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.toggleSearchOverlay()
+                } label: {
+                    SlateSymbol.search.label()
+                }
+                // #422: ⌘F moved to the menu bar ("Search Vault…").
+                // The toolbar registration proved dead with sidebar
+                // focus (VO test); the menu equivalent works because
+                // nothing claims bare ⌘F in the key-window sweep
+                // (which AppKit runs BEFORE the menu — see the note
+                // in SlateMacApp). Two registrations of the same
+                // equivalent would be ambiguous, so the toolbar
+                // button is click/AX-activate only.
+                .accessibilityHint(
+                    "Opens the search overlay. Cmd+F to toggle, Esc to close."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.openTemplatePicker()
+                } label: {
+                    SlateSymbol.newFromTemplate.label()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .accessibilityHint(
+                    "Opens the template picker. Cmd+Shift+N. Esc closes."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.openTasksReview()
+                } label: {
+                    SlateSymbol.tasksReview.label()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(appState.currentSession == nil)
+                .accessibilityHint(
+                    "Opens the vault-wide tasks review. Cmd+Shift+T. Esc closes."
+                )
+            }
+            // Milestone L #282: Citation Summary. Cmd+Shift+J opens
+            // the sheet showing N citations / M unique sources for
+            // the current note. Disabled with no note selected.
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.isCitationSummaryOpen = true
+                } label: {
+                    SlateSymbol.citationSummary.label()
+                }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+                .disabled(appState.selectedFilePath == nil)
+                .accessibilityHint(
+                    "Opens the citation summary for the current note. Cmd+Shift+J. Esc closes."
+                )
+            }
+            // Milestone L #282: Jump to bibliography from the
+            // currently-expanded citation. Cmd+J. Active only when
+            // a citation popover is open.
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    appState.jumpToBibliographyFromExpandedCitation()
+                } label: {
+                    SlateSymbol.bibliography.label("Jump to Bibliography")
+                }
+                .keyboardShortcut("j", modifiers: .command)
+                .disabled(appState.expandedCitation == nil)
+                .accessibilityHint(
+                    "Filters the Bibliography sidebar to the citation's key. Cmd+J."
+                )
+            }
+            ToolbarItem(placement: .automatic) {
+                Button("Close Vault") {
+                    // Shared with the palette's slate.vault.close
+                    // registration (#314) so both surfaces post the
+                    // same VoiceOver announcement on clean close
+                    // and route the dirty path through the same
+                    // "Save changes?" prompt.
+                    appState.closeVaultFromUserAction()
+                }
+                .accessibilityHint(
+                    "Returns to the welcome screen. Prompts to save if the editor has unsaved changes."
+                )
+            }
+    }
+
+    private var pendingTabClosePresented: Binding<Bool> {
+        Binding(
+            get: { appState.pendingTabClose != nil },
+            set: { presented in
+                if !presented {
+                    appState.pendingTabClose = nil
+                }
+            }
+        )
+    }
+
+    private var pendingVaultClosePresented: Binding<Bool> {
+        Binding(
+            get: { appState.pendingVaultClose != nil },
+            set: { presented in
+                if !presented {
+                    appState.pendingVaultClose = nil
+                }
+            }
+        )
+    }
+
     private func filename(of path: String) -> String {
         (path as NSString).lastPathComponent
     }
 
     private var vaultTitle: String {
         appState.currentVaultURL?.lastPathComponent ?? "Vault"
+    }
+}
+
+/// The detail column: segmented picker over Outline / Citations /
+/// Bibliography with the mounted-ZStack retention pattern. Extracted from
+/// `MainSplitView.body` (U1-2) purely for type-checker budget — behavior,
+/// comments, and the retention rationale are verbatim from the original.
+/// U4 replaces this column with the leaf rail.
+///
+/// Retention: keep every panel mounted via `ZStack`, with `.opacity` +
+/// `.allowsHitTesting` + `.accessibilityHidden` gating which one is visible.
+/// A `switch` over the tab would destroy and re-create panels per switch,
+/// silently regressing: `BibliographyPanel.segment` reset, re-fired
+/// `loadBibliographyEntries` IO, and `announcedFilePath` re-announcements.
+/// Hidden panels stay in the hierarchy purely for state retention;
+/// `accessibilityHidden(true)` + `allowsHitTesting(false)` keep VoiceOver
+/// and pointer focus scoped to the visible one.
+struct DetailSidebarColumn: View {
+    @Binding var sidebarTab: MainSplitView.SidebarTab
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Picker(.segmented) instead of `TabView` so the strip renders
+            // uniform dividers regardless of selection (Milestone L #279).
+            Picker("Sidebar tab", selection: $sidebarTab) {
+                Text("Outline").tag(MainSplitView.SidebarTab.outline)
+                Text("Citations").tag(MainSplitView.SidebarTab.citations)
+                Text("Bibliography").tag(MainSplitView.SidebarTab.bibliography)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .accessibilityLabel("Sidebar tab")
+
+            ZStack {
+                OutlineSidebar()
+                    .opacity(sidebarTab == .outline ? 1 : 0)
+                    .allowsHitTesting(sidebarTab == .outline)
+                    .accessibilityHidden(sidebarTab != .outline)
+                CitationsPanel()
+                    .opacity(sidebarTab == .citations ? 1 : 0)
+                    .allowsHitTesting(sidebarTab == .citations)
+                    .accessibilityHidden(sidebarTab != .citations)
+                BibliographyPanel()
+                    .opacity(sidebarTab == .bibliography ? 1 : 0)
+                    .allowsHitTesting(sidebarTab == .bibliography)
+                    .accessibilityHidden(sidebarTab != .bibliography)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .accessibilityLabel("Sidebar")
     }
 }

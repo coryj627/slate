@@ -187,14 +187,20 @@ struct WorkspaceModel: Hashable {
     /// Open `item` in `groupID` (default: active group). Dedup rule: if the
     /// group already has a tab for `item`, that tab is selected instead of
     /// opening a duplicate (a different group may hold the same item).
+    /// `allowDuplicate` bypasses dedup for the EXPLICIT duplicate gesture
+    /// (⌘T "New Tab") — navigation-opens keep the dedup behavior. (U1-2
+    /// tests caught the conflict: with unconditional dedup, duplicate-tab
+    /// was a silent no-op.)
     @discardableResult
     mutating func openTab(
-        _ item: EditorItem, in groupID: GroupID? = nil, activate: Bool = true
+        _ item: EditorItem, in groupID: GroupID? = nil, activate: Bool = true,
+        allowDuplicate: Bool = false
     ) -> TabID {
         let targetID = groupID.flatMap { group($0) != nil ? $0 : nil } ?? activeGroupID
         var opened: TabID!
         updateGroup(targetID) { group in
-            if let existing = group.tabs.first(where: { $0.item == item }) {
+            if !allowDuplicate,
+                let existing = group.tabs.first(where: { $0.item == item }) {
                 opened = existing.id
                 if activate { group.activeTabID = existing.id }
                 return

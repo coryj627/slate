@@ -15,7 +15,19 @@ struct WorkspaceView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        SplitNodeView(node: appState.workspace.model.root)
+        // `workspace` is a nested ObservableObject — AppState's own
+        // publisher does NOT forward its changes, so the tree observes it
+        // directly (a tab switch between two tabs of the same file changes
+        // no AppState @Published field at all).
+        WorkspaceTreeView(workspace: appState.workspace)
+    }
+}
+
+private struct WorkspaceTreeView: View {
+    @ObservedObject var workspace: WorkspaceState
+
+    var body: some View {
+        SplitNodeView(node: workspace.model.root)
     }
 }
 
@@ -42,14 +54,21 @@ private struct SplitNodeView: View {
     }
 }
 
-/// One tab group's pane: (from U1-2) the tab strip, then the active tab's
-/// content. In U1-4 the content is today's `NoteContentView`, which owns all
-/// of the center column's visual states — including "no note selected" — so
-/// nothing about the app's behavior or accessibility tree changes shape.
+/// One tab group's pane: the tab strip (U1-2), then the active tab's
+/// content — today's `NoteContentView`, which owns all of the center
+/// column's visual states. The strip renders only when the group holds a
+/// tab: an empty workspace shows the content pane's own empty state without
+/// a bar above it.
 private struct TabGroupView: View {
     let group: TabGroupNode
 
     var body: some View {
-        NoteContentView()
+        VStack(spacing: 0) {
+            if !group.tabs.isEmpty {
+                TabBarView(group: group)
+                Divider()
+            }
+            NoteContentView()
+        }
     }
 }

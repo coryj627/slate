@@ -251,10 +251,202 @@ final class AppState: ObservableObject {
     @Published var selectedFilePath: String?
 
     /// The workspace shell (Milestone U1): split tree → tab groups → tabs.
-    /// U1-4 keeps it as a mirror of `selectedFilePath` (one group, ≤ 1 tab)
-    /// synced from `handleSelectionChange`; U1-2 makes it the owner of open
-    /// documents.
+    /// AppState's single-note fields hold the ACTIVE tab's document; parked
+    /// tabs live in `workspace.documents` (U1-2 snapshot/restore — see the
+    /// architecture amendment in u1_spec.md).
     let workspace = WorkspaceState()
+
+    /// A tab-close request blocked on that tab's unsaved changes (U1-2).
+    /// Drives the Save / Discard / Cancel alert in `MainSplitView`; the
+    /// resolve trio below routes the outcome.
+    @Published var pendingTabClose: TabID?
+
+    /// Set when the pending-close alert chose "Save": the close completes
+    /// when the in-flight save lands cleanly, and aborts on conflict/error
+    /// (the tab must stay open while the user resolves).
+    var pendingTabCloseAfterSave: TabID?
+
+    /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
+    /// mirrors `selectedFilePath` for the sidebar highlight; the
+    /// `$selectedFilePath` sink must not run the selection funnel again on
+    /// that assignment. Synchronous sink ⇒ a plain flag suffices.
+    private var isActivatingTab = false
+
+    /// The single tab-switch funnel (U1-2): snapshot the outgoing tab,
+    /// select `id`, restore its parked buffer (or disk-load on first
+    /// activation), re-fire the collection loads, and mirror the sidebar
+    /// selection. Identity-keyed, so two tabs holding the SAME path switch
+    /// correctly (a path-keyed funnel cannot distinguish them).
+    func activateTab(_ id: TabID) {
+        guard let tab = workspace.model.tab(id),
+            case .markdown(let path) = tab.item
+        else { return }
+        if id == workspace.model.activeGroup.activeTabID, loadedFilePath == path {
+            return
+        }
+        // Codoki #492 (High): a save-then-close scope must not outlive its
+        // tab context. If the user switches away while that save is in
+        // flight, the success branch correctly skips the close (active-tab
+        // guard) — but leaving the marker set would close the tab on a
+        // LATER unrelated save. Clear it on any switch away.
+        if let pending = pendingTabCloseAfterSave, pending != id {
+            pendingTabCloseAfterSave = nil
+        }
+        isActivatingTab = true
+        defer { isActivatingTab = false }
+        workspace.snapshotActiveTab(
+            text: currentNoteText, baseline: savedBaselineText,
+            contentHash: currentNoteContentHash,
+            hasUnsavedChanges: hasUnsavedChanges,
+            saveError: saveError, saveConflict: currentSaveConflict,
+            loadedFilePath: loadedFilePath)
+        cancelNoteScopedWork()
+        clearActiveNoteFields()
+        workspace.select(id)
+        clearTransitionSensitiveCollections()
+        restoreParkedOrLoadFromDisk(path: path)
+        // Sidebar highlight mirrors the active tab. The sink is latched;
+        // `removeDuplicates` additionally swallows same-path switches.
+        if selectedFilePath != path {
+            selectedFilePath = path
+        }
+        fireCollectionLoads(path: path)
+    }
+
+    // MARK: - Tab lifecycle (U1-2, #454)
+
+    /// ⌘T. Until quick-open lands with U1-5, new-tab duplicates the active
+    /// tab's item (the spec's documented stopgap); with no active tab it is
+    /// a no-op.
+    func newTab() {
+        guard let item = workspace.activeTab?.item else { return }
+        // Snapshot the outgoing buffer, then open the duplicate. The
+        // selection sink does NOT fire (same path selected), so park and
+        // restore in place.
+        workspace.snapshotActiveTab(
+            text: currentNoteText, baseline: savedBaselineText,
+            contentHash: currentNoteContentHash,
+            hasUnsavedChanges: hasUnsavedChanges,
+            saveError: saveError, saveConflict: currentSaveConflict,
+            loadedFilePath: loadedFilePath)
+        workspace.openTab(item, allowDuplicate: true)
+        announceActiveTab(prefix: "Opened new tab.")
+    }
+
+    /// ⌘W and the tab-strip close buttons. Gates on the tab's dirty state —
+    /// active tab reads the live fields; parked tabs read their document.
+    func requestCloseTab(_ id: TabID? = nil) {
+        guard let target = id ?? workspace.model.activeGroup.activeTabID else { return }
+        let isActive = target == workspace.model.activeGroup.activeTabID
+        let dirty =
+            isActive
+            ? hasUnsavedChanges
+            : (workspace.document(for: target)?.hasUnsavedChanges ?? false)
+        if dirty {
+            pendingTabClose = target
+        } else {
+            performCloseTab(target)
+        }
+    }
+
+    /// Alert "Save": activate the tab if parked (snapshot/restore through
+    /// the identity funnel), then save through the standard path; the close
+    /// completes in `performSave`'s success branch.
+    func resolveTabCloseSave() {
+        guard let target = pendingTabClose else { return }
+        pendingTabClose = nil
+        if target != workspace.model.activeGroup.activeTabID {
+            activateTab(target)
+        }
+        pendingTabCloseAfterSave = target
+        saveCurrentNote()
+    }
+
+    /// Alert "Discard": drop the tab's buffer and close it.
+    func resolveTabCloseDiscard() {
+        guard let target = pendingTabClose else { return }
+        pendingTabClose = nil
+        if target == workspace.model.activeGroup.activeTabID {
+            // Neutralize the dirty state so the close path's teardown
+            // doesn't trip the navigation gate.
+            hasUnsavedChanges = false
+        }
+        performCloseTab(target)
+    }
+
+    func resolveTabCloseCancel() {
+        pendingTabClose = nil
+    }
+
+    /// The close itself: mutate the model, then activate the surviving
+    /// focused tab through the identity funnel (restores its buffer even
+    /// when it shares a path with the closed tab).
+    func performCloseTab(_ id: TabID) {
+        let closingActive = id == workspace.model.activeGroup.activeTabID
+        let closedTitle = workspace.model.tab(id).map { filename(of: workspace.tabPath($0)) }
+        if closingActive {
+            // The buffer being closed must not leak into the successor's
+            // snapshot: tear the active fields down BEFORE the model close
+            // (afterwards the model's active tab is already the successor,
+            // and a snapshot would park the closed buffer under its id).
+            // A dirty buffer only reaches here through the Discard
+            // resolution or clean state — requestCloseTab gates the rest.
+            cancelNoteScopedWork()
+            clearActiveNoteFields()
+        }
+        let outcome = workspace.close(id)
+        if closingActive {
+            if let successor = outcome.focusedTab {
+                activateTab(successor)
+            } else if selectedFilePath != nil {
+                selectedFilePath = nil
+            }
+        }
+        if let closedTitle {
+            let successor = workspace.activeTab.map {
+                filename(of: workspace.tabPath($0))
+            }
+            postAccessibilityAnnouncement(
+                successor.map { "Closed \(closedTitle). \($0) is active." }
+                    ?? "Closed \(closedTitle).",
+                priority: .medium)
+        }
+    }
+
+    /// ⌘⇧] / ⌘⇧[ / ⌘1…⌘9. The model is a value type: compute the target on
+    /// a COPY (zero logic duplication), then run the identity funnel.
+    func selectNextTab() { activateComputedTab { $0.selectNextTab() } }
+    func selectPreviousTab() { activateComputedTab { $0.selectPreviousTab() } }
+    func selectTab(ordinal: Int) { activateComputedTab { $0.selectTab(ordinal: ordinal) } }
+    func selectTab(id: TabID) { activateTab(id) }
+
+    /// ⌃⌘← / ⌃⌘→ keyboard reorder (the non-drag equivalent to dragging).
+    func moveActiveTabLeft() {
+        workspace.moveActiveTab(by: -1)
+        announceActiveTab(prefix: "Moved tab left.")
+    }
+    func moveActiveTabRight() {
+        workspace.moveActiveTab(by: 1)
+        announceActiveTab(prefix: "Moved tab right.")
+    }
+
+    private func activateComputedTab(_ compute: (inout WorkspaceModel) -> Void) {
+        var preview = workspace.model
+        compute(&preview)
+        guard let target = preview.activeGroup.activeTabID,
+            target != workspace.model.activeGroup.activeTabID
+        else { return }
+        activateTab(target)
+    }
+
+    private func announceActiveTab(prefix: String) {
+        guard let tab = workspace.activeTab else { return }
+        let group = workspace.model.activeGroup
+        let index = (group.tabs.firstIndex { $0.id == tab.id }).map { $0 + 1 } ?? 0
+        postAccessibilityAnnouncement(
+            "\(prefix) \(filename(of: workspace.tabPath(tab))), tab \(index) of \(group.tabs.count).",
+            priority: .medium)
+    }
 
     /// UTF-8 text of the currently-selected note. Nil while no note
     /// is selected or while loading is in flight. Writable so the
@@ -1273,6 +1465,20 @@ final class AppState: ObservableObject {
         if let loaded = loadedFilePath, path == loaded {
             return
         }
+        // U1-2 (#454): re-entrancy guard — `activateTab` drives the funnel
+        // itself and updates `selectedFilePath` as a mirror; the sink must
+        // not run the funnel a second time on that assignment.
+        if isActivatingTab { return }
+        // U1-2: a selection naming a path that is already open as ANOTHER
+        // tab in the active group is a tab switch, not a navigation —
+        // route through the tab funnel (snapshot/restore, no dirty gate:
+        // each tab keeps its own dirty buffer; that is the point of tabs).
+        if let path,
+            let incomingTab = workspace.activeGroupTab(forPath: path),
+            incomingTab.id != workspace.model.activeGroup.activeTabID {
+            activateTab(incomingTab.id)
+            return
+        }
         // Dirty-state gate (issue #63): switching files while the
         // editor has unsaved changes must not silently drop the
         // user's edits. Park the requested destination in
@@ -1299,51 +1505,25 @@ final class AppState: ObservableObject {
             }
             return
         }
-        noteLoadTask?.cancel()
-        noteLoadTask = nil
-        // #421: a pending {{cursor}} park belongs to the note that
-        // requested it — never let it ride into a different note.
-        clearPendingCursorByteOffset()
-        linksLoadTask?.cancel()
-        linksLoadTask = nil
-        tasksLoadTask?.cancel()
-        tasksLoadTask = nil
-        // Audit #257 M1: orphaned content-pipeline tasks would
-        // otherwise keep grabbing the session mutex after the user
-        // switched files, serialising the new selection's loads
-        // behind their FFI bodies. Cancel them eagerly so rapid
-        // file switching doesn't pile up serialized work.
-        mathBlocksLoadTask?.cancel()
-        mathBlocksLoadTask = nil
-        codeBlocksLoadTask?.cancel()
-        codeBlocksLoadTask = nil
-        diagramBlocksLoadTask?.cancel()
-        diagramBlocksLoadTask = nil
-        // Red-team M1+M2: cancel pending refresh-after-save tasks
-        // too — same conn-mutex contention argument, plus this
-        // avoids a race where the orphan refresh's old-prefs
-        // result lands AFTER a prefs-driven reload publishes the
-        // new-prefs blocks.
-        mathBlocksRefreshTask?.cancel()
-        mathBlocksRefreshTask = nil
-        codeBlocksRefreshTask?.cancel()
-        codeBlocksRefreshTask = nil
-        diagramBlocksRefreshTask?.cancel()
-        diagramBlocksRefreshTask = nil
-        currentNoteText = nil
-        savedBaselineText = nil
-        currentNoteContentHash = nil
-        loadedFilePath = nil
-        hasUnsavedChanges = false
-        currentSaveConflict = nil
-        saveError = nil
-        currentNoteHeadings = []
-        noteLoadError = nil
-        linksLoadError = nil
-        tasksLoadError = nil
-        // Mirror the accepted selection into the workspace model (U1-4).
-        // Below the dirty gate on purpose: a parked navigation rolled back
-        // by the alert must never surface in the workspace.
+        // U1-2: park the outgoing tab's buffer BEFORE the teardown below
+        // clears the fields. No-ops when nothing is loaded (guards inside).
+        workspace.snapshotActiveTab(
+            text: currentNoteText, baseline: savedBaselineText,
+            contentHash: currentNoteContentHash,
+            hasUnsavedChanges: hasUnsavedChanges,
+            saveError: saveError, saveConflict: currentSaveConflict,
+            loadedFilePath: loadedFilePath)
+        // Same save-then-close scope rule as activateTab (Codoki #492):
+        // replacing the active tab's item in place also ends the scope —
+        // the pending close would otherwise target a different document.
+        pendingTabCloseAfterSave = nil
+        cancelNoteScopedWork()
+        clearActiveNoteFields()
+        // Workspace model update (U1-4 mirror; tab switches took the
+        // `activateTab` early-return above). Below the dirty gate on
+        // purpose: a parked navigation rolled back by the alert must never
+        // surface in the workspace. Replaces the active tab's item, or
+        // closes it on deselect.
         workspace.mirrorSingleSelection(path)
         guard let path else {
             // Full clear when nothing is selected. Safe here because
@@ -1393,25 +1573,107 @@ final class AppState: ObservableObject {
         // the stale data is whole notes, not one-liners. Clear
         // synchronously so the panel falls back to "not yet
         // resolved" placeholders until the new resolutions land.
+        clearTransitionSensitiveCollections()
+        restoreParkedOrLoadFromDisk(path: path)
+        fireCollectionLoads(path: path)
+    }
+
+    /// Cancel every note-scoped in-flight task (loads + after-save
+    /// refreshes). Shared by the selection funnel and `activateTab`.
+    /// Comment history: #421 cursor park; audit #257 M1 orphaned pipelines;
+    /// red-team M1+M2 refresh-task cancellation.
+    private func cancelNoteScopedWork() {
+        noteLoadTask?.cancel()
+        noteLoadTask = nil
+        // #421: a pending {{cursor}} park belongs to the note that
+        // requested it — never let it ride into a different note.
+        clearPendingCursorByteOffset()
+        linksLoadTask?.cancel()
+        linksLoadTask = nil
+        tasksLoadTask?.cancel()
+        tasksLoadTask = nil
+        // Audit #257 M1: orphaned content-pipeline tasks would otherwise
+        // keep grabbing the session mutex after the user switched files.
+        mathBlocksLoadTask?.cancel()
+        mathBlocksLoadTask = nil
+        codeBlocksLoadTask?.cancel()
+        codeBlocksLoadTask = nil
+        diagramBlocksLoadTask?.cancel()
+        diagramBlocksLoadTask = nil
+        // Red-team M1+M2: cancel pending refresh-after-save tasks too.
+        mathBlocksRefreshTask?.cancel()
+        mathBlocksRefreshTask = nil
+        codeBlocksRefreshTask?.cancel()
+        codeBlocksRefreshTask = nil
+        diagramBlocksRefreshTask?.cancel()
+        diagramBlocksRefreshTask = nil
+    }
+
+    /// Clear the active-note fields for a transition. Shared by the
+    /// selection funnel and `activateTab`.
+    private func clearActiveNoteFields() {
+        currentNoteText = nil
+        savedBaselineText = nil
+        currentNoteContentHash = nil
+        loadedFilePath = nil
+        hasUnsavedChanges = false
+        currentSaveConflict = nil
+        saveError = nil
+        currentNoteHeadings = []
+        noteLoadError = nil
+        linksLoadError = nil
+        tasksLoadError = nil
+    }
+
+    /// Audit #203: embeds + content pipelines clear synchronously on any
+    /// transition (their cached payloads are whole rendered content of the
+    /// PREVIOUS file); links/properties intentionally hold stale values
+    /// until the new load lands (#90 anti-flicker discipline).
+    private func clearTransitionSensitiveCollections() {
         currentNoteEmbedResolutions = [:]
         // Drop any open embed-preview popover too — its target may
         // not exist in the new file's embed set.
         pendingEmbedPreview = nil
-        // Content pipelines: same synchronous-clear reasoning as
-        // embeds. The blocks carry rendered MathML / token streams /
-        // SVG bytes for the previous file's body — holding them
-        // during a transition would render the prior file's content
-        // inside panels labelled as the new file's. Audit #203
-        // logic, repeated.
         currentNoteMathBlocks = []
         currentNoteCodeBlocks = []
         currentNoteDiagramBlocks = []
         currentNoteCitations = []
         currentNoteCitationRefs = []
         expandedCitation = nil
-        noteLoadTask = Task { [weak self] in
-            await self?.loadCurrentNote(path: path)
+    }
+
+    /// U1-2 restore path: a previously-activated tab restores its parked
+    /// buffer instead of re-reading disk; headings refresh through the
+    /// after-save path (index read, no file read). A parked stale
+    /// `contentHash` is safe by construction — the next save's conflict
+    /// detection compares it against disk, exactly as for a long-open note.
+    private func restoreParkedOrLoadFromDisk(path: String) {
+        if let activeTabID = workspace.model.activeGroup.activeTabID,
+            let parked = workspace.document(for: activeTabID),
+            parked.hasLoaded, parked.path == path {
+            currentNoteText = parked.text
+            savedBaselineText = parked.savedBaselineText
+            currentNoteContentHash = parked.contentHash
+            loadedFilePath = path
+            hasUnsavedChanges = parked.hasUnsavedChanges
+            saveError = parked.saveError
+            currentSaveConflict = parked.saveConflict
+            isLoadingNote = false
+            noteLoadError = nil
+            if let session = currentSession {
+                refreshHeadingsAfterSave(session: session, path: path)
+            }
+        } else {
+            noteLoadTask = Task { [weak self] in
+                await self?.loadCurrentNote(path: path)
+            }
         }
+    }
+
+    /// The per-note collection fan-out (links → embeds chain, tasks, math,
+    /// code, diagrams, citations). Shared by the selection funnel and
+    /// `activateTab`; every loader carries its own race guard.
+    private func fireCollectionLoads(path: String) {
         linksLoadTask = Task { [weak self] in
             await self?.loadCurrentLinks(path: path)
             // Chain the embed-resolution load on after links — we
@@ -1665,6 +1927,12 @@ final class AppState: ObservableObject {
             // don't briefly flash in the new vault's sidebar.
             files = []
             scanError = nil
+            // U1-2: tabs belong to a vault; a fresh open starts clean (and
+            // must reset BEFORE the selection clear so the funnel doesn't
+            // park the previous vault's buffer).
+            workspace.reset()
+            pendingTabClose = nil
+            pendingTabCloseAfterSave = nil
             selectedFilePath = nil
             scanProgress = nil
             scanAnnouncementCount = 0
@@ -1753,14 +2021,71 @@ final class AppState: ObservableObject {
     /// - Clean editor → closes immediately and posts the
     ///   announcement inline here.
     func closeVaultFromUserAction() {
-        if hasUnsavedChanges {
-            attemptCloseVault()
+        // U1-2: the dirty check aggregates over every tab. With no parked
+        // dirty documents the flow is exactly the pre-tabs behavior (the
+        // active document routes through the existing single-file alert).
+        let parkedDirty = workspace.dirtyParkedDocuments()
+        if parkedDirty.isEmpty {
+            if hasUnsavedChanges {
+                attemptCloseVault()
+            } else {
+                closeVault()
+                postAccessibilityAnnouncement(
+                    "Vault closed. Returned to the welcome screen."
+                )
+            }
         } else {
-            closeVault()
+            pendingVaultClose = parkedDirty.count + (hasUnsavedChanges ? 1 : 0)
+        }
+    }
+
+    /// Multi-tab vault-close prompt (U1-2): the number of dirty tabs, nil
+    /// when no prompt is up. Drives the Save All / Discard All / Cancel
+    /// alert in `MainSplitView`.
+    @Published var pendingVaultClose: Int?
+
+    /// Test hook for the sequential Save All chain.
+    private(set) var vaultCloseSaveAllTask: Task<Void, Never>?
+
+    /// "Save All": save every dirty tab through the STANDARD save path
+    /// (activate → saveCurrentNote → await), sequentially. Aborts on the
+    /// first conflict/error, leaving the user on that tab with the standard
+    /// resolution dialog up; the vault stays open. Closes on full success.
+    func resolveVaultCloseSaveAll() {
+        pendingVaultClose = nil
+        vaultCloseSaveAllTask = Task { [weak self] in
+            guard let self else { return }
+            while true {
+                if self.hasUnsavedChanges {
+                    self.saveCurrentNote()
+                    await self.saveTask?.value
+                    if self.currentSaveConflict != nil || self.saveError != nil {
+                        return  // standard dialog owns recovery; vault stays open
+                    }
+                }
+                guard let next = self.workspace.dirtyParkedDocuments().first else { break }
+                self.activateTab(next.id)
+            }
+            self.closeVault()
             postAccessibilityAnnouncement(
-                "Vault closed. Returned to the welcome screen."
+                "All changes saved. Vault closed. Returned to the welcome screen."
             )
         }
+    }
+
+    /// "Discard All": close without saving any tab. The per-tab buffers are
+    /// dropped by `closeVault`'s workspace reset.
+    func resolveVaultCloseDiscardAll() {
+        pendingVaultClose = nil
+        hasUnsavedChanges = false
+        closeVault()
+        postAccessibilityAnnouncement(
+            "Changes discarded. Vault closed. Returned to the welcome screen."
+        )
+    }
+
+    func resolveVaultCloseCancel() {
+        pendingVaultClose = nil
     }
 
     func closeVault() {
@@ -1856,6 +2181,14 @@ final class AppState: ObservableObject {
         currentVaultURL = nil
         files = []
         scanError = nil
+        // U1-2: drop every tab + parked document BEFORE clearing the
+        // selection — the selection funnel's snapshot would otherwise park
+        // the about-to-be-discarded buffer, and mirrorSingleSelection would
+        // close only the ACTIVE tab, leaving siblings pointing into a
+        // closed vault.
+        workspace.reset()
+        pendingTabClose = nil
+        pendingTabCloseAfterSave = nil
         selectedFilePath = nil
         currentNoteText = nil
         currentNoteHeadings = []
@@ -3460,6 +3793,13 @@ final class AppState: ObservableObject {
         if currentNoteText == newText { return }
         currentNoteText = newText
         hasUnsavedChanges = (newText != (savedBaselineText ?? ""))
+        // U1-2: a duplicated tab (same path in another tab) is the same
+        // buffer — mirror the edit into same-path parked documents so an
+        // unfocused pane never renders stale bytes. Copy-on-write assign.
+        if let path = loadedFilePath {
+            workspace.mirrorEdit(
+                path: path, text: newText, hasUnsavedChanges: hasUnsavedChanges)
+        }
     }
 
     /// SwiftUI `Binding<String>` for the editor view. Wraps the
@@ -3549,6 +3889,18 @@ final class AppState: ObservableObject {
             currentNoteContentHash = report.newContentHash
             savedBaselineText = contents
             hasUnsavedChanges = false
+            // U1-2: same-path parked documents share the file — a save
+            // updates their baseline/hash too (one file, one truth).
+            workspace.mirrorSaveResult(
+                path: path, baseline: contents,
+                contentHash: report.newContentHash)
+            // U1-2: a close-tab request that chose "Save" completes its
+            // close once the save lands cleanly.
+            if let pending = pendingTabCloseAfterSave,
+                workspace.model.activeGroup.activeTabID == pending {
+                pendingTabCloseAfterSave = nil
+                performCloseTab(pending)
+            }
             // Refresh headings so the outline matches the just-
             // saved buffer. Same shape as `loadCurrentNote` —
             // a metadata fetch, no need to re-read text. The
@@ -3585,6 +3937,9 @@ final class AppState: ObservableObject {
                 priority: .medium
             )
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
+            // U1-2: a save-then-close chain aborts on conflict — the tab
+            // must stay open while the user resolves the dialog.
+            pendingTabCloseAfterSave = nil
             currentSaveConflict = SaveConflict(
                 path: path,
                 attemptedContents: contents,
@@ -3602,6 +3957,7 @@ final class AppState: ObservableObject {
                 priority: .medium
             )
         case .failure(let error):
+            pendingTabCloseAfterSave = nil
             saveError = humanReadable(error)
         }
         isSaving = false
