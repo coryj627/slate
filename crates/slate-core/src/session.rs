@@ -157,6 +157,42 @@ pub struct FileSummary {
     pub is_markdown: bool,
 }
 
+// --- Directory tree types (#459, U2-1) ---
+
+/// One child directory row returned by [`VaultSession::list_dir_children`].
+///
+/// `child_dir_count` / `child_file_count` are the immediate (non-
+/// recursive) child counts, so the UI can announce "N items" for a
+/// collapsed folder without a second fetch. Counts exclude dot-prefixed
+/// entries (which are never indexed) and count only the level directly
+/// under this directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirNodeSummary {
+    /// Stable across rescans (upserted by `path`); the tree uses it as a
+    /// node id.
+    pub id: i64,
+    /// Vault-relative, forward slashes, no trailing `/`.
+    pub path: String,
+    /// Final path component.
+    pub name: String,
+    pub child_dir_count: u32,
+    pub child_file_count: u32,
+}
+
+/// One level of the file tree: the child directories of a parent, then
+/// its child files. Returned by [`VaultSession::list_dir_children`].
+///
+/// `dirs` is the full (unpaged) list of child directories, sorted
+/// case-insensitively; `files` is a [`Page`] of the child files in the
+/// same order. The UI renders dirs first, then files (the sidebar's
+/// existing convention). No `PartialEq` derive is needed by callers, but
+/// both halves derive it so tests can assert on the whole listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirListing {
+    pub dirs: Vec<DirNodeSummary>,
+    pub files: Page<FileSummary>,
+}
+
 // --- Metadata type ---
 
 /// Full per-file metadata: the summary fields plus parsed structure
@@ -305,7 +341,7 @@ impl Paging {
 }
 
 /// A page of results plus the cursor that fetches the next page.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page<T> {
     pub items: Vec<T>,
     /// `None` when this page is the last one matching the filter.
@@ -1025,6 +1061,33 @@ impl VaultSession {
     ) -> Result<Page<FileSummary>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         list_files_impl(&conn, filter, paging)
+    }
+
+    /// List one level of the file tree: the child directories of
+    /// `parent_path`, then a page of its child files (#459, U2-1).
+    ///
+    /// `parent_path = ""` lists the root level. The path is validated
+    /// (no absolute, no `..`, no platform prefix) the same way the
+    /// provider validates mutation paths; an invalid path surfaces
+    /// `VaultError::InvalidPath` without touching the index.
+    ///
+    /// Ordering: directories first, then files, each sorted
+    /// case-insensitively on the NFC form of the name (a decomposed and
+    /// precomposed spelling of the same name sort adjacently and
+    /// deterministically). `dirs` is the complete child-directory list;
+    /// `files` is paged via the supplied [`Paging`]. Each
+    /// `DirNodeSummary` carries the immediate child dir/file counts so
+    /// the UI can announce a collapsed folder without a second fetch.
+    ///
+    /// Lazy per level: nothing recursive happens, so one call materializes
+    /// exactly one expanded folder.
+    pub fn list_dir_children(
+        &self,
+        parent_path: &str,
+        paging: Paging,
+    ) -> Result<DirListing, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        list_dir_children_impl(&conn, parent_path, paging)
     }
 
     /// Every outgoing link from `path`, in document order. Includes
@@ -2325,6 +2388,14 @@ fn scan_vault(
     }
     let mut indexed_count: u64 = 0;
 
+    // Every non-dot directory the walk visits, so we can prune `dirs`
+    // rows for directories that vanished from disk after the walk
+    // (mirrors the intent behind stale-file cleanup, scoped to the
+    // directory index this PR owns). The root ("") is never a `dirs`
+    // row — `list_dir_children("")` lists root children — so it is not
+    // tracked here.
+    let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let mut stack: Vec<String> = vec![String::new()];
     while let Some(dir) = stack.pop() {
         if cancel.is_cancelled() {
@@ -2363,6 +2434,10 @@ fn scan_vault(
 
             match entry.kind {
                 EntryKind::Directory => {
+                    if let Err(e) = upsert_dir(&tx, &path, &dir, &entry.name) {
+                        report.errors.push(format!("upsert dir {path:?}: {e}"));
+                    }
+                    seen_dirs.insert(path.clone());
                     stack.push(path);
                 }
                 EntryKind::File => {
@@ -2400,6 +2475,15 @@ fn scan_vault(
                 }
             }
         }
+    }
+
+    // Prune `dirs` rows for directories no longer on disk. The walk
+    // upserts every directory it sees into `seen_dirs`; anything left
+    // in the table that we didn't see this pass was deleted (or renamed
+    // away) since the last scan, so drop it. Runs inside the same
+    // transaction so it commits atomically with the upserts above.
+    if let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
+        report.errors.push(format!("prune stale dirs: {e}"));
     }
 
     // Re-resolve links that were Unresolved purely because their
@@ -2472,6 +2556,65 @@ fn count_files(provider: &dyn VaultProvider, cancel: &CancelToken) -> Result<u64
         }
     }
     Ok(total)
+}
+
+/// Upsert one directory row keyed by its vault-relative `path`.
+///
+/// `parent` is the directory the walk was listing (`""` for a root-
+/// level directory) and `name` is the final path component. Keyed on
+/// the `path UNIQUE` constraint so a rescan re-uses the same row —
+/// `dirs.id` is therefore stable across rescans (the census asserts
+/// it), matching the stable-`files.id` guarantee. Only `parent_path`
+/// and `name` are refreshed on conflict; a plain re-scan leaves them
+/// unchanged (the path is the conflict key, and parent/name are a pure
+/// function of it), while a future in-place path rewrite (U2-2) can
+/// reuse this to keep the row.
+fn upsert_dir(
+    tx: &rusqlite::Transaction,
+    path: &str,
+    parent: &str,
+    name: &str,
+) -> Result<(), VaultError> {
+    tx.execute(
+        "INSERT INTO dirs (path, parent_path, name)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(path) DO UPDATE SET
+            parent_path = excluded.parent_path,
+            name        = excluded.name",
+        rusqlite::params![path, parent, name],
+    )?;
+    Ok(())
+}
+
+/// Delete `dirs` rows whose `path` was not visited this scan.
+///
+/// The scan walks every non-dot directory and records each in
+/// `seen_dirs`; whatever remains in the table afterward is a directory
+/// that was removed or renamed on disk since the previous scan. We load
+/// the current paths and delete the set difference by id in one pass, so
+/// the work is O(rows) with no per-row query round-trip.
+fn prune_unseen_dirs(
+    tx: &rusqlite::Transaction,
+    seen_dirs: &std::collections::HashSet<String>,
+) -> Result<(), VaultError> {
+    let stale: Vec<i64> = {
+        let mut stmt = tx.prepare("SELECT id, path FROM dirs")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut stale = Vec::new();
+        for row in rows {
+            let (id, path) = row?;
+            if !seen_dirs.contains(&path) {
+                stale.push(id);
+            }
+        }
+        stale
+    };
+    for id in stale {
+        tx.execute("DELETE FROM dirs WHERE id = ?1", rusqlite::params![id])?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)] // shared scanner state; bundling adds friction
@@ -2973,6 +3116,245 @@ fn list_files_impl(
     })
 }
 
+// --- Internal: list_dir_children (#459, U2-1) ---
+
+/// Case-insensitive sort key for a tree node name.
+///
+/// The spec pins the key to `name.to_lowercase()` on the **NFC**
+/// normalization: a decomposed (NFD) and precomposed (NFC) spelling of
+/// the same name normalize to the same key, so they sort adjacently and
+/// deterministically rather than by raw code-unit order (where the
+/// combining-mark form sorts after the base letter of the *next* name).
+/// `to_lowercase` is the full Unicode lowercasing, matching the
+/// resolver's case-insensitive discipline.
+fn tree_sort_key(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.nfc().collect::<String>().to_lowercase()
+}
+
+/// Normalize + validate a `parent_path` for [`list_dir_children_impl`].
+///
+/// Returns the canonical vault-relative form (forward slashes, no
+/// trailing `/`, `.` components stripped) or `VaultError::InvalidPath`.
+/// `""` (root) is accepted and returned as `""`. Rejection rules mirror
+/// the provider's `resolve_relative`: no absolute paths, no `..`, no
+/// platform prefix. The canonical form must match the slash form the
+/// scanner stores in `dirs.path` / `files.path`, since the child queries
+/// key off it exactly.
+fn normalize_parent_path(parent_path: &str) -> Result<String, VaultError> {
+    use std::path::{Component, Path};
+    let mut normalized = String::new();
+    for component in Path::new(parent_path).components() {
+        match component {
+            Component::Normal(s) => {
+                let seg = s.to_string_lossy();
+                if !normalized.is_empty() {
+                    normalized.push('/');
+                }
+                normalized.push_str(&seg);
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(VaultError::InvalidPath {
+                    path: parent_path.to_string(),
+                    reason: "parent-directory references (..) are not allowed".into(),
+                });
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(VaultError::InvalidPath {
+                    path: parent_path.to_string(),
+                    reason: "absolute paths and platform prefixes are not allowed".into(),
+                });
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+/// Inclusive-lower / exclusive-upper bounds for a range-scan of every
+/// descendant path under `parent` (`""` = whole vault).
+///
+/// For a non-root `parent` the subtree is every path in
+/// `('parent/', 'parent' + '0')`: `'/'` is `0x2F` and the byte after it
+/// is `'0'` (`0x30`), so `'parent0'` is the least string greater than
+/// every `'parent/...'` string. We deliberately avoid `GLOB`/`LIKE` —
+/// `[`, `*`, `?`, `_`, `%` are all legal in vault filenames and would be
+/// interpreted as wildcards, silently corrupting the scan (gap_analysis
+/// G10 / spec §U2-1). Returns `None` for the root, whose "subtree" is the
+/// full table (no bounds).
+fn subtree_bounds(parent: &str) -> Option<(String, String)> {
+    if parent.is_empty() {
+        None
+    } else {
+        Some((format!("{parent}/"), format!("{parent}0")))
+    }
+}
+
+/// The immediate child segment of `path` relative to `parent`, or `None`
+/// if `path` is a deeper descendant (has more than one segment below
+/// `parent`) or is not under `parent` at all.
+///
+/// `parent = ""` treats the whole path as relative; a top-level entry
+/// `"notes"` yields `Some("notes")`, a nested `"notes/a.md"` yields
+/// `None`. For `parent = "notes"`, `"notes/a.md"` yields `Some("a.md")`
+/// and `"notes/sub/a.md"` yields `None`.
+fn immediate_child_segment<'a>(parent: &str, path: &'a str) -> Option<&'a str> {
+    let rest = if parent.is_empty() {
+        path
+    } else {
+        path.strip_prefix(parent)?.strip_prefix('/')?
+    };
+    if rest.is_empty() || rest.contains('/') {
+        None
+    } else {
+        Some(rest)
+    }
+}
+
+fn list_dir_children_impl(
+    conn: &Connection,
+    parent_path: &str,
+    paging: Paging,
+) -> Result<DirListing, VaultError> {
+    let parent = normalize_parent_path(parent_path)?;
+
+    // --- Child directories, with their immediate child counts. ---
+    //
+    // Range-scan the `dirs` subtree once (root = whole table), then
+    // group in Rust: immediate children are the depth-1 rows; each such
+    // child's `child_dir_count` is the number of descendant dirs whose
+    // `parent_path` equals that child's path. Range-scan + Rust-side
+    // count is the spec's normative choice — correctness over a
+    // GLOB/LIKE query that filenames can break.
+    let mut child_dirs: Vec<(i64, String, String)> = Vec::new(); // (id, path, name)
+    let mut dir_child_dir_count: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    {
+        let scan_dir_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, String, String)> {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        };
+        let rows: Vec<(i64, String, String)> = match subtree_bounds(&parent) {
+            Some((lo, hi)) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, path, parent_path FROM dirs WHERE path > ?1 AND path < ?2",
+                )?;
+                stmt.query_map(rusqlite::params![lo, hi], scan_dir_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            None => {
+                let mut stmt = conn.prepare("SELECT id, path, parent_path FROM dirs")?;
+                stmt.query_map([], scan_dir_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+        for (id, path, row_parent) in rows {
+            // Tally toward the containing dir's child-dir count.
+            *dir_child_dir_count.entry(row_parent).or_insert(0) += 1;
+            if let Some(name) = immediate_child_segment(&parent, &path) {
+                child_dirs.push((id, path.clone(), name.to_string()));
+            }
+        }
+    }
+
+    // --- Files: immediate child files of `parent`, plus each child
+    //     directory's immediate child-file count. ---
+    let mut listing_files: Vec<FileSummary> = Vec::new();
+    let mut dir_child_file_count: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    {
+        let scan_file_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<FileSummary> {
+            Ok(FileSummary {
+                path: row.get(0)?,
+                name: row.get(1)?,
+                mtime_ms: row.get(2)?,
+                size_bytes: row.get::<_, i64>(3)? as u64,
+                is_markdown: row.get::<_, i64>(4)? != 0,
+            })
+        };
+        let rows: Vec<FileSummary> = match subtree_bounds(&parent) {
+            Some((lo, hi)) => {
+                let mut stmt = conn.prepare(
+                    "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
+                     WHERE path > ?1 AND path < ?2",
+                )?;
+                stmt.query_map(rusqlite::params![lo, hi], scan_file_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare("SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files")?;
+                stmt.query_map([], scan_file_row)?
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+        for f in rows {
+            // A file's containing directory is its path minus the final
+            // component. Tally it toward that dir's child-file count so a
+            // collapsed child folder can announce its file count.
+            let file_parent = match f.path.rfind('/') {
+                Some(i) => &f.path[..i],
+                None => "",
+            };
+            *dir_child_file_count
+                .entry(file_parent.to_string())
+                .or_insert(0) += 1;
+            if immediate_child_segment(&parent, &f.path).is_some() {
+                listing_files.push(f);
+            }
+        }
+    }
+
+    // Assemble + sort the child directories (dirs-first ordering is by
+    // construction — they're a separate list from files).
+    let mut dirs: Vec<DirNodeSummary> = child_dirs
+        .into_iter()
+        .map(|(id, path, name)| DirNodeSummary {
+            child_dir_count: dir_child_dir_count.get(&path).copied().unwrap_or(0),
+            child_file_count: dir_child_file_count.get(&path).copied().unwrap_or(0),
+            id,
+            path,
+            name,
+        })
+        .collect();
+    // Case-insensitive NFC sort; the path is a deterministic tiebreak so
+    // two names with the same fold key (distinct only by case/normal
+    // form) still order stably across runs. `sort_by_cached_key` computes
+    // each NFC key once (not per comparison).
+    dirs.sort_by_cached_key(|d| (tree_sort_key(&d.name), d.path.clone()));
+
+    // Sort the files the same way, then page by numeric offset — the
+    // level is materialized in memory (case-insensitive order doesn't
+    // survive a SQL `path >` cursor), so the cursor is the count already
+    // returned.
+    listing_files.sort_by_cached_key(|f| (tree_sort_key(&f.name), f.path.clone()));
+    let total_files = listing_files.len() as u64;
+    let offset: usize = match &paging.cursor {
+        Some(c) => c.parse().map_err(|_| VaultError::InvalidArgument {
+            message: format!("invalid directory paging cursor {c:?}"),
+        })?,
+        None => 0,
+    };
+    let end = offset
+        .saturating_add(paging.limit as usize)
+        .min(listing_files.len());
+    let start = offset.min(listing_files.len());
+    let items: Vec<FileSummary> = listing_files[start..end].to_vec();
+    let next_cursor = if end < listing_files.len() {
+        Some(end.to_string())
+    } else {
+        None
+    };
+
+    Ok(DirListing {
+        dirs,
+        files: Page {
+            items,
+            next_cursor,
+            total_filtered: total_files,
+        },
+    })
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3209,6 +3591,9 @@ mod tests {
 
     #[path = "files.rs"]
     mod files;
+
+    #[path = "dir_tree.rs"]
+    mod dir_tree;
 
     #[path = "search.rs"]
     mod search;

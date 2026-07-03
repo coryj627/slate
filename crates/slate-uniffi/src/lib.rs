@@ -276,6 +276,19 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    /// List one level of the file tree: `parent_path`'s child directories
+    /// (each with immediate child-dir / child-file counts) then a page of
+    /// its child files. `parent_path = ""` lists the root. Directories
+    /// come first, then files, each sorted case-insensitively (#459).
+    pub fn list_dir_children(
+        &self,
+        parent_path: String,
+        paging: Paging,
+    ) -> Result<DirListing, VaultError> {
+        let listing = self.inner.list_dir_children(&parent_path, paging.into())?;
+        Ok(listing.into())
+    }
+
     /// Fetch full per-file metadata (basic columns + headings).
     ///
     /// Returns `nil` if the path isn't in the index yet — call
@@ -1021,6 +1034,48 @@ impl From<core::Page<core::FileSummary>> for FileSummaryPage {
             items: p.items.into_iter().map(Into::into).collect(),
             next_cursor: p.next_cursor,
             total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// One child directory row in a [`DirListing`] (#459). `child_dir_count`
+/// / `child_file_count` are the immediate (non-recursive) child counts so
+/// the UI can announce a collapsed folder's item count without a second
+/// fetch. `id` is stable across rescans and serves as the tree node id.
+#[derive(uniffi::Record)]
+pub struct DirNodeSummary {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub child_dir_count: u32,
+    pub child_file_count: u32,
+}
+
+impl From<core::DirNodeSummary> for DirNodeSummary {
+    fn from(d: core::DirNodeSummary) -> Self {
+        Self {
+            id: d.id,
+            path: d.path,
+            name: d.name,
+            child_dir_count: d.child_dir_count,
+            child_file_count: d.child_file_count,
+        }
+    }
+}
+
+/// One level of the file tree: the child directories of a parent (already
+/// sorted, dirs-first) followed by a page of its child files (#459).
+#[derive(uniffi::Record)]
+pub struct DirListing {
+    pub dirs: Vec<DirNodeSummary>,
+    pub files: FileSummaryPage,
+}
+
+impl From<core::DirListing> for DirListing {
+    fn from(l: core::DirListing) -> Self {
+        Self {
+            dirs: l.dirs.into_iter().map(Into::into).collect(),
+            files: l.files.into(),
         }
     }
 }

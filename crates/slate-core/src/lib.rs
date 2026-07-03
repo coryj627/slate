@@ -79,9 +79,10 @@ pub use templates::{
 pub use text_buffer::TextBuffer;
 
 pub use session::{
-    CancelToken, CslStyleInfo, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, Page, Paging,
-    RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped,
-    SaveReport, ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
+    CancelToken, CslStyleInfo, DirListing, DirNodeSummary, FileFilter, FileMetadata, FileSummary,
+    NoteLoadBundle, Page, Paging, RenameAffected, RenameFailed, RenameFailureKind, RenameReport,
+    RenameSkipReason, RenameSkipped, SaveReport, ScanProgress, ScanProgressListener, ScanReport,
+    SessionConfig, VaultSession,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,

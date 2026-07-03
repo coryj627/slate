@@ -115,6 +115,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "links: display_text column so image alt rides the links query (#433)",
         sql: include_str!("../migrations/015_links_display_text.sql"),
     },
+    Migration {
+        description: "dirs: first-class directory index for the file tree (#459)",
+        sql: include_str!("../migrations/016_dirs.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
