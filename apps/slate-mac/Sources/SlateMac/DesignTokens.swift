@@ -117,7 +117,7 @@ extension NSColor {
     static let tokenTextPrimary = tokenDynamic(
         light: srgb(0.09, 0.09, 0.10), dark: srgb(0.96, 0.96, 0.97))
     static let tokenTextSecondary = tokenDynamic(
-        light: srgb(0.34, 0.34, 0.36), dark: srgb(0.82, 0.82, 0.84))
+        light: srgb(0.34, 0.34, 0.36), dark: srgb(0.855, 0.855, 0.875))
 
     // Accent — fixed (not the user's control-accent) so contrast is
     // deterministic. FILL (control background, white text on it) vs TEXT
