@@ -38,7 +38,10 @@ permissions:
 jobs:
   audit:
     name: cargo audit
-    runs-on: namespace-profile-default
+    # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
+    # cargo-audit is a Rust tool, so this needs a profile with the Rust
+    # toolchain preinstalled; arm64-fast ships cargo, x64-fast does not.
+    runs-on: namespace-profile-arm64-fast
     permissions:
       contents: read
     steps:
@@ -79,6 +82,19 @@ jobs:
           fi
           if [ "$stale" -eq 1 ]; then exit 1; fi
           echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
+
+      - name: Cache cargo (Namespace NVMe cache)
+        # Mirror rust.yml: the `rust` mode caches ~/.cargo/{registry,git},
+        # target/, and the global cache — deliberately NOT ~/.cargo/bin.
+        # cargo is preinstalled in the arm64-fast image at ~/.cargo/bin;
+        # mounting a cold cache volume over that dir shadows the toolchain
+        # (cargo: command not found), which is exactly what broke this job.
+        # cargo-audit therefore recompiles per run, but the cached registry
+        # keeps its dependency fetch fast, and audit is low-frequency (manifest
+        # changes + weekly cron), so the recompile is a non-issue.
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
 
       - name: Install cargo-audit
         # Pin the scanner version (matching the repo's pin-everything

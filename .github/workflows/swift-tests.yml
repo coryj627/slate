@@ -34,21 +34,38 @@ permissions:
 jobs:
   swift-tests:
     name: Mac app XCTest suite
-    # Pin to a specific runner image (rather than `macos-latest`) so
-    # GitHub's image rollovers don't silently swap Xcode/SDK versions
-    # under us. Bump deliberately when picking up a new Apple toolchain.
-    runs-on: macos-15
+    # Namespace macOS runner (mac-actions — Apple Silicon, latest Xcode,
+    # cargo preinstalled) with NVMe caching. Faster + cheaper than the GitHub
+    # macOS pool for the cargo + SwiftPM build. NB: the app's SwiftUI bodies
+    # (e.g. MainSplitView) require a current Swift toolchain — Swift 6.2.4
+    # specifically regressed the expression type-checker and times out on
+    # MainSplitView.body, so this profile must track latest Xcode.
+    runs-on: namespace-profile-mac-actions
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Cache Rust build
-        # Caches target/ and ~/.cargo/registry keyed off Cargo.lock so a
-        # cold cargo build for slate-uniffi stays under a minute instead
-        # of compiling the whole crate graph from scratch every run.
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - name: Cache Rust + SwiftPM + Xcode (Namespace NVMe cache)
+        # Namespace cross-invocation cache. The action unions `cache:` modes
+        # with `path:` entries (src/action.ts passes both --mode and --path to
+        # spacectl), so these all cache together:
+        #   rust     — ~/.cargo + target/ (keeps the slate-uniffi build warm)
+        #   swiftpm  — the SwiftPM dependency clones / resolved-package cache
+        #   xcode    — the Xcode module/derived-data cache
+        # Plus one explicit path for the project-local compiled build products
+        # (apps/slate-mac/.build) that no generic mode can know about, so the
+        # SwiftPM deps (SwiftDraw, MathJaxSwift, LaTeXSwiftUI, SwiftMath) don't
+        # recompile every run.
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: |
+            rust
+            swiftpm
+            xcode
+          path: |
+            apps/slate-mac/.build
 
       - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:

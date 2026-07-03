@@ -30,8 +30,8 @@ permissions:
 jobs:
   check:
     name: SPDX header present on every .rs/.swift
-    # Namespace Linux runner — no toolchain needed, just bash + grep + git.
-    runs-on: namespace-profile-default
+    # Namespace Linux x64 runner — no toolchain needed, just bash + grep + git.
+    runs-on: namespace-profile-x64-fast
     permissions:
       contents: read
     steps:

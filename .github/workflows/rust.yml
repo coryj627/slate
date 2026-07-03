@@ -1,11 +1,10 @@
 # Rust CI for slate-core + slate-uniffi.
 #
 # Mirrors what `make ci` runs locally, plus a bench-compile step so
-# benchmark code can't silently rot. Runs on a Namespace Linux runner
-# (namespace-profile-default): the Rust workspace is platform-independent,
-# so Linux is faster + cheaper than the macOS pool. Caching is GitHub-backed
-# for now; swap to Namespace's NVMe cross-invocation cache once Caching is
-# enabled on the profile in the Namespace dashboard.
+# benchmark code can't silently rot. Runs on a Namespace Linux ARM64 runner
+# (arm64-fast — high capacity): the Rust workspace is platform-independent, so
+# Linux is faster + cheaper than the macOS pool, and Namespace's NVMe
+# cross-invocation cache keeps cold cargo runs short.
 
 name: Rust
 
@@ -30,22 +29,22 @@ permissions:
 jobs:
   rust:
     name: fmt / clippy / test / bench-compile
-    # Namespace Linux runner (Ubuntu 22.04, Rust preinstalled). The Rust
-    # workspace is platform-independent — audit.yml already resolves it on
-    # Linux — so this doesn't need the macOS pin the Swift build uses.
-    runs-on: namespace-profile-default
+    # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
+    # The Rust workspace is platform-independent, so this needs neither the
+    # macOS pin the Swift build uses nor any specific arch.
+    runs-on: namespace-profile-arm64-fast
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - name: Cache Rust build
-        # GitHub-backed cache (works on the Namespace runner). Swap for
-        # namespacelabs/nscloud-cache-action (with: {cache: rust}) once a cache
-        # volume is enabled on the namespace-profile-default profile in the
-        # Namespace dashboard — that moves the cache onto the NVMe volume.
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - name: Cache Rust build (Namespace NVMe cache)
+        # Namespace cross-invocation cache — ~/.cargo + target/ on the NVMe
+        # volume attached to the arm64-fast profile.
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
 
       - name: cargo fmt --check
         run: cargo fmt --all --check
