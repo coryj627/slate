@@ -1,5 +1,7 @@
 # U0 — Baseline & design foundation
 
+**Status: ✅ Complete (2026-07-03).** All four issues shipped and merged: U0-1 (#449 → PR #479), U0-2 (#450 → PR #482), U0-3 (#451 → PR #483), U0-4 (#452 → PR #484). The macOS-15 floor, `SlateSymbol` icon layer, `DesignTokens` system, and `PresentationReady` harness are in `main`; U1–U5 now inherit the presentation-ready gates. Test suite 497 → 509.
+
 **Goal.** Lay the technical and visual foundation the rest of the program stands on: raise the OS floor, build the single source of truth for icons and design tokens (light + dark), and extend the test harness so U1–U5 inherit the presentation-ready gates automatically. No user-visible feature ships here — but nothing else can hit the bar without it.
 
 **Depends on:** nothing. **Unblocks:** all of U1–U5. **Parallel:** none (do this first).
@@ -8,19 +10,22 @@
 
 ## Issues
 
-### U0-1 · Chore: raise deployment target to macOS 15; remove 13/14 workarounds `swift-ui` `test`
+### U0-1 · Chore: raise deployment target to macOS 15; remove 13/14 workarounds `swift-ui` `test` ✅ shipped
+**Shipped in PR #479 (closes #449).** `Package.swift` platform is `.macOS("15.0")` (string form — the `.v15` enum needs `swift-tools-version:6.0` + Swift 6 language mode, which we don't want; string form keeps the current tools version). 21 one-arg `.onChange` call sites migrated to the two-arg form; stale "macOS 13/14 minimum" workaround comments removed. CI moved to the macOS 15 SDK. No behavior change; suite green.
 - Bump `Package.swift` platform `.macOS(.v13)` → `.macOS(.v15)`; update CI matrix and any runner images.
 - Remove the accreted back-compat: one-arg `.onChange` → two-arg; adopt modern `NavigationSplitView` / focus APIs where they delete workaround code (audit the comments that say "sticking with the one-arg form … macOS 13 minimum").
 - **Acceptance:** app builds and full suite is green on the macOS 15 SDK with no availability-related warnings; no behavior change.
 
-### U0-2 · Mac UI: `SlateSymbol` semantic icon layer `swift-ui` `a11y` `design`
+### U0-2 · Mac UI: `SlateSymbol` semantic icon layer `swift-ui` `a11y` `design` ✅ shipped
+**Shipped in PR #482 (closes #450).** `apps/slate-mac/Sources/SlateMac/SlateSymbol.swift` — a semantic enum mapping app roles → SF Symbols with a `(v7, fallback)` pair resolved by `if #available(macOS 26, *)`, per-surface size/weight, and a required-or-defaulted accessibility label on every constructor. `systemName` is `private` and a source-lint test (`testNoRawSFSymbolsOutsideLayer`, recursive/regex) fails the build if any call site outside the layer reaches for a raw symbol string. `MainSplitView` toolbar migrated. a11y-check 100/100. Codoki flagged a false-positive "unlabeled PropertiesPanel buttons" — refuted with evidence (button-level labels present), no code change.
 - A single semantic enum/registry mapping app roles (`.search`, `.save`, `.newTab`, `.splitRight`, `.readingMode`, `.editingMode`, `.folder`, `.folderOpen`, leaf icons, …) → SF Symbols v7 names, with `if #available(macOS 26, *)` fallbacks to a v6 equivalent for macOS 15–25.
 - Enforces consistent size/weight/rendering-mode per surface; every symbol constructor requires (or defaults) an accessibility label so an icon can't ship unlabeled.
 - Replace existing raw `Image(systemName:)`/`Label(_, systemImage:)` call sites incrementally (start with the toolbar in `MainSplitView`).
 - **Tests:** every semantic role resolves on both the v7 and fallback path; snapshot of the toolbar renders identically pre/post; a11y label present for each. a11y-check 100/100.
 - **Acceptance:** no call site references a raw SF Symbol string; toggling the SDK availability path yields a valid symbol in every case.
 
-### U0-3 · Mac UI: design-token system (spacing / type / color) with light + dark + APCA `swift-ui` `a11y` `design`
+### U0-3 · Mac UI: design-token system (spacing / type / color) with light + dark + APCA `swift-ui` `a11y` `design` ✅ shipped
+**Shipped in PR #483 (closes #451).** `apps/slate-mac/Sources/SlateMac/DesignTokens.swift` — spacing scale, type ramp, and semantic color roles as dynamic `NSColor`s pinned to sRGB per appearance (the `NSColor.textColor` nil-gotcha: dynamic colors are set explicitly, never left to defaults). Roles are the theming seam Milestone R will later re-skin. `APCAContrast` extended with `lc(text:background:for appearance:)` for per-appearance measurement; every text-on-surface and control pairing clears APCA `|Lc| > 75` in both Aqua and DarkAqua, verified through the `PresentationReady` harness in `DesignTokensTests`.
 - Centralize spacing scale, type ramp, and **semantic color roles** (surface, surface-secondary, text-primary, text-secondary, accent, selection, separator, destructive, …) as dynamic colors correct in light and dark. No literals at call sites.
 - Authored so **Milestone R** can later re-skin the roles (tokens are the theming seam) without touching U call sites.
 - Ship an APCA verification helper (extend `APCAContrast` test util) that measures token pairings in both appearances.
@@ -28,7 +33,7 @@
 - **Acceptance:** a documented token catalog; the tightest contrast pairs pass Lc ≥ 75 measured in both modes.
 
 ### U0-4 · Test: presentation-ready test harness for U1–U5 `test` `a11y` ✅ shipped
-Shipped as `PresentationReady` (`apps/slate-mac/Tests/SlateMacTests/PresentationReady.swift`) — the single entry point U1–U5 surface tests call to hold themselves to the program DoD. Assertions:
+**Shipped in PR #484 (closes #452)** as `PresentationReady` (`apps/slate-mac/Tests/SlateMacTests/PresentationReady.swift`) — the single entry point U1–U5 surface tests call to hold themselves to the program DoD. Assertions:
 - `assertContrastFloor(_:)` — every `(text, surface)` pairing clears APCA `|Lc| > 75` in **both** Aqua and DarkAqua (DoD §D). Backed by the `APCAContrast.lc(text:background:for:)` per-appearance extension.
 - `assertResolvesDistinctlyPerAppearance(_:)` — each dynamic color resolves to a different value light vs dark (no appearance leak).
 - `assertRendersInBothAppearances(_:)` — the view renders to a finite, non-empty size in both appearances (headless via `ImageRenderer`; catches per-appearance crashes / failed renders).

@@ -1,6 +1,6 @@
 # 08 — UI Parity Program (Milestone U): Obsidian-parity, presentation-ready macOS workspace
 
-**Status:** 📋 Planned (2026-07-03). Next stream after L/K close; sequenced **ahead of** Canvas (T) and Graph (P) per owner decision 2026-07-03.
+**Status:** 🚧 In progress (2026-07-03). **U0 (Baseline & design foundation) is ✅ complete** — all 4 issues shipped (PRs #479, #482, #483, #484); milestone closed. U1–U5 not yet started. Sequenced **ahead of** Canvas (T) and Graph (P) per owner decision 2026-07-03. Next up: **U1 (workspace shell) ∥ U2 (file tree)**.
 
 **Strategic goal.** Slate's functionality and its accessibility are in a decent place. This program brings the *presentation* to parity with what users expect from an app like Obsidian — a tabbed, split-pane workspace; an in-note properties experience; a real reading/editing split; a proper file tree with folder management; docked right-hand panels; and a coherent macOS 26 / SF Symbols v7 visual language — **without ceding one inch of the accessibility bar**, and while raising the app to a **presentation-ready** finish across visual polish, dark/light modes, reliability, and performance.
 
@@ -29,14 +29,14 @@ U0 Baseline ──┬──▶ U1 Shell (tabs + splits) ──┬──▶ U3 Ed
               └──▶ U2 File tree (parallel with U1) ──────────────────────────▶
 ```
 
-| ID | Milestone | Depends on | Runs parallel with | Primary surfaces |
-|----|-----------|-----------|--------------------|------------------|
-| **U0** | Baseline & design foundation | — | — | Deployment target, `SlateSymbol` icon layer, design tokens, test harness |
-| **U1** | Workspace shell: tabs + split panes | U0 | U2 | `WorkspaceModel`, tab bar, split panes, `MainSplitView` migration |
-| **U2** | File tree + full file management | U0 | U1 | slate-core directory API + mutations + link-rewrite, `FileTreeSidebar` |
-| **U3** | Editor: reading/editing + inline properties | U1 | U4 | Reading view, mode toggle, in-note properties widget |
-| **U4** | Right-hand leaves + utility rail | U1 | U3 | Leaf container + icon rail, panel port, utility icons |
-| **U5** | Iconography & presentation polish | U3, U4 | — | Icon application, layout/density polish, dark/light pass, verification sweep |
+| ID | Milestone | Status | Depends on | Runs parallel with | Primary surfaces |
+|----|-----------|--------|-----------|--------------------|------------------|
+| **U0** | Baseline & design foundation | ✅ complete | — | — | Deployment target, `SlateSymbol` icon layer, design tokens, test harness |
+| **U1** | Workspace shell: tabs + split panes | ⬜ not started | U0 | U2 | `WorkspaceModel`, tab bar, split panes, `MainSplitView` migration |
+| **U2** | File tree + full file management | ⬜ not started | U0 | U1 | slate-core directory API + mutations + link-rewrite, `FileTreeSidebar` |
+| **U3** | Editor: reading/editing + inline properties | ⬜ not started | U1 | U4 | Reading view, mode toggle, in-note properties widget |
+| **U4** | Right-hand leaves + utility rail | ⬜ not started | U1 | U3 | Leaf container + icon rail, panel port, utility icons |
+| **U5** | Iconography & presentation polish | ⬜ not started | U3, U4 | — | Icon application, layout/density polish, dark/light pass, verification sweep |
 
 **Execution order:** `U0 → (U1 ∥ U2) → (U3 ∥ U4) → U5`. U1 (center workspace) and U2 (left sidebar + core) touch disjoint surfaces and can run concurrently in separate worktrees.
 
@@ -110,7 +110,7 @@ This is the standing bar. An issue is not done until it satisfies the dimensions
 
 ## Per-milestone specs
 
-- [U0 — Baseline & design foundation](u0_baseline.md)
+- [U0 — Baseline & design foundation](u0_baseline.md) — ✅ complete
 - [U1 — Workspace shell: tabs + split panes](u1_workspace_shell.md)
 - [U2 — File tree + full file management](u2_file_tree.md)
 - [U3 — Editor: reading/editing + inline properties](u3_editor_modes.md)
