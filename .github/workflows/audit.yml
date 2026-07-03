@@ -15,12 +15,18 @@ on:
       - 'Cargo.toml'
       - 'crates/**/Cargo.toml'
       - '.github/workflows/audit.yml'
+      # Re-run the gate when the ignore list changes, so a newly-added
+      # advisory ignore is validated (and a removed one re-checked).
+      - '.cargo/audit.toml'
   push:
     branches: [main]
     paths:
       - 'Cargo.toml'
       - 'crates/**/Cargo.toml'
       - '.github/workflows/audit.yml'
+      # Re-run the gate when the ignore list changes, so a newly-added
+      # advisory ignore is validated (and a removed one re-checked).
+      - '.cargo/audit.toml'
   schedule:
     # Weekly, so a newly-disclosed advisory against an unchanged pinned
     # dependency is still caught without waiting for a manifest edit.
