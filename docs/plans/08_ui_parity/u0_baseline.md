@@ -27,7 +27,15 @@
 - **Tests:** APCA Lc ≥ 75 for every text-on-surface and control pairing in **both** light and dark; snapshot of a token catalog view in both appearances.
 - **Acceptance:** a documented token catalog; the tightest contrast pairs pass Lc ≥ 75 measured in both modes.
 
-### U0-4 · Test: extend a11y + contrast + appearance snapshot harness for U1–U5 `test` `a11y`
-- Helpers to snapshot a view in light **and** dark and assert APCA on the rendered result; a reusable "presentation-ready" test bundle (VoiceOver label presence, focus-order, Dynamic Type reflow at an XXL size, Reduce Motion path).
-- Wire into the a11y-inspect baseline so new component families are covered from their first commit.
-- **Acceptance:** a single test entry point U1–U5 issues call to assert their surface against DoD §D/§E; documented in the milestone spec.
+### U0-4 · Test: presentation-ready test harness for U1–U5 `test` `a11y` ✅ shipped
+Shipped as `PresentationReady` (`apps/slate-mac/Tests/SlateMacTests/PresentationReady.swift`) — the single entry point U1–U5 surface tests call to hold themselves to the program DoD. Assertions:
+- `assertContrastFloor(_:)` — every `(text, surface)` pairing clears APCA `|Lc| > 75` in **both** Aqua and DarkAqua (DoD §D). Backed by the `APCAContrast.lc(text:background:for:)` per-appearance extension.
+- `assertResolvesDistinctlyPerAppearance(_:)` — each dynamic color resolves to a different value light vs dark (no appearance leak).
+- `assertRendersInBothAppearances(_:)` — the view renders to a finite, non-empty size in both appearances (headless via `ImageRenderer`; catches per-appearance crashes / failed renders).
+
+**Honest coverage boundary.** What is **not** reliably unit-testable is left to the **`a11y-check` static gate** (run in CI over all of `Sources/SlateMac`, so new component families are scanned automatically — this is the "wire into the a11y baseline" requirement) and the **VoiceOver feature-test runbook** (`docs/runbooks/voiceover-feature-test.md`):
+- VoiceOver label/trait presence and reading/focus order — no public API to read a rendered SwiftUI AX tree from XCTest;
+- Reduce-Motion animation behaviour;
+- **Dynamic Type reflow** — the `\.dynamicTypeSize` environment override is not honored by headless `ImageRenderer`/`NSHostingView` (measured: a token-styled surface renders at an identical size at `.large` and `.accessibility5`), so a unit assertion can't distinguish a scaling view from a fixed one. a11y-check covers the fixed-size-font anti-pattern statically.
+
+The harness deliberately does not fake those assertions. Exercised by `PresentationReadyTests` (render smoke + a contrast negative control proving the check has teeth) and by `DesignTokensTests` (token correctness through the same harness).
