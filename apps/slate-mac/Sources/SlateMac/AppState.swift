@@ -250,6 +250,12 @@ final class AppState: ObservableObject {
     /// off the load whenever it changes.
     @Published var selectedFilePath: String?
 
+    /// The workspace shell (Milestone U1): split tree → tab groups → tabs.
+    /// U1-4 keeps it as a mirror of `selectedFilePath` (one group, ≤ 1 tab)
+    /// synced from `handleSelectionChange`; U1-2 makes it the owner of open
+    /// documents.
+    let workspace = WorkspaceState()
+
     /// UTF-8 text of the currently-selected note. Nil while no note
     /// is selected or while loading is in flight. Writable so the
     /// editor's two-way `Binding<String>` can update the buffer
@@ -1335,6 +1341,10 @@ final class AppState: ObservableObject {
         noteLoadError = nil
         linksLoadError = nil
         tasksLoadError = nil
+        // Mirror the accepted selection into the workspace model (U1-4).
+        // Below the dirty gate on purpose: a parked navigation rolled back
+        // by the alert must never surface in the workspace.
+        workspace.mirrorSingleSelection(path)
         guard let path else {
             // Full clear when nothing is selected. Safe here because
             // there's no destination note to attribute stale content

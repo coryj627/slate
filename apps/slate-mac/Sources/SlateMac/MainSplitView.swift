@@ -57,7 +57,11 @@ struct MainSplitView: View {
             FileListSidebar()
                 .accessibilityLabel("Files sidebar")
         } content: {
-            NoteContentView()
+            // U1-4 (#456): the center column is the workspace region.
+            // With one group and ≤ 1 tab (the U1-4 mirror), WorkspaceView
+            // delegates to the same NoteContentView subtree as before —
+            // the reparent is structural, not behavioral.
+            WorkspaceView()
                 .accessibilityLabel("Note content pane")
                 .accessibilityFocused($alertFocusReturn, equals: .editor)
         } detail: {
