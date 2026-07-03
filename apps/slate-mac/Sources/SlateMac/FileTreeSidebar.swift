@@ -403,8 +403,17 @@ final class FileTreeViewModel: ObservableObject {
 /// (which the note-load cascade watches), preserving the flat list's open
 /// semantics exactly. Folder rows disclose/collapse instead of opening.
 ///
-/// The per-note panel stack, the scan progress strip, and the #418 selection-
-/// announcement discipline are carried over unchanged from the flat list.
+/// The scan progress strip and the #418 selection-announcement discipline are
+/// carried over unchanged from the flat list.
+///
+/// The per-note panel stack that once lived below the tree is GONE (U4-2,
+/// #471): its seven panels (Outgoing links, Backlinks, Embeds, Math, Code,
+/// Diagrams, Tasks) moved into the right-pane leaf rail. `PropertiesPanel`
+/// alone remains here, in a TEMPORARY bottom `DisclosureGroup` with its
+/// bindings unchanged — U3-3 relocates it to the in-note properties widget and
+/// deletes this section. The header coordination note in u4_spec §U4-2 keeps
+/// both milestones independently mergeable: whichever lands first, Properties
+/// has a home and the stack is retired exactly once.
 struct FileTreeSidebar: View {
     @EnvironmentObject private var appState: AppState
     /// The tree model. `@StateObject` so it survives view-body churn; rebound
@@ -457,34 +466,24 @@ struct FileTreeSidebar: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Per-note panels live below the tree inside the same sidebar
-            // column. They self-hide when no note is selected (returning
-            // EmptyView), so they don't push the tree around in the empty
-            // case. Order matches the mental model of "what does this note say
-            // about itself / link to / get linked from": properties → outgoing
-            // → backlinks → tasks. Tasks lands last because users typically
-            // scroll to it after reading the note's structural context; the
-            // panel is dense (toggleable rows) and benefits from being below
-            // the metadata sections that don't require interaction. (Outline
-            // lives in the third NavigationSplit column, not here.)
+            // TEMPORARY Properties home (U4-2, #471). The other seven per-note
+            // panels moved into the right-pane leaf rail this milestone;
+            // `PropertiesPanel` stays here in one `DisclosureGroup` — its own
+            // bindings and self-hiding behavior unchanged — until U3-3 relocates
+            // it to the in-note properties widget and deletes this section
+            // (header coordination note, u4_spec §U4-2). Structure is exactly
+            // what the panel stack used (divider + bounded ScrollView); with
+            // only Properties inside it now, the section self-hides via
+            // `PropertiesPanel`'s own `EmptyView` when no note is selected —
+            // unchanged from the stack era, so the tree isn't pushed around in
+            // the empty case.
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     PropertiesPanel()
-                    OutgoingLinksPanel()
-                    BacklinksPanel()
-                    EmbedsPanel()
-                    // Milestone K surfaces (#410): math / code / diagram
-                    // pipelines for the selected note, after embeds (same
-                    // "what does this note contain" family), before tasks
-                    // (interaction-dense, kept last).
-                    MathBlocksPanel()
-                    CodeBlocksPanel()
-                    DiagramsPanel()
-                    TasksPanel()
                 }
             }
-            .frame(maxHeight: 400)
+            .frame(maxHeight: 300)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")

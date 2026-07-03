@@ -6,28 +6,26 @@ import SwiftUI
 /// Inbound-links section: every file that links to the currently-
 /// selected note. Bound to `AppState.currentBacklinks`.
 ///
-/// Activation flow (clicking a row to jump to the source file) is
-/// wired in #C5 — this panel ships the readable, screen-reader-
-/// navigable list shape only.
+/// The Backlinks LEAF in the right-pane rail (U4-2, #471). Bindings and
+/// row AX are unchanged from the sidebar-stack panel it replaces; the two
+/// structural changes the leaf host requires: the old self-hiding
+/// `EmptyView` gate is now a labeled leaf empty state (a leaf must never be
+/// a blank rectangle — DoD §A), and the `DisclosureGroup` is now a
+/// non-collapsible header row (the rail selects the leaf; the disclosure was
+/// a stack-era space-saver). The header keeps its `.isHeader` trait + count.
 struct BacklinksPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = true
 
     var body: some View {
-        // Hide entirely when no note is selected. `EmptyView` removes
-        // the panel from the AX tree so VoiceOver doesn't enumerate
-        // an empty section — per the acceptance criteria.
-        if appState.selectedFilePath == nil {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its backlinks.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Backlinks")
     }
 
     private var header: some View {

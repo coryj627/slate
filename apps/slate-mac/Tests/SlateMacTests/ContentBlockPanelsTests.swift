@@ -94,29 +94,33 @@ final class ContentBlockPanelsTests: XCTestCase {
 
     /// Red-team MEDIUM-1 on #410: the pipeline tests above pass even
     /// when no view consumes the panels (they pin inputs, not the
-    /// consumer). This pins the WIRING: `FileTreeSidebar`'s panel
-    /// stack must instantiate all three #410 panels, after
-    /// `EmbedsPanel` and before `TasksPanel`. Same source-structural
-    /// technique as `CloseVaultSheetParityTests` (walk up from
-    /// #filePath to the app sources). It fails outright if the
-    /// panels are ever dropped from the stack again — exactly the
-    /// regression the red-team audit caught pre-push.
-    func testSidebarSourceWiresAllThreePanelsIntoTheStack() throws {
+    /// consumer). This pins the WIRING. As of U4-2 (#471) the panels
+    /// moved out of the sidebar stack into the right-pane leaf host, so
+    /// this now asserts `RightPaneView.leafContent` instantiates all
+    /// three #410 panels, still between `EmbedsPanel` and `TasksPanel`
+    /// (registry order: embeds → math → code → diagrams → tasks — the
+    /// content-block leaves stay grouped exactly as the stack ordered
+    /// them). Same source-structural technique as
+    /// `CloseVaultSheetParityTests` (walk up from #filePath to the app
+    /// sources). It fails outright if the panels are ever dropped from
+    /// the host again — the regression the red-team audit caught pre-push,
+    /// re-pointed at the new home.
+    func testLeafHostWiresAllThreeContentBlockPanels() throws {
         var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        var sidebar: URL?
+        var host: URL?
         for _ in 0..<8 {
             let candidate = cursor.appendingPathComponent(
-                "Sources/SlateMac/FileTreeSidebar.swift"
+                "Sources/SlateMac/Workspace/RightPaneView.swift"
             )
             if FileManager.default.fileExists(atPath: candidate.path) {
-                sidebar = candidate
+                host = candidate
                 break
             }
             cursor = cursor.deletingLastPathComponent()
         }
         let url = try XCTUnwrap(
-            sidebar,
-            "Could not locate Sources/SlateMac/FileTreeSidebar.swift from \(#filePath)"
+            host,
+            "Could not locate Sources/SlateMac/Workspace/RightPaneView.swift from \(#filePath)"
         )
         let source = try String(contentsOf: url, encoding: .utf8)
 
@@ -125,11 +129,11 @@ final class ContentBlockPanelsTests: XCTestCase {
         for panel in ["MathBlocksPanel()", "CodeBlocksPanel()", "DiagramsPanel()"] {
             let r = try XCTUnwrap(
                 source.range(of: panel),
-                "\(panel) must be instantiated in FileListSidebar — the #410 wiring is missing"
+                "\(panel) must be instantiated in RightPaneView.leafContent — the #410 wiring is missing"
             )
             XCTAssertTrue(
                 r.lowerBound > embeds.upperBound && r.upperBound < tasks.lowerBound,
-                "\(panel) must sit between EmbedsPanel and TasksPanel in the per-note stack"
+                "\(panel) must sit between EmbedsPanel and TasksPanel in the leaf host"
             )
         }
     }

@@ -3,7 +3,7 @@
 
 import SwiftUI
 
-/// Sidebar panels surfacing the Milestone K content pipelines —
+/// Right-pane leaves surfacing the Milestone K content pipelines —
 /// math, code, and Mermaid diagrams — for the currently-selected
 /// note ([#410](https://github.com/coryj627/slate/issues/410)).
 ///
@@ -12,20 +12,23 @@ import SwiftUI
 /// refresh after saves, race-guarded) but deferred the user-facing
 /// surface, so MathCAT speech, code preambles, and structured
 /// diagram descriptions were unreachable in the app: VoiceOver read
-/// raw `$$…$$` and raw fences in the note pane. These panels wire
+/// raw `$$…$$` and raw fences in the note pane. These leaves wire
 /// the three existing views (`MathView` / `CodeBlockView` /
 /// `MermaidView` — previously instantiated only by Settings
-/// previews) into the same per-note panel stack the Embeds panel
-/// ships in, which is the established accessible pattern: the
-/// NSTextView editor stays untouched (true inline rendering rides
-/// NSTextAttachment, deferred V1.x), and AT users reach the
-/// accessible representations from the sidebar.
+/// previews) into the right-pane leaf host, which is the established
+/// accessible pattern: the NSTextView editor stays untouched (true
+/// inline rendering rides NSTextAttachment, deferred V1.x), and AT
+/// users reach the accessible representations from the leaf rail.
 ///
-/// Each panel follows the `EmbedsPanel` idiom: hidden (and out of
-/// the AX tree) when no note is selected or the note has neither
-/// blocks of that kind nor a load error; a count header with the
-/// heading trait; a loading row; an error row; otherwise one row
-/// per block with a "Jump to source" affordance that scrolls the
+/// Each panel follows the `EmbedsPanel` idiom, adapted for the leaf
+/// host (U4-2, #471): a labeled leaf empty state when no note is
+/// selected, and a distinct labeled empty state when the note has
+/// neither blocks of that kind nor a load error (a leaf must never be
+/// a blank rectangle — DoD §A, superseding the stack-era self-hiding).
+/// When there IS something to show — a load in flight, a load error,
+/// or one or more blocks — the leaf renders a non-collapsible header
+/// row (count + heading trait) over a loading row / error row / one
+/// row per block with a "Jump to source" affordance that scrolls the
 /// editor to the block's line.
 ///
 /// Deliberate decisions (red-team #410):
@@ -69,32 +72,31 @@ private struct BlockRowFooter: View {
 
 struct MathBlocksPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = true
 
     var body: some View {
-        // Red-team HIGH-1 + Codoki #428: the gate must keep the
-        // panel visible when a load FAILED with no stale blocks
-        // (otherwise the error row is dead code and "pipeline
-        // crashed" is indistinguishable from "no math here" for a
-        // blind user) AND while a load is in flight (otherwise the
-        // loading row is unreachable on initial load and progress
-        // never surfaces to AT). Loads are local SQLite reads, so
-        // the no-blocks flash is millisecond-scale.
-        if appState.selectedFilePath == nil
-            || (appState.currentNoteMathBlocks.isEmpty
+        // Red-team HIGH-1 + Codoki #428, carried into the leaf host: the
+        // populated `LeafSection` (which owns the loading + error rows) must
+        // render when a load FAILED with no stale blocks (otherwise the error
+        // row is dead code and "pipeline crashed" is indistinguishable from
+        // "no math here" for a blind user) AND while a load is in flight
+        // (otherwise the loading row is unreachable on initial load). The
+        // no-blocks empty state is reached only once a load has settled with
+        // zero blocks and no error. Loads are local SQLite reads, so the
+        // no-blocks flash is millisecond-scale.
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its math.")
+            } else if appState.currentNoteMathBlocks.isEmpty
                 && appState.mathBlocksLoadError == nil
-                && !appState.isLoadingMathBlocks)
-        {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+                && !appState.isLoadingMathBlocks
+            {
+                LeafEmptyState(message: "This note has no math blocks.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Math")
     }
 
     private var header: some View {
@@ -131,7 +133,6 @@ struct MathBlocksPanel: View {
 
 struct CodeBlocksPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = true
 
     /// The code pipeline ingests EVERY fence, including ```mermaid
     /// (the diagram pipeline consumes the same fences). Listing
@@ -147,21 +148,20 @@ struct CodeBlocksPanel: View {
     }
 
     var body: some View {
-        if appState.selectedFilePath == nil
-            || (panelBlocks.isEmpty
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its code blocks.")
+            } else if panelBlocks.isEmpty
                 && appState.codeBlocksLoadError == nil
-                && !appState.isLoadingCodeBlocks)
-        {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+                && !appState.isLoadingCodeBlocks
+            {
+                LeafEmptyState(message: "This note has no code blocks.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Code")
     }
 
     private var header: some View {
@@ -198,24 +198,22 @@ struct CodeBlocksPanel: View {
 
 struct DiagramsPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = true
 
     var body: some View {
-        if appState.selectedFilePath == nil
-            || (appState.currentNoteDiagramBlocks.isEmpty
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its diagrams.")
+            } else if appState.currentNoteDiagramBlocks.isEmpty
                 && appState.diagramBlocksLoadError == nil
-                && !appState.isLoadingDiagramBlocks)
-        {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+                && !appState.isLoadingDiagramBlocks
+            {
+                LeafEmptyState(message: "This note has no diagrams.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Diagrams")
     }
 
     private var header: some View {

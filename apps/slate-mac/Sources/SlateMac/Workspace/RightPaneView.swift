@@ -4,16 +4,15 @@
 import SwiftUI
 
 /// A right-pane leaf: one selectable panel in the trailing utility rail
-/// (Milestone U4-1, #470).
+/// (Milestone U4-1, #470; all ten leaves live as of U4-2, #471).
 ///
-/// The full ten-case vocabulary is declared now so the enum, its persistence
-/// string, and the rail's iteration order are settled once. Only the three
-/// leaves whose content has been ported (`.outline`, `.citations`,
-/// `.bibliography` — today's detail-column tabs) are `registered`; the other
-/// seven arrive in U4-2 when their panels move into the leaf host. The rail
-/// renders ONLY registered leaves, so this PR shows three icons and the pane
-/// is behavior-equivalent to the segmented picker it replaces, minus the
-/// picker.
+/// The full ten-case vocabulary is the rail's iteration + persistence order.
+/// All ten leaves are `registered`: the three former detail-column tabs
+/// (`.outline`, `.citations`, `.bibliography`) that U4-1 seeded, plus the
+/// seven panels U4-2 ported out of the retired left-sidebar stack
+/// (`.backlinks`, `.outgoingLinks`, `.embeds`, `.math`, `.code`, `.diagrams`,
+/// `.tasks`). The rail renders every registered leaf, so it shows ten icons
+/// and the pane replaces both the old segmented picker AND the sidebar stack.
 ///
 /// `rawValue` is the persistence token stored in `workspace.json`; an unknown
 /// token decodes to `.outline` (see `Leaf.init(persisted:)`).
@@ -48,36 +47,38 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// The rail glyph, by semantic role. Only the three REGISTERED leaves are
-    /// ever rendered in U4-1, and each maps to a role that exists today:
-    /// `.outline` (new this PR), and `.citations`/`.bibliography` reusing the
-    /// existing `.citationSummary`/`.bibliography` roles (u4_spec SlateSymbol
-    /// table).
-    ///
-    /// The seven not-yet-registered leaves return a neutral placeholder
-    /// (`.moreActions`) because their dedicated roles (`.backlinks`,
-    /// `.outgoingLinks`, `.embed`, `.diagram`, `.tasksLeaf`) land in U4-2 with
-    /// their content — the u4_spec deliberately defers those SlateSymbol rows.
-    /// The rail never renders these leaves (it iterates `Leaf.registered`), so
-    /// the placeholder is never shown; U4-2 replaces each arm with its real
-    /// role as the leaf registers.
+    /// The rail glyph, by semantic role. Every leaf maps to a dedicated role
+    /// in the `SlateSymbol` vocabulary (u4_spec SlateSymbol table): `.outline`
+    /// and the five U4-2 roles (`.backlinks`/`.outgoingLinks`/`.embed`/
+    /// `.diagram`/`.tasksLeaf`), plus `.math`/`.code`/`.citationSummary`/
+    /// `.bibliography` reused from U0. `.tasksLeaf` shares `.tasksReview`'s
+    /// glyph on purpose (same metaphor — DoD §B).
     var symbol: SlateSymbol {
         switch self {
         case .outline: return .outline
-        case .citations: return .citationSummary
-        case .bibliography: return .bibliography
+        case .backlinks: return .backlinks
+        case .outgoingLinks: return .outgoingLinks
+        case .embeds: return .embed
         case .math: return .math
         case .code: return .code
-        case .backlinks, .outgoingLinks, .embeds, .diagrams, .tasks:
-            return .moreActions
+        case .diagrams: return .diagram
+        case .tasks: return .tasksLeaf
+        case .citations: return .citationSummary
+        case .bibliography: return .bibliography
         }
     }
 
-    /// Leaves whose content is live in this PR, in rail order (outline first —
-    /// most used, matches the old default tab). U4-2 grows this to all ten as
-    /// each panel moves into the host; the rail iterates exactly this list, so
-    /// an unregistered leaf can never present a selectable-but-blank icon.
-    static let registered: [Leaf] = [.outline, .citations, .bibliography]
+    /// Leaves whose content is live, in rail order (outline first — most used,
+    /// matches the old default tab; the order is the registry declaration
+    /// order per u4_spec §U4-2). All ten leaves are registered as of U4-2
+    /// (#471): the seven former sidebar-stack panels ported into the leaf host
+    /// alongside the three detail tabs U4-1 seeded. The rail iterates exactly
+    /// this list, so an unregistered leaf can never present a
+    /// selectable-but-blank icon.
+    static let registered: [Leaf] = [
+        .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
+        .tasks, .citations, .bibliography,
+    ]
 
     var isRegistered: Bool { Self.registered.contains(self) }
 
@@ -185,25 +186,36 @@ struct RightPaneView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Maps a registered leaf to its panel view. U4-2 extends this switch as it
-    /// ports the remaining seven panels (see the file-level seam note); an
-    /// unregistered leaf is never rendered (the `ForEach` iterates
-    /// `Leaf.registered`), so no default arm is needed.
+    /// Maps a leaf to its panel view. All ten leaves are registered (U4-2), so
+    /// the switch is exhaustive over `Leaf` — no default arm. The seven panels
+    /// ported here from the retired sidebar stack are unchanged in binding and
+    /// AX; only their outer self-hiding `EmptyView` gates became labeled leaf
+    /// empty states (a leaf must never be a blank rectangle — DoD §A). Registry
+    /// order (embeds → math → code → diagrams → tasks) keeps the content-block
+    /// leaves grouped between embeds and tasks exactly as the stack did.
     @ViewBuilder
     private func leafContent(_ leaf: Leaf) -> some View {
         switch leaf {
         case .outline:
             OutlineSidebar()
+        case .backlinks:
+            BacklinksPanel()
+        case .outgoingLinks:
+            OutgoingLinksPanel()
+        case .embeds:
+            EmbedsPanel()
+        case .math:
+            MathBlocksPanel()
+        case .code:
+            CodeBlocksPanel()
+        case .diagrams:
+            DiagramsPanel()
+        case .tasks:
+            TasksPanel()
         case .citations:
             CitationsPanel()
         case .bibliography:
             BibliographyPanel()
-        default:
-            // Unreachable: `ForEach(Leaf.registered)` never yields an
-            // unregistered leaf. A blank arm here would violate the DoD
-            // empty-state rule if it ever rendered; U4-2 replaces it with the
-            // real panels as they register.
-            EmptyView()
         }
     }
 
