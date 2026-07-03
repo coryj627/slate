@@ -1,0 +1,25 @@
+name: NSC smoke
+on:
+  push:
+    branches: [chore/namespace-fast-profiles]
+permissions:
+  contents: read
+jobs:
+  arm64:
+    runs-on: namespace-profile-arm64-fast
+    steps:
+      - run: 'echo "arch: $(uname -m)  os: $(uname -s)  nproc: $(nproc)"'
+      - name: cache probe
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
+      - run: echo "arm64-fast + caching OK"
+  x64:
+    runs-on: namespace-profile-x64-fast
+    steps:
+      - run: 'echo "arch: $(uname -m)  os: $(uname -s)  nproc: $(nproc)"'
+      - name: cache probe
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
+      - run: echo "x64-fast + caching OK"
