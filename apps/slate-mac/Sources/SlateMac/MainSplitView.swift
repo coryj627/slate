@@ -527,19 +527,13 @@ struct MainSplitView: View {
                     "Filters the Bibliography sidebar to the citation's key. Cmd+J."
                 )
             }
-            ToolbarItem(placement: .automatic) {
-                Button("Close Vault") {
-                    // Shared with the palette's slate.vault.close
-                    // registration (#314) so both surfaces post the
-                    // same VoiceOver announcement on clean close
-                    // and route the dirty path through the same
-                    // "Save changes?" prompt.
-                    appState.closeVaultFromUserAction()
-                }
-                .accessibilityHint(
-                    "Returns to the welcome screen. Prompts to save if the editor has unsaved changes."
-                )
-            }
+            // U4-3 (#472): the "Close Vault" toolbar button was removed here.
+            // Close Vault now lives in the bottom-left utility bar's vault-
+            // switcher menu (`SidebarUtilityBar`), alongside the File menu and
+            // the `slate.vault.close` palette command — all three route through
+            // `closeVaultFromUserAction`. The toolbar was the wrong prominence
+            // for a destructive-adjacent action (DoD §C action-hierarchy); its
+            // command registration + menu path are unchanged.
     }
 
     private var pendingTabClosePresented: Binding<Bool> {

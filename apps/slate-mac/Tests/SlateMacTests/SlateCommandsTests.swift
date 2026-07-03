@@ -592,6 +592,22 @@ final class SlateCommandsTests: XCTestCase {
         try appState.commandRegistry.invokeById(id: SlateCommandID.openSettings)
     }
 
+    /// `slate.help.open` (U4-3, #472) routes the repository README URL through
+    /// AppState's injected `externalOpener` (gap G13) — the same hand-off the
+    /// SidebarUtilityBar "Help" button uses. A recording opener stands in for
+    /// `NSWorkspace.open`, so invoking the command opens exactly the README URL
+    /// without spawning a browser.
+    @MainActor
+    func testInvokingOpenHelpCommandOpensReadmeURL() async throws {
+        var opened: [URL] = []
+        let appState = AppState(externalOpener: { url in
+            opened.append(url)
+            return true
+        })
+        try appState.commandRegistry.invokeById(id: SlateCommandID.openHelp)
+        XCTAssertEqual(opened, [AppState.helpURL])
+    }
+
     /// The `slate.settings.open` action relies on SwiftUI's
     /// auto-installed `Settings { }` scene to provide the
     /// `showSettingsWindow:` responder. If the scene is ever

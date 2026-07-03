@@ -2117,6 +2117,35 @@ final class AppState: ObservableObject {
         navigate(to: path, kind: "Opened", target: openTargetFromCurrentEvent())
     }
 
+    /// The repository README URL the Help utility opens (gap G13). Small,
+    /// honest, replaceable: Help has no dedicated in-app surface, so the
+    /// utility bar's "Help" button hands this URL to the same external-open
+    /// path (`externalOpener`, → `NSWorkspace` in production) that outgoing
+    /// links use. `static` so a test can assert the exact URL a recording
+    /// `externalOpener` received without reaching into a running view.
+    static let helpURL = URL(string: "https://github.com/coryj627/slate#readme")!
+
+    /// Open the repository README in the user's default browser (U4-3, #472;
+    /// gap G13). Routed through `externalOpener` — the same injected hand-off
+    /// the outgoing-links panel uses — so tests spy on it with a recording
+    /// closure instead of spawning a browser, and the announcement mirrors the
+    /// external-link path so a screen-reader user hears the hand-off. Surfaced
+    /// both here (the `SidebarUtilityBar` "Help" button) and in the command
+    /// registry as `slate.help.open` — one implementation, two entry points.
+    func openHelp() {
+        if externalOpener(Self.helpURL) {
+            postAccessibilityAnnouncement(
+                "Opened Help in your default browser."
+            )
+            lastActivatedLinkOutcome = .openedExternal(Self.helpURL.absoluteString)
+        } else {
+            postAccessibilityAnnouncement(
+                "Could not open Help."
+            )
+            lastActivatedLinkOutcome = .externalOpenFailed(Self.helpURL.absoluteString)
+        }
+    }
+
     /// Activate a backlink row from the BacklinksPanel — navigates
     /// to the source file that linked here. Backlinks are always
     /// resolved (the query joins on resolved target_path), so this
@@ -2231,6 +2260,48 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The recent vault the user asked to switch to while the current vault
+    /// was still open (U4-3, #472). Held from `switchToRecent(_:)` until the
+    /// close committed (`closeVault()`'s tail opens it) or the dirty-gate
+    /// prompt was cancelled (the cancel resolvers clear it → no switch).
+    /// `private(set)` so tests can assert the gate parked / cleared it.
+    private(set) var pendingVaultSwitchTarget: RecentVault?
+
+    /// Switch to a recent vault (U4-3 vault switcher): close the current vault
+    /// **through the same dirty gate** `closeVaultFromUserAction` uses, then
+    /// open the target. Cancelling the "Save changes?" prompt cancels the whole
+    /// switch — nothing closes, the target is dropped, the current vault stays.
+    ///
+    /// The open is deferred to `closeVault()`'s tail (which fires once the close
+    /// commits from any gate branch — clean, single-dirty save/discard, or
+    /// multi-tab Save All / Discard All), so we never open over an unsaved
+    /// buffer. We drive the same gate primitives as `closeVaultFromUserAction`
+    /// (attemptCloseVault / pendingVaultClose) but WITHOUT its "returned to the
+    /// welcome screen" announcement, which would be false for a switch — the
+    /// subsequent `openVault` posts its own "Vault … opened" announcement.
+    func switchToRecent(_ entry: RecentVault) {
+        // Already the open vault → no-op (the menu also disables the current
+        // vault's row; this guards the programmatic path).
+        guard entry.path != currentVaultURL?.path else { return }
+        pendingVaultSwitchTarget = entry
+        let parkedDirty = workspace.dirtyParkedDocuments()
+        if parkedDirty.isEmpty {
+            if hasUnsavedChanges {
+                // Single dirty document → "Save changes?" (pendingNavigation
+                // = .closeVault). On Save/Discard the resolver calls
+                // closeVault(), whose tail opens the target; on Cancel the
+                // resolver clears the target (no switch).
+                attemptCloseVault()
+            } else {
+                // Clean → close now; the tail opens the target.
+                closeVault()
+            }
+        } else {
+            // Multiple dirty tabs → Save All / Discard All / Cancel prompt.
+            pendingVaultClose = parkedDirty.count + (hasUnsavedChanges ? 1 : 0)
+        }
+    }
+
     /// Open a recent-vaults entry. If the path no longer exists on
     /// disk, do *not* try to open it (which would either fail with
     /// InvalidPath or, on older bugs, silently materialize a vault) —
@@ -2337,6 +2408,9 @@ final class AppState: ObservableObject {
 
     func resolveVaultCloseCancel() {
         pendingVaultClose = nil
+        // U4-3: same as the single-dirty cancel — a cancelled multi-tab close
+        // cancels the switch and drops the parked target.
+        pendingVaultSwitchTarget = nil
     }
 
     func closeVault() {
@@ -2518,6 +2592,17 @@ final class AppState: ObservableObject {
         isLoadingTasks = false
         isLoadingVaultTasks = false
         scanProgress = nil
+        // U4-3 vault switch: if this close was the front half of a switch,
+        // open the parked target now that teardown is complete. Capture-then-
+        // clear so the open (which resets state again) can't re-enter this
+        // arm. `openRecent` re-checks the target exists on disk and posts its
+        // own "Vault … opened" announcement. Cancelled switches never reach
+        // here (the cancel resolvers cleared the target), so a plain Close
+        // Vault after a cancelled switch can't accidentally reopen a vault.
+        if let target = pendingVaultSwitchTarget {
+            pendingVaultSwitchTarget = nil
+            openRecent(target)
+        }
     }
 
     /// Drop a recent-vaults entry by path. Used by the welcome screen
@@ -4648,6 +4733,10 @@ final class AppState: ObservableObject {
     /// navigation without saving. The dirty buffer stays.
     func resolvePendingNavigationCancel() {
         pendingNavigation = nil
+        // U4-3: cancelling the gate cancels an in-flight vault switch — drop
+        // the parked target so no close/open follows and a later plain Close
+        // Vault can't inherit it.
+        pendingVaultSwitchTarget = nil
     }
 
     /// Common tail for the Save / Discard branches: clear the
