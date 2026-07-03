@@ -83,6 +83,8 @@ func describe(_ error: VaultError) -> String {
         return "CSL style \(path) is unreadable: \(reason)"
     case .PrefsUnreadable(let path, let reason):
         return "preferences file \(path) is unreadable: \(reason)"
+    case .DestinationExists(let path):
+        return "destination already exists: \(path)"
     }
 }
 
