@@ -1,5 +1,3 @@
-# TEMPORARY smoke test to verify the Namespace runner connection.
-# Removed before this branch merges.
 name: NSC smoke
 on:
   push:
@@ -8,11 +6,10 @@ on:
 permissions:
   contents: read
 jobs:
-  smoke:
-    runs-on: namespace-profile-default
+  macos-probe:
+    runs-on: namespace-profile-macos
     steps:
-      - name: Report runner
-        run: |
+      - run: |
           echo "uname: $(uname -a)"
-          echo "nproc: $(nproc 2>/dev/null || sysctl -n hw.ncpu)"
-          echo "namespace runner reached ✓"
+          echo "xcode: $(xcodebuild -version 2>/dev/null | head -1 || echo none)"
+          echo "namespace macOS runner reached ✓"
