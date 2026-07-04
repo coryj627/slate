@@ -55,17 +55,19 @@ final class AccessibleDataGridTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// The AX contract, source-structural (traits are not readable from a
-    /// rendered SwiftUI tree): header cells carry `.isHeader`, body cells
-    /// announce "Header: value", the summary carries `.isSummaryElement`, and
-    /// the container label is the injected parameter (not a hardcoded string).
+    /// The AX contract, source-structural. v2 (#519) is NSTableView-
+    /// backed: header semantics + NSAccessibilitySortDirection come from
+    /// the native NSTableColumn headers, body cells announce
+    /// "Header: value" via the AppKit label, the summary carries
+    /// `.isSummaryElement`, and the container label is the injected
+    /// parameter (not a hardcoded string).
     func testGridAccessibilityContract() throws {
         let src = try gridSource()
         XCTAssertTrue(
-            src.contains(".accessibilityAddTraits(.isHeader)"),
-            "header cells must carry the header trait for the VO rotor")
+            src.contains("NSTableColumn("),
+            "v2 must use native NSTableColumn headers (AX header role + sort direction)")
         XCTAssertTrue(
-            src.contains(".accessibilityLabel(\"\\(col.header): \\(text)\")"),
+            src.contains("setAccessibilityLabel(\"\\(column.header): \\(text)\")"),
             "body cells must announce \"Header: value\"")
         XCTAssertTrue(
             src.contains(".accessibilityAddTraits(.isSummaryElement)"),
@@ -73,5 +75,87 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertTrue(
             src.contains(".accessibilityLabel(accessibilityLabel)"),
             "the container label must be the caller-supplied parameter")
+        XCTAssertTrue(
+            src.contains("setAccessibilityCustomActions"),
+            "row actions must surface as AX custom actions")
+    }
+
+    // MARK: v2 behavior (#519) — coordinator seams, no window needed.
+
+    private func makeGrid(
+        rows: [Row],
+        selection: Binding<Int?>? = nil,
+        announce: @escaping (String) -> Void = { _ in }
+    ) -> AccessibleDataGrid<Row> {
+        AccessibleDataGrid(
+            columns: [
+                .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
+                .init("Role", cell: { $0.b }),
+            ],
+            rows: rows,
+            summary: "Table: \(rows.count) rows, 2 columns.",
+            accessibilityLabel: "Table",
+            selection: selection,
+            announce: announce)
+    }
+
+    private static let people = [
+        Row(id: 0, a: "Charlie", b: "Ops"),
+        Row(id: 1, a: "Ada", b: "Engineer"),
+        Row(id: 2, a: "Bea", b: "Design"),
+    ]
+
+    @MainActor
+    func testSortComparatorAndAnnouncement() {
+        var announced: [String] = []
+        let grid = makeGrid(rows: Self.people) { announced.append($0) }
+        let coordinator = GridCoordinator(grid: grid)
+
+        XCTAssertEqual(coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertEqual(coordinator.displayRows.map(\.a), ["Ada", "Bea", "Charlie"])
+
+        XCTAssertEqual(coordinator.applySort(column: 0, ascending: false),
+            "Sorted by Name, descending")
+        XCTAssertEqual(coordinator.displayRows.map(\.a), ["Charlie", "Bea", "Ada"])
+
+        // Unsortable column: no-op, no announcement.
+        XCTAssertNil(coordinator.applySort(column: 1, ascending: true))
+        XCTAssertEqual(announced.count, 2)
+    }
+
+    @MainActor
+    func testSortSurvivesReload() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        coordinator.applySort(column: 0, ascending: true)
+        // New data arrives (SwiftUI update): sort order is preserved.
+        coordinator.reload(grid: makeGrid(rows: Self.people + [Row(id: 3, a: "Abe", b: "QA")]))
+        XCTAssertEqual(coordinator.displayRows.map(\.a), ["Abe", "Ada", "Bea", "Charlie"])
+    }
+
+    @MainActor
+    func testTypeAheadSelectsByFirstColumnPrefix() {
+        var selected: Int?
+        let binding = Binding<Int?>(get: { selected }, set: { selected = $0 })
+        let grid = makeGrid(rows: Self.people, selection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.typeAhead("b", in: nil)
+        XCTAssertEqual(selected, 2, "prefix 'b' → Bea")
+        // Accumulating within the window narrows the match.
+        coordinator.typeAhead("e", in: nil)
+        XCTAssertEqual(selected, 2, "prefix 'be' still Bea")
+    }
+
+    @MainActor
+    func testVirtualizedDataSourceAtScaleBudget() {
+        // §K: 2,000 rows through the data source — row count is O(1),
+        // cell building is on-demand only.
+        let rows = (0..<2000).map { Row(id: $0, a: "Row \($0)", b: "value") }
+        let grid = makeGrid(rows: rows)
+        let coordinator = GridCoordinator(grid: grid)
+        XCTAssertEqual(coordinator.numberOfRows(in: NSTableView()), 2000)
+        XCTAssertEqual(coordinator.displayRows.count, 2000)
     }
 }
