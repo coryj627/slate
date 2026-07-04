@@ -94,7 +94,7 @@ struct NoteContentView: View {
             Text("Select a file to read.")
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
-            Text("Reading lands in a follow-up milestone.")
+            Text("Open a note from the file tree, or press ⌘N to create one.")
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer()
