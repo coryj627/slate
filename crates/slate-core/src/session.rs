@@ -3513,6 +3513,10 @@ fn list_dir_children_impl(
     })
 }
 
+fn fputs_warn(message: &str) {
+    eprintln!("Slate: {message}");
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3786,6 +3790,7 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFolder,
+            true,
         )
     }
 
@@ -3800,6 +3805,7 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::MoveFolder,
+            true,
         )
     }
 
@@ -3814,6 +3820,7 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFile,
+            true,
         )
     }
 
@@ -3828,6 +3835,7 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::MoveFile,
+            true,
         )
     }
 
@@ -3975,10 +3983,10 @@ impl VaultSession {
                 })?
             }
             StructuralOpKind::RenameFolder | StructuralOpKind::MoveFolder => {
-                self.structural_move_folder(&payload.to, &payload.from, kind)?
+                self.structural_move_folder(&payload.to, &payload.from, kind, false)?
             }
             StructuralOpKind::RenameFile | StructuralOpKind::MoveFile => {
-                self.structural_move_file(&payload.to, &payload.from, kind)?
+                self.structural_move_file(&payload.to, &payload.from, kind, false)?
             }
             StructuralOpKind::DeleteFile | StructuralOpKind::DeleteFolder => {
                 unreachable!("undoable() filtered deletes above")
@@ -3989,12 +3997,23 @@ impl VaultSession {
         // to its pre-op bytes via the per-file op-log, guarded by the
         // recorded post-op hash so an external edit since the op surfaces
         // as a per-file WriteConflict in the report, never a clobber.
+        //
+        // Rewrites are journaled under POST-move paths; the inverse move
+        // above already relocated moved files back, so map each restore
+        // target through the reverse mapping (census-found: rewritten
+        // MOVED sources otherwise fail their restore at a stale path).
+        let reverse: std::collections::HashMap<&str, &str> = payload
+            .moved
+            .iter()
+            .map(|(old, new)| (new.as_str(), old.as_str()))
+            .collect();
         for rewrite in &payload.rewrites {
-            match self.restore_file_to_hash(
-                &rewrite.path,
-                &rewrite.hash_before,
-                &rewrite.hash_after,
-            ) {
+            let restore_path = reverse
+                .get(rewrite.path.as_str())
+                .copied()
+                .unwrap_or(rewrite.path.as_str());
+            match self.restore_file_to_hash(restore_path, &rewrite.hash_before, &rewrite.hash_after)
+            {
                 Ok(()) => report.rewritten.push(rewrite.clone()),
                 Err(VaultError::WriteConflict { .. }) => {
                     report.failed.push(crate::structural::RewriteFailure {
@@ -4018,6 +4037,7 @@ impl VaultSession {
         from: &str,
         to: &str,
         kind: crate::structural::StructuralOpKind,
+        plan_rewrites: bool,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
@@ -4065,32 +4085,8 @@ impl VaultSession {
         };
 
         self.provider.rename(from, to)?;
-        let tx_result = self.with_structural_tx(conn, |tx| {
-            rename_prefix_in_index(tx, from, to)?;
-            journal_append(
-                tx,
-                kind,
-                &crate::structural::StructuralOpPayload {
-                    from: from.to_string(),
-                    to: to.to_string(),
-                    moved: moved.clone(),
-                    ..Default::default()
-                },
-            )
-        });
-        let op_id = match tx_result {
-            Ok(id) => id,
-            Err(e) => {
-                // Best-effort fs revert so state can't silently split.
-                let _ = self.provider.rename(to, from);
-                return Err(e);
-            }
-        };
-        Ok(crate::structural::StructuralReport {
-            op_id,
-            moved,
-            rewritten: Vec::new(),
-            failed: Vec::new(),
+        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx| {
+            rename_prefix_in_index(tx, from, to)
         })
     }
 
@@ -4099,6 +4095,7 @@ impl VaultSession {
         from: &str,
         to: &str,
         kind: crate::structural::StructuralOpKind,
+        plan_rewrites: bool,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
@@ -4126,37 +4123,222 @@ impl VaultSession {
         }
 
         self.provider.rename(from, to)?;
-        let (name, extension, is_markdown) = classify_path(to);
-        let tx_result = self.with_structural_tx(conn, |tx| {
+        let moved = vec![(from.to_string(), to.to_string())];
+        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx| {
+            let (name, extension, is_markdown) = classify_path(to);
             tx.execute(
                 "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
                  WHERE path = ?5",
                 rusqlite::params![to, name, extension, is_markdown as i64, from],
             )?;
-            journal_append(
-                tx,
+            Ok(())
+        })
+    }
+
+    /// Shared tail of every move/rename (U2-2 index update + U2-3 link
+    /// integrity, #461): with the fs op already done and the connection
+    /// lock held —
+    ///
+    ///   tx1: `update_index` (path renames) + inbound `links.target_path`
+    ///        column updates + unresolved-link re-resolution (arrivals
+    ///        heal) — the atomic "move" as far as the index is concerned;
+    ///   then: per-file link-text rewrites through the standard save path
+    ///        (each file atomic + op-logged; failures reported per file,
+    ///        never aborting the move — the rename-property discipline);
+    ///   tx2: journal append carrying the applied rewrites, so
+    ///        `undo_structural` can restore them byte-exactly.
+    ///
+    /// tx1 failure reverts the fs op best-effort (no silently split state).
+    #[allow(clippy::too_many_arguments)] // cohesive move-tail; a param
+    // struct would only relocate the argument list
+    fn finish_structural_move(
+        &self,
+        mut conn: std::sync::MutexGuard<'_, Connection>,
+        kind: crate::structural::StructuralOpKind,
+        from: &str,
+        to: &str,
+        moved: Vec<(String, String)>,
+        plan_rewrites: bool,
+        update_index: impl FnOnce(&rusqlite::Transaction) -> Result<(), VaultError>,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let tx1 = (|| -> Result<(), VaultError> {
+            let tx = conn.transaction()?;
+            update_index(&tx)?;
+            {
+                let mut stmt =
+                    tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
+                for (old, new) in &moved {
+                    stmt.execute(rusqlite::params![new, old])?;
+                }
+            }
+            crate::links_db::re_resolve_unresolved_links(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = tx1 {
+            let _ = self.provider.rename(to, from);
+            return Err(e);
+        }
+
+        // Undo inverts the move and restores the FORWARD rewrites from the
+        // journal — it must never plan NEW rewrites (the reverse pass would
+        // both break byte-identity and invalidate the hash-guarded
+        // restores; census-found, seed 0).
+        let (rewritten, failed) = if plan_rewrites {
+            self.apply_link_rewrites(&mut conn, &moved)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let op_id = {
+            let tx = conn.transaction()?;
+            let id = journal_append(
+                &tx,
                 kind,
                 &crate::structural::StructuralOpPayload {
                     from: from.to_string(),
                     to: to.to_string(),
-                    moved: vec![(from.to_string(), to.to_string())],
-                    ..Default::default()
+                    moved: moved.clone(),
+                    rewrites: rewritten.clone(),
                 },
-            )
-        });
-        let op_id = match tx_result {
-            Ok(id) => id,
-            Err(e) => {
-                let _ = self.provider.rename(to, from);
-                return Err(e);
-            }
+            )?;
+            tx.commit()?;
+            id
         };
         Ok(crate::structural::StructuralReport {
             op_id,
-            moved: vec![(from.to_string(), to.to_string())],
-            rewritten: Vec::new(),
-            failed: Vec::new(),
+            moved,
+            rewritten,
+            failed,
         })
+    }
+
+    /// U2-3 (#461): plan and apply the link-text rewrites a move demands.
+    /// Referential stability — every link that resolved to file F before
+    /// still resolves to F, byte-minimal edits only; the planner
+    /// (`crate::link_rewrite`) decides, this method applies.
+    fn apply_link_rewrites(
+        &self,
+        conn: &mut std::sync::MutexGuard<'_, Connection>,
+        moved: &[(String, String)],
+    ) -> (
+        Vec<crate::structural::RewriteOutcome>,
+        Vec<crate::structural::RewriteFailure>,
+    ) {
+        use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
+        let mapping = crate::link_rewrite::MoveMapping::new(moved.iter().cloned());
+        if mapping.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+
+        // This path is best-effort by design (the move already stands): a
+        // DB error here must never panic the process (Codoki #503). It
+        // surfaces LOUDLY instead — an empty rewrite set plus a sweep-level
+        // failure entry, so the report can't read as "nothing needed
+        // rewriting".
+        let (index, candidates) = match collect_rewrite_candidates(conn, moved) {
+            Ok(pair) => pair,
+            Err(e) => {
+                return (
+                    Vec::new(),
+                    vec![RewriteFailure {
+                        path: "*".to_string(),
+                        kind: RewriteFailureKind::Other(format!(
+                            "link-rewrite candidate sweep failed: {e}"
+                        )),
+                    }],
+                );
+            }
+        };
+
+        let mut rewritten = Vec::new();
+        let mut failed = Vec::new();
+        for path in candidates {
+            let (text, hash_before) = match self.read_text(&path) {
+                Ok(text) => {
+                    let hash = crate::vault::content_hash(text.as_bytes());
+                    (text, hash)
+                }
+                Err(e) => {
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(e.to_string()),
+                    });
+                    continue;
+                }
+            };
+            let edits =
+                crate::link_rewrite::plan_rewrites_for_source(&path, &text, &mapping, &index);
+            if edits.is_empty() {
+                continue;
+            }
+            // Anchor the PRE-rewrite bytes in the op-log before rewriting:
+            // scan-indexed files have no log entries yet, so without this
+            // anchor `undo_structural`'s reconstruct-at-hash cannot reach
+            // the pre-op state (census-found, seed 0). hash_before ==
+            // hash_after marks a pure anchor; the state map is updated so
+            // the following save appends its EditBatch against it.
+            self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
+            let new_text = crate::link_rewrite::apply_edits(&text, &edits);
+            match self.save_text_locked(conn, &path, &new_text, Some(&hash_before)) {
+                Ok(report) => rewritten.push(RewriteOutcome {
+                    path,
+                    hash_before,
+                    hash_after: report.new_content_hash,
+                }),
+                Err(VaultError::WriteConflict { .. }) => failed.push(RewriteFailure {
+                    path,
+                    kind: RewriteFailureKind::WriteConflict,
+                }),
+                Err(e) => failed.push(RewriteFailure {
+                    path,
+                    kind: RewriteFailureKind::Other(e.to_string()),
+                }),
+            }
+        }
+        (rewritten, failed)
+    }
+
+    /// Append a pure WholeFileReplace anchor of `contents` (current disk
+    /// state, hash `content_hash`) to `path`'s op-log, and align the append
+    /// state so the next save chains onto it. Failures are logged, not
+    /// fatal: a missing anchor degrades an eventual undo of THIS file to a
+    /// per-file conflict report, never corruption.
+    fn anchor_oplog_snapshot(
+        &self,
+        conn: &std::sync::MutexGuard<'_, Connection>,
+        path: &str,
+        contents: &str,
+        content_hash: &str,
+    ) {
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(file_id) = file_id else { return };
+        let entry = crate::oplog::OpLogEntry {
+            timestamp_ms: now_ms(),
+            user_actor_id: self.config.user_actor_id.clone(),
+            op_kind: crate::oplog::OpKind::WholeFileReplace,
+            content_hash_before: content_hash.to_string(),
+            content_hash_after: content_hash.to_string(),
+            payload_bytes: contents.as_bytes().to_vec(),
+        };
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
+            fputs_warn(&format!("oplog anchor for {path:?} failed: {e}"));
+            return;
+        }
+        let mut state = self.oplog_state.lock().expect("oplog state mutex");
+        state.insert(
+            file_id,
+            OplogAppendState {
+                last_hash_after: content_hash.to_string(),
+                bytes_since_snapshot: 0,
+            },
+        );
     }
 
     /// Run `body` inside one transaction on the already-locked connection.
@@ -4206,6 +4388,72 @@ impl VaultSession {
         self.save_text_locked(&mut conn, path, &contents, Some(expected_current))
             .map(|_| ())
     }
+}
+
+/// Post-move index + candidate set for the link-rewrite pass (U2-3).
+/// Candidates: any source with an internal link whose `target_raw` STEM
+/// matches a moved file's stem (census-found over-approximation — a move
+/// can flip bystander basename links by proximity; over-inclusion costs a
+/// plan, never an edit) ∪ moved markdown files that carry links.
+fn collect_rewrite_candidates(
+    conn: &Connection,
+    moved: &[(String, String)],
+) -> Result<
+    (
+        crate::InMemoryVaultIndex,
+        std::collections::BTreeSet<String>,
+    ),
+    VaultError,
+> {
+    let all_paths: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT path FROM files")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let stem_of = |s: &str| -> String {
+        let name = s.rsplit('/').next().unwrap_or(s);
+        let mut stem = name;
+        for ext in [".md", ".markdown", ".mdown", ".mkd"] {
+            if let Some(candidate) = stem.strip_suffix(ext) {
+                stem = candidate;
+                break;
+            }
+        }
+        stem.to_lowercase()
+    };
+    let moved_stems: std::collections::HashSet<String> =
+        moved.iter().map(|(old, _)| stem_of(old)).collect();
+    let mut candidates = std::collections::BTreeSet::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT f.path, l.target_raw FROM links l
+             JOIN files f ON f.id = l.source_file_id
+             WHERE l.is_external = 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (source, target_raw) = row?;
+            if moved_stems.contains(&stem_of(&target_raw)) {
+                candidates.insert(source);
+            }
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT f.path FROM files f
+             WHERE f.path = ?1 AND f.is_markdown = 1
+               AND EXISTS (SELECT 1 FROM links l WHERE l.source_file_id = f.id)",
+        )?;
+        for (_, new) in moved {
+            let rows = stmt.query_map(rusqlite::params![new], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                candidates.insert(row?);
+            }
+        }
+    }
+    Ok((crate::InMemoryVaultIndex::new(all_paths), candidates))
 }
 
 /// Final path component (files or folders; input is a validated relative
@@ -4399,6 +4647,9 @@ mod tests {
 
     #[path = "structural.rs"]
     mod structural;
+
+    #[path = "link_integrity.rs"]
+    mod link_integrity;
 
     #[path = "search.rs"]
     mod search;
