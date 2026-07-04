@@ -193,7 +193,12 @@ final class ViewModeTests: XCTestCase {
         state.selectedFilePath = "a.md"
         await state.noteLoadTask?.value
 
-        state.noteEditorCaretDidMove(toByte: 7)
+        // Multibyte guard: the coordinator reports RAW UTF-16; the byte
+        // conversion happens once at capture, against the live buffer.
+        // "# a.md\n" — caret after the 'é' we type next would differ; use
+        // the loaded ASCII fixture text: UTF-16 location 7 == byte 7 here,
+        // then assert a non-ASCII case explicitly below.
+        state.noteEditorCaretDidMove(toUTF16: 7)
         state.toggleViewMode()
         XCTAssertEqual(state.activeViewMode, .reading)
 
@@ -202,6 +207,16 @@ final class ViewModeTests: XCTestCase {
         XCTAssertEqual(
             state.cursorByteOffsetRequest.value, 7,
             "the parked caret is delivered on the editor remount")
+
+        // Non-ASCII: buffer "hé!" — caret after "hé" is UTF-16 location 2
+        // but UTF-8 byte offset 3. The parked value must be BYTES.
+        state.updateEditorText("hé!")
+        state.noteEditorCaretDidMove(toUTF16: 2)
+        state.toggleViewMode()
+        state.toggleViewMode()
+        XCTAssertEqual(
+            state.cursorByteOffsetRequest.value, 3,
+            "UTF-16 caret location converts to a UTF-8 byte offset at capture")
     }
 
     /// Layout persistence: a reading-mode tab survives vault close/reopen

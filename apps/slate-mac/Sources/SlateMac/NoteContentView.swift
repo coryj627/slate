@@ -201,8 +201,8 @@ struct NoteContentView: View {
             previewEmbedAtCursor: { [appState] target, line in
                 appState.requestEmbedPreview(target: target, sourceLine: line)
             },
-            onCaretByteChange: { [appState] byte in
-                appState.noteEditorCaretDidMove(toByte: byte)
+            onCaretUTF16Change: { [appState] location in
+                appState.noteEditorCaretDidMove(toUTF16: location)
             }
         )
         .onAppear { _ = text }

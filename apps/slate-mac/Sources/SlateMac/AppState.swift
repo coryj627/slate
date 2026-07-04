@@ -502,19 +502,22 @@ final class AppState: ObservableObject {
 
     // MARK: - View mode (U3-2, #466)
 
-    /// Live caret byte offset, reported continuously by the editor
-    /// coordinator (`onCaretByteChange`). A plain stored var — NEVER
-    /// `@Published`: selection churn is per-keystroke and must not
-    /// invalidate views. Read exactly once, at switch-to-reading time.
-    private var liveEditorCaretByte: Int = 0
+    /// Live caret location in RAW UTF-16, reported continuously by the
+    /// editor coordinator (`onCaretUTF16Change`) — a plain Int handoff.
+    /// NEVER `@Published` (selection churn is per-keystroke and must not
+    /// invalidate views), and never converted here: the UTF-8 conversion
+    /// runs ONCE at switch-to-reading time — a per-keystroke rope build
+    /// over the whole document is the O(n) class #404 eliminated.
+    private var liveEditorCaretUTF16: Int = 0
 
-    /// Caret to restore per tab when its editor remounts after reading
-    /// mode (U3-2 spec: "caret preserved from last editing session of this
-    /// tab, else {0,0}"). Sparse; cleared on delivery and on tab close.
+    /// Caret (UTF-8 byte offset) to restore per tab when its editor
+    /// remounts after reading mode (U3-2 spec: "caret preserved from last
+    /// editing session of this tab, else {0,0}"). Sparse; cleared on
+    /// delivery and on tab close.
     private var editorCaretReturn: [TabID: Int] = [:]
 
-    func noteEditorCaretDidMove(toByte byte: Int) {
-        liveEditorCaretByte = byte
+    func noteEditorCaretDidMove(toUTF16 location: Int) {
+        liveEditorCaretUTF16 = location
     }
 
     /// The ACTIVE tab's view mode — what `NoteContentView` renders.
@@ -543,9 +546,12 @@ final class AppState: ObservableObject {
         guard workspace.viewMode(for: tabID) != target else { return }
         let isActiveTab = tabID == workspace.model.activeGroup.activeTabID
         if isActiveTab, target == .reading {
-            // Park the caret before the editor unmounts. The live buffer
-            // stays in AppState's fields — reading renders from it.
-            editorCaretReturn[tabID] = liveEditorCaretByte
+            // Park the caret before the editor unmounts (converted to a
+            // byte offset HERE, once, against the live buffer — human
+            // cadence, not keystroke cadence). The buffer stays in
+            // AppState's fields — reading renders from it.
+            editorCaretReturn[tabID] = EditorTextConversions.byteOffsetForUTF16Location(
+                liveEditorCaretUTF16, in: currentNoteText ?? "")
         }
         workspace.setViewMode(target, for: tabID)
         if isActiveTab, target == .editing {
