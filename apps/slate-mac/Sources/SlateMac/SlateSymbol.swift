@@ -82,6 +82,17 @@ enum SlateSymbol: CaseIterable {
     /// (same metaphor, same glyph — the DoD §B consistency rule); the two
     /// roles stay distinct so their labels differ ("Tasks" vs "Tasks Review").
     case tasksLeaf
+    /// Bottom-left utility rail roles (U4-3, #472). Each renders in the
+    /// `SidebarUtilityBar` as a labeled glyph; `v7 == fallback` (all three
+    /// glyphs exist on the macOS 15 floor). Per the u4_spec SlateSymbol table.
+    case settings
+    case help
+    case vaultSwitch
+    /// "Currently selected" leading checkmark (U4-3, #472): marks the open
+    /// vault's row in the vault-switcher menu. A supporting role for the U4-3
+    /// surface — the source-lint funnels every glyph through this layer, so the
+    /// menu's selection cue lives here rather than as a raw `systemImage:`.
+    case checkmark
 
     /// The resolved SF Symbol name for the running OS. `private` so call
     /// sites can't reach past the labeled/decorative builders to name a raw
@@ -125,6 +136,10 @@ enum SlateSymbol: CaseIterable {
         case .embed: return "Embed"
         case .diagram: return "Diagram"
         case .tasksLeaf: return "Tasks"
+        case .settings: return "Settings"
+        case .help: return "Help"
+        case .vaultSwitch: return "Switch vault"
+        case .checkmark: return "Current"
         }
     }
 
@@ -176,6 +191,10 @@ enum SlateSymbol: CaseIterable {
                     "point.3.connected.trianglepath.dotted")
         // Shares `.tasksReview`'s glyph deliberately (DoD §B).
         case .tasksLeaf: return ("checklist", "checklist")
+        case .settings: return ("gearshape", "gearshape")
+        case .help: return ("questionmark.circle", "questionmark.circle")
+        case .vaultSwitch: return ("externaldrive", "externaldrive")
+        case .checkmark: return ("checkmark", "checkmark")
         }
     }
 

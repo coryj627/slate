@@ -484,6 +484,12 @@ struct FileTreeSidebar: View {
                 }
             }
             .frame(maxHeight: 300)
+
+            // U4-3 (#472): the bottom-left utility bar — Settings, Help, and
+            // the vault switcher — pinned at the sidebar's bottom edge. Last
+            // child of the column, below the temporary Properties section
+            // (which U3-3 deletes). The bar draws its own separator above.
+            SidebarUtilityBar()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")

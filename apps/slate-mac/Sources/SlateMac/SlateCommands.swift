@@ -62,6 +62,12 @@ enum SlateCommandID {
     // Settings
     static let openSettings = "slate.settings.open"
 
+    // Help (U4-3, #472). Grouped under the Settings section — Help and
+    // Settings are the app-meta utilities the bottom-left utility bar
+    // surfaces, and `CommandSection` (an FFI enum) has no dedicated `.help`
+    // case; adding one is a cross-language change out of this PR's scope.
+    static let openHelp = "slate.help.open"
+
     // Tasks
     static let tasksReview = "slate.tasks.review"
 
@@ -97,6 +103,7 @@ enum SlateCommandID {
         addProperty,
         bulkRenameProperties,
         openSettings,
+        openHelp,
         tasksReview,
     ]
 }
@@ -450,6 +457,20 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
             to: nil,
             from: nil
         )
+    }
+
+    // ----- Help -----
+
+    register(
+        SlateCommandID.openHelp,
+        label: "Help",
+        section: .settings,
+        hint: "Open the project README in your default browser."
+    ) { [weak appState] in
+        // Same implementation the SidebarUtilityBar "Help" button calls —
+        // routes through AppState's injected `externalOpener` (gap G13) so
+        // both surfaces open one URL and tests can spy on the hand-off.
+        appState?.openHelp()
     }
 
     // ----- Tasks -----

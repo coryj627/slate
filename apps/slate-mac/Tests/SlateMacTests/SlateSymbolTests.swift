@@ -33,6 +33,10 @@ final class SlateSymbolTests: XCTestCase {
         // U4-2 leaf roles (#471).
         "arrow.uturn.backward", "arrow.up.right", "photo.on.rectangle",
         "point.3.connected.trianglepath.dotted",
+        // U4-3 (#472): utility-bar roles + the menu's selection checkmark. All
+        // predate SF Symbols 7 (gearshape/questionmark.circle/checkmark since
+        // v1; externaldrive since v2/macOS 11), so they're on the macOS 15 floor.
+        "gearshape", "questionmark.circle", "externaldrive", "checkmark",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated
