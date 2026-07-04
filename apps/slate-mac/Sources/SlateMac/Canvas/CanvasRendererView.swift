@@ -191,8 +191,14 @@ final class CanvasRendererNSView: NSView {
             cardLayers[node.nodeId] = cardLayer
             if cardLayer.superlayer == nil { contentLayer.addSublayer(cardLayer) }
             cardLayer.frame = viewRect
-            (cardLayer.sublayers?.first as? CATextLayer)?.fontSize = max(
-                4, 12 * (viewport?.scale ?? 1))
+            if let text = cardLayer.sublayers?.first as? CATextLayer {
+                // Frame tracks the SCALED rect, not the canvas-unit
+                // width stamped at creation (Codoki #615) — at non-1.0
+                // zoom the old width truncated or overflowed the card.
+                text.fontSize = max(4, 12 * (viewport?.scale ?? 1))
+                text.frame = CGRect(
+                    x: 6, y: 4, width: max(0, viewRect.width - 12), height: text.fontSize * 1.6)
+            }
 
             let element = axElement(for: node)
             element.setAccessibilityFrame(screenRect(from: viewRect))
