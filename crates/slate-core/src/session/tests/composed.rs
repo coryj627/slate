@@ -64,14 +64,30 @@ fn read_note_parts_offsets_are_exact_by_construction() {
     let crlf: &[u8] = b"---\r\ntitle: Hi\r\n---\r\nBody\r\n";
     let bommed: &[u8] = b"\xef\xbb\xbf---\ntitle: Hi\n---\nBody\n";
     let plain: &[u8] = b"# No fm\nBody\n";
-    let cases: [(&[u8], Option<(u64, u32)>); 4] = [
-        (lf, Some((18, 3))),
+    struct Case {
+        bytes: &'static [u8],
+        pinned: Option<(u64, u32)>,
+    }
+    let cases = [
+        Case {
+            bytes: lf,
+            pinned: Some((18, 3)),
+        },
         // "---\r\n" (5) + "title: Hi\r\n" (11) + "---\r\n" (5) = 21 bytes, 3 newlines.
-        (crlf, Some((21, 3))),
-        (bommed, None),
-        (plain, Some((0, 0))),
+        Case {
+            bytes: crlf,
+            pinned: Some((21, 3)),
+        },
+        Case {
+            bytes: bommed,
+            pinned: None,
+        },
+        Case {
+            bytes: plain,
+            pinned: Some((0, 0)),
+        },
     ];
-    for (bytes, pinned) in cases {
+    for Case { bytes, pinned } in cases {
         let (_tmp, session) = make_vault(|p| {
             p.write_file("note.md", bytes).unwrap();
         });
