@@ -826,4 +826,296 @@ final class ReadingViewTests: XCTestCase {
         PresentationReady.assertRendersInBothAppearances(
             ReadingView(text: "", pathLabel: "Empty.md"))
     }
+
+    // MARK: - Block-level embed detection (#511)
+
+    /// Detection is span-authority, not string-prefix: a paragraph that IS one
+    /// `![[…]]` embed yields its cache-key target. The target form MATCHES
+    /// `AppState.embedTargetKey` (anchors attached) so a reading-view card and
+    /// the EmbedsPanel look up the SAME `currentNoteEmbedResolutions` entry.
+    func testBlockEmbedDetectionPositives() {
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note]]"), "Note")
+        // Leading/trailing whitespace around the sole embed is still
+        // block-level. (A ≥4-space / tab indent is NOT tested here: that is a
+        // CommonMark indented-code block, which the Rust classifier correctly
+        // declines to treat as an embed — and `readingBlocksSource` never hands
+        // a paragraph slice such an indent anyway.)
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "  ![[Note]]  "), "Note")
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: " ![[Note]] \n"), "Note")
+        // Heading anchor stays attached to the target (cache-key form).
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note#Section A]]"),
+            "Note#Section A")
+        // Block anchor likewise (`^id`).
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note^blk]]"),
+            "Note^blk")
+        // Alias does NOT change the routing target/cache key.
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note|shown]]"), "Note")
+    }
+
+    /// The detected target equals the key `AppState.embedTargetKey` composes
+    /// for the same reference — the ONE-cache-key invariant, pinned so the
+    /// reading card and the panel can never drift onto different dict entries.
+    func testBlockEmbedTargetMatchesAppStateCacheKey() {
+        // Plain target.
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[folder/Note]]"),
+            appStateEmbedKey(targetRaw: "folder/Note", anchorKind: nil, anchorText: nil))
+        // Heading anchor.
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note#Sec]]"),
+            appStateEmbedKey(targetRaw: "Note", anchorKind: "heading", anchorText: "Sec"))
+        // Block anchor.
+        XCTAssertEqual(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note^b1]]"),
+            appStateEmbedKey(targetRaw: "Note", anchorKind: "block", anchorText: "b1"))
+    }
+
+    /// Mirror of `AppState.embedTargetKey` without needing a live link record.
+    private func appStateEmbedKey(
+        targetRaw: String, anchorKind: String?, anchorText: String?
+    ) -> String {
+        guard let anchorKind, let anchorText else { return targetRaw }
+        let marker = anchorKind == "block" ? "^" : "#"
+        return "\(targetRaw)\(marker)\(anchorText)"
+    }
+
+    /// Negatives: anything that is NOT exactly one embed stays inline (the
+    /// mid-paragraph / multi-embed cases keep today's link-run behavior).
+    func testBlockEmbedDetectionNegatives() {
+        // Embed with surrounding prose — mid-paragraph, not block-level.
+        XCTAssertNil(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "see ![[Note]] here"))
+        XCTAssertNil(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note]] trailing"))
+        XCTAssertNil(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "leading ![[Note]]"))
+        // Two embeds in one paragraph.
+        XCTAssertNil(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[One]] ![[Two]]"))
+        // A wikilink (not an embed) is not a block-level embed.
+        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "[[Note]]"))
+        // Plain prose.
+        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "just text"))
+        // Empty embed body doesn't parse to a target.
+        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "![[]]"))
+    }
+
+    /// An embed INSIDE inline code is suppressed by the shared `mappableSpans`
+    /// (rendered-as-code stays literal), so it never counts as a block embed —
+    /// the no-second-classifier suppression is pinned here.
+    func testBlockEmbedDetectionSuppressedInsideInlineCode() {
+        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "`![[Note]]`"))
+    }
+
+    /// SCOPE (pinned, #511): only WIKILINK embeds expand in place. A markdown
+    /// IMAGE embed classifies as `.image`, not `.embed`, so it is NOT detected
+    /// as a block-level embed and keeps its current inline behavior. In-place
+    /// markdown-image rendering is a noted follow-up, not this PR.
+    func testMarkdownImageEmbedIsNotBlockLevelEmbed() {
+        XCTAssertNil(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "![alt](picture.png)"))
+    }
+
+    // MARK: - Block-level embed render state machine (#511)
+
+    /// RESOLVED path: a present dict entry renders through `EmbedView` (the one
+    /// path for both real resolutions and `.unresolved`), with jump-to-source
+    /// wired and depth 0 — structural check against the renderer source.
+    func testBlockEmbedRendersEmbedViewWhenResolved() throws {
+        let text = try strippedReadingViewSource()
+        XCTAssertTrue(
+            text.contains("blockEmbedTarget(inSlice:"),
+            "the paragraph case must detect block-level embeds via the span authority")
+        XCTAssertTrue(
+            text.contains("EmbedView("),
+            "a resolved block-level embed must render EmbedView")
+        XCTAssertTrue(
+            text.contains("jumpToSourceAction:") && text.contains("onOpenEmbedSource("),
+            "the card's jump-to-source must route through onOpenEmbedSource")
+    }
+
+    /// PENDING → RESOLVED-EMPTY: the placeholder carries the house AX label and
+    /// the request-once guard; the terminal fallback is the inline leaf. The AX
+    /// label is a string literal (stripped by `strippedReadingViewSource`), so
+    /// this reads the RAW source.
+    func testBlockEmbedPlaceholderAndFallbackShape() throws {
+        let url = Self.projectRoot
+            .appendingPathComponent("apps/slate-mac/Sources/SlateMac/Reading")
+            .appendingPathComponent("ReadingView.swift")
+        let raw = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(
+            raw.contains("\"Embed, loading.\""),
+            "the pending placeholder must carry the 'Embed, loading.' AX label")
+        XCTAssertTrue(
+            raw.contains("requestedEmbedKeys"),
+            "resolution must be requested at most once per key (guard set)")
+        XCTAssertTrue(
+            raw.contains("await context.onResolveEmbed(key)"),
+            "the placeholder must request resolution for its key and AWAIT it")
+        XCTAssertTrue(
+            raw.contains("inlineLeaf(fallbackSlice)"),
+            "resolved-empty must fall back to the inline link-run rendering")
+        // The fallback gate must be request COMPLETION, not request start —
+        // gating on requestedEmbedKeys would flash the inline run for the
+        // whole in-flight window (the defect this pins against).
+        XCTAssertTrue(
+            raw.contains("completedEmbedKeys.contains(key)"),
+            "the fallback must gate on completion, not on request start")
+        XCTAssertTrue(
+            raw.contains("defer { completedEmbedKeys.insert(key) }"),
+            "completion must be recorded terminally (defer), even on cancellation")
+    }
+
+    /// The reading view renders a block-level embed (resolved), a placeholder
+    /// (pending), and the inline fallback without crashing in either
+    /// appearance — the full state machine mounted.
+    @MainActor
+    func testBlockEmbedStatesRenderInBothAppearances() {
+        // Resolved (full note) — the card path.
+        let resolvedCtx = ReadingView.ReadingBlockContext(
+            embedResolutions: [
+                "Note": .fullNote(targetPath: "Note.md", text: "body", nested: [])
+            ])
+        PresentationReady.assertRendersInBothAppearances(
+            ReadingView(
+                text: "![[Note]]", pathLabel: "Host.md", context: resolvedCtx))
+
+        // Unresolved variant — still the EmbedView card (honest render), never
+        // a dead block.
+        let unresolvedCtx = ReadingView.ReadingBlockContext(
+            embedResolutions: [
+                "Ghost": .unresolved(reason: .targetNotFound(target: "Ghost"))
+            ])
+        PresentationReady.assertRendersInBothAppearances(
+            ReadingView(
+                text: "![[Ghost]]", pathLabel: "Host.md", context: unresolvedCtx))
+
+        // Pending — the placeholder (no dict entry, resolver is a no-op here).
+        PresentationReady.assertRendersInBothAppearances(
+            ReadingView(text: "![[Pending]]", pathLabel: "Host.md"))
+    }
+
+    // MARK: - Mid-paragraph embed keeps navigate routing (#511)
+
+    /// A mid-paragraph embed stays an inline run whose activation routes
+    /// through the embed scheme — unchanged from today. Asserted at the mapper:
+    /// the surrounding text keeps the embed as ONE `.embed` run.
+    func testMidParagraphEmbedStaysInlineRun() {
+        let mapped = ReadingInlineMapper.map(slice: "before ![[Note]] after")
+        XCTAssertEqual(mapped.runs.count, 1)
+        XCTAssertEqual(mapped.runs[0].kind, .embed)
+        XCTAssertEqual(mapped.runs[0].target, "Note")
+        XCTAssertEqual(mapped.runs[0].url.scheme, ReadingLinkRouter.embedScheme)
+        // And it is NOT a block-level embed, so the paragraph case renders it
+        // via the inline leaf (mid-paragraph navigate behavior preserved).
+        XCTAssertNil(
+            ReadingInlineMapper.blockEmbedTarget(inSlice: "before ![[Note]] after"))
+    }
+
+    // MARK: - AppState single-embed resolution (#511)
+
+    /// The block-embed live-buffer gap filler resolves one key and MERGES it
+    /// into `currentNoteEmbedResolutions` (never replacing the batch's other
+    /// keys). Against a real vault: a `![[target]]` in the live buffer resolves
+    /// to a `.fullNote` and lands under the exact cache key the reading card
+    /// looks up.
+    @MainActor
+    func testRequestReadingEmbedResolutionMergesResolvedTarget() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-reading-embed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("# Target\n\nbody text".utf8)
+            .write(to: vault.appendingPathComponent("target.md"))
+        try Data("# Second\n\nmore".utf8)
+            .write(to: vault.appendingPathComponent("second.md"))
+        try Data("host body".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents.json"))
+        let appState = AppState(recentsStore: store, externalOpener: { _ in true })
+        appState.openVault(at: vault)
+        await appState.scanTask?.value
+        appState.selectedFilePath = "host.md"
+        // Let the selection-driven batch settle before single-resolving — in
+        // production the batch runs once early, then reading-view gap fills
+        // merge onto it; here we await it so it can't wipe our writes mid-test.
+        await appState.linksLoadTask?.value
+        await appState.embedsLoadTask?.value
+
+        // Resolve one key, then a SECOND: the merge (not replace) contract
+        // means the first survives the second write.
+        await appState.requestReadingEmbedResolution(target: "second")
+        await appState.requestReadingEmbedResolution(target: "target")
+
+        XCTAssertNotNil(
+            appState.currentNoteEmbedResolutions["second"],
+            "single resolve must MERGE, not replace, existing keys")
+        let resolution = try XCTUnwrap(
+            appState.currentNoteEmbedResolutions["target"])
+        if case .fullNote(let path, _, _) = resolution {
+            XCTAssertTrue(path.contains("target"))
+        } else {
+            XCTFail("expected a resolved full-note embed, got \(resolution)")
+        }
+    }
+
+    /// A broken target still lands a terminal `.unresolved` entry (so the
+    /// placeholder collapses to EmbedView's honest unresolved render — never an
+    /// infinite spinner).
+    @MainActor
+    func testRequestReadingEmbedResolutionWritesUnresolvedForBrokenTarget()
+        async throws
+    {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-reading-embed-broken-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("host body".utf8)
+            .write(to: vault.appendingPathComponent("host.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents.json"))
+        let appState = AppState(recentsStore: store, externalOpener: { _ in true })
+        appState.openVault(at: vault)
+        await appState.scanTask?.value
+        appState.selectedFilePath = "host.md"
+        await appState.linksLoadTask?.value
+        await appState.embedsLoadTask?.value
+
+        await appState.requestReadingEmbedResolution(target: "does-not-exist")
+        let resolution = try XCTUnwrap(
+            appState.currentNoteEmbedResolutions["does-not-exist"],
+            "a broken target must still WRITE a terminal entry, not stay absent")
+        if case .unresolved = resolution {
+            // expected
+        } else {
+            XCTFail("broken target must resolve to .unresolved, got \(resolution)")
+        }
+    }
+
+    /// No session → no write. The reading view's request-once guard then keeps
+    /// the key marked and its state machine renders the inline fallback
+    /// (deterministic, no re-request loop).
+    @MainActor
+    func testRequestReadingEmbedResolutionNoSessionIsNoOp() async {
+        let appState = AppState()
+        await appState.requestReadingEmbedResolution(target: "anything")
+        XCTAssertNil(appState.currentNoteEmbedResolutions["anything"])
+    }
 }

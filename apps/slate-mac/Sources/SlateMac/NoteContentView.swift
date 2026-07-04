@@ -169,7 +169,22 @@ struct NoteContentView: View {
                 onToggleTask: { [appState] item in
                     appState.toggleCurrentTask(item)
                 },
-                taskLineOffset: appState.bodyLineOffset
+                taskLineOffset: appState.bodyLineOffset,
+                // #511: block-level `![[…]]` embeds expand in place. The dict
+                // is the SAME saved-state resolution map the EmbedsPanel reads
+                // (identical cache keys); `onResolveEmbed` fills a live-buffer
+                // gap the batch didn't see; `onOpenEmbedSource` reuses the
+                // panel's jump-to-source routing.
+                embedResolutions: appState.currentNoteEmbedResolutions,
+                onResolveEmbed: { [appState] key in
+                    // Awaited (not fire-and-forget): the reading view holds
+                    // its loading placeholder until this returns, then
+                    // reads the dict to pick card vs fallback.
+                    await appState.requestReadingEmbedResolution(target: key)
+                },
+                onOpenEmbedSource: { [appState] target in
+                    appState.openEmbedTarget(target)
+                }
             )
         )
         .accessibilityFocused($readingSurfaceFocused)
