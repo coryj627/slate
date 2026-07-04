@@ -67,7 +67,7 @@ fn sample_summaries() {
     assert_eq!(q.kind_label, "text");
     assert_eq!(q.group_path, ["Research"]);
     assert_eq!((q.position_in_container, q.container_size), (1, 4));
-    assert_eq!(q.color_name, Some("red"));
+    assert_eq!(q.color_name.as_deref(), Some("red"));
 
     assert_eq!(s("card-notes").display_title, "canvas research"); // humanized, never a raw path
     assert_eq!(
@@ -82,7 +82,10 @@ fn sample_summaries() {
     );
     assert_eq!(s("card-diagram").kind_label, "image");
     assert_eq!(s("grp-inspiration").display_title, "Inspiration");
-    assert_eq!(s("card-loose").color_name, Some("custom color"));
+    assert_eq!(
+        s("card-loose").color_name.as_deref(),
+        Some("purple (custom)")
+    );
 
     // Root-level positional context counts all roots.
     let loose = s("card-loose");

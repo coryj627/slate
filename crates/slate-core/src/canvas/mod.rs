@@ -73,19 +73,63 @@ pub enum CanvasColor {
 }
 
 /// The pinned, backend-owned color names all surfaces phrase through
-/// (t0 §1.1). Presets follow JSON Canvas order.
-pub fn color_name(color: &CanvasColor) -> &'static str {
+/// (t0 §1.1). Presets follow JSON Canvas order; hex names as the
+/// NEAREST preset plus "custom" (t5 G7 pin, #370) so a spoken color
+/// still carries the author's semantic ("red = blocker") and the
+/// table's Color column sorts customs beside their family.
+pub fn color_name(color: &CanvasColor) -> String {
     match color {
-        CanvasColor::Preset(1) => "red",
-        CanvasColor::Preset(2) => "orange",
-        CanvasColor::Preset(3) => "yellow",
-        CanvasColor::Preset(4) => "green",
-        CanvasColor::Preset(5) => "cyan",
-        CanvasColor::Preset(6) => "purple",
-        // Preset is only ever constructed for 1..=6; anything else parses
-        // as Hex. The arm exists to keep the match total.
-        CanvasColor::Preset(_) | CanvasColor::Hex(_) => "custom color",
+        CanvasColor::Preset(p) => preset_name(*p).to_string(),
+        CanvasColor::Hex(hex) => match nearest_preset(hex) {
+            Some(p) => format!("{} (custom)", preset_name(p)),
+            None => "custom color".to_string(),
+        },
     }
+}
+
+fn preset_name(preset: u8) -> &'static str {
+    match preset {
+        1 => "red",
+        2 => "orange",
+        3 => "yellow",
+        4 => "green",
+        5 => "cyan",
+        6 => "purple",
+        // Preset is only ever constructed for 1..=6; the arm keeps the
+        // match total.
+        _ => "custom color",
+    }
+}
+
+/// Obsidian's default preset RGBs — the reference points the nearest-
+/// preset mapping measures against (documented in the #370 PR).
+const PRESET_RGB: [(u8, [i32; 3]); 6] = [
+    (1, [0xfb, 0x46, 0x4c]),
+    (2, [0xe9, 0x97, 0x3f]),
+    (3, [0xe0, 0xde, 0x71]),
+    (4, [0x44, 0xcf, 0x6e]),
+    (5, [0x53, 0xdf, 0xdd]),
+    (6, [0xa8, 0x82, 0xff]),
+];
+
+/// Nearest preset by RGB distance; `None` for unparseable hex.
+fn nearest_preset(hex: &str) -> Option<u8> {
+    let raw = hex.strip_prefix('#')?;
+    let expanded: String = match raw.len() {
+        3 => raw.chars().flat_map(|c| [c, c]).collect(),
+        6 => raw.to_string(),
+        _ => return None,
+    };
+    let value = u32::from_str_radix(&expanded, 16).ok()?;
+    let rgb = [
+        ((value >> 16) & 0xff) as i32,
+        ((value >> 8) & 0xff) as i32,
+        (value & 0xff) as i32,
+    ];
+    PRESET_RGB
+        .iter()
+        .min_by_key(|(_, p)| (0..3).map(|i| (rgb[i] - p[i]).pow(2)).sum::<i32>())
+        .map(|(preset, _)| *preset)
 }
 
 /// Which side of a node an edge attaches to.

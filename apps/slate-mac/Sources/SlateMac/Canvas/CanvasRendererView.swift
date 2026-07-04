@@ -131,8 +131,14 @@ final class CanvasRendererNSView: NSView {
 
     private let contentLayer = CALayer()
     private let edgeLayer = CAShapeLayer()
+    /// Per-color edge overlays (#370); keyed by raw color string.
+    private var coloredEdgeLayers: [String: CAShapeLayer] = [:]
     /// Screen-space overlay: selection indicator (constant thickness).
+    /// Dual stroke (#370 G7): `selectionLayer` (labelColor, 3 pt) is
+    /// the measured APCA carrier against every fill; the thinner
+    /// accent core is brand, not the contrast guarantee.
     private let selectionLayer = CAShapeLayer()
+    private let selectionAccentLayer = CAShapeLayer()
 
     private var cardLayers: [String: CALayer] = [:]
     private var axElements: [CanvasCardAXElement] = []
@@ -164,6 +170,9 @@ final class CanvasRendererNSView: NSView {
         selectionLayer.fillColor = nil
         selectionLayer.lineWidth = 3  // minimum screen-space thickness
         layer?.addSublayer(selectionLayer)
+        selectionAccentLayer.fillColor = nil
+        selectionAccentLayer.lineWidth = 1.5
+        layer?.addSublayer(selectionAccentLayer)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Canvas visual view")
         // #520: zoom level inspectable from the renderer's AX value
@@ -172,6 +181,10 @@ final class CanvasRendererNSView: NSView {
         NotificationCenter.default.addObserver(
             self, selector: #selector(frameChanged),
             name: NSView.frameDidChangeNotification, object: self)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(contrastPreferencesChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -227,6 +240,17 @@ final class CanvasRendererNSView: NSView {
 
     @objc private func frameChanged() {
         viewport?.viewSize = bounds.size
+        rebuildVisible()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        rebuildVisible()
+    }
+
+    /// Increase Contrast flip repaints (#370) — registered in init on
+    /// the workspace center (the #416 lesson: that's where it posts).
+    @objc private func contrastPreferencesChanged() {
         rebuildVisible()
     }
 
@@ -327,6 +351,17 @@ final class CanvasRendererNSView: NSView {
             cardLayers[node.nodeId] = cardLayer
             if cardLayer.superlayer == nil { contentLayer.addSublayer(cardLayer) }
             cardLayer.frame = viewRect
+            // #370: color paints EVERY pass — cached layers must track
+            // color edits, appearance flips, and Increase Contrast.
+            let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            cardLayer.backgroundColor = CanvasColorPalette.cardFill(
+                raw: node.color, isGroup: node.kind == "group",
+                increaseContrast: increaseContrast, appearance: effectiveAppearance
+            ).cgColor
+            cardLayer.borderColor = CanvasColorPalette.cardBorder(
+                raw: node.color, increaseContrast: increaseContrast,
+                appearance: effectiveAppearance
+            ).cgColor
             if let text = cardLayer.sublayers?.first as? CATextLayer {
                 // Frame tracks the SCALED rect, not the canvas-unit
                 // width stamped at creation (Codoki #615) — at non-1.0
@@ -334,6 +369,8 @@ final class CanvasRendererNSView: NSView {
                 text.fontSize = max(4, 12 * (viewport?.scale ?? 1))
                 text.frame = CGRect(
                     x: 6, y: 4, width: max(0, viewRect.width - 12), height: text.fontSize * 1.6)
+                text.foregroundColor =
+                    CanvasColorPalette.cardText(appearance: effectiveAppearance).cgColor
             }
 
             let element = axElement(for: node)
@@ -367,15 +404,10 @@ final class CanvasRendererNSView: NSView {
         let cardLayer = CALayer()
         cardLayer.cornerRadius = 6
         cardLayer.borderWidth = 1
-        cardLayer.borderColor = NSColor.separatorColor.cgColor
-        cardLayer.backgroundColor =
-            node.kind == "group"
-            ? NSColor.quaternarySystemFill.cgColor
-            : NSColor.controlBackgroundColor.cgColor
+        // Colors are stamped per-pass in rebuildVisible (#370).
         let text = CATextLayer()
         text.string = node.title
         text.fontSize = 12
-        text.foregroundColor = NSColor.textColor.cgColor
         text.truncationMode = .end
         text.contentsScale = window?.backingScaleFactor ?? 2
         text.frame = CGRect(x: 6, y: 4, width: max(0, node.width - 12), height: 20)
@@ -425,6 +457,7 @@ final class CanvasRendererNSView: NSView {
     private func rebuildEdges(window: CGRect) {
         guard let document else { return }
         let path = CGMutablePath()
+        var coloredPaths: [String: CGMutablePath] = [:]
         var byId: [String: CanvasSceneNode] = [:]
         for node in document.scene.nodes { byId[node.nodeId] = node }
         for edge in document.scene.edges {
@@ -442,19 +475,47 @@ final class CanvasRendererNSView: NSView {
             guard window.intersects(fromRect) || window.intersects(toRect) else { continue }
             let start = canvasToView(anchorPoint(on: fromRect, side: edge.fromSide, toward: toRect))
             let end = canvasToView(anchorPoint(on: toRect, side: edge.toSide, toward: fromRect))
-            path.move(to: CGPoint(x: start.midX, y: start.midY))
-            path.addLine(to: CGPoint(x: end.midX, y: end.midY))
+            // #370: colored connections stroke in their own layer.
+            let target: CGMutablePath
+            if let raw = edge.color, !raw.isEmpty {
+                let existing = coloredPaths[raw] ?? CGMutablePath()
+                coloredPaths[raw] = existing
+                target = existing
+            } else {
+                target = path
+            }
+            target.move(to: CGPoint(x: start.midX, y: start.midY))
+            target.addLine(to: CGPoint(x: end.midX, y: end.midY))
             if edge.toArrow {
-                addArrowHead(to: path, from: start, at: end)
+                addArrowHead(to: target, from: start, at: end)
             }
             if edge.fromArrow {
-                addArrowHead(to: path, from: end, at: start)
+                addArrowHead(to: target, from: end, at: start)
             }
         }
+        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let lineWidth = max(1, 1.5 * (viewport?.scale ?? 1))
         edgeLayer.path = path
-        edgeLayer.strokeColor = NSColor.tertiaryLabelColor.cgColor
+        edgeLayer.strokeColor = CanvasColorPalette.edgeStroke(
+            raw: nil, increaseContrast: increaseContrast, appearance: effectiveAppearance
+        ).cgColor
         edgeLayer.fillColor = nil
-        edgeLayer.lineWidth = max(1, 1.5 * (viewport?.scale ?? 1))
+        edgeLayer.lineWidth = lineWidth
+        for (raw, layer) in coloredEdgeLayers where coloredPaths[raw] == nil {
+            layer.removeFromSuperlayer()
+            coloredEdgeLayers[raw] = nil
+        }
+        for (raw, coloredPath) in coloredPaths {
+            let layer = coloredEdgeLayers[raw] ?? CAShapeLayer()
+            coloredEdgeLayers[raw] = layer
+            if layer.superlayer == nil { contentLayer.addSublayer(layer) }
+            layer.path = coloredPath
+            layer.strokeColor = CanvasColorPalette.edgeStroke(
+                raw: raw, increaseContrast: increaseContrast, appearance: effectiveAppearance
+            ).cgColor
+            layer.fillColor = nil
+            layer.lineWidth = lineWidth
+        }
     }
 
     private func anchorPoint(on rect: CGRect, side: CanvasSide?, toward other: CGRect) -> CGRect {
@@ -503,6 +564,7 @@ final class CanvasRendererNSView: NSView {
             let node = document.scene.nodes.first(where: { $0.nodeId == selected })
         else {
             selectionLayer.path = nil
+            selectionAccentLayer.path = nil
             return
         }
         // #521 preview: the ring tracks the transient, not the
@@ -514,9 +576,13 @@ final class CanvasRendererNSView: NSView {
                 width: transient?.width ?? node.width,
                 height: transient?.height ?? node.height)
         ).insetBy(dx: -3, dy: -3)
-        selectionLayer.path = CGPath(
+        let ring = CGPath(
             roundedRect: viewRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
-        selectionLayer.strokeColor = NSColor.controlAccentColor.cgColor
+        selectionLayer.path = ring
+        selectionLayer.strokeColor =
+            CanvasColorPalette.selectionRingCarrier(appearance: effectiveAppearance).cgColor
+        selectionAccentLayer.path = ring
+        selectionAccentLayer.strokeColor = NSColor.controlAccentColor.cgColor
     }
 
     /// Keyboard selection ALWAYS scrolls into view (WCAG 2.4.11),
@@ -659,5 +725,14 @@ final class CanvasRendererNSView: NSView {
 
     func speakableLabelsForTesting() -> [String] {
         axElements.compactMap { $0.accessibilityLabel() }
+    }
+
+    /// #370 test seam: the painted fill per materialized card.
+    func cardFillsForTesting() -> [String: CGColor] {
+        var out: [String: CGColor] = [:]
+        for (id, layer) in cardLayers {
+            if let fill = layer.backgroundColor { out[id] = fill }
+        }
+        return out
     }
 }
