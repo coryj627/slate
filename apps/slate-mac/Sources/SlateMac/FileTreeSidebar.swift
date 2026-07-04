@@ -610,6 +610,16 @@ struct FileTreeSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")
+        // U4-4 (#473): ⌘⌥← off the leftmost editor group routes focus into the
+        // file tree (the westernmost terminal region). AppState can't assign
+        // this view's `@FocusState` directly, so it bumps `treeFocusRequest`;
+        // the `TreeFocusBridge` below OBSERVES `workspace` (this view observes
+        // only `appState`, whose publisher doesn't forward the nested
+        // `WorkspaceState` @Published — the same reason `RightPaneView` takes
+        // `workspace` as an `@ObservedObject`) and mirrors the request into
+        // `fileTreeFocused` on `.onChange` (a post-update mutation point, #448).
+        .background(
+            TreeFocusBridge(workspace: appState.workspace, focused: $fileTreeFocused))
         .onAppear {
             // Bind the tree to whatever session is already open when the
             // sidebar mounts (re-entering a vault view with files loaded).
@@ -699,6 +709,12 @@ struct FileTreeSidebar: View {
         }
         .listStyle(.sidebar)
         .focused($fileTreeFocused)
+        // U4-4 review: mirror REAL tree focus into the region bookkeeping —
+        // Tab/click into the tree must make the next ⌘⌥→ "return to editor"
+        // per spec, not an interior editor move. Post-update (#448-safe).
+        .onChange(of: fileTreeFocused) { _, focused in
+            appState.workspace.noteTreeFocusChanged(focused)
+        }
         // Keyboard disclosure: →/← move through the tree. On macOS a custom
         // flattened List doesn't get native outline arrow-disclosure, so we map
         // it explicitly (spec §U2-4):
@@ -1567,5 +1583,33 @@ private struct RenameField: View {
             }
             editor.setSelectedRange(NSRange(location: 0, length: end))
         }
+    }
+}
+
+/// Bridges `WorkspaceState.treeFocusRequest` (bumped by ⌘⌥← off the leftmost
+/// editor group, U4-4 #473) into the file tree's `@FocusState`.
+///
+/// Exists because `FileTreeSidebar` observes only `appState`, and AppState's
+/// publisher does not forward the nested `WorkspaceState`'s `@Published`
+/// changes — so an `.onChange(of: appState.workspace.treeFocusRequest)` on the
+/// sidebar would never re-evaluate and never fire. This tiny view DOES observe
+/// `workspace` (`@ObservedObject`), so its body re-evaluates when the request
+/// bumps; the `.onChange` then mirrors it into the passed `FocusState` binding
+/// (a post-update mutation point — never publishing inside the update
+/// transaction, #448). Rendered in a `.background` so it adds no layout.
+/// When the tree list isn't present (empty/scanning vault) the FocusState has
+/// no target and the assignment is a harmless no-op — ⌘⌥→ still exits, so focus
+/// is never trapped.
+private struct TreeFocusBridge: View {
+    @ObservedObject var workspace: WorkspaceState
+    var focused: FocusState<Bool>.Binding
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: workspace.treeFocusRequest) {
+                focused.wrappedValue = true
+            }
     }
 }

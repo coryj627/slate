@@ -140,6 +140,20 @@ struct RightPaneView: View {
     /// focus, at which point it seeds to the active leaf.
     @FocusState private var railHighlight: Leaf?
 
+    /// Keyboard focus for the leaf-content region (U4-4, #473). ⌘⌥→ off the
+    /// rightmost editor group routes focus INTO the leaf; SwiftUI moves
+    /// keyboard focus here (the leaf's focus anchor), giving the pane a
+    /// first-responder home so a subsequent ⌘⌥← has a defined origin and the
+    /// pane visibly holds focus.
+    @FocusState private var leafFocused: Bool
+
+    /// VoiceOver focus for the leaf's first element (U4-4, #473). Bound to the
+    /// leaf focus anchor so entering the leaf lands the VO cursor on a labeled
+    /// "<leaf> panel." element — the AX half of the routing the spec requires,
+    /// and the uniform fallback for empty-state leaves that have no natural
+    /// first element (the U4-2 report's flagged gap).
+    @AccessibilityFocusState private var leafAXFocused: Bool
+
     var body: some View {
         HStack(spacing: 0) {
             activeLeafContent
@@ -158,6 +172,27 @@ struct RightPaneView: View {
         // leaf vocabulary; the rail and each leaf carry their own labels.
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Panels")
+        // U4-4 (#473): honor the leaf-focus request AppState raises on ⌘⌥→ off
+        // the rightmost group. `.onChange` is a post-update mutation point
+        // (#448 — never publish inside the update transaction); it pulls both
+        // keyboard and VoiceOver focus to the leaf anchor.
+        .onChange(of: workspace.leafFocusRequest) {
+            leafFocused = true
+            leafAXFocused = true
+        }
+        // U4-4 review: mirror REAL right-pane focus into the region
+        // bookkeeping — native Tab lands on the rail (its single focus
+        // stop) or the leaf anchor without any routing command, and the
+        // next ⌘⌥← must "return to editor" per spec. Rail and anchor are
+        // both leaf-region entries; either losing focus only demotes the
+        // region when the other doesn't hold it (the state machine in
+        // WorkspaceState converges). Post-update (#448-safe).
+        .onChange(of: leafFocused) { _, focused in
+            workspace.noteLeafFocusChanged(focused || railHighlight != nil)
+        }
+        .onChange(of: railHighlight) { _, rail in
+            workspace.noteLeafFocusChanged(rail != nil || leafFocused)
+        }
     }
 
     /// The mounted-ZStack retention pattern, carried over VERBATIM (rationale
@@ -175,15 +210,39 @@ struct RightPaneView: View {
     /// visible one. This is today's cost envelope — the three detail panels are
     /// all permanently mounted already.
     private var activeLeafContent: some View {
-        ZStack {
-            ForEach(Leaf.registered) { leaf in
-                leafContent(leaf)
-                    .opacity(workspace.activeLeaf == leaf ? 1 : 0)
-                    .allowsHitTesting(workspace.activeLeaf == leaf)
-                    .accessibilityHidden(workspace.activeLeaf != leaf)
+        VStack(spacing: 0) {
+            leafFocusAnchor
+            ZStack {
+                ForEach(Leaf.registered) { leaf in
+                    leafContent(leaf)
+                        .opacity(workspace.activeLeaf == leaf ? 1 : 0)
+                        .allowsHitTesting(workspace.activeLeaf == leaf)
+                        .accessibilityHidden(workspace.activeLeaf != leaf)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The leaf-content region's focus entry point (U4-4, #473): a
+    /// zero-footprint, labeled anchor the keyboard + VoiceOver focus land on
+    /// when ⌘⌥→ enters the leaf. It adds NO visible chrome (each leaf already
+    /// renders its own `.isHeader` count header — "Backlinks, N entries" etc.
+    /// — so a second visible header would duplicate it); it exists purely to
+    /// give the pane a first-responder home (so a subsequent ⌘⌥← has a defined
+    /// origin) and a uniform AX entry element that works for EVERY leaf,
+    /// including empty-state leaves with no natural focusable first element
+    /// (the U4-2 report's flagged fallback). Its `.accessibilityLabel` orients
+    /// VoiceOver ("<leaf> panel"); the user then arrows down into the leaf's
+    /// real header + rows. Invisible (`Color.clear`, zero height) so layout is
+    /// untouched.
+    private var leafFocusAnchor: some View {
+        Color.clear
+            .frame(height: 0)
+            .focusable()
+            .focused($leafFocused)
+            .accessibilityLabel("\(workspace.activeLeaf.title) panel")
+            .accessibilityFocused($leafAXFocused)
     }
 
     /// Maps a leaf to its panel view. All ten leaves are registered (U4-2), so
