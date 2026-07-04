@@ -11,6 +11,7 @@
 
 pub mod blocks;
 pub mod blocks_db;
+pub mod canvas;
 pub mod citations;
 pub mod citations_db;
 pub mod code;
