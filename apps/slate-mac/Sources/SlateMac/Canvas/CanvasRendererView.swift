@@ -133,6 +133,18 @@ final class CanvasRendererNSView: NSView {
     private let edgeLayer = CAShapeLayer()
     /// Per-color edge overlays (#370); keyed by raw color string.
     private var coloredEdgeLayers: [String: CAShapeLayer] = [:]
+    /// Edge-label chips (#371); keyed by edge id.
+    private var edgeLabelLayers: [String: CATextLayer] = [:]
+
+    /// WCAG 1.4.4 (#371): CALayer text doesn't scale with the system
+    /// text size on its own — factor the preferred body size in, the
+    /// AppKit analogue of the project's @ScaledMetric discipline
+    /// (MathView.swift precedent). 13 pt is the macOS body baseline.
+    static func scaledLabelFontSize(base: CGFloat, bodyPointSize: CGFloat, zoom: CGFloat)
+        -> CGFloat
+    {
+        max(4, base * (bodyPointSize / 13.0) * zoom)
+    }
     /// Screen-space overlay: selection indicator (constant thickness).
     /// Dual stroke (#370 G7): `selectionLayer` (labelColor, 3 pt) is
     /// the measured APCA carrier against every fill; the thinner
@@ -330,6 +342,8 @@ final class CanvasRendererNSView: NSView {
         let window = materializationRect
         var seen: Set<String> = []
         var elements: [CanvasCardAXElement] = []
+        // Tooltips re-register with the frames they describe (#371).
+        removeAllToolTips()
 
         for node in document.scene.nodes {
             // #521: an active move/resize mode's hypothetical geometry
@@ -363,15 +377,22 @@ final class CanvasRendererNSView: NSView {
                 appearance: effectiveAppearance
             ).cgColor
             if let text = cardLayer.sublayers?.first as? CATextLayer {
-                // Frame tracks the SCALED rect, not the canvas-unit
-                // width stamped at creation (Codoki #615) — at non-1.0
-                // zoom the old width truncated or overflowed the card.
-                text.fontSize = max(4, 12 * (viewport?.scale ?? 1))
+                // #371: track the system text size AND the zoom; the
+                // label band grows with the font so ascenders never
+                // clip, and the full title rides the hover tooltip +
+                // AX label (keyboard path: Where am I, ⌃⌘I).
+                text.fontSize = Self.scaledLabelFontSize(
+                    base: 12,
+                    bodyPointSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                    zoom: viewport?.scale ?? 1)
                 text.frame = CGRect(
-                    x: 6, y: 4, width: max(0, viewRect.width - 12), height: text.fontSize * 1.6)
+                    x: 6, y: 4,
+                    width: max(0, viewRect.width - 12),
+                    height: text.fontSize * 1.6)
                 text.foregroundColor =
                     CanvasColorPalette.cardText(appearance: effectiveAppearance).cgColor
             }
+            addToolTip(viewRect, owner: node.title as NSString, userData: nil)
 
             let element = axElement(for: node)
             element.setAccessibilityFrame(screenRect(from: viewRect))
@@ -407,10 +428,8 @@ final class CanvasRendererNSView: NSView {
         // Colors are stamped per-pass in rebuildVisible (#370).
         let text = CATextLayer()
         text.string = node.title
-        text.fontSize = 12
         text.truncationMode = .end
         text.contentsScale = window?.backingScaleFactor ?? 2
-        text.frame = CGRect(x: 6, y: 4, width: max(0, node.width - 12), height: 20)
         cardLayer.addSublayer(text)
         return cardLayer
     }
@@ -458,6 +477,7 @@ final class CanvasRendererNSView: NSView {
         guard let document else { return }
         let path = CGMutablePath()
         var coloredPaths: [String: CGMutablePath] = [:]
+        var labeledEdges: [String: (label: String, mid: CGPoint)] = [:]
         var byId: [String: CanvasSceneNode] = [:]
         for node in document.scene.nodes { byId[node.nodeId] = node }
         for edge in document.scene.edges {
@@ -492,6 +512,13 @@ final class CanvasRendererNSView: NSView {
             if edge.fromArrow {
                 addArrowHead(to: target, from: end, at: start)
             }
+            if let label = edge.label, !label.isEmpty {
+                labeledEdges[edge.edgeId] = (
+                    label,
+                    CGPoint(
+                        x: (start.midX + end.midX) / 2, y: (start.midY + end.midY) / 2)
+                )
+            }
         }
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let lineWidth = max(1, 1.5 * (viewport?.scale ?? 1))
@@ -515,6 +542,40 @@ final class CanvasRendererNSView: NSView {
             ).cgColor
             layer.fillColor = nil
             layer.lineWidth = lineWidth
+        }
+        // #371: connection labels render as scaled chips; the full
+        // text also rides a hover tooltip (keyboard path: the outline
+        // connection rows narrate every label).
+        let labelFont = Self.scaledLabelFontSize(
+            base: 10,
+            bodyPointSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+            zoom: viewport?.scale ?? 1)
+        for (id, layer) in edgeLabelLayers where labeledEdges[id] == nil {
+            layer.removeFromSuperlayer()
+            edgeLabelLayers[id] = nil
+        }
+        for (id, entry) in labeledEdges {
+            let chip = edgeLabelLayers[id] ?? CATextLayer()
+            edgeLabelLayers[id] = chip
+            if chip.superlayer == nil { contentLayer.addSublayer(chip) }
+            chip.string = entry.label
+            chip.fontSize = labelFont
+            chip.truncationMode = .end
+            chip.alignmentMode = .center
+            chip.contentsScale = self.window?.backingScaleFactor ?? 2
+            chip.cornerRadius = 3
+            chip.backgroundColor = CanvasColorPalette.cardFill(
+                raw: nil, isGroup: false, increaseContrast: increaseContrast,
+                appearance: effectiveAppearance
+            ).cgColor
+            chip.foregroundColor =
+                CanvasColorPalette.cardText(appearance: effectiveAppearance).cgColor
+            let width = min(200 * (viewport?.scale ?? 1), CGFloat(entry.label.count) * labelFont * 0.7 + 12)
+            let height = labelFont * 1.6
+            chip.frame = CGRect(
+                x: entry.mid.x - width / 2, y: entry.mid.y - height / 2,
+                width: width, height: height)
+            addToolTip(chip.frame, owner: entry.label as NSString, userData: nil)
         }
     }
 
@@ -725,6 +786,17 @@ final class CanvasRendererNSView: NSView {
 
     func speakableLabelsForTesting() -> [String] {
         axElements.compactMap { $0.accessibilityLabel() }
+    }
+
+    /// #371 test seam: label font sizes per materialized card.
+    func labelFontSizesForTesting() -> [String: CGFloat] {
+        var out: [String: CGFloat] = [:]
+        for (id, layer) in cardLayers {
+            if let text = layer.sublayers?.first as? CATextLayer {
+                out[id] = text.fontSize
+            }
+        }
+        return out
     }
 
     /// #370 test seam: the painted fill per materialized card.
