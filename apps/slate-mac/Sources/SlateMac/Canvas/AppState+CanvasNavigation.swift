@@ -97,18 +97,20 @@ extension AppState {
             }
         }
         guard candidates.indices.contains(ordinal - 1) else {
+            let base = forward ? "No outgoing connection" : "No incoming connection"
             canvasAnnouncer.announce(
-                .status(
-                    forward
-                        ? "No outgoing connection\(candidates.isEmpty ? "" : " \(ordinal)")."
-                        : "No incoming connection\(candidates.isEmpty ? "" : " \(ordinal)")."))
+                .status(candidates.isEmpty ? "\(base)." : "\(base) \(ordinal)."))
             return
         }
         let neighbor = candidates[ordinal - 1]
+        // Narrate the destination's REAL kind (Codoki #613: a group or
+        // file target must not be introduced as a text card).
+        let otherKind =
+            doc.outline.first { $0.nodeId == neighbor.otherNode }?.kind ?? "text"
         canvasAnnouncer.announce(
             .connectionTraversed(
                 direction: neighbor.direction,
-                other: CanvasCardRef(kind: "text", title: neighbor.otherTitle),
+                other: CanvasCardRef(kind: otherKind, title: neighbor.otherTitle),
                 label: neighbor.label, towardOther: true))
         canvasSelect(nodeId: neighbor.otherNode, in: doc, announce: false)
     }
@@ -157,7 +159,15 @@ extension AppState {
             .flatMap { prev in doc.outline.first { $0.nodeId == prev } }?.groupPath ?? []
         if row.groupPath != previousPath {
             if let entered = row.groupPath.last, !previousPath.contains(entered) {
-                let count = doc.outline.first { $0.title == entered && $0.kind == "group" }
+                // The entered group's row is the nearest PRECEDING
+                // outline row one level up — title lookups miscount
+                // when labels repeat (Codoki #613).
+                let count = doc.outline.firstIndex { $0.nodeId == nodeId }
+                    .flatMap { idx in
+                        doc.outline[..<idx].last {
+                            $0.kind == "group" && $0.depth == row.depth - 1
+                        }
+                    }
                     .map { Int($0.totalM) }
                 canvasAnnouncer.announce(.groupEntered(label: entered, cardCount: count ?? 0))
             } else if let left = previousPath.last, !row.groupPath.contains(left) {
