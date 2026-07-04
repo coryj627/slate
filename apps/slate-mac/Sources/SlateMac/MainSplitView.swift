@@ -296,6 +296,13 @@ struct MainSplitView: View {
             CommandPaletteView()
                 .environmentObject(appState)
         }
+        // Quick switcher (#495). Triggered by ⌘T from the SlateMacApp
+        // CommandGroup; closes via Esc or on opening a file (handled
+        // inside the sheet).
+        .sheet(isPresented: $appState.isQuickSwitcherOpen) {
+            QuickSwitcherView()
+                .environmentObject(appState)
+        }
         // Citation expand popover (#279). Triggered by activating a
         // row in `CitationsPanel`; the sheet binding tracks
         // `expandedCitation`. Dismissal routes focus back to the

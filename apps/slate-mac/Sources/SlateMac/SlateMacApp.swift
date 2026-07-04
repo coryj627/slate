@@ -65,10 +65,22 @@ struct SlateMacApp: App {
                 // inside a vault; Close Window remains reachable at ⌘⇧W.
                 // Disabled (not hidden) without a vault so the shortcuts
                 // aren't silent no-ops on the welcome screen.
-                Button("New Tab") {
-                    appState.newTab()
+                // Quick switcher (#495). ⌘T fuzzy-opens a note by name.
+                // Enabled whenever a vault is open — it doesn't need an
+                // active tab (unlike Duplicate Tab below); `openQuickSwitcher()`
+                // self-guards on the vault too.
+                Button("Quick Open…") {
+                    appState.openQuickSwitcher()
                 }
                 .keyboardShortcut("t", modifiers: [.command])
+                .disabled(!appState.isVaultOpen)
+
+                // ⌘T moved to Quick Open (#495); this keeps the duplicate-
+                // current-note-into-a-new-tab behavior under a clearer label
+                // with no hotkey.
+                Button("Duplicate Tab") {
+                    appState.newTab()
+                }
                 .disabled(!appState.isVaultOpen || appState.workspace.activeTab == nil)
 
                 Button("Close Tab") {

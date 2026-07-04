@@ -28,6 +28,12 @@ enum SlateCommandID {
 
     // Navigation
     static let jumpToBibliography = "slate.navigation.jumpToBibliography"
+    /// Quick switcher — fuzzy filename quick-open (#495). ⌘T. Grouped
+    /// under Navigation (it navigates to a file); the palette sorts
+    /// Navigation high. The id keeps the `slate.workspace.` prefix
+    /// because it's a workspace surface, even though its palette section
+    /// is Navigation — id prefix and section don't have to agree.
+    static let quickOpen = "slate.workspace.quickOpen"
 
     // View
     static let toggleSearch = "slate.view.toggleSearch"
@@ -91,6 +97,7 @@ enum SlateCommandID {
         moveTo,
         deleteEntry,
         jumpToBibliography,
+        quickOpen,
         toggleSearch,
         newTab,
         closeTab,
@@ -273,6 +280,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Filter the Bibliography sidebar to the expanded citation's key."
     ) { [weak appState] in appState?.jumpToBibliographyFromExpandedCitation() }
 
+    register(
+        SlateCommandID.quickOpen,
+        label: "Quick Open…",
+        section: .navigation,
+        hotkey: "⌘T",
+        hint: "Fuzzy-find a note by name and open it. Return opens it in the current tab."
+    ) { [weak appState] in appState?.openQuickSwitcher() }
+
     // ----- View -----
 
     register(
@@ -287,10 +302,13 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     register(
         SlateCommandID.newTab,
-        label: "New Tab",
+        label: "Duplicate Tab",
         section: .view,
-        hotkey: "⌘T",
-        hint: "Open the current note in a new tab."
+        // ⌘T moved to Quick Open (#495); this keeps its duplicate-tab
+        // behavior under the clearer "Duplicate Tab" label with no
+        // hotkey. The New-Tab menu item in SlateMacApp likewise dropped
+        // its ⌘T binding.
+        hint: "Duplicate the current note into a new tab."
     ) { [weak appState] in appState?.newTab() }
 
     register(

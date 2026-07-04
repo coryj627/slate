@@ -743,6 +743,11 @@ final class AppState: ObservableObject {
     /// row, backlink/outgoing-link/embed activation, search result, palette
     /// command — routes here with an explicit target.
     func openFile(_ path: String, target: OpenTarget) {
+        // Record the open into the vault's file-recents (#495) at this
+        // single funnel — every user-visible open routes here, launch
+        // restores (activateTab) do not. Recorded once per call, before
+        // the target branch, so all three targets bump recency equally.
+        recordFileOpen(path: path)
         switch target {
         case .currentTab:
             if selectedFilePath != path {
@@ -1078,6 +1083,12 @@ final class AppState: ObservableObject {
     /// the palette open doesn't leave the bool stuck (and re-
     /// trigger the sheet on the next vault open).
     @Published var isCommandPaletteOpen: Bool = false
+
+    /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
+    /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file
+    /// closes it. Reset in `closeVault()` for the same stuck-bool reason
+    /// as `isCommandPaletteOpen` — enforced by `CloseVaultSheetParityTests`.
+    @Published var isQuickSwitcherOpen: Bool = false
 
     /// Latest `RenameReport` from `previewPropertyRename` (dry-run)
     /// or `applyPropertyRename` (applied). The bulk-rename sheet
@@ -1677,6 +1688,24 @@ final class AppState: ObservableObject {
     /// `recordCommandInvocation(id:)`.
     @Published private(set) var commandPaletteRecents: [String] = []
 
+    /// In-memory, most-recent-first list of vault-relative file paths
+    /// the quick switcher (#495) orders its empty-query list by and
+    /// tie-breaks fuzzy matches with. Loaded from the vault's
+    /// `FileRecentsStore` on vault open, refreshed on every user-visible
+    /// file open via `recordFileOpen(path:)`. Empty while no vault is
+    /// open. Unlike `commandPaletteRecents` (a single global store), the
+    /// backing store is per-vault, so this is repopulated from
+    /// `fileRecentsStore` each time a vault opens.
+    @Published private(set) var fileRecents: [String] = []
+
+    /// The current vault's file-recents store, or nil with no vault
+    /// open. A computed value rather than a stored field because the
+    /// path is vault-relative (`<vault>/.slate/file-recents.json`) and
+    /// changes with every vault switch.
+    private var fileRecentsStore: FileRecentsStore? {
+        currentVaultURL.map { FileRecentsStore(vaultRoot: $0) }
+    }
+
     init(
         recentsStore: RecentVaultsStore? = nil,
         externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
@@ -1845,6 +1874,50 @@ final class AppState: ObservableObject {
             try commandPaletteRecentsStore.save(updated)
         } catch {
             NSLog("Failed to persist command palette recent '\(id)': \(error)")
+        }
+    }
+
+    /// Entry point for the ⌘T "Quick Open…" command (#495). Opens the
+    /// quick switcher when a vault is open; otherwise announces instead
+    /// of a silent no-op — same vault-scoped-surface reasoning as
+    /// `requestCommandPalette()`. The sheet is only mounted by
+    /// `MainSplitView` (vault open), so this must never flip the bool
+    /// with no vault, or the switcher would auto-present on the next
+    /// vault open.
+    func openQuickSwitcher() {
+        guard isVaultOpen else {
+            postAccessibilityAnnouncement(
+                "Open a vault to quickly open a file.", priority: .high)
+            return
+        }
+        isQuickSwitcherOpen = true
+    }
+
+    /// Record a user-visible file open into the vault's file-recents so
+    /// the quick switcher (#495) surfaces it first next time. Called
+    /// from ONE choke point — `openFile(_:target:)`, the U1-5 single
+    /// navigation entry point every user open (sidebar, links, search,
+    /// palette, quick switcher) routes through. Launch-time workspace
+    /// restores use `activateTab` directly, NOT `openFile`, so they
+    /// never land here — the restored layout doesn't churn recency.
+    ///
+    /// In-memory-first, persist-second, same as `recordCommandInvocation`:
+    /// the session view stays consistent even if the per-vault write
+    /// fails (recents is convenience, not critical state). No-op with no
+    /// vault (the store is nil).
+    func recordFileOpen(path: String) {
+        guard let store = fileRecentsStore else { return }
+        var updated = fileRecents
+        updated.removeAll { $0 == path }
+        updated.insert(path, at: 0)
+        if updated.count > FileRecentsStore.maxEntries {
+            updated = Array(updated.prefix(FileRecentsStore.maxEntries))
+        }
+        fileRecents = updated
+        do {
+            try store.save(updated)
+        } catch {
+            NSLog("Failed to persist file recent '\(path)': \(error)")
         }
     }
 
@@ -2500,6 +2573,10 @@ final class AppState: ObservableObject {
             currentSession = session
             currentVaultURL = url
             lastError = nil
+            // Load this vault's file-recents (#495) now that the store's
+            // vault path resolves. Per-vault, so it's repopulated on
+            // every vault switch; a missing / malformed file loads empty.
+            fileRecents = fileRecentsStore?.load() ?? []
             // Reset file-list state so the previous vault's contents
             // don't briefly flash in the new vault's sidebar.
             files = []
@@ -2751,6 +2828,11 @@ final class AppState: ObservableObject {
         // auto-present the empty palette). #313 belt-and-suspenders
         // with the `requestCommandPalette()` open-guard.
         isCommandPaletteOpen = false
+        // Quick switcher (#495): same stuck-bool reset as the palette,
+        // enforced by CloseVaultSheetParityTests. Also drop the in-memory
+        // file-recents — it's per-vault, so the next vault reloads its own.
+        isQuickSwitcherOpen = false
+        fileRecents = []
         // #328 sheet-flag parity audit. Each `@Published var
         // is*Open` driving a `.sheet` binding must reset here for
         // the same reason as `isCommandPaletteOpen`: a vault close
