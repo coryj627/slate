@@ -65,6 +65,23 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    /// Per-tab properties-widget expansion (U3-3, #467). Sparse like
+    /// `viewModes`: only COLLAPSED tabs have an entry — expanded is the
+    /// default and the absent-key state in workspace.json.
+    @Published private(set) var propertiesCollapsed: Set<TabID> = []
+
+    func isPropertiesExpanded(for tabID: TabID) -> Bool {
+        !propertiesCollapsed.contains(tabID)
+    }
+
+    func setPropertiesExpanded(_ expanded: Bool, for tabID: TabID) {
+        if expanded {
+            propertiesCollapsed.remove(tabID)
+        } else {
+            propertiesCollapsed.insert(tabID)
+        }
+    }
+
     // MARK: Queries
 
     var activeTab: WorkspaceTab? { model.activeGroup.activeTab }
@@ -116,7 +133,8 @@ final class WorkspaceState: ObservableObject {
     func snapshotActiveTab(
         text: String?, baseline: String?, contentHash: String?,
         hasUnsavedChanges: Bool, saveError: String?, saveConflict: SaveConflict?,
-        loadedFilePath: String?
+        loadedFilePath: String?,
+        fmSource: String = "", bodyByteOffset: Int = 0, bodyLineOffset: Int = 0
     ) {
         guard let tab = activeTab, case .markdown(let path) = tab.item,
             let text, let baseline,
@@ -129,8 +147,27 @@ final class WorkspaceState: ObservableObject {
         doc.hasUnsavedChanges = hasUnsavedChanges
         doc.saveError = saveError
         doc.saveConflict = saveConflict
+        doc.fmSource = fmSource
+        doc.bodyByteOffset = bodyByteOffset
+        doc.bodyLineOffset = bodyLineOffset
         doc.hasLoaded = true
         documents[tab.id] = doc
+    }
+
+    /// U3-3: a property edit (or U3-4 source commit) rewrote the file's
+    /// frontmatter — same-path parked documents must carry the fresh fm,
+    /// offsets, and hash, or a later composed save from a duplicated tab
+    /// would resurrect stale frontmatter over the new bytes.
+    func mirrorFrontmatter(
+        path: String, fmSource: String, bodyByteOffset: Int,
+        bodyLineOffset: Int, contentHash: String?
+    ) {
+        for doc in documents.values where doc.path == path {
+            doc.fmSource = fmSource
+            doc.bodyByteOffset = bodyByteOffset
+            doc.bodyLineOffset = bodyLineOffset
+            doc.contentHash = contentHash
+        }
     }
 
     /// Mirror a live edit into every same-path parked document so a
@@ -277,6 +314,7 @@ final class WorkspaceState: ObservableObject {
         let outcome = model.closeTab(tabID)
         documents[tabID] = nil
         viewModes[tabID] = nil
+        propertiesCollapsed.remove(tabID)
         assert(model.validate().isEmpty)
         return outcome
     }
@@ -289,6 +327,7 @@ final class WorkspaceState: ObservableObject {
         model = WorkspaceModel()
         documents = [:]
         viewModes = [:]
+        propertiesCollapsed = []
         activeLeaf = .outline
         focusRegion = .editor
         lastFocusedGroup = nil
@@ -300,13 +339,18 @@ final class WorkspaceState: ObservableObject {
     /// lazily on first activation, missing files surface the existing
     /// per-tab load-error state. `viewModes` restores the per-tab reading
     /// modes captured in the snapshot (U3-2); unknown ids are dropped.
-    func adopt(_ restored: WorkspaceModel, viewModes restoredModes: [TabID: NoteViewMode] = [:]) {
+    func adopt(
+        _ restored: WorkspaceModel,
+        viewModes restoredModes: [TabID: NoteViewMode] = [:],
+        propertiesCollapsed restoredCollapsed: Set<TabID> = []
+    ) {
         assert(restored.validate().isEmpty)
         model = restored
         documents = [:]
         let knownIDs = Set(restored.allTabs.map(\.id))
         viewModes = restoredModes
             .filter { knownIDs.contains($0.key) && $0.value != .editing }
+        propertiesCollapsed = restoredCollapsed.intersection(knownIDs)
         focusRegion = .editor
         lastFocusedGroup = nil
     }

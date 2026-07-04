@@ -365,7 +365,9 @@ final class AppState: ObservableObject {
             contentHash: currentNoteContentHash,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
-            loadedFilePath: loadedFilePath)
+            loadedFilePath: loadedFilePath,
+            fmSource: currentNoteFMSource,
+            bodyByteOffset: bodyByteOffset, bodyLineOffset: bodyLineOffset)
         cancelNoteScopedWork()
         clearActiveNoteFields()
         workspace.select(id)
@@ -394,7 +396,9 @@ final class AppState: ObservableObject {
             contentHash: currentNoteContentHash,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
-            loadedFilePath: loadedFilePath)
+            loadedFilePath: loadedFilePath,
+            fmSource: currentNoteFMSource,
+            bodyByteOffset: bodyByteOffset, bodyLineOffset: bodyLineOffset)
         workspace.openTab(item, allowDuplicate: true)
         announceActiveTab(prefix: "Opened new tab.")
     }
@@ -504,6 +508,73 @@ final class AppState: ObservableObject {
             target != workspace.model.activeGroup.activeTabID
         else { return }
         activateTab(target)
+    }
+
+    // MARK: - Frontmatter parts (U3-3, #467/#469)
+
+    /// The exact bytes between the note's frontmatter delimiters ("" when
+    /// the note has none) — `read_note_parts.fm_source`. The editor buffer
+    /// (`currentNoteText`) is the BODY; every composed save reassembles
+    /// through the ONE Rust composer (`compose_note` inside
+    /// `save_composed`), never a Swift mirror. Refreshed by load, property
+    /// edits, and the U3-4 source editor.
+    @Published private(set) var currentNoteFMSource: String = ""
+
+    /// Whole-file → body deltas, straight from `read_note_parts` (computed
+    /// Rust-side as `whole − body` at the split point — byte-exact by
+    /// construction, NEVER re-derived from any compose rule in Swift: two
+    /// composers diverge, the U3-5 law). Backend offsets (headings, task
+    /// lines, backlink lines, template cursors) are whole-file; the body
+    /// buffer is not — these are the one conversion authority.
+    private(set) var bodyByteOffset: Int = 0
+    private(set) var bodyLineOffset: Int = 0
+
+    /// Whole-file heading offsets → body space (clamped at 0 — the scanner
+    /// only emits body headings, so clamping is defensive, not semantic).
+    static func rebasedToBody(_ headings: [Heading], prefixBytes: Int) -> [Heading] {
+        guard prefixBytes > 0 else { return headings }
+        return headings.map { h in
+            var rebased = h
+            rebased.byteOffset = UInt32(max(0, Int(h.byteOffset) - prefixBytes))
+            return rebased
+        }
+    }
+
+    /// Whole-file 1-based line → body 1-based line (floor 1) and back.
+    func bodyLine(fromFileLine line: Int) -> Int {
+        max(1, line - bodyLineOffset)
+    }
+
+    func fileLine(fromBodyLine line: Int) -> Int {
+        line + bodyLineOffset
+    }
+
+    /// Whole-file byte offset → body byte offset (floor 0).
+    func bodyByte(fromFileByte byte: Int) -> Int {
+        max(0, byte - bodyByteOffset)
+    }
+
+    /// Refresh fmSource + offsets (+hash) after an operation rewrote the
+    /// file's frontmatter out-of-buffer (property edit, U3-4 source
+    /// commit). One `read_note_parts` call; the BODY buffer is never
+    /// touched — an fm-only rewrite leaves the on-disk body identical to
+    /// `savedBaselineText`, and a dirty buffer keeps its edits. Same-path
+    /// parked duplicates mirror the fresh fm so their eventual composed
+    /// saves can't resurrect stale frontmatter.
+    private func refreshNoteParts(session: VaultSession, path: String) async {
+        let parts: NotePartsBundle? = await Task.detached(priority: .userInitiated) {
+            try? session.readNoteParts(path: path)
+        }.value
+        guard let parts, loadedFilePath == path else { return }
+        currentNoteFMSource = parts.fmSource
+        bodyByteOffset = Int(parts.bodyByteOffset)
+        bodyLineOffset = Int(parts.bodyLineOffset)
+        currentNoteContentHash = parts.contentHash
+        workspace.mirrorFrontmatter(
+            path: path, fmSource: parts.fmSource,
+            bodyByteOffset: Int(parts.bodyByteOffset),
+            bodyLineOffset: Int(parts.bodyLineOffset),
+            contentHash: parts.contentHash)
     }
 
     // MARK: - View mode (U3-2, #466)
@@ -620,7 +691,8 @@ final class AppState: ObservableObject {
             try store.save(
                 WorkspaceStore.snapshot(
                     of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue,
-                    viewModes: workspace.viewModes))
+                    viewModes: workspace.viewModes,
+                    propertiesCollapsed: workspace.propertiesCollapsed))
         } catch {
             // Layout persistence must never interrupt the user; the next
             // clean save wins.
@@ -640,7 +712,9 @@ final class AppState: ObservableObject {
         guard let restored = WorkspaceStore.model(from: snapshot),
             !restored.isEmpty
         else { return }
-        workspace.adopt(restored, viewModes: WorkspaceStore.viewModes(from: snapshot))
+        workspace.adopt(
+            restored, viewModes: WorkspaceStore.viewModes(from: snapshot),
+            propertiesCollapsed: WorkspaceStore.propertiesCollapsed(from: snapshot))
         if let tab = workspace.model.activeGroup.activeTabID {
             activateTab(tab)
         }
@@ -684,7 +758,9 @@ final class AppState: ObservableObject {
                 contentHash: currentNoteContentHash,
                 hasUnsavedChanges: hasUnsavedChanges,
                 saveError: saveError, saveConflict: currentSaveConflict,
-                loadedFilePath: loadedFilePath)
+                loadedFilePath: loadedFilePath,
+                fmSource: currentNoteFMSource,
+                bodyByteOffset: bodyByteOffset, bodyLineOffset: bodyLineOffset)
             let id = workspace.openTab(.markdown(path: path))
             activateTab(id)
         case .newSplit(let axis):
@@ -729,7 +805,9 @@ final class AppState: ObservableObject {
             contentHash: currentNoteContentHash,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
-            loadedFilePath: loadedFilePath)
+            loadedFilePath: loadedFilePath,
+            fmSource: currentNoteFMSource,
+            bodyByteOffset: bodyByteOffset, bodyLineOffset: bodyLineOffset)
         guard let newGroup = workspace.split(workspace.model.activeGroupID, axis: axis)
         else {
             let reason =
@@ -1960,7 +2038,9 @@ final class AppState: ObservableObject {
             contentHash: currentNoteContentHash,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
-            loadedFilePath: loadedFilePath)
+            loadedFilePath: loadedFilePath,
+            fmSource: currentNoteFMSource,
+            bodyByteOffset: bodyByteOffset, bodyLineOffset: bodyLineOffset)
         // Same save-then-close scope rule as activateTab (Codoki #492):
         // replacing the active tab's item in place also ends the scope —
         // the pending close would otherwise target a different document.
@@ -2063,6 +2143,9 @@ final class AppState: ObservableObject {
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
+        currentNoteFMSource = ""
+        bodyByteOffset = 0
+        bodyLineOffset = 0
         loadedFilePath = nil
         hasUnsavedChanges = false
         currentSaveConflict = nil
@@ -2102,6 +2185,9 @@ final class AppState: ObservableObject {
             currentNoteText = parked.text
             savedBaselineText = parked.savedBaselineText
             currentNoteContentHash = parked.contentHash
+            currentNoteFMSource = parked.fmSource
+            bodyByteOffset = parked.bodyByteOffset
+            bodyLineOffset = parked.bodyLineOffset
             loadedFilePath = path
             hasUnsavedChanges = parked.hasUnsavedChanges
             saveError = parked.saveError
@@ -2247,8 +2333,10 @@ final class AppState: ObservableObject {
             let body = self.currentNoteText ?? ""
             let line = firstTokenLineNumber(in: body, query: queryForLineLookup)
             self.lineScrollRequest.send(line)
+            // U3-3: the buffer (and thus `line`) is body-space; humans and
+            // on-disk tooling count whole-file lines — announce THOSE.
             postAccessibilityAnnouncement(
-                "Opened \(filename), line \(line): \(cleanSnippet)"
+                "Opened \(filename), line \(self.fileLine(fromBodyLine: line)): \(cleanSnippet)"
             )
             self.lastActivatedSearchResultLine = line
             self.lastActivatedSearchResultPath = hit.path
@@ -2949,20 +3037,20 @@ final class AppState: ObservableObject {
         // surfaced as an error or stale-content situation). The
         // save-flow uses this hash as `expected_content_hash` so a
         // mid-edit external write is caught as `WriteConflict`.
-        let result: Result<(String, [Heading], String?), VaultError> = await Task.detached(priority: .userInitiated) {
+        let result: Result<(NotePartsBundle, [Heading]), VaultError> = await Task.detached(priority: .userInitiated) {
             do {
-                let text = try session.readText(path: path)
+                // U3-3 (#467/#469): the buffer is the BODY. One read, one
+                // hash — `read_note_parts` splits at the canonical scanner
+                // boundary and its hash covers the WHOLE file, so the
+                // composed-save conflict chain stays intact.
+                let parts = try session.readNoteParts(path: path)
                 // get_file_metadata returns nil when the path isn't in
                 // the index yet (race: file showed up between scan and
                 // selection). Empty headings is the right fallback —
                 // the outline pane shows its "no headings" empty state
-                // and the user still sees the content. A nil hash is
-                // fine too: subsequent saves will pass nil as
-                // expected_content_hash, which means "save
-                // unconditionally" — the right behavior when we
-                // don't have a known baseline.
+                // and the user still sees the content.
                 let metadata = try session.getFileMetadata(path: path)
-                return .success((text, metadata?.headings ?? [], metadata?.contentHash))
+                return .success((parts, metadata?.headings ?? []))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -2977,18 +3065,29 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, selectedFilePath == path else { return }
 
         switch result {
-        case .success(let (text, headings, contentHash)):
-            currentNoteText = text
-            savedBaselineText = text
-            currentNoteContentHash = contentHash
+        case .success(let (parts, headings)):
+            currentNoteText = parts.body
+            savedBaselineText = parts.body
+            currentNoteContentHash = parts.contentHash
+            currentNoteFMSource = parts.fmSource
+            bodyByteOffset = Int(parts.bodyByteOffset)
+            bodyLineOffset = Int(parts.bodyLineOffset)
             loadedFilePath = path
             hasUnsavedChanges = false
-            currentNoteHeadings = headings
+            // The editor + reading view live in BODY space; backend
+            // offsets are whole-file. Rebase once, here — every consumer
+            // downstream (outline anchors, rotor, scroll routing) is then
+            // body-relative for free.
+            currentNoteHeadings = Self.rebasedToBody(
+                headings, prefixBytes: Int(parts.bodyByteOffset))
             noteLoadError = nil
         case .failure(let error):
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
+            currentNoteFMSource = ""
+            bodyByteOffset = 0
+            bodyLineOffset = 0
             loadedFilePath = nil
             hasUnsavedChanges = false
             currentNoteHeadings = []
@@ -3668,7 +3767,10 @@ final class AppState: ObservableObject {
     /// re-fire side effects without state changes. Short-circuit
     /// when the same target is already pending so the popover
     /// behaves like an idempotent open.
-    func requestEmbedPreview(target: String, sourceLine: Int? = nil) {
+    func requestEmbedPreview(target: String, sourceLine bodySourceLine: Int? = nil) {
+        // U3-3: the editor reports body lines; the popover's spatial cue
+        // ("source line N") should match what the user sees in the file.
+        let sourceLine = bodySourceLine.map { fileLine(fromBodyLine: $0) }
         // Idempotency: re-firing Cmd+E on the exact same embed
         // occurrence (same target AND same source line) is a
         // no-op. A second Cmd+E on a different occurrence of
@@ -3966,7 +4068,9 @@ final class AppState: ObservableObject {
             // contents — we don't actually have it here because
             // the FFI did the read + mutate internally, so re-
             // read from disk before stashing.
-            let attempted = (try? session.readText(path: path)) ?? ""
+            // U3-3: SaveConflict.attemptedContents is BODY space now (the
+            // keep-mine path composes it with the current fmSource).
+            let attempted = ((try? session.readNoteParts(path: path))?.body) ?? ""
             currentSaveConflict = SaveConflict(
                 path: path,
                 attemptedContents: attempted,
@@ -3998,14 +4102,19 @@ final class AppState: ObservableObject {
         path: String
     ) -> Task<Void, Never> {
         Task { [weak self] in
-            let text: String? = await Task.detached(priority: .userInitiated) {
-                try? session.readText(path: path)
+            // U3-3: the buffer is the BODY — reload through the same split
+            // the load path uses so fm + offsets stay coherent with it.
+            let parts: NotePartsBundle? = await Task.detached(priority: .userInitiated) {
+                try? session.readNoteParts(path: path)
             }
             .value
-            guard let self, let text else { return }
+            guard let self, let parts else { return }
             guard self.loadedFilePath == path else { return }
-            self.currentNoteText = text
-            self.savedBaselineText = text
+            self.currentNoteText = parts.body
+            self.savedBaselineText = parts.body
+            self.currentNoteFMSource = parts.fmSource
+            self.bodyByteOffset = Int(parts.bodyByteOffset)
+            self.bodyLineOffset = Int(parts.bodyLineOffset)
             self.hasUnsavedChanges = false
         }
     }
@@ -4307,7 +4416,8 @@ final class AppState: ObservableObject {
 
         // If we're already on the file, just scroll.
         if selectedFilePath == target {
-            lineScrollRequest.send(line)
+            // U3-3: task lines are whole-file; the editor buffer is body.
+            lineScrollRequest.send(bodyLine(fromFileLine: line))
             postAccessibilityAnnouncement(
                 "Scrolled to \(filename(of: target)), line \(line).",
                 priority: .medium
@@ -4330,7 +4440,8 @@ final class AppState: ObservableObject {
             }
             guard let self else { return }
             guard self.selectedFilePath == target else { return }
-            self.lineScrollRequest.send(line)
+            // Offsets are current here — the awaited load set them.
+            self.lineScrollRequest.send(self.bodyLine(fromFileLine: line))
             postAccessibilityAnnouncement(
                 "Opened \(filename(of: target)), line \(line).",
                 priority: .medium
@@ -4396,11 +4507,13 @@ final class AppState: ObservableObject {
         isSaving = true
         saveError = nil
         let expected = currentNoteContentHash
+        let fmSource = currentNoteFMSource
         let task: Task<Void, Never> = Task { [weak self] in
             await self?.performSave(
                 session: session,
                 path: path,
                 contents: contents,
+                fmSource: fmSource,
                 expectedHash: expected
             )
             return
@@ -4416,15 +4529,20 @@ final class AppState: ObservableObject {
         session: VaultSession,
         path: String,
         contents: String,
+        fmSource: String,
         expectedHash: String?
     ) async {
-        // Detached so the SQLite-mutex-holding `save_text` doesn't
-        // pin the main actor while disk IO + tree rewrites run.
+        // Detached so the SQLite-mutex-holding save doesn't pin the main
+        // actor while disk IO + tree rewrites run. U3-3 (#469): `contents`
+        // is the BODY; `save_composed` reassembles fm ⊕ body through the
+        // one Rust composer and then runs the existing save_text machinery
+        // verbatim (conflict detection, atomic write, index, op-log).
         let outcome: Result<SaveReport, VaultError> = await Task.detached(priority: .userInitiated) {
             do {
-                let report = try session.saveText(
+                let report = try session.saveComposed(
                     path: path,
-                    contents: contents,
+                    fmSource: fmSource,
+                    body: contents,
                     expectedContentHash: expectedHash
                 )
                 return .success(report)
@@ -4542,10 +4660,14 @@ final class AppState: ObservableObject {
         currentSaveConflict = nil
         isSaving = true
         let task: Task<Void, Never> = Task { [weak self] in
+            // Keep-mine composes MY fm ⊕ MY body over the external write —
+            // the same "my whole state wins" semantics the whole-file
+            // keep-mine had before the body flip.
             await self?.performSave(
                 session: session,
                 path: conflict.path,
                 contents: conflict.attemptedContents,
+                fmSource: self?.currentNoteFMSource ?? "",
                 expectedHash: conflict.currentContentHash
             )
             return
@@ -5362,6 +5484,12 @@ final class AppState: ObservableObject {
         switch outcome {
         case .success(let report):
             currentNoteContentHash = report.newContentHash
+            // U3-3 (#469 handoff): the edit rewrote the file's frontmatter —
+            // refresh fmSource + offsets from ONE read so the next composed
+            // save can't resurrect stale fm. The body on disk is unchanged
+            // by an fm-only edit, so the buffer + baseline stay untouched
+            // (property edits are allowed while the body is dirty).
+            await refreshNoteParts(session: session, path: path)
             // Refresh the properties panel so the row updates in
             // place. `loadCurrentLinks` already runs one trip
             // through the SQLite mutex for backlinks + outgoing +
@@ -5666,7 +5794,9 @@ final class AppState: ObservableObject {
             }.value
             guard let self else { return }
             guard self.loadedFilePath == path else { return }
-            self.currentNoteHeadings = headings ?? []
+            // U3-3: metadata offsets are whole-file; the buffer is body.
+            self.currentNoteHeadings = Self.rebasedToBody(
+                headings ?? [], prefixBytes: self.bodyByteOffset)
         }
     }
 
@@ -6002,7 +6132,10 @@ final class AppState: ObservableObject {
                     guard let self,
                         self.selectedFilePath == relativePath
                     else { return }
-                    self.cursorByteOffsetRequest.send(Int(offset))
+                    // U3-3: {{cursor}} offsets are whole-rendered-file;
+                    // the load above set the body offsets for this note.
+                    self.cursorByteOffsetRequest.send(
+                        self.bodyByte(fromFileByte: Int(offset)))
                     // Focus follows content (F-H1): the caret park
                     // alone leaves keyboard focus on the window; the
                     // coordinator makes the editor first responder

@@ -50,6 +50,72 @@ fn read_note_parts_splits_frontmatter_and_body() {
 }
 
 #[test]
+fn read_note_parts_offsets_are_exact_by_construction() {
+    // U3-3 (#467): body_byte_offset == whole.len() - body.len() and
+    // body_line_offset == newlines before the body — pinned across the
+    // shapes that would break any compose-rule re-derivation: plain LF,
+    // CRLF frontmatter (delimiter lines carry \r), BOM'd file, and the
+    // no-frontmatter case (both zeros).
+    // Expected constants are re-derived by the law asserts below; the
+    // literals here document the shapes. The BOM case's constants are
+    // whatever whole-minus-body yields under the scanner's current BOM
+    // treatment — asserted via the law only (no guessed constant).
+    let lf: &[u8] = b"---\ntitle: Hi\n---\nBody\n";
+    let crlf: &[u8] = b"---\r\ntitle: Hi\r\n---\r\nBody\r\n";
+    let bommed: &[u8] = b"\xef\xbb\xbf---\ntitle: Hi\n---\nBody\n";
+    let plain: &[u8] = b"# No fm\nBody\n";
+    struct Case {
+        bytes: &'static [u8],
+        pinned: Option<(u64, u32)>,
+    }
+    let cases = [
+        Case {
+            bytes: lf,
+            pinned: Some((18, 3)),
+        },
+        // "---\r\n" (5) + "title: Hi\r\n" (11) + "---\r\n" (5) = 21 bytes, 3 newlines.
+        Case {
+            bytes: crlf,
+            pinned: Some((21, 3)),
+        },
+        Case {
+            bytes: bommed,
+            pinned: None,
+        },
+        Case {
+            bytes: plain,
+            pinned: Some((0, 0)),
+        },
+    ];
+    for Case { bytes, pinned } in cases {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("note.md", bytes).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let bundle = session.read_note_parts("note.md").unwrap();
+        // The law itself, independent of the expected constants:
+        assert_eq!(
+            bundle.body_byte_offset as usize,
+            bytes.len() - bundle.body.len(),
+            "offset law violated for {bytes:?}"
+        );
+        assert_eq!(
+            bundle.body_line_offset as usize,
+            bytes[..bundle.body_byte_offset as usize]
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count(),
+            "line law violated for {bytes:?}"
+        );
+        // And the pinned constants where the shape has an unambiguous one:
+        if let Some((want_bytes, want_lines)) = pinned {
+            assert_eq!(bundle.body_byte_offset, want_bytes, "bytes for {bytes:?}");
+            assert_eq!(bundle.body_line_offset, want_lines, "lines for {bytes:?}");
+        }
+    }
+}
+
+#[test]
 fn read_note_parts_empty_fm_for_plain_markdown() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("note.md", b"# Just a body\n\nNo frontmatter.\n")

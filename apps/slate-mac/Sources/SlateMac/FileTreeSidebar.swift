@@ -583,29 +583,10 @@ struct FileTreeSidebar: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // TEMPORARY Properties home (U4-2, #471). The other seven per-note
-            // panels moved into the right-pane leaf rail this milestone;
-            // `PropertiesPanel` stays here in one `DisclosureGroup` — its own
-            // bindings and self-hiding behavior unchanged — until U3-3 relocates
-            // it to the in-note properties widget and deletes this section
-            // (header coordination note, u4_spec §U4-2). Structure is exactly
-            // what the panel stack used (divider + bounded ScrollView); with
-            // only Properties inside it now, the section self-hides via
-            // `PropertiesPanel`'s own `EmptyView` when no note is selected —
-            // unchanged from the stack era, so the tree isn't pushed around in
-            // the empty case.
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    PropertiesPanel()
-                }
-            }
-            .frame(maxHeight: 300)
-
             // U4-3 (#472): the bottom-left utility bar — Settings, Help, and
             // the vault switcher — pinned at the sidebar's bottom edge. Last
-            // child of the column, below the temporary Properties section
-            // (which U3-3 deletes). The bar draws its own separator above.
+            // child of the column (U3-3 moved Properties into the in-note
+            // widget). The bar draws its own separator above.
             SidebarUtilityBar()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

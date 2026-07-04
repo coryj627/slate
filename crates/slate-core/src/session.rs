@@ -249,6 +249,15 @@ pub struct NotePartsBundle {
     pub body: String,
     pub content_hash: String,
     pub mtime_ms: i64,
+    /// Where the body starts in the whole file, in UTF-8 bytes — exactly
+    /// `whole.len() - body.len()` at the split point (U3-3, #467). The
+    /// host rebases whole-file offsets (headings, cursor parks) into its
+    /// body-only buffer with THIS, never by re-deriving the compose
+    /// prefix (two composers diverge — the U3-5 law).
+    pub body_byte_offset: u64,
+    /// Newlines before the body start — the whole-file → body LINE delta
+    /// (backlink jumps, task rows speak 1-based file lines).
+    pub body_line_offset: u32,
 }
 
 // --- Save report ---
@@ -1695,11 +1704,21 @@ impl VaultSession {
         let content_hash = crate::vault::content_hash(contents.as_bytes());
         let mtime_ms = self.provider.stat(path)?.mtime_ms;
         let parts = crate::split_note(&contents);
+        // Byte-exact by construction: the body is a suffix of `contents`
+        // (split_note never rewrites bytes), so the prefix length is the
+        // difference — no compose-rule arithmetic anywhere.
+        let body_byte_offset = contents.len() - parts.body.len();
+        let body_line_offset = contents[..body_byte_offset]
+            .bytes()
+            .filter(|b| *b == b'\n')
+            .count() as u32;
         Ok(NotePartsBundle {
             fm_source: parts.fm_source,
             body: parts.body,
             content_hash,
             mtime_ms,
+            body_byte_offset: body_byte_offset as u64,
+            body_line_offset,
         })
     }
 

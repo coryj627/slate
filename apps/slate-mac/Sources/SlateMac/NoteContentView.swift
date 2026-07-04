@@ -128,15 +128,22 @@ struct NoteContentView: View {
 
     @ViewBuilder
     private func contentState(_ text: String) -> some View {
-        // U3-2 (#466): one mode mounted at a time — `if` (never the
-        // ZStack-retention pattern): an offscreen editor duplicates the
-        // whole text tree for VO and double-fires publishers; the reading
-        // view's scroll position is cheap to lose, and the editor caret
-        // round-trips via AppState's caret park.
-        if workspace.activeViewMode == .reading {
-            readingSurface(text)
-        } else {
-            editorSurface(text)
+        // U3-3 (#467): the properties widget is PINNED above the mode
+        // surface, in BOTH modes, outside the editor scroll view —
+        // VoiceOver reads Properties, then the content, matching where
+        // frontmatter physically lives in the file.
+        VStack(spacing: 0) {
+            NotePropertiesHeader(workspace: workspace)
+            // U3-2 (#466): one mode mounted at a time — `if` (never the
+            // ZStack-retention pattern): an offscreen editor duplicates the
+            // whole text tree for VO and double-fires publishers; the
+            // reading view's scroll position is cheap to lose, and the
+            // editor caret round-trips via AppState's caret park.
+            if workspace.activeViewMode == .reading {
+                readingSurface(text)
+            } else {
+                editorSurface(text)
+            }
         }
     }
 
@@ -158,7 +165,8 @@ struct NoteContentView: View {
                 isDocumentDirty: appState.hasUnsavedChanges,
                 onToggleTask: { [appState] item in
                     appState.toggleCurrentTask(item)
-                }
+                },
+                taskLineOffset: appState.bodyLineOffset
             )
         )
         .accessibilityFocused($readingSurfaceFocused)

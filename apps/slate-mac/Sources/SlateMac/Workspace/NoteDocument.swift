@@ -26,6 +26,12 @@ final class NoteDocument: ObservableObject, Identifiable {
     @Published var hasUnsavedChanges: Bool = false
     var savedBaselineText: String = ""
     var contentHash: String?
+    /// U3-3 (#467/#469): `text` is the BODY; the frontmatter source and
+    /// the whole-file→body deltas park alongside it (straight from
+    /// `read_note_parts` — never re-derived; two composers diverge).
+    var fmSource: String = ""
+    var bodyByteOffset: Int = 0
+    var bodyLineOffset: Int = 0
     var saveError: String?
     var saveConflict: SaveConflict?
     /// False until the tab has been activated (and thus disk-loaded) once.

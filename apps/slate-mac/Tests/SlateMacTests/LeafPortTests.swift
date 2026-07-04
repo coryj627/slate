@@ -149,13 +149,18 @@ final class LeafPortTests: XCTestCase {
         }
     }
 
-    /// The temporary Properties home (header coordination note): `FileTreeSidebar`
-    /// keeps exactly `PropertiesPanel` below the tree until U3-3 relocates it.
-    func testSidebarKeepsTemporaryPropertiesSection() throws {
+    /// U3-3 (#467) completed the relocation: the sidebar hosts NO properties
+    /// surface at all — the in-note widget (`NotePropertiesHeader`, mounted
+    /// by `NoteContentView` above both mode surfaces) is the one home.
+    func testSidebarNoLongerHostsProperties() throws {
         let source = try panelSource("FileTreeSidebar.swift")
-        XCTAssertTrue(
+        XCTAssertFalse(
             source.contains("PropertiesPanel()"),
-            "PropertiesPanel must stay in the sidebar (temporary home) until U3-3 deletes it.")
+            "the temporary sidebar Properties section is gone (U3-3)")
+        let contentHost = try panelSource("NoteContentView.swift")
+        XCTAssertTrue(
+            contentHost.contains("NotePropertiesHeader(workspace:"),
+            "NoteContentView mounts the in-note properties widget")
     }
 
     /// The leaf host, conversely, DOES instantiate all seven ported panels —
