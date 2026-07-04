@@ -77,7 +77,17 @@ enum ReadingBlockSource {
 
     /// Split a list-item slice into marker / optional task box / content.
     /// Returns nil when no marker is found (degrade: render slice verbatim).
-    static func listItemParts(_ source: String) -> ListItemParts? {
+    ///
+    /// `stripTaskBox` gates the `[c]` removal and must be true ONLY when the
+    /// Rust block kind already says this item IS a task — taskhood belongs to
+    /// the classifier, not this splitter. A plain list item that merely looks
+    /// boxy keeps its bracket text verbatim: `1. [v] Visible` (ordered items
+    /// are never tasks) and `- [v]x` (no space after the box) both reach the
+    /// plain-list renderer, and unconditional stripping lost that authored
+    /// content (Codoki, #514).
+    static func listItemParts(
+        _ source: String, stripTaskBox: Bool = false
+    ) -> ListItemParts? {
         let firstLineEnd = source.firstIndex(of: "\n") ?? source.endIndex
         let firstLine = source[source.startIndex..<firstLineEnd]
         let rest = firstLineEnd < source.endIndex
@@ -120,10 +130,10 @@ enum ReadingBlockSource {
 
         var content = String(firstLine[index...])
         var taskChar: String? = nil
-        // Task box: `[c] ` — same shape the Rust tasks grammar recognized
-        // when it set `ReadingBlockKind.listItem(task:)`; stripping here only
-        // happens when the renderer already knows this item IS a task.
-        if content.hasPrefix("["), content.count >= 3 {
+        // Task box: `[c] ` — same shape the Rust tasks grammar recognizes.
+        // Only split it off when the caller vouched (via `stripTaskBox`)
+        // that the classifier marked this item a task.
+        if stripTaskBox, content.hasPrefix("["), content.count >= 3 {
             let afterOpen = content.index(after: content.startIndex)
             let closeIndex = content.index(afterOpen, offsetBy: 1)
             if content[closeIndex] == "]" {

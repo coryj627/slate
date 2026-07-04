@@ -342,7 +342,10 @@ struct ReadingView: View {
     private func taskRow(
         _ block: ReadingBlock, depth: UInt8, taskChar: String, lineStarts: [Int]
     ) -> some View {
-        let parts = ReadingBlockSource.listItemParts(block.source)
+        // stripTaskBox: the KIND said task (Rust classifier) — the checkbox
+        // control replaces the authored `[c]` box.
+        let parts = ReadingBlockSource.listItemParts(
+            block.source, stripTaskBox: true)
         let line = ReadingBlockSource.lineNumber(
             forByteOffset: Int(block.byteStart), lineStarts: lineStarts)
         let item = context.tasks.first { Int($0.line) == line }

@@ -604,7 +604,8 @@ final class ReadingViewTests: XCTestCase {
         let paren = ReadingBlockSource.listItemParts("3) three")
         XCTAssertEqual(paren?.marker, "3)")
 
-        let task = ReadingBlockSource.listItemParts("- [x] done thing")
+        let task = ReadingBlockSource.listItemParts(
+            "- [x] done thing", stripTaskBox: true)
         XCTAssertEqual(task?.taskChar, "x")
         XCTAssertEqual(task?.content, "done thing")
 
@@ -612,6 +613,25 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(multi?.content, "a\n  continued")
 
         XCTAssertNil(ReadingBlockSource.listItemParts("not a list"))
+    }
+
+    /// Taskhood belongs to the Rust classifier — the splitter must NOT strip
+    /// a boxy-looking prefix from PLAIN list items (Codoki, #514). The two
+    /// reachable shapes: ordered items (never tasks in the Rust grammar) and
+    /// a box with no following space.
+    func testListItemPartsKeepsBracketTextOnPlainItems() {
+        let ordered = ReadingBlockSource.listItemParts("1. [v] Visible")
+        XCTAssertEqual(ordered?.content, "[v] Visible")
+        XCTAssertNil(ordered?.taskChar)
+
+        let noSpace = ReadingBlockSource.listItemParts("- [v]x")
+        XCTAssertEqual(noSpace?.content, "[v]x")
+        XCTAssertNil(noSpace?.taskChar)
+
+        // Default (no flag) never strips, even for the canonical task shape.
+        let unflagged = ReadingBlockSource.listItemParts("- [x] done")
+        XCTAssertEqual(unflagged?.content, "[x] done")
+        XCTAssertNil(unflagged?.taskChar)
     }
 
     func testQuoteContentStripping() {
