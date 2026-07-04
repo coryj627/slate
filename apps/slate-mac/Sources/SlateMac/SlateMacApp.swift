@@ -202,6 +202,12 @@ struct SlateMacApp: App {
                 .keyboardShortcut("c", modifiers: [.control, .command])
                 .disabled(appState.activeCanvasDocument == nil)
 
+                Button("Canvas: Toggle Mark") {
+                    appState.canvasToggleMark()
+                }
+                .keyboardShortcut("m", modifiers: [.control, .command])
+                .disabled(appState.activeCanvasDocument == nil)
+
                 // #520 viewport chords: one modifier apart from the
                 // ⌥⌘=/⌥⌘- pane-grow chords — the drift test asserts
                 // both exist and differ. Disabled unless a canvas tab

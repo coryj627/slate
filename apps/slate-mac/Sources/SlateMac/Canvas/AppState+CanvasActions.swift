@@ -22,6 +22,10 @@ enum CanvasPrompt: Identifiable, Equatable {
     case pickConnection(choices: [(edgeId: String, label: String)], toDelete: Bool)
     /// #523: label + direction editor for one connection.
     case editConnection(edgeId: String, currentLabel: String)
+    /// #524: the focusable marks list (Unmark + Jump per row).
+    case marksList
+    /// #524: label prompt for Group Marked Cards.
+    case groupMarked
 
     var id: String {
         switch self {
@@ -32,6 +36,8 @@ enum CanvasPrompt: Identifiable, Equatable {
         case .connectLabel: return "connectLabel"
         case .pickConnection: return "pickConnection"
         case .editConnection: return "editConnection"
+        case .marksList: return "marksList"
+        case .groupMarked: return "groupMarked"
         }
     }
 
@@ -483,5 +489,145 @@ extension AppState {
             let edge = doc.scene.edges.first(where: { $0.edgeId == edgeId })
         else { return }
         canvasPrompt = .editConnection(edgeId: edgeId, currentLabel: edge.label ?? "")
+    }
+}
+
+
+/// Mark-then-act multi-select (Milestone T, #524 — interview decision
+/// 4: no shift-range selection). `CanvasSelection.marked` is the store
+/// (per document, shared across panes, cleared when the last tab
+/// closes); arrows move selection and NEVER mutate marks. Bulk actions
+/// batch into ONE CanvasAction — one write, one undo, one summary.
+extension AppState {
+    /// ⌃⌘M on whichever surface has focus.
+    func canvasToggleMark() {
+        guard let doc = activeCanvasDocument,
+            let selected = doc.selection.selected,
+            let row = doc.outline.first(where: { $0.nodeId == selected })
+        else {
+            canvasAnnouncer.announce(.status("Nothing selected."))
+            return
+        }
+        if doc.selection.marked.contains(selected) {
+            doc.selection.marked.remove(selected)
+            canvasAnnouncer.announce(
+                .status("Unmarked \"\(row.title)\". \(doc.selection.marked.count) marked."))
+        } else {
+            doc.selection.marked.insert(selected)
+            canvasAnnouncer.announce(
+                .status("Marked \"\(row.title)\". \(doc.selection.marked.count) marked."))
+        }
+    }
+
+    func canvasClearMarks() {
+        guard let doc = activeCanvasDocument else { return }
+        let count = doc.selection.marked.count
+        doc.selection.marked = []
+        canvasAnnouncer.announce(
+            .status(count == 0 ? "No marks." : "Cleared \(count) marks."))
+    }
+
+    /// The marks list (t0 §3: the pull-based counterpart to mark
+    /// announcements) — a focusable panel with Unmark + Jump per row.
+    func canvasShowMarksList() {
+        guard let doc = activeCanvasDocument else { return }
+        guard !doc.selection.marked.isEmpty else {
+            canvasAnnouncer.announce(.status("No marks."))
+            return
+        }
+        canvasPrompt = .marksList
+    }
+
+    /// Marked ids in reading order (deterministic everywhere).
+    func canvasMarkedInOrder(_ doc: CanvasDocument) -> [String] {
+        doc.outline.map(\.nodeId).filter { doc.selection.marked.contains($0) }
+    }
+
+    /// Bulk delete: one action, one undo, one summary.
+    func canvasDeleteMarked() {
+        guard let doc = activeCanvasDocument else { return }
+        let marked = canvasMarkedInOrder(doc)
+        guard !marked.isEmpty else {
+            canvasAnnouncer.announce(.status("No marks."))
+            return
+        }
+        let ops = marked.map { CanvasOp.deleteNode(id: $0) }
+        let ok = canvasApply(
+            CanvasAction(name: "delete \(marked.count) cards", ops: ops), to: doc)
+        guard ok else { return }
+        doc.selection.marked = []
+        if doc.selection.selected.map(marked.contains) == true {
+            doc.selection.selected = nil
+        }
+        canvasAnnouncer.announce(
+            .destructiveConfirmation("Deleted \(marked.count) cards"))
+    }
+
+    /// Bulk color: one action, one summary.
+    func canvasColorMarked(preset: Int?) {
+        guard let doc = activeCanvasDocument else { return }
+        let marked = canvasMarkedInOrder(doc)
+        guard !marked.isEmpty else {
+            canvasAnnouncer.announce(.status("No marks."))
+            return
+        }
+        let names = [1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "cyan", 6: "purple"]
+        let name = preset.flatMap { names[$0] } ?? "no color"
+        let ops = marked.map {
+            CanvasOp.setNodeColor(id: $0, color: preset.map(String.init))
+        }
+        let ok = canvasApply(
+            CanvasAction(name: "color \(marked.count) cards", ops: ops), to: doc)
+        guard ok else { return }
+        canvasAnnouncer.announce(.bulk("Set \(marked.count) cards to \(name)."))
+    }
+
+    /// Group the marked set: one group sized to the set's padded
+    /// bounds — geometric containment (t1 rule 1) does the parenting.
+    func canvasGroupMarked(label: String) {
+        guard let doc = activeCanvasDocument else { return }
+        let marked = canvasMarkedInOrder(doc)
+        guard marked.count >= 1 else {
+            canvasAnnouncer.announce(.status("No marks."))
+            return
+        }
+        var minX = Double.infinity, minY = Double.infinity
+        var maxX = -Double.infinity, maxY = -Double.infinity
+        for id in marked {
+            guard let node = doc.scene.nodes.first(where: { $0.nodeId == id }) else { continue }
+            minX = min(minX, node.x)
+            minY = min(minY, node.y)
+            maxX = max(maxX, node.x + node.width)
+            maxY = max(maxY, node.y + node.height)
+        }
+        guard minX.isFinite else { return }
+        let pad = 40.0
+        let ok = canvasApply(
+            CanvasAction(
+                name: "group \(marked.count) cards",
+                ops: [
+                    .createGroup(
+                        id: Self.newCanvasEntityID(),
+                        label: label.isEmpty ? nil : label,
+                        x: minX - pad, y: minY - pad,
+                        width: (maxX - minX) + pad * 2,
+                        height: (maxY - minY) + pad * 2,
+                        color: nil)
+                ]),
+            to: doc)
+        guard ok else { return }
+        doc.selection.marked = []
+        canvasAnnouncer.announce(
+            .bulk(
+                "Grouped \(marked.count) cards into \"\(label.isEmpty ? "Untitled" : label)\"."
+            ))
+    }
+
+    func canvasPromptGroupMarked() {
+        guard let doc = activeCanvasDocument, !doc.selection.marked.isEmpty else {
+            canvasAnnouncer.announce(.status("No marks."))
+            return
+        }
+        canvasPrompt = .groupMarked
     }
 }
