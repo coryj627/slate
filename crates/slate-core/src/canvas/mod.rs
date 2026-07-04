@@ -44,6 +44,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 pub mod model;
+pub mod placement;
 
 /// Insertion-ordered map of raw JSON fields (requires serde_json's
 /// `preserve_order` feature, enabled workspace-wide).
