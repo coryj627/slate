@@ -1,0 +1,28 @@
+# Code ownership for review routing.
+#
+# Slate is a single monorepo: one Rust core + one FFI surface, consumed by
+# per-platform native frontends under apps/. See docs/plans/13_repo_structure.md.
+# Per-area ownership is expressed here (not via separate repositories); as
+# platform maintainers join, add them to the matching app line — no restructuring.
+#
+# Syntax: <path glob>  <owner...>   (last matching pattern wins)
+
+# Default owner for everything not matched below.
+*                               @coryj627
+
+# --- Shared Rust core (the only code shared across all platforms) ---
+/crates/slate-core/             @coryj627
+/crates/slate-uniffi/           @coryj627
+
+# --- Per-platform frontends (add platform maintainers here as they join) ---
+/apps/slate-mac/                @coryj627
+/apps/slate-windows/            @coryj627
+/apps/slate-ios/                @coryj627
+/apps/slate-android/            @coryj627
+
+# --- Cross-cutting: build, CI, licensing, architecture ---
+/scripts/                       @coryj627
+/.github/                       @coryj627
+/docs/plans/                    @coryj627
+/Cargo.toml                     @coryj627
+/LICENSE                        @coryj627

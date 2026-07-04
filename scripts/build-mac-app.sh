@@ -22,13 +22,19 @@ fi
 RUN=0
 SKIP_A11Y_CHECK=0
 BUNDLE=0
+BINDINGS_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --run) RUN=1; BUNDLE=1 ;;
         --bundle) BUNDLE=1 ;;
         --skip-a11y-check) SKIP_A11Y_CHECK=1 ;;
+        --bindings-only) BINDINGS_ONLY=1 ;;
         --help|-h)
-            echo "usage: $0 [--run] [--bundle] [--skip-a11y-check]"
+            echo "usage: $0 [--run] [--bundle] [--skip-a11y-check] [--bindings-only]"
+            echo "  --bindings-only     Build slate-uniffi and regenerate + stage the"
+            echo "                      Swift FFI bindings, then stop (no swift build,"
+            echo "                      no bundle, no a11y-check). Used by"
+            echo "                      \`make regenerate-bindings\`."
             echo "  --run               Build, wrap in .app bundle, and launch."
             echo "                      Implies --bundle."
             echo "  --bundle            Wrap the SwiftPM binary in a SlateMac.app"
@@ -72,6 +78,12 @@ cargo run -p slate-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
 echo "==> Staging generated bindings into $APP_DIR"
 cp "$GENERATED_DIR/slate_uniffi.swift"  "$APP_DIR/Sources/SlateMac/slate_uniffi.swift"
 cp "$GENERATED_DIR/slate_uniffiFFI.h"   "$APP_DIR/Sources/slate_uniffiFFI/slate_uniffiFFI.h"
+
+if [[ "$BINDINGS_ONLY" == "1" ]]; then
+    echo
+    echo "==> Bindings regenerated and staged (--bindings-only); stopping before swift build."
+    exit 0
+fi
 
 echo "==> swift build ($APP_DIR)"
 cd "$APP_DIR"

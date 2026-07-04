@@ -6,7 +6,7 @@
 # picks it up). If you hit "cargo: command not found", source
 # the rustup env once: `. "$HOME/.cargo/env"`.
 
-.PHONY: help check test fmt fmt-check clippy bench-check check-license-headers ci swift-cli mac-app mac-app-run bench clean
+.PHONY: help check test fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings swift-cli mac-app mac-app-run bench clean
 
 help:
 	@echo "Slate — common commands"
@@ -19,6 +19,7 @@ help:
 	@echo "  make bench-check   cargo bench --no-run (compile benches without executing)"
 	@echo "  make check-license-headers   verify every tracked .rs/.swift carries an SPDX header"
 	@echo "  make ci            fmt-check + clippy + test + bench-check + check-license-headers"
+	@echo "  make regenerate-bindings   rebuild slate-uniffi + regenerate/stage Swift FFI bindings"
 	@echo "  make swift-cli     build + run the Swift command-line smoke test"
 	@echo "  make mac-app       build the SwiftUI smoke-test app"
 	@echo "  make mac-app-run   build + launch the SwiftUI smoke-test app"
@@ -49,6 +50,14 @@ check-license-headers:
 	./scripts/check-license-headers.sh
 
 ci: fmt-check clippy test bench-check check-license-headers
+
+# Regenerate the uniffi Swift bindings and stage them into apps/slate-mac.
+# The bindings (slate_uniffi.swift, slate_uniffiFFI.h) are generated from the
+# freshly built dylib and are git-ignored — never committed. Run this after
+# changing the FFI surface in crates/slate-uniffi so the Swift frontend sees
+# the new API. Reuses the canonical build pipeline (no duplicated commands).
+regenerate-bindings:
+	./scripts/build-mac-app.sh --bindings-only
 
 swift-cli:
 	./scripts/build-swift-cli.sh
