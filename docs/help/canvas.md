@@ -1,6 +1,6 @@
 # Canvas
 
-> **Draft** — this guide describes the Canvas feature as specified for Milestone T. Shortcuts shown are the planned defaults; the in-app Command Palette (⌘⇧P) is always the authoritative list.
+> Shortcuts shown are the shipped defaults; the in-app Command Palette (⌘⇧P) is always the authoritative list.
 
 A canvas is a spatial board where you arrange cards — snippets of text, notes from your vault, images, and links — and draw labelled connections between them. Slate reads and writes the same `.canvas` files as Obsidian ([JSON Canvas](https://jsoncanvas.org)), so your canvases stay portable.
 
@@ -49,12 +49,13 @@ Press **⌘F** in a canvas to filter it. Type part of a title, a type ("image"),
 - **Note, image, and link cards** — use *Add Note to Canvas…* (picks a note from your vault), *Add Media…* (a picture or other file from your vault), or paste a URL with *Add Link Card*.
 - **Duplicate Card** copies the current card (or everything you've marked) and places the copy alongside, telling you where it went.
 - A note card can point at a **specific section**: cards like "Project Plan › Timeline" open the note right at that heading.
+- Text scales with your system text size everywhere — including the visual board — and truncated titles show in full on hover, in the card's spoken name, and in *Where am I?*.
 
 ## Editing
 
 - **Text cards** open in Slate's real note editor — the same editor, shortcuts, and VoiceOver behavior as your notes. Esc saves and returns you to the card.
 - **Rename Group** and **Edit Connection Label** are commands on the group/connection rows and in the palette.
-- **Set Color** assigns one of the six named colors (or a custom one). Colors are always announced and shown by *name* — color is never the only way information is conveyed.
+- **Set Color** assigns one of the six named colors (or a custom one). Colors are always announced and shown by *name* — a custom color says its nearest family, like "purple (custom)" — so color is never the only way information is conveyed. With **Increase Contrast** on, decorative fills step aside; the names stay.
 - **Convert Card to Note** turns a text card into a real note file in your vault; the card becomes a link to the new note.
 
 ## Arranging
@@ -69,7 +70,7 @@ Every mode announces how to get out when you enter it, shows its state on the ca
 
 ## Connecting cards
 
-- **Connect To… (⌃⌘C)** — opens the card picker; choose the target and the connection is made, attaching at the nearest edges automatically. An optional details step lets you set the sides, the direction (one-way, both ways, or no arrows), and a label.
+- **Connect To… (⌃⌘C)** — opens the card picker; choose the target and the connection is made, attaching at the nearest edges automatically, with an optional label step. Change the direction (one-way, both ways, or no arrows) or the label any time with *Edit Connection*.
 - **Connect Mode** — or navigate there instead: enter connect mode, move to the target card the way you normally navigate, and press Return to confirm.
 - Deleting a connection, changing its direction, or renaming its label all happen from the card's connection list or the palette.
 
@@ -77,7 +78,7 @@ Every mode announces how to get out when you enter it, shows its state on the ca
 
 Selection moves; **marks stick**. Press **⌃⌘M** on any card to mark it ("Marked — 3 cards marked"), on any view. The **Marks List** shows everything marked, lets you unmark or jump, and *Clear All Marks* resets.
 
-*Group Marked Cards*, *Move Marked Cards*, *Delete Marked Cards*, and *Set Color of Marked Cards* act on the whole set at once — one announcement, and one ⌘Z brings it all back.
+*Group Marked Cards…* and *Delete Marked Cards* act on the whole set at once — one announcement, and one ⌘Z brings it all back. Marked cards also move as a unit: enter Move Mode or use a placement command and the whole set travels together, keeping its shape.
 
 ## The visual view
 
@@ -97,7 +98,7 @@ The visual view is fully accessible too: VoiceOver reads each card as a real ele
 
 ## Command reference
 
-Every canvas command lives in the Command Palette (⌘⇧P) under **Canvas** — that list is always current. Planned default shortcuts:
+Every canvas command lives in the Command Palette (⌘⇧P) under **Canvas** — that list is always current. Default shortcuts:
 
 | Command | Shortcut |
 |---|---|
@@ -108,7 +109,7 @@ Every canvas command lives in the Command Palette (⌘⇧P) under **Canvas** —
 | Move Mode | ⌃⌘G |
 | Resize Mode | ⌃⌘R |
 | Connect To… | ⌃⌘C |
-| Filter Canvas | ⌘F |
+| Filter Cards | ⌘F |
 | Zoom In / Out / Actual Size | ⌘= / ⌘- / ⌘0 |
 | Fit Canvas / Zoom to Selection | ⇧1 / ⇧2 |
 | Next / Previous Card | ↓ / ↑ |
