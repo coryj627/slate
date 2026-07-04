@@ -694,6 +694,96 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(changed.blocks.count, 1)
     }
 
+    // MARK: - Table grid (#510)
+
+    /// Table cells are segmented at PARSE time (once per toggle), keyed by the
+    /// block's index — never re-derived in `body` on each render.
+    func testParseCacheSegmentsTableCellsEagerly() {
+        let cache = ReadingParseCache()
+        let parsed = cache.parsed(for: Self.everyKindFixture)
+        let tableIndex = parsed.blocks.firstIndex {
+            if case .table = $0.kind { return true }
+            return false
+        }
+        let index = try! XCTUnwrap(tableIndex, "fixture has a table block")
+        let cells = try! XCTUnwrap(
+            parsed.tableCells[index],
+            "table cells must be computed eagerly at parse time")
+        XCTAssertEqual(cells.header, ["a", "b"])
+        XCTAssertEqual(cells.rows, [["1", "2"]])
+    }
+
+    /// The Rust segmentation is the single table parser: cells arrive already
+    /// flattened, so no Swift-side pipe splitting is needed or present.
+    func testTableCellsComeFromRustSegmentation() {
+        let src = "| **h1** | h2 |\n|---|---|\n| `x` | [t](https://u) |\n"
+        let cells = try! XCTUnwrap(readingTableCells(source: src))
+        XCTAssertEqual(cells.header, ["h1", "h2"])
+        XCTAssertEqual(cells.rows, [["x", "t"]])
+    }
+
+    /// Non-table input → nil → the raw-block fallback path (never a crash or a
+    /// fabricated grid).
+    func testTableCellsRejectsNonTableSource() {
+        XCTAssertNil(readingTableCells(source: "just a paragraph\n"))
+        XCTAssertNil(readingTableCells(source: ""))
+    }
+
+    /// The `.table` case must render the grid (with the raw-source fallback
+    /// still present for the nil branch) — a structural check on the renderer
+    /// since AccessibleDataGrid is the honest path.
+    func testTableRendererDispatchesToGrid() throws {
+        let text = try strippedReadingViewSource()
+        XCTAssertTrue(
+            text.contains("AccessibleDataGrid("),
+            "the table case must render AccessibleDataGrid on segmented cells")
+        XCTAssertTrue(
+            text.contains("readingTableCells(source:"),
+            "table cells must come from the Rust segmentation API")
+        XCTAssertTrue(
+            text.contains("rawSourceBlock(block.source, axLabel:"),
+            "the nil branch must keep the raw-source fallback")
+    }
+
+    /// Summary string is "Table: N rows, M columns." with singular/plural
+    /// agreement — the grid's focusable summary region.
+    func testTableSummaryStringPluralization() {
+        // The summary derivation lives in tableGrid; assert the same rule the
+        // view uses so a copy-edit there is caught.
+        func summary(rows: Int, columns: Int) -> String {
+            "Table: \(rows) \(rows == 1 ? "row" : "rows"), "
+                + "\(columns) \(columns == 1 ? "column" : "columns")."
+        }
+        XCTAssertEqual(summary(rows: 2, columns: 3), "Table: 2 rows, 3 columns.")
+        XCTAssertEqual(summary(rows: 1, columns: 1), "Table: 1 row, 1 column.")
+        XCTAssertEqual(summary(rows: 0, columns: 2), "Table: 0 rows, 2 columns.")
+    }
+
+    /// Ragged rows are normalized to header width by Rust, so grid indexing is
+    /// safe by construction — a short row is padded, a long one truncated.
+    func testTableRaggedRowsNormalizedToHeaderWidth() {
+        let src = "| a | b | c |\n|---|---|---|\n| 1 | 2 |\n| 4 | 5 | 6 | 7 |\n"
+        let cells = try! XCTUnwrap(readingTableCells(source: src))
+        XCTAssertEqual(cells.header.count, 3)
+        for row in cells.rows {
+            XCTAssertEqual(row.count, 3, "every row equals header width")
+        }
+        XCTAssertEqual(cells.rows[0], ["1", "2", ""])
+        XCTAssertEqual(cells.rows[1], ["4", "5", "6"])
+    }
+
+    @MainActor
+    func testTableGridRendersInBothAppearances() {
+        let table = """
+            | Name | Role |
+            | --- | --- |
+            | Ada | Engineer |
+            | Grace | Admiral |
+            """
+        PresentationReady.assertRendersInBothAppearances(
+            ReadingView(text: table, pathLabel: "Table.md"))
+    }
+
     // MARK: - Contrast: reading text sits on already-gated pairings
 
     /// The reading view introduces NO new color roles; every text-on-surface

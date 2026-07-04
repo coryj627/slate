@@ -23,6 +23,22 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     let columns: [Column]
     let rows: [Row]
     let summary: String
+    /// Container AX label — names the grid to VoiceOver as a whole. Defaults
+    /// to the property-rename phrasing (the skeleton's original consumer);
+    /// the reading-view table consumer passes its own ("Table").
+    let accessibilityLabel: String
+
+    init(
+        columns: [Column],
+        rows: [Row],
+        summary: String,
+        accessibilityLabel: String = "Property rename preview, data grid"
+    ) {
+        self.columns = columns
+        self.rows = rows
+        self.summary = summary
+        self.accessibilityLabel = accessibilityLabel
+    }
 
     /// One column declaration. `header` is the visible label and
     /// the AX-announced name; `cell` returns the per-row text.
@@ -53,7 +69,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
             summaryRow
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Property rename preview, data grid")
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private var headerRow: some View {
