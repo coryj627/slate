@@ -116,7 +116,8 @@ final class WorkspaceState: ObservableObject {
     func snapshotActiveTab(
         text: String?, baseline: String?, contentHash: String?,
         hasUnsavedChanges: Bool, saveError: String?, saveConflict: SaveConflict?,
-        loadedFilePath: String?
+        loadedFilePath: String?,
+        fmSource: String = "", bodyByteOffset: Int = 0, bodyLineOffset: Int = 0
     ) {
         guard let tab = activeTab, case .markdown(let path) = tab.item,
             let text, let baseline,
@@ -129,8 +130,27 @@ final class WorkspaceState: ObservableObject {
         doc.hasUnsavedChanges = hasUnsavedChanges
         doc.saveError = saveError
         doc.saveConflict = saveConflict
+        doc.fmSource = fmSource
+        doc.bodyByteOffset = bodyByteOffset
+        doc.bodyLineOffset = bodyLineOffset
         doc.hasLoaded = true
         documents[tab.id] = doc
+    }
+
+    /// U3-3: a property edit (or U3-4 source commit) rewrote the file's
+    /// frontmatter — same-path parked documents must carry the fresh fm,
+    /// offsets, and hash, or a later composed save from a duplicated tab
+    /// would resurrect stale frontmatter over the new bytes.
+    func mirrorFrontmatter(
+        path: String, fmSource: String, bodyByteOffset: Int,
+        bodyLineOffset: Int, contentHash: String?
+    ) {
+        for doc in documents.values where doc.path == path {
+            doc.fmSource = fmSource
+            doc.bodyByteOffset = bodyByteOffset
+            doc.bodyLineOffset = bodyLineOffset
+            doc.contentHash = contentHash
+        }
     }
 
     /// Mirror a live edit into every same-path parked document so a

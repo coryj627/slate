@@ -1382,6 +1382,10 @@ pub struct NotePartsBundle {
     pub body: String,
     pub content_hash: String,
     pub mtime_ms: i64,
+    /// Body start in the whole file, UTF-8 bytes (U3-3 offset rebase).
+    pub body_byte_offset: u64,
+    /// Newlines before the body start (file line → body line delta).
+    pub body_line_offset: u32,
 }
 
 impl From<core::NotePartsBundle> for NotePartsBundle {
@@ -1391,6 +1395,8 @@ impl From<core::NotePartsBundle> for NotePartsBundle {
             body: b.body,
             content_hash: b.content_hash,
             mtime_ms: b.mtime_ms,
+            body_byte_offset: b.body_byte_offset,
+            body_line_offset: b.body_line_offset,
         }
     }
 }

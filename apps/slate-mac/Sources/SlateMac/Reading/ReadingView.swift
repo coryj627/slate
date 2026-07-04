@@ -72,6 +72,11 @@ struct ReadingView: View {
         /// post-save reload would overwrite the dirty buffer).
         var isDocumentDirty: Bool = false
         var onToggleTask: (TaskItem) -> Void = { _ in }
+        /// U3-3 (#467): `TaskItem.line` is a whole-FILE 1-based line; the
+        /// rendered `text` is the BODY, so row matching adds this delta
+        /// (AppState.bodyLineOffset). 0 when the note has no frontmatter —
+        /// and 0 was correct for the pre-flip whole-file text too.
+        var taskLineOffset: Int = 0
 
         init(
             mathBlocks: [MathBlock] = [],
@@ -80,7 +85,8 @@ struct ReadingView: View {
             citations: [RenderedCitation] = [],
             tasks: [TaskItem] = [],
             isDocumentDirty: Bool = false,
-            onToggleTask: @escaping (TaskItem) -> Void = { _ in }
+            onToggleTask: @escaping (TaskItem) -> Void = { _ in },
+            taskLineOffset: Int = 0
         ) {
             self.mathBlocks = mathBlocks
             self.codeBlocks = codeBlocks
@@ -89,6 +95,7 @@ struct ReadingView: View {
             self.tasks = tasks
             self.isDocumentDirty = isDocumentDirty
             self.onToggleTask = onToggleTask
+            self.taskLineOffset = taskLineOffset
         }
     }
 
@@ -348,7 +355,10 @@ struct ReadingView: View {
             block.source, stripTaskBox: true)
         let line = ReadingBlockSource.lineNumber(
             forByteOffset: Int(block.byteStart), lineStarts: lineStarts)
-        let item = context.tasks.first { Int($0.line) == line }
+        // Body line + delta == the record's whole-file line (U3-3).
+        let item = context.tasks.first {
+            Int($0.line) == line + context.taskLineOffset
+        }
         let completed = item?.completed ?? (taskChar.lowercased() == "x")
         return HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.sm) {
             taskCheckbox(item: item, completed: completed)

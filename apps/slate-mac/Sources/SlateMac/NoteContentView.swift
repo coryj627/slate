@@ -158,7 +158,8 @@ struct NoteContentView: View {
                 isDocumentDirty: appState.hasUnsavedChanges,
                 onToggleTask: { [appState] item in
                     appState.toggleCurrentTask(item)
-                }
+                },
+                taskLineOffset: appState.bodyLineOffset
             )
         )
         .accessibilityFocused($readingSurfaceFocused)
