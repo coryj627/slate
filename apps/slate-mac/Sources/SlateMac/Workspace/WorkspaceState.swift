@@ -82,6 +82,24 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    /// Per-tab canvas sub-surface (Milestone T, #369). Sparse like
+    /// `viewModes`: only tabs away from the outline (the structured-first
+    /// default landing) have an entry; persisted per tab as
+    /// `"activeCanvasSurface"` in the snapshot schema.
+    @Published private(set) var canvasSurfaces: [TabID: CanvasSurface] = [:]
+
+    func canvasSurface(for tabID: TabID) -> CanvasSurface {
+        canvasSurfaces[tabID] ?? .outline
+    }
+
+    func setCanvasSurface(_ surface: CanvasSurface, for tabID: TabID) {
+        if surface == .outline {
+            canvasSurfaces[tabID] = nil  // sparse: outline is the absent default
+        } else {
+            canvasSurfaces[tabID] = surface
+        }
+    }
+
     // MARK: Queries
 
     var activeTab: WorkspaceTab? { model.activeGroup.activeTab }
@@ -94,13 +112,14 @@ final class WorkspaceState: ObservableObject {
     func document(for tabID: TabID) -> NoteDocument? { documents[tabID] }
 
     func tabPath(_ tab: WorkspaceTab) -> String {
-        if case .markdown(let path) = tab.item { return path }
-        return ""
+        tab.item.path
     }
 
-    /// The tab in the ACTIVE group holding `path`, if any (dedup rule scope).
+    /// The tab in the ACTIVE group holding `path`, if any (dedup rule
+    /// scope) — kind-agnostic: a path opens as exactly one item kind, so
+    /// equal paths are one tab (#369 openTab dedup).
     func activeGroupTab(forPath path: String) -> WorkspaceTab? {
-        model.activeGroup.tabs.first { $0.item == .markdown(path: path) }
+        model.activeGroup.tabs.first { $0.item.path == path }
     }
 
     /// True when any tab — parked or (per the caller-supplied flag) active —
@@ -213,8 +232,10 @@ final class WorkspaceState: ObservableObject {
     @discardableResult
     func retarget(old: String, new: String) -> [TabID] {
         guard old != new else { return [] }
-        let changed = model.retargetItem(
+        var changed = model.retargetItem(
             from: .markdown(path: old), to: .markdown(path: new))
+        changed += model.retargetItem(
+            from: .canvas(path: old), to: .canvas(path: new))
         // Rebind parked documents: `NoteDocument.path` is a `let`, so a moved
         // file gets a fresh document that inherits the old one's buffer state.
         // Only tabs that were actually retargeted are touched (the ACTIVE tab
@@ -315,6 +336,7 @@ final class WorkspaceState: ObservableObject {
         documents[tabID] = nil
         viewModes[tabID] = nil
         propertiesCollapsed.remove(tabID)
+        canvasSurfaces[tabID] = nil
         assert(model.validate().isEmpty)
         return outcome
     }
@@ -328,6 +350,7 @@ final class WorkspaceState: ObservableObject {
         documents = [:]
         viewModes = [:]
         propertiesCollapsed = []
+        canvasSurfaces = [:]
         activeLeaf = .outline
         focusRegion = .editor
         lastFocusedGroup = nil
@@ -342,7 +365,8 @@ final class WorkspaceState: ObservableObject {
     func adopt(
         _ restored: WorkspaceModel,
         viewModes restoredModes: [TabID: NoteViewMode] = [:],
-        propertiesCollapsed restoredCollapsed: Set<TabID> = []
+        propertiesCollapsed restoredCollapsed: Set<TabID> = [],
+        canvasSurfaces restoredSurfaces: [TabID: CanvasSurface] = [:]
     ) {
         assert(restored.validate().isEmpty)
         model = restored
@@ -351,6 +375,8 @@ final class WorkspaceState: ObservableObject {
         viewModes = restoredModes
             .filter { knownIDs.contains($0.key) && $0.value != .editing }
         propertiesCollapsed = restoredCollapsed.intersection(knownIDs)
+        canvasSurfaces = restoredSurfaces
+            .filter { knownIDs.contains($0.key) && $0.value != .outline }
         focusRegion = .editor
         lastFocusedGroup = nil
     }

@@ -138,8 +138,10 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     func testUnknownTabKindDroppedNotFatal() throws {
-        // A future "canvas" tab (Milestone T) round-trips as a DROP, with
-        // the group's active pointer repaired.
+        // Forward compat (#369 inverted the old canvas-drop assertion):
+        // a still-future "graph" tab (Milestone P) round-trips as a DROP,
+        // with the group's active pointer repaired — exactly how a T-era
+        // snapshot degrades in an older build.
         let groupID = UUID()
         let keepID = UUID()
         let json = """
@@ -148,7 +150,7 @@ final class WorkspaceStoreTests: XCTestCase {
                       "activeTab": "\(UUID().uuidString)",
                       "tabs": [
                         {"id": "\(UUID().uuidString)",
-                         "item": {"kind": "canvas", "path": "board.canvas"}},
+                         "item": {"kind": "graph", "path": "vault.graph"}},
                         {"id": "\(keepID.uuidString)",
                          "item": {"kind": "markdown", "path": "kept.md"}}
                       ]}}
@@ -161,6 +163,34 @@ final class WorkspaceStoreTests: XCTestCase {
             model.activeGroup.activeTabID, TabID(raw: keepID),
             "dangling active pointer repaired to a surviving tab")
         XCTAssertTrue(model.validate().isEmpty)
+    }
+
+    /// #369: canvas tabs round-trip through the store — with the
+    /// additive per-tab `activeCanvasSurface` field (sparse: outline is
+    /// the absent default) — instead of being dropped.
+    func testCanvasTabRoundTripsWithActiveSurface() throws {
+        var model = WorkspaceModel()
+        let canvasTab = model.openTab(.canvas(path: "boards/plan.canvas"))
+        _ = model.openTab(.markdown(path: "notes/a.md"))
+
+        let snapshot = WorkspaceStore.snapshot(
+            of: model, canvasSurfaces: [canvasTab: .table])
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WorkspaceStore.Snapshot.self, from: data)
+
+        let rebuilt = try XCTUnwrap(WorkspaceStore.model(from: decoded))
+        XCTAssertEqual(
+            rebuilt.allTabs.map(\.item),
+            [.canvas(path: "boards/plan.canvas"), .markdown(path: "notes/a.md")])
+        XCTAssertEqual(
+            WorkspaceStore.canvasSurfaces(from: decoded), [canvasTab: .table])
+        XCTAssertTrue(rebuilt.validate().isEmpty)
+
+        // Sparse rule: an outline-surface tab writes no field at all.
+        let outlineSnap = WorkspaceStore.snapshot(of: model)
+        let encoded = String(
+            decoding: try JSONEncoder().encode(outlineSnap), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("activeCanvasSurface"))
     }
 
     // MARK: End-to-end restore

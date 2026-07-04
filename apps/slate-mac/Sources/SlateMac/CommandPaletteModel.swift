@@ -163,7 +163,7 @@ final class CommandPaletteModel: ObservableObject {
     /// stays explicit here so a Rust-side reorder doesn't silently
     /// change the palette layout.
     private nonisolated static let sectionOrder: [CommandSection] = [
-        .file, .navigation, .view, .vault, .editor, .tasks, .settings, .plugins,
+        .file, .navigation, .view, .vault, .editor, .canvas, .tasks, .settings, .plugins,
     ]
 
     /// Human-readable header for a section. Plain en-US strings
@@ -178,6 +178,7 @@ final class CommandPaletteModel: ObservableObject {
         case .tasks: return "Tasks"
         case .settings: return "Settings"
         case .plugins: return "Plugins"
+        case .canvas: return "Canvas"
         }
     }
 

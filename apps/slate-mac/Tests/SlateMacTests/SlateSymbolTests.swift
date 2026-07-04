@@ -44,6 +44,9 @@ final class SlateSymbolTests: XCTestCase {
         // (folder.badge.plus / square.and.pencil / trash since v1;
         // arrow.turn.down.right since v1), so they're on the macOS 15 floor.
         "folder.badge.plus", "square.and.pencil", "arrow.turn.down.right", "trash",
+        // Milestone T (#369): canvas tab glyph. rectangle.3.group is
+        // SF Symbols 2 (macOS 11), comfortably on the macOS 15 floor.
+        "rectangle.3.group",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated
