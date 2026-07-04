@@ -1,6 +1,6 @@
 # P1 executable spec — Accessible navigator: Connections leaf, graph table, commands & presets
 
-Issues: P1-1 (#TBD) · P1-2 (#TBD) · P1-3 (#TBD).
+Issues: P1-1 ([#554](https://github.com/coryj627/slate/issues/554)) · P1-2 ([#555](https://github.com/coryj627/slate/issues/555)) · P1-3 ([#556](https://github.com/coryj627/slate/issues/556)).
 Milestone: [GH 16](https://github.com/coryj627/slate/milestone/16). One PR per issue.
 Program: [00_program.md](../00_program.md) (locked decisions 6–7; DoD §P-A/§P-B). The full U-program Presentation-Ready DoD (`../../08_ui_parity/00_program.md` §A–§G) applies to every P1 issue — empty/loading/error/populated states, APCA Lc ≥ 75 measured both appearances, a11y-check 100/100.
 
@@ -19,7 +19,7 @@ Baseline facts (verified 2026-07-04, this worktree):
 
 ---
 
-## P1-1 · Connections leaf — the local graph, accessibly (#TBD) — PR 1
+## P1-1 · Connections leaf — the local graph, accessibly (#554) — PR 1
 
 The Roam-derived in/out split (research brief §5): the focused note's relational neighborhood as structured, keyboard-navigable lists — this *is* the local graph, projected accessibly.
 
@@ -48,7 +48,7 @@ New `Leaf.connections` (icon: new `SlateSymbol.connections`; label "Connections"
 
 Leaf registration + panel-identity (no re-create on switch); row copy strings verbatim; depth clamp; ghost create-note routing; keyboard path E2E (XCUITest keyboard-only walk: focus leaf → depth 2 → expand → open in new tab); a11y-check on the panel; empty (orphan note) / loading / error states.
 
-## P1-2 · Graph tab, Table mode — the global graph as a grid (#TBD) — PR 2
+## P1-2 · Graph tab, Table mode — the global graph as a grid (#555) — PR 2
 
 ### Surface
 
@@ -66,7 +66,7 @@ Row actions (menu + keyboard, drift-tested against Diagram actions when P2-5 lan
 
 Workspace censuses green with `.graph` tabs (open/close/split/serialize round-trip); sort determinism (ties break by key); filter↔announcement copy verbatim; 10k-row synthetic snapshot renders virtualized (no full materialization — instrument row instantiation); keyboard-only sort + filter + act E2E; a11y-check 100/100.
 
-## P1-3 · Graph commands, presets & announcements (#TBD) — PR 3
+## P1-3 · Graph commands, presets & announcements (#556) — PR 3
 
 New `CommandSection.graph` (cross-language enum change — backend + Swift in one PR per T's #369 precedent). Commands (registry + palette + menu; no new chords — T rule R1, palette/menu are the paths):
 

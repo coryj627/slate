@@ -1,6 +1,6 @@
 # P0 executable spec — Graph backend: GraphIndex, metrics, FFI surface, censuses
 
-Issues: P0-1 (#TBD) · P0-2 (#TBD) · P0-3 (#TBD) · P0-4 (#TBD).
+Issues: P0-1 ([#550](https://github.com/coryj627/slate/issues/550)) · P0-2 ([#551](https://github.com/coryj627/slate/issues/551)) · P0-3 ([#552](https://github.com/coryj627/slate/issues/552)) · P0-4 ([#553](https://github.com/coryj627/slate/issues/553)).
 Milestone: [GH 16](https://github.com/coryj627/slate/milestone/16). One PR per issue.
 Program: [00_program.md](../00_program.md) (locked decisions 2–4, 10; DoD §P-C/§P-D/§P-E). Backend norms apply: fmt/clippy pre-push, censuses for correctness invariants, host-independent slate-core (no macOS deps).
 
@@ -22,7 +22,7 @@ Baseline facts (verified 2026-07-04, this worktree):
 
 ---
 
-## P0-1 · GraphIndex — in-memory adjacency mirror of the links table (#TBD) — PR 1
+## P0-1 · GraphIndex — in-memory adjacency mirror of the links table (#550) — PR 1
 
 ### Dependency
 
@@ -79,7 +79,7 @@ pub struct EdgeData { pub kind: EdgeKind, pub count: u32 }
 - Property (proptest, links_roundtrip.rs pattern): random vault → build → node/edge counts match direct SQL aggregation; permutation of file insertion order yields identical sorted node/edge lists.
 - The full mutation census lands in P0-4; PR 1 includes its `debug_assert`-free seam (`GraphIndex::deep_equals(&other)`).
 
-## P0-2 · Graph metrics — degree, orphan, components, PageRank (#TBD) — PR 2
+## P0-2 · Graph metrics — degree, orphan, components, PageRank (#551) — PR 2
 
 New `crates/slate-core/src/graph_metrics.rs`, computed on demand over a `&GraphIndex`, cached per generation (`Mutex<Option<(u64, MetricsSnapshot)>>` beside the index):
 
@@ -105,7 +105,7 @@ Rules (normative):
 
 Tests: golden metrics on the P0-1 fixture; property: orphan ⇔ zero Link degree; component labels invariant under insertion-order permutation; PageRank sums to ~1.0 (1e-9) and is bit-identical across two builds of the same vault.
 
-## P0-3 · uniffi graph surface (#TBD) — PR 3
+## P0-3 · uniffi graph surface (#552) — PR 3
 
 Records (slate-uniffi/src/lib.rs, mirror + `From` per convention):
 
@@ -146,7 +146,7 @@ Rules:
 
 Tests: FFI-shape unit tests on fixture vault (filter combinations, neighborhood depth clamp, summary strings verbatim); Swift side gets binding smoke tests with the regenerated bindings.
 
-## P0-4 · Censuses + benchmarks — the wave gate (#TBD) — PR 4
+## P0-4 · Censuses + benchmarks — the wave gate (#553) — PR 4
 
 **Censuses** (`crates/slate-core/src/session/tests/graph.rs`, `census_*` convention, `census_scale()` scaling):
 

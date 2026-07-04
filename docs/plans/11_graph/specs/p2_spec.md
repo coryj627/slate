@@ -1,6 +1,6 @@
 # P2 executable spec — Visual projection: layout kernel, LayoutSession FFI, Diagram mode
 
-Issues: P2-1 (#TBD) · P2-2 (#TBD) · P2-3 (#TBD) · P2-4 (#TBD) · P2-5 (#TBD) · P-D docs (#TBD).
+Issues: P2-1 ([#557](https://github.com/coryj627/slate/issues/557)) · P2-2 ([#558](https://github.com/coryj627/slate/issues/558)) · P2-3 ([#559](https://github.com/coryj627/slate/issues/559)) · P2-4 ([#560](https://github.com/coryj627/slate/issues/560)) · P2-5 ([#561](https://github.com/coryj627/slate/issues/561)) · P-D docs ([#562](https://github.com/coryj627/slate/issues/562)).
 Milestone: [GH 16](https://github.com/coryj627/slate/milestone/16). One PR per issue.
 Program: [00_program.md](../00_program.md) (locked decisions 4–6, 8–10; DoD §P-B/§P-C/§P-E). Gate: **P2-1 may start alongside Wave 2 (pure Rust); P2-2+ gate on P1 complete (DoD §P-A).**
 
@@ -17,7 +17,7 @@ Baseline facts (verified 2026-07-04, this worktree; P0/P1 facts assumed from the
 
 ---
 
-## P2-1 · Deterministic force-layout kernel (#TBD) — PR 1 (pure Rust, host-independent)
+## P2-1 · Deterministic force-layout kernel (#557) — PR 1 (pure Rust, host-independent)
 
 New `crates/slate-core/src/graph_layout.rs`. No new dependencies.
 
@@ -65,7 +65,7 @@ impl LayoutEngine {
 - **Oracle census `census_barnes_hut_matches_exact`:** random graphs ≤ 500 nodes, forced-BH vs forced-exact, per-iteration force vectors within 5% relative tolerance and final layouts within `0.05 * k` per node — plus the qualitative invariants (no NaN, bounded) at 10k forced-BH.
 - Criterion: `layout_cold/{300n, 1500n, 10k}`, `layout_warm_tick/{300n}` (budget < 2 ms, locked decision 10), `layout_cold_10k` converge ≤ 3 s single-threaded release on Apple silicon.
 
-## P2-2 · LayoutSession FFI — flat-buffer position protocol (#TBD) — PR 2
+## P2-2 · LayoutSession FFI — flat-buffer position protocol (#558) — PR 2
 
 `#[uniffi::Object]` — state stays pointer-side; only position buffers cross (research brief §7).
 
@@ -98,7 +98,7 @@ Threading contract (normative): all methods callable off-main; Swift drives tick
 
 Tests: id/position order lock (property: positions index i ↔ node_ids[i] across refresh with node churn — surviving keys keep their slots' *identity mapping* consistent, i.e. re-fetch node_ids after any refresh that reports topology change, and the contract test proves stale-buffer detection via generation); cancellation ≤ 10 iterations after cancel; determinism through the FFI (two sessions, same inputs ⇒ identical frames); frame size = 2×n f32s.
 
-## P2-3 · Diagram mode — CALayer renderer + native AX surface (#TBD) — PR 3
+## P2-3 · Diagram mode — CALayer renderer + native AX surface (#559) — PR 3
 
 `GraphDiagramView` (NSViewRepresentable) inside the Graph tab; `GraphTabMode` toggle goes live (Table ↔ Diagram, U3 toggle pattern: one coherent AX tree per mode, mode persisted in `.slate/graph.json` via P2-4).
 
@@ -117,7 +117,7 @@ Tests: id/position order lock (property: positions index i ↔ node_ids[i] acros
 
 Tests: tier switch at the boundary count; AX element count/labels/actions on fixture graph (XCTest AX API); keyboard spatial-move determinism on a fixture layout; Reduce Motion path (no intermediate frames applied); zoom chord scope disjointness vs canvas (drift test); APCA measurements for node/edge/label pairs in both appearances recorded in the PR.
 
-## P2-4 · Graph controls + persistence (#TBD) — PR 4
+## P2-4 · Graph controls + persistence (#560) — PR 4
 
 Inspector (trailing popover/panel within the graph tab, both modes): **Filters** (text query — client-side label substring, same semantics as Table filter; Attachments; Unresolved; Orphans only), **Groups** (ordered list of query→color rules; query = same label/folder/tag matcher as the table filter; color from an 8-slot token palette, each slot APCA-checked in both appearances; each group also assigns a ring style — solid/dashed/double/dotted — cycling automatically so color is never the sole channel; first-match-wins, matching Obsidian), **Display** (Arrows, Text fade threshold, Node size multiplier, Link thickness), **Forces** (Center / Repel / Link force / Link distance sliders 0–1 → `set_forces`, live re-heat).
 
@@ -127,13 +127,13 @@ Every control is a labeled, keyboard-operable standard control (sliders with val
 
 Tests: schema round-trip incl. unknown-key preservation; group precedence (first-match-wins) + ring-style assignment; filter equivalence table↔diagram (same predicate code path — assert single source of truth); slider → `set_forces` → re-settle E2E; a11y-check.
 
-## P2-5 · Projection sync + visual-surface closure (#TBD) — PR 5
+## P2-5 · Projection sync + visual-surface closure (#561) — PR 5
 
 - **Shared selection/filter state:** one `GraphViewState` observable (selected node key, filter, groups) owned by the tab; Table rows, Diagram selection, and `Leaf.connections` re-rooting all read/write it. Selecting in any projection reflects in the others within one runloop tick; Diagram→Table mode switch lands focus on the selected node's row (and vice versa: Table→Diagram focuses its AX element).
 - **Action-parity drift test (DoD §P-B):** enumerated action sets for diagram node / table row / connections row asserted equal (Open, Open in new tab, Show connections, Reveal, Create note-for-ghost, Pin [diagram-only, exempted with rationale in the test]).
 - **VoiceOver E2E script:** the P1 walkthrough extended across projections: run "Graph: orphaned notes" → Table first row → switch to Diagram (focus lands on same node's AX element) → arrow to a neighbor → "Where am I?" → Show connections → depth 2 → back. Recorded in the PR; becomes docs material.
 - Global sweep: announcement copy audit (all through coordinator, verbosity honored), focus return on tab close/mode switch (WCAG 2.4.3), no keyboard traps, a11y-check 100/100, APCA table for every new pair, dark/light screenshots, `BENCHMARKS.md` refresh (§P-E budgets), full census suite re-run (`SLATE_CENSUS_FULL=1`).
 
-## P-D · Docs: `docs/help/graph.md` (#TBD) — PR 6
+## P-D · Docs: `docs/help/graph.md` (#562) — PR 6
 
 User guide: what the graph shows (model, node/edge kinds, ghost semantics), the three projections and when each wins (incl. the honest large-vault guidance: table > diagram past the cognitive ceiling), full keyboard + VoiceOver reference (from the recorded walkthroughs), presets, groups, forces, `.slate/graph.json` format, Obsidian-parity notes + deliberate divergences (no Animate; typed embed edges; accessibility-first ordering) with one-line rationales linking [`../01_research_brief.md`](../01_research_brief.md) §8 for the positioning story. Routed through the in-app help system the same way `docs/help/canvas.md` (#526) lands.
