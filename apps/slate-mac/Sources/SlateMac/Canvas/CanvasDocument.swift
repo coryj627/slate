@@ -64,6 +64,14 @@ final class CanvasDocument: ObservableObject {
     /// Shared selection + marks for every pane showing this canvas.
     let selection = CanvasSelection()
 
+    /// Zoom/pan state for the visual surface (#367/#520), shared by
+    /// panes showing this canvas.
+    let viewport = CanvasViewport()
+
+    /// Render scene for the visual surface (geometry in document
+    /// order + edges).
+    @Published private(set) var scene = CanvasScene(nodes: [], edges: [])
+
     /// FFI handle; valid while non-nil. Node ids are unique per file,
     /// so every canvas call routes through this.
     private(set) var handle: UInt64?
@@ -106,6 +114,7 @@ final class CanvasDocument: ObservableObject {
             handle = info.handle
             outline = try session.canvasOutline(handle: info.handle)
             tableRows = try session.canvasTableRows(handle: info.handle)
+            scene = try session.canvasScene(handle: info.handle)
             targets = Dictionary(
                 uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
@@ -123,6 +132,7 @@ final class CanvasDocument: ObservableObject {
         guard let handle else { return }
         outline = (try? session.canvasOutline(handle: handle)) ?? outline
         tableRows = (try? session.canvasTableRows(handle: handle)) ?? tableRows
+        scene = (try? session.canvasScene(handle: handle)) ?? scene
         targets = Dictionary(
             uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
         neighborsCache = [:]

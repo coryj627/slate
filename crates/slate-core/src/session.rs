@@ -4860,6 +4860,36 @@ pub struct CanvasWhereAmI {
     pub color_name: Option<String>,
 }
 
+/// One node's render geometry (visual renderer, #367). Raw JSON
+/// Canvas coordinates; the renderer owns view transforms.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasSceneNode {
+    pub node_id: String,
+    pub kind: String,
+    pub title: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Raw color ("1".."6" or hex), if set.
+    pub color: Option<String>,
+    pub color_name: Option<String>,
+}
+
+/// One connection's render data (visual renderer, #367).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasSceneEdge {
+    pub edge_id: String,
+    pub from_node: String,
+    pub from_side: Option<crate::canvas::Side>,
+    pub to_node: String,
+    pub to_side: Option<crate::canvas::Side>,
+    pub from_arrow: bool,
+    pub to_arrow: bool,
+    pub label: Option<String>,
+    pub color: Option<String>,
+}
+
 /// One load warning, pre-classified so the UI can phrase t0 §5
 /// ("Canvas loaded. N unsupported items are preserved…") without
 /// string-matching.
@@ -5389,6 +5419,62 @@ impl VaultSession {
             new_content_hash: report.new_content_hash,
             inverse,
         })
+    }
+
+    /// The full render scene (nodes with geometry, in document order —
+    /// the renderer's z-order tiebreak — plus edges). One call per
+    /// open/mutation; the renderer windows its own materialization.
+    pub fn canvas_scene(
+        &self,
+        handle: u64,
+    ) -> Result<(Vec<CanvasSceneNode>, Vec<CanvasSceneEdge>), VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let nodes = state
+            .canvas
+            .nodes
+            .iter()
+            .map(|node| {
+                let summary = &state.model.summaries[&node.id];
+                CanvasSceneNode {
+                    node_id: node.id.0.clone(),
+                    kind: summary.kind_label.to_string(),
+                    title: summary.display_title.clone(),
+                    x: node.x,
+                    y: node.y,
+                    width: node.width,
+                    height: node.height,
+                    color: node.color.as_ref().map(|c| match c {
+                        crate::canvas::CanvasColor::Preset(p) => p.to_string(),
+                        crate::canvas::CanvasColor::Hex(h) => h.clone(),
+                    }),
+                    color_name: node
+                        .color
+                        .as_ref()
+                        .map(|c| crate::canvas::color_name(c).to_string()),
+                }
+            })
+            .collect();
+        let edges = state
+            .canvas
+            .edges
+            .iter()
+            .map(|edge| CanvasSceneEdge {
+                edge_id: edge.id.0.clone(),
+                from_node: edge.from.0.0.clone(),
+                from_side: edge.from.1,
+                to_node: edge.to.0.0.clone(),
+                to_side: edge.to.1,
+                from_arrow: edge.from_end == crate::canvas::EndStyle::Arrow,
+                to_arrow: edge.to_end == crate::canvas::EndStyle::Arrow,
+                label: edge.label.clone(),
+                color: edge.color.as_ref().map(|c| match c {
+                    crate::canvas::CanvasColor::Preset(p) => p.to_string(),
+                    crate::canvas::CanvasColor::Hex(h) => h.clone(),
+                }),
+            })
+            .collect();
+        Ok((nodes, edges))
     }
 
     /// A text card's markdown content (interim read-only detail panel,

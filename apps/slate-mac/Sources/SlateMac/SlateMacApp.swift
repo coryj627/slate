@@ -176,6 +176,7 @@ struct SlateMacApp: App {
                 .keyboardShortcut("i", modifiers: [.control, .command])
                 .disabled(!appState.isVaultOpen)
 
+
                 Divider()
 
                 // ⌘1…⌘9 select tab N (9 = last, macOS convention).
