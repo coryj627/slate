@@ -4339,6 +4339,16 @@ impl VaultSession {
             .into())
     }
 
+    /// A text card's markdown content (t2 §#362 interim detail panel);
+    /// `None` for non-text cards.
+    pub fn canvas_node_text(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.canvas_node_text(handle, &node_id)?)
+    }
+
     /// Node ids overlapping `rect` (cards only) — #521 overlap warnings.
     pub fn canvas_check_overlap(
         &self,

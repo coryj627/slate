@@ -86,7 +86,9 @@ struct CanvasContainerView: View {
                 emptyOnboarding
             } else {
                 switch surface {
-                case .outline: interimOutline
+                case .outline:
+                    CanvasOutlineView(document: document, tabID: tabID)
+                        .accessibilityFocused($contentFocused)
                 case .table: interimPlaceholder(
                     "Canvas table view is under construction.",
                     detail: "The sortable table surface arrives with the canvas table milestone work. Use Show Outline (Command Palette) meanwhile.")
@@ -133,62 +135,6 @@ struct CanvasContainerView: View {
             get: { appState.workspace.canvasSurface(for: tabID) },
             set: { appState.workspace.setCanvasSurface($0, for: tabID) }
         )
-    }
-
-    /// Interim outline (#369): a plain accessible list of the reading
-    /// order with N-of-M context. #362 replaces this with the full
-    /// rotor-enabled outline; keep this list boring and correct.
-    private var interimOutline: some View {
-        List(document.outline, id: \.nodeId, selection: selectionBinding) { row in
-            HStack(spacing: Tokens.Spacing.xs) {
-                Text(row.title)
-                    .font(Tokens.Typography.body)
-                    .padding(.leading, CGFloat(row.depth) * Tokens.Spacing.md)
-                Spacer()
-                if row.connectionCount > 0 {
-                    Text("\(row.connectionCount)")
-                        .font(Tokens.Typography.caption)
-                        .foregroundStyle(Tokens.ColorRole.textSecondary)
-                        .accessibilityHidden(true)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityLabel(for: row))
-        }
-        .accessibilityLabel("Canvas outline")
-        .accessibilityFocused($contentFocused)
-    }
-
-    private var selectionBinding: Binding<String?> {
-        Binding(
-            get: { document.selection.selected },
-            set: { newValue in
-                document.selection.selected = newValue
-                // Selection narration rides the #518 funnel (DoD §H) —
-                // rapid arrowing coalesces to the resting card.
-                if let id = newValue,
-                    let row = document.outline.first(where: { $0.nodeId == id })
-                {
-                    appState.canvasAnnouncer.announce(
-                        .movedTo(
-                            card: CanvasCardRef(kind: row.kind, title: row.title),
-                            ordinal: row.ordinalN, total: row.totalM,
-                            container: row.groupPath.last,
-                            connectionCount: row.connectionCount,
-                            colorName: row.colorName,
-                            marked: document.selection.marked.contains(id)))
-                }
-            }
-        )
-    }
-
-    /// t0 §1.2 standard-level phrasing, assembled from backend data.
-    /// The #518 coordinator takes phrasing over in the next PR; this
-    /// string matches the grammar so nothing regresses at the swap.
-    private func accessibilityLabel(for row: CanvasOutlineRow) -> String {
-        let type = row.kind == "group" ? "Group" : "\(row.kind.capitalized) card"
-        let container = row.groupPath.last.map { "in \($0)" } ?? "in canvas"
-        return "\(type) \"\(row.title)\", \(row.ordinalN) of \(row.totalM) \(container)"
     }
 
     // MARK: Empty / error states

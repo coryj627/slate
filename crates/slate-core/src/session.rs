@@ -5371,6 +5371,28 @@ impl VaultSession {
         })
     }
 
+    /// A text card's markdown content (interim read-only detail panel,
+    /// t2 §#362; the real editor replaces it in Wave 4). `None` for
+    /// non-text cards.
+    pub fn canvas_node_text(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Option<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let node = state
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.id.0 == node_id)
+            .ok_or_else(|| bad_node(node_id))?;
+        Ok(match &node.kind {
+            crate::canvas::NodeKind::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+    }
+
     fn canvas_file_id(&self, handle: u64) -> Result<i64, VaultError> {
         self.canvases
             .lock()

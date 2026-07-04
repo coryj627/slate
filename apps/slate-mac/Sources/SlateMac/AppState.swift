@@ -1707,7 +1707,7 @@ final class AppState: ObservableObject {
     /// this to `NSWorkspace.shared.open`; tests inject a no-op so
     /// `XCTest` runs don't actually spawn the user's default browser
     /// every time the suite touches an external-link code path.
-    private let externalOpener: (URL) -> Bool
+    let externalOpener: (URL) -> Bool
     /// Preferences persistence (math + code panels, #224). Injected
     /// at init so tests can substitute a non-standard `UserDefaults`.
     let preferencesStore: PreferencesStore
