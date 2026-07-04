@@ -29,6 +29,36 @@ struct SlateMacApp: App {
 
                 Divider()
 
+                // File-management commands (U2-5, #463). Act on the file tree's
+                // selected node; disabled without a vault (rename/move also
+                // without a selection) so the chords aren't silent no-ops. ⌘⌫
+                // (delete) is deliberately NOT here — it's tree-focused-only,
+                // delivered by the tree's own key handling (spec §U2-5).
+                Button("New Note") {
+                    appState.newNoteCommand()
+                }
+                .keyboardShortcut("n", modifiers: [.command])
+                .disabled(!appState.isVaultOpen)
+
+                Button("New Folder…") {
+                    appState.newFolderCommand()
+                }
+                .disabled(!appState.isVaultOpen)
+
+                Button("Rename…") {
+                    appState.renameSelectedCommand()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+
+                Button("Move to…") {
+                    appState.moveSelectedCommand()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+
+                Divider()
+
                 // Workspace tab lifecycle (U1-2, #454). Menu items beat the
                 // window's implicit ⌘W (performClose:) in AppKit's key-
                 // equivalent order, which is exactly the override we want

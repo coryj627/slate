@@ -242,6 +242,50 @@ struct WorkspaceModel: Hashable {
         if !handled { openTab(item, in: groupID) }
     }
 
+    /// Rewrite every tab whose item is `.markdown(from)` to `.markdown(to)` —
+    /// the model half of `WorkspaceState.retarget(old:new:)` (U2-5, #463). A
+    /// file's on-disk path changed (rename / move / an ancestor folder moved);
+    /// every tab pointing at it must follow, preserving tab identity (TabID)
+    /// and each group's active-tab pointer. Tab ORDER and focus are untouched —
+    /// this is a pure path substitution, not an open/close.
+    ///
+    /// Returns the ids of the tabs whose item changed, so the caller can rebind
+    /// the matching parked `NoteDocument`s (their `path` is a `let`).
+    ///
+    /// Dedup is deliberately NOT applied: retarget can transiently produce two
+    /// tabs in one group with the same item only if `from` and `to` collide,
+    /// which the backend's collision check (`DestinationExists`) already
+    /// forbids — so the post-condition stays within the model's invariants
+    /// (I1–I7 don't require intra-group item uniqueness; `openTab`'s dedup is a
+    /// UX convenience, not an invariant).
+    @discardableResult
+    mutating func retargetItem(from: EditorItem, to: EditorItem) -> [TabID] {
+        guard from != to else { return [] }
+        var changed: [TabID] = []
+        root = Self.mapAllGroups(root) { group in
+            for idx in group.tabs.indices where group.tabs[idx].item == from {
+                group.tabs[idx].item = to
+                changed.append(group.tabs[idx].id)
+            }
+        }
+        return changed
+    }
+
+    /// Apply `body` to every group in the tree (unlike `updateGroup`, which
+    /// targets one id). Used by whole-tree substitutions like `retargetItem`.
+    private static func mapAllGroups(
+        _ node: SplitNode, _ body: (inout TabGroupNode) -> Void
+    ) -> SplitNode {
+        switch node {
+        case .group(var group):
+            body(&group)
+            return .group(group)
+        case .split(var branch):
+            branch.children = branch.children.map { mapAllGroups($0, body) }
+            return .split(branch)
+        }
+    }
+
     struct CloseOutcome: Equatable {
         /// The tab that holds focus after the close (nil = workspace empty).
         var focusedTab: TabID?

@@ -668,5 +668,60 @@ final class WorkspaceModelTests: XCTestCase {
         let unknown = Data(#"{"kind":"canvas","path":"board.canvas"}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(EditorItem.self, from: unknown))
     }
+
+    // MARK: - retargetItem (U2-5, #463)
+
+    /// A rename/move of an open file rewrites every tab pointing at it — across
+    /// all groups — preserving tab identity, order, and each group's active
+    /// pointer.
+    func testRetargetItemRewritesAllMatchingTabsAcrossGroups() {
+        var model = twoGroupFixture()  // [a, b] | [c], focus g2
+        // Open a.md a second time in group 2 so two groups reference it.
+        let g2 = model.activeGroupID
+        model.openTab(md("a.md"), in: g2)
+        let aTabsBefore = model.allTabs.filter { $0.item == md("a.md") }.map(\.id)
+        XCTAssertEqual(aTabsBefore.count, 2, "a.md open in two tabs")
+
+        let changed = model.retargetItem(from: md("a.md"), to: md("renamed.md"))
+
+        XCTAssertEqual(Set(changed), Set(aTabsBefore), "both a.md tabs retargeted, by id")
+        XCTAssertTrue(
+            model.allTabs.allSatisfy { $0.item != md("a.md") }, "no a.md left")
+        XCTAssertEqual(
+            model.allTabs.filter { $0.item == md("renamed.md") }.map(\.id).sorted(by: idOrder),
+            aTabsBefore.sorted(by: idOrder),
+            "same tab ids now hold renamed.md")
+        assertValid(model, "after retarget")
+    }
+
+    func testRetargetItemNoOpWhenPathAbsentOrUnchanged() {
+        var model = twoGroupFixture()
+        XCTAssertEqual(model.retargetItem(from: md("nope.md"), to: md("x.md")), [])
+        XCTAssertEqual(model.retargetItem(from: md("a.md"), to: md("a.md")), [])
+        assertValid(model)
+    }
+
+    /// A folder move retargets each descendant file by its own mapping — the
+    /// `applyRetargets` per-file loop relies on this.
+    func testRetargetItemFolderDescendantsEachByOwnPath() {
+        var model = WorkspaceModel()
+        model.openTab(md("proj/a.md"))
+        model.openTab(md("proj/sub/b.md"))
+        model.openTab(md("other.md"))
+
+        // Simulate the two descendant mappings a folder move produces.
+        _ = model.retargetItem(from: md("proj/a.md"), to: md("archive/proj/a.md"))
+        _ = model.retargetItem(from: md("proj/sub/b.md"), to: md("archive/proj/sub/b.md"))
+
+        XCTAssertEqual(
+            Set(model.allTabs.map(\.item)),
+            [md("archive/proj/a.md"), md("archive/proj/sub/b.md"), md("other.md")],
+            "descendants followed; the bystander file is untouched")
+        assertValid(model)
+    }
+
+    private func idOrder(_ a: TabID, _ b: TabID) -> Bool {
+        a.raw.uuidString < b.raw.uuidString
+    }
 }
 

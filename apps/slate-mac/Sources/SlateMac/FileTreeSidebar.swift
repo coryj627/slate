@@ -569,10 +569,15 @@ struct FileTreeSidebar: View {
         // the user arrows/clicks; `selectedFilePath` (and its note-load
         // cascade) is assigned from the `.onChange` below, after the update
         // pass, and only for *file* rows.
+        // ScrollViewReader wraps the List so U2-6 can scroll the post-mutation
+        // focus target into view (`proxy.scrollTo(rowID)`). U2-5 already re-
+        // anchors `listSelection`; the scroll is wired in U2-6.
+        ScrollViewReader { proxy in
         List(selection: $listSelection) {
             ForEach(rows) { entry in
                 rowView(for: entry)
                     .tag(entry.rowID)
+                    .id(entry.rowID)
             }
         }
         .listStyle(.sidebar)
@@ -586,9 +591,35 @@ struct FileTreeSidebar: View {
         .onMoveCommand { direction in
             handleMoveCommand(direction)
         }
+        // ⌘⌫ deletes the selected node, but ONLY while the tree has keyboard
+        // focus (spec §U2-5 "tree-focused only"). Delivered here rather than as
+        // a menu-bar chord so it can't fire while a property field or the editor
+        // is focused. A folder-or-file selection is required; placeholders and
+        // no-selection no-op.
+        .onDeleteCommand {
+            guard fileTreeFocused, let node = selectedTreeNode else { return }
+            appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+        }
+        // Root drop target: a node dropped on the tree background (not on a
+        // folder row) moves to the vault root. Folder rows have their own
+        // `.onDrop` that wins when the drop lands on them.
+        .onDrop(
+            of: [Self.nodeUTType], isTargeted: nil,
+            perform: { providers in handleDrop(providers, into: "") })
+        // Complex-gesture disclosure (WCAG 3.3.2) for the container-level
+        // drop target above.
+        .accessibilityHint(
+            "Dropping a dragged file or folder on empty space moves it to the vault root.")
         // Seed the mirror if a selection already exists when the sidebar mounts
         // (e.g. re-entering the vault view with a file open).
         .onAppear { listSelection = rowID(forPath: appState.selectedFilePath) }
+        // U2-5: react to structural mutations. AppState (the mutation funnel)
+        // publishes `treeMutation`; the view-owned VM refreshes the affected
+        // levels here, then U2-6 moves the selection. Token-edge-triggered so
+        // two equal mutations still fire.
+        .onChange(of: appState.treeMutation?.token) { _, _ in
+            handleTreeMutation(proxy: proxy)
+        }
         // User-driven selection: push it onto AppState here, outside the list's
         // update transaction, so handleSelectionChange runs in a well-defined
         // context. Only *file* rows drive `selectedFilePath`; selecting a
@@ -596,6 +627,9 @@ struct FileTreeSidebar: View {
         // (folders don't open). The guard prevents a write-back loop with the
         // mirror `.onChange` below.
         .onChange(of: listSelection) { _, newSelection in
+            // Mirror the selection (file OR folder) to AppState so the file-
+            // management commands know their target. Placeholders clear it.
+            mirrorTreeSelectionToAppState(newSelection)
             // Only *file* rows drive opens; the path travels in the NodeID
             // itself, so no tree lookup is needed (robust even if the level
             // was refetched between select and this callback).
@@ -643,7 +677,82 @@ struct FileTreeSidebar: View {
                 priority: .medium
             )
         }
+        }  // ScrollViewReader
     }
+
+    /// The tree node (file or folder) currently selected, if the selection is a
+    /// real node (not a loading/error placeholder). Command targets read this.
+    private var selectedTreeNode: TreeNode? {
+        guard case let .node(id) = listSelection else { return nil }
+        return tree.node(for: id)
+    }
+
+    /// Mirror the current row selection (file OR folder) into
+    /// `appState.treeSelectedNode`, the single source the file-management
+    /// commands (rename/move/delete/new) read. Placeholder rows or no selection
+    /// clear it. Post-update mutation point (#448 discipline): this runs inside
+    /// the `.onChange` closure, not during the list's update pass.
+    private func mirrorTreeSelectionToAppState(_ selection: RowID?) {
+        guard case let .node(id) = selection, let node = tree.node(for: id) else {
+            if appState.treeSelectedNode != nil { appState.treeSelectedNode = nil }
+            return
+        }
+        let mirrored = AppState.TreeSelection(path: node.path, isDirectory: node.isDirectory)
+        if appState.treeSelectedNode != mirrored {
+            appState.treeSelectedNode = mirrored
+        }
+    }
+
+    /// Refresh the tree after a structural mutation (U2-5) and move the
+    /// post-mutation selection (U2-6). `handleTreeMutation` invalidates exactly
+    /// the affected levels; the focus/scroll half is filled by U2-6.
+    private func handleTreeMutation(proxy: ScrollViewProxy) {
+        guard let mutation = appState.treeMutation else { return }
+        // Invalidate each dirtied level. A move dirties two (source +
+        // destination); everything else dirties one. `nil` = the root level.
+        for parent in mutation.affectedParents {
+            tree.treeInvalidation(parent: parentNodeID(forPath: parent))
+        }
+        // U2-6 fills the focus-target computation + scroll-into-view here.
+        applyPostMutationFocus(mutation, proxy: proxy)
+    }
+
+    /// Move the tree selection to the post-mutation target and scroll it into
+    /// view (spec §U2-6). U2-5 ships this as a stub — the refresh (above) lands
+    /// here, but the focus rules (create→new row, rename→keep, move→follow,
+    /// delete→next sibling) and the `ScrollViewReader` scroll are wired in U2-6.
+    private func applyPostMutationFocus(_ mutation: AppState.TreeMutation, proxy: ScrollViewProxy) {
+        // U2-6 fills this in.
+    }
+
+    /// The `NodeID` of the directory at `parentPath` (nil ⇒ the root level's
+    /// sentinel), so `treeInvalidation` can target the level that changed. A
+    /// dir's NodeID is `.dir(id)`, keyed by the tree's own materialized rows; if
+    /// the level isn't materialized yet, `nil` (root) is the safe fallback —
+    /// invalidating root refetches everything, which is correct if we can't
+    /// resolve a finer target.
+    private func parentNodeID(forPath parentPath: String?) -> NodeID? {
+        guard let parentPath else { return nil }  // root level
+        // Find the dir node for this path across the materialized tree.
+        if let node = tree.rootLevel.first(where: { $0.path == parentPath && $0.isDirectory }) {
+            return node.nodeID
+        }
+        for level in tree.children.values {
+            if let node = level.first(where: { $0.path == parentPath && $0.isDirectory }) {
+                return node.nodeID
+            }
+        }
+        // Not materialized (its parent isn't expanded) → nothing to refresh at
+        // that level; return a sentinel that no-ops. Using the path-derived
+        // parent chain isn't possible without the id, so fall back to root only
+        // if the level genuinely can't be found AND it should be visible.
+        return .dir(Self.unmaterializedSentinel)
+    }
+
+    /// Sentinel dir id for "a level that isn't materialized" — distinct from the
+    /// VM's root sentinel (-1) and from any real dir id (which are ≥ 1).
+    /// `treeInvalidation` on it is a harmless no-op (no cached level to drop).
+    private static let unmaterializedSentinel: Int64 = -2
 
     /// A `List` row: a real tree node, or a synthetic per-level loading/error
     /// placeholder. `Identifiable` so `ForEach` can diff rows; placeholder ids
@@ -722,87 +831,280 @@ struct FileTreeSidebar: View {
     /// A folder row: disclosure chevron + folder glyph + name. Disclosure state
     /// and item count live in the AX value (macOS VoiceOver doesn't voice
     /// custom row traits — #420 lesson — so state is baked into label/value).
+    ///
+    /// U2-5: swaps to an inline rename field when `appState.renamingNode`
+    /// matches; is a drag source and a drop target (folders + root accept
+    /// moves), and carries the file-management context menu.
+    @ViewBuilder
     private func folderRow(_ node: TreeNode) -> some View {
         let isExpanded = tree.expanded.contains(node.nodeID)
-        return HStack(spacing: Tokens.Spacing.xs) {
-            indent(for: node.depth)
-            // Disclosure chevron — rotates with expansion. Decorative (routed
-            // through SlateSymbol, no raw glyph): the AX value already states
-            // expanded/collapsed.
-            SlateSymbol.disclosure.decorative
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            // Folder glyph per expanded state; decorative since the row label
-            // names the folder (SlateSymbol contract).
-            (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
-                .foregroundStyle(.secondary)
-            Text(node.name)
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-            Spacer(minLength: 0)
+        if isRenaming(node) {
+            renameFieldRow(node)
+        } else {
+            HStack(spacing: Tokens.Spacing.xs) {
+                indent(for: node.depth)
+                // Disclosure chevron — rotates with expansion. Decorative (routed
+                // through SlateSymbol, no raw glyph): the AX value already states
+                // expanded/collapsed.
+                SlateSymbol.disclosure.decorative
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                // Folder glyph per expanded state; decorative since the row label
+                // names the folder (SlateSymbol contract).
+                (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
+                    .foregroundStyle(.secondary)
+                Text(node.name)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            // A folder row toggles disclosure on activation (pointer tap, or
+            // Space/Return/double-click when selected). The spec preferred an
+            // "isButton-free plain row", but the a11y gate (WCAG 4.1.2) requires
+            // any `.onTapGesture` target to carry `.isButton` so VoiceOver users
+            // can discover it's actuatable — and for a folder that genuinely
+            // toggles on activation, the button role is honest. We keep BOTH: the
+            // button trait (discoverable activation) and the named Expand/Collapse
+            // rotor action (VO users get an explicit verb), plus the AX value that
+            // states expanded/collapsed + item count + level.
+            .onTapGesture { tree.toggle(node) }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(node.name)
+            .accessibilityValue(Self.folderAccessibilityValue(for: node, expanded: isExpanded))
+            .accessibilityAction(named: Text(isExpanded ? "Collapse" : "Expand")) {
+                tree.toggle(node)
+            }
+            // U2-5 file-management rotor actions so VoiceOver users reach
+            // rename/move/delete/new without the pointer context menu.
+            .accessibilityAction(named: Text("Rename")) { beginRename(node) }
+            .accessibilityAction(named: Text("Move to Trash")) {
+                appState.deleteEntry(path: node.path, isDirectory: true)
+            }
+            .accessibilityAction(named: Text("New Note in Folder")) {
+                appState.createNote(in: node.path)
+            }
+            // Complex-gesture disclosure (WCAG 3.3.2): the row carries a
+            // context menu, a drag source, and a drop target — say what each
+            // does, not how to perform it.
+            .accessibilityHint(
+                "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Rename, move, delete, and new-note actions are in the context menu.")
+            .help(node.path)
+            .contextMenu { fileManagementMenu(for: node) }
+            // Drag source: a folder can be dragged onto another folder / root.
+            .onDrag { dragItem(for: node) }
+            // Drop target: dropping a file/folder onto this folder moves it here.
+            .onDrop(
+                of: [Self.nodeUTType], isTargeted: nil,
+                perform: { providers in handleDrop(providers, into: node.path) })
         }
-        .contentShape(Rectangle())
-        // A folder row toggles disclosure on activation (pointer tap, or
-        // Space/Return/double-click when selected). The spec preferred an
-        // "isButton-free plain row", but the a11y gate (WCAG 4.1.2) requires
-        // any `.onTapGesture` target to carry `.isButton` so VoiceOver users
-        // can discover it's actuatable — and for a folder that genuinely
-        // toggles on activation, the button role is honest. We keep BOTH: the
-        // button trait (discoverable activation) and the named Expand/Collapse
-        // rotor action (VO users get an explicit verb), plus the AX value that
-        // states expanded/collapsed + item count + level.
-        .onTapGesture { tree.toggle(node) }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(node.name)
-        .accessibilityValue(Self.folderAccessibilityValue(for: node, expanded: isExpanded))
-        .accessibilityAction(named: Text(isExpanded ? "Collapse" : "Expand")) {
-            tree.toggle(node)
-        }
-        .help(node.path)
     }
 
     /// A file row: name + relative modified time (the flat list's cell, carried
     /// over verbatim), indented to its depth.
+    ///
+    /// U2-5: swaps to an inline rename field when renaming; is a drag source and
+    /// carries the file-management context menu alongside the open-in actions.
+    @ViewBuilder
     private func fileRow(_ node: TreeNode) -> some View {
-        // Explicit `.primary` / `.secondary` so the text colors don't fall back
-        // to whatever inherited container style happens to be in scope. Xcode's
-        // Accessibility Inspector reported contrast failures on these rows with
-        // foreground and background colors nearly identical (#100F16 vs
-        // #101016) — most likely the inspector sampling antialiased edges on a
-        // dark sidebar bg, but pinning the foreground style makes the intent
-        // unambiguous either way.
-        HStack(spacing: Tokens.Spacing.xs) {
-            indent(for: node.depth)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(node.name)
-                    .foregroundStyle(.primary)
-                Text("Modified \(relativeDate(for: mtime(of: node)))")
+        if isRenaming(node) {
+            renameFieldRow(node)
+        } else {
+            // Explicit `.primary` / `.secondary` so the text colors don't fall
+            // back to whatever inherited container style happens to be in scope.
+            HStack(spacing: Tokens.Spacing.xs) {
+                indent(for: node.depth)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(node.name)
+                        .foregroundStyle(.primary)
+                    Text("Modified \(relativeDate(for: mtime(of: node)))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
+            .accessibilityHint(
+                "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, move, and delete actions are in the context menu.")
+            // U2-5 file-management rotor actions.
+            .accessibilityAction(named: Text("Rename")) { beginRename(node) }
+            .accessibilityAction(named: Text("Move to Trash")) {
+                appState.deleteEntry(path: node.path, isDirectory: false)
+            }
+            .help(node.path)
+            .contextMenu {
+                // U1-5 (#457): open-in targets. The context menu is the
+                // keyboard-discoverable path (VoiceOver actions rotor); ⌘-click
+                // is the pointer shortcut for a new tab.
+                Button("Open") {
+                    appState.openFile(node.path, target: .currentTab)
+                }
+                Button("Open in New Tab") {
+                    appState.openFile(node.path, target: .newTab)
+                }
+                Button("Open in Split") {
+                    appState.openFile(node.path, target: .newSplit(.horizontal))
+                }
+                Divider()
+                fileManagementMenu(for: node)
+            }
+            // Drag source: a file can be dragged onto a folder / root.
+            .onDrag { dragItem(for: node) }
+        }
+    }
+
+    // MARK: - Inline rename (U2-5)
+
+    /// True when this node is the one currently in inline-rename mode.
+    private func isRenaming(_ node: TreeNode) -> Bool {
+        appState.renamingNode?.path == node.path
+    }
+
+    /// Enter inline-rename mode for `node` (context-menu / rotor entry point).
+    private func beginRename(_ node: TreeNode) {
+        appState.structuralRenameError = nil
+        appState.renamingNode = AppState.RenamingNode(path: node.path, isDirectory: node.isDirectory)
+    }
+
+    /// The row shown in place of the label while renaming: a focused TextField
+    /// (Return commits, Esc cancels) plus an inline error below it when the last
+    /// commit was rejected (collision / invalid name) — the field keeps focus so
+    /// the user can correct without re-invoking (spec §U2-5).
+    private func renameFieldRow(_ node: TreeNode) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: Tokens.Spacing.xs) {
+                indent(for: node.depth)
+                if node.isDirectory {
+                    SlateSymbol.folder.decorative.foregroundStyle(.secondary)
+                }
+                RenameField(
+                    initialName: node.name,
+                    isDirectory: node.isDirectory,
+                    error: appState.structuralRenameError,
+                    onCommit: { newName in
+                        commitRename(node, to: newName)
+                    },
+                    onCancel: {
+                        appState.renamingNode = nil
+                        appState.structuralRenameError = nil
+                    })
+            }
+            if let error = appState.structuralRenameError {
+                Text(error)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
-        .accessibilityHint(
-            "Opens the note. Open-in-new-tab and split actions are in the context menu.")
-        .help(node.path)
-        // U1-5 (#457), ported through the U2-4 rename: open-in targets.
-        // The context menu is the keyboard-discoverable path (VoiceOver
-        // actions rotor); ⌘-click is the pointer shortcut for a new tab.
-        .contextMenu {
-            Button("Open") {
-                appState.openFile(node.path, target: .currentTab)
-            }
-            Button("Open in New Tab") {
-                appState.openFile(node.path, target: .newTab)
-            }
-            Button("Open in Split") {
-                appState.openFile(node.path, target: .newSplit(.horizontal))
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
+                    // WCAG 1.4.4: wrap, don't clip.
+                    .lineLimit(3)
+                    .padding(.leading, Self.indentWidth(for: node.depth))
+                    .accessibilityLabel("Rename error. \(error)")
             }
         }
+    }
+
+    /// Commit an inline rename. Empty / unchanged names just cancel; otherwise
+    /// route through the AppState wrapper (which surfaces collisions inline).
+    private func commitRename(_ node: TreeNode, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != node.name else {
+            appState.renamingNode = nil
+            appState.structuralRenameError = nil
+            return
+        }
+        appState.renameEntry(path: node.path, isDirectory: node.isDirectory, to: trimmed)
+    }
+
+    // MARK: - Context menu (U2-5)
+
+    /// The shared file-management actions for a node's context menu: New Note /
+    /// New Folder (into a folder, or the node's parent for a file), Rename, Move
+    /// to…, Move to Trash. Each routes through the AppState wrapper. SlateSymbol
+    /// labels per the u2_spec table.
+    @ViewBuilder
+    private func fileManagementMenu(for node: TreeNode) -> some View {
+        let creationParent = node.isDirectory ? node.path : (AppState.TreeMutation.parentPath(of: node.path) ?? "")
+        Button {
+            appState.createNote(in: creationParent)
+        } label: {
+            SlateSymbol.newNote.label("New Note")
+        }
+        Button {
+            appState.newFolderInContext(parent: creationParent)
+        } label: {
+            SlateSymbol.newFolder.label("New Folder")
+        }
+        Divider()
+        Button {
+            beginRename(node)
+        } label: {
+            SlateSymbol.rename.label("Rename")
+        }
+        Button {
+            appState.pendingMove = AppState.PendingMove(path: node.path, isDirectory: node.isDirectory)
+        } label: {
+            SlateSymbol.moveTo.label("Move to…")
+        }
+        Divider()
+        Button(role: .destructive) {
+            appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+        } label: {
+            SlateSymbol.trash.label("Move to Trash")
+        }
+    }
+
+    // MARK: - Drag & drop (U2-5)
+
+    /// Custom UTType carrying a tree node's vault-relative path across a drag.
+    /// A private app type so drops from Finder / other apps don't masquerade as
+    /// intra-tree moves.
+    static let nodeUTType = "com.slate.tree-node-path"
+
+    /// Build the drag payload for `node`: an `NSItemProvider` carrying the
+    /// node's path under the private UTType. Also records the source in AppState
+    /// so the drop handler knows whether the dragged node is a directory.
+    private func dragItem(for node: TreeNode) -> NSItemProvider {
+        appState.dragSourceNode = AppState.TreeSelection(
+            path: node.path, isDirectory: node.isDirectory)
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: Self.nodeUTType, visibility: .ownProcess
+        ) { completion in
+            completion(Data(node.path.utf8), nil)
+            return nil
+        }
+        return provider
+    }
+
+    /// Handle a drop of a dragged tree node into `destinationFolder` ("" =
+    /// root). Reads the dragged path, resolves whether it's a directory from the
+    /// recorded source, and routes through the SAME `moveEntry` wrapper the
+    /// commands use (spec §U2-5: "drop calls exactly `move_file`/`move_folder`
+    /// — the commands are the source of truth"). Rejects a no-op (already in the
+    /// destination) and a folder-into-own-subtree drop (the backend also
+    /// guards, but rejecting early avoids a wasted round-trip + error alert).
+    private func handleDrop(_ providers: [NSItemProvider], into destinationFolder: String) -> Bool {
+        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(Self.nodeUTType) })
+        else { return false }
+        provider.loadDataRepresentation(forTypeIdentifier: Self.nodeUTType) { data, _ in
+            guard let data, let path = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor in
+                let isDir = appState.dragSourceNode?.path == path
+                    ? (appState.dragSourceNode?.isDirectory ?? false)
+                    : false
+                appState.dragSourceNode = nil
+                // No-op: already directly in the destination folder.
+                let currentParent = AppState.TreeMutation.parentPath(of: path) ?? ""
+                if currentParent == destinationFolder { return }
+                // Folder into its own subtree (or onto itself) — reject early.
+                if isDir, AppState.pathIsWithin(destinationFolder, path: path, isDirectory: true) {
+                    return
+                }
+                appState.moveEntry(path: path, isDirectory: isDir, to: destinationFolder)
+            }
+        }
+        return true
     }
 
     /// Inline "Loading…" row shown under a folder whose children are being
@@ -1019,5 +1321,78 @@ struct FileTreeSidebar: View {
     private func relativeDate(for mtimeMs: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(mtimeMs) / 1000)
         return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// The inline rename TextField swapped into a tree row while renaming (U2-5).
+///
+/// - Auto-focuses on appear and selects the base name (a file's extension is
+///   left out of the selection so Return-to-keep-extension is one keystroke —
+///   spec §U2-5: "current name with extension excluded from the initial
+///   selection for files").
+/// - Return commits (`onCommit`); Esc cancels (`onCancel`). A focus loss also
+///   commits (matches Finder), so clicking away doesn't silently lose the edit.
+/// - Kept a separate `View` with its own `@State`/`@FocusState` so the field's
+///   local text isn't a `@Published` on AppState mutated during a view update
+///   (#448 discipline) — the commit is the only mutation point that reaches
+///   AppState.
+private struct RenameField: View {
+    let initialName: String
+    let isDirectory: Bool
+    /// The last commit error (collision / invalid name), if any — drives the
+    /// field's error styling. The message itself renders in the parent row.
+    let error: String?
+    let onCommit: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var text: String = ""
+    @State private var didSeed = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Name", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .font(.body)
+            .focused($focused)
+            .accessibilityLabel(isDirectory ? "Folder name" : "File name")
+            .accessibilityHint("Type a new name. Return renames; Escape cancels.")
+            .onSubmit { onCommit(text) }
+            .onExitCommand { onCancel() }
+            .onChange(of: focused) { _, isFocused in
+                // Commit on focus loss (click-away) — but not on the initial
+                // pre-focus render, and not while an error keeps us focused.
+                if !isFocused && didSeed && error == nil {
+                    onCommit(text)
+                }
+            }
+            .onAppear {
+                if !didSeed {
+                    text = initialName
+                    didSeed = true
+                }
+                focused = true
+                selectBaseName()
+            }
+    }
+
+    /// Select the editable portion of the name: the whole thing for a folder,
+    /// the stem (sans extension) for a file. Reaches into the AppKit field
+    /// editor after focus lands — SwiftUI has no partial-selection API.
+    private func selectBaseName() {
+        DispatchQueue.main.async {
+            guard let window = NSApp?.keyWindow,
+                let editor = window.firstResponder as? NSTextView
+            else { return }
+            let ns = initialName as NSString
+            let extLength = (ns.pathExtension as NSString).length
+            let end: Int
+            if !isDirectory, extLength > 0, ns.length > extLength + 1 {
+                // Stop the selection just before the ".ext".
+                end = ns.length - extLength - 1
+            } else {
+                end = ns.length
+            }
+            editor.setSelectedRange(NSRange(location: 0, length: end))
+        }
     }
 }

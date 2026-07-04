@@ -362,6 +362,41 @@ struct MainSplitView: View {
             CitationSummarySheet()
                 .environmentObject(appState)
         }
+        // Move-to-folder picker (U2-5, #463). Presented when a rename/move
+        // command sets `pendingMove`; the sheet's own commit/cancel clears it.
+        .sheet(
+            isPresented: Binding(
+                get: { appState.pendingMove != nil },
+                set: { presented in
+                    if !presented { appState.pendingMove = nil }
+                }
+            )
+        ) {
+            if let move = appState.pendingMove {
+                MoveToFolderSheet(move: move)
+                    .environmentObject(appState)
+            }
+        }
+        // Link-rewrite partial-failure alert (U2-5, #463). A move/rename stood
+        // but some notes' links to it couldn't be updated — list exactly which,
+        // never silent (spec §U2-5).
+        .alert(
+            structuralFailureTitle,
+            isPresented: Binding(
+                get: { appState.structuralFailureReport != nil },
+                set: { presented in
+                    if !presented { appState.structuralFailureReport = nil }
+                }
+            ),
+            presenting: appState.structuralFailureReport
+        ) { _ in
+            Button("OK", role: .cancel) {
+                appState.structuralFailureReport = nil
+                alertFocusReturn = .editor
+            }
+        } message: { report in
+            Text(structuralFailureMessage(report))
+        }
         .onAppear {
             postAccessibilityAnnouncement(
                 "Vault \(vaultTitle) opened. Scanning files for the sidebar."
@@ -564,5 +599,32 @@ struct MainSplitView: View {
 
     private var vaultTitle: String {
         appState.currentVaultURL?.lastPathComponent ?? "Vault"
+    }
+
+    // MARK: - Structural-failure alert (U2-5, #463)
+
+    /// Title for the link-rewrite partial-failure alert. Uses the report's verb
+    /// + name so the user knows which mutation partially failed.
+    private var structuralFailureTitle: String {
+        guard let report = appState.structuralFailureReport else {
+            return "Couldn't update some links"
+        }
+        return "Couldn't update links after \(report.verb) of \(report.name)"
+    }
+
+    /// Body listing exactly the notes whose links couldn't be updated (spec
+    /// §U2-5: "a specific alert listing skipped files — never silent"). When the
+    /// report carries no skipped files (a plain move/rename error surfaced via
+    /// this path), fall back to `lastError`.
+    private func structuralFailureMessage(_ report: AppState.StructuralFailureReport) -> String {
+        guard !report.skipped.isEmpty else {
+            return appState.lastError
+                ?? "The \(report.verb) could not be completed."
+        }
+        let list = report.skipped.joined(separator: "\n• ")
+        let count = report.skipped.count
+        return "The \(report.verb) succeeded, but links in "
+            + "\(count) \(count == 1 ? "note" : "notes") couldn't be updated "
+            + "(they may have been edited externally):\n\n• \(list)"
     }
 }

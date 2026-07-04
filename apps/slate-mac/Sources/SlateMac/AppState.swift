@@ -250,6 +250,66 @@ final class AppState: ObservableObject {
     /// off the load whenever it changes.
     @Published var selectedFilePath: String?
 
+    // MARK: File-management command state (U2-5, #463)
+
+    /// The most recent structural mutation the tree sidebar must react to
+    /// (create/rename/move/delete). `FileTreeSidebar` observes this and drives
+    /// its view-owned `FileTreeViewModel` — `treeInvalidation` for the affected
+    /// levels, then `postMutationFocus` (U2-6) to move the selection. AppState
+    /// owns the mutation funnel but not the tree VM (which is a `@StateObject`
+    /// in the view, per U2-4), so this published seam is how the two connect —
+    /// the same shape `selectedFilePath` uses to drive the tree.
+    ///
+    /// A monotonically-bumped `token` guarantees `.onChange` fires even when two
+    /// mutations produce an equal event payload (e.g. two creates into root).
+    @Published private(set) var treeMutation: TreeMutation?
+
+    /// Surfaced when a structural mutation's link-rewrite pass left one or more
+    /// files un-rewritten (`StructuralReport.failed`): the move/rename itself
+    /// stood, but some notes' links to it couldn't be updated (an external edit
+    /// raced us, malformed frontmatter, …). Drives a SPECIFIC alert listing the
+    /// skipped files — never a silent drop (spec §U2-5 "surface … in a specific
+    /// alert listing skipped files").
+    @Published var structuralFailureReport: StructuralFailureReport?
+
+    /// The tab currently in inline-rename mode in the tree, if any (U2-5). The
+    /// tree row swaps its label for a `TextField` while this matches the row's
+    /// node. Nil = no rename in progress. Set by the rename command, cleared on
+    /// commit/cancel.
+    @Published var renamingNode: RenamingNode?
+
+    /// Drives the Move-to-folder sheet (U2-5). Non-nil = the sheet is up,
+    /// carrying the node being moved. Cleared on commit/cancel.
+    @Published var pendingMove: PendingMove?
+
+    /// The tree's currently-selected node (file OR folder), mirrored from
+    /// `FileTreeSidebar` so the file-management COMMANDS (which run from the
+    /// palette / menu with no row context) know what to act on. A file
+    /// selection also lives in `selectedFilePath`; folders have no other home,
+    /// so this is the single source the commands read. Nil = nothing selected
+    /// (commands that need a target no-op or fall back to the vault root).
+    @Published var treeSelectedNode: TreeSelection?
+
+    /// A tree selection the file-management commands act on (U2-5).
+    struct TreeSelection: Equatable {
+        let path: String
+        let isDirectory: Bool
+    }
+
+    /// The node currently being dragged in the tree (U2-5 drag & drop), recorded
+    /// when a drag starts so the drop handler knows whether it's a directory
+    /// (the drag payload carries only the path). Transient; cleared on drop.
+    @Published var dragSourceNode: TreeSelection?
+
+    /// The folder a new note/folder should be created in, given the current
+    /// tree selection: the selected folder itself, a selected file's parent
+    /// folder, or the vault root ("") when nothing is selected. Command-facing.
+    var creationParentPath: String {
+        guard let node = treeSelectedNode else { return "" }
+        if node.isDirectory { return node.path }
+        return TreeMutation.parentPath(of: node.path) ?? ""
+    }
+
     /// The workspace shell (Milestone U1): split tree → tab groups → tabs.
     /// AppState's single-note fields hold the ACTIVE tab's document; parked
     /// tabs live in `workspace.documents` (U1-2 snapshot/restore — see the
@@ -4371,6 +4431,648 @@ final class AppState: ObservableObject {
     /// stays true so the indicator and dirty-gate remain active.
     func resolveSaveConflictCancel() {
         currentSaveConflict = nil
+    }
+
+    // MARK: - File management (U2-5, #463)
+
+    /// A structural mutation the tree must react to. Carries the *primary*
+    /// post-mutation path (the created/renamed/moved node's new path; nil for a
+    /// delete) plus the parent path(s) whose levels changed, so
+    /// `FileTreeViewModel` can invalidate exactly the touched levels and then
+    /// compute the post-mutation focus target (U2-6). `token` makes the seam
+    /// edge-trigger even when two mutations are otherwise equal.
+    struct TreeMutation: Equatable {
+        enum Kind: Equatable {
+            /// A folder was created at `path` (parent = its parent level).
+            case createFolder(path: String)
+            /// A note was created at `path` (parent = its parent level).
+            case createNote(path: String)
+            /// `oldPath` → `newPath`, same parent level.
+            case rename(oldPath: String, newPath: String)
+            /// `oldPath` → `newPath`; source + destination parent levels both
+            /// change (`newParent` is "" for the vault root).
+            case move(oldPath: String, newPath: String, oldParent: String, newParent: String)
+            /// `path` was deleted; `parent` is the level it left ("" = root).
+            case delete(path: String, parent: String, wasDirectory: Bool)
+        }
+
+        let token: Int
+        let kind: Kind
+        /// The op's rewritten-file count (distinct files whose links were
+        /// updated) — U2-6's ", updated links in N notes." suffix reads this.
+        let rewrittenCount: Int
+
+        /// The parent-level paths this mutation dirtied (nil = the vault root
+        /// level). The tree invalidates each. A move dirties two; everything
+        /// else dirties one.
+        var affectedParents: [String?] {
+            switch kind {
+            case let .createFolder(path), let .createNote(path):
+                return [Self.parentPath(of: path)]
+            case let .rename(oldPath, _):
+                return [Self.parentPath(of: oldPath)]
+            case let .move(_, _, oldParent, newParent):
+                return [Self.normalizedParent(oldParent), Self.normalizedParent(newParent)]
+            case let .delete(path, _, _):
+                return [Self.parentPath(of: path)]
+            }
+        }
+
+        /// The parent path of a vault-relative path, or nil if it's a root-level
+        /// entry (whose parent is the vault root).
+        static func parentPath(of path: String) -> String? {
+            guard let slash = path.lastIndex(of: "/") else { return nil }
+            return String(path[path.startIndex..<slash])
+        }
+
+        /// "" (the root sentinel used by the mutation API) maps to nil (the
+        /// tree's root level); any other parent stays as-is.
+        static func normalizedParent(_ parent: String) -> String? {
+            parent.isEmpty ? nil : parent
+        }
+    }
+
+    /// A link-rewrite partial failure surfaced to the user (spec §U2-5). The
+    /// mutation succeeded; `skipped` lists the notes whose links to it could not
+    /// be updated. `verb`/`name` build the alert title.
+    struct StructuralFailureReport: Identifiable, Equatable {
+        let id = UUID()
+        let verb: String
+        let name: String
+        let skipped: [String]
+    }
+
+    /// A tree node in inline-rename mode (U2-5).
+    struct RenamingNode: Equatable {
+        let path: String
+        let isDirectory: Bool
+        /// The current final component (the field's initial text).
+        var name: String { (path as NSString).lastPathComponent }
+    }
+
+    /// The node whose Move-to-folder sheet is open (U2-5).
+    struct PendingMove: Equatable, Identifiable {
+        let path: String
+        let isDirectory: Bool
+        var id: String { path }
+        var name: String { (path as NSString).lastPathComponent }
+    }
+
+    /// True while any structural mutation FFI call is in flight — serializes the
+    /// commands (the session lock does too, but this stops the UI from firing a
+    /// second mutation before the first's tree refresh lands).
+    private var isMutatingStructure = false
+
+    /// Monotone token backing `TreeMutation.token`.
+    private var treeMutationCounter = 0
+
+    /// The most recent structural-mutation task kicked off by a COMMAND entry
+    /// point (`newNoteCommand`, `newFolderCommand`, `deleteSelectedCommand`, …).
+    /// Command actions run through the registry and can't return their Task, so
+    /// this handle lets tests `await` the mutation deterministically — the same
+    /// role `scanTask`/`noteLoadTask` play for their flows.
+    private(set) var pendingStructuralTaskForTesting: Task<Void, Never>?
+
+    /// Publish a tree mutation to the sidebar seam, bumping the edge-trigger
+    /// token. Also fires the U2-6 announcement (`postMutationAnnouncement`,
+    /// filled in that PR; a no-op stub until then).
+    private func publishTreeMutation(_ kind: TreeMutation.Kind, rewrittenCount: Int) {
+        treeMutationCounter += 1
+        treeMutation = TreeMutation(
+            token: treeMutationCounter, kind: kind, rewrittenCount: rewrittenCount)
+    }
+
+    /// Turn a `StructuralReport.failed` list into the user-facing skipped-files
+    /// alert, if non-empty. Never silent (spec §U2-5).
+    private func surfaceStructuralFailures(
+        _ report: StructuralReport, verb: String, name: String
+    ) {
+        guard !report.failed.isEmpty else { return }
+        structuralFailureReport = StructuralFailureReport(
+            verb: verb, name: name,
+            skipped: report.failed.map(\.path).sorted())
+    }
+
+    /// The count of DISTINCT files whose links a report rewrote — the number
+    /// U2-6's ", updated links in N notes." suffix announces.
+    static func distinctRewrittenCount(_ report: StructuralReport) -> Int {
+        Set(report.rewritten.map(\.path)).count
+    }
+
+    /// Announce a completed structural mutation to VoiceOver (spec §U2-6). The
+    /// wrappers build the verbatim sentence; this seam routes it.
+    ///
+    /// U2-5 ships this as a no-op stub — the mutation funnel and the sentence-
+    /// building are in place, but the announcement *routing* (and the focus-
+    /// preservation that goes with it) land in U2-6, which replaces this body
+    /// with a `postAccessibilityAnnouncement(_:priority:)` call and adds the
+    /// verbatim-string tests. Keeping the call sites here from U2-5 means U2-6
+    /// is a one-method change with no wrapper churn.
+    func postMutationAnnouncement(_ message: String) {
+        // U2-6 fills this in. Stub: no announcement yet.
+    }
+
+    // MARK: Create
+
+    /// Create a new folder named `name` inside `parent` ("" = vault root). On
+    /// success: refreshes the affected tree level + selects the new row (U2-6),
+    /// announces, and — never silently — surfaces any link-rewrite failures
+    /// (a create has none, but the discipline is uniform). A collision /
+    /// invalid name surfaces through `lastError` (the tree's create affordance
+    /// has no inline field; the palette/menu path reports via the alert).
+    @discardableResult
+    func createFolder(name: String, in parent: String) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        let path = Self.joinVaultPath(parent, name)
+        isMutatingStructure = true
+        let task = Task { [weak self] in
+            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do { return .success(try session.createFolder(path: path)) }
+                catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success(let report):
+                self.publishTreeMutation(
+                    .createFolder(path: path),
+                    rewrittenCount: Self.distinctRewrittenCount(report))
+                self.postMutationAnnouncement(
+                    "Created folder \((path as NSString).lastPathComponent).")
+            case .failure(let error):
+                self.lastError = self.humanReadable(error)
+            }
+            self.isMutatingStructure = false
+        }
+        return task
+    }
+
+    /// Create a new untitled note inside `parent` ("" = vault root), open it in
+    /// the current tab, and put the tree row into inline-rename mode with the
+    /// title selected (spec §U2-5: "creates 'Untitled.md' … opens it, selects
+    /// title for rename"). Collisions auto-suffix ("Untitled 2.md", …) so ⌘N is
+    /// never a dead end.
+    @discardableResult
+    func createNote(in parent: String) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        isMutatingStructure = true
+        // Compute a non-colliding name against the known file set. The backend
+        // still guards the collision (DestinationExists) — this just spares the
+        // user a failure on the common "several untitled notes" flow.
+        let name = uniqueUntitledName(in: parent)
+        let path = Self.joinVaultPath(parent, name)
+        let task = Task { [weak self] in
+            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    // A new note is an empty file; save_text creates it + indexes
+                    // it. create_folder's sibling for files is just a write.
+                    _ = try session.saveText(path: path, contents: "", expectedContentHash: nil)
+                    return .success(
+                        StructuralReport(opId: 0, moved: [], rewritten: [], failed: []))
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success:
+                self.publishTreeMutation(.createNote(path: path), rewrittenCount: 0)
+                self.postMutationAnnouncement(
+                    "Created note \((path as NSString).lastPathComponent).")
+                // Refresh the flat file list so the row exists, then open it.
+                await self.loadFiles()
+                self.openFile(path, target: .currentTab)
+                // Drop the user straight into renaming the fresh note's title.
+                self.renamingNode = RenamingNode(path: path, isDirectory: false)
+            case .failure(let error):
+                self.lastError = self.humanReadable(error)
+            }
+            self.isMutatingStructure = false
+        }
+        return task
+    }
+
+    // MARK: Rename
+
+    /// Rename the file or folder at `path` to `newName` (a single path
+    /// component). On success: retargets any open tab holding the file (or a
+    /// descendant of the folder) so it follows the move, refreshes the tree
+    /// level + keeps the renamed row selected (U2-6), announces (incl. the
+    /// links-updated suffix), and surfaces any per-file rewrite failures. A
+    /// collision / invalid name is returned via `structuralRenameError` so the
+    /// inline field can show it and keep focus (spec §U2-5).
+    @discardableResult
+    func renameEntry(path: String, isDirectory: Bool, to newName: String) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        isMutatingStructure = true
+        structuralRenameError = nil
+        let task = Task { [weak self] in
+            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    let report =
+                        isDirectory
+                        ? try session.renameFolder(path: path, newName: newName)
+                        : try session.renameFile(path: path, newName: newName)
+                    return .success(report)
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success(let report):
+                let newPath = Self.siblingPath(of: path, newName: newName)
+                self.applyRetargets(report, movedFrom: path, movedTo: newPath, isDirectory: isDirectory)
+                self.renamingNode = nil
+                self.publishTreeMutation(
+                    .rename(oldPath: path, newPath: newPath),
+                    rewrittenCount: Self.distinctRewrittenCount(report))
+                self.postMutationAnnouncement(
+                    self.mutationSentence(
+                        "Renamed \((path as NSString).lastPathComponent) to \(newName).",
+                        report: report))
+                self.surfaceStructuralFailures(
+                    report, verb: "rename", name: (path as NSString).lastPathComponent)
+                await self.loadFiles()
+            case .failure(let error):
+                // Keep the inline field open + focused with a specific message.
+                self.structuralRenameError = self.humanReadable(error)
+            }
+            self.isMutatingStructure = false
+        }
+        return task
+    }
+
+    /// Surfaced when `renameEntry` fails (collision / invalid name). The inline
+    /// rename field renders this below itself and keeps focus (never silent).
+    @Published var structuralRenameError: String?
+
+    // MARK: Move
+
+    /// Move the file or folder at `path` under `newParent` ("" = vault root).
+    /// Same success handling as rename (retarget open tabs, refresh both
+    /// affected levels, announce, surface failures). A collision / invalid
+    /// destination (incl. moving a folder into its own subtree) surfaces via the
+    /// skipped-files alert path's sibling — the move error alert.
+    @discardableResult
+    func moveEntry(path: String, isDirectory: Bool, to newParent: String) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        isMutatingStructure = true
+        let task = Task { [weak self] in
+            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    let report =
+                        isDirectory
+                        ? try session.moveFolder(path: path, newParent: newParent)
+                        : try session.moveFile(path: path, newParent: newParent)
+                    return .success(report)
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success(let report):
+                let newPath = Self.joinVaultPath(newParent, (path as NSString).lastPathComponent)
+                let oldParent = TreeMutation.parentPath(of: path) ?? ""
+                self.applyRetargets(report, movedFrom: path, movedTo: newPath, isDirectory: isDirectory)
+                self.pendingMove = nil
+                self.publishTreeMutation(
+                    .move(
+                        oldPath: path, newPath: newPath,
+                        oldParent: oldParent, newParent: newParent),
+                    rewrittenCount: Self.distinctRewrittenCount(report))
+                self.postMutationAnnouncement(
+                    self.mutationSentence(
+                        "Moved \((path as NSString).lastPathComponent) to "
+                            + "\(newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent).",
+                        report: report))
+                self.surfaceStructuralFailures(
+                    report, verb: "move", name: (path as NSString).lastPathComponent)
+                await self.loadFiles()
+            case .failure(let error):
+                // A move has no inline field — report through the alert path.
+                self.structuralFailureReport = StructuralFailureReport(
+                    verb: "move", name: (path as NSString).lastPathComponent,
+                    skipped: [])
+                self.lastError = self.humanReadable(error)
+            }
+            self.isMutatingStructure = false
+        }
+        return task
+    }
+
+    // MARK: Delete
+
+    /// Send the file or folder at `path` to the system trash. Any open tab
+    /// holding the file (or a descendant of the folder) flips to the missing-
+    /// file error state (spec §U2-5). Refreshes the parent level + moves the
+    /// selection to the next sibling / prev / parent (U2-6), and announces.
+    @discardableResult
+    func deleteEntry(path: String, isDirectory: Bool) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        isMutatingStructure = true
+        // Snapshot which open tabs point at the doomed path(s) BEFORE the delete
+        // so the active-tab error flip and the parked-doc drop are exact.
+        let deletedActive = self.loadedFilePath.map { Self.pathIsWithin($0, path: path, isDirectory: isDirectory) } ?? false
+        let task = Task { [weak self] in
+            let outcome: Result<Void, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    if isDirectory { try session.deleteFolder(path: path) }
+                    else { try session.deleteFile(path: path) }
+                    return .success(())
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success:
+                // Flip open tabs to the error state. The ACTIVE tab's document
+                // lives in AppState's fields; parked tabs drop so re-activation
+                // re-reads from disk and fails into `noteLoadError`.
+                self.dropOpenTabsForDeletedPath(path, isDirectory: isDirectory, activeWasDeleted: deletedActive)
+                let parent = TreeMutation.parentPath(of: path) ?? ""
+                self.publishTreeMutation(
+                    .delete(path: path, parent: parent, wasDirectory: isDirectory),
+                    rewrittenCount: 0)
+                self.postMutationAnnouncement(
+                    "Moved \((path as NSString).lastPathComponent) to Trash.")
+                await self.loadFiles()
+            case .failure(let error):
+                self.lastError = self.humanReadable(error)
+            }
+            self.isMutatingStructure = false
+        }
+        return task
+    }
+
+    /// Create a folder (auto-suffixed to avoid a collision) inside `parent`,
+    /// then move `movePath` into it — the "New Folder…" row of the Move sheet.
+    /// Chains the two mutations so the picker flow is atomic from the user's
+    /// view. On a create failure the move is skipped and the error surfaces.
+    @discardableResult
+    func createFolderThenMove(
+        newFolderName: String, in parent: String, movePath: String, isDirectory: Bool
+    ) -> Task<Void, Never>? {
+        guard isVaultOpen else { return nil }
+        // Suffix the name against the known set so the create doesn't collide.
+        let suffixed = uniqueName(
+            base: newFolderName, ext: nil, siblingsIn: parent)
+        let newFolderPath = Self.joinVaultPath(parent, suffixed)
+        return Task { [weak self] in
+            guard let self else { return }
+            await self.createFolder(name: suffixed, in: parent)?.value
+            guard self.currentSession != nil, self.lastError == nil else { return }
+            await self.moveEntry(path: movePath, isDirectory: isDirectory, to: newFolderPath)?.value
+        }
+    }
+
+    /// Generic non-colliding-name helper: `base`(+`.ext`), then `base N`(+ext).
+    /// `siblingsIn` scopes the collision check to one parent level (files +
+    /// derived folder names). Used by note/folder creation + the move-new-folder
+    /// flow so the auto-naming rule is single-source.
+    private func uniqueName(base: String, ext: String?, siblingsIn parent: String) -> String {
+        let prefix = parent.isEmpty ? "" : parent + "/"
+        var siblings: Set<String> = []
+        for file in files where file.path.hasPrefix(prefix) {
+            let rest = String(file.path.dropFirst(prefix.count))
+            if let slash = rest.firstIndex(of: "/") {
+                siblings.insert(String(rest[rest.startIndex..<slash]).lowercased())
+            } else {
+                siblings.insert(rest.lowercased())
+            }
+        }
+        func candidate(_ n: Int?) -> String {
+            let stem = n.map { "\(base) \($0)" } ?? base
+            return ext.map { "\(stem).\($0)" } ?? stem
+        }
+        if !siblings.contains(candidate(nil).lowercased()) { return candidate(nil) }
+        var n = 2
+        while siblings.contains(candidate(n).lowercased()) { n += 1 }
+        return candidate(n)
+    }
+
+    // MARK: Retarget / error-flip helpers
+
+    /// Retarget open tabs after a rename/move: the moved node itself, and — for
+    /// a folder — every open descendant path (they moved with the folder). Uses
+    /// the report's `moved` list (authoritative: it's exactly the files whose
+    /// path changed) so multi-file folder moves retarget precisely.
+    private func applyRetargets(
+        _ report: StructuralReport, movedFrom: String, movedTo: String, isDirectory: Bool
+    ) {
+        if isDirectory {
+            // Folder: retarget each moved file by its own old→new mapping.
+            for m in report.moved {
+                let changed = workspace.retarget(old: m.oldPath, new: m.newPath)
+                rebindActiveIfRetargeted(changed, to: m.newPath)
+            }
+            // The report's `moved` only lists FILES; if the active buffer is a
+            // file under the folder it's covered above. Nothing else to do —
+            // folders don't have buffers.
+        } else {
+            let changed = workspace.retarget(old: movedFrom, new: movedTo)
+            rebindActiveIfRetargeted(changed, to: movedTo)
+        }
+    }
+
+    /// If the ACTIVE tab was among the retargeted set, rebind AppState's live
+    /// fields to the new path (the active document lives here, not in
+    /// `workspace.documents`, so `WorkspaceState.retarget` couldn't touch it).
+    private func rebindActiveIfRetargeted(_ changed: [TabID], to newPath: String) {
+        guard let activeID = workspace.model.activeGroup.activeTabID,
+            changed.contains(activeID)
+        else { return }
+        loadedFilePath = newPath
+        if selectedFilePath != newPath { selectedFilePath = newPath }
+    }
+
+    /// After a successful delete, flip open tabs pointing at the removed path
+    /// to the missing-file error state. The active tab: clear its buffer + set
+    /// `noteLoadError` (NoteContentView then renders its error pane). Parked
+    /// tabs: drop their document so re-activation re-reads and fails into the
+    /// same error state.
+    private func dropOpenTabsForDeletedPath(
+        _ path: String, isDirectory: Bool, activeWasDeleted: Bool
+    ) {
+        // Parked tabs whose path is within the deleted subtree.
+        for tab in workspace.model.allTabs {
+            guard case .markdown(let tabPath) = tab.item,
+                Self.pathIsWithin(tabPath, path: path, isDirectory: isDirectory)
+            else { continue }
+            _ = workspace.invalidateParkedDocuments(forPath: tabPath)
+        }
+        if activeWasDeleted {
+            let deletedName = loadedFilePath.map { ($0 as NSString).lastPathComponent }
+            cancelNoteScopedWork()
+            currentNoteText = nil
+            savedBaselineText = nil
+            currentNoteContentHash = nil
+            hasUnsavedChanges = false
+            currentNoteHeadings = []
+            loadedFilePath = nil
+            noteLoadError =
+                "\(deletedName ?? "This note") was moved to Trash and is no longer available."
+        }
+    }
+
+    // MARK: Path helpers
+
+    /// Join a parent path ("" = root) and a final component into a vault path.
+    static func joinVaultPath(_ parent: String, _ name: String) -> String {
+        parent.isEmpty ? name : "\(parent)/\(name)"
+    }
+
+    /// The sibling path of `path` with its final component replaced by `newName`.
+    static func siblingPath(of path: String, newName: String) -> String {
+        let parent = TreeMutation.parentPath(of: path) ?? ""
+        return joinVaultPath(parent, newName)
+    }
+
+    /// Whether `candidate` is `path` itself, or (when `path` is a folder) a
+    /// descendant of it. Used to decide which open tabs a delete/rename affects.
+    static func pathIsWithin(_ candidate: String, path: String, isDirectory: Bool) -> Bool {
+        if candidate == path { return true }
+        guard isDirectory else { return false }
+        return candidate.hasPrefix(path + "/")
+    }
+
+    /// Build a non-colliding "Untitled.md" / "Untitled N.md" for a fresh note in
+    /// `parent`, checking the known file set (case-insensitively). The backend
+    /// re-checks; this just avoids the common repeat-⌘N collision.
+    private func uniqueUntitledName(in parent: String) -> String {
+        let existing = Set(
+            files.map { ($0.path as NSString).lastPathComponent.lowercased() })
+        if !existing.contains("untitled.md") { return "Untitled.md" }
+        var n = 2
+        while existing.contains("untitled \(n).md") { n += 1 }
+        return "Untitled \(n).md"
+    }
+
+    /// Append U2-6's ", updated links in N notes." suffix to a mutation
+    /// sentence when the report rewrote links; otherwise return the base.
+    /// (U2-6 fills the announcement *routing*; the suffix logic is shared here
+    /// so rename/move build one sentence.)
+    private func mutationSentence(_ base: String, report: StructuralReport) -> String {
+        let n = Self.distinctRewrittenCount(report)
+        guard n > 0 else { return base }
+        // "Renamed a.md to b.md" (drop trailing period) + suffix.
+        let trimmed = base.hasSuffix(".") ? String(base.dropLast()) : base
+        return "\(trimmed), updated links in \(n) \(n == 1 ? "note" : "notes")."
+    }
+
+    // MARK: Command entry points (palette + menu → tree selection)
+
+    /// ⌘N — create a new note in the selection's folder (or root) and open it
+    /// for renaming. The command-surface funnel for `createNote(in:)`.
+    func newNoteCommand() {
+        guard isVaultOpen else { return }
+        pendingStructuralTaskForTesting = createNote(in: creationParentPath)
+    }
+
+    /// Context-menu / palette "New Folder…". Opens an inline-named folder in the
+    /// selection's parent. Uses a placeholder name the user then renames — the
+    /// tree has no create-time field, so we create "Untitled Folder" and drop
+    /// straight into rename, mirroring the new-note flow.
+    func newFolderCommand() {
+        guard isVaultOpen else { return }
+        newFolderInContext(parent: creationParentPath)
+    }
+
+    /// Create a new folder in an EXPLICIT parent (the context-menu path, which
+    /// targets the right-clicked folder rather than the current selection), then
+    /// drop into inline rename of the new folder.
+    func newFolderInContext(parent: String) {
+        guard isVaultOpen else { return }
+        let name = uniqueUntitledFolderName(in: parent)
+        let path = Self.joinVaultPath(parent, name)
+        let task = createFolder(name: name, in: parent)
+        // After the create lands, drop into inline rename of the new folder.
+        pendingStructuralTaskForTesting = Task { [weak self] in
+            await task?.value
+            guard let self, self.currentSession != nil else { return }
+            // Only enter rename if the create actually succeeded (no error).
+            if self.lastError == nil {
+                self.renamingNode = RenamingNode(path: path, isDirectory: true)
+            }
+        }
+    }
+
+    /// ⌘⌥R — rename the selected node. Enters inline-rename mode (the tree row
+    /// swaps to a field); the actual FFI call fires on commit via `renameEntry`.
+    func renameSelectedCommand() {
+        guard isVaultOpen, let node = treeSelectedNode else { return }
+        structuralRenameError = nil
+        renamingNode = RenamingNode(path: node.path, isDirectory: node.isDirectory)
+    }
+
+    /// ⌘⇧M — open the Move-to-folder sheet for the selected node.
+    func moveSelectedCommand() {
+        guard isVaultOpen, let node = treeSelectedNode else { return }
+        pendingMove = PendingMove(path: node.path, isDirectory: node.isDirectory)
+    }
+
+    /// ⌘⌫ (tree-focused) / context-menu "Move to Trash" — delete the selected
+    /// node. The command-surface funnel for `deleteEntry`.
+    func deleteSelectedCommand() {
+        guard isVaultOpen, let node = treeSelectedNode else { return }
+        pendingStructuralTaskForTesting = deleteEntry(path: node.path, isDirectory: node.isDirectory)
+    }
+
+    /// Every folder path in the vault (vault-relative, sorted case-insensitive,
+    /// dirs-first order from the API), for the Move-to-folder picker. Walks
+    /// `list_dir_children` recursively off the main actor. The vault root is NOT
+    /// included as a path here — the picker adds a "Vault root" row (path "")
+    /// explicitly. Empty folders ARE included (they're real move targets).
+    func loadAllFolders() async -> [String] {
+        guard let session = currentSession else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            var out: [String] = []
+            var queue: [String] = [""]
+            // Bound the walk defensively against a pathological vault so the
+            // picker can't hang; realistic vaults are far under this.
+            var visited = 0
+            let cap = 50_000
+            while !queue.isEmpty, visited < cap {
+                let parent = queue.removeFirst()
+                visited += 1
+                guard
+                    let listing = try? session.listDirChildren(
+                        parentPath: parent,
+                        paging: Paging(cursor: nil, limit: 5000))
+                else { continue }
+                for dir in listing.dirs {
+                    out.append(dir.path)
+                    queue.append(dir.path)
+                }
+            }
+            return out
+        }.value
+    }
+
+    /// A non-colliding "Untitled Folder" / "Untitled Folder N" for `parent`.
+    private func uniqueUntitledFolderName(in parent: String) -> String {
+        // Folders aren't in `files`; derive existing sibling folder names from
+        // the file set's path prefixes under `parent`.
+        let prefix = parent.isEmpty ? "" : parent + "/"
+        let siblingDirs: Set<String> = Set(
+            files.compactMap { file -> String? in
+                guard file.path.hasPrefix(prefix) else { return nil }
+                let rest = String(file.path.dropFirst(prefix.count))
+                guard let slash = rest.firstIndex(of: "/") else { return nil }
+                return String(rest[rest.startIndex..<slash]).lowercased()
+            })
+        if !siblingDirs.contains("untitled folder") { return "Untitled Folder" }
+        var n = 2
+        while siblingDirs.contains("untitled folder \(n)") { n += 1 }
+        return "Untitled Folder \(n)"
     }
 
     // MARK: - Property edits (Milestone I)

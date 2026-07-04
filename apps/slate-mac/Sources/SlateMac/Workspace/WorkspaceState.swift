@@ -122,6 +122,71 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    // MARK: Retarget (U2-5 file rename/move follow)
+
+    /// The single mutation point for an open file whose PATH changed on disk —
+    /// rename, move, or an ancestor folder moving (U2-5, #463). Every tab
+    /// holding `.markdown(old)` is rewritten to `.markdown(new)` (tab identity,
+    /// order, and focus preserved), and every matching parked `NoteDocument` is
+    /// rebound to the new path with its buffer/dirty/hash/baseline state carried
+    /// over — the FILE moved, the in-memory buffer is still valid, and the
+    /// content-hash conflict machinery stays correct because the hash travels
+    /// with the CONTENT, not the path.
+    ///
+    /// Returns the ids of the tabs that were retargeted. AppState uses this to
+    /// tell whether the ACTIVE tab (whose document lives in AppState's fields,
+    /// not in `documents`) was among them, so it can rebind `loadedFilePath` /
+    /// `selectedFilePath` to the new path in the same turn.
+    ///
+    /// A no-op (`old == new`, or the file isn't open anywhere) returns `[]`.
+    @discardableResult
+    func retarget(old: String, new: String) -> [TabID] {
+        guard old != new else { return [] }
+        let changed = model.retargetItem(
+            from: .markdown(path: old), to: .markdown(path: new))
+        // Rebind parked documents: `NoteDocument.path` is a `let`, so a moved
+        // file gets a fresh document that inherits the old one's buffer state.
+        // Only tabs that were actually retargeted are touched (the ACTIVE tab
+        // has no `documents` entry while active — AppState owns its fields).
+        for tabID in changed {
+            guard let old = documents[tabID] else { continue }
+            let rebound = NoteDocument(id: tabID, path: new)
+            rebound.text = old.text
+            rebound.savedBaselineText = old.savedBaselineText
+            rebound.contentHash = old.contentHash
+            rebound.hasUnsavedChanges = old.hasUnsavedChanges
+            rebound.saveError = old.saveError
+            rebound.saveConflict = old.saveConflict
+            rebound.hasLoaded = old.hasLoaded
+            documents[tabID] = rebound
+        }
+        assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
+        return changed
+    }
+
+    /// Close every tab (across all groups) whose item is `.markdown(path)` —
+    /// the workspace half of a DELETE of an open file (U2-5, #463). Returns the
+    /// ids of the tabs that were closed, plus whether the ACTIVE tab was among
+    /// them (so AppState can flip its live fields to the missing-file error
+    /// state). Tabs pointing elsewhere are untouched.
+    ///
+    /// NOTE: the spec's chosen behavior for delete-while-open is to flip the tab
+    /// to the missing-file error STATE, not to close it — so AppState drives
+    /// that directly for the active tab (see `deleteEntry`). This helper exists
+    /// for the parked-tab arm: a deleted file open in a *background* tab should
+    /// surface its error the next time it's activated. We keep those tabs open
+    /// (they load lazily and hit `noteLoadError`), so this returns the set for
+    /// bookkeeping without mutating — the parked documents are simply dropped so
+    /// the next activation re-reads from disk and fails into the error state.
+    @discardableResult
+    func invalidateParkedDocuments(forPath path: String) -> [TabID] {
+        let affected = model.allTabs
+            .filter { $0.item == .markdown(path: path) }
+            .map(\.id)
+        for id in affected { documents[id] = nil }
+        return affected
+    }
+
     // MARK: Model mutations (funneled)
 
     /// U1-4 compatibility: mirror a single selection (replace-in-place /
