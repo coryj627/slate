@@ -689,6 +689,13 @@ struct FileTreeSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        // Tree folder glyphs (disclosure + open/closed folder) render
+        // hierarchical so open and closed folders read as one family (U5-1,
+        // DoD §B rendering-mode consistency). Rendering-mode only — the sidebar
+        // List already sits on the system sidebar material, so no `glassEffect`
+        // here (the spec's material list is toolbar/rail/tab strip; the tree is
+        // not a custom-backgrounded chrome container).
+        .slateSymbolSurface(.tree)
         .focused($fileTreeFocused)
         // U4-4 review: mirror REAL tree focus into the region bookkeeping —
         // Tab/click into the tree must make the next ⌘⌥→ "return to editor"

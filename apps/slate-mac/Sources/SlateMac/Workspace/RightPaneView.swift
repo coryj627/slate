@@ -307,7 +307,12 @@ private struct LeafRailView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Tokens.ColorRole.surface)
+        // macOS 26 Liquid Glass on the rail; the exact `surface` token below 26
+        // (U5-1) — appearance-only, no layout change.
+        .slateChromeMaterial(fallback: Tokens.ColorRole.surface)
+        // Rail glyphs render hierarchical so the larger leaf icons gain depth
+        // from a single accent — the Obsidian-rail feel (U5-1, DoD §B).
+        .slateSymbolSurface(.rail)
         // One focus stop for the whole rail: the container is focusable and
         // owns the highlight; the item Buttons are not individually
         // focus-reachable by Tab (arrow-within, Tab-out — the segmented picker

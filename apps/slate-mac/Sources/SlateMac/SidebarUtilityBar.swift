@@ -46,7 +46,13 @@ struct SidebarUtilityBar: View {
             .frame(height: Self.barHeight)
         }
         .frame(maxWidth: .infinity)
-        .background(Tokens.ColorRole.surface)
+        // macOS 26 Liquid Glass on the utility bar; the exact `surface` token
+        // below 26 (U5-1) — appearance-only, no layout change. This bar is the
+        // bottom-left half of the "rail" surface, so it takes the rail's mode.
+        .slateChromeMaterial(fallback: Tokens.ColorRole.surface)
+        // Utility-bar glyphs render hierarchical, matching the leaf rail (U5-1,
+        // DoD §B rendering-mode consistency — the two rails read as a family).
+        .slateSymbolSurface(.rail)
         // One AX container for the whole bar so VoiceOver announces a named
         // region ("Vault utilities") wrapping the three controls, each of
         // which keeps its own label/trait.
