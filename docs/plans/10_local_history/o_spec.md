@@ -1,6 +1,7 @@
 # O executable spec — Local history + change tracking
 
-Issues: O-1..O-6 (to be filed on GH [milestone 15](https://github.com/coryj627/slate/milestone/15); one PR per issue).
+Issues: [#539](https://github.com/coryj627/slate/issues/539) (O-1) · [#540](https://github.com/coryj627/slate/issues/540) (O-2) · [#541](https://github.com/coryj627/slate/issues/541) (O-3) · [#542](https://github.com/coryj627/slate/issues/542) (O-4) · [#543](https://github.com/coryj627/slate/issues/543) (O-5) · [#544](https://github.com/coryj627/slate/issues/544) (O-6).
+Milestone: [GH 15](https://github.com/coryj627/slate/milestone/15). One PR per issue.
 Plan: [00_plan.md](00_plan.md). U-program Presentation-Ready DoD applies to O-5; backend norms
 (fmt/clippy pre-push, adversarial censuses for correctness invariants — release-run, not
 `debug_assert`) apply throughout.
@@ -72,7 +73,7 @@ Baseline facts (verified 2026-07-03, this worktree — oplog.rs is 1260 lines in
 
 ---
 
-## O-1 · Op-log v2: durable identity + semantic annotations (#TBD) — PR 1
+## O-1 · Op-log v2: durable identity + semantic annotations (#539) — PR 1
 
 ### Format v2 (oplog.rs)
 
@@ -224,7 +225,7 @@ corruption.
 - Bench: `bench_append_annotated` — append with 3 annotations vs plain batch; assert overhead
   < 10% and absolute append cost at the #404 baseline resolution (numbers in the PR).
 
-## O-2 · Compaction + retention (#TBD) — PR 2
+## O-2 · Compaction + retention (#540) — PR 2
 
 ### Fold semantics (normative — positional, never timestamp-filtered)
 
@@ -320,7 +321,7 @@ hard error). This is the load-bearing invariant; it gets its own census.
 - Editor-blocking assertion: an append during an in-flight compaction of the same file completes
   within the lock-retry budget (artificially slowed compactor via a test-only hook).
 
-## O-3 · Version history + deleted-file recovery APIs (#TBD) — PR 3
+## O-3 · Version history + deleted-file recovery APIs (#541) — PR 3
 
 ### Session APIs (all uniffi-mirrored)
 
@@ -418,7 +419,7 @@ Deleted segment carries a standing footnote pointing at the system Trash (O-5).
   delete → one row, newest remnant wins, recovery returns the newest content;
   post-cache-rebuild deletion (no journal row) → listed with `deleted_at_ms: None`.
 
-## O-4 · StructuredDiff engine + changes-since-last-open (#TBD) — PR 4
+## O-4 · StructuredDiff engine + changes-since-last-open (#542) — PR 4
 
 ### Types (adapting the `05` §7.4 sketch — single-timeline core; the conflict-specific
 `local/remote` split stays V2)
@@ -517,7 +518,7 @@ of its own.
   Rust test proving mark-first would have lied. (The Swift funnel ordering is O-5's g3 test.)
 - Perf: `bench_structured_diff` — 500 KB / 2k-block pair diffs in < 50 ms release.
 
-## O-5 · History leaf + retention settings (#TBD) — PR 5
+## O-5 · History leaf + retention settings (#543) — PR 5
 
 ### Leaf registration
 
@@ -630,7 +631,7 @@ commands (they need row context).
 - Appearance snapshots (both modes) for versions + diff + deleted; APCA on annotation chips and
   secondary text; `a11y-check` 100 at the PR tip.
 
-## O-6 · Temporal query operators (#TBD) — PR 6 — **blocked on Milestone N**
+## O-6 · Temporal query operators (#544) — PR 6 — **blocked on Milestone N**
 
 ### Derived index: `oplog_events`
 

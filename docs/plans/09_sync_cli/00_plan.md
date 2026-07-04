@@ -23,12 +23,12 @@
 
 | ID | Issue | Track | Depends on | Labels |
 |----|-------|-------|-----------|--------|
-| M-1 | Sync detector engine (`sync_detect.rs`) + session/uniffi API | Rust | — | `backend` |
-| M-2 | LiveSync config reader (read-only, credential-free) | Rust | M-1 | `backend` |
-| M-3 | Sync diagnostics leaf (Mac UI) | Swift | M-1, M-2 | `swift-ui`, `a11y` |
-| M-4 | `slate-cli` crate: scaffold, output formats, exit codes, Ctrl-C, `open` + `sync-check` | Rust | M-1 | `backend` |
-| M-5 | CLI query commands: `read`, `list`, `search`, `links`, `properties` (+ two new core property queries) | Rust | M-4 | `backend` |
-| M-6 | CLI `tasks` + `render-template` | Rust | M-4 | `backend` |
+| M-1 ([#532](https://github.com/coryj627/slate/issues/532)) | Sync detector engine (`sync_detect.rs`) + session/uniffi API | Rust | — | `backend` |
+| M-2 ([#533](https://github.com/coryj627/slate/issues/533)) | LiveSync config reader (read-only, credential-free) | Rust | M-1 | `backend` |
+| M-3 ([#534](https://github.com/coryj627/slate/issues/534)) | Sync diagnostics leaf (Mac UI) | Swift | M-1, M-2 | `swift-ui`, `a11y` |
+| M-4 ([#535](https://github.com/coryj627/slate/issues/535)) | `slate-cli` crate: scaffold, output formats, exit codes, Ctrl-C, `open` + `sync-check` | Rust | M-1 | `backend` |
+| M-5 ([#536](https://github.com/coryj627/slate/issues/536)) | CLI query commands: `read`, `list`, `search`, `links`, `properties` (+ two new core property queries) | Rust | M-4 | `backend` |
+| M-6 ([#537](https://github.com/coryj627/slate/issues/537)) | CLI `tasks` + `render-template` | Rust | M-4 | `backend` |
 
 ```
 M-1 ──┬──▶ M-2 ──▶ M-3            (diagnostics track)
