@@ -16,6 +16,12 @@ enum CanvasPrompt: Identifiable, Equatable {
     case renameGroup(current: String)
     case moveIntoGroup(groups: [(id: String, title: String)])
     case setColor
+    /// #523 optional label step after a Connect To… pick.
+    case connectLabel(targetId: String, targetTitle: String)
+    /// #523: choose one of the selected card's connections to act on.
+    case pickConnection(choices: [(edgeId: String, label: String)], toDelete: Bool)
+    /// #523: label + direction editor for one connection.
+    case editConnection(edgeId: String, currentLabel: String)
 
     var id: String {
         switch self {
@@ -23,6 +29,9 @@ enum CanvasPrompt: Identifiable, Equatable {
         case .renameGroup: return "renameGroup"
         case .moveIntoGroup: return "moveIntoGroup"
         case .setColor: return "setColor"
+        case .connectLabel: return "connectLabel"
+        case .pickConnection: return "pickConnection"
+        case .editConnection: return "editConnection"
         }
     }
 
@@ -433,6 +442,46 @@ extension AppState {
         case .placeAbove: canvasPlaceRelative(target: target, direction: .above)
         case .placeLeftOf: canvasPlaceRelative(target: target, direction: .leftOf)
         case .alignWith: canvasAlignWith(target: target)
+        case .connectTo:
+            // Optional label step (#523) before the edge commits.
+            guard let doc = activeCanvasDocument,
+                let row = doc.outline.first(where: { $0.nodeId == target })
+            else { return }
+            canvasPrompt = .connectLabel(targetId: target, targetTitle: row.title)
         }
+    }
+
+    /// Palette entries for existing connections (#523).
+    func canvasPromptDeleteConnection() {
+        let choices = canvasConnectionChoices()
+        guard !choices.isEmpty else {
+            canvasAnnouncer.announce(.status("The selected card has no connections."))
+            return
+        }
+        if choices.count == 1 {
+            canvasDeleteConnection(edgeId: choices[0].edgeId)
+        } else {
+            canvasPrompt = .pickConnection(choices: choices, toDelete: true)
+        }
+    }
+
+    func canvasPromptEditConnection() {
+        let choices = canvasConnectionChoices()
+        guard !choices.isEmpty else {
+            canvasAnnouncer.announce(.status("The selected card has no connections."))
+            return
+        }
+        if choices.count == 1 {
+            canvasOpenConnectionEditor(edgeId: choices[0].edgeId)
+        } else {
+            canvasPrompt = .pickConnection(choices: choices, toDelete: false)
+        }
+    }
+
+    func canvasOpenConnectionEditor(edgeId: String) {
+        guard let doc = activeCanvasDocument,
+            let edge = doc.scene.edges.first(where: { $0.edgeId == edgeId })
+        else { return }
+        canvasPrompt = .editConnection(edgeId: edgeId, currentLabel: edge.label ?? "")
     }
 }

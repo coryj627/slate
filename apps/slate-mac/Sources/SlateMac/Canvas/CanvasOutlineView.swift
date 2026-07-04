@@ -219,7 +219,22 @@ struct CanvasOutlineView: View {
         .accessibilityHint("Opens the connected card's row.")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: "Jump to Card") { jump(to: neighbor.otherNode) }
+        .accessibilityAction(named: "Edit Connection") {
+            appState.canvasOpenConnectionEditor(edgeId: neighbor.edgeId)
+        }
+        .accessibilityAction(named: "Delete Connection") {
+            appState.canvasDeleteConnection(edgeId: neighbor.edgeId)
+        }
         .onTapGesture(count: 2) { jump(to: neighbor.otherNode) }
+        .contextMenu {
+            Button("Jump to Card") { jump(to: neighbor.otherNode) }
+            Button("Edit Connection…") {
+                appState.canvasOpenConnectionEditor(edgeId: neighbor.edgeId)
+            }
+            Button("Delete Connection") {
+                appState.canvasDeleteConnection(edgeId: neighbor.edgeId)
+            }
+        }
     }
 
     /// t0 §1.2 direction phrases honoring fromEnd/toEnd.

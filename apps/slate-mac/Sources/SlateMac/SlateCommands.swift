@@ -78,6 +78,10 @@ enum SlateCommandID {
     static let canvasCancelMode = "slate.canvas.cancelMode"
     static let canvasResizeDefault = "slate.canvas.resizeDefaultSize"
     static let canvasResizeFit = "slate.canvas.resizeFitContent"
+    static let canvasConnectTo = "slate.canvas.connectTo"
+    static let canvasConnectMode = "slate.canvas.connectMode"
+    static let canvasDeleteConnection = "slate.canvas.deleteConnection"
+    static let canvasEditConnection = "slate.canvas.editConnection"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -176,6 +180,10 @@ enum SlateCommandID {
         canvasCancelMode,
         canvasResizeDefault,
         canvasResizeFit,
+        canvasConnectTo,
+        canvasConnectMode,
+        canvasDeleteConnection,
+        canvasEditConnection,
         newTab,
         closeTab,
         nextTab,
@@ -575,6 +583,38 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "In resize mode, size the card to its text."
     ) { [weak appState] in appState?.canvasResizeFitContent() }
+
+    // Connect flow (#523): picker primary, mode secondary; edits and
+    // deletes reachable from the palette (R1) and the outline's
+    // connection rows.
+    register(
+        SlateCommandID.canvasConnectTo,
+        label: "Canvas: Connect To…",
+        section: .canvas,
+        hotkey: "⌃⌘C",
+        hint: "Connect the selected card to a card you pick, with an optional label. Sides are automatic."
+    ) { [weak appState] in appState?.canvasOpenConnectPicker() }
+
+    register(
+        SlateCommandID.canvasConnectMode,
+        label: "Canvas: Connect Mode",
+        section: .canvas,
+        hint: "Remember the selected card, navigate to a target with the usual movements, press Return to connect."
+    ) { [weak appState] in appState?.canvasEnterConnectMode() }
+
+    register(
+        SlateCommandID.canvasDeleteConnection,
+        label: "Canvas: Delete Connection…",
+        section: .canvas,
+        hint: "Delete one of the selected card's connections. Undo with Command-Z."
+    ) { [weak appState] in appState?.canvasPromptDeleteConnection() }
+
+    register(
+        SlateCommandID.canvasEditConnection,
+        label: "Canvas: Edit Connection…",
+        section: .canvas,
+        hint: "Change one of the selected card's connection labels or direction."
+    ) { [weak appState] in appState?.canvasPromptEditConnection() }
 
     register(
         SlateCommandID.newCanvas,

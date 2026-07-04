@@ -13,6 +13,7 @@ struct CanvasPromptSheet: View {
 
     @State private var text: String = ""
     @State private var chosenGroup: String = ""
+    @State private var direction: CanvasConnectionDirectionChoice = .toTarget
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
@@ -48,6 +49,54 @@ struct CanvasPromptSheet: View {
                     if !chosenGroup.isEmpty {
                         appState.canvasMoveIntoGroup(groupId: chosenGroup)
                     }
+                }
+            case .connectLabel(let targetId, let targetTitle):
+                Text("Connect to \"\(targetTitle)\"")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                TextField("Connection label (optional)", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Connection label, optional")
+                commitRow("Connect") {
+                    if let origin = appState.activeCanvasDocument?.selection.selected {
+                        appState.canvasConnect(from: origin, to: targetId, label: text)
+                    }
+                }
+            case .pickConnection(let choices, let toDelete):
+                Text(toDelete ? "Delete Connection" : "Edit Connection")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                Picker("Connection", selection: $chosenGroup) {
+                    ForEach(choices, id: \.edgeId) { choice in
+                        Text(choice.label).tag(choice.edgeId)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .accessibilityLabel("Connection")
+                .onAppear { chosenGroup = choices.first?.edgeId ?? "" }
+                commitRow(toDelete ? "Delete" : "Edit") {
+                    guard !chosenGroup.isEmpty else { return }
+                    if toDelete {
+                        appState.canvasDeleteConnection(edgeId: chosenGroup)
+                    } else {
+                        appState.canvasOpenConnectionEditor(edgeId: chosenGroup)
+                    }
+                }
+            case .editConnection(let edgeId, let currentLabel):
+                Text("Edit Connection")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                TextField("Label", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Connection label")
+                    .onAppear { text = currentLabel }
+                Picker("Direction", selection: $direction) {
+                    ForEach(CanvasConnectionDirectionChoice.allCases, id: \.self) { choice in
+                        Text(choice.title).tag(choice)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .accessibilityLabel("Direction")
+                commitRow("Apply") {
+                    appState.canvasEditConnection(
+                        edgeId: edgeId, label: text, direction: direction)
                 }
             case .setColor:
                 Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
@@ -86,6 +135,9 @@ struct CanvasPromptSheet: View {
         case .renameGroup: return "Rename Group"
         case .moveIntoGroup: return "Move into Group"
         case .setColor: return "Set Color"
+        case .connectLabel: return "Connect"
+        case .pickConnection: return "Choose Connection"
+        case .editConnection: return "Edit Connection"
         }
     }
 
