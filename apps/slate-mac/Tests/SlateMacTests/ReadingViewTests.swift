@@ -956,11 +956,20 @@ final class ReadingViewTests: XCTestCase {
             raw.contains("requestedEmbedKeys"),
             "resolution must be requested at most once per key (guard set)")
         XCTAssertTrue(
-            raw.contains("context.onResolveEmbed(key)"),
-            "the placeholder must request resolution for its key")
+            raw.contains("await context.onResolveEmbed(key)"),
+            "the placeholder must request resolution for its key and AWAIT it")
         XCTAssertTrue(
             raw.contains("inlineLeaf(fallbackSlice)"),
             "resolved-empty must fall back to the inline link-run rendering")
+        // The fallback gate must be request COMPLETION, not request start —
+        // gating on requestedEmbedKeys would flash the inline run for the
+        // whole in-flight window (the defect this pins against).
+        XCTAssertTrue(
+            raw.contains("completedEmbedKeys.contains(key)"),
+            "the fallback must gate on completion, not on request start")
+        XCTAssertTrue(
+            raw.contains("defer { completedEmbedKeys.insert(key) }"),
+            "completion must be recorded terminally (defer), even on cancellation")
     }
 
     /// The reading view renders a block-level embed (resolved), a placeholder

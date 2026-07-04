@@ -177,7 +177,10 @@ struct NoteContentView: View {
                 // panel's jump-to-source routing.
                 embedResolutions: appState.currentNoteEmbedResolutions,
                 onResolveEmbed: { [appState] key in
-                    Task { await appState.requestReadingEmbedResolution(target: key) }
+                    // Awaited (not fire-and-forget): the reading view holds
+                    // its loading placeholder until this returns, then
+                    // reads the dict to pick card vs fallback.
+                    await appState.requestReadingEmbedResolution(target: key)
                 },
                 onOpenEmbedSource: { [appState] target in
                     appState.openEmbedTarget(target)

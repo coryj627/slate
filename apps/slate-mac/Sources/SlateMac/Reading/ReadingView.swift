@@ -90,8 +90,11 @@ struct ReadingView: View {
         /// Request async resolution for a cache key the dict lacks. Wired to
         /// `AppState.requestReadingEmbedResolution`; the view calls it AT MOST
         /// once per key (a `@State` guard set), so a placeholder that stays
-        /// unresolved can't loop the resolver.
-        var onResolveEmbed: (String) -> Void = { _ in }
+        /// unresolved can't loop the resolver. `async` so the view can await
+        /// COMPLETION and only then declare the key resolved-empty — the
+        /// pending placeholder holds for exactly the in-flight window rather
+        /// than collapsing to the fallback one frame after the request fires.
+        var onResolveEmbed: (String) async -> Void = { _ in }
         /// Jump-to-source for a block-level embed card. Wired to
         /// `AppState.openEmbedTarget` — the SAME routing the EmbedsPanel rows
         /// and the Cmd+E popover use.
@@ -107,7 +110,7 @@ struct ReadingView: View {
             onToggleTask: @escaping (TaskItem) -> Void = { _ in },
             taskLineOffset: Int = 0,
             embedResolutions: [String: EmbedResolution] = [:],
-            onResolveEmbed: @escaping (String) -> Void = { _ in },
+            onResolveEmbed: @escaping (String) async -> Void = { _ in },
             onOpenEmbedSource: @escaping (String) -> Void = { _ in }
         ) {
             self.mathBlocks = mathBlocks
@@ -145,6 +148,16 @@ struct ReadingView: View {
     /// target). Keys are never removed: a re-request would be redundant work,
     /// and the resolution — once it arrives — flows in through `context`.
     @State private var requestedEmbedKeys: Set<String> = []
+
+    /// Cache keys whose `onResolveEmbed` call has RETURNED (#511). Split from
+    /// `requestedEmbedKeys` so the state machine can tell "in flight" (show
+    /// the placeholder) from "completed without landing" (fall back to the
+    /// inline run). Marked in a `defer` so a task cancelled at unmount still
+    /// records terminally — though @State is discarded with the view then, so
+    /// the distinction only matters if SwiftUI ever cancels a mounted row's
+    /// task, where a stuck spinner would be strictly worse than an early
+    /// fallback.
+    @State private var completedEmbedKeys: Set<String> = []
 
     init(
         text: String,
@@ -343,8 +356,9 @@ struct ReadingView: View {
     /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, == the
     /// `AppState.embedTargetKey` the resolutions dict is keyed on).
     ///
-    /// States, driven by ONE input (is `key` in `context.embedResolutions`?)
-    /// plus the per-key "already requested" guard:
+    /// States, driven by the dict entry plus TWO per-key guard sets
+    /// (`requestedEmbedKeys` = asked, `completedEmbedKeys` = the ask
+    /// RETURNED — split so "in flight" and "came back empty" are distinct):
     ///
     ///  1. RESOLVED — the dict has an entry → `EmbedView` renders it. This is
     ///     the ONE path for BOTH a real resolution (full note / section /
@@ -352,20 +366,19 @@ struct ReadingView: View {
     ///     the honest "Unresolved embed: …" render + AX for the latter, so a
     ///     resolved-but-broken target is never a dead block and never the
     ///     inline fallback.
-    ///  2. PENDING — no entry, and we haven't asked → placeholder row
-    ///     ("Embed, loading") + fire `onResolveEmbed(key)` exactly once
-    ///     (recorded in `requestedEmbedKeys`, so no re-request loop).
-    ///  3. RESOLVED-EMPTY — no entry, and we already asked → the resolve pass
-    ///     completed without landing this key (live/unsaved buffer whose embed
-    ///     the saved-state resolver never saw, or a batch that legitimately
-    ///     lacks it). Deterministic terminal fallback: render the INLINE
+    ///  2. PENDING — no entry, request not yet returned → placeholder row
+    ///     ("Embed, loading"); the request fires exactly once
+    ///     (`requestedEmbedKeys`) and the placeholder holds for the whole
+    ///     in-flight window (gating the fallback on `requestedEmbedKeys`
+    ///     alone would collapse to state 3 one frame after the request
+    ///     fired, flashing the inline run while the resolver was still
+    ///     running).
+    ///  3. RESOLVED-EMPTY — no entry, and the request RETURNED without
+    ///     landing this key (no session — the one path the resolver writes
+    ///     nothing). Deterministic terminal fallback: render the INLINE
     ///     link-run, so activation still routes through the router's embed
-    ///     branch (announces "unresolved" when the target can't open) — never
-    ///     an infinite spinner.
-    ///
-    /// The pending→resolved-empty transition is edge-triggered by the guard
-    /// set, so the placeholder is shown for exactly the window between "first
-    /// seen" and "resolve pass returned", then collapses to the fallback.
+    ///     branch (announces "unresolved" when the target can't open) —
+    ///     never an infinite spinner.
     @ViewBuilder
     private func embedBlock(key: String, fallbackSlice: String) -> some View {
         if let resolution = context.embedResolutions[key] {
@@ -375,7 +388,7 @@ struct ReadingView: View {
                 depth: 0
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if requestedEmbedKeys.contains(key) {
+        } else if completedEmbedKeys.contains(key) {
             // Resolved-empty terminal: the request completed, the key never
             // landed — fall back to the inline run so the embed is still
             // reachable + activation announces unresolved. Never a dead block.
@@ -386,7 +399,9 @@ struct ReadingView: View {
     }
 
     /// Pending-resolution placeholder for a block-level embed. Requests the
-    /// resolution exactly once (`requestedEmbedKeys` guard). Labeled per the
+    /// resolution exactly once (`requestedEmbedKeys` guard) and records the
+    /// request's RETURN (`completedEmbedKeys`) so `embedBlock` only falls
+    /// back once the resolver has actually had its say. Labeled per the
     /// house loading-row phrasing so VoiceOver announces the wait rather than
     /// landing on an unlabeled spinner.
     private func embedPlaceholder(key: String) -> some View {
@@ -401,14 +416,17 @@ struct ReadingView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Embed, loading.")
-        .onAppear {
+        .task {
             // Request-once: the guard prevents a re-request loop when the
             // resolution legitimately never arrives (unsaved buffer / broken
-            // target). `.onAppear` (not `.task`) so a struct re-init that
-            // re-runs body doesn't spawn a fresh async request per render.
+            // target) — a struct re-init re-runs `.task`, but the @State
+            // guard set survives it, so no fresh request spawns per render.
             guard !requestedEmbedKeys.contains(key) else { return }
             requestedEmbedKeys.insert(key)
-            context.onResolveEmbed(key)
+            // Terminal even on cancellation: an early fallback beats a
+            // spinner no resolve is coming for.
+            defer { completedEmbedKeys.insert(key) }
+            await context.onResolveEmbed(key)
         }
     }
 
