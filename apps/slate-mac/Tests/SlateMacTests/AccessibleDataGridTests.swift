@@ -148,6 +148,58 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(selected, 2, "prefix 'be' still Bea")
     }
 
+    /// Codoki #611: the header's sort indicator must track `activeSort`
+    /// — programmatic sorts and reloads previously left
+    /// NSTableView.sortDescriptors stale — and syncing it must not
+    /// re-announce the sort through the delegate callback.
+    @MainActor
+    func testSortDescriptorsTrackActiveSortWithoutReAnnouncing() {
+        var announced: [String] = []
+        let grid = makeGrid(rows: Self.people) { announced.append($0) }
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+
+        coordinator.applySort(column: 0, ascending: false)
+        XCTAssertEqual(table.sortDescriptors.first?.key, "0")
+        XCTAssertEqual(table.sortDescriptors.first?.ascending, false)
+        XCTAssertEqual(announced, ["Sorted by Name, descending"], "sync must not re-announce")
+
+        // Reload keeps the indicator in step too.
+        table.sortDescriptors = []
+        coordinator.reload(grid: makeGrid(rows: Self.people))
+        XCTAssertEqual(table.sortDescriptors.first?.key, "0")
+        XCTAssertEqual(announced.count, 1)
+    }
+
+    /// Codoki #611: a cleared or dangling selection binding deselects
+    /// the table instead of leaving a stale visible selection.
+    @MainActor
+    func testClearedOrDanglingSelectionDeselectsTable() {
+        var selected: Int? = 1
+        let binding = Binding<Int?>(get: { selected }, set: { selected = $0 })
+        let grid = makeGrid(rows: Self.people, selection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+
+        coordinator.reload(grid: makeGrid(rows: Self.people, selection: binding))
+        XCTAssertEqual(table.selectedRow, 1, "binding drives the initial selection")
+
+        selected = nil
+        coordinator.reload(grid: makeGrid(rows: Self.people, selection: binding))
+        XCTAssertEqual(table.selectedRow, -1, "cleared binding deselects")
+
+        selected = 99  // no such row
+        coordinator.reload(grid: makeGrid(rows: Self.people, selection: binding))
+        XCTAssertEqual(table.selectedRow, -1, "dangling id deselects")
+    }
+
     @MainActor
     func testVirtualizedDataSourceAtScaleBudget() {
         // §K: 2,000 rows through the data source — row count is O(1),

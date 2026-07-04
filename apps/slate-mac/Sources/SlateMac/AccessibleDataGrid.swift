@@ -209,6 +209,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     func reload(grid: AccessibleDataGrid<Row>) {
         self.grid = grid
         resortPreservingDescriptor()
+        syncSortDescriptorsToTable()
         table?.reloadData()
         syncSelectionFromBinding()
     }
@@ -224,6 +225,30 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         }
     }
 
+    /// Keep the header's sort indicator matching `activeSort` (it
+    /// drifts when a sort is applied programmatically or after a
+    /// reload). Guarded so the descriptor-change delegate callback
+    /// doesn't re-announce the sort.
+    private var isSyncingSortDescriptors = false
+
+    private func syncSortDescriptorsToTable() {
+        guard let table else { return }
+        let wanted =
+            activeSort.map {
+                [NSSortDescriptor(key: "\($0.column)", ascending: $0.ascending)]
+            } ?? []
+        let current = table.sortDescriptors
+        let matches =
+            current.count == wanted.count
+            && zip(current, wanted).allSatisfy {
+                $0.key == $1.key && $0.ascending == $1.ascending
+            }
+        guard !matches else { return }
+        isSyncingSortDescriptors = true
+        table.sortDescriptors = wanted
+        isSyncingSortDescriptors = false
+    }
+
     /// Apply a sort (the unit-testable seam). Returns the announcement
     /// text it routed through the announce hook.
     @discardableResult
@@ -233,6 +258,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         else { return nil }
         activeSort = (columnIndex, ascending)
         resortPreservingDescriptor()
+        syncSortDescriptorsToTable()
         table?.reloadData()
         let text =
             "Sorted by \(grid.columns[columnIndex].header), "
@@ -245,7 +271,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         _ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]
     ) {
         MainActor.assumeIsolated {
-            guard let descriptor = tableView.sortDescriptors.first,
+            guard !isSyncingSortDescriptors,
+                let descriptor = tableView.sortDescriptors.first,
                 let columnIndex = descriptor.key.flatMap(Int.init)
             else { return }
             applySort(column: columnIndex, ascending: descriptor.ascending)
@@ -322,10 +349,17 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     private func syncSelectionFromBinding() {
-        guard let table, let wanted = grid.selection?.wrappedValue else { return }
-        if let index = displayRows.firstIndex(where: { $0.id == wanted }),
-            table.selectedRow != index
-        {
+        guard let table else { return }
+        // A cleared binding — or one naming a row that no longer
+        // exists — must clear the table too, or the visible selection
+        // goes stale against the model.
+        guard let wanted = grid.selection?.wrappedValue,
+            let index = displayRows.firstIndex(where: { $0.id == wanted })
+        else {
+            if table.selectedRow != -1 { table.deselectAll(nil) }
+            return
+        }
+        if table.selectedRow != index {
             table.selectRowIndexes([index], byExtendingSelection: false)
             table.scrollRowToVisible(index)
         }
