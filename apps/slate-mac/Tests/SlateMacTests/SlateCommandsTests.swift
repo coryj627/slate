@@ -960,6 +960,42 @@ final class SlateCommandsTests: XCTestCase {
         )
     }
 
+    // MARK: - Quick switcher registry (#495)
+
+    /// `slate.workspace.quickOpen` is registered, labelled "Quick
+    /// Open…", grouped under Navigation, and carries ⌘T — the chord
+    /// ⌘T moved to it from New Tab.
+    @MainActor
+    func testQuickOpenCommandIsRegisteredWithCommandT() throws {
+        let appState = AppState()
+        let cmd = appState.commandRegistry.list().first { $0.id == SlateCommandID.quickOpen }
+        let quickOpen = try XCTUnwrap(cmd, "quickOpen must be registered")
+        XCTAssertEqual(quickOpen.label, "Quick Open…")
+        XCTAssertEqual(quickOpen.section, .navigation)
+        XCTAssertEqual(quickOpen.hotkeyHint, "⌘T", "⌘T maps to Quick Open, not New Tab")
+    }
+
+    /// The former New Tab command keeps its id + duplicate-tab
+    /// behavior but is relabelled "Duplicate Tab" and has NO hotkey
+    /// (⌘T moved to Quick Open).
+    @MainActor
+    func testDuplicateTabCommandRelabelledAndHasNoHotkey() throws {
+        let appState = AppState()
+        let cmd = appState.commandRegistry.list().first { $0.id == SlateCommandID.newTab }
+        let dup = try XCTUnwrap(cmd, "the newTab id must still be registered")
+        XCTAssertEqual(dup.label, "Duplicate Tab")
+        XCTAssertNil(dup.hotkeyHint, "New Tab lost ⌘T when Quick Open claimed it")
+    }
+
+    /// Cross-check: exactly one registered command claims ⌘T, and it's
+    /// quickOpen — no accidental double-binding survived the move.
+    @MainActor
+    func testExactlyOneCommandClaimsCommandT() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘T" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.quickOpen])
+    }
+
     // MARK: - Unknown id
 
     /// Invoking a command id that isn't registered surfaces
