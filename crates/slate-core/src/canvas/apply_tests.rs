@@ -433,3 +433,60 @@ fn census_random_action_sequences_unwind_byte_equal() {
         );
     }
 }
+
+/// #372 journal codec: every op kind round-trips through JSON.
+#[test]
+fn action_json_codec_round_trips_every_op() {
+    let (original, _) = parse(SAMPLE);
+    let mut canvas = original.clone();
+    // Build a real inverse-bearing set: delete (Restore ops) + all
+    // attribute mutations (InPlace ops) + creations.
+    let act = action(
+        "codec exercise",
+        vec![
+            CanvasOp::CreateNode {
+                id: "codec-n".into(),
+                content: CanvasNodeContent::File {
+                    file: "notes/x.md".into(),
+                    subpath: Some("#H".into()),
+                },
+                x: 0.0,
+                y: 900.0,
+                width: 100.0,
+                height: 50.0,
+                color: Some("2".into()),
+            },
+            CanvasOp::AddEdge {
+                id: "codec-e".into(),
+                from_node: "codec-n".into(),
+                from_side: Some(Side::Left),
+                to_node: "card-loose".into(),
+                to_side: None,
+                from_end: EndStyle::Arrow,
+                to_end: EndStyle::Arrow,
+                label: Some("L".into()),
+                color: None,
+            },
+            CanvasOp::SetNodeColor {
+                id: "card-question".into(),
+                color: None,
+            },
+            CanvasOp::DeleteNode {
+                id: "card-notes".into(),
+            },
+            CanvasOp::RenameGroup {
+                id: "grp-research".into(),
+                label: Some("Renamed".into()),
+            },
+        ],
+    );
+    let inverse = apply(&mut canvas, &act).unwrap();
+
+    for action_value in [&act, &inverse] {
+        let encoded = action_to_json(action_value);
+        // Survives a serialize→parse cycle (what the journal stores).
+        let reparsed: serde_json::Value = serde_json::from_str(&encoded.to_string()).unwrap();
+        let decoded = action_from_json(&reparsed).unwrap();
+        assert_eq!(&decoded, action_value);
+    }
+}

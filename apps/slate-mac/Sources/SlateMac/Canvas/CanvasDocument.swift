@@ -53,6 +53,14 @@ final class CanvasDocument: ObservableObject {
     /// target when the user returns (WCAG 2.4.3, #362).
     var lastActivatedNode: String?
 
+    /// Session-scoped undo/redo stacks (#372, t3 layer 2): named
+    /// inverse actions returned by canvas_apply. Deliberately NOT
+    /// persisted — undo does not survive app restart (the NSUndoManager
+    /// contract notes follow); the op-log journal remains the durable
+    /// audit record.
+    var undoStack: [(name: String, inverse: CanvasAction)] = []
+    var redoStack: [(name: String, inverse: CanvasAction)] = []
+
     /// Shared selection + marks for every pane showing this canvas.
     let selection = CanvasSelection()
 
@@ -107,6 +115,17 @@ final class CanvasDocument: ObservableObject {
             outline = []
             state = .failed(friendlyMessage(for: error))
         }
+    }
+
+    /// Refresh outline/table/targets after a committed mutation —
+    /// same fetches as load, but the handle (and stacks) survive.
+    func reloadAfterMutation(session: VaultSession) {
+        guard let handle else { return }
+        outline = (try? session.canvasOutline(handle: handle)) ?? outline
+        tableRows = (try? session.canvasTableRows(handle: handle)) ?? tableRows
+        targets = Dictionary(
+            uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
+        neighborsCache = [:]
     }
 
     /// Release the FFI handle (idempotent).

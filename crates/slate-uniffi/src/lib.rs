@@ -1919,6 +1919,10 @@ impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
 pub enum OpKind {
     WholeFileReplace,
     EditBatch,
+    /// One committed canvas action (Milestone T #372): payload is the
+    /// JSON `{name, action, inverse}` record. Opaque to hosts like
+    /// `EditBatch`.
+    CanvasApply,
 }
 
 impl From<core::OpKind> for OpKind {
@@ -1926,6 +1930,7 @@ impl From<core::OpKind> for OpKind {
         match k {
             core::OpKind::WholeFileReplace => OpKind::WholeFileReplace,
             core::OpKind::EditBatch => OpKind::EditBatch,
+            core::OpKind::CanvasApply => OpKind::CanvasApply,
         }
     }
 }

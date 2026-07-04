@@ -570,6 +570,316 @@ fn apply_one(canvas: &mut Canvas, op: &CanvasOp) -> Result<Vec<CanvasOp>, ApplyE
     }
 }
 
+// MARK: JSON codec (journal payload, #372)
+
+fn side_json(side: Option<Side>) -> Value {
+    match side {
+        Some(Side::Top) => Value::from("top"),
+        Some(Side::Right) => Value::from("right"),
+        Some(Side::Bottom) => Value::from("bottom"),
+        Some(Side::Left) => Value::from("left"),
+        None => Value::Null,
+    }
+}
+
+fn side_from(value: Option<&Value>) -> Option<Side> {
+    match value.and_then(Value::as_str) {
+        Some("top") => Some(Side::Top),
+        Some("right") => Some(Side::Right),
+        Some("bottom") => Some(Side::Bottom),
+        Some("left") => Some(Side::Left),
+        _ => None,
+    }
+}
+
+fn end_json(end: EndStyle) -> Value {
+    Value::from(match end {
+        EndStyle::None => "none",
+        EndStyle::Arrow => "arrow",
+    })
+}
+
+fn end_from(value: Option<&Value>, default: EndStyle) -> EndStyle {
+    match value.and_then(Value::as_str) {
+        Some("none") => EndStyle::None,
+        Some("arrow") => EndStyle::Arrow,
+        _ => default,
+    }
+}
+
+fn content_json(content: &CanvasNodeContent) -> Value {
+    match content {
+        CanvasNodeContent::Text { text } => serde_json::json!({"kind": "text", "text": text}),
+        CanvasNodeContent::File { file, subpath } => {
+            serde_json::json!({"kind": "file", "file": file, "subpath": subpath})
+        }
+        CanvasNodeContent::Link { url } => serde_json::json!({"kind": "link", "url": url}),
+    }
+}
+
+fn content_from(value: &Value) -> Result<CanvasNodeContent, String> {
+    let kind = value.get("kind").and_then(Value::as_str).unwrap_or("");
+    let text_of = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("content missing {key:?}"))
+    };
+    match kind {
+        "text" => Ok(CanvasNodeContent::Text {
+            text: text_of("text")?,
+        }),
+        "file" => Ok(CanvasNodeContent::File {
+            file: text_of("file")?,
+            subpath: value
+                .get("subpath")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        "link" => Ok(CanvasNodeContent::Link {
+            url: text_of("url")?,
+        }),
+        other => Err(format!("unknown content kind {other:?}")),
+    }
+}
+
+fn opt_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(str::to_string)
+}
+
+fn op_to_json(op: &CanvasOp) -> Value {
+    match op {
+        CanvasOp::CreateNode {
+            id,
+            content,
+            x,
+            y,
+            width,
+            height,
+            color,
+        } => serde_json::json!({
+            "op": "createNode", "id": id, "content": content_json(content),
+            "x": x, "y": y, "width": width, "height": height, "color": color,
+        }),
+        CanvasOp::CreateGroup {
+            id,
+            label,
+            x,
+            y,
+            width,
+            height,
+            color,
+        } => serde_json::json!({
+            "op": "createGroup", "id": id, "label": label,
+            "x": x, "y": y, "width": width, "height": height, "color": color,
+        }),
+        CanvasOp::UpdateNodeGeometry {
+            id,
+            x,
+            y,
+            width,
+            height,
+        } => serde_json::json!({
+            "op": "updateNodeGeometry", "id": id,
+            "x": x, "y": y, "width": width, "height": height,
+        }),
+        CanvasOp::SetNodeColor { id, color } => serde_json::json!({
+            "op": "setNodeColor", "id": id, "color": color,
+        }),
+        CanvasOp::SetNodeContent { id, content } => serde_json::json!({
+            "op": "setNodeContent", "id": id, "content": content_json(content),
+        }),
+        CanvasOp::DeleteNode { id } => serde_json::json!({"op": "deleteNode", "id": id}),
+        CanvasOp::AddEdge {
+            id,
+            from_node,
+            from_side,
+            to_node,
+            to_side,
+            from_end,
+            to_end,
+            label,
+            color,
+        } => serde_json::json!({
+            "op": "addEdge", "id": id,
+            "fromNode": from_node, "fromSide": side_json(*from_side),
+            "toNode": to_node, "toSide": side_json(*to_side),
+            "fromEnd": end_json(*from_end), "toEnd": end_json(*to_end),
+            "label": label, "color": color,
+        }),
+        CanvasOp::UpdateEdge {
+            id,
+            from_side,
+            to_side,
+            from_end,
+            to_end,
+            label,
+            color,
+        } => {
+            serde_json::json!({
+                "op": "updateEdge", "id": id,
+                "fromSide": side_json(*from_side), "toSide": side_json(*to_side),
+                "fromEnd": end_json(*from_end), "toEnd": end_json(*to_end),
+                "label": label, "color": color,
+            })
+        }
+        CanvasOp::DeleteEdge { id } => serde_json::json!({"op": "deleteEdge", "id": id}),
+        CanvasOp::RenameGroup { id, label } => serde_json::json!({
+            "op": "renameGroup", "id": id, "label": label,
+        }),
+        CanvasOp::Ungroup { id } => serde_json::json!({"op": "ungroup", "id": id}),
+        CanvasOp::RestoreNode {
+            node_json,
+            position,
+        } => serde_json::json!({
+            "op": "restoreNode", "nodeJson": node_json, "position": position,
+        }),
+        CanvasOp::RestoreEdge {
+            edge_json,
+            position,
+        } => serde_json::json!({
+            "op": "restoreEdge", "edgeJson": edge_json, "position": position,
+        }),
+        CanvasOp::RestoreNodeInPlace { node_json } => serde_json::json!({
+            "op": "restoreNodeInPlace", "nodeJson": node_json,
+        }),
+        CanvasOp::RestoreEdgeInPlace { edge_json } => serde_json::json!({
+            "op": "restoreEdgeInPlace", "edgeJson": edge_json,
+        }),
+    }
+}
+
+fn op_from_json(value: &Value) -> Result<CanvasOp, String> {
+    let op = value.get("op").and_then(Value::as_str).unwrap_or("");
+    let str_of = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("op {op:?} missing {key:?}"))
+    };
+    let num_of = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_f64)
+            .ok_or_else(|| format!("op {op:?} missing {key:?}"))
+    };
+    let pos_of = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .ok_or_else(|| format!("op {op:?} missing {key:?}"))
+    };
+    match op {
+        "createNode" => Ok(CanvasOp::CreateNode {
+            id: str_of("id")?,
+            content: content_from(value.get("content").ok_or("createNode missing content")?)?,
+            x: num_of("x")?,
+            y: num_of("y")?,
+            width: num_of("width")?,
+            height: num_of("height")?,
+            color: opt_string(value.get("color")),
+        }),
+        "createGroup" => Ok(CanvasOp::CreateGroup {
+            id: str_of("id")?,
+            label: opt_string(value.get("label")),
+            x: num_of("x")?,
+            y: num_of("y")?,
+            width: num_of("width")?,
+            height: num_of("height")?,
+            color: opt_string(value.get("color")),
+        }),
+        "updateNodeGeometry" => Ok(CanvasOp::UpdateNodeGeometry {
+            id: str_of("id")?,
+            x: num_of("x")?,
+            y: num_of("y")?,
+            width: num_of("width")?,
+            height: num_of("height")?,
+        }),
+        "setNodeColor" => Ok(CanvasOp::SetNodeColor {
+            id: str_of("id")?,
+            color: opt_string(value.get("color")),
+        }),
+        "setNodeContent" => Ok(CanvasOp::SetNodeContent {
+            id: str_of("id")?,
+            content: content_from(
+                value
+                    .get("content")
+                    .ok_or("setNodeContent missing content")?,
+            )?,
+        }),
+        "deleteNode" => Ok(CanvasOp::DeleteNode { id: str_of("id")? }),
+        "addEdge" => Ok(CanvasOp::AddEdge {
+            id: str_of("id")?,
+            from_node: str_of("fromNode")?,
+            from_side: side_from(value.get("fromSide")),
+            to_node: str_of("toNode")?,
+            to_side: side_from(value.get("toSide")),
+            from_end: end_from(value.get("fromEnd"), EndStyle::None),
+            to_end: end_from(value.get("toEnd"), EndStyle::Arrow),
+            label: opt_string(value.get("label")),
+            color: opt_string(value.get("color")),
+        }),
+        "updateEdge" => Ok(CanvasOp::UpdateEdge {
+            id: str_of("id")?,
+            from_side: side_from(value.get("fromSide")),
+            to_side: side_from(value.get("toSide")),
+            from_end: end_from(value.get("fromEnd"), EndStyle::None),
+            to_end: end_from(value.get("toEnd"), EndStyle::Arrow),
+            label: opt_string(value.get("label")),
+            color: opt_string(value.get("color")),
+        }),
+        "deleteEdge" => Ok(CanvasOp::DeleteEdge { id: str_of("id")? }),
+        "renameGroup" => Ok(CanvasOp::RenameGroup {
+            id: str_of("id")?,
+            label: opt_string(value.get("label")),
+        }),
+        "ungroup" => Ok(CanvasOp::Ungroup { id: str_of("id")? }),
+        "restoreNode" => Ok(CanvasOp::RestoreNode {
+            node_json: str_of("nodeJson")?,
+            position: pos_of("position")?,
+        }),
+        "restoreEdge" => Ok(CanvasOp::RestoreEdge {
+            edge_json: str_of("edgeJson")?,
+            position: pos_of("position")?,
+        }),
+        "restoreNodeInPlace" => Ok(CanvasOp::RestoreNodeInPlace {
+            node_json: str_of("nodeJson")?,
+        }),
+        "restoreEdgeInPlace" => Ok(CanvasOp::RestoreEdgeInPlace {
+            edge_json: str_of("edgeJson")?,
+        }),
+        other => Err(format!("unknown op {other:?}")),
+    }
+}
+
+/// JSON encoding of an action (the #372 journal payload).
+pub fn action_to_json(action: &CanvasAction) -> Value {
+    serde_json::json!({
+        "name": action.name,
+        "ops": action.ops.iter().map(op_to_json).collect::<Vec<_>>(),
+    })
+}
+
+/// Decode an action from its journal payload.
+pub fn action_from_json(value: &Value) -> Result<CanvasAction, String> {
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("action missing name")?
+        .to_string();
+    let ops = value
+        .get("ops")
+        .and_then(Value::as_array)
+        .ok_or("action missing ops")?
+        .iter()
+        .map(op_from_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CanvasAction { name, ops })
+}
+
 #[cfg(test)]
 #[path = "apply_tests.rs"]
 mod tests;

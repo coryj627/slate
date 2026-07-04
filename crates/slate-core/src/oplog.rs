@@ -112,6 +112,14 @@ pub enum OpKind {
     /// A single save's fine-grained edit ops, encoded as a batch (see
     /// [`encode_edit_batch`] / [`decode_edit_batch`]).
     EditBatch,
+    /// One committed canvas action (Milestone T #372): payload is the
+    /// JSON encoding of `{ name, action, inverse }` from
+    /// `canvas::apply`. Semantic audit record alongside the byte-level
+    /// text entries the canvas save also writes; enables named,
+    /// canvas-aware document revert. Additive: pre-T readers stop at
+    /// the first such entry (the documented unknown-kind degradation)
+    /// — entries before it still read.
+    CanvasApply,
 }
 
 impl OpKind {
@@ -119,6 +127,7 @@ impl OpKind {
         match self {
             OpKind::WholeFileReplace => 1,
             OpKind::EditBatch => 2,
+            OpKind::CanvasApply => 3,
         }
     }
 
@@ -126,6 +135,7 @@ impl OpKind {
         match v {
             1 => Some(OpKind::WholeFileReplace),
             2 => Some(OpKind::EditBatch),
+            3 => Some(OpKind::CanvasApply),
             _ => None,
         }
     }
@@ -296,6 +306,10 @@ pub fn reconstruct_at_tail(entries: &[OpLogEntry]) -> Result<String, String> {
                     apply_op(&mut buf, op)?;
                 }
             }
+            // Semantic canvas records (#372) don't participate in the
+            // text replay — the same mutation is also journaled as a
+            // text entry by the canvas save path.
+            OpKind::CanvasApply => {}
         }
     }
     Ok(buf.to_string())

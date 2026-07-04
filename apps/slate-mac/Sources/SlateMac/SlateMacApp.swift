@@ -96,6 +96,31 @@ struct SlateMacApp: App {
             }
             // Tab navigation lives under View alongside the palette/search
             // items — one menu for "where am I looking" commands.
+            // #372: ⌘Z / ⇧⌘Z route by focus — the canvas undo stack
+            // when a canvas surface owns the tab, the standard responder
+            // chain (NSTextView's NSUndoManager) everywhere else. One
+            // owner for the chord; the buttons forward faithfully so
+            // note-editor undo behaves exactly as before.
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    if appState.undoTargetsCanvas {
+                        appState.canvasUndo()
+                    } else {
+                        NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+                    }
+                }
+                .keyboardShortcut("z", modifiers: [.command])
+
+                Button("Redo") {
+                    if appState.undoTargetsCanvas {
+                        appState.canvasRedo()
+                    } else {
+                        NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+                    }
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+            }
+
             CommandGroup(after: .toolbar) {
                 // U3-2 (#466): the single ⌘⇧E registration — the per-group
                 // strip buttons carry the visual affordance without a

@@ -182,4 +182,90 @@ extension AppState {
         canvasAnnouncer.verbosity = verbosity
         preferencesStore.saveCanvasPrefs(CanvasPrefs(verbosity: verbosity))
     }
+
+    // MARK: Mutations + undo (#372)
+
+    /// The one mutation entry point every canvas verb uses: applies the
+    /// action (one write, one journal entry), pushes the inverse onto
+    /// the document's undo stack, clears redo. Errors surface through
+    /// the funnel (conflicts assertively, t0 §5) and return false.
+    @discardableResult
+    func canvasApply(_ action: CanvasAction, to doc: CanvasDocument) -> Bool {
+        guard let session = currentSession, let handle = doc.handle else { return false }
+        do {
+            let result = try session.canvasApply(handle: handle, action: action)
+            doc.undoStack.append((name: action.name, inverse: result.inverse))
+            doc.redoStack = []
+            doc.reloadAfterMutation(session: session)
+            return true
+        } catch let error as VaultError {
+            if case .WriteConflict = error {
+                canvasAnnouncer.announce(
+                    .error(
+                        "The canvas changed on disk. Reload it to continue — your action was not applied."
+                    ))
+            } else {
+                canvasAnnouncer.announce(.error("Canvas action failed: \(error.localizedDescription)"))
+            }
+            return false
+        } catch {
+            canvasAnnouncer.announce(.error("Canvas action failed: \(error.localizedDescription)"))
+            return false
+        }
+    }
+
+    /// ⌘Z on a canvas surface: apply the top inverse; its own inverse
+    /// becomes the redo entry. "Undid: ⟨name⟩" per t0 §1.3.
+    func canvasUndo() {
+        guard let doc = activeCanvasDocument else { return }
+        guard let entry = doc.undoStack.popLast() else {
+            canvasAnnouncer.announce(.status("Nothing to undo."))
+            return
+        }
+        guard let session = currentSession, let handle = doc.handle else { return }
+        do {
+            let result = try session.canvasApply(handle: handle, action: entry.inverse)
+            doc.redoStack.append((name: entry.name, inverse: result.inverse))
+            doc.reloadAfterMutation(session: session)
+            canvasAnnouncer.announce(.confirmation(CanvasAnnouncer.undidText(actionName: entry.name)))
+        } catch {
+            // Stale undo after an external change: conflict surfaces,
+            // the entry stays poppable after the user reloads (t3).
+            doc.undoStack.append(entry)
+            canvasAnnouncer.announce(
+                .error("Undo blocked: the canvas changed on disk. Reload it and try again."))
+        }
+    }
+
+    /// ⇧⌘Z symmetric to `canvasUndo`.
+    func canvasRedo() {
+        guard let doc = activeCanvasDocument else { return }
+        guard let entry = doc.redoStack.popLast() else {
+            canvasAnnouncer.announce(.status("Nothing to redo."))
+            return
+        }
+        guard let session = currentSession, let handle = doc.handle else { return }
+        do {
+            let result = try session.canvasApply(handle: handle, action: entry.inverse)
+            doc.undoStack.append((name: entry.name, inverse: result.inverse))
+            doc.reloadAfterMutation(session: session)
+            canvasAnnouncer.announce(.confirmation(CanvasAnnouncer.redidText(actionName: entry.name)))
+        } catch {
+            doc.redoStack.append(entry)
+            canvasAnnouncer.announce(
+                .error("Redo blocked: the canvas changed on disk. Reload it and try again."))
+        }
+    }
+
+    /// The responder-chain seam (#372): ⌘Z drives the canvas stack when
+    /// a canvas surface owns focus, the standard responder chain
+    /// otherwise (NSTextView editors keep their NSUndoManager). Wave 4's
+    /// inline text-card editor refines this with a first-responder
+    /// text-view check.
+    var undoTargetsCanvas: Bool {
+        guard activeCanvasDocument != nil else { return false }
+        // Inside the inline editor (Wave 4) the editor's undo wins;
+        // today the only canvas text surface is the read-only detail.
+        return true
+    }
 }
