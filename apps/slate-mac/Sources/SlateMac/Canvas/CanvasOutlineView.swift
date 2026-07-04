@@ -261,9 +261,12 @@ struct CanvasOutlineView: View {
     }
 
     private func jump(to nodeId: String) {
+        // Capture the origin BEFORE mutating selection — group
+        // enter/leave narration compares the two paths (Codoki #610).
+        let origin = selection.selected
         selection.selected = nodeId
         focusedRow = nodeId
-        announceMove(to: nodeId, from: selection.selected)
+        announceMove(to: nodeId, from: origin)
     }
 
     private func activationHint(_ row: CanvasOutlineRow) -> String {
