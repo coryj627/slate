@@ -38,6 +38,8 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
+pub mod model;
+
 /// Insertion-ordered map of raw JSON fields (requires serde_json's
 /// `preserve_order` feature, enabled workspace-wide).
 pub type RawExtra = Map<String, Value>;
