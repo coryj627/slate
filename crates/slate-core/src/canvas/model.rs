@@ -234,6 +234,16 @@ impl SpatialIndex {
             .any(|e| e.rect.overlaps(&rect))
     }
 
+    /// Rect of one node, if present.
+    pub fn rect_of(&self, id: &NodeId) -> Option<Rect> {
+        self.entries.iter().find(|e| e.id == *id).map(|e| e.rect)
+    }
+
+    /// True when the canvas has no nodes at all.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Bounding box of all nodes (None for an empty canvas).
     pub fn bounds(&self) -> Option<Rect> {
         let mut it = self.entries.iter();
