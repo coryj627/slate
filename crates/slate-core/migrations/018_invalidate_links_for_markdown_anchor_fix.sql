@@ -1,0 +1,29 @@
+-- Migration 018: invalidate cached links rows after the Markdown
+-- anchor-split fix (#509).
+--
+-- Pre-fix, `walk_markdown` stored an anchored Markdown destination
+-- verbatim (`note.md#sec`) in target_raw, so the resolver saw the
+-- literal fragment-bearing string and left the row UNRESOLVED
+-- (target_path NULL) forever. The fix splits the `#fragment` into
+-- `anchor` at extraction time so the base resolves like a wikilink
+-- anchor.
+--
+-- The fix only takes effect on the scanner's slow path: an unchanged
+-- file keeps its cached rows, so vaults indexed pre-fix would keep
+-- their anchored Markdown links dangling in the outgoing/unresolved
+-- panels until each file's content changed.
+--
+-- Unlike migration 012 (headings), no bulk DELETE is needed: links
+-- rows are replaced wholesale per file on the slow path
+-- (`replace_links_for_file` is DELETE-then-INSERT keyed by
+-- source_file_id), so re-running the slow path rewrites every file's
+-- rows with the corrected splitter.
+--
+-- Force the slow path: `session.rs::index_file_slow_path` short-
+-- circuits when a file's `(mtime_ms, size_bytes, ctime_ms)` triple
+-- matches the cache. Zeroing mtime_ms makes that comparison false for
+-- every real file on the next scan, so the corrected extractor runs
+-- once per file; the slow path then writes the real stat value back,
+-- bounding the cost to one re-scan per file.
+
+UPDATE files SET mtime_ms = 0;

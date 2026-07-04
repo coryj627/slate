@@ -168,11 +168,11 @@ extension ReadingLinkRouter {
                 // Match the note's own outgoing-link record and reuse
                 // `openLink` wholesale — it resolves, navigates via
                 // `openFile(_:target:)` honoring `openTargetFromCurrentEvent`,
-                // announces, and records the outcome seam. Two storage forms
-                // (links.rs): wikilink records are anchor-STRIPPED (compare
-                // the base), markdown records keep the full destination
-                // including any `#fragment` (compare verbatim) — the wiki
-                // scheme carries both, so try both forms.
+                // announces, and records the outcome seam. Both wikilink and
+                // markdown records are now anchor-STRIPPED (links.rs #509), so
+                // the base form is the match. Keep the verbatim arm as defense
+                // for any pre-migration rows still carrying a `#fragment` in
+                // targetRaw mid-transition.
                 let base = Self.baseTarget(of: target)
                 if let link = appState.currentOutgoingLinks.first(where: {
                     !$0.isEmbed

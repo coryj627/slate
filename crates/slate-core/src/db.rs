@@ -123,6 +123,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "structural_ops: journal for folder/file mutations + undo (#460)",
         sql: include_str!("../migrations/017_structural_ops.sql"),
     },
+    Migration {
+        description: "links: invalidate cached rows after Markdown anchor-split fix (#509)",
+        sql: include_str!("../migrations/018_invalidate_links_for_markdown_anchor_fix.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -560,6 +564,61 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mtime, 0, "migration 015 must force the slow path");
+    }
+
+    #[test]
+    fn migration_018_resets_mtime_to_force_link_reindex() {
+        // Pre-fix caches keep anchored Markdown links unresolved for
+        // unchanged files. Unlike 012/015 the migration does NOT wipe
+        // links (they're replaced per file on the slow path); it only
+        // zeroes mtimes so the corrected splitter re-runs (#509).
+        let mut conn = fresh_db();
+        migrate(&mut conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/qux.md', 'qux.md', 'md', 100, 1700000000000,
+               1700000000000, 'jkl012', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        let file_id: i64 = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = 'notes/qux.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // A stale pre-fix row: the anchor lives inside target_raw and the
+        // link never resolved.
+        conn.execute(
+            "INSERT INTO links (
+                source_file_id, ordinal, target_path, target_raw, target_anchor,
+                kind, is_embed, is_external, snippet, span_start, span_end
+             ) VALUES (?1, 0, NULL, 'note.md#sec', NULL, 'markdown', 0, 0, '', 0, 10)",
+            rusqlite::params![file_id],
+        )
+        .unwrap();
+
+        let sql = include_str!("../migrations/018_invalidate_links_for_markdown_anchor_fix.sql");
+        conn.execute_batch(sql).unwrap();
+
+        // Links are NOT wiped — the per-file slow path replaces them.
+        let links: u32 = conn
+            .query_row("SELECT COUNT(*) FROM links", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(links, 1, "migration 018 must not wipe links rows");
+        let mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'notes/qux.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mtime, 0, "migration 018 must force the slow path");
     }
 
     #[test]
