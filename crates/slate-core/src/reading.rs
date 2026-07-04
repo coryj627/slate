@@ -500,9 +500,16 @@ pub fn reading_table_cells(source: &str) -> Option<ReadingTableCells> {
             _ => {}
         }
     }
-    // A malformed input might not fire TableHead; fall back to the alignment
-    // count so the width is still well-defined.
+    // A malformed input might not fire TableHead (or fire one with fewer
+    // cells than the delimiter row declares); fall back to the alignment
+    // count so the width is still well-defined. The delimiter row is
+    // authoritative — pad HEADER to it too, not just rows, so a short/absent
+    // header can never leave trailing body cells with no header to pair
+    // with (Swift derives its columns from `header.len()`, so an unpadded
+    // header would silently drop real cells rather than showing them under
+    // an honest empty label).
     let width = header.len().max(alignments_len);
+    header.resize(width, String::new());
 
     // Normalize every body row to the header width: pad short rows with "",
     // truncate long ones. pulldown already does this per GFM, but pinning it
@@ -1244,6 +1251,49 @@ final para
         let cells = reading_table_cells(src).expect("a table");
         assert_eq!(cells.header, vec!["a", "b"]);
         assert!(cells.rows.is_empty());
+    }
+
+    /// Codoki review (PR #566): flagged that `width = header.len().max(alignments_len)`
+    /// only resized ROWS, not `header` itself, so a header shorter than the
+    /// delimiter-declared width could in principle leave trailing body cells
+    /// with no header to pair with (Swift derives its columns from
+    /// `header.len()`). `header.resize(width, ...)` was added to close that
+    /// gap by construction rather than by trusting pulldown-cmark's own
+    /// table detection.
+    ///
+    /// Empirically (see scratch probes run against this exact pulldown-cmark
+    /// version), `header.len() < alignments_len` does not appear reachable
+    /// through the public `&str` entry point: `Start(Tag::Table(aligns))`
+    /// only fires once the header row's cell count already matches the
+    /// delimiter row's, and pulldown tolerates truncated/malformed sources
+    /// (missing closing pipes, no trailing newline) by still completing a
+    /// well-formed `TableHead`. A header/delimiter cell-count mismatch (e.g.
+    /// `"| a |\n|---|---|\n"`, 1 header cell vs. 2 delimiter cells) is
+    /// rejected as "not a table" before `reading_table_cells` ever sees a
+    /// `Table` event, so `reading_table_cells` returns `None` for it — it is
+    /// NOT the `Some` with a padded header the literal issue description
+    /// suggested. This test pins the invariant the fix actually guarantees —
+    /// header width always equals row width for whatever IS recognized as a
+    /// table — rather than asserting an input shape that cannot occur.
+    #[test]
+    fn table_cells_header_width_always_matches_row_width() {
+        let src = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        for row in &cells.rows {
+            assert_eq!(
+                row.len(),
+                cells.header.len(),
+                "row width must equal header width by construction"
+            );
+        }
+
+        // A header/delimiter cell-count mismatch is not a table at all to
+        // pulldown-cmark — confirms the "short header" shape this fix
+        // defends against cannot reach `reading_table_cells` as `Some`.
+        assert!(
+            reading_table_cells("| a |\n|---|---|\n| 1 | 2 |\n").is_none(),
+            "header/delimiter cell-count mismatch is rejected upstream, not padded"
+        );
     }
 
     /// Integration of the two APIs: feed a segmented Table block's `source`
