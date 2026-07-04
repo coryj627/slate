@@ -8,30 +8,30 @@ Slate's canvas is built so that **you never need to see it to use it**. Every ca
 
 **Two things work differently from Obsidian, on purpose:**
 
-- **Link cards don't embed live websites.** A link card shows the page title and site, and *Open in Browser* opens it where the web is actually accessible. (Obsidian renders the website inside the canvas.)
+- **Link cards don't embed live websites.** A link card shows the site's address (the full link is always available on the card), and *Open in Browser* opens it where the web is actually accessible. (Obsidian renders the website inside the canvas.)
 - **Undo is real.** Every canvas change is recorded and reversible with ⌘Z, with a spoken description of what was undone. (Obsidian's canvas undo is separate toolbar buttons.)
 
 ## Opening a canvas
 
 Canvas files appear in your file tree and in Quick Open (⌘O) like any note. Opening one creates a canvas tab. To create a new canvas, use **New Canvas** from the Command Palette or the File menu.
 
-When a canvas opens, focus lands on the **outline** — a structured view of everything on the board, in a predictable reading order (top-to-bottom, left-to-right, group by group). From there you can switch views with the **Show Outline / Show Table / Show Visual / Show Navigator** commands. Whatever you select stays selected when you switch — the views are four windows onto the same board.
+When a canvas opens, focus lands on the **outline** — a structured view of everything on the board, in a predictable reading order (top-to-bottom, left-to-right, group by group). From there you can switch views with the **Show Outline / Show Table / Show Visual** commands. Whatever you select stays selected when you switch — the views are windows onto the same board, and the navigation commands below work in all of them.
 
 If the canvas is empty, you'll land on a short message telling you exactly how to create your first card. If a file has content Slate doesn't understand, you'll hear how many items were preserved-but-hidden; nothing is ever deleted from the file.
 
 ## Getting oriented
 
-- **Where am I? (⌃⌘I)** — at any moment, this reads back your full context: the card you're on, its group, its position ("4 of 14"), its connections, its color, and whether it's marked. The same information appears in a small panel you can read with a braille display.
+- **Where am I? (⌃⌘I)** — at any moment, this reads back your full context: the card you're on, its group, its position ("4 of 14"), its connections, its color, whether it's marked, any mode you're in, and any active filter. The same information appears in a small panel you can read with a braille display.
 - **Verbosity** — in Settings, choose how much detail navigation announcements carry: *terse* (just the title), *standard* (title, type, position), or *verbose* (adds connections, color, marks).
 - Your position, marks, active mode, and any filter are always readable from the element under your cursor — announcements are a convenience, never the only copy.
 
 ## Navigating
 
-In the outline and navigator:
+These commands work in every canvas view:
 
 - **↑ / ↓** — previous / next card in reading order. You'll hear "Card 4 of 14 in group Research"-style context.
 - **Enter / exit group** — step into a group's cards or back out.
-- **→ / ←** (navigator) — follow a connection forward, or back the way you came. Connections read with their direction and label: "Connects to *Ideas*, labelled *supports*".
+- **→ / ←** — follow a connection forward, or back the way you came. Connections read with their direction and label: "Connects to *Ideas*, labelled *supports*".
 - **Jump to connected card** — pick from the card's connections by number.
 - **Trace path** — walk the chain of connections from the current card, hearing each hop.
 
@@ -46,7 +46,9 @@ Press **⌘F** in a canvas to filter it. Type part of a title, a type ("image"),
 - **New Card (⌥⌘N)** — creates a text card next to your current card (below it if there's room) and puts you straight into editing. On an empty canvas it starts at the origin. You'll hear where it landed: "Created text card below 'Research'."
 - **New Group** — creates a labelled group; you'll be prompted for the label.
 - **Create Connected Card (⌃⌥⌘N)** — the mind-mapping move: creates a new card *already connected* to the current one and starts editing. Variants let you choose the direction (below, right, above, left).
-- **Note, image, and link cards** — use *Add Note to Canvas* (picks a note from your vault), *Add Media*, or paste a URL with *Add Link Card*.
+- **Note, image, and link cards** — use *Add Note to Canvas…* (picks a note from your vault), *Add Media…* (a picture or other file from your vault), or paste a URL with *Add Link Card*.
+- **Duplicate Card** copies the current card (or everything you've marked) and places the copy alongside, telling you where it went.
+- A note card can point at a **specific section**: cards like "Project Plan › Timeline" open the note right at that heading.
 
 ## Editing
 

@@ -3,7 +3,7 @@
 Issues: #359 (parser) · #360 (model) · #517 (placement) · #361 (schema/FFI) · #366 (serializer).
 Milestone: GH 20. Every issue also satisfies the 08 program DoD §A–§G and the 09 deltas §H–§L; this spec adds what is Wave-1-specific. One PR per issue. All Rust; no UI.
 
-**Execution order: #359 → #360 → (#517 ∥ #361) → #366.**
+**Execution order: #359 → #360 → (#517 ∥ #361) → #366.** (#361's `canvas_apply` write surface may land as a second PR after #366, since it serializes through it — but its API shape below is locked now because Wave 4 builds against it.)
 
 ---
 
@@ -14,13 +14,20 @@ crates/slate-core/src/canvas/mod.rs        (#359)  parse: &str -> (Canvas, Vec<C
 crates/slate-core/src/canvas/model.rs      (#360)  derive: &Canvas -> CanvasModel
 crates/slate-core/src/canvas/placement.rs  (#517)  place_new(...) -> Placement
 crates/slate-core/src/canvas/serialize.rs  (#366)  serialize: &Canvas -> String
-crates/slate-core/migrations/NNNN_canvas.sql (#361)
+crates/slate-core/migrations/NNN_canvas.sql  (#361, repo 3-digit convention)
 crates/slate-uniffi/src/lib.rs             (#361)  1:1 mirrors, From<core::X>, no logic
 ```
 
 ```rust
 // #359 — raw, spec-faithful, lossless
-pub struct Canvas { pub nodes: Vec<Node>, pub edges: Vec<Edge>, pub unknown: RawExtra }
+pub struct Canvas {
+    pub nodes: Vec<Node>, pub edges: Vec<Edge>, pub unknown: RawExtra,
+    // Malformed/unrecognized entries are SKIPPED from nodes/edges but RETAINED here
+    // verbatim (raw JSON + document position) so #366 re-emits them in place.
+    // A save must never delete what the parser couldn't model (t0 §5's
+    // "preserved in the file but not shown" is this field).
+    pub skipped: Vec<SkippedEntry>,   // { position: usize, raw: RawValue, warning: CanvasWarning }
+}
 pub enum NodeKind { Text { text: String },
                     File { file: String, subpath: Option<String> },
                     Link { url: String },
@@ -56,8 +63,10 @@ pub struct CanvasModel {
 
 ## #359 — Parser
 
-As issued, plus: `RawExtra` preserves unknown keys **and their order** where serde allows, so #366 can round-trip byte-stably in practice; a malformed node/edge yields `CanvasWarning { index, reason }` and is skipped — the file never hard-fails (frontmatter-parser contract). Edge referencing a missing node parses but is flagged (`DanglingEdge`) for t0 §5 surfacing.
-**Tests:** fixture per node kind, labelled/unlabelled/directed/undirected edges, nested groups, unknown fields at node/edge/root level, malformed entries, empty file, `{}` file.
+As issued, plus: `RawExtra` preserves unknown keys **and their order** where serde allows, so #366 can round-trip byte-stably in practice; a malformed node/edge yields `CanvasWarning { index, reason }`, is skipped from `nodes`/`edges`, and is **retained in `Canvas.skipped`** (see struct above) — the file never hard-fails (frontmatter-parser contract) and never loses data on save. Edge referencing a missing node parses but is flagged (`DanglingEdge`) for t0 §5 surfacing.
+**Color names pinned here** (backend-owned, t0 §1.1): presets 1–6 = *red, orange, yellow, green, cyan, purple* (JSON Canvas order); `Hex` values phrase as *"custom color"* (verbose level) — #370 later verifies contrast and may refine hex→nearest-preset naming, but Wave 1 ships these strings.
+**Fixtures:** committed here in `crates/slate-core/tests/fixtures/canvas/`, including the **2,000-node fixture** (checked-in generator script) that t1 benchmarks and #365 later reuse — plus a malformed-entry fixture that must round-trip with the malformed entry intact.
+**Tests:** fixture per node kind, labelled/unlabelled/directed/undirected edges, nested groups, unknown fields at node/edge/root level, malformed entries (parse → serialize retains them), empty file, `{}` file.
 
 ## #360 — Model
 
@@ -66,13 +75,21 @@ As issued + the normative rules above. `CardSummary.display_title` implements th
 
 ## #517 — Placement engine
 
-As issued (see the issue body for the full contract). Key spec points: preference order below→right→above→left from the anchor, first non-overlapping grid-aligned slot at the default gap; occupied ring → expand ring. Exports `GRID_STEP`, `GRID_STEP_LARGE`, `DEFAULT_CARD_SIZE`, `DEFAULT_GAP` (single source of truth for #521/#366). Returns `Placement { x, y, relative: RelativeDesc }` where `RelativeDesc` feeds t0 §1.3 announcements without UI-side geometry.
-**Tests:** non-overlap census (random models × anchors × exhaustive hints); determinism; empty-canvas origin; dense-ring fallback.
+As issued (see the issue body for the full contract). Key spec points: preference order below→right→above→left from the anchor, first non-overlapping grid-aligned slot at the default gap; occupied ring → expand ring. Exports `GRID_STEP`, `GRID_STEP_LARGE`, `DEFAULT_CARD_SIZE`, `DEFAULT_GAP` (single source of truth for #521/#366; numeric values are the implementing dev's choice, exported once). Returns `Placement { x, y, relative: RelativeDesc }` — `RelativeDesc` is a **typed enum** `{ Below(anchor), RightOf(anchor), Above(anchor), LeftOf(anchor), AtOrigin }` (anchor = display title); phrasing/localization stays UI-side (#518).
+**Rigid sets:** `place_set(anchor, boxes: Vec<Rect>) -> Vec<Point>` places a marked set / duplicated set as one unit — pairwise offsets preserved, the set's bounding box placed by the same slot search (#522/#524/#525 consume; never UI math).
+**Tests:** non-overlap census (random models × anchors × exhaustive hints); determinism; empty-canvas origin; dense-ring fallback; place_set offset preservation.
 
-## #361 — Schema + VaultSession + uniffi
+## #361 — Schema + VaultSession + uniffi (read **and write** surface)
 
-As issued. Schema: `canvas_files(path, hash, parsed_at)`, `canvas_nodes(file, id, kind, title, group_id, order_idx, color, x, y, w, h)`, `canvas_edges(file, id, from_id, to_id, from_side, to_side, from_end, to_end, label, color)` — derived columns (`title`, `group_id`, `order_idx`) come from #360 so `canvas_table_rows`/`canvas_outline` are single queries. Append-only migration; refuses newer schema; index regenerable from `.canvas` source of truth. API: `open_canvas`, `canvas_outline`, `canvas_table_rows`, `canvas_neighbors`, `canvas_place_new` (#517), `canvas_where_am_i(node)` (context struct for #518). Reindex on scan + file-watcher change like other content types.
-**Tests:** migration forward on fresh/existing DB; round-trip open→API parity with #360 unit expectations; uniffi type-mirror parity test; watcher reindex.
+As issued, with the open decision **closed: derived columns, not a model blob**. Schema: `canvas_files(path, hash, parsed_at)`, `canvas_nodes(file, id, kind, title, group_id, order_idx, color, x, y, w, h)`, `canvas_edges(file, id, from_id, to_id, from_side, to_side, from_end, to_end, label, color)` — derived columns (`title`, `group_id`, `order_idx`) come from #360 so `canvas_table_rows`/`canvas_outline` are single queries. Append-only migration (follow the repo's `NNN_` naming); refuses newer schema; index regenerable from `.canvas` source of truth. Reindex on scan + file-watcher change like other content types. **The scan and quick-open filters extend to include `.canvas`** (today `session.rs` is hard-filtered to `.md` — that change is backend work owned here, consumed by #369).
+
+**Handle-based API** (node IDs are unique per file, not per vault): `open_canvas(path) -> CanvasHandle`; all other calls take the handle.
+
+*Read:* `canvas_outline(h) -> Vec<OutlineRow>` (depth-first flattening: `{ node_id, depth, kind, title, group_path, ordinal_n, total_m, connection_count, color_name }`), `canvas_table_rows(h) -> Vec<TableRow>` (`{ node_id, kind, title, group_path, target, connection_count, color_name }`; `target` = file path / URL host / empty per kind), `canvas_neighbors(h, node) -> Vec<Neighbor>` (`{ edge_id, other_node, direction, side, label }`), `canvas_where_am_i(h, node) -> WhereAmI` (`{ title, kind, group_path, ordinal_n, total_m, in_count, out_count, color_name }` — mark state is UI-owned and merged UI-side), `canvas_place_new` / `canvas_place_set` (#517), `canvas_check_overlap(h, rect, exclude: Vec<NodeId>) -> Vec<NodeId>` (mode-transient overlap warnings, #521).
+
+*Write (the Wave-4 mutation surface — owned here, consumed by #368/#521–#525):* `canvas_apply(h, action: CanvasAction) -> ApplyResult`. `CanvasAction` = `{ name: String /* op-log + undo label */, ops: Vec<CanvasOp> }`; `CanvasOp` = `CreateNode | UpdateNodeGeometry | SetNodeColor | SetNodeContent | DeleteNode | AddEdge | UpdateEdge | DeleteEdge | CreateGroup | RenameGroup | Ungroup`. One committed user action = **one** `canvas_apply` (bulk ops batch into one action) = one serialize+atomic write (#366) + one journal entry (#372); `ApplyResult` returns the reindexed deltas or a typed conflict error (t0 §5). The engine computes and returns the **inverse action** for the undo stack (#372).
+
+**Tests:** migration forward on fresh/existing DB; round-trip open→API parity with #360 unit expectations; uniffi type-mirror parity test; watcher reindex; `.canvas` in scan/quick-open results; every `CanvasOp` applies + inverts to the prior state (apply→invert→byte-equal serialize); overlap query correctness.
 
 ## #366 — Serializer
 

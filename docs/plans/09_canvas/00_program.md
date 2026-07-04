@@ -31,7 +31,7 @@ The user (a screen-reader and keyboard-only user) was interviewed against the or
 ## Issue map, waves & dependencies
 
 ```
-Wave 1 (backend)      #359 parser ─▶ #360 model ─▶ #361 schema/FFI
+Wave 1 (backend)      #359 parser ─▶ #360 model ─▶ #361 schema/FFI (read + write API)
                                  └─▶ #517 placement    #366 serializer
 Wave 2 (container +   #369 entry/routing ─ #518 announcer ─ #362 outline ─ #519 grid v2 ─▶ #363 table
         primary AT)
@@ -40,6 +40,8 @@ Wave 4 (authoring)    #368 actions ─ #521 move/resize ─ #522 picker/placemen
 Wave 5 (parity +      #525 parity extras ─ #370 color ─ #371 dynamic type ─ #373 filter ─ #365 E2E ─ #526 docs
         close-out)
 ```
+
+Note on "four surfaces": the switchable *views* are **outline, table, and visual** — the keyboard **navigator (#364) is the canvas-wide command layer hosted by all of them**, not a fourth view (decision recorded in t2's shared architecture). The canvas **mutation FFI** (`canvas_apply` + ops) is owned by #361 and specified in t1 — Wave 4's UI issues consume it, they don't invent it.
 
 | Wave | Issues | Gate |
 |------|--------|------|
@@ -57,18 +59,18 @@ Specs: [t0 interaction contract](specs/t0_interaction_contract.md) (cross-cuttin
 
 Rules first — they matter more than any single chord:
 
-- **R1.** Every canvas action is a `CommandRegistry` command (new FFI `CommandSection.canvas`; land the enum change with #364 — cross-language, backend-labeled) reachable via palette and menu. A chord is a convenience, never the only path.
+- **R1.** Every canvas action is a `CommandRegistry` command (new FFI `CommandSection.canvas`; the enum change lands with **#369, first Wave-2 PR** — Wave 2 already registers commands — cross-language, backend-labeled) reachable via palette and menu. A chord is a convenience, never the only path.
 - **R2.** Plain arrows / typing keys act **only while a canvas non-text surface has focus** (outline/table/navigator/renderer). VoiceOver Quick Nav intercepts plain arrows — every arrow-driven behavior therefore has a palette/menu equivalent, and the mode announcements name it.
 - **R3.** No new chord may collide with the claimed inventory below or with VO (⌃⌥…) / FKA reserved combos. New chords are added to this table in the same PR that registers them; the existing chord↔surface **drift test** extends to the canvas section.
 - **R4.** Chord mnemonics must survive dictation ("press Control Command M" is speakable; label text is full words).
 
-**Claimed inventory (today, from `SlateCommands.swift` + system):** ⌘N ⇧⌘N ⌘O ⌘S ⌘F ⌘J ⇧⌘J ⌘T ⌘W ⇧⌘] ⇧⌘[ ⌃⌘← ⌃⌘→ ⌘\ ⌥⌘\ ⌥⌘←→↑↓ ⌥⌘= ⌥⌘- ⇧⌘R ⇧⌘T ⌘, ⌘⇧P ⌘1–9 ⌘Z ⇧⌘Z (+ system edit chords).
+**Claimed inventory (today, from `SlateCommands.swift` / `SlateMacApp.swift` + system):** ⇧⌘N (New from Template — note: New *Note* is also here, **not** ⌘N; the app replaces the system `.newItem` group, so **⌘N is currently free**) ⌘O ⌘S ⌘F ⌘J ⇧⌘J ⌘T ⌘W ⇧⌘W ⇧⌘] ⇧⌘[ ⌃⌘← ⌃⌘→ ⌘\ ⌥⌘\ ⌥⌘←→↑↓ ⌥⌘= ⌥⌘- ⇧⌘R ⇧⌘T ⌘, ⌘⇧P ⌘1–9 ⌘Z ⇧⌘Z (+ system edit chords).
 
 **Canvas allocations (proposed here; final binding in the registering PR, drift-tested):**
 
 | Command | Chord | Scope | Notes |
 |---|---|---|---|
-| New card | ⌥⌘N | canvas focus | ⌘N stays "new note" app-wide |
+| New card | ⌥⌘N | canvas focus | ⌘N is deliberately left free (reserved for a future app-wide New Note binding) |
 | Create connected card | ⌃⌥⌘N | canvas focus | direction prompt; #525 |
 | Where am I? | ⌃⌘I | canvas focus | #518 |
 | Toggle mark | ⌃⌘M | canvas focus | #524 |

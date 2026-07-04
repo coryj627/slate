@@ -15,13 +15,14 @@ Per the issue body (create-connected-card, duplicate, convert-to-note, edit edge
 - Duplicate: deep-copies the node (kind, size, color, unknown fields); marked-set duplicate = one entry; announced with placement.
 - Convert-to-note: U2-2 create API; canvas write and file creation are **one logical undo step** (journaled-undo convention); the new file card keeps geometry/color; announced with the new note title.
 - Subpath cards: `file#heading` parses (#359 `subpath`), labels per t0 §1.1 ("Note › Heading"), activation opens the note at the anchor; detail view renders the narrowed content via U3's reading-view embed rendering.
-- URL cards: label = title/host (never a raw URL blob); activation + explicit action "Open in Browser"; the **no-live-embeds divergence** is documented in `docs/help/canvas.md` and the program table.
+- URL cards: label = **URL host (+ first path segment when ambiguous)** per t0 §1.1 — JSON Canvas link nodes carry no title and Slate does not fetch pages; full URL in the AX detail, never a raw URL blob as the label. Activation + explicit action "Open in Browser"; the **no-live-embeds divergence** is documented in `docs/help/canvas.md` and the program table.
+- Terminology: the JSON field is `edge`; **all user-facing text says "connection"** ("Edit Connection Label") — specs may say edge when meaning the data structure.
 
 **Tests:** per action round-trip + announcement; connected-card direction variants; convert undo restores text card and removes file; subpath open-to-anchor; URL activation.
 
 ## #370 — Color & visual-attribute accessibility
 
-As issued: Increase Contrast collapse via the `EditorSyntaxPalette.color(for:increaseContrast:)` convention for fills/borders/strokes/group backgrounds; color exposed as **named preset text** in outline labels (verbose level, t0 §1.2) and the sortable table column (landed structurally in #363 — correctness + naming finalized here); APCA Lc > 75 for text on every preset fill and a hex sample, both appearances, including the #367 focus indicator against colored fills.
+As issued: Increase Contrast collapse via the `EditorSyntaxPalette.color(for:increaseContrast:)` convention for fills/borders/strokes/group backgrounds; color exposed as **named preset text** in outline labels (verbose level, t0 §1.2) and the sortable table column (landed structurally in #363 — correctness + naming finalized here); APCA Lc ≥ 75 for text on every preset fill and a hex sample, both appearances, including the #367 focus indicator against colored fills.
 **Tests:** exhaustive preset × appearance × increaseContrast matrix; APCA measurements asserted; sort-by-color; label naming (hex → nearest preset name + "custom" suffix — pin the mapping in the PR).
 
 ## #371 — Dynamic Type / text scaling
@@ -40,7 +41,7 @@ Per the issue body: `docs/help/canvas.md` (first draft ships with this spec PR �
 
 ## #365 — E2E integration + close-out
 
-As issued (Milestone{Letter} convention; sample + **2,000-node** fixtures; through `AppState` + FFI, not mocks) — final scope across all waves:
+As issued (Milestone{Letter} convention; through `AppState` + FFI, not mocks; the sample + **2,000-node** fixtures were committed with #359 — this suite consumes them) — final scope across all waves:
 - E2E: open sample canvas → outline structure/labels → table rows/sort → navigator traversal → author (create card, connect, group marked set, move) → undo chain → serializer round-trip byte-compare.
 - Benchmarks in `BENCHMARKS.md`: parse+derive, outline/table build, VO-traversal, renderer pan/zoom, AX-tree windowing — at 2,000 nodes; no quadratic blow-ups (§K).
 - Gates: a11y-check 100/100; APCA matrix (#370) green; announcement-grammar conformance suite green; **manual AT smoke checklist** executed and recorded (t0 §4: VO walk, FKA tab-through, Voice Control "Show numbers" + 5 dictated commands, Switch Control mode cycle, braille inspectability).

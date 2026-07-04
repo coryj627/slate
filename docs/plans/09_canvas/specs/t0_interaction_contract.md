@@ -11,7 +11,7 @@ All user-audible strings are assembled by the #518 coordinator from these gramma
 ### 1.1 Card reference
 
 `⟨card⟩ := ⟨Type⟩ card "⟨title⟩"` — Types: *Text*, *File*, *Image*, *Link*, *Group* (group phrased as `Group "⟨label⟩"`).
-Title derivation: text → first line; file → note title (frontmatter `title`, else humanized filename — **never a raw path**); file+subpath → `⟨note title⟩ › ⟨heading⟩`; image/media → frontmatter alt/title, else humanized filename with type prefix ("Image: architecture diagram"); link → page title if known, else host. Untitled duplicates disambiguate with a stable ordinal ("Untitled 3") — same string feeds Voice Control ("click Untitled 3").
+Title derivation: text → first line; file → note title (frontmatter `title`, else humanized filename — **never a raw path**); file+subpath → `⟨note title⟩ › ⟨heading⟩`; image/media → frontmatter alt/title, else humanized filename with type prefix ("Image: architecture diagram"); link → **URL host, plus first path segment when the host alone is ambiguous** (JSON Canvas link nodes carry no title and Slate does not fetch pages; the full URL is in the AX detail). Untitled duplicates disambiguate with a stable ordinal ("Untitled 3") — same string feeds Voice Control ("click Untitled 3"). **Ordinal stability:** assigned from document order at canvas load and held for the session (moves don't renumber; a new untitled card takes the next free ordinal). Color names (backend-pinned, t1): presets 1–6 = red, orange, yellow, green, cyan, purple; hex = "custom color".
 
 ### 1.2 Navigation / selection (verbosity matrix)
 
@@ -47,6 +47,7 @@ One pull-based readback, always verbose-grade regardless of setting:
 - **M5 Esc ladder (innermost first):** active mode → active filter (#373, clears) → canvas surface → workspace tab. Each Esc consumes exactly one rung; each rung's effect is announced.
 - **M6 Visible controls:** every mode is enterable/committable/cancelable via on-screen controls (context menu / toolbar) — Switch Control and Voice Control never depend on the keyboard-only path.
 - **M7 One mode at a time:** entering a mode while one is active commits nothing — it is rejected with an announcement naming the active mode.
+- **M8 Embedded-editor carve-out:** the inline text-card editor (#368) is *not* a spatial mode — **Esc commits** the text and returns focus to the card (matching the app's note-editing convention and interview decision 7); M2's cancel-on-Esc does not apply. Discarding an edit is the editor's own undo (⌘Z) before Esc. Every doc that references editor Esc behavior must say "commits", never cite M2.
 
 ## 3. Inspectability rule (braille)
 
