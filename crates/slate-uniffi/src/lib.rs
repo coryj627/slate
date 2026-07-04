@@ -2853,6 +2853,34 @@ pub fn reading_blocks_source(source: String) -> Vec<ReadingBlock> {
         .collect()
 }
 
+/// FFI mirror of [`core::reading::ReadingTableCells`] (#510). `rows` is a
+/// list of rows, each a list of cell strings — uniffi carries `Vec<Vec<String>>`
+/// directly, so no row wrapper record is needed. Every row equals `header.len()`
+/// (Rust normalizes ragged rows), so the Swift grid indexes cells safely.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ReadingTableCells {
+    pub header: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+impl From<core::reading::ReadingTableCells> for ReadingTableCells {
+    fn from(c: core::reading::ReadingTableCells) -> Self {
+        Self {
+            header: c.header,
+            rows: c.rows,
+        }
+    }
+}
+
+/// Segment a GFM table's `source` slice into header + body cells — pure, no
+/// IO (#510). Input is exactly what [`ReadingBlock::source`] carries for a
+/// `Table` block; `None` when the slice is not a table (the Swift side falls
+/// back to the raw-source block). Cells are the flattened inline text.
+#[uniffi::export]
+pub fn reading_table_cells(source: String) -> Option<ReadingTableCells> {
+    core::reading::reading_table_cells(&source).map(Into::into)
+}
+
 // =====================================================================
 // Milestone L citations + bibliography (#278) — FFI mirror
 // =====================================================================

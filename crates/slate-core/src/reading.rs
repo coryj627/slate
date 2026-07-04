@@ -55,6 +55,15 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+/// The single pulldown-cmark option set both the block walk and the
+/// table-cell segmentation ([`reading_table_cells`]) parse with. Factored
+/// to a const so the two entry points can never diverge — a table the walk
+/// classifies as [`ReadingBlockKind::Table`] parses identically when its
+/// source is fed back for cell extraction.
+const READING_PARSE_OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS);
+
 /// The kind of one reading block, in document order.
 ///
 /// Payload variants carry exactly what the SwiftUI renderer needs to
@@ -145,7 +154,7 @@ pub fn reading_blocks_source(source: &str) -> Vec<ReadingBlock> {
         .map(|m| m.byte_offset as usize)
         .collect();
 
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let opts = READING_PARSE_OPTIONS;
 
     // --- Pass 1: record a cut point per emitted block --------------------
     //
@@ -419,6 +428,123 @@ fn heading_level(level: HeadingLevel) -> u8 {
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
     }
+}
+
+// --- Table cell segmentation (#510) -----------------------------------
+
+/// The cells of one GFM table, segmented by pulldown-cmark's table events.
+///
+/// `header` is the head row's cells left-to-right; `rows` is the body rows,
+/// each a `Vec<String>` of the SAME length as `header` — pulldown normalizes
+/// ragged body rows against the header per the GFM spec, and
+/// [`reading_table_cells`] pads/truncates defensively so the width holds by
+/// construction (the Swift grid indexes `rows[r][c]` without a bounds risk).
+///
+/// Cell text is the flattened inline content (emphasis/code/links reduced to
+/// their text), so `**b**` → `"b"`, `` `code` `` → `"code"`, `[t](u)` → `"t"`.
+/// The block's raw pipes never reach the consumer — this is the honest,
+/// no-second-classifier alternative to rendering the table as monospace source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingTableCells {
+    pub header: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Segment a GFM table's `source` slice into header + body cells.
+///
+/// Input is exactly what [`ReadingBlock::source`] carries for a
+/// [`ReadingBlockKind::Table`] block. Parsing reuses [`READING_PARSE_OPTIONS`]
+/// (the block walk's option set) so the two entry points can never disagree
+/// about what is a table.
+///
+/// Returns `None` when the first top-level block of the parse is not a table
+/// — the API stays total, so a caller handing arbitrary text (or the Swift
+/// side falling back) gets `None` rather than a panic. Any blocks trailing the
+/// table are ignored (they can't occur from a segmented Table block's slice).
+pub fn reading_table_cells(source: &str) -> Option<ReadingTableCells> {
+    let mut parser = Parser::new_ext(source, READING_PARSE_OPTIONS);
+
+    // The API is defensive: only a leading Table drives extraction. Scan to
+    // the first block-level Start; if it is not a Table, bail.
+    let alignments_len = loop {
+        match parser.next()? {
+            Event::Start(Tag::Table(aligns)) => break aligns.len(),
+            // A non-table leading block → not our input; stay total.
+            Event::Start(_) => return None,
+            _ => {}
+        }
+    };
+
+    let mut header: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    // Cells accumulate here per row/head; the head fills `header`, each body
+    // TableRow flushes to `rows`.
+    let mut current: Vec<String> = Vec::new();
+
+    while let Some(event) = parser.next() {
+        match event {
+            Event::End(TagEnd::TableHead) => {
+                header = std::mem::take(&mut current);
+            }
+            // Only body rows fire TableRow; the head uses TableHead directly,
+            // so a TableRow's cells are always a body row.
+            Event::Start(Tag::TableRow) => current = Vec::new(),
+            Event::End(TagEnd::TableRow) => {
+                rows.push(std::mem::take(&mut current));
+            }
+            Event::Start(Tag::TableCell) => {
+                // Drain the cell's inline run up to its matching End and flatten.
+                current.push(collect_cell_text(&mut parser));
+            }
+            Event::End(TagEnd::Table) => break,
+            _ => {}
+        }
+    }
+    // A malformed input might not fire TableHead; fall back to the alignment
+    // count so the width is still well-defined.
+    let width = header.len().max(alignments_len);
+
+    // Normalize every body row to the header width: pad short rows with "",
+    // truncate long ones. pulldown already does this per GFM, but pinning it
+    // here makes the Swift grid's row[c] indexing safe by construction.
+    for row in &mut rows {
+        row.resize(width, String::new());
+    }
+
+    Some(ReadingTableCells { header, rows })
+}
+
+/// Flatten the current `TableCell`'s inline events into plain text, draining
+/// `parser` up to (and including) the cell's matching `End(TableCell)`. The
+/// caller has already consumed the opening `Start(TableCell)`.
+///
+/// Mirrors [`crate::links::collect_inline_text`] semantics — Text/Code append,
+/// SoftBreak/HardBreak → space, other events ignored — implemented locally
+/// because links.rs's helper is private and typed to its own parser; a small
+/// copy here avoids widening that API for one call site. Depth tracking stops
+/// at the End that closes the cell (nested emphasis/code/links emit their own
+/// Start/End pairs).
+fn collect_cell_text<'a, I>(parser: &mut I) -> String
+where
+    I: Iterator<Item = Event<'a>>,
+{
+    let mut out = String::new();
+    let mut depth = 1usize;
+    for event in parser.by_ref() {
+        match &event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Event::Text(s) | Event::Code(s) => out.push_str(s),
+            Event::SoftBreak | Event::HardBreak => out.push(' '),
+            _ => {}
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1044,5 +1170,94 @@ final para
                 w[1]
             );
         }
+    }
+
+    // --- table cell segmentation (#510) ---
+
+    #[test]
+    fn table_cells_basic_2x2() {
+        let src = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.header, vec!["a", "b"]);
+        assert_eq!(cells.rows, vec![vec!["1", "2"]]);
+    }
+
+    #[test]
+    fn table_cells_alignment_row_does_not_leak() {
+        // The `:---` / `:--:` / `---:` delimiter row is table CHROME, never a
+        // body row — it must not appear in header or rows.
+        let src = "| left | center | right |\n|:---|:--:|---:|\n| a | b | c |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.header, vec!["left", "center", "right"]);
+        assert_eq!(cells.rows, vec![vec!["a", "b", "c"]]);
+    }
+
+    #[test]
+    fn table_cells_flatten_inline_content() {
+        // Emphasis, inline code, and links reduce to their text content.
+        let src = "| x | y | z |\n|---|---|---|\n| **b** | `code` | [t](https://u) |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.rows, vec![vec!["b", "code", "t"]]);
+    }
+
+    #[test]
+    fn table_cells_escaped_pipe_stays_in_cell() {
+        // GFM: `\|` is a literal pipe inside a cell, not a column separator.
+        let src = "| a | b |\n|---|---|\n| x \\| y | z |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.rows, vec![vec!["x | y", "z"]]);
+    }
+
+    #[test]
+    fn table_cells_ragged_rows_normalized_to_header_width() {
+        // A short body row and a long one both come out at header width:
+        // pulldown normalizes per GFM, and reading_table_cells pins it.
+        let src = "| a | b | c |\n|---|---|---|\n| 1 | 2 |\n| 4 | 5 | 6 | 7 |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.header.len(), 3);
+        for row in &cells.rows {
+            assert_eq!(row.len(), 3, "every body row must equal header width");
+        }
+        assert_eq!(cells.rows[0], vec!["1", "2", ""]);
+        assert_eq!(cells.rows[1], vec!["4", "5", "6"]);
+    }
+
+    #[test]
+    fn table_cells_unicode_slices_cleanly() {
+        let src = "| 見出し | émoji |\n|---|---|\n| 値 🎉 | café |\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.header, vec!["見出し", "émoji"]);
+        assert_eq!(cells.rows, vec![vec!["値 🎉", "café"]]);
+    }
+
+    #[test]
+    fn table_cells_not_a_table_is_none() {
+        assert!(reading_table_cells("just a paragraph\n").is_none());
+        assert!(reading_table_cells("# heading\n").is_none());
+        assert!(reading_table_cells("").is_none());
+        assert!(reading_table_cells("- list item\n").is_none());
+    }
+
+    #[test]
+    fn table_cells_header_only_has_empty_rows() {
+        let src = "| a | b |\n|---|---|\n";
+        let cells = reading_table_cells(src).expect("a table");
+        assert_eq!(cells.header, vec!["a", "b"]);
+        assert!(cells.rows.is_empty());
+    }
+
+    /// Integration of the two APIs: feed a segmented Table block's `source`
+    /// straight into `reading_table_cells` — the round-trip the Swift consumer
+    /// performs.
+    #[test]
+    fn table_block_source_round_trips_into_cells() {
+        let src = "intro\n\n| h1 | h2 |\n|---|---|\n| a | b |\n| c | d |\n\nafter\n";
+        let table_block = reading_blocks_source(src)
+            .into_iter()
+            .find(|b| b.kind == ReadingBlockKind::Table)
+            .expect("fixture has a table block");
+        let cells = reading_table_cells(&table_block.source).expect("cells from block source");
+        assert_eq!(cells.header, vec!["h1", "h2"]);
+        assert_eq!(cells.rows, vec![vec!["a", "b"], vec!["c", "d"]]);
     }
 }

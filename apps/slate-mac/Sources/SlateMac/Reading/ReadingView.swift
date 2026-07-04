@@ -210,8 +210,11 @@ struct ReadingView: View {
             // laziness; >2k-block perf note logged by the cache;
             // virtualization is the recorded U5-4-gated follow-up).
             VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
-                ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { _, block in
-                    blockView(block, lineStarts: parsed.lineStarts)
+                ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
+                    blockView(
+                        block, index: index,
+                        lineStarts: parsed.lineStarts,
+                        tableCells: parsed.tableCells[index])
                 }
             }
             .padding(Tokens.Spacing.lg)
@@ -228,7 +231,10 @@ struct ReadingView: View {
     // MARK: - Block dispatch
 
     @ViewBuilder
-    private func blockView(_ block: ReadingBlock, lineStarts: [Int]) -> some View {
+    private func blockView(
+        _ block: ReadingBlock, index: Int, lineStarts: [Int],
+        tableCells: ReadingTableCells?
+    ) -> some View {
         switch block.kind {
         case .heading(let level):
             headingView(block, level: level)
@@ -252,13 +258,15 @@ struct ReadingView: View {
         case .diagram(let dialect):
             diagramView(block, dialect: dialect)
         case .table:
-            // Raw-block fallback per spec. The evaluated alternative —
-            // `AccessibleDataGrid` — requires structured columns/rows, so an
-            // honest mapping needs a Rust-side cell segmentation API (a
-            // second table parser in Swift would violate the no-second-
-            // classifier rule). Recorded as the follow-up; the AX label
-            // still announces "table".
-            rawSourceBlock(block.source, axLabel: "Table.")
+            // Cells come from the Rust segmentation API (#510) — the honest
+            // grid, no Swift-side pipe parser (no-second-classifier). On nil
+            // (Rust didn't recognize the slice as a table), fall back to the
+            // raw monospace source, labeled "Table." exactly as before.
+            if let cells = tableCells {
+                tableGrid(cells)
+            } else {
+                rawSourceBlock(block.source, axLabel: "Table.")
+            }
         case .thematicBreak:
             // Decorative: the visual rule carries no content (spec: hidden
             // from AX so VO continuous read flows past it).
@@ -461,6 +469,46 @@ struct ReadingView: View {
         .accessibilityHint("Wide content scrolls horizontally.")
     }
 
+    /// One body row of a rendered table. `id` is the row's index (rows are
+    /// value-identical when their cells repeat, so a positional id keeps
+    /// `ForEach` stable); `cells` has the same width as the header — Rust
+    /// normalizes ragged rows, so `cell(_:)` never indexes out of range.
+    private struct TableRow: Identifiable {
+        let id: Int
+        let cells: [String]
+
+        /// Belt-and-braces bounds guard: returns "" past the row's width even
+        /// though Rust guarantees width == header count.
+        func cell(_ column: Int) -> String {
+            column >= 0 && column < cells.count ? cells[column] : ""
+        }
+    }
+
+    /// Honest table render (#510): [`AccessibleDataGrid`] backed by the Rust
+    /// cell segmentation — header cells carry `.isHeader`, each body cell
+    /// announces "Header: value", and the summary is a focusable region. An
+    /// empty header cell stays honest (no "Column N" fabrication); the grid's
+    /// per-cell labels use it verbatim.
+    private func tableGrid(_ cells: ReadingTableCells) -> some View {
+        let columns = cells.header.enumerated().map { columnIndex, header in
+            AccessibleDataGrid<TableRow>.Column(header) { row in
+                row.cell(columnIndex)
+            }
+        }
+        let rows = cells.rows.enumerated().map { rowIndex, cellValues in
+            TableRow(id: rowIndex, cells: cellValues)
+        }
+        let columnCount = cells.header.count
+        let summary =
+            "Table: \(rows.count) \(rows.count == 1 ? "row" : "rows"), "
+            + "\(columnCount) \(columnCount == 1 ? "column" : "columns")."
+        return AccessibleDataGrid(
+            columns: columns,
+            rows: rows,
+            summary: summary,
+            accessibilityLabel: "Table")
+    }
+
     // MARK: - Specialized-model matching
 
     /// A pipeline model belongs to a segmented block when its byte offset
@@ -526,6 +574,13 @@ final class ReadingParseCache {
     struct Parsed {
         var blocks: [ReadingBlock]
         var lineStarts: [Int]
+        /// Segmented cells for each `.table` block, keyed by its index in
+        /// `blocks`. Computed EAGERLY here (once per parse), never in `body`
+        /// — the "one parse per toggle" budget forbids per-render FFI. Tables
+        /// are rare, so eager alongside the block walk is bounded and simplest.
+        /// A missing key (Rust returned nil) means the renderer falls back to
+        /// the raw-source block.
+        var tableCells: [Int: ReadingTableCells]
     }
 
     /// Documented perf boundary (spec §U3-1): the eager VStack materializes
@@ -547,9 +602,21 @@ final class ReadingParseCache {
                     + "boundary (%d); virtualization follow-up is measured in U5-4.",
                 blocks.count, Self.perfNoteBlockThreshold)
         }
+        // Eager, once-per-parse table segmentation (#510): the FFI runs here,
+        // not in `body`. Cells come from the SAME Rust parse the block walk
+        // used (no second, Swift-side pipe parser — the no-second-classifier
+        // invariant). A nil result leaves the key absent → raw-block fallback.
+        var tableCells: [Int: ReadingTableCells] = [:]
+        for (index, block) in blocks.enumerated() {
+            guard case .table = block.kind else { continue }
+            if let cells = readingTableCells(source: block.source) {
+                tableCells[index] = cells
+            }
+        }
         let parsed = Parsed(
             blocks: blocks,
-            lineStarts: ReadingBlockSource.lineStartOffsets(of: text))
+            lineStarts: ReadingBlockSource.lineStartOffsets(of: text),
+            tableCells: tableCells)
         cachedText = text
         cached = parsed
         return parsed
