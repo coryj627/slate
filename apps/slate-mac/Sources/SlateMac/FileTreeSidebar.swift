@@ -606,6 +606,10 @@ struct FileTreeSidebar: View {
         .onDrop(
             of: [Self.nodeUTType], isTargeted: nil,
             perform: { providers in handleDrop(providers, into: "") })
+        // Complex-gesture disclosure (WCAG 3.3.2) for the container-level
+        // drop target above.
+        .accessibilityHint(
+            "Dropping a dragged file or folder on empty space moves it to the vault root.")
         // Seed the mirror if a selection already exists when the sidebar mounts
         // (e.g. re-entering the vault view with a file open).
         .onAppear { listSelection = rowID(forPath: appState.selectedFilePath) }
@@ -882,6 +886,11 @@ struct FileTreeSidebar: View {
             .accessibilityAction(named: Text("New Note in Folder")) {
                 appState.createNote(in: node.path)
             }
+            // Complex-gesture disclosure (WCAG 3.3.2): the row carries a
+            // context menu, a drag source, and a drop target — say what each
+            // does, not how to perform it.
+            .accessibilityHint(
+                "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Rename, move, delete, and new-note actions are in the context menu.")
             .help(node.path)
             .contextMenu { fileManagementMenu(for: node) }
             // Drag source: a folder can be dragged onto another folder / root.
@@ -919,7 +928,7 @@ struct FileTreeSidebar: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
             .accessibilityHint(
-                "Opens the note. Open-in-new-tab, split, rename, move, and delete actions are in the context menu.")
+                "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, move, and delete actions are in the context menu.")
             // U2-5 file-management rotor actions.
             .accessibilityAction(named: Text("Rename")) { beginRename(node) }
             .accessibilityAction(named: Text("Move to Trash")) {
