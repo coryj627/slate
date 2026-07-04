@@ -1,5 +1,7 @@
 # U4 — Right-hand leaves + utility rail
 
+**Status: ✅ Complete (2026-07-04).** All four issues shipped and merged: U4-1 leaf rail + container (#470 → PR #501), U4-2 panel port to leaves (#471 → #505, mounted-ZStack retention verbatim), U4-3 bottom-left utility bar (#472 → #506), U4-4 three-region focus routing + leaf context (#473 → #516; the ⌘⌥arrow census extended over tree/leaf terminals, passive region mirrors added in review so Tab/click entry routes per spec).
+
 **Goal.** Give the workspace an Obsidian-style right pane: a set of switchable "leaves" chosen from a vertical icon rail, hosting the panels that used to stack in the left sidebar (now that Properties has moved into the note). Move the bottom-left utilities (Settings, Help, Vault switcher) to icon buttons. The left sidebar becomes, cleanly, just the file tree.
 
 **Depends on:** U1 (leaves reflect the active tab; live in the workspace). **Parallel:** U3.

@@ -1,5 +1,7 @@
 # U5 — Iconography & presentation polish
 
+**Status: ✅ Complete (2026-07-05).** U5-1 SlateSymbol totality + macOS 26 Liquid Glass + per-surface rendering modes (#474 → PR #545; the raw-symbol sweep surface was EMPTY — the U0 lint held all program; v7 audit changed no glyphs, by evidence); U5-2 layout/density/typography polish (#475 → #547; InteractiveRowStyle — one hover/pressed wash, not seven; Tokens.Radius); U5-3 dark/light correctness (#476 → #538; found + fixed a real APCA floor failure — unresolved-link `.orange` at Lc≈43 light — via the gated `warningText` role; 13 pairings machine-verified both appearances); U5-4 verification sweep + close-out (#477 → final PR; full-scale release censuses recorded, interaction budgets benched, runbook §U written — human VO pass pending as scripted).
+
 **Goal.** The finishing pass. Apply the `SlateSymbol` language everywhere, adopt the macOS 26 look where available, and take a deliberate run at layout clarity, density, emphasis, and dark/light balance across every new surface — then verify the whole shell against the presentation-ready bar end to end. This is what turns "functionally complete" into "you can demo it."
 
 **Depends on:** U3, U4 (polish over the finished surfaces). **Parallel:** none (last).

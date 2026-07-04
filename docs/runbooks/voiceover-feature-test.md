@@ -186,6 +186,42 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 2. Type a filter → live region **"N command(s) matching \"<filter>\""**; rows (via VO cursor) speak **"<command>, <hotkey> … button"** with per-command hints; section headings ("Navigation").
 3. Return invokes the selection (observable effect, e.g. **"N tasks shown"**); Esc closes and announces focus restore to the prior responder.
 
+### U — Workspace shell: tabs, splits, modes, properties, leaves, file management (Milestones U1–U5)
+
+Scripted end-to-end path per u5_spec §U5-4. Fixture: the demo vault plus one
+note containing every block kind (headings/list/task/code/math/mermaid/embed/
+citation/wikilink — `reading-fixture.md`; create it from the U3-1 test fixture
+if the vault lacks one). **2026-07 baseline column**: `auto-PASS` rows were
+verified by the automated suites (the utterance string is pinned by a unit
+test); `pending` rows need the human VO pass — every FAIL becomes an `audit`
+issue; the milestone does not close with an open FAIL.
+
+| # | Step | Expected utterance / outcome | Baseline 2026-07 |
+|---|---|---|---|
+| U1 | Open vault → tree: expand two folder levels (→ key) | Folder rows: **"<name>, expanded/collapsed, N items, level N"**; → expands, ← collapses (onMoveCommand mapping) | pending |
+| U2 | Open note (Return) → ⌘-click a second note → tab strip | **"Showing <file>."** then tab items: **"<name>, tab 2 of 2, selected"**; dirty tab appends **", edited"** | pending |
+| U3 | Reorder tab (⌃⌘→) → ⌘1/⌘2 direct select | Reorder announces the new position; ⌘N selects + **"Showing <file>."** | pending |
+| U4 | Split right (⌘\) → ⌘⌥arrows across panes → resize (⌘⌥+/-) | **"Split. Editor pane 2 of 2, <title>."** · moves announce **"Editor pane N of M, <title>."** · resize: **"Pane resized, N percent."** | pending |
+| U5 | ⌘⌥← from leftmost pane → tree; ⌘⌥→ back; ⌘⌥→ from rightmost → leaf; ⌘⌥← back | **"Files."** → **"Editor pane …"** → **"<leaf> panel."** → same pane returns (anchor); Tab-into-tree then ⌘⌥→ also returns (passive region mirror) | pending |
+| U6 | Reading mode (⌘⇧E) on the fixture note → continuous read (VO+A) | **"Reading mode."**; continuous read flows: headings speak as headings (rotor VO+H walks document order), list depth as **"list item, level N"**, task rows expose **"Mark complete/incomplete"** buttons, code/math/mermaid speak their existing panel contracts, thematic break silent | pending |
+| U7 | Activate a wikilink in reading mode → land per open rules; activate an internal markdown link | **"Opened <file>."** (+ unresolved links announce **"<target> is unresolved. Cannot open."**, never silent) | pending |
+| U8 | Toggle a task in reading mode (buffer clean) | Checkbox toggles; disabled-while-dirty carries the hint **"Save the note first…"** | pending |
+| U9 | Properties: edit a text property → add one → show source (⌘⇧D) → apply a YAML edit | **"Property <key> updated."** · sheet flow per M4 · **"Showing source"** value on the toggle · apply: **"Properties updated."**; malformed YAML: inline error spoken, nothing written | pending |
+| U10 | Scripted external edit → apply YAML → conflict alert → Keep mine | The property-conflict alert (three buttons) with focus returned to the toggle on resolve | pending |
+| U11 | Leaves: rail arrows across all 10 → each leaf announces + renders | **"<leaf> panel."** per switch; rail is ONE Tab stop (single-focus-stop) | pending |
+| U12 | File management: new folder → rename (inline) → move (picker) → delete | **"Created folder <name>."** · **"Renamed <old> to <new>."** (+ **", updated links in N notes."** when inbound links exist) · **"Moved <name> to <folder>."** · **"Moved <name> to Trash."**; focus per U2-6 (create→new row, delete→sibling) | pending |
+| U13 | Verify a wikilink to the moved/renamed file still resolves (open the citer) | Link opens the moved target (**referential stability** — the U2-3 invariant, census-guaranteed) | auto-PASS (censuses; spot-check live) |
+| U14 | Quit → relaunch → layout + per-tab modes restored; externally-deleted tabbed file | Same panes/tabs/modes (workspace.json v1); deleted file's tab shows the error pane, never silent | pending |
+| U15 | Dynamic Type XXL over U1–U14 surfaces | No truncation/clip; properties header scrolls internally; tab strip scrolls horizontally | pending |
+| U16 | Reduce Motion pass | Mode/leaf swaps are instant (no animation exists — inherently safe); scroll routing jumps respect the setting | auto-PASS (structural: swaps are unanimated `if` mounts) |
+| U17 | Keyboard-only pass: complete U1–U14 with no pointer | Every step completes; no focus limbo (the U4-4 no-trap tests are the structural guarantee; this is the live confirmation) | pending |
+| U18 | macOS 26 only: Liquid Glass visual check — tab strip / leaf rail / utility bar in BOTH appearances | Glass renders legibly over bleed-through content (esp. the tab strip); <26 fallback is byte-identical tokens (no check needed) | pending |
+
+**Known chatter items to adjudicate during the pass** (from U4-4 review; fix as
+`audit` issues only if they read as noise in practice): same-pane terminal
+return re-announces "Editor pane N of M"; empty-vault tree entry is a silent
+no-op (⌘⌥→ still exits).
+
 ## 7. Reporting
 
 Per milestone: PASS / PARTIAL / FAIL + the quoted utterances + disk probes. File findings as `audit`-labeled issues; one issue per root cause, umbrella for announcement-polish items. Re-run only the FAIL/PARTIAL paths after fixes land, plus A (smoke) — full sweep per release.

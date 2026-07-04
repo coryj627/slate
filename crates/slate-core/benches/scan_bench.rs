@@ -551,6 +551,72 @@ fn bench_doc_buffer_keystroke(c: &mut Criterion) {
     group.finish();
 }
 
+/// U2 directory API (#459) + U2-3 rewrite planner (#461) — the u2_spec
+/// benches, recorded as Milestone U baselines in BENCHMARKS.md.
+fn bench_dir_and_rewrite(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dir_and_rewrite");
+    group.sample_size(20);
+
+    // list_dir_children over a 10k-file vault root — the tree's lazy
+    // per-level fetch (the sidebar's hot path on expand).
+    let vault = generate_vault(10_000);
+    let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+    session.scan_initial(&CancelToken::new()).expect("scan");
+    group.bench_function("list_dir_children_10k_root", |b| {
+        b.iter(|| {
+            black_box(
+                session
+                    .list_dir_children(
+                        "",
+                        Paging {
+                            cursor: None,
+                            limit: 1_000,
+                        },
+                    )
+                    .expect("list_dir_children"),
+            )
+        });
+    });
+
+    // plan_rewrites_for_source over a 500-note link graph for one moved
+    // file — the U2-3 planner's per-file cost during a move, through the
+    // public planner surface (post-move paths + the public index type).
+    let sources: Vec<(String, String)> = (0..500)
+        .map(|i| {
+            (
+                format!("notes/n{i:03}.md"),
+                format!(
+                    "see [[target]] and [[n{:03}]] plus [md](notes/target.md)\n",
+                    (i + 1) % 500
+                ),
+            )
+        })
+        .collect();
+    let mapping = slate_core::link_rewrite::MoveMapping::new([(
+        "notes/target.md".to_string(),
+        "archive/target.md".to_string(),
+    )]);
+    let mut post_paths: Vec<String> = sources.iter().map(|(p, _)| p.clone()).collect();
+    post_paths.push("archive/target.md".to_string());
+    let index = slate_core::InMemoryVaultIndex::new(post_paths);
+    group.bench_function("plan_rewrites_500_sources", |b| {
+        b.iter(|| {
+            let mut edits = 0usize;
+            for (path, text) in &sources {
+                edits += black_box(
+                    slate_core::link_rewrite::plan_rewrites_for_source(
+                        path, text, &mapping, &index,
+                    )
+                    .len(),
+                );
+            }
+            black_box(edits)
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_first_open_and_scan,
@@ -564,5 +630,6 @@ criterion_group!(
     bench_editor_highlight_ranged,
     bench_extract_code_blocks,
     bench_doc_buffer_keystroke,
+    bench_dir_and_rewrite,
 );
 criterion_main!(benches);

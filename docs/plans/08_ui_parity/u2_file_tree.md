@@ -1,5 +1,7 @@
 # U2 — File tree + full file management
 
+**Status: ✅ Complete (2026-07-04).** All six issues shipped and merged: U2-1 directory API (#459 → PR #493), U2-2 structural mutations + journaled undo (#460 → #502), U2-3 link integrity (#461 → #497 pure planner + resolver rooted-exact fix, then #503 session integration), U2-4 FileTreeSidebar (#462 → #499), U2-5 file-management commands + tab retargeting (#463 → #512), U2-6 announcements + focus (#464 → #513). The referential-stability invariant is census-guaranteed (full-scale 500×200 structural + 120-seed link censuses, release); censuses caught the undo-replan, stem-sweep, oplog-anchor, and reverse-mapping bugs pre-merge. Follow-ups: #495 quick switcher, #507 logging facade, #509 anchored markdown resolution.
+
 **Goal.** Replace the flat file list with a real collapsible folder tree, and give it full file management: create folders, move and rename files and folders — and, critically, **rewrite links when things move** so a reorganization never breaks the vault's wikilinks, embeds, or backlinks. Keyboard-first throughout; drag is an enhancement, never the only path.
 
 **Depends on:** U0. **Parallel:** U1 (disjoint surfaces — core + left sidebar vs. center workspace).

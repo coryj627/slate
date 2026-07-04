@@ -1,5 +1,7 @@
 # U1 — Workspace shell: tabs + split panes
 
+**Status: ✅ Complete (2026-07-03).** All six issues shipped and merged: U1-1 WorkspaceModel (#453 → PR #490), U1-4 MainSplitView migration (#456 → #491), U1-2 tab bar + per-tab documents (#454 → #492), U1-3 split panes + focus routing (#455 → #494), U1-5 open-in targets (#457 → #496), U1-6 session restore (#458 → #498, promoted from stretch). Executed order U1-1→U1-4→U1-2→U1-3→U1-5→U1-6 (migration before tab UI). Architecture as amended in specs/u1_spec.md: AppState's single-note fields ARE the active tab's document; parked `NoteDocument`s + the `activateTab` identity funnel make the buffer-under-wrong-tab class structurally impossible. Quick switcher deferred to #495. 800-seed model censuses (two real bugs pre-merge: clamp oscillation → sticky waterfill; I5 breach → global 6-group cap).
+
 **Goal.** Replace the single-note center column with a real workspace: multiple documents as tabs, side-by-side split panes, and a typed tab-content abstraction so today's markdown editor — and tomorrow's Bases / Canvas / Graph — are just *kinds* of tab. This is the largest structural change in the program and the seam that lets Milestones N/T/P plug in without bespoke windows.
 
 **Depends on:** U0. **Parallel:** U2. **Unblocks:** U3, U4.

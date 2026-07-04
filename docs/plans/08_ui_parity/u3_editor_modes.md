@@ -1,5 +1,7 @@
 # U3 — Editor: reading/editing modes + inline properties
 
+**Status: ✅ Complete (2026-07-05).** All five issues shipped and merged: U3-5 body-only buffer, Rust half (#469 → PR #500; Swift flip deliberately deferred) — completed by U3-3; U3-1 reading blocks + ReadingView (#465 → #504 Rust, #514 view); U3-2 mode toggle ⌘⇧E (#466 → #515); U3-3 in-note properties widget + the U3-5 editor flip (#467+#469 → #528; NotePartsBundle gained exact body offsets — the one conversion authority); U3-4 show-source YAML toggle ⌘⇧D (#468 → #530). Round-trip law + widget/body interleave censused at 100k (release). Reading follow-ups: #508 tag scope, #509 anchored destinations, #510 table grid, #511 in-place embeds.
+
 **Goal.** Give the editor the two things Obsidian users expect: a **Reading view** (fully rendered, navigable, read-only) and an **Editing view** (today's source `NSTextView`), toggled per tab — and move **Properties into the note** as a rich editable widget at the top, with a "show source" YAML escape hatch. Reading view finally puts the math/Mermaid/code/citation pipelines *inline* instead of only in side panels.
 
 **Depends on:** U1 (mode + properties are per-tab). **Parallel:** U4. **Unblocks:** U5.
