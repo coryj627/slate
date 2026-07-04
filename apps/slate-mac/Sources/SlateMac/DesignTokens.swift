@@ -38,6 +38,20 @@ enum Tokens {
         static let xxl: CGFloat = 32
     }
 
+    // MARK: Corner radius — the small, fixed rounding scale for control shapes
+    // (selection fills, chips, hover washes). Fixed points, not Dynamic-Type
+    // scaled: a corner radius is a shape constant, not text (WCAG 1.4.4 governs
+    // the text inside, which still scales). Call sites reach for these so a
+    // control's hover wash and its selected fill share one rounding (U5-2).
+    enum Radius {
+        /// 3 — tight chips / inline badges (e.g. an unresolved-link badge).
+        static let chip: CGFloat = 3
+        /// 4 — small blocks (raw-source / code-fence fallbacks).
+        static let small: CGFloat = 4
+        /// 5 — the default control shape (tab background, interactive-row wash).
+        static let control: CGFloat = 5
+    }
+
     // MARK: Typography — semantic roles mapped to Dynamic-Type text styles (never
     // fixed sizes, so text scales — WCAG 1.4.4). Milestone R can re-map roles.
     enum Typography {

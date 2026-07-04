@@ -32,30 +32,31 @@ struct BacklinksPanel: View {
         let count = appState.currentBacklinks.count
         let suffix = count == 1 ? "entry" : "entries"
         return Text("Backlinks, \(count) \(suffix)")
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
     private var content: some View {
         if appState.isLoadingLinks && appState.currentBacklinks.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: Tokens.Spacing.sm) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading backlinks…")
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, Tokens.Spacing.xs)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Loading backlinks.")
         } else if appState.currentBacklinks.isEmpty {
             Text("No notes link here yet.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 4)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+                .padding(.vertical, Tokens.Spacing.xs)
                 .accessibilityLabel("No notes link here yet.")
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
                 ForEach(Array(appState.currentBacklinks.enumerated()), id: \.offset) { _, backlink in
                     row(for: backlink)
                 }
@@ -67,24 +68,25 @@ struct BacklinksPanel: View {
         Button {
             appState.openBacklink(backlink)
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                 Text(filename(for: backlink.sourcePath))
-                    .foregroundStyle(.primary)
-                    .font(.callout)
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
                 // No lineLimit: the snippet is a context excerpt
                 // from the source note's body — content the user
                 // wants to read, not chrome to constrain. At large
                 // Dynamic Type the prior `.lineLimit(3)` truncated
                 // below the WCAG 1.4.4 threshold. Let it wrap.
                 Text(backlink.snippet)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 2)
+            .padding(.vertical, Tokens.Spacing.xxs)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Leaf row rest/hover/pressed affordance (U5-2).
+        .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .accessibilityLabel(
             "Backlink from \(filename(for: backlink.sourcePath)), context: \(backlink.snippet)"
         )

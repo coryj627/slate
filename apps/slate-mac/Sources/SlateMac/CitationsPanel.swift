@@ -59,24 +59,26 @@ struct CitationsPanel: View {
     // MARK: - States
 
     private func emptyState(message: String) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Spacing.sm) {
             Spacer()
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
                 .multilineTextAlignment(.center)
             Spacer()
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
     }
 
     private var loadingState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Tokens.Spacing.md) {
             ProgressView()
             Text("Loading citations…")
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -84,14 +86,15 @@ struct CitationsPanel: View {
     }
 
     private func errorState(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
             Text("Citations couldn't be loaded")
-                .font(.headline)
+                .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Citations couldn't be loaded. \(message)")
@@ -126,8 +129,10 @@ struct CitationsPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .foregroundStyle(
                     citation.bibEntry == nil && citation.styleId.isEmpty == false
-                        ? Color.orange  // unresolved key marker
-                        : Color.primary
+                        // Unresolved-key marker: semantic warning tint. The
+                        // warning-color token + its APCA pairing land in U5-3.
+                        ? Color.orange
+                        : Tokens.ColorRole.textPrimary
                 )
                 .contentShape(Rectangle())
         }

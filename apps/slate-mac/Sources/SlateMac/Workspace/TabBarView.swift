@@ -23,6 +23,12 @@ struct TabBarView: View {
     /// with the active tab's bolded title (never color alone).
     var isFocusedGroup: Bool = true
 
+    /// Tab-strip row height (u5_spec §U5-2 density target: 30pt). A fixed
+    /// SHAPE height, not text — the titles inside are `Tokens.Typography`
+    /// roles and still scale with Dynamic Type (WCAG 1.4.4); the 24pt hit
+    /// targets sit inside this with breathing room.
+    private static let stripHeight: CGFloat = 30
+
     var body: some View {
         HStack(spacing: 0) {
             modeToggle
@@ -44,7 +50,7 @@ struct TabBarView: View {
             Spacer(minLength: 0)
             allTabsMenu
         }
-        .frame(height: 30)
+        .frame(height: Self.stripHeight)
         // macOS 26 Liquid Glass on the strip; the exact `surfaceSecondary`
         // token below 26 (U5-1) — appearance-only, no layout change.
         .slateChromeMaterial(fallback: Tokens.ColorRole.surfaceSecondary)
@@ -94,7 +100,7 @@ struct TabBarView: View {
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.interactiveRow())
             .padding(.leading, Tokens.Spacing.xs)
             .accessibilityLabel(
                 target == .reading ? "Reading mode" : "Editing mode")
@@ -156,7 +162,9 @@ struct TabBarView: View {
                 .padding(.horizontal, Tokens.Spacing.sm)
                 .padding(.vertical, Tokens.Spacing.xs)
             }
-            .buttonStyle(.plain)
+            // Shared rest/hover/pressed affordance (U5-2). Selection stays the
+            // outer `surface` fill below; focus stays the system ring.
+            .buttonStyle(.interactiveRow())
             .accessibilityValue(
                 Self.accessibilityValue(index: index, count: group.tabs.count, isDirty: dirty)
             )
@@ -172,14 +180,16 @@ struct TabBarView: View {
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            // Close is its own hover/pressed target (U5-2) so it lights up
+            // independently of the tab body it sits beside.
+            .buttonStyle(.interactiveRow())
             .foregroundStyle(Tokens.ColorRole.textSecondary)
             .opacity(active ? 1 : 0.6)
             .accessibilityValue(Text(title(tab)))
             .help("Close tab")
         }
         .background(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: Tokens.Radius.control)
                 .fill(active ? Tokens.ColorRole.surface : Color.clear)
         )
         .contextMenu {

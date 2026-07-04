@@ -80,7 +80,8 @@ struct SidebarUtilityBar: View {
         } label: {
             utilityGlyph(.settings)
         }
-        .buttonStyle(.plain)
+        // Shared rest/hover/pressed affordance (U5-2).
+        .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .accessibilityLabel("Settings")
         .accessibilityHint("Opens the Settings window.")
         .help("Settings (⌘,)")
@@ -94,7 +95,8 @@ struct SidebarUtilityBar: View {
         } label: {
             utilityGlyph(.help)
         }
-        .buttonStyle(.plain)
+        // Shared rest/hover/pressed affordance (U5-2).
+        .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .accessibilityLabel("Help")
         .accessibilityHint("Opens the project README in your default browser.")
         .help("Help")

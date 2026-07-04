@@ -635,10 +635,11 @@ struct FileTreeSidebar: View {
     // MARK: - States
 
     private var scanningState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Tokens.Spacing.md) {
             ProgressView()
             Text("Scanning vault…")
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -646,23 +647,25 @@ struct FileTreeSidebar: View {
     }
 
     private func errorState(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
             Text("Could not load files")
-                .font(.headline)
+                .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Spacing.sm) {
             Text("No Markdown files in this vault.")
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("No Markdown files in this vault.")
     }
@@ -1025,14 +1028,15 @@ struct FileTreeSidebar: View {
                 // expanded/collapsed.
                 SlateSymbol.disclosure.decorative
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                 // Folder glyph per expanded state; decorative since the row label
                 // names the folder (SlateSymbol contract).
                 (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                 Text(node.name)
-                    .foregroundStyle(.primary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
                     .lineLimit(2)
                 Spacer(minLength: 0)
             }
@@ -1089,16 +1093,18 @@ struct FileTreeSidebar: View {
         if isRenaming(node) {
             renameFieldRow(node)
         } else {
-            // Explicit `.primary` / `.secondary` so the text colors don't fall
-            // back to whatever inherited container style happens to be in scope.
+            // Explicit token text roles so the colors don't fall back to
+            // whatever inherited container style happens to be in scope
+            // (textPrimary for the name, textSecondary for the metadata line).
             HStack(spacing: Tokens.Spacing.xs) {
                 indent(for: node.depth)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                     Text(node.name)
-                        .foregroundStyle(.primary)
+                        .font(Tokens.Typography.body)
+                        .foregroundStyle(Tokens.ColorRole.textPrimary)
                     Text("Modified \(relativeDate(for: mtime(of: node)))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -1151,11 +1157,11 @@ struct FileTreeSidebar: View {
     /// commit was rejected (collision / invalid name) — the field keeps focus so
     /// the user can correct without re-invoking (spec §U2-5).
     private func renameFieldRow(_ node: TreeNode) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
             HStack(spacing: Tokens.Spacing.xs) {
                 indent(for: node.depth)
                 if node.isDirectory {
-                    SlateSymbol.folder.decorative.foregroundStyle(.secondary)
+                    SlateSymbol.folder.decorative.foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
                 RenameField(
                     initialName: node.name,
@@ -1171,7 +1177,7 @@ struct FileTreeSidebar: View {
             }
             if let error = appState.structuralRenameError {
                 Text(error)
-                    .font(.caption)
+                    .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.destructiveText)
                     // WCAG 1.4.4: wrap, don't clip.
                     .lineLimit(3)
@@ -1292,8 +1298,8 @@ struct FileTreeSidebar: View {
             ProgressView()
                 .controlSize(.small)
             Text("Loading…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
@@ -1309,8 +1315,8 @@ struct FileTreeSidebar: View {
             SlateSymbol.warning.image()
                 .foregroundStyle(Tokens.ColorRole.destructiveText)
             Text(message)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
                 // WCAG 1.4.4: no lineLimit(1) — let Dynamic Type wrap.
                 .lineLimit(3)
             Spacer(minLength: 0)
@@ -1380,7 +1386,7 @@ struct FileTreeSidebar: View {
         // Indeterminate (`progress == nil`) when we don't yet know the
         // denominator — Started{totalFiles: 0} or a FileIndexed with total ==
         // 0. The label still tells the user what's happening.
-        HStack(spacing: 8) {
+        HStack(spacing: Tokens.Spacing.sm) {
             if let progress {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
@@ -1389,12 +1395,15 @@ struct FileTreeSidebar: View {
                     .progressViewStyle(.linear)
             }
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
                 // WCAG 1.4.4: no lineLimit(1) — let Dynamic Type wrap.
                 .lineLimit(2)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Tokens.Spacing.md)
+        // 6pt: a deliberate half-step between xs(4) and sm(8) — a thin progress
+        // strip wants a tighter vertical rhythm than a full sm row. No 6pt token
+        // (the scale is 2/4/8/12…); kept literal per the u5_spec escape hatch.
         .padding(.vertical, 6)
         // Combine into one accessible element so VoiceOver reads "<label>"
         // instead of separately announcing the bar.
@@ -1529,7 +1538,7 @@ private struct RenameField: View {
     var body: some View {
         TextField("Name", text: $text)
             .textFieldStyle(.roundedBorder)
-            .font(.body)
+            .font(Tokens.Typography.body)
             .focused($focused)
             .accessibilityLabel(isDirectory ? "Folder name" : "File name")
             .accessibilityHint("Type a new name. Return renames; Escape cancels.")

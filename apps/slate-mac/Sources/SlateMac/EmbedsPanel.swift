@@ -41,35 +41,36 @@ struct EmbedsPanel: View {
         let count = embedLinks.count
         let suffix = count == 1 ? "entry" : "entries"
         return Text(verbatim: "Embeds, \(count) \(suffix)")
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
     private var content: some View {
         if appState.isLoadingEmbeds {
-            HStack(spacing: 8) {
+            HStack(spacing: Tokens.Spacing.sm) {
                 ProgressView()
                     .controlSize(.small)
                 Text(verbatim: "Resolving embeds…")
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, Tokens.Spacing.xs)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Resolving embeds.")
         } else if let err = appState.embedsLoadError {
-            HStack(alignment: .top, spacing: 6) {
+            HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
                 SlateSymbol.warning.decorative
                     .foregroundStyle(Tokens.ColorRole.warningText)
                 Text(verbatim: "Could not resolve embeds: \(err)")
-                    .font(.caption)
-                    .foregroundStyle(.primary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, Tokens.Spacing.xs)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Could not resolve embeds: \(err)")
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 ForEach(Array(embedLinks.enumerated()), id: \.offset) { _, link in
                     row(for: link)
                 }
@@ -80,7 +81,7 @@ struct EmbedsPanel: View {
     private func row(for link: OutgoingLink) -> some View {
         let key = appState.embedTargetKey(link)
         let resolution = appState.currentNoteEmbedResolutions[key]
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
             if let resolution {
                 EmbedView(
                     resolution: resolution,
@@ -93,14 +94,14 @@ struct EmbedsPanel: View {
                 // change in flight, or the embed wasn't in the
                 // batch). Show a placeholder so the panel still
                 // accounts for every embed link.
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
                     SlateSymbol.moreActions.decorative
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
                     Text(verbatim: "Embed not yet resolved: \(key)")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.callout)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, Tokens.Spacing.xs)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Embed not yet resolved: \(key)")
             }

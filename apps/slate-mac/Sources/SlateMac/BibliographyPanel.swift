@@ -29,10 +29,10 @@ struct BibliographyPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
             segmentPicker
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
+                .padding(.horizontal, Tokens.Spacing.md)
+                .padding(.top, Tokens.Spacing.sm)
 
             Divider()
 
@@ -102,9 +102,9 @@ struct BibliographyPanel: View {
                     "No bibliography sources configured. Open Settings → Bibliography to add one."
             )
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 searchField
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, Tokens.Spacing.md)
                 Divider()
                 let filtered = appState.filteredBibliographyEntries()
                 if filtered.isEmpty {
@@ -135,13 +135,14 @@ struct BibliographyPanel: View {
         Button {
             appState.expandedBibEntry = entry
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                 Text(rowTitle(for: entry))
+                    .font(Tokens.Typography.body)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text(rowSubtitle(for: entry))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .lineLimit(2)
                     .accessibilityHidden(true)
             }
@@ -249,6 +250,9 @@ struct BibliographyPanel: View {
                     }
                 } header: {
                     Text(path)
+                        // Grouped-list section header: an emphasized caption
+                        // (semantic Dynamic-Type style, scales). Tokens.Typography
+                        // has no bold-caption role, so kept direct.
                         .font(.caption.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
                 }
@@ -260,12 +264,13 @@ struct BibliographyPanel: View {
     // MARK: - Shared states
 
     private func emptyState(message: String) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Spacing.sm) {
             Spacer()
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, Tokens.Spacing.md)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -274,10 +279,11 @@ struct BibliographyPanel: View {
     }
 
     private func loadingState(message: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Tokens.Spacing.md) {
             ProgressView()
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -285,14 +291,15 @@ struct BibliographyPanel: View {
     }
 
     private func errorState(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
             Text("Bibliography couldn't be loaded")
-                .font(.headline)
+                .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Bibliography couldn't be loaded. \(message)")
@@ -308,14 +315,15 @@ struct FilesCitingSheet: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
             Text("Files citing this entry")
-                .font(.headline)
+                .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
 
             if paths.isEmpty {
                 Text("No files in this vault cite this entry.")
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("No files in this vault cite this entry.")
             } else {
@@ -333,7 +341,7 @@ struct FilesCitingSheet: View {
                     .keyboardShortcut(.cancelAction)
             }
         }
-        .padding(16)
+        .padding(Tokens.Spacing.lg)
         .frame(minWidth: 380, idealWidth: 460, maxWidth: 600, minHeight: 200, maxHeight: 500)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(

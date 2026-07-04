@@ -34,30 +34,31 @@ struct OutgoingLinksPanel: View {
         let count = appState.currentOutgoingLinks.count
         let suffix = count == 1 ? "entry" : "entries"
         return Text("Outgoing links, \(count) \(suffix)")
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
     private var content: some View {
         if appState.isLoadingLinks && appState.currentOutgoingLinks.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: Tokens.Spacing.sm) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading outgoing links…")
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, Tokens.Spacing.xs)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Loading outgoing links.")
         } else if appState.currentOutgoingLinks.isEmpty {
             Text("This note has no outgoing links.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 4)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+                .padding(.vertical, Tokens.Spacing.xs)
                 .accessibilityLabel("This note has no outgoing links.")
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
                 ForEach(
                     Array(appState.currentOutgoingLinks.enumerated()),
                     id: \.offset
@@ -72,10 +73,10 @@ struct OutgoingLinksPanel: View {
         Button {
             appState.openLink(link)
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+                HStack(spacing: Tokens.Spacing.xs) {
                     Text(displayTarget(for: link))
-                        .font(.callout)
+                        .font(Tokens.Typography.callout)
                         .foregroundStyle(linkColor(for: link))
                         // Strikethrough on unresolved: visual axis
                         // complements the accessibility-label "Unresolved
@@ -92,15 +93,16 @@ struct OutgoingLinksPanel: View {
                     // Dynamic Type sizes below the WCAG 1.4.4
                     // threshold.
                     Text(link.snippet)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 2)
+            .padding(.vertical, Tokens.Spacing.xxs)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Leaf row rest/hover/pressed affordance (U5-2).
+        .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .accessibilityLabel(accessibilityLabel(for: link))
         .accessibilityHint(accessibilityHint(for: link))
         .help(link.targetRaw)
@@ -147,14 +149,18 @@ struct OutgoingLinksPanel: View {
     private func badgeText(_ text: String) -> some View {
         // Plain Text is the most reliable AX-friendly badge here — a
         // custom shape would need its own label, and Dynamic Type
-        // already scales font-based badges naturally.
+        // already scales font-based badges naturally. `.caption2` is a
+        // smaller-than-caption Dynamic-Type style (scales; no fixed size)
+        // with no Tokens.Typography role — kept direct.
         Text(text)
             .font(.caption2)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, Tokens.Spacing.xs)
+            // 1pt: a hairline badge inset, tighter than xxs(2). No 1pt token;
+            // kept literal per the u5_spec escape hatch (a chip, not a row).
             .padding(.vertical, 1)
             .overlay(
-                RoundedRectangle(cornerRadius: 3)
-                    .stroke(.secondary, lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: Tokens.Radius.chip)
+                    .stroke(Tokens.ColorRole.separator, lineWidth: 0.5)
             )
             .accessibilityHidden(true) // role is in the row's label
     }

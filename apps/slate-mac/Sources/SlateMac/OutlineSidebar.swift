@@ -51,24 +51,26 @@ struct OutlineSidebar: View {
     // MARK: - States
 
     private func emptyState(message: String) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Spacing.sm) {
             Spacer()
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
                 .multilineTextAlignment(.center)
             Spacer()
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
     }
 
     private var loadingState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Tokens.Spacing.md) {
             ProgressView()
             Text("Loading outline…")
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -135,10 +137,10 @@ struct OutlineSidebar: View {
     }
 
     private func indentWidth(for level: UInt8) -> CGFloat {
-        // 12pt per level beyond h1. Multiplied by the system text-size
-        // factor inside `Spacer().frame(width:)` so Dynamic Type
+        // Tokens.Spacing.md per level beyond h1. Multiplied by the system
+        // text-size factor inside `Spacer().frame(width:)` so Dynamic Type
         // doesn't visually collapse the hierarchy.
-        CGFloat(level - 1) * 12
+        CGFloat(level - 1) * Tokens.Spacing.md
     }
 
     private func headingLevel(for level: UInt8) -> AccessibilityHeadingLevel {

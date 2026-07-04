@@ -368,7 +368,9 @@ private struct LeafRailView: View {
                 }
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Shared rest/hover/pressed affordance (U5-2). Selection stays the 2pt
+        // leading bar + tint above; focus stays the system ring on the rail.
+        .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .help(help(for: leaf))
         // The active leaf carries `.isSelected` so VoiceOver announces
         // "Outline, selected" — the value half of the radio-group semantics.

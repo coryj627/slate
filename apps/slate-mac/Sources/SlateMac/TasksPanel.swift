@@ -42,30 +42,31 @@ struct TasksPanel: View {
             ? "Tasks, none"
             : "Tasks, \(open) open of \(total) \(suffix)"
         return Text(label)
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
     private var content: some View {
         if appState.isLoadingTasks && appState.currentNoteTasks.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: Tokens.Spacing.sm) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading tasks…")
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, Tokens.Spacing.xs)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Loading tasks.")
         } else if appState.currentNoteTasks.isEmpty {
             Text("No tasks in this note.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 4)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+                .padding(.vertical, Tokens.Spacing.xs)
                 .accessibilityLabel("No tasks in this note.")
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 section(
                     title: "Open",
                     tasks: appState.currentNoteTasks.filter { !$0.completed }
@@ -81,12 +82,15 @@ struct TasksPanel: View {
     @ViewBuilder
     private func section(title: String, tasks: [TaskItem]) -> some View {
         if !tasks.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                 Text("\(title) (\(tasks.count))")
+                    // Open/Done sub-section header: a `.subheadline` semantic
+                    // Dynamic-Type style (scales) sits between sectionHeader and
+                    // body; Tokens.Typography has no sub-header role, kept direct.
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .accessibilityAddTraits(.isHeader)
-                    .padding(.bottom, 2)
+                    .padding(.bottom, Tokens.Spacing.xxs)
                 ForEach(tasks, id: \.ordinal) { task in
                     row(for: task)
                 }
@@ -95,7 +99,7 @@ struct TasksPanel: View {
     }
 
     private func row(for task: TaskItem) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
             checkbox(for: task)
             Button {
                 // Activation → ask the editor to scroll to the
@@ -108,11 +112,13 @@ struct TasksPanel: View {
             } label: {
                 taskBody(task)
             }
-            .buttonStyle(.plain)
+            // Leaf row rest/hover/pressed affordance (U5-2). The checkbox
+            // beside it keeps its own plain style + disabled state.
+            .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
             .accessibilityLabel(rowAccessibilityLabel(task))
             .accessibilityHint("Scrolls the editor to this task's line.")
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, Tokens.Spacing.xxs)
     }
 
     private func checkbox(for task: TaskItem) -> some View {
@@ -153,15 +159,15 @@ struct TasksPanel: View {
     }
 
     private func taskBody(_ task: TaskItem) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
             Text(task.text)
-                .font(.callout)
-                .foregroundStyle(.primary)
-                .strikethrough(task.completed, color: .secondary)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
+                .strikethrough(task.completed, color: Tokens.ColorRole.textSecondary)
             if let metadata = inlineMetadata(for: task) {
                 Text(metadata)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
