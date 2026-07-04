@@ -139,6 +139,37 @@ final class MutationAnnouncementFocusTests: XCTestCase {
             "no rewrites ⇒ no suffix, base string unchanged")
     }
 
+    /// END-TO-END suffix: with U2-3's link rewriting on main (#503), a rename
+    /// of a note that another note links to must (a) rewrite the inbound link
+    /// on disk and (b) announce the verbatim suffix from the REAL
+    /// `StructuralReport.rewritten` — the full UI-wrapper → uniffi → rewrite →
+    /// announcement chain, not the pure builder.
+    func testRenameWithInboundLinkAnnouncesUpdatedLinksSuffixLive() async throws {
+        let vault = tempDir.appendingPathComponent("vault-live-rewrite")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# Target\n".write(
+            to: vault.appendingPathComponent("target.md"), atomically: true, encoding: .utf8)
+        try "see [[target]] here\n".write(
+            to: vault.appendingPathComponent("citer.md"), atomically: true, encoding: .utf8)
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents-live.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        await state.renameEntry(path: "target.md", isDirectory: false, to: "goal.md")?.value
+
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Renamed target.md to goal.md, updated links in 1 note.")
+        let citer = try String(
+            contentsOf: vault.appendingPathComponent("citer.md"), encoding: .utf8)
+        XCTAssertTrue(
+            citer.contains("[[goal]]"),
+            "the inbound wikilink was rewritten on disk (got: \(citer))")
+    }
+
     func testFailureAnnouncementVerbatim() async throws {
         let (state, _) = try await makeVault(files: ["a.md", "b.md"])
         // Rename a.md → b.md collides → "Could not rename a.md: <reason>."
