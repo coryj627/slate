@@ -127,6 +127,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "links: invalidate cached rows after Markdown anchor-split fix (#509)",
         sql: include_str!("../migrations/018_invalidate_links_for_markdown_anchor_fix.sql"),
     },
+    Migration {
+        description: "file_tags: honest tag dimension (inline + frontmatter) for SearchScope::Tag (#508)",
+        sql: include_str!("../migrations/019_file_tags.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

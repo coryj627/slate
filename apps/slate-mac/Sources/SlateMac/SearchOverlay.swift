@@ -53,6 +53,13 @@ struct SearchOverlay: View {
     var body: some View {
         VStack(spacing: 0) {
             field
+            // Active-scope chip: only present when a non-vault scope is
+            // armed (today: reading-view tag activation). Sits between
+            // the field and the results so it reads as a filter on the
+            // query below it.
+            if let tagName = activeTagScopeName {
+                scopeChip(tagName: tagName)
+            }
             Divider()
             content
         }
@@ -152,6 +159,58 @@ struct SearchOverlay: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // MARK: - Scope chip
+
+    /// The tag name when a `.tag` scope is armed, else `nil`. Drives
+    /// the chip's presence; a `switch` (not `if case` in the view) so
+    /// a future scope surfaces here explicitly rather than silently.
+    private var activeTagScopeName: String? {
+        switch appState.searchScope {
+        case .tag(let name): return name
+        default: return nil
+        }
+    }
+
+    /// Dismissible "Tag: <name>" chip shown while a tag scope filters
+    /// the search. All colors come from `Tokens.ColorRole` (APCA-gated
+    /// roles only — no literals): `accentText` label + `accentFill`
+    /// wash so the chip reads as an active filter, `textSecondary` for
+    /// the ⓧ. The chip is one AX element ("Filtered to tag <name>");
+    /// the focusable clear button ("Clear tag filter") drops back to
+    /// vault scope.
+    private func scopeChip(tagName: String) -> some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            HStack(spacing: Tokens.Spacing.xs) {
+                Text("Tag: \(tagName)")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.accentText)
+                Button {
+                    appState.clearSearchScope()
+                } label: {
+                    SlateSymbol.clearSearch.decorative
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear tag filter")
+                .accessibilityHint("Removes the tag filter and searches the whole vault.")
+            }
+            .padding(.horizontal, Tokens.Spacing.sm)
+            .padding(.vertical, Tokens.Spacing.xs)
+            .background(
+                Tokens.ColorRole.accentFill.opacity(0.18),
+                in: RoundedRectangle(cornerRadius: Tokens.Radius.chip)
+            )
+            // One AX element so VoiceOver reads the filter as a unit;
+            // the clear button stays independently focusable/activatable.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Filtered to tag \(tagName)")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Tokens.Spacing.md)
+        .padding(.bottom, Tokens.Spacing.sm)
     }
 
     // MARK: - Content

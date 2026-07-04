@@ -302,10 +302,10 @@ fn full_text_search_pre_cancelled_returns_immediately() {
 
 #[test]
 fn full_text_search_reserved_scopes_return_unsupported() {
-    // #93 item 2: File / Tag scopes used to return `Cancelled`
-    // as a placeholder. That confused any retry-on-cancel
-    // caller and made logs lie about why the call failed.
-    // They now return `Unsupported { feature: ... }`.
+    // #93 item 2: File used to return `Cancelled` as a placeholder,
+    // confusing retry-on-cancel callers. It now returns
+    // `Unsupported`. Tag is no longer reserved (#508) — it has its
+    // own live tests below.
     let (_tmp, session) = make_vault(|_| {});
     let cancel = CancelToken::new();
     match session.full_text_search(
@@ -321,19 +321,215 @@ fn full_text_search_reserved_scopes_return_unsupported() {
         }
         other => panic!("expected Unsupported for File scope, got {other:?}"),
     }
-    match session.full_text_search(
-        "anything",
-        &crate::SearchScope::Tag("project".to_string()),
-        &cancel,
-    ) {
-        Err(VaultError::Unsupported { feature }) => {
-            assert!(
-                feature.contains("Tag"),
-                "expected feature label to identify Tag, got {feature:?}"
-            );
-        }
-        other => panic!("expected Unsupported for Tag scope, got {other:?}"),
+}
+
+// --- SearchScope::Tag (#508) ---
+
+fn tag_scope(tag: &str) -> crate::SearchScope {
+    crate::SearchScope::Tag(tag.to_string())
+}
+
+#[test]
+fn tag_scope_empty_query_lists_all_tagged_files_frontmatter_and_inline() {
+    let (_tmp, session) = make_vault(|p| {
+        // Frontmatter tag only.
+        p.write_file("notes/fm.md", b"---\ntags: [project]\n---\nbody\n")
+            .unwrap();
+        // Inline tag only.
+        p.write_file("notes/inline.md", b"see #project here\n")
+            .unwrap();
+        // Neither — must be excluded.
+        p.write_file("notes/none.md", b"nothing tagged\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let result = session
+        .full_text_search("", &tag_scope("project"), &CancelToken::new())
+        .unwrap();
+    let paths: Vec<&str> = result.rows.iter().map(|r| r.path.as_str()).collect();
+    // Path order, both dimensions, none excluded.
+    assert_eq!(paths, vec!["notes/fm.md", "notes/inline.md"]);
+    // Empty-query tag rows carry no snippet and score 0.
+    for row in &result.rows {
+        assert_eq!(row.snippet, "");
+        assert_eq!(row.score, 0.0);
     }
+    assert_eq!(result.summary, "Search returned 2 results.");
+}
+
+#[test]
+fn tag_scope_nonempty_query_intersects_fts_with_tag() {
+    let (_tmp, session) = make_vault(|p| {
+        // Has the tag AND the word.
+        p.write_file("notes/both.md", b"#project sharedword here\n")
+            .unwrap();
+        // Has the tag but NOT the word.
+        p.write_file("notes/tag_only.md", b"#project unrelated text\n")
+            .unwrap();
+        // Has the word but NOT the tag.
+        p.write_file("notes/word_only.md", b"sharedword no tag\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let result = session
+        .full_text_search("sharedword", &tag_scope("project"), &CancelToken::new())
+        .unwrap();
+    let paths: Vec<&str> = result.rows.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(paths, vec!["notes/both.md"]);
+    assert!(result.rows[0].snippet.contains("sharedword"));
+}
+
+#[test]
+fn tag_scope_suppresses_tags_in_code_and_comments() {
+    // The inline dimension reuses highlight_spans, so a `#tag` inside
+    // a code fence / inline code / comment is NOT indexed.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/fenced.md", b"```\n#project inside code\n```\n")
+            .unwrap();
+        p.write_file("notes/comment.md", b"%% #project in a comment %%\n")
+            .unwrap();
+        p.write_file("notes/inlinecode.md", b"`#project` in code span\n")
+            .unwrap();
+        p.write_file("notes/real.md", b"a genuine #project tag\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let result = session
+        .full_text_search("", &tag_scope("project"), &CancelToken::new())
+        .unwrap();
+    let paths: Vec<&str> = result.rows.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(paths, vec!["notes/real.md"]);
+}
+
+#[test]
+fn tag_scope_nested_child_matches_parent_but_not_sibling() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/nested.md", b"work #area/subarea done\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Parent scope matches the nested child.
+    let parent = session
+        .full_text_search("", &tag_scope("area"), &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        parent
+            .rows
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["notes/nested.md"]
+    );
+    // Exact scope of the full nested tag also matches.
+    let exact = session
+        .full_text_search("", &tag_scope("area/subarea"), &CancelToken::new())
+        .unwrap();
+    assert_eq!(exact.rows.len(), 1);
+    // A sibling / unrelated leaf does NOT match.
+    let sibling = session
+        .full_text_search("", &tag_scope("subarea"), &CancelToken::new())
+        .unwrap();
+    assert!(sibling.rows.is_empty());
+}
+
+#[test]
+fn tag_scope_is_case_insensitive() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/cap.md", b"a #Project here\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let result = session
+        .full_text_search("", &tag_scope("project"), &CancelToken::new())
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].path, "notes/cap.md");
+}
+
+#[test]
+fn tag_scope_like_metachars_do_not_over_match() {
+    // A tag containing `_` must compare literally in the prefix arm,
+    // not as a LIKE wildcard: `a_b`'s nested-child pattern is
+    // `a\_b/%`, so a file tagged `aXb` never matches scope `a_b`.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/underscore.md", b"tag #a_b/child here\n")
+            .unwrap();
+        p.write_file("notes/other.md", b"tag #aXb/child here\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let result = session
+        .full_text_search("", &tag_scope("a_b"), &CancelToken::new())
+        .unwrap();
+    let paths: Vec<&str> = result.rows.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(paths, vec!["notes/underscore.md"]);
+}
+
+#[test]
+fn tag_scope_dedups_inline_and_frontmatter_into_one_row() {
+    // A file tagged both inline and in frontmatter with the same tag
+    // appears once (file_tags stores the distinct set per file).
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "notes/dup.md",
+            b"---\ntags: [project]\n---\nbody #project inline\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let result = session
+        .full_text_search("", &tag_scope("project"), &CancelToken::new())
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].path, "notes/dup.md");
+}
+
+#[test]
+fn tag_scope_rows_clear_when_tag_removed() {
+    // Update path: removing the tag from a file drops its file_tags
+    // rows on the next slow-path scan.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("notes/n.md", b"has #project tag\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        session
+            .full_text_search("", &tag_scope("project"), &CancelToken::new())
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file("notes/n.md", b"no more tag here\n")
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        session
+            .full_text_search("", &tag_scope("project"), &CancelToken::new())
+            .unwrap()
+            .rows
+            .is_empty(),
+        "file_tags row survived tag removal"
+    );
+}
+
+#[test]
+fn tag_scope_empty_normalized_tag_returns_no_results() {
+    // A scope tag that normalizes to empty (`#` alone) can't match.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/n.md", b"#project here\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let result = session
+        .full_text_search("", &tag_scope("#"), &CancelToken::new())
+        .unwrap();
+    assert!(result.rows.is_empty());
+    assert_eq!(result.summary, "Search returned no results.");
 }
 
 #[test]

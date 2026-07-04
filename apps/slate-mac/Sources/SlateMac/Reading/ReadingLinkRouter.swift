@@ -203,18 +203,19 @@ extension ReadingLinkRouter {
             },
             openTag: { [weak appState] tag in
                 guard let appState else { return }
-                // Search overlay prefiltered with the tag name. TRUE tag
-                // scoping is not available: `SearchScope::Tag` returns
-                // `Unsupported` in the backend (search_db.rs), and a leading
-                // `#` is an FTS5 syntax error — so the prefilter is the bare
-                // tag name through the vault-wide FTS query (approximate by
-                // construction: also matches the word outside tag position).
-                // Upgrading to real tag scope is the backend follow-up.
-                appState.searchQuery = tag
+                // Real tag scope (#508): `SearchScope::Tag` now filters the
+                // `file_tags` dimension (inline `#tag`s + frontmatter `tags:`),
+                // and an EMPTY query under that scope lists every file with the
+                // tag. So activation opens the overlay scoped to the tag with a
+                // blank query — the exact set the tag names, not the old
+                // approximate "bare tag name through vault-wide FTS" (which also
+                // matched the word outside tag position). `setSearchScope`
+                // re-arms the search; the empty query is honored under `.tag`.
+                appState.searchQuery = ""
                 if !appState.isSearchOpen {
                     appState.toggleSearchOverlay()
                 }
-                appState.bumpSearchQuery()
+                appState.setSearchScope(.tag(name: tag))
             },
             expandCitation: { [weak appState] raw in
                 guard let appState else { return }

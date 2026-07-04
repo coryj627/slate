@@ -505,15 +505,16 @@ final class ReadingViewTests: XCTestCase {
 
     // MARK: - Live router → AppState seams
 
-    /// Tag activation prefilters the vault-wide search overlay (approximate
-    /// scope — `SearchScope::Tag` is Unsupported in the backend; documented
-    /// in the router).
+    /// Tag activation opens the search overlay in REAL tag scope (#508):
+    /// `.tag("alpha")` with an empty query (which, under tag scope, lists
+    /// the tag's files) — not the old approximate bare-name FTS prefilter.
     @MainActor
     func testLiveRouterTagPrefiltersSearchOverlay() {
         let appState = AppState()
         let router = ReadingLinkRouter.live(appState: appState)
         router.openTag("alpha")
-        XCTAssertEqual(appState.searchQuery, "alpha")
+        XCTAssertEqual(appState.searchScope, .tag(name: "alpha"))
+        XCTAssertEqual(appState.searchQuery, "")
         XCTAssertTrue(appState.isSearchOpen)
     }
 
