@@ -195,9 +195,9 @@ struct CanvasContainerView: View {
                         }
                     }
                     .accessibilityFocused($contentFocused)
-                case .visual: interimPlaceholder(
-                    "Canvas visual view is under construction.",
-                    detail: "The visual renderer arrives with the canvas renderer milestone work. The outline and table carry everything it will show.")
+                case .visual:
+                    CanvasRendererView(document: document)
+                        .accessibilityFocused($contentFocused)
                 }
             }
         }

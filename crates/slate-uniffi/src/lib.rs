@@ -4231,6 +4231,86 @@ impl From<core::CanvasApplyResult> for CanvasApplyResult {
     }
 }
 
+/// One node's render geometry (visual renderer, #367).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasSceneNode {
+    pub node_id: String,
+    pub kind: String,
+    pub title: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub color: Option<String>,
+    pub color_name: Option<String>,
+}
+
+impl From<core::CanvasSceneNode> for CanvasSceneNode {
+    fn from(n: core::CanvasSceneNode) -> Self {
+        CanvasSceneNode {
+            node_id: n.node_id,
+            kind: n.kind,
+            title: n.title,
+            x: n.x,
+            y: n.y,
+            width: n.width,
+            height: n.height,
+            color: n.color,
+            color_name: n.color_name,
+        }
+    }
+}
+
+/// One connection's render data (visual renderer, #367).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasSceneEdge {
+    pub edge_id: String,
+    pub from_node: String,
+    pub from_side: Option<CanvasSide>,
+    pub to_node: String,
+    pub to_side: Option<CanvasSide>,
+    pub from_arrow: bool,
+    pub to_arrow: bool,
+    pub label: Option<String>,
+    pub color: Option<String>,
+}
+
+impl From<core::CanvasSceneEdge> for CanvasSceneEdge {
+    fn from(e: core::CanvasSceneEdge) -> Self {
+        CanvasSceneEdge {
+            edge_id: e.edge_id,
+            from_node: e.from_node,
+            from_side: e.from_side.map(Into::into),
+            to_node: e.to_node,
+            to_side: e.to_side.map(Into::into),
+            from_arrow: e.from_arrow,
+            to_arrow: e.to_arrow,
+            label: e.label,
+            color: e.color,
+        }
+    }
+}
+
+/// The full render scene for one canvas.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasScene {
+    pub nodes: Vec<CanvasSceneNode>,
+    pub edges: Vec<CanvasSceneEdge>,
+}
+
+#[uniffi::export]
+impl VaultSession {
+    /// The render scene (geometry in document order + edges) for the
+    /// visual surface (#367).
+    pub fn canvas_scene(&self, handle: u64) -> Result<CanvasScene, VaultError> {
+        let (nodes, edges) = self.inner.canvas_scene(handle)?;
+        Ok(CanvasScene {
+            nodes: nodes.into_iter().map(Into::into).collect(),
+            edges: edges.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
 #[uniffi::export]
 impl VaultSession {
     /// Apply one committed user action (one write, one undo step);

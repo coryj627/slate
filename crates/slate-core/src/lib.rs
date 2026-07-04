@@ -88,11 +88,12 @@ pub use text_buffer::TextBuffer;
 
 pub use session::{
     CancelToken, CanvasApplyResult, CanvasLoadWarning, CanvasLoadWarningKind, CanvasNeighbor,
-    CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement, CanvasRectArg, CanvasSetPlacement,
-    CanvasTableRow, CanvasWhereAmI, CslStyleInfo, DirListing, DirNodeSummary, FileFilter,
-    FileMetadata, FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RenameAffected,
-    RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
-    ScanProgress, ScanProgressListener, ScanReport, SessionConfig, VaultSession,
+    CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement, CanvasRectArg, CanvasSceneEdge,
+    CanvasSceneNode, CanvasSetPlacement, CanvasTableRow, CanvasWhereAmI, CslStyleInfo, DirListing,
+    DirNodeSummary, FileFilter, FileMetadata, FileSummary, NoteLoadBundle, NotePartsBundle, Page,
+    Paging, RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason,
+    RenameSkipped, SaveReport, ScanProgress, ScanProgressListener, ScanReport, SessionConfig,
+    VaultSession,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
