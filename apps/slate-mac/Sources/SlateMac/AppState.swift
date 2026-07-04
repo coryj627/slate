@@ -335,6 +335,17 @@ final class AppState: ObservableObject {
     /// canvas. Not @Published: views observe each document directly.
     var canvasDocuments: [String: CanvasDocument] = [:]
 
+    /// The one canvas announcement funnel (#518, DoD §H). Every canvas
+    /// surface phrases through it; verbosity persists via
+    /// `PreferencesStore` (`setCanvasVerbosity`).
+    lazy var canvasAnnouncer = CanvasAnnouncer(
+        verbosity: preferencesStore.loadCanvasPrefs().verbosity)
+
+    /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
+    /// focusable transient panel in the canvas container; Esc/Close
+    /// dismisses (panel-local, not a t0 M5 ladder rung).
+    @Published var canvasWhereAmIReadback: String?
+
     /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
     /// mirrors `selectedFilePath` for the sidebar highlight; the
     /// `$selectedFilePath` sink must not run the selection funnel again on

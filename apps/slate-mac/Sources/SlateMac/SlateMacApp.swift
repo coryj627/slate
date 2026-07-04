@@ -141,6 +141,18 @@ struct SlateMacApp: App {
 
                 Divider()
 
+                // Milestone T (#518): the ⌃⌘I Where-am-I chord lives in
+                // the menu bar (single owner, survives focus changes —
+                // the #422 lesson). Palette equivalents exist for every
+                // canvas command (program rule R1).
+                Button("Canvas: Where Am I?") {
+                    appState.canvasWhereAmI()
+                }
+                .keyboardShortcut("i", modifiers: [.control, .command])
+                .disabled(!appState.isVaultOpen)
+
+                Divider()
+
                 // ⌘1…⌘9 select tab N (9 = last, macOS convention).
                 ForEach(1..<10, id: \.self) { ordinal in
                     Button("Tab \(ordinal == 9 ? "9 (Last)" : String(ordinal))") {

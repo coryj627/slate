@@ -38,6 +38,10 @@ struct SettingsView: View {
                     .tabItem {
                         SlateSymbol.bibliography.label()
                     }
+                CanvasSettingsTab()
+                    .tabItem {
+                        SlateSymbol.canvas.label()
+                    }
             }
         }
         .frame(minWidth: 500, minHeight: 400)
@@ -680,5 +684,44 @@ struct BibliographySettingsTab: View {
         let filePath = url.standardizedFileURL.path
         guard filePath.hasPrefix(vaultPath + "/") else { return nil }
         return String(filePath.dropFirst(vaultPath.count + 1))
+    }
+}
+
+
+// MARK: - Canvas tab (Milestone T, #518)
+
+/// Canvas announcement verbosity (t0 §1.2). Live-switchable: the
+/// announcer phrases the very next event at the new level.
+struct CanvasSettingsTab: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Canvas announcement verbosity", selection: verbosityBinding) {
+                    ForEach(CanvasVerbosity.allCases, id: \.self) { level in
+                        Text(level.title).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Canvas announcement verbosity")
+            } footer: {
+                Text(
+                    "Terse announces card titles only. Standard adds position and container. Verbose adds connections, color, and marks. \"Where am I?\" (⌃⌘I) is always verbose."
+                )
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+        }
+        .formStyle(.grouped)
+        .accessibilityLabel("Canvas settings")
+    }
+
+    private var verbosityBinding: Binding<CanvasVerbosity> {
+        Binding(
+            get: { appState.canvasAnnouncer.verbosity },
+            set: { appState.setCanvasVerbosity($0) }
+        )
     }
 }
