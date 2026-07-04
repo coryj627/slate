@@ -303,6 +303,117 @@ final class FileTreeViewModel: ObservableObject {
         return nil
     }
 
+    // MARK: - Post-mutation focus (U2-6, #464)
+
+    /// The `NodeID` of the materialized node at `path` (file OR folder), or nil
+    /// if it isn't in the tree (its level isn't fetched/expanded). A file's
+    /// NodeID *is* its path, so files always resolve once their level exists;
+    /// folders resolve by matching the refetched level's `.dir(id)` rows.
+    ///
+    /// U2-6 create/rename/move focus: after `treeInvalidation` refetches the
+    /// affected level, the new/renamed/moved row exists here.
+    func focusTarget(forPath path: String) -> NodeID? {
+        let fileID = NodeID.file(path: path)
+        if rootLevel.contains(where: { $0.nodeID == fileID }) { return fileID }
+        if let dir = rootLevel.first(where: { $0.path == path && $0.isDirectory }) {
+            return dir.nodeID
+        }
+        for level in children.values {
+            if level.contains(where: { $0.nodeID == fileID }) { return fileID }
+            if let dir = level.first(where: { $0.path == path && $0.isDirectory }) {
+                return dir.nodeID
+            }
+        }
+        return nil
+    }
+
+    /// The post-DELETE focus target, computed on the CURRENT (pre-invalidation)
+    /// tree — the deleted node's next sibling, else previous, else the parent
+    /// folder; nil (⇒ no move / stay wherever the list lands, never the window
+    /// root) when the deleted node was the only entry at the vault root.
+    ///
+    /// Pure over the tree's current state (the level still contains the doomed
+    /// node) so it's unit-testable and must run BEFORE `treeInvalidation` drops
+    /// the level. `parentPath` is "" for a root-level delete.
+    func deleteFocusTarget(deletedPath: String, parentPath: String) -> NodeID? {
+        // The visible level the deleted node lived in.
+        let level: [TreeNode]
+        let parentID: NodeID?
+        if parentPath.isEmpty {
+            level = rootLevel
+            parentID = nil
+        } else if let pid = dirNodeID(forPath: parentPath), let kids = children[pid] {
+            level = kids
+            parentID = pid
+        } else {
+            // Parent level isn't materialized — nothing to compute a sibling
+            // against. Fall back to selecting the parent folder if we can find
+            // it, else no move.
+            return dirNodeID(forPath: parentPath)
+        }
+        guard let idx = level.firstIndex(where: { $0.path == deletedPath }) else {
+            // Already gone from the level (double-fire) — target the parent.
+            return parentID
+        }
+        // Next sibling (the element after the deleted one), else previous, else
+        // the parent folder, else nil (only child at the root).
+        if idx + 1 < level.count { return level[idx + 1].nodeID }
+        if idx - 1 >= 0 { return level[idx - 1].nodeID }
+        return parentID
+    }
+
+    /// The `.dir(id)` NodeID for a folder at `path` in the CURRENT tree, or nil.
+    /// (Files are keyed by path; this is the folder-only lookup the focus
+    /// helpers use.)
+    func dirNodeID(forPath path: String) -> NodeID? {
+        if let dir = rootLevel.first(where: { $0.path == path && $0.isDirectory }) {
+            return dir.nodeID
+        }
+        for level in children.values {
+            if let dir = level.first(where: { $0.path == path && $0.isDirectory }) {
+                return dir.nodeID
+            }
+        }
+        return nil
+    }
+
+    /// Expand the whole ancestor chain of `path` so a moved node is revealed at
+    /// its new location (spec §U2-6 "auto-expand the destination ancestor
+    /// chain"). Walks the path's directory prefixes shallow→deep, expanding +
+    /// fetching each so the next level materializes before the deeper one is
+    /// reached. No-op for a root-level path (no ancestors to expand).
+    func ensureAncestorsExpanded(forPath path: String) {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count > 1 else { return }  // root-level: no ancestors
+        var prefix = ""
+        // Every component except the last is an ancestor DIRECTORY.
+        for component in components.dropLast() {
+            prefix = prefix.isEmpty ? component : "\(prefix)/\(component)"
+            guard let node = dirNode(forPath: prefix) else {
+                // The ancestor level isn't materialized yet — expanding its
+                // parent (done on the previous iteration) fetched it, so a
+                // retry after that fetch would find it. In the synchronous
+                // fetch model the child level is already present; if not, we
+                // stop (the node will still be selectable once visible).
+                break
+            }
+            expand(node)
+        }
+    }
+
+    /// The full `TreeNode` for a folder at `path` in the current tree, or nil.
+    private func dirNode(forPath path: String) -> TreeNode? {
+        if let dir = rootLevel.first(where: { $0.path == path && $0.isDirectory }) {
+            return dir
+        }
+        for level in children.values {
+            if let dir = level.first(where: { $0.path == path && $0.isDirectory }) {
+                return dir
+            }
+        }
+        return nil
+    }
+
     // MARK: - Keyboard disclosure decision (pure, unit-tested)
 
     /// What a →/← key does to the currently-selected node. Pure over the tree's
@@ -436,6 +547,12 @@ struct FileTreeSidebar: View {
     /// Keyboard focus on the file tree — gates the #418 selection announcements
     /// to list-driven changes only.
     @FocusState private var fileTreeFocused: Bool
+
+    /// Set for exactly one `listSelection` change when post-DELETE focus moves
+    /// the highlight to a sibling: the deleted node's tab is now in the missing-
+    /// file error state (U2-5), and re-selecting a sibling FILE must NOT open it
+    /// (that would replace the error tab). Cleared the moment it's consumed.
+    @State private var suppressOpenForPostMutationFocus = false
 
     /// The `List` row id / selection key. A real tree node (`.node`) or a
     /// per-level loading/error placeholder derived from its parent level id so
@@ -630,6 +747,13 @@ struct FileTreeSidebar: View {
             // Mirror the selection (file OR folder) to AppState so the file-
             // management commands know their target. Placeholders clear it.
             mirrorTreeSelectionToAppState(newSelection)
+            // Post-delete focus moved the highlight to a sibling — honor the
+            // one-shot suppression so the deleted note's error tab isn't
+            // replaced by opening the sibling. Consume the flag either way.
+            if suppressOpenForPostMutationFocus {
+                suppressOpenForPostMutationFocus = false
+                return
+            }
             // Only *file* rows drive opens; the path travels in the NodeID
             // itself, so no tree lookup is needed (robust even if the level
             // was refetched between select and this callback).
@@ -704,25 +828,74 @@ struct FileTreeSidebar: View {
     }
 
     /// Refresh the tree after a structural mutation (U2-5) and move the
-    /// post-mutation selection (U2-6). `handleTreeMutation` invalidates exactly
-    /// the affected levels; the focus/scroll half is filled by U2-6.
+    /// post-mutation selection (U2-6). Invalidates exactly the affected levels,
+    /// then re-anchors `listSelection` on the post-mutation target and scrolls
+    /// it into view.
     private func handleTreeMutation(proxy: ScrollViewProxy) {
         guard let mutation = appState.treeMutation else { return }
+        // For a DELETE, the focus target (next sibling / prev / parent) must be
+        // read from the tree BEFORE the level is dropped — capture it first.
+        var preInvalidationDeleteTarget: NodeID?
+        if case let .delete(path, parent, _) = mutation.kind {
+            preInvalidationDeleteTarget = tree.deleteFocusTarget(
+                deletedPath: path, parentPath: parent)
+        }
         // Invalidate each dirtied level. A move dirties two (source +
         // destination); everything else dirties one. `nil` = the root level.
         for parent in mutation.affectedParents {
             tree.treeInvalidation(parent: parentNodeID(forPath: parent))
         }
-        // U2-6 fills the focus-target computation + scroll-into-view here.
-        applyPostMutationFocus(mutation, proxy: proxy)
+        applyPostMutationFocus(mutation, deleteTarget: preInvalidationDeleteTarget, proxy: proxy)
     }
 
     /// Move the tree selection to the post-mutation target and scroll it into
-    /// view (spec §U2-6). U2-5 ships this as a stub — the refresh (above) lands
-    /// here, but the focus rules (create→new row, rename→keep, move→follow,
-    /// delete→next sibling) and the `ScrollViewReader` scroll are wired in U2-6.
-    private func applyPostMutationFocus(_ mutation: AppState.TreeMutation, proxy: ScrollViewProxy) {
-        // U2-6 fills this in.
+    /// view (spec §U2-6). Focus rules:
+    ///   - create-folder / create-note → the new row,
+    ///   - rename → the renamed row (kept selected at its new path),
+    ///   - move → the moved row at its new location (ancestors auto-expanded),
+    ///   - delete → next sibling, else previous, else parent (never window-root).
+    /// VoiceOver focus follows list selection (verified in the runbook pass).
+    private func applyPostMutationFocus(
+        _ mutation: AppState.TreeMutation, deleteTarget: NodeID?, proxy: ScrollViewProxy
+    ) {
+        let target: NodeID?
+        switch mutation.kind {
+        case let .createFolder(path), let .createNote(path):
+            target = tree.focusTarget(forPath: path)
+        case let .rename(_, newPath):
+            target = tree.focusTarget(forPath: newPath)
+        case let .move(_, newPath, _, _):
+            // Reveal the moved node's new home, then resolve it.
+            tree.ensureAncestorsExpanded(forPath: newPath)
+            target = tree.focusTarget(forPath: newPath)
+        case .delete:
+            target = deleteTarget
+            // After a delete the tab flips to the missing-file error state
+            // (U2-5); moving the tree highlight to the sibling must NOT open it
+            // (that would replace the error tab the user just created by
+            // deleting). Suppress the open for this one selection change.
+            suppressOpenForPostMutationFocus = true
+        }
+        guard let target else {
+            suppressOpenForPostMutationFocus = false
+            return
+        }
+        // Re-anchor the highlight (VO focus follows it). #448 discipline: this
+        // runs inside `.onChange`, a post-update mutation point — not the list's
+        // update pass. For create-note / rename / move the file is already the
+        // active note (created-open, or retargeted), so re-selecting it is a
+        // no-op open; for delete the open is suppressed above.
+        if listSelection != .node(target) {
+            listSelection = .node(target)
+        } else {
+            // Selection didn't change (already there) → the open-suppression
+            // flag would leak to the next real selection. Clear it now.
+            suppressOpenForPostMutationFocus = false
+        }
+        // Scroll it into view. Reduce Motion is respected by SwiftUI's implicit
+        // handling; `scrollTo` itself is instantaneous here (no explicit
+        // animation), matching the outline pane's behavior.
+        proxy.scrollTo(RowID.node(target), anchor: .center)
     }
 
     /// The `NodeID` of the directory at `parentPath` (nil ⇒ the root level's

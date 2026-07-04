@@ -4559,17 +4559,20 @@ final class AppState: ObservableObject {
         Set(report.rewritten.map(\.path)).count
     }
 
-    /// Announce a completed structural mutation to VoiceOver (spec §U2-6). The
-    /// wrappers build the verbatim sentence; this seam routes it.
-    ///
-    /// U2-5 ships this as a no-op stub — the mutation funnel and the sentence-
-    /// building are in place, but the announcement *routing* (and the focus-
-    /// preservation that goes with it) land in U2-6, which replaces this body
-    /// with a `postAccessibilityAnnouncement(_:priority:)` call and adds the
-    /// verbatim-string tests. Keeping the call sites here from U2-5 means U2-6
-    /// is a one-method change with no wrapper churn.
+    /// The last message routed through `postMutationAnnouncement`. Tests assert
+    /// the VERBATIM string here (spec §U2-6); `postAccessibilityAnnouncement` is
+    /// a no-op under the XCTest runner — there's no `NSApp` — so the string must
+    /// be observable without a live announcement.
+    @Published private(set) var lastMutationAnnouncement: String?
+
+    /// Announce a completed (or failed) structural mutation to VoiceOver
+    /// (spec §U2-6). The wrappers build the verbatim sentence; this seam routes
+    /// it through the existing `postAccessibilityAnnouncement` helper at
+    /// `.medium` priority (the politeness floor that survives — see the palette
+    /// / search precedent) and records it for the verbatim-string tests.
     func postMutationAnnouncement(_ message: String) {
-        // U2-6 fills this in. Stub: no announcement yet.
+        lastMutationAnnouncement = message
+        postAccessibilityAnnouncement(message, priority: .medium)
     }
 
     // MARK: Create
@@ -4603,6 +4606,9 @@ final class AppState: ObservableObject {
                     "Created folder \((path as NSString).lastPathComponent).")
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "create folder",
+                    name: (path as NSString).lastPathComponent, error: error)
             }
             self.isMutatingStructure = false
         }
@@ -4649,6 +4655,9 @@ final class AppState: ObservableObject {
                 self.renamingNode = RenamingNode(path: path, isDirectory: false)
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "create note",
+                    name: (path as NSString).lastPathComponent, error: error)
             }
             self.isMutatingStructure = false
         }
@@ -4701,6 +4710,9 @@ final class AppState: ObservableObject {
             case .failure(let error):
                 // Keep the inline field open + focused with a specific message.
                 self.structuralRenameError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "rename",
+                    name: (path as NSString).lastPathComponent, error: error)
             }
             self.isMutatingStructure = false
         }
@@ -4761,6 +4773,9 @@ final class AppState: ObservableObject {
                     verb: "move", name: (path as NSString).lastPathComponent,
                     skipped: [])
                 self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "move",
+                    name: (path as NSString).lastPathComponent, error: error)
             }
             self.isMutatingStructure = false
         }
@@ -4807,10 +4822,20 @@ final class AppState: ObservableObject {
                 await self.loadFiles()
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "delete",
+                    name: (path as NSString).lastPathComponent, error: error)
             }
             self.isMutatingStructure = false
         }
         return task
+    }
+
+    /// Announce a failed mutation (spec §U2-6 failure form). "Could not <verb>
+    /// <name>: <specific reason>." Routes through the same medium-priority seam
+    /// as the success announcements.
+    private func announceMutationFailure(verb: String, name: String, error: VaultError) {
+        postMutationAnnouncement("Could not \(verb) \(name): \(humanReadable(error))")
     }
 
     /// Create a folder (auto-suffixed to avoid a collision) inside `parent`,
@@ -4961,11 +4986,21 @@ final class AppState: ObservableObject {
     /// (U2-6 fills the announcement *routing*; the suffix logic is shared here
     /// so rename/move build one sentence.)
     private func mutationSentence(_ base: String, report: StructuralReport) -> String {
-        let n = Self.distinctRewrittenCount(report)
-        guard n > 0 else { return base }
+        Self.withLinksSuffix(base, rewrittenCount: Self.distinctRewrittenCount(report))
+    }
+
+    /// Pure: append ", updated links in N notes." to `base` when `rewrittenCount
+    /// > 0` (spec §U2-6 verbatim suffix), else return `base` unchanged. Static so
+    /// the exact phrasing is regression-locked without a live rewrite — which the
+    /// current base branch never produces (U2-3 part 2, the rewriter's session
+    /// integration, isn't wired here; `StructuralReport.rewritten` is always
+    /// empty until it lands, so this suffix is dormant end-to-end).
+    static func withLinksSuffix(_ base: String, rewrittenCount: Int) -> String {
+        guard rewrittenCount > 0 else { return base }
         // "Renamed a.md to b.md" (drop trailing period) + suffix.
         let trimmed = base.hasSuffix(".") ? String(base.dropLast()) : base
-        return "\(trimmed), updated links in \(n) \(n == 1 ? "note" : "notes")."
+        return "\(trimmed), updated links in \(rewrittenCount) "
+            + "\(rewrittenCount == 1 ? "note" : "notes")."
     }
 
     // MARK: Command entry points (palette + menu → tree selection)
