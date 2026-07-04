@@ -454,10 +454,13 @@ fn build_large_fixture() -> String {
         }
     }
 
-    let mut out = serde_json::to_string(&json!({ "nodes": nodes, "edges": edges }))
+    // Emit through the canonical serializer (#366) so the committed
+    // fixture is also a byte-stability test subject.
+    let compact = serde_json::to_string(&json!({ "nodes": nodes, "edges": edges }))
         .expect("fixture serialization cannot fail");
-    out.push('\n');
-    out
+    let (canvas, warnings) = parse(&compact);
+    assert!(warnings.is_empty(), "generator produced warnings");
+    super::serialize::serialize(&canvas)
 }
 
 /// Regenerate the committed fixture: `cargo test -p slate-core
