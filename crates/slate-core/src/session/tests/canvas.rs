@@ -320,6 +320,74 @@ fn canvas_rows_pruned_when_file_deleted() {
 }
 
 #[test]
+fn note_move_rewrites_canvas_file_references() {
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Rename the note the sample canvas's plain file card references.
+    let report = session
+        .rename_file("notes/canvas research.md", "research log.md")
+        .unwrap();
+    assert!(
+        report.rewritten.iter().any(|r| r.path == "board.canvas"),
+        "canvas rewrite must be reported, not silent: {report:?}"
+    );
+
+    // The canvas on disk now points at the new path…
+    let text = session.read_text("board.canvas").unwrap();
+    assert!(text.contains("notes/research log.md"), "{text}");
+    assert!(!text.contains("notes/canvas research.md"));
+    // …and the rewrite is per-field: unrelated lines are untouched.
+    assert!(text.contains("\"id\":\"card-question\",\"type\":\"text\""));
+    assert!(text.contains("\"subpath\":\"#Announcement grammar\""));
+
+    // The index followed (save path reindexes canvas rows).
+    let conn = session.conn.lock().unwrap();
+    let target: String = conn
+        .query_row(
+            "SELECT target FROM canvas_nodes WHERE node_id = 'card-notes'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(target, "notes/research log.md");
+}
+
+#[test]
+fn subpath_card_rewrites_and_unreferenced_moves_leave_canvas_alone() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("board.canvas", SAMPLE.as_bytes()).unwrap();
+        p.write_file("notes/canvas research.md", b"# n").unwrap();
+        p.write_file("specs/interaction.md", b"# Announcement grammar\n")
+            .unwrap();
+        p.write_file("unrelated.md", b"# lonely").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let before = session.read_text("board.canvas").unwrap();
+
+    // The subpath card references specs/interaction.md — the path
+    // rewrites, the subpath anchor rides along untouched.
+    let report = session
+        .rename_file("specs/interaction.md", "renamed spec.md")
+        .unwrap();
+    assert!(report.rewritten.iter().any(|r| r.path == "board.canvas"));
+    let after = session.read_text("board.canvas").unwrap();
+    assert!(after.contains("\"file\":\"specs/renamed spec.md\""));
+    assert!(after.contains("\"subpath\":\"#Announcement grammar\""));
+    assert_ne!(before, after);
+
+    // A rename nothing on the canvas references leaves it
+    // byte-identical (no gratuitous canvas churn) and unreported.
+    let untouched_before = session.read_text("board.canvas").unwrap();
+    let report = session
+        .rename_file("unrelated.md", "still lonely.md")
+        .unwrap();
+    assert!(report.rewritten.iter().all(|r| r.path != "board.canvas"));
+    let untouched_after = session.read_text("board.canvas").unwrap();
+    assert_eq!(untouched_before, untouched_after);
+}
+
+#[test]
 fn canvas_apply_writes_reindexes_and_returns_inverse() {
     use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
 

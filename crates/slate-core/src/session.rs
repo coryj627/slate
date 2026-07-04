@@ -4374,7 +4374,101 @@ impl VaultSession {
             }
         }
 
+        // `.canvas` participation (Milestone T #366, program gate G24):
+        // file cards reference notes by vault path, so a note move must
+        // rewrite those references or canvases silently rot. Same
+        // discipline as the markdown loop above: best-effort, every
+        // outcome or failure lands in the structural report — never
+        // silent. Serialization is per-field (#366), so only the
+        // changed `file` values are touched on disk.
+        self.rewrite_canvas_references(conn, &mapping, &mut rewritten, &mut failed);
+
         (rewritten, failed)
+    }
+
+    /// Rewrite `file`-card paths in every canvas that references a
+    /// moved file. Degraded canvases are skipped (unwritable by the
+    /// #359 contract); references inside skipped/unmodelable entries
+    /// can't be rewritten and stay exactly as the user wrote them.
+    fn rewrite_canvas_references(
+        &self,
+        conn: &mut std::sync::MutexGuard<'_, Connection>,
+        mapping: &crate::link_rewrite::MoveMapping,
+        rewritten: &mut Vec<crate::structural::RewriteOutcome>,
+        failed: &mut Vec<crate::structural::RewriteFailure>,
+    ) {
+        use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
+
+        let canvas_paths: Vec<String> = {
+            let result = conn
+                .prepare("SELECT path FROM files WHERE extension = 'canvas' ORDER BY path")
+                .and_then(|mut stmt| {
+                    stmt.query_map([], |row| row.get::<_, String>(0))
+                        .and_then(std::iter::Iterator::collect)
+                });
+            match result {
+                Ok(paths) => paths,
+                Err(e) => {
+                    failed.push(RewriteFailure {
+                        path: "*.canvas".to_string(),
+                        kind: RewriteFailureKind::Other(format!(
+                            "canvas rewrite sweep failed: {e}"
+                        )),
+                    });
+                    return;
+                }
+            }
+        };
+
+        for path in canvas_paths {
+            let (text, hash_before) = match self.read_text(&path) {
+                Ok(text) => {
+                    let hash = crate::vault::content_hash(text.as_bytes());
+                    (text, hash)
+                }
+                Err(e) => {
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(e.to_string()),
+                    });
+                    continue;
+                }
+            };
+            let (mut canvas, warnings) = crate::canvas::parse(&text);
+            if crate::canvas::is_load_degraded(&warnings) {
+                continue; // unwritable; nothing modelable to rewrite
+            }
+            let mut changed = false;
+            for node in &mut canvas.nodes {
+                if let crate::canvas::NodeKind::File { file, .. } = &mut node.kind {
+                    let new_path = mapping.new_path_of(file).to_string();
+                    if new_path != *file {
+                        *file = new_path;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                continue;
+            }
+            self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
+            let new_text = crate::canvas::serialize::serialize(&canvas);
+            match self.save_text_locked(conn, &path, &new_text, Some(&hash_before)) {
+                Ok(report) => rewritten.push(RewriteOutcome {
+                    path,
+                    hash_before,
+                    hash_after: report.new_content_hash,
+                }),
+                Err(VaultError::WriteConflict { .. }) => failed.push(RewriteFailure {
+                    path,
+                    kind: RewriteFailureKind::WriteConflict,
+                }),
+                Err(e) => failed.push(RewriteFailure {
+                    path,
+                    kind: RewriteFailureKind::Other(e.to_string()),
+                }),
+            }
+        }
     }
 
     /// Append a pure WholeFileReplace anchor of `contents` (current disk
