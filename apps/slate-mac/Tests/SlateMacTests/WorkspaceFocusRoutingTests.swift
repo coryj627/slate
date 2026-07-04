@@ -200,6 +200,67 @@ final class WorkspaceFocusRoutingTests: XCTestCase {
     /// group. ⌘⌥→ off the rightmost group enters the leaf; ⌘⌥← returns to it.
     /// Both hold on a horizontal 3-group layout where the group identities are
     /// known.
+    /// U4-4 review: the region mirrors REAL focus, not just routing
+    /// commands. Tab/click into the tree, then ⌘⌥→, must return to the
+    /// editor per spec — the passive mirror parks the same anchor the
+    /// command path would.
+    func testPassiveTreeFocusParksAnchorAndRoutesReturn() {
+        let ws = WorkspaceState()
+        ws.openTab(.markdown(path: "a.md"), allowDuplicate: true)
+        _ = ws.split(ws.model.activeGroupID, axis: .horizontal)
+        let g0 = ws.model.groupsInOrder.map(\.id)[0]
+        ws.focusGroup(g0)
+        ws.markEditorRegionActive()
+
+        // Native Tab into the tree — no routing command ran.
+        ws.noteTreeFocusChanged(true)
+        XCTAssertEqual(ws.focusRegion, .tree)
+        XCTAssertEqual(ws.resolvedReturnGroup, g0, "passive entry parks the anchor")
+        XCTAssertEqual(applyFocusPane(.right, to: ws), .returnToEditor(g0))
+        XCTAssertEqual(ws.focusRegion, .editor)
+    }
+
+    func testPassiveLeafFocusRoutesReturnWest() {
+        let ws = WorkspaceState()
+        ws.openTab(.markdown(path: "a.md"), allowDuplicate: true)
+        let g = ws.model.activeGroupID
+        ws.markEditorRegionActive()
+
+        ws.noteLeafFocusChanged(true)
+        XCTAssertEqual(ws.focusRegion, .leaf)
+        XCTAssertEqual(applyFocusPane(.left, to: ws), .returnToEditor(g))
+        XCTAssertEqual(ws.focusRegion, .editor)
+    }
+
+    /// Command entry then the view's mirrored focus flip must not re-park
+    /// (idempotent), and losing focus only demotes the region that owns it —
+    /// a tree→leaf Tab interleaves in either order and converges on .leaf.
+    func testPassiveMirrorIdempotenceAndInterleaveConvergence() {
+        let ws = WorkspaceState()
+        ws.openTab(.markdown(path: "a.md"), allowDuplicate: true)
+        let g = ws.model.activeGroupID
+        ws.markEditorRegionActive()
+
+        // Command entry parks; the request's mirrored focus flip re-enters
+        // the same region — anchor unchanged.
+        ws.focusTreeRegion()
+        XCTAssertEqual(ws.resolvedReturnGroup, g)
+        ws.noteTreeFocusChanged(true)
+        XCTAssertEqual(ws.focusRegion, .tree)
+        XCTAssertEqual(ws.resolvedReturnGroup, g, "no double-park on re-entry")
+
+        // Interleave A: leaf gains BEFORE tree loses.
+        ws.noteLeafFocusChanged(true)
+        ws.noteTreeFocusChanged(false)
+        XCTAssertEqual(ws.focusRegion, .leaf, "losing tree focus must not demote the leaf")
+
+        // Interleave B: tree focus returns; leaf loses first, then tree gains.
+        ws.noteLeafFocusChanged(false)
+        XCTAssertEqual(ws.focusRegion, .editor)
+        ws.noteTreeFocusChanged(true)
+        XCTAssertEqual(ws.focusRegion, .tree)
+    }
+
     func testTerminalRoundTripsReturnToTheSameGroup() {
         let ws = WorkspaceState()
         ws.openTab(.markdown(path: "a.md"), allowDuplicate: true)

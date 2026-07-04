@@ -517,4 +517,34 @@ final class WorkspaceState: ObservableObject {
         focusRegion = .editor
         lastFocusedGroup = nil
     }
+
+    // MARK: Passive region mirrors (U4-4 review)
+
+    /// The region must also track focus that arrived WITHOUT a routing
+    /// command — native Tab order or a mouse click into a terminal — so the
+    /// next ⌘⌥arrow behaves per spec ("from the tree, ⌘⌥→ returns to the
+    /// editor" regardless of how focus got to the tree). Views mirror their
+    /// real focus state here on `.onChange` (post-update, #448-safe). No
+    /// focus request is bumped — focus is already where it is; only the
+    /// region bookkeeping catches up. Entering from `.editor` parks the
+    /// round-trip anchor exactly like the command path; re-entry while
+    /// already in the region never re-parks (idempotent).
+    func noteTreeFocusChanged(_ focused: Bool) {
+        noteTerminalFocusChanged(.tree, focused: focused)
+    }
+
+    func noteLeafFocusChanged(_ focused: Bool) {
+        noteTerminalFocusChanged(.leaf, focused: focused)
+    }
+
+    private func noteTerminalFocusChanged(_ region: FocusRegion, focused: Bool) {
+        if focused {
+            if focusRegion == .editor { lastFocusedGroup = model.activeGroupID }
+            if focusRegion != region { focusRegion = region }
+        } else if focusRegion == region {
+            // Only demote the region we own — a tree→leaf Tab interleaves
+            // (tree loses focus, leaf gains) and must converge on .leaf.
+            focusRegion = .editor
+        }
+    }
 }

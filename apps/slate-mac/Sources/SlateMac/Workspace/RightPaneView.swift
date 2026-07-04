@@ -180,6 +180,19 @@ struct RightPaneView: View {
             leafFocused = true
             leafAXFocused = true
         }
+        // U4-4 review: mirror REAL right-pane focus into the region
+        // bookkeeping — native Tab lands on the rail (its single focus
+        // stop) or the leaf anchor without any routing command, and the
+        // next ⌘⌥← must "return to editor" per spec. Rail and anchor are
+        // both leaf-region entries; either losing focus only demotes the
+        // region when the other doesn't hold it (the state machine in
+        // WorkspaceState converges). Post-update (#448-safe).
+        .onChange(of: leafFocused) { _, focused in
+            workspace.noteLeafFocusChanged(focused || railHighlight != nil)
+        }
+        .onChange(of: railHighlight) { _, rail in
+            workspace.noteLeafFocusChanged(rail != nil || leafFocused)
+        }
     }
 
     /// The mounted-ZStack retention pattern, carried over VERBATIM (rationale
