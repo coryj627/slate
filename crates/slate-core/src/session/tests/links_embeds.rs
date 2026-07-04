@@ -259,6 +259,34 @@ fn link_anchor_passes_through_to_outgoing() {
 }
 
 #[test]
+fn markdown_anchored_link_stores_base_and_anchor_and_resolves() {
+    // `[t](Alpha.md#sec)` must store the fragment-less base in
+    // target_raw, carry `#sec` as a heading anchor, and resolve to the
+    // target path just like the wikilink form (#509).
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/source.md", b"see [t](Alpha.md#sec)")
+            .unwrap();
+        p.write_file("notes/Alpha.md", b"# Alpha\n\n## sec")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let outgoing = session.outgoing_links("notes/source.md").unwrap();
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].kind, "markdown");
+    assert_eq!(outgoing[0].target_raw, "Alpha.md");
+    assert_eq!(
+        outgoing[0].target_anchor.as_ref().map(|(k, _)| k.as_str()),
+        Some("heading")
+    );
+    assert_eq!(
+        outgoing[0].target_anchor.as_ref().map(|(_, v)| v.as_str()),
+        Some("sec")
+    );
+    assert_eq!(outgoing[0].target_path.as_deref(), Some("notes/Alpha.md"));
+    assert!(!outgoing[0].is_unresolved);
+}
+
+#[test]
 fn note_load_bundle_returns_backlinks_outgoing_and_properties_in_one_call() {
     // Three vaults' worth of state in a single bundle:
     //   - notes/target.md is linked to from notes/src.md (one backlink)

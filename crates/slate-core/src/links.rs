@@ -18,7 +18,11 @@
 //!   path-resolution at this layer; that's #49).
 //! - **Markdown** (pulldown-cmark): `[text](relative.md)` and
 //!   `[text](https://example.com)`. We flag the latter as external so
-//!   the link table never builds a phantom backlink to a URL.
+//!   the link table never builds a phantom backlink to a URL. An
+//!   internal destination's `#fragment` splits into `anchor` exactly
+//!   like a wikilink anchor (`note.md#sec`, `note.md#^blk`), so the
+//!   base resolves and the anchor rides the shared `LinkAnchor`
+//!   plumbing (#509).
 //!
 //! ## What's NOT a link
 //!
@@ -49,11 +53,13 @@ pub enum LinkKind {
     Markdown,
 }
 
-/// Anchor suffix on a wikilink target.
+/// Anchor suffix on a link target.
 ///
 /// Held separately from `target_raw` so #49's resolver can match the
 /// target's note independently from the anchor (which is checked
-/// against the resolved file's parsed headings or block IDs).
+/// against the resolved file's parsed headings or block IDs). Carried
+/// by both wikilinks (`[[note#sec]]`) and internal Markdown links
+/// (`[t](note.md#sec)`, #509).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkAnchor {
     /// `[[target#heading]]` — heading text as authored, pre-slugify.
@@ -72,8 +78,10 @@ pub enum LinkAnchor {
 pub struct ParsedLink {
     pub kind: LinkKind,
     /// Raw target as authored, with anchor stripped. For wikilinks
-    /// this is the part before `|`, `#`, or `^`. For Markdown links
-    /// it's the URL/path verbatim (no URL-decoding).
+    /// this is the part before `|`, `#`, or `^`. For internal Markdown
+    /// links it's the destination before the first `#`, verbatim
+    /// otherwise (no URL-decoding); external destinations keep any
+    /// `#fragment`.
     pub target_raw: String,
     /// Optional display text:
     /// - Wikilink: the segment after `|`, if any.
@@ -82,7 +90,8 @@ pub struct ParsedLink {
     ///   the display matches `target_raw` so callers don't have to
     ///   special-case).
     pub display_text: Option<String>,
-    /// Anchor suffix when present (wikilinks only at this layer).
+    /// Anchor suffix when present, for wikilinks and internal Markdown
+    /// links alike (#509).
     pub anchor: Option<LinkAnchor>,
     /// Inclusive start byte offset of the link in source.
     pub span_start: usize,
@@ -154,11 +163,18 @@ fn walk_markdown(source: &str) -> (Vec<ParsedLink>, Vec<(usize, usize)>) {
                 } else {
                     Some(display)
                 };
+                // Fragment splits into `anchor` only for internal
+                // destinations; external URLs keep their `#y` verbatim.
+                let (target_raw, anchor) = if is_external {
+                    (url_string, None)
+                } else {
+                    split_markdown_target(&url_string)
+                };
                 links.push(ParsedLink {
                     kind: LinkKind::Markdown,
-                    target_raw: url_string,
+                    target_raw,
                     display_text,
-                    anchor: None,
+                    anchor,
                     span_start: range.start,
                     span_end: range.end,
                     is_embed: false,
@@ -174,11 +190,16 @@ fn walk_markdown(source: &str) -> (Vec<ParsedLink>, Vec<(usize, usize)>) {
                 } else {
                     Some(display)
                 };
+                let (target_raw, anchor) = if is_external {
+                    (url_string, None)
+                } else {
+                    split_markdown_target(&url_string)
+                };
                 links.push(ParsedLink {
                     kind: LinkKind::Markdown,
-                    target_raw: url_string,
+                    target_raw,
                     display_text,
-                    anchor: None,
+                    anchor,
                     span_start: range.start,
                     span_end: range.end,
                     is_embed: true,
@@ -232,6 +253,30 @@ where
         }
     }
     out
+}
+
+/// Split a non-external Markdown destination into `(base, anchor)` by
+/// the FIRST `#`, mirroring the wikilink anchor rules so anchored
+/// destinations (`note.md#sec`) resolve on their base and carry the
+/// fragment through `LinkAnchor` (#509).
+///
+/// The full destination is otherwise verbatim — no percent-decoding,
+/// no trimming (the resolver reads destination bytes as authored).
+/// Unlike wikilinks, `^` is a legal path character in a Markdown
+/// destination, so a bare `^` (no `#`) is NOT an anchor.
+///
+/// Callers must have already ruled the destination internal:
+/// `looks_external` runs on the FULL authored destination so a
+/// fragment-only `#intro` or a `https://x#y` URL stays external and
+/// untouched.
+fn split_markdown_target(url: &str) -> (String, Option<LinkAnchor>) {
+    match url.find('#') {
+        Some(idx) => (
+            url[..idx].to_string(),
+            parse_anchor_after_hash(&url[idx + 1..]),
+        ),
+        None => (url.to_string(), None),
+    }
 }
 
 /// `pub(crate)` alias so the link resolver (#49) can short-circuit
@@ -388,19 +433,7 @@ fn split_wikilink_body(body: &str) -> (String, Option<String>, Option<LinkAnchor
     // `[[note^block]]` legacy form.
     let (target, anchor) = if let Some(idx) = target_segment.find('#') {
         let target = target_segment[..idx].trim().to_string();
-        let anchor_raw = target_segment[idx + 1..].trim().to_string();
-        let anchor = if anchor_raw.is_empty() {
-            None
-        } else if let Some(block_raw) = anchor_raw.strip_prefix('^') {
-            let block = block_raw.trim();
-            if block.is_empty() {
-                None
-            } else {
-                Some(LinkAnchor::Block(block.to_string()))
-            }
-        } else {
-            Some(LinkAnchor::Heading(anchor_raw))
-        };
+        let anchor = parse_anchor_after_hash(&target_segment[idx + 1..]);
         (target, anchor)
     } else if let Some(idx) = target_segment.find('^') {
         let target = target_segment[..idx].trim().to_string();
@@ -419,6 +452,31 @@ fn split_wikilink_body(body: &str) -> (String, Option<String>, Option<LinkAnchor
     // to distinguish "no pipe" from "empty after pipe".
     let display = display.and_then(|d| if d.is_empty() { None } else { Some(d) });
     (target, display, anchor)
+}
+
+/// Parse the anchor text that follows a `#` into a `LinkAnchor`.
+///
+/// `anchor_raw` is everything after the `#` (the `#` itself already
+/// stripped). Shared by wikilink and Markdown extraction so both
+/// families split fragments identically:
+/// - `sec` → `Heading("sec")`
+/// - `^blk` → `Block("blk")` (Obsidian's canonical block-ref syntax,
+///   #413)
+/// - empty (`#`) or bare `^` (`#^`) → `None`
+fn parse_anchor_after_hash(anchor_raw: &str) -> Option<LinkAnchor> {
+    let anchor_raw = anchor_raw.trim();
+    if anchor_raw.is_empty() {
+        None
+    } else if let Some(block_raw) = anchor_raw.strip_prefix('^') {
+        let block = block_raw.trim();
+        if block.is_empty() {
+            None
+        } else {
+            Some(LinkAnchor::Block(block.to_string()))
+        }
+    } else {
+        Some(LinkAnchor::Heading(anchor_raw.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -653,6 +711,68 @@ mod tests {
         // span starts at the `[` after the escaped `\!`, not at the
         // `\` or `!`.
         assert_eq!(&source[links[0].span_start..links[0].span_end], "[[Alpha]]");
+    }
+
+    #[test]
+    fn markdown_heading_fragment_splits_into_anchor() {
+        let links = extract_links("see [t](note.md#sec)");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].kind, LinkKind::Markdown);
+        assert_eq!(target(&links[0]), "note.md");
+        assert_eq!(
+            links[0].anchor,
+            Some(LinkAnchor::Heading("sec".to_string()))
+        );
+        assert!(!links[0].is_external);
+    }
+
+    #[test]
+    fn markdown_block_fragment_splits_into_anchor() {
+        let links = extract_links("see [t](note.md#^blk)");
+        assert_eq!(links.len(), 1);
+        assert_eq!(target(&links[0]), "note.md");
+        assert_eq!(links[0].anchor, Some(LinkAnchor::Block("blk".to_string())));
+    }
+
+    #[test]
+    fn markdown_image_fragment_splits_into_anchor() {
+        let links = extract_links("![a](note.md#sec)");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_embed);
+        assert_eq!(target(&links[0]), "note.md");
+        assert_eq!(
+            links[0].anchor,
+            Some(LinkAnchor::Heading("sec".to_string()))
+        );
+    }
+
+    #[test]
+    fn markdown_empty_fragment_yields_no_anchor() {
+        let links = extract_links("see [t](note.md#)");
+        assert_eq!(links.len(), 1);
+        assert_eq!(target(&links[0]), "note.md");
+        assert_eq!(links[0].anchor, None);
+    }
+
+    #[test]
+    fn markdown_external_url_with_fragment_stays_verbatim() {
+        // The fragment splitter only runs on internal destinations, so a
+        // URL keeps its `#y` in target_raw and gets no anchor.
+        let links = extract_links("[t](https://x.com#y)");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_external);
+        assert_eq!(target(&links[0]), "https://x.com#y");
+        assert_eq!(links[0].anchor, None);
+    }
+
+    #[test]
+    fn markdown_caret_in_path_is_not_split() {
+        // `^` is a legal path character in a Markdown destination — only
+        // `#` opens an anchor.
+        let links = extract_links("[t](notes/a^b.md)");
+        assert_eq!(links.len(), 1);
+        assert_eq!(target(&links[0]), "notes/a^b.md");
+        assert_eq!(links[0].anchor, None);
     }
 
     #[test]

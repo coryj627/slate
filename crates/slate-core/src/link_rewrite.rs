@@ -40,7 +40,7 @@
 use std::collections::HashMap;
 
 use crate::link_resolver::{ResolvedLink, VaultIndex, resolve_link};
-use crate::links::{LinkKind, ParsedLink, extract_links};
+use crate::links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 
 /// Old-path → new-path mapping for every file whose path changes in one
 /// structural mutation (a single file move/rename, or every file under a
@@ -215,6 +215,19 @@ fn pin_edit(
     let replacement = match link.kind {
         LinkKind::Wikilink => pinned,
         LinkKind::Markdown => {
+            // The replaced segment covers the WHOLE destination including
+            // any `#frag` (target_segment runs to `)`/whitespace/`>`),
+            // but `pinned` is fragment-less — reconstruct the authored
+            // anchor from `link.anchor` and re-append it before deciding
+            // on the angle-bracket wrap (#509). Wikilinks don't need this:
+            // their target_segment stops at `#`/`^`, so the anchor bytes
+            // are never inside the replaced segment.
+            let frag = match &link.anchor {
+                Some(LinkAnchor::Heading(t)) => format!("#{t}"),
+                Some(LinkAnchor::Block(t)) => format!("#^{t}"),
+                None => String::new(),
+            };
+            let pinned = format!("{pinned}{frag}");
             // The resolver reads destination bytes verbatim (no percent-
             // decoding); angle brackets preserve authored wrapping and are
             // REQUIRED when the pin contains whitespace (a bare CommonMark
@@ -454,6 +467,36 @@ mod tests {
         assert_eq!(
             apply_edits(text, &edits),
             "See [t](<arch ive/a file.md>).\n"
+        );
+    }
+
+    #[test]
+    fn markdown_anchored_dest_keeps_heading_fragment_on_rewrite() {
+        // The move dangles the qualified dest; the pin must re-append the
+        // `#sec` fragment that target_segment stripped along with the base
+        // (#509).
+        let mapping = moved(&[("old/note.md", "new/note.md")]);
+        let text = "See [t](old/note.md#sec).\n";
+        let edits = plan("index.md", text, &mapping, &["index.md", "new/note.md"]);
+        assert_eq!(apply_edits(text, &edits), "See [t](new/note.md#sec).\n");
+    }
+
+    #[test]
+    fn markdown_anchored_dest_keeps_block_fragment_on_rewrite() {
+        let mapping = moved(&[("old/note.md", "new/note.md")]);
+        let text = "See [t](old/note.md#^blk).\n";
+        let edits = plan("index.md", text, &mapping, &["index.md", "new/note.md"]);
+        assert_eq!(apply_edits(text, &edits), "See [t](new/note.md#^blk).\n");
+    }
+
+    #[test]
+    fn markdown_wrapped_anchored_dest_stays_wrapped_and_keeps_fragment() {
+        let mapping = moved(&[("old my note.md", "new my note.md")]);
+        let text = "See [t](<old my note.md#sec>).\n";
+        let edits = plan("index.md", text, &mapping, &["index.md", "new my note.md"]);
+        assert_eq!(
+            apply_edits(text, &edits),
+            "See [t](<new my note.md#sec>).\n"
         );
     }
 
