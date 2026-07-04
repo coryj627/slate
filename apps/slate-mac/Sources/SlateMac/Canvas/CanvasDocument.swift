@@ -64,9 +64,14 @@ final class CanvasDocument: ObservableObject {
         }
         do {
             let info = try session.openCanvas(path: path)
-            handle = info.handle
             warnings = info.warnings
             if info.degraded {
+                // Degraded = read-only error state: nothing will use
+                // the handle, so release it immediately rather than
+                // retaining native resources until teardown (Codoki
+                // #608).
+                session.closeCanvas(handle: info.handle)
+                handle = nil
                 let detail =
                     info.warnings.first { $0.kind == .parseFailed }?.detail
                     ?? "the file is not valid JSON Canvas"
@@ -74,6 +79,7 @@ final class CanvasDocument: ObservableObject {
                 outline = []
                 return
             }
+            handle = info.handle
             outline = try session.canvasOutline(handle: info.handle)
             state = .ready
         } catch {

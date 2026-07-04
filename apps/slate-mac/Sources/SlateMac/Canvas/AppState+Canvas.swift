@@ -60,6 +60,15 @@ extension AppState {
     /// only), and mirror the sidebar highlight. Canvas tabs carry no
     /// note-editor state, so the note fields clear rather than park.
     func activateCanvasTab(_ id: TabID, path: String) {
+        // Same-tab re-activation is a no-op once the document is live —
+        // mirrors the markdown branch's early return (Codoki #608:
+        // avoids re-clearing collections and main-thread churn).
+        if id == workspace.model.activeGroup.activeTabID,
+            selectedFilePath == path,
+            canvasDocuments[path]?.handle != nil
+        {
+            return
+        }
         workspace.markEditorRegionActive()
         if let pending = pendingTabCloseAfterSave, pending != id {
             pendingTabCloseAfterSave = nil
