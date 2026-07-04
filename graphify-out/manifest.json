@@ -1,786 +1,1038 @@
 {
-  "/Users/coryj/Dev/slate/crates/slate-uniffi/src/lib.rs": {
-    "mtime": 1781375307.828461,
-    "hash": "47d7b2bedf4e7fed3f2bb485c61aa927"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-uniffi/src/lib.rs": {
+    "mtime": 1783136330.6810513,
+    "hash": "b7aaa949b1e3d0208ba432115923388c"
   },
-  "/Users/coryj/Dev/slate/crates/slate-uniffi/src/bin/uniffi-bindgen.rs": {
-    "mtime": 1779752569.4075215,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-uniffi/src/bin/uniffi-bindgen.rs": {
+    "mtime": 1783099779.650561,
     "hash": "b5b95b917b5fb13fa63f203caaae74e4"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/006_fts5.sql": {
-    "mtime": 1779509854.1910713,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/006_fts5.sql": {
+    "mtime": 1783099779.6327164,
     "hash": "9ecfc6475f55de4ca8b47b6749868f0e"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/007_properties_value_norm.sql": {
-    "mtime": 1779509854.1912258,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/007_properties_value_norm.sql": {
+    "mtime": 1783099779.6331515,
     "hash": "8677138587e89b434ab61560158c3756"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/012_invalidate_headings_for_frontmatter_fix.sql": {
-    "mtime": 1779722331.7996151,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/017_structural_ops.sql": {
+    "mtime": 1783113527.289657,
+    "hash": "30d050b1cc6c509bfe07b382dce2e004"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/012_invalidate_headings_for_frontmatter_fix.sql": {
+    "mtime": 1783099779.6348987,
     "hash": "39e5df62e439c29592a52f2a4318c9c8"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/010_tasks_sort_index.sql": {
-    "mtime": 1779645084.385204,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/010_tasks_sort_index.sql": {
+    "mtime": 1783099779.6341066,
     "hash": "aaf81b36f79ba1b337f3ccf1e44f6a6f"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/011_blocks.sql": {
-    "mtime": 1779676476.769007,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/011_blocks.sql": {
+    "mtime": 1783099779.6344318,
     "hash": "610184969f179918d50a16a36fcbb38f"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/008_tasks.sql": {
-    "mtime": 1779599971.0899258,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/016_dirs.sql": {
+    "mtime": 1783105864.1959665,
+    "hash": "6d8a1a722a4b063484dbe48f35835a19"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/008_tasks.sql": {
+    "mtime": 1783099779.6334825,
     "hash": "18c0826b923b2037f60f3eace834c550"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/009_tasks_priority_index.sql": {
-    "mtime": 1779602571.6612668,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/009_tasks_priority_index.sql": {
+    "mtime": 1783099779.6337717,
     "hash": "69157d46ded4c89c781e5adf19ea71b2"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/001_init.sql": {
-    "mtime": 1779509854.190491,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/001_init.sql": {
+    "mtime": 1783099779.6310816,
     "hash": "063b053f7396650e408c13685089cd88"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/004_links.sql": {
-    "mtime": 1779509854.190756,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/004_links.sql": {
+    "mtime": 1783099779.6320038,
     "hash": "a35e77ecfea4cc28d7034b98203ffdfa"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/005_properties.sql": {
-    "mtime": 1779509854.19093,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/005_properties.sql": {
+    "mtime": 1783099779.632299,
     "hash": "0d18c1b437a444120944ff8da9e1ce0d"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/003_headings.sql": {
-    "mtime": 1779509854.1906626,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/003_headings.sql": {
+    "mtime": 1783099779.6317182,
     "hash": "28174462d9b70822075b88f82e437a7d"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/014_headings_byte_offset.sql": {
-    "mtime": 1781145838.1206026,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/014_headings_byte_offset.sql": {
+    "mtime": 1783099779.6354806,
     "hash": "5782fd90ae9cb3a7e845596cb9b157f7"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/013_citations.sql": {
-    "mtime": 1779762344.1403327,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/013_citations.sql": {
+    "mtime": 1783099779.6351936,
     "hash": "fc3e56bed3986215a3ab8ae3c62a0b7d"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/002_files_ctime.sql": {
-    "mtime": 1779509854.1905792,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/002_files_ctime.sql": {
+    "mtime": 1783099779.6313944,
     "hash": "cedca2cd9866e9ab13811f01e1c8f4f2"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/migrations/015_links_display_text.sql": {
-    "mtime": 1781145838.1207075,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/migrations/015_links_display_text.sql": {
+    "mtime": 1783099779.6357732,
     "hash": "1c7097d64e4000478e53ed5e1d31fa11"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/tests/links_roundtrip.rs": {
-    "mtime": 1781375307.8280745,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/tests/links_roundtrip.rs": {
+    "mtime": 1783099779.649972,
     "hash": "c6365b11ef1b9a25df6cad3514d3b29b"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/benches/scan_bench.rs": {
-    "mtime": 1781380995.9031966,
-    "hash": "b48cd59bb5d481ac17bb3cafb48a667d"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/benches/scan_bench.rs": {
+    "mtime": 1783138340.2258952,
+    "hash": "50348df711cb411d82ca93a07b4eedb3"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/benches/common/mod.rs": {
-    "mtime": 1779752569.4032266,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/benches/common/mod.rs": {
+    "mtime": 1783099779.630415,
     "hash": "ec4b9fa6f1cc06c35a37aa59a5ada81f"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/links.rs": {
-    "mtime": 1781375307.8233643,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/links.rs": {
+    "mtime": 1783099779.6427262,
     "hash": "9cadc8512481fa2a61676ede209d78af"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/blocks_db.rs": {
-    "mtime": 1781375307.8192272,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/blocks_db.rs": {
+    "mtime": 1783099779.6364202,
     "hash": "603513ffc0fd6dbe2549b24e807726b7"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/code.rs": {
-    "mtime": 1781375307.8213704,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/reading.rs": {
+    "mtime": 1783123924.6256425,
+    "hash": "5c02f55ca7c7b91b3a83b5ca615f189a"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/code.rs": {
+    "mtime": 1783099779.638309,
     "hash": "72881df3efd85bf0c8c9e402516958d3"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session.rs": {
-    "mtime": 1781375307.8250897,
-    "hash": "b617b403ac05ba58a99fcbe4f29ec9f3"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session.rs": {
+    "mtime": 1783136330.6803553,
+    "hash": "9bc7d8155a1de5e5b15c39bc2a674163"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/links_db.rs": {
-    "mtime": 1781375307.8235426,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/links_db.rs": {
+    "mtime": 1783099779.642957,
     "hash": "c08a6b376ffac22881d06a3a7a2b3025"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/frontmatter.rs": {
-    "mtime": 1781375307.822614,
-    "hash": "c0997bfb4c618738d46b2db4eb39800a"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/frontmatter.rs": {
+    "mtime": 1783123924.6252263,
+    "hash": "b0b2d544191981669c91a2bdb45c6c32"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/diagram.rs": {
-    "mtime": 1780261110.3873782,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/diagram.rs": {
+    "mtime": 1783099779.639313,
     "hash": "6b1fcb2a1b4f13c592656706449923f9"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/tasks.rs": {
-    "mtime": 1781375307.8268743,
-    "hash": "4d0b9353f5fb3758b42ea379ff669100"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/tasks.rs": {
+    "mtime": 1783123924.6267328,
+    "hash": "29579196890920fe351555d537f5c946"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/lib.rs": {
-    "mtime": 1781375307.8228717,
-    "hash": "dc3ac804b7e965496c31bd02c2bbba1a"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/lib.rs": {
+    "mtime": 1783123924.6254601,
+    "hash": "4411debd4c2b39a8ee9d116aa0124b70"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/properties_db.rs": {
-    "mtime": 1781375307.8242135,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/properties_db.rs": {
+    "mtime": 1783099779.643844,
     "hash": "98664574c46c7da9ba1cc15851e609ef"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/citations.rs": {
-    "mtime": 1781375307.8195655,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/citations.rs": {
+    "mtime": 1783099779.6366825,
     "hash": "de457e616f7d7b540ad416da9ab6a849"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/citations_db.rs": {
-    "mtime": 1781375307.8210275,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/structural.rs": {
+    "mtime": 1783120728.454624,
+    "hash": "e0c3c43d742f01e5444c061ae0d6a131"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/citations_db.rs": {
+    "mtime": 1783099779.6380332,
     "hash": "236142a6a77f7bd7abb5f1936207c438"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/link_resolver.rs": {
-    "mtime": 1781375307.8231835,
-    "hash": "36a0c782d7fa49eaed9721b855d121b2"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/link_resolver.rs": {
+    "mtime": 1783113473.229234,
+    "hash": "713fb481950e87ecfe612a82197b471c"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/db.rs": {
-    "mtime": 1781145838.1208599,
-    "hash": "2e146e9db8e5cb8743d37d1f138c2e27"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/db.rs": {
+    "mtime": 1783119839.5465164,
+    "hash": "85f12689536bcd7b19ae0f89d2423281"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/search_db.rs": {
-    "mtime": 1781375307.8246875,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/search_db.rs": {
+    "mtime": 1783099779.6441834,
     "hash": "8d14063f8c4798a954b4c33aed584170"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/commands.rs": {
-    "mtime": 1779904819.443042,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/commands.rs": {
+    "mtime": 1783099779.6385953,
     "hash": "6d01de9f799e49646d072f7e0c8ba681"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/text_buffer.rs": {
-    "mtime": 1781380995.9042904,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/text_buffer.rs": {
+    "mtime": 1783099779.6487768,
     "hash": "22873be9ae941316ed71e3366ef0b236"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/line_index.rs": {
-    "mtime": 1780261110.3876595,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/line_index.rs": {
+    "mtime": 1783099779.642298,
     "hash": "7723394eee618c45372a7624e20ad632"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/tasks_db.rs": {
-    "mtime": 1781375307.8270566,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/tasks_db.rs": {
+    "mtime": 1783099779.6483262,
     "hash": "e3915a24607e9ece21ff054ef93a0c36"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/embeds.rs": {
-    "mtime": 1781137200.3559172,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/embeds.rs": {
+    "mtime": 1783099779.6411207,
     "hash": "b6155b7fe4491a58031ac8a9e38da482"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/doc_buffer.rs": {
-    "mtime": 1781375307.8216517,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/doc_buffer.rs": {
+    "mtime": 1783099779.6398194,
     "hash": "c182dfd7dfc0bc12c6a4b9dc5da7534b"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/math.rs": {
-    "mtime": 1781375307.823699,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/math.rs": {
+    "mtime": 1783099779.6431983,
     "hash": "175dce6a63ad22fa195e156e246cb1b6"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/blocks.rs": {
-    "mtime": 1781380995.9033756,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/blocks.rs": {
+    "mtime": 1783099779.6361687,
     "hash": "2b0e4c9eaf4778654ec75980cebdb81e"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/editor_spans.rs": {
-    "mtime": 1781380995.9039896,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/editor_spans.rs": {
+    "mtime": 1783099779.6405883,
     "hash": "b4810269993ed6026ec10742fc9a06cb"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/oplog.rs": {
-    "mtime": 1781375307.823965,
-    "hash": "a6470967a757819d1dabf446cbaab82f"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/oplog.rs": {
+    "mtime": 1783120728.4087574,
+    "hash": "c88e070dffe6a064a641b1f312c32a3c"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/diff.rs": {
-    "mtime": 1781380995.9036114,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/diff.rs": {
+    "mtime": 1783099779.6395931,
     "hash": "9db084d22471c1e2816ca62dc8fafb99"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/templates.rs": {
-    "mtime": 1781375307.8273103,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/templates.rs": {
+    "mtime": 1783099779.6485453,
     "hash": "43ab397113ddf01fed3856ee7096b4b6"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/vault_config.rs": {
-    "mtime": 1781375307.8278766,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/vault_config.rs": {
+    "mtime": 1783099779.6496713,
     "hash": "df01f0801cf9dd1664be0b2184eee2bf"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/citations/render.rs": {
-    "mtime": 1781375307.820575,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/link_rewrite.rs": {
+    "mtime": 1783113473.229614,
+    "hash": "e8ea2abbe1f18166556e80ce5f888dbb"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/citations/render.rs": {
+    "mtime": 1783099779.6376977,
     "hash": "8485eda07a5b90bdd29a76529e966cd7"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/citations/bibliography.rs": {
-    "mtime": 1781375307.8198905,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/citations/bibliography.rs": {
+    "mtime": 1783099779.6371205,
     "hash": "51b2ad3b5971857b641a2e72bf9900a5"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/citations/prefs.rs": {
-    "mtime": 1781375307.8200712,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/citations/prefs.rs": {
+    "mtime": 1783099779.6373708,
     "hash": "91e8ef40053f4bb7d554138b02258c48"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/vault/provider.rs": {
-    "mtime": 1779752569.4072237,
-    "hash": "121bc0e5a8466dd160fd57731ffc3146"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/vault/provider.rs": {
+    "mtime": 1783119953.5427785,
+    "hash": "256acda5fd4d549a5bcc631a31d20121"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/vault/mod.rs": {
-    "mtime": 1781375307.8277056,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/vault/mod.rs": {
+    "mtime": 1783099779.6493342,
     "hash": "b41372309b750ea121498fcd7682995e"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/vault/fs.rs": {
-    "mtime": 1779752569.4068146,
-    "hash": "7306edf7e90cd017fbd7bce39e65573d"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/vault/fs.rs": {
+    "mtime": 1783119957.1526077,
+    "hash": "04b2a7526d83bb37199bf8f3e44717ae"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/tasks.rs": {
-    "mtime": 1779812589.4798403,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/reading.rs": {
+    "mtime": 1783123924.626451,
+    "hash": "21b3ed24a0d81160de903338dd27664c"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/link_integrity.rs": {
+    "mtime": 1783123924.638804,
+    "hash": "3643c1de021a80f15125804dd1a02580"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/tasks.rs": {
+    "mtime": 1783099779.647596,
     "hash": "0ad49bce383cbb919dde296b48ca6ad1"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/properties.rs": {
-    "mtime": 1781375307.8265567,
-    "hash": "3bc7e0e25874b2c296fbcb36a7c2562a"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/properties.rs": {
+    "mtime": 1783120465.055927,
+    "hash": "d76dc947f4ba1c71bc234f7e47363653"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/citations.rs": {
-    "mtime": 1781139240.9027917,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/citations.rs": {
+    "mtime": 1783099779.6450744,
     "hash": "a4234a6d777a21e1758736aa0a3ba1c1"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/save.rs": {
-    "mtime": 1780197279.559844,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/structural.rs": {
+    "mtime": 1783120805.8742023,
+    "hash": "efd285c294670699250eee49299902cf"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/save.rs": {
+    "mtime": 1783099779.6467543,
     "hash": "e7eaffe8aec778af03cdeb3b56dcb8b2"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/files.rs": {
-    "mtime": 1779759021.6478608,
-    "hash": "c429b660dca8b73f271a5b7d7fe09bac"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/composed.rs": {
+    "mtime": 1783136330.68065,
+    "hash": "5ecd559ac6924da31aa1ef0249d45744"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/misc.rs": {
-    "mtime": 1779759021.6481993,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/files.rs": {
+    "mtime": 1783120465.0553496,
+    "hash": "e8e690b696127619bb77407bec41c21c"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/misc.rs": {
+    "mtime": 1783099779.6462603,
     "hash": "cc78d1fff2866c6aa3a2874865bf130e"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/links_embeds.rs": {
-    "mtime": 1781145838.121836,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/links_embeds.rs": {
+    "mtime": 1783099779.6460788,
     "hash": "7a72fd783cf0b630746e3996968195d6"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/search.rs": {
-    "mtime": 1779759021.6498392,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/search.rs": {
+    "mtime": 1783099779.647291,
     "hash": "c79ad6351480a7d93cba609bc0da18bb"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/scan.rs": {
-    "mtime": 1779759021.6496127,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/scan.rs": {
+    "mtime": 1783099779.6469982,
     "hash": "2b0fba7e752b06dee5ac64a20e7b3bc0"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/templates.rs": {
-    "mtime": 1781139240.9029455,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/dir_tree.rs": {
+    "mtime": 1783105864.196743,
+    "hash": "84e24afe0dbab5d9aff13e7c2783de4a"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/templates.rs": {
+    "mtime": 1783099779.6478407,
     "hash": "9fd8a6a53c6a4011ae9507fed44a0494"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/common.rs": {
-    "mtime": 1779759021.6475556,
-    "hash": "f58c4e3704e804f441ce714351a1680e"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/src/session/tests/common.rs": {
+    "mtime": 1783120465.0549998,
+    "hash": "bf3a1b249c153160bb782a446dfebccf"
   },
-  "/Users/coryj/Dev/slate/examples/swift-cli/main.swift": {
-    "mtime": 1780243767.798909,
-    "hash": "87f7247853c59bed9cb21ab020ed9268"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/examples/swift-cli/main.swift": {
+    "mtime": 1783122669.00528,
+    "hash": "06d94d058c2ad52b25941bab4ae21d7c"
   },
-  "/Users/coryj/Dev/slate/scripts/apply-license-header.py": {
-    "mtime": 1779752569.4081073,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/scripts/apply-license-header.py": {
+    "mtime": 1783099779.6736631,
     "hash": "b4220f03f24769a55f6ba2acdf01461d"
   },
-  "/Users/coryj/Dev/slate/scripts/ax-set-caret.swift": {
-    "mtime": 1781134114.2902977,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/scripts/ax-set-caret.swift": {
+    "mtime": 1783099779.6747158,
     "hash": "e0258f7df6e6351fced4507837af7c79"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Package.swift": {
-    "mtime": 1783057090.5998378,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Package.swift": {
+    "mtime": 1783099779.5941975,
     "hash": "cf4077f30386a8f54e75413ec33515f1"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CodeBlockViewTests.swift": {
-    "mtime": 1781140335.2996976,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceTabsTests.swift": {
+    "mtime": 1783105864.171705,
+    "hash": "d83754b8692b365ddf9288ce0f7073fd"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CodeBlockViewTests.swift": {
+    "mtime": 1783099779.6143744,
     "hash": "9547182cbcf4f612fba6672fecf5ff1f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneKIntegrationTests.swift": {
-    "mtime": 1779755594.645566,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceViewMigrationTests.swift": {
+    "mtime": 1783102380.6779146,
+    "hash": "be8b83059c63097be42d11170b4b2a6a"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MilestoneKIntegrationTests.swift": {
+    "mtime": 1783099779.6203609,
     "hash": "9e093ab6f3cc9bbc4c8c0ce8fa349655"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ContentBlockPanelsTests.swift": {
-    "mtime": 1781140335.2998593,
-    "hash": "e3d3d71bf8703a6ac721c6c516d7a7d8"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/ContentBlockPanelsTests.swift": {
+    "mtime": 1783136330.6766272,
+    "hash": "7b142d60ec2b39da69e243e79c549cb2"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EmbedPreviewCmdEIntegrationTests.swift": {
-    "mtime": 1781134114.2879379,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EmbedPreviewCmdEIntegrationTests.swift": {
+    "mtime": 1783099779.6183639,
     "hash": "c07ddbbab4f535d662050e97d1747dcd"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorSyntaxPaletteTests.swift": {
-    "mtime": 1780183410.0461028,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EditorSyntaxPaletteTests.swift": {
+    "mtime": 1783099779.617092,
     "hash": "65f2470195f1bbf771837bb6899e42d3"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SwiftSourceStrippingTests.swift": {
-    "mtime": 1779941574.1348524,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MutationAnnouncementFocusTests.swift": {
+    "mtime": 1783136330.677577,
+    "hash": "47dce9635a152a5ea01ab61aa3ac7569"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SwiftSourceStrippingTests.swift": {
+    "mtime": 1783099779.627589,
     "hash": "36a5bd328ce99892d1e3106aa88d75d9"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/NoteEditorCoordinatorTests.swift": {
-    "mtime": 1781145838.11977,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/NoteEditorCoordinatorTests.swift": {
+    "mtime": 1783099779.6214788,
     "hash": "3852b78a1342d2c8592365e9d01e6748"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneIIntegrationTests.swift": {
-    "mtime": 1779752569.4021652,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MilestoneIIntegrationTests.swift": {
+    "mtime": 1783099779.6196582,
     "hash": "edc4309ffd8f1aa5178abec9eb55357f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CitationsPanelTests.swift": {
-    "mtime": 1779763655.08932,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CitationsPanelTests.swift": {
+    "mtime": 1783099779.6135557,
     "hash": "7e3cec123c7bf34d2ca6da54a95713af"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CitationSummaryTests.swift": {
-    "mtime": 1779765443.9419281,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/RightPaneViewTests.swift": {
+    "mtime": 1783136330.6784184,
+    "hash": "ea196e070c8c44f3be95333d19e349ab"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CitationSummaryTests.swift": {
+    "mtime": 1783099779.6131856,
     "hash": "470b6a4964095c7a4d4d8e572b06b8e6"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/BibliographyVaultConfigTests.swift": {
-    "mtime": 1781139240.9011197,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/BibliographyVaultConfigTests.swift": {
+    "mtime": 1783099779.612913,
     "hash": "6068eed2e30ed639c0da191fc0ef332a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/TemplateCursorRequestTests.swift": {
-    "mtime": 1781141571.0785477,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/TemplateCursorRequestTests.swift": {
+    "mtime": 1783099779.6293745,
     "hash": "ada97500fe87b632c23ea36688ee1f50"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PreferencesStoreTests.swift": {
-    "mtime": 1779752569.4028761,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceStoreTests.swift": {
+    "mtime": 1783123924.6245196,
+    "hash": "27c1f7199a3fb773e8ccf918501ed96e"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/ReadingViewTests.swift": {
+    "mtime": 1783136330.6780353,
+    "hash": "cfa429c1776938edf2c0cfa31ab507ba"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/FileTreeSidebarTests.swift": {
+    "mtime": 1783113473.2240493,
+    "hash": "0966eabf059349bc872964a641b94119"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/PreferencesStoreTests.swift": {
+    "mtime": 1783099779.6239862,
     "hash": "f28542edf1ace0dcd983ebbf73212cf3"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CommandRegistryTests.swift": {
-    "mtime": 1779904819.442906,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceOpenTargetsTests.swift": {
+    "mtime": 1783108078.3675435,
+    "hash": "ddadaa4443910132d56802470de339d8"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/PropertiesSourceTests.swift": {
+    "mtime": 1783136330.6776981,
+    "hash": "addc58c45a1697f123ae7180cefebf87"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CommandRegistryTests.swift": {
+    "mtime": 1783099779.6157393,
     "hash": "9320cf35e75b78283b02346ae14736b3"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PresentationReadyTests.swift": {
-    "mtime": 1783093733.3036497,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SidebarUtilityBarTests.swift": {
+    "mtime": 1783136330.678708,
+    "hash": "a88cbec9d8f018fc1ce0651117532938"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/PresentationReadyTests.swift": {
+    "mtime": 1783099779.624809,
     "hash": "d597c424a943c2510c1c1cb8b98a0aa2"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SearchErgonomicsTests.swift": {
-    "mtime": 1781142933.4244707,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SearchErgonomicsTests.swift": {
+    "mtime": 1783099779.625567,
     "hash": "6e4ad14e2174bfd5bcc42b42437a393c"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SwiftSourceStripping.swift": {
-    "mtime": 1779941574.1347091,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SwiftSourceStripping.swift": {
+    "mtime": 1783099779.6273515,
     "hash": "e1b15667f8d83023e500978bfa82c14b"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MathViewTests.swift": {
-    "mtime": 1779752569.4018383,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MathViewTests.swift": {
+    "mtime": 1783099779.61947,
     "hash": "e16c2565e4d14fdc9a0f8ea7ccfd8f23"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorTextConversionsTests.swift": {
-    "mtime": 1780191575.2306538,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EditorTextConversionsTests.swift": {
+    "mtime": 1783099779.6175644,
     "hash": "da8843c50b4c84d078782e594bf61424"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorSpanMappingTests.swift": {
-    "mtime": 1780183410.045941,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EditorSpanMappingTests.swift": {
+    "mtime": 1783099779.6168523,
     "hash": "9d49bc0dcdcdcfc4e93669064e2a7a28"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorTypingSaveFlowTests.swift": {
-    "mtime": 1781131095.8507106,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EditorTypingSaveFlowTests.swift": {
+    "mtime": 1783099779.6180494,
     "hash": "74e5420abb36a220a0b38d431909147d"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SlateCommandsTests.swift": {
-    "mtime": 1779947196.8005242,
-    "hash": "19fc4c73ae5bf4680d0dc1bab4e3d098"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/InteractionBudgetTests.swift": {
+    "mtime": 1783138105.0296526,
+    "hash": "a7e81c983e0511b4d5f8116f4ac553fa"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/AppStateTests.swift": {
-    "mtime": 1781145838.119488,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SlateCommandsTests.swift": {
+    "mtime": 1783136330.6790736,
+    "hash": "34b5dce01d0b968bfc469300a560a3cf"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceFocusRoutingTests.swift": {
+    "mtime": 1783136330.679626,
+    "hash": "33227f4264356f7d3cda4688f3df5eb0"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/PropertiesWidgetTests.swift": {
+    "mtime": 1783136330.67779,
+    "hash": "0f501bfa753b5fc3dc6874acc0ec7d53"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/AppStateTests.swift": {
+    "mtime": 1783099779.6123075,
     "hash": "2db407f5b412e6224f16630e94a53c20"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/HighlightBenchmarkTests.swift": {
-    "mtime": 1780244538.608879,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/HighlightBenchmarkTests.swift": {
+    "mtime": 1783099779.6188533,
     "hash": "a50959e695523dbffc5efcd7bd9e5d88"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CloseVaultSheetParityTests.swift": {
-    "mtime": 1779946834.531611,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CloseVaultSheetParityTests.swift": {
+    "mtime": 1783099779.6139464,
     "hash": "e957ea0dc929c21ee7fe6902c3dd747f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneJIntegrationTests.swift": {
-    "mtime": 1781137200.355642,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MilestoneJIntegrationTests.swift": {
+    "mtime": 1783099779.619913,
     "hash": "3c2e99ec7ea80e395eadf93e46ff915e"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EmbedViewTests.swift": {
-    "mtime": 1781141571.0782034,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EmbedViewTests.swift": {
+    "mtime": 1783099779.6186614,
     "hash": "3e134cfb254349505a29fa20a9d92a87"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneQIntegrationTests.swift": {
-    "mtime": 1779922379.3426244,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/ComposedBufferTests.swift": {
+    "mtime": 1783136330.6761384,
+    "hash": "c3f62a77378f9f033203418f7bb40d3c"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/LeafContextMatrixTests.swift": {
+    "mtime": 1783136330.6772327,
+    "hash": "49ffd0c1ed0edb91c6ed8c27f37265ac"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MilestoneQIntegrationTests.swift": {
+    "mtime": 1783099779.6212523,
     "hash": "836f63c5b4d0774486fb295dbeada18f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SettingsLocalizationTests.swift": {
-    "mtime": 1781140335.3003192,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SettingsLocalizationTests.swift": {
+    "mtime": 1783099779.626029,
     "hash": "4aa485c4b86c83ed42950c1d8906afe6"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/APCAContrast.swift": {
-    "mtime": 1783061811.4311287,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/APCAContrast.swift": {
+    "mtime": 1783099779.6115875,
     "hash": "e80f9b0a68f2b124c1ada87859052a79"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/NoteSectionSlicerTests.swift": {
-    "mtime": 1781145838.1201305,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/ViewModeTests.swift": {
+    "mtime": 1783136330.679519,
+    "hash": "978c048dba274f039349616420a6d954"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/NoteSectionSlicerTests.swift": {
+    "mtime": 1783099779.623706,
     "hash": "bf43eaa8c4c7b4f528b67f0a8c6d80a3"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/NoteEditorRangedHighlightTests.swift": {
-    "mtime": 1780268993.0462043,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/NoteEditorRangedHighlightTests.swift": {
+    "mtime": 1783099779.6222107,
     "hash": "158972fccbc104fe7bc371e5acb54d9a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorEmbedSpansTests.swift": {
-    "mtime": 1779752569.401571,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/EditorEmbedSpansTests.swift": {
+    "mtime": 1783099779.616563,
     "hash": "b34c63ce3280a7a1d365fb78447fdfd5"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PrefsJsonStoreTests.swift": {
-    "mtime": 1779764782.6197522,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/PrefsJsonStoreTests.swift": {
+    "mtime": 1783099779.6243577,
     "hash": "063012894f7960521ea7adafba5cec68"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MermaidViewTests.swift": {
-    "mtime": 1779752569.4020233,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MermaidViewTests.swift": {
+    "mtime": 1783099779.6195467,
     "hash": "0192e8e9a5a5d7c97beb6a47841c9250"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/OutlineSidebarTests.swift": {
-    "mtime": 1781145838.1203856,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceModelTests.swift": {
+    "mtime": 1783136330.6798909,
+    "hash": "4a79719fb464af526dc5ba5a826f3999"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/OutlineSidebarTests.swift": {
+    "mtime": 1783099779.6238945,
     "hash": "1203f47666ac5e2a9020313cc6cd2e54"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/BibliographyPanelTests.swift": {
-    "mtime": 1779764303.4341998,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/BibliographyPanelTests.swift": {
+    "mtime": 1783099779.6126263,
     "hash": "6ae2b554921217515ff7fb53086ced3b"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SlateSymbolTests.swift": {
-    "mtime": 1783060272.0742736,
-    "hash": "9da0de47e29ab49865ab67006da9d0c7"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/SlateSymbolTests.swift": {
+    "mtime": 1783136330.679238,
+    "hash": "658f66fc3cbe52936a5f9100772700e6"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/TaskStatusPhraseTests.swift": {
-    "mtime": 1781142623.1207356,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/TaskStatusPhraseTests.swift": {
+    "mtime": 1783099779.627917,
     "hash": "56f85d9fb02bdcf644baad581e7e6c5f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CommandPaletteViewTests.swift": {
-    "mtime": 1780184280.2180538,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CommandPaletteViewTests.swift": {
+    "mtime": 1783099779.615274,
     "hash": "2747dc2e5ecaa348fc0875acbe0e3aba"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneLIntegrationTests.swift": {
-    "mtime": 1779811786.2114122,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/MilestoneLIntegrationTests.swift": {
+    "mtime": 1783099779.6206994,
     "hash": "20c071ab86d57027325523a2797f0418"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/NoteEditorRangedHighlightConcurrencyTests.swift": {
-    "mtime": 1780247886.3535883,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/NoteEditorRangedHighlightConcurrencyTests.swift": {
+    "mtime": 1783099779.621823,
     "hash": "41e37f03f01ab34753911cce769cce4b"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/RecentVaultsStoreTests.swift": {
-    "mtime": 1779947769.5770187,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/RecentVaultsStoreTests.swift": {
+    "mtime": 1783099779.6252573,
     "hash": "c101ed82c5a9522736e4cc5a22a8adcc"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PresentationReady.swift": {
-    "mtime": 1783093733.303556,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/WorkspaceSplitsTests.swift": {
+    "mtime": 1783105864.2031794,
+    "hash": "c6dd56e0dd5228645a042f844ab1d125"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/PresentationReady.swift": {
+    "mtime": 1783099779.6245923,
     "hash": "8537d23d206a39a3aaa121bd42ffdb0f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/HotkeySpokenTests.swift": {
-    "mtime": 1779938833.615532,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/HotkeySpokenTests.swift": {
+    "mtime": 1783099779.6192935,
     "hash": "fdf76efd2eb88d2b95e05f7087421344"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CommandPaletteRecentsStoreTests.swift": {
-    "mtime": 1779945374.0675733,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/LeafPortTests.swift": {
+    "mtime": 1783136330.6773303,
+    "hash": "182aa078ff1c15ed8cd002fb0c75e1f5"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/FileManagementCommandsTests.swift": {
+    "mtime": 1783136330.6771176,
+    "hash": "a473e4b73d53328cfb95db6747fb95e8"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Tests/SlateMacTests/CommandPaletteRecentsStoreTests.swift": {
+    "mtime": 1783099779.614876,
     "hash": "32a1c9e8a17d4ffa6c675b5e71c91bf7"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AppState.swift": {
-    "mtime": 1783007513.7362494,
-    "hash": "96eb13464365226c0bcd0e771a453ade"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/AppState.swift": {
+    "mtime": 1783136330.665361,
+    "hash": "e87a9ee8801f5402cb856b48b82449cd"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MathView.swift": {
-    "mtime": 1779752569.3980577,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/MathView.swift": {
+    "mtime": 1783099779.6035051,
     "hash": "07265bef77bc23aa2b979a2b0e2d5900"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/OutlineSidebar.swift": {
-    "mtime": 1783057090.601123,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/OutlineSidebar.swift": {
+    "mtime": 1783099779.6055405,
     "hash": "e9389f7fffd607df334e4fe4f031095b"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorSpanMapping.swift": {
-    "mtime": 1780183410.0453553,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/EditorSpanMapping.swift": {
+    "mtime": 1783099779.600529,
     "hash": "d7c01a60a47e6c408ff0a48fbf408213"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MathPrefs.swift": {
-    "mtime": 1779752569.3978696,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/MathPrefs.swift": {
+    "mtime": 1783099779.603318,
     "hash": "95982ab11b66b38c870473afbc3621f8"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EmbedView.swift": {
-    "mtime": 1783060272.0717099,
-    "hash": "458ac77f4bb9f7026f16ce4b6a3c6c8a"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/EmbedView.swift": {
+    "mtime": 1783136330.667286,
+    "hash": "deba18d5815ced102bdc0f899e4dd42d"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/RecentVault.swift": {
-    "mtime": 1779752569.3993497,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/RecentVault.swift": {
+    "mtime": 1783099779.6069024,
     "hash": "700806cd27ea7079332e3a86e93b417f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SettingsView.swift": {
-    "mtime": 1783060272.0731287,
-    "hash": "19a11b4f5f632cf326b73a05c232b413"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/SettingsView.swift": {
+    "mtime": 1783136330.6721416,
+    "hash": "ad98982cc289ec85ec55db4183e71791"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NoteSectionSlicer.swift": {
-    "mtime": 1779752569.3985887,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/NoteSectionSlicer.swift": {
+    "mtime": 1783099779.6047468,
     "hash": "b2c61ab8ec259bddfb2ca84af5b422ae"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AddPropertySheet.swift": {
-    "mtime": 1779752569.3946457,
-    "hash": "5f437a7725dccffa4503dcb834350b48"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/AddPropertySheet.swift": {
+    "mtime": 1783136330.6646922,
+    "hash": "ae4d94e1e96e14a7f769435d137891a7"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorEmbedSpans.swift": {
-    "mtime": 1779752569.396948,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/EditorEmbedSpans.swift": {
+    "mtime": 1783099779.6002784,
     "hash": "90f4b5b543d03682e1e9de70016766c3"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NoteEditorView.swift": {
-    "mtime": 1783007513.7367551,
-    "hash": "80f26045884b2e52d7ab63d647e30d2f"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/NoteEditorView.swift": {
+    "mtime": 1783136330.6698818,
+    "hash": "621db246c39ac775cd27da58b370111c"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CitationPopover.swift": {
-    "mtime": 1779764303.4338903,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/FileTreeSidebar.swift": {
+    "mtime": 1783136330.667935,
+    "hash": "29ada1ca92956c89195ad5d4ed63eed7"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CitationPopover.swift": {
+    "mtime": 1783099779.5973246,
     "hash": "cb237ffc7f374e20a6505c8d4dc05d33"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PreferencesStore.swift": {
-    "mtime": 1779752569.3990548,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/PreferencesStore.swift": {
+    "mtime": 1783099779.6056068,
     "hash": "08e89560caf65c4a489749a7b4a7b6da"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EmbedsPanel.swift": {
-    "mtime": 1783060272.071941,
-    "hash": "f7f897069566e3088b6a9bc4a501973b"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/EmbedsPanel.swift": {
+    "mtime": 1783136330.6674464,
+    "hash": "59741a55b851eea85f7d86f58fcd411a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/ScanProgressAdapter.swift": {
-    "mtime": 1779752569.3996334,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/ScanProgressAdapter.swift": {
+    "mtime": 1783099779.6072953,
     "hash": "7a3c6e8fcb3dc2b1980cc1aa9581fd28"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorTextConversions.swift": {
-    "mtime": 1780268993.0457165,
-    "hash": "316cfb5fe9b785bcb75d46e2218b974a"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/NotePropertiesHeader.swift": {
+    "mtime": 1783136330.6700761,
+    "hash": "7915c923f30019bcd36a227f976059c1"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CommandPaletteModel.swift": {
-    "mtime": 1779920444.7567067,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/EditorTextConversions.swift": {
+    "mtime": 1783136330.6670332,
+    "hash": "fb329a99223b1abed3ffc03b7a2f8061"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CommandPaletteModel.swift": {
+    "mtime": 1783099779.598716,
     "hash": "f0a1da780508077a552259006dc0b3a2"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SearchOverlay.swift": {
-    "mtime": 1783060272.0728524,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/SearchOverlay.swift": {
+    "mtime": 1783099779.60757,
     "hash": "af079a891e4cdafd7d00c4d5a6b882db"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorSyntaxPalette.swift": {
-    "mtime": 1780183410.0455904,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/EditorSyntaxPalette.swift": {
+    "mtime": 1783099779.6008978,
     "hash": "933946774ee0f222aa1f5a98b2c0c79a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/BacklinksPanel.swift": {
-    "mtime": 1779752569.3963513,
-    "hash": "d342db206c1224568e0dce925b9d49f4"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/BacklinksPanel.swift": {
+    "mtime": 1783136330.6657984,
+    "hash": "e127e4665cf89e2a1767190a16c86914"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PrefsJsonStore.swift": {
-    "mtime": 1779764782.61931,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/PrefsJsonStore.swift": {
+    "mtime": 1783099779.6059134,
     "hash": "e669fd193655df1ffd2a9a586769014a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CodeBlockView.swift": {
-    "mtime": 1781140335.2984111,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CodeBlockView.swift": {
+    "mtime": 1783099779.598242,
     "hash": "a4ffb3821bf310c44e51ed24118a5f74"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift": {
-    "mtime": 1779752569.394434,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift": {
+    "mtime": 1783099779.595155,
     "hash": "d8997968bf7627ea5e05df9f766b8c7f"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MainSplitView.swift": {
-    "mtime": 1783060272.072224,
-    "hash": "1b3cbf7715b3a22f4c813bdd2e75e38c"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/MainSplitView.swift": {
+    "mtime": 1783136330.6684992,
+    "hash": "370eae1a2a5c5b9618cbe164d70b3c83"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/WelcomeView.swift": {
-    "mtime": 1783057090.602003,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/WelcomeView.swift": {
+    "mtime": 1783099779.6107569,
     "hash": "d0f1745697198effe9151f8a9e8c17a3"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TemplatePromptSheet.swift": {
-    "mtime": 1779752569.4006717,
-    "hash": "afeb357db0c8e06a4af08d0ffb1675de"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/TemplatePromptSheet.swift": {
+    "mtime": 1783136330.6736035,
+    "hash": "f35e5cd4fa8bd23b4d956be2902b3178"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/FileListSidebar.swift": {
-    "mtime": 1783057090.6007023,
-    "hash": "c7c99b49288043bcdf1bc825e542c17c"
-  },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CodePrefs.swift": {
-    "mtime": 1779752569.3968523,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CodePrefs.swift": {
+    "mtime": 1783099779.5983043,
     "hash": "92d11671f5389c0ec826c3a732152fa6"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/ContentBlockPanels.swift": {
-    "mtime": 1783060272.0714784,
-    "hash": "3df70cbb9dc2c61e2466be1d9905600f"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/ContentBlockPanels.swift": {
+    "mtime": 1783136330.6663108,
+    "hash": "ccdd68887ca553dac2155906a768872c"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/VaultPicker.swift": {
-    "mtime": 1779752569.4007974,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/VaultPicker.swift": {
+    "mtime": 1783099779.6103928,
     "hash": "06b78598e4a2fa6bfcd2ade3ecccdaa8"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TemplatePicker.swift": {
-    "mtime": 1779752569.4004292,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/TemplatePicker.swift": {
+    "mtime": 1783099779.6102388,
     "hash": "20ca37f725b7515c8c7850aee338151a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MermaidView.swift": {
-    "mtime": 1779752569.3981571,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/MermaidView.swift": {
+    "mtime": 1783099779.603623,
     "hash": "5220e3a63af177f087ed321d33086fdd"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/BulkRenameSheet.swift": {
-    "mtime": 1783057090.6002274,
-    "hash": "ee21008b8db090ade2923bf34697d9cc"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/BulkRenameSheet.swift": {
+    "mtime": 1783136330.6659803,
+    "hash": "c66f5e559b035345a6465eacfc9f7751"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PropertyEditorRow.swift": {
-    "mtime": 1783057090.601285,
-    "hash": "eecbf4c173bd54ac0df75be6ffdb12e6"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/MoveToFolderSheet.swift": {
+    "mtime": 1783136330.6687033,
+    "hash": "65c3abe801a8caa38ee53e5aed812b5a"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CommandPaletteRecentsStore.swift": {
-    "mtime": 1779948926.9082365,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/PropertyValueDisplay.swift": {
+    "mtime": 1783136330.67072,
+    "hash": "c0c4d8a27dce5519ee9b25ba4d81e020"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/PropertyEditorRow.swift": {
+    "mtime": 1783136330.6706052,
+    "hash": "b03c1fc9f79d6b32d82779df92678d0d"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CommandPaletteRecentsStore.swift": {
+    "mtime": 1783099779.5990658,
     "hash": "481ebb3f49e66d23f05f94c36279dcab"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SlateCommands.swift": {
-    "mtime": 1783057090.601864,
-    "hash": "e1579860be7bc59d427e1765b9b82f65"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/SlateCommands.swift": {
+    "mtime": 1783136330.6724443,
+    "hash": "7b77930cab4e0d04b09e37ec2542fe14"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TaskStatusPhrase.swift": {
-    "mtime": 1781142623.1202242,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/TaskStatusPhrase.swift": {
+    "mtime": 1783099779.6093893,
     "hash": "e8ff5b154a7681bbed613f39271bd396"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CommandPaletteView.swift": {
-    "mtime": 1783060272.0711577,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CommandPaletteView.swift": {
+    "mtime": 1783099779.5994816,
     "hash": "861e92aacbb097c42b2b4d3c4b7d53dd"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/HotkeySpoken.swift": {
-    "mtime": 1779938833.6153977,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/HotkeySpoken.swift": {
+    "mtime": 1783099779.6027696,
     "hash": "5121f8ae6eecdac3791567d3d2005551"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SlateMacApp.swift": {
-    "mtime": 1781142933.4243505,
-    "hash": "42b667f95e664d200f0999a86825a5b9"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/SlateMacApp.swift": {
+    "mtime": 1783136330.6728585,
+    "hash": "6d4218a616b5adb7d97d11bfdbb1bb16"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TasksReviewView.swift": {
-    "mtime": 1783060272.0740328,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/SidebarUtilityBar.swift": {
+    "mtime": 1783136330.6723034,
+    "hash": "4e7a78214dded0503947a249cfe5d387"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/LeafChrome.swift": {
+    "mtime": 1783136330.668147,
+    "hash": "6a2aed76586564eb482acec762f399af"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/TasksReviewView.swift": {
+    "mtime": 1783099779.6101382,
     "hash": "390b4b5ab590b57bc7c3562f1e9d0cc4"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/BibliographyPanel.swift": {
-    "mtime": 1783057090.6000705,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/BibliographyPanel.swift": {
+    "mtime": 1783099779.5968325,
     "hash": "042ddbceb0d35797fc3ae7c4ddf0f07b"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AccessibilityExtensions.swift": {
-    "mtime": 1779943693.4780865,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/AccessibilityExtensions.swift": {
+    "mtime": 1783099779.595056,
     "hash": "39b6c15cc33df5dfabbd440adb70afff"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/RecentVaultsStore.swift": {
-    "mtime": 1779948926.9086044,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/RecentVaultsStore.swift": {
+    "mtime": 1783099779.6072202,
     "hash": "d66e8b7832e4b15d93fffeb3f747e754"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CitationsPanel.swift": {
-    "mtime": 1783057090.6003795,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CitationsPanel.swift": {
+    "mtime": 1783099779.5979085,
     "hash": "5b5568946524bac65d434e4e7d55e03b"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NoteContentView.swift": {
-    "mtime": 1783057090.6009634,
-    "hash": "a3f488bc33cbce4b376b1e235dc4a75d"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/NoteContentView.swift": {
+    "mtime": 1783136330.6689613,
+    "hash": "692f9a30931e4e06088c08382d2e8d41"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PropertiesPanel.swift": {
-    "mtime": 1783060272.072504,
-    "hash": "c778308d200d662cc0c3d10c78ea1e4f"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/OutgoingLinksPanel.swift": {
+    "mtime": 1783136330.6703494,
+    "hash": "e389abd2415205cad49ea11cddb99126"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/OutgoingLinksPanel.swift": {
-    "mtime": 1781142623.1197803,
-    "hash": "c4bab561853e550f326c434c85b72078"
-  },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CitationSummarySheet.swift": {
-    "mtime": 1779811786.2111635,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/CitationSummarySheet.swift": {
+    "mtime": 1783099779.5976107,
     "hash": "397fda40ea0798d69e4654fb2acdcbe8"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SlateSymbol.swift": {
-    "mtime": 1783060272.0733962,
-    "hash": "76a5d2dc0cc1d05faf2e2479d53b4cfd"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/SlateSymbol.swift": {
+    "mtime": 1783136330.6731281,
+    "hash": "cf8eb4503cf4b777ffaffb4937c7ae40"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TasksPanel.swift": {
-    "mtime": 1783060272.0736952,
-    "hash": "ec47de3791d82d1dc3327d2b6357ba33"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/TasksPanel.swift": {
+    "mtime": 1783136330.6734524,
+    "hash": "fc6552b0abf63b0bc9bc2c4eabe06d78"
   },
-  "/Users/coryj/Dev/slate/BENCHMARKS.md": {
-    "mtime": 1780280815.3821347,
-    "hash": "78af637a811897270156fd43be6e634f"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Reading/ReadingView.swift": {
+    "mtime": 1783136330.6718316,
+    "hash": "eaf16e9033aa83eb4880d6a34875f22d"
   },
-  "/Users/coryj/Dev/slate/README.md": {
-    "mtime": 1779751816.1270156,
-    "hash": "26e7dee00cee8f898e1d73a4a37ce816"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Reading/ReadingLinkRouter.swift": {
+    "mtime": 1783136330.6717215,
+    "hash": "8933ab8067a465976e8356a5c3514426"
   },
-  "/Users/coryj/Dev/slate/crates/slate-uniffi/README.md": {
-    "mtime": 1779645613.519517,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Reading/ReadingInlineMapper.swift": {
+    "mtime": 1783136330.6715155,
+    "hash": "d69e5caefb22bf29ad72b1c5a5163b85"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Reading/ReadingBlockSource.swift": {
+    "mtime": 1783136330.6711879,
+    "hash": "e66f1cfad0707a64acb38c0e970195ee"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceModel.swift": {
+    "mtime": 1783136330.6750877,
+    "hash": "4e53c53580d309705e483bd852a424ac"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceState.swift": {
+    "mtime": 1783136330.6753619,
+    "hash": "1efbaa524d9a3a7a3de8ed8c51dc6e63"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swift": {
+    "mtime": 1783136330.674343,
+    "hash": "5d7b55f575fc4b4da5ddb45911d634be"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/TabBarView.swift": {
+    "mtime": 1783136330.674686,
+    "hash": "c6a6e2aade31bb1277997f47e5ea80f1"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/SplitContainerView.swift": {
+    "mtime": 1783108344.3219957,
+    "hash": "89753b4c3b2b18dce2a909919cce27bd"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceView.swift": {
+    "mtime": 1783136330.676018,
+    "hash": "e3855f4ab5c587081ce2458758b3a858"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceStore.swift": {
+    "mtime": 1783136330.6757963,
+    "hash": "50372eca3fb553cd1197d43162fcf6f9"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/Sources/SlateMac/Workspace/NoteDocument.swift": {
+    "mtime": 1783136330.6740718,
+    "hash": "7230391d05bd4a5343b1a30aca3c12b7"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/BENCHMARKS.md": {
+    "mtime": 1783138903.1464355,
+    "hash": "1ad7b8a9e1591b45692ff88e887a934e"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/README.md": {
+    "mtime": 1783136330.6644197,
+    "hash": "3ebfd199d27296d891667a01a1e6788d"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-uniffi/README.md": {
+    "mtime": 1783099779.6504457,
     "hash": "ab1ce8d78923aee8c6af292d05ce5dc5"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/README.md": {
-    "mtime": 1779645613.5193224,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/crates/slate-core/README.md": {
+    "mtime": 1783099779.6301928,
     "hash": "c19c560faf04e910e68f808db85a21d3"
   },
-  "/Users/coryj/Dev/slate/crates/slate-core/proptest-regressions/editor_spans.txt": {
-    "mtime": 1780277625.9101868,
-    "hash": "01160804628e7411c114007a4b298278"
-  },
-  "/Users/coryj/Dev/slate/crates/slate-core/proptest-regressions/text_buffer.txt": {
-    "mtime": 1780190109.9146876,
-    "hash": "9d3a0342435c7c8b65758014672a84b8"
-  },
-  "/Users/coryj/Dev/slate/docs/README.md": {
-    "mtime": 1778980739.2745647,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/README.md": {
+    "mtime": 1783099779.6513608,
     "hash": "1aff06c2e10c951324258ffdfeafdf4c"
   },
-  "/Users/coryj/Dev/slate/docs/research/competitive-landscape-and-resources.md": {
-    "mtime": 1778980002.6002595,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/research/competitive-landscape-and-resources.md": {
+    "mtime": 1783099779.6593223,
     "hash": "6c6868ae4cb4756af0345cf6c11a54b0"
   },
-  "/Users/coryj/Dev/slate/docs/plans/02_phase_0_plan.md": {
-    "mtime": 1778980732.8715909,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/02_phase_0_plan.md": {
+    "mtime": 1783099779.6549966,
     "hash": "30bc6fd1b41e88595e8ca42a8a9da9b0"
   },
-  "/Users/coryj/Dev/slate/docs/plans/03_phase_1_plan.md": {
-    "mtime": 1778980730.2198653,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/03_phase_1_plan.md": {
+    "mtime": 1783099779.65528,
     "hash": "ad2eddd54eeaaa365e276778c67eec06"
   },
-  "/Users/coryj/Dev/slate/docs/plans/01_detailed_roadmap.md": {
-    "mtime": 1778980736.387304,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/01_detailed_roadmap.md": {
+    "mtime": 1783099779.6547847,
     "hash": "4b05ee816f1a2c82e5b63b2db41600bd"
   },
-  "/Users/coryj/Dev/slate/docs/plans/initial_chat_and_research.md": {
-    "mtime": 1778980725.106805,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/initial_chat_and_research.md": {
+    "mtime": 1783099779.6590738,
     "hash": "3de5ba1bd18cafc48f041dc18584101f"
   },
-  "/Users/coryj/Dev/slate/docs/plans/04_draft_architecture_plan.md": {
-    "mtime": 1778980727.7109725,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/04_draft_architecture_plan.md": {
+    "mtime": 1783099779.6554568,
     "hash": "23f1a5919618cbe8f34e4fb270f56e10"
   },
-  "/Users/coryj/Dev/slate/docs/plans/05_locked_architecture_decisions.md": {
-    "mtime": 1779509854.1944613,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/05_locked_architecture_decisions.md": {
+    "mtime": 1783099779.6559653,
     "hash": "58c6c2b0c5cbcbfa5ae912484a78591c"
   },
-  "/Users/coryj/Dev/slate/docs/plans/06_v1_milestones.md": {
-    "mtime": 1781140335.3011498,
-    "hash": "061990678fdfded4304f5cab7ca40e60"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/06_v1_milestones.md": {
+    "mtime": 1783136330.681364,
+    "hash": "6fa1cf4fb8ce9452673b8b4e4f24875a"
   },
-  "/Users/coryj/Dev/slate/docs/plans/07_portability_review.md": {
-    "mtime": 1780183410.047198,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/07_portability_review.md": {
+    "mtime": 1783099779.6566231,
     "hash": "c4e8647cab82ac0058cb4171c18b2e26"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/u2_file_tree.md": {
-    "mtime": 1783057090.6025598,
-    "hash": "f8064a88d4a22c69c468d911fa729ba4"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/u2_file_tree.md": {
+    "mtime": 1783137456.5858488,
+    "hash": "fa8b96d84bf5fea731e52c32c90569f5"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/u1_workspace_shell.md": {
-    "mtime": 1783057090.6024742,
-    "hash": "87060e6e7ccbaf4a9e3c3838f04fe46d"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/u1_workspace_shell.md": {
+    "mtime": 1783137456.5823963,
+    "hash": "56ee0c43b871d61ff86f317766cc5b05"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/u5_presentation_polish.md": {
-    "mtime": 1783057090.6028547,
-    "hash": "1bebaede32fe8691295a4ca7e27aae6d"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/u5_presentation_polish.md": {
+    "mtime": 1783137456.5869002,
+    "hash": "79817be4ffc7ecaaf8a7f26348e02378"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/u0_baseline.md": {
-    "mtime": 1783093733.3038018,
-    "hash": "c9d27df38f4076bc69727af67c0f6f54"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/u0_baseline.md": {
+    "mtime": 1783099779.656899,
+    "hash": "bc6d8712d2de1a78dc53e2de04c8d462"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/00_program.md": {
-    "mtime": 1783057090.60227,
-    "hash": "44f8025468d3fe4389c45906d41001af"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/00_program.md": {
+    "mtime": 1783137400.3914573,
+    "hash": "8d3517cdc9d9ade844235ef9277384eb"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/u3_editor_modes.md": {
-    "mtime": 1783057090.602668,
-    "hash": "813bb63456f4c56f8d891ab7e8e1b48c"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/u3_editor_modes.md": {
+    "mtime": 1783137456.5860872,
+    "hash": "04743587d6e94e8e6c421ed14d79242b"
   },
-  "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/u4_right_pane_leaves.md": {
-    "mtime": 1783057090.6027677,
-    "hash": "cc6103105645004c37372a269b69343d"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/u4_right_pane_leaves.md": {
+    "mtime": 1783137456.5866737,
+    "hash": "f199f4cb83352b25b6d8997d66036137"
   },
-  "/Users/coryj/Dev/slate/docs/diagrams/README.md": {
-    "mtime": 1778995310.0,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/specs/u3_spec.md": {
+    "mtime": 1783101114.2070005,
+    "hash": "3dbac8a3502631d9a50d4d4555820d3d"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/specs/u2_spec.md": {
+    "mtime": 1783113473.2338905,
+    "hash": "c001ee70f02924b5d99d871ed9b82639"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/specs/gap_analysis.md": {
+    "mtime": 1783101114.2065275,
+    "hash": "4faf6462711c0c693782a1fa99f4aae3"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/specs/u1_spec.md": {
+    "mtime": 1783104925.18726,
+    "hash": "2857a2c25bf0e0119e06446eec4ff91d"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/specs/u4_spec.md": {
+    "mtime": 1783101114.207168,
+    "hash": "86c394082658d17d8e341c7be622d59b"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/08_ui_parity/specs/u5_spec.md": {
+    "mtime": 1783101114.207331,
+    "hash": "9060c8a8ff46bc960714dba82ca3661a"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/00_program.md": {
+    "mtime": 1783136330.6816676,
+    "hash": "c49fab1db0c6aebe7a627af74bbe20b8"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/t3_spec.md": {
+    "mtime": 1783136330.6822765,
+    "hash": "f20d1da2a04de7352e5497a2a5021af6"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/t2_spec.md": {
+    "mtime": 1783136330.682181,
+    "hash": "16a40c8c5502c06773f9c12a24e856d8"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/gap_analysis.md": {
+    "mtime": 1783136330.6818333,
+    "hash": "9e88ad53aa60ad3e2d92c1e5d1395184"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/t1_spec.md": {
+    "mtime": 1783136330.6820574,
+    "hash": "690650194734c575f0b5db9d2a6bd45b"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/t4_spec.md": {
+    "mtime": 1783136330.6823933,
+    "hash": "21ef7689cb3eb612ba0697f20881d4b2"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/t5_spec.md": {
+    "mtime": 1783136330.682495,
+    "hash": "5ad1d9b0e7921570e1edcc873f309e9b"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_canvas/specs/t0_interaction_contract.md": {
+    "mtime": 1783136330.6819315,
+    "hash": "a3057d84a75a0846021e28c8333e40a7"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_sync_cli/m_spec.md": {
+    "mtime": 1783136330.971997,
+    "hash": "09b14b193eb50e427ecf382b0dd59268"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/09_sync_cli/00_plan.md": {
+    "mtime": 1783136330.9718006,
+    "hash": "7bba3e5eaf8560c7a9080b5f595bbd78"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/10_local_history/o_spec.md": {
+    "mtime": 1783136330.9723432,
+    "hash": "1d3c51852848c6a1395617699b17e9ee"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/plans/10_local_history/00_plan.md": {
+    "mtime": 1783136330.972159,
+    "hash": "14735f97302a8272ebab8b26488d956d"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/diagrams/README.md": {
+    "mtime": 1783099779.6520777,
     "hash": "573c8da61f9ba3423641efcd8698232f"
   },
-  "/Users/coryj/Dev/slate/docs/diagrams/MANIFEST.md": {
-    "mtime": 1778995310.0,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/diagrams/MANIFEST.md": {
+    "mtime": 1783099779.651828,
     "hash": "e04241fc1535f219700e9aab0008be90"
   },
-  "/Users/coryj/Dev/slate/docs/diagrams/ALL_MERMAID_ARCHITECTURE_DIAGRAMS.md": {
-    "mtime": 1778995310.0,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/diagrams/ALL_MERMAID_ARCHITECTURE_DIAGRAMS.md": {
+    "mtime": 1783099779.6516705,
     "hash": "bea51864347d24a7af526e077d237777"
   },
-  "/Users/coryj/Dev/slate/docs/runbooks/voiceover-feature-test.md": {
-    "mtime": 1783093733.303964,
-    "hash": "d8cb0ab48c4647e3e4665e8749900056"
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/runbooks/voiceover-feature-test.md": {
+    "mtime": 1783136391.6309118,
+    "hash": "470db927d8749565a3f7b7d07bf2311e"
   },
-  "/Users/coryj/Dev/slate/examples/swift-cli/README.md": {
-    "mtime": 1779509854.194832,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/docs/help/canvas.md": {
+    "mtime": 1783136330.6812303,
+    "hash": "a07cfcd73390be46af792d54268fbed1"
+  },
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/examples/swift-cli/README.md": {
+    "mtime": 1783099779.659818,
     "hash": "fdf305af70b989d8c039eb675b0f0c20"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/README.md": {
-    "mtime": 1779512343.652461,
+  "/Users/coryj/Dev/slate/.claude/worktrees/vigorous-solomon-3bf1d3/apps/slate-mac/README.md": {
+    "mtime": 1783099779.594664,
     "hash": "da9bda9787785312fd1ae56d81e665d5"
   }
 }
