@@ -19,14 +19,17 @@ import SwiftUI
 ///   slate-tag://<name>       tag             → search overlay, prefiltered
 ///   slate-cite://<raw>       citation        → expand the citation popover
 ///
+/// Internal markdown links like `[t](note.md)` parse as scheme-less URLs;
+/// the mapper's style pass rewrites those onto `slate-wiki` (Slate markdown
+/// destinations are vault-rooted/basename — the same `target_raw` form the
+/// wiki path already matches), so they activate like wikilinks.
+///
 /// Anything else: `http`/`https`/`mailto` pass through to the system (the
 /// same allowlist `AppState.openLink` enforces — `file:`/`javascript:`/custom
 /// schemes must NOT be handed to LaunchServices, where a typo'd markdown link
 /// would hand control to whatever app registered the scheme). Non-allowlisted
-/// URLs — including relative markdown links like `[t](note.md)`, which parse
-/// as scheme-less URLs — are discarded; in-reading-view activation of internal
-/// markdown links is a recorded U3-1 follow-up (they remain reachable via the
-/// Outgoing-links panel, which is also the documented keyboard path).
+/// URLs are discarded — and the mapper strips the link affordance from every
+/// discard-class run, so nothing renders as activatable and then dead-clicks.
 struct ReadingLinkRouter {
 
     static let wikiScheme = "slate-wiki"
@@ -104,8 +107,10 @@ struct ReadingLinkRouter {
         case citation(String)
         /// Allowlisted external scheme — hand to the system.
         case external
-        /// Everything else (scheme-less relative markdown links, `file:`,
-        /// `javascript:`, unknown schemes) — dropped, never LaunchServices.
+        /// Everything else (`file:`, `javascript:`, unknown schemes, and any
+        /// scheme-less URL the mapper chose not to rewrite) — dropped, never
+        /// LaunchServices. The mapper strips the link affordance from these,
+        /// so a discard here is defense in depth, not a reachable dead end.
         case discard
     }
 
@@ -163,11 +168,15 @@ extension ReadingLinkRouter {
                 // Match the note's own outgoing-link record and reuse
                 // `openLink` wholesale — it resolves, navigates via
                 // `openFile(_:target:)` honoring `openTargetFromCurrentEvent`,
-                // announces, and records the outcome seam. `targetRaw` is
-                // anchor-less, so compare the base form.
+                // announces, and records the outcome seam. Two storage forms
+                // (links.rs): wikilink records are anchor-STRIPPED (compare
+                // the base), markdown records keep the full destination
+                // including any `#fragment` (compare verbatim) — the wiki
+                // scheme carries both, so try both forms.
                 let base = Self.baseTarget(of: target)
                 if let link = appState.currentOutgoingLinks.first(where: {
-                    !$0.isEmbed && $0.targetRaw == base
+                    !$0.isEmbed
+                        && ($0.targetRaw == base || $0.targetRaw == target)
                 }) {
                     appState.openLink(link)
                 } else {

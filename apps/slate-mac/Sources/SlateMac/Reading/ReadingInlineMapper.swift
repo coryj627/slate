@@ -60,7 +60,12 @@ enum ReadingInlineMapper {
     /// citation runs (matched by `RenderedCitation.raw` — the record carries
     /// no byte offset); an unmatched citation degrades to its raw text.
     static func map(slice: String, citations: [RenderedCitation] = []) -> Mapped {
-        let spans = editorHighlightSpans(text: slice)
+        // Two Rust authorities compose here: the highlight classifier for
+        // Slate tokens, plus the CommonMark link/image spans it intentionally
+        // omits — those arrive only as exclusion ranges (isMappableKind
+        // ignores them), so Slate-token splicing stays out of markdown-link
+        // syntax the native parse owns.
+        let spans = editorHighlightSpans(text: slice) + markdownLinkSpans(text: slice)
         let mappable = mappableSpans(from: spans)
 
         let utf8 = Array(slice.utf8)
@@ -108,14 +113,18 @@ enum ReadingInlineMapper {
 
     /// Keep the wikilink / embed / tag / citation spans, outermost-first, and
     /// drop (a) spans nested inside an already-kept span (an embed's interior
-    /// may also classify as a wikilink) and (b) spans overlapping inline-code
+    /// may also classify as a wikilink), (b) spans overlapping inline-code
     /// or fence spans — a construct rendered *as code* must stay literal
-    /// (turning it into a link inside backticks would print raw brackets).
+    /// (turning it into a link inside backticks would print raw brackets) —
+    /// and (c) spans overlapping a markdown link/image span: the markdown
+    /// link IS the construct there (`[t](#intro)`'s destination classifies
+    /// as a tag too); splicing inside it would corrupt the destination that
+    /// `AttributedString(markdown:)` is about to parse natively.
     private static func mappableSpans(from spans: [EditorSpan]) -> [EditorSpan] {
         var codeRanges: [(Int, Int)] = []
         for span in spans {
             switch span.kind {
-            case .inlineCode, .codeFence, .code:
+            case .inlineCode, .codeFence, .code, .link, .image:
                 codeRanges.append((Int(span.startByte), Int(span.endByte)))
             default:
                 break
@@ -241,29 +250,78 @@ enum ReadingInlineMapper {
     // MARK: - Styling
 
     private static func style(_ attributed: inout AttributedString, runs: [MappedRun]) {
-        for run in attributed.runs {
-            guard let link = run.link else { continue }
-            // Every link — slate-scheme or external — gets the accent +
-            // underline treatment: same affordance for every activatable run,
-            // and underline keeps the cue non-color-only (WCAG 1.4.1).
-            // `accentText` on `surface` is an existing gated pairing in
-            // `Tokens.contrastPairings`. Explicit attribute keys: the
-            // dynamic-member spellings are ambiguous between the SwiftUI and
-            // AppKit attribute scopes.
-            attributed[run.range][
+        // Snapshot the link runs before mutating: rewriting/removing `.link`
+        // re-segments the run collection, so never mutate while iterating it.
+        // Attribute-only mutation moves no characters, so the captured ranges
+        // stay valid throughout.
+        let linkRuns: [(range: Range<AttributedString.Index>, link: URL)] =
+            attributed.runs.compactMap { run in
+                run.link.map { (run.range, $0) }
+            }
+        for (range, link) in linkRuns {
+            if case .discard = ReadingLinkRouter.disposition(for: link) {
+                if let rewritten = internalMarkdownDestination(link) {
+                    // Scheme-less markdown destination: Slate semantics are
+                    // vault-rooted/basename (never source-relative) — the
+                    // exact string `links.rs` records as `target_raw`. Route
+                    // it like a wikilink, so activation resolves through the
+                    // note's own link records and announces when unresolved.
+                    attributed[range][
+                        AttributeScopes.FoundationAttributes.LinkAttribute.self
+                    ] = rewritten
+                } else {
+                    // file: / javascript: / unknown schemes, protocol-relative
+                    // `//host`, fragment-only `#anchor`: never activatable
+                    // (the router would drop the click silently). Remove the
+                    // link attribute so there is no dead affordance — visually
+                    // or to VoiceOver.
+                    attributed[range][
+                        AttributeScopes.FoundationAttributes.LinkAttribute.self
+                    ] = nil
+                    continue
+                }
+            }
+            // Every surviving link — slate-scheme or external — gets the
+            // accent + underline treatment: same affordance for every
+            // activatable run, and underline keeps the cue non-color-only
+            // (WCAG 1.4.1). `accentText` on `surface` is an existing gated
+            // pairing in `Tokens.contrastPairings`. Explicit attribute keys:
+            // the dynamic-member spellings are ambiguous between the SwiftUI
+            // and AppKit attribute scopes.
+            attributed[range][
                 AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self
             ] = Tokens.ColorRole.accentText
-            attributed[run.range][
+            attributed[range][
                 AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self
             ] = Text.LineStyle(pattern: .solid)
             if link.scheme?.lowercased() == ReadingLinkRouter.citeScheme,
                 let mapped = runs.first(where: { $0.url == link })
             {
-                attributed[run.range][
+                attributed[range][
                     AttributeScopes.AccessibilityAttributes.TextCustomAttribute.self
                 ] = [mapped.axLabel]
             }
         }
+    }
+
+    /// A scheme-less markdown destination the vault could resolve, rewritten
+    /// to the wiki routing scheme — or nil when the URL is not an internal
+    /// note reference. Mirrors `links.rs::looks_external`: anything with a
+    /// scheme, a protocol-relative `//host`, or a fragment-only `#anchor` is
+    /// NOT internal (fragment-only heading navigation inside the open note is
+    /// out of reading-v1 scope, so those lose the affordance rather than
+    /// dead-clicking).
+    private static func internalMarkdownDestination(_ link: URL) -> URL? {
+        guard link.scheme == nil else { return nil }
+        // The authored destination text, VERBATIM — Slate never
+        // percent-decodes markdown destinations (`target_raw` stores them
+        // literally), so no decoding happens here either.
+        let raw = link.absoluteString
+        guard !raw.isEmpty, !raw.hasPrefix("//"), !raw.hasPrefix("#") else {
+            return nil
+        }
+        return ReadingLinkRouter.encodedURL(
+            scheme: ReadingLinkRouter.wikiScheme, target: raw)
     }
 
     // MARK: - Small helpers

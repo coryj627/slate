@@ -2682,6 +2682,31 @@ impl From<core::diagram::DiagramDialect> for DiagramDialect {
     }
 }
 
+/// Markdown link/image spans for a source slice — the CommonMark
+/// structure `editor_highlight_spans` intentionally omits (the editor
+/// never colours links; see `highlight_spans`' doc). The reading-mode
+/// inline mapper (U3-1, #465) uses these to keep Slate-token splicing
+/// out of markdown-link syntax it doesn't own: `[t](#intro)`'s
+/// destination also classifies as a tag, and splicing inside the link
+/// would corrupt the destination the native markdown parse is about to
+/// consume. Same authority as everywhere else — `pulldown-cmark`'s
+/// event stream via `editor_spans::markdown_spans`; wikilinks are NOT
+/// in this set (the highlight classifier already carries those).
+#[uniffi::export]
+pub fn markdown_link_spans(text: String) -> Vec<EditorSpan> {
+    core::editor_spans::markdown_spans(&text)
+        .into_iter()
+        .filter(|s| {
+            matches!(
+                s.kind,
+                core::editor_spans::EditorSpanKind::Link
+                    | core::editor_spans::EditorSpanKind::Image
+            )
+        })
+        .map(Into::into)
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum DiagramRenderStatus {
     Ok,

@@ -328,6 +328,77 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(styledRuns, 2)
     }
 
+    /// Internal markdown destinations (scheme-less; Slate semantics:
+    /// vault-rooted/basename, stored literally) are rewritten onto the wiki
+    /// scheme so they activate — never styled-then-dead.
+    func testMapperRewritesInternalMarkdownLinksToWikiScheme() {
+        let mapped = ReadingInlineMapper.map(slice: "See [t](note.md).")
+        let links = mapped.attributed.runs.compactMap(\.link)
+        XCTAssertEqual(links.count, 1)
+        XCTAssertEqual(links[0].scheme, ReadingLinkRouter.wikiScheme)
+        XCTAssertEqual(
+            ReadingLinkRouter.disposition(for: links[0]), .wiki("note.md"))
+    }
+
+    /// The authored destination travels VERBATIM — fragments kept (markdown
+    /// `targetRaw` stores them), percent-escapes NOT decoded (Slate never
+    /// decodes markdown destinations).
+    func testMapperRewriteKeepsFragmentAndPercentEscapesLiteral() {
+        let anchored = ReadingInlineMapper.map(slice: "[t](note.md#sec)")
+        XCTAssertEqual(
+            anchored.attributed.runs.compactMap(\.link).compactMap {
+                ReadingLinkRouter.disposition(for: $0)
+            },
+            [.wiki("note.md#sec")])
+        let escaped = ReadingInlineMapper.map(slice: "[t](my%20note.md)")
+        XCTAssertEqual(
+            escaped.attributed.runs.compactMap(\.link).compactMap {
+                ReadingLinkRouter.disposition(for: $0)
+            },
+            [.wiki("my%20note.md")])
+    }
+
+    /// Non-activatable destinations lose the link attribute entirely: no
+    /// dead affordance visually or to VoiceOver, and nothing ever reaches
+    /// LaunchServices. Fragment-only and protocol-relative references mirror
+    /// `links.rs::looks_external` (not internal notes → not rewritten).
+    func testMapperStripsLinkAffordanceFromNonActivatableDestinations() {
+        for slice in [
+            "[t](javascript:alert(1))",
+            "[t](file:///etc/passwd)",
+            "[t](ftp://host/x)",
+            "[t](#intro)",
+            "[t](//host/x)",
+        ] {
+            let mapped = ReadingInlineMapper.map(slice: slice)
+            XCTAssertEqual(
+                mapped.attributed.runs.compactMap(\.link), [],
+                "\(slice) must not render as an activatable link")
+            XCTAssertTrue(
+                String(mapped.attributed.characters).contains("t"),
+                "\(slice) keeps its display text")
+        }
+    }
+
+    /// Slate tokens inside markdown-link syntax stay literal — the link is
+    /// the construct there. `#intro` in the label (or a fragment-only
+    /// destination) must not be spliced into a tag link, which would corrupt
+    /// the destination the native markdown parse consumes.
+    func testMapperDoesNotSpliceSlateTokensInsideMarkdownLinks() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "see [about #intro](note.md) here")
+        XCTAssertTrue(
+            mapped.runs.isEmpty,
+            "no Slate-token runs may be minted inside a markdown link")
+        let links = mapped.attributed.runs.compactMap(\.link)
+        XCTAssertEqual(links.count, 1)
+        XCTAssertEqual(
+            ReadingLinkRouter.disposition(for: links[0]), .wiki("note.md"))
+        XCTAssertTrue(
+            String(mapped.attributed.characters).contains("about #intro"),
+            "label text renders verbatim")
+    }
+
     func testMapperPreservesDocumentOrderAcrossKinds() {
         let mapped = ReadingInlineMapper.map(slice: "A [[x]] then #t end.")
         XCTAssertEqual(mapped.runs.map(\.kind), [.wiki, .tag])
@@ -460,6 +531,52 @@ final class ReadingViewTests: XCTestCase {
         let appState = AppState()
         ReadingLinkRouter.live(appState: appState).openWikiLink("Nowhere")
         XCTAssertNil(appState.selectedFilePath)
+    }
+
+    /// Rewritten internal markdown links ride the wiki path, end to end
+    /// against a real vault. Markdown link records store `targetRaw` WITH
+    /// any fragment (links.rs walk_markdown) while wikilink records are
+    /// anchor-stripped — the live matcher accepts both forms; a base-only
+    /// matcher would find NOTHING here and leave the outcome nil. The
+    /// anchored form indexes as unresolved today (the resolver sees the
+    /// literal `note.md#sec`), so activation produces the same unresolved
+    /// FEEDBACK the Outgoing panel gives — never a silent no-op. (Anchored
+    /// markdown-destination resolution is a backend follow-up.)
+    @MainActor
+    func testLiveRouterOpensInternalMarkdownLinksEndToEnd() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-reading-md-links-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("# Note".utf8).write(to: vault.appendingPathComponent("note.md"))
+        // ONLY the anchored form: its record stores targetRaw verbatim
+        // ("note.md#sec"), so a base-form-only matcher would find nothing —
+        // this pins the verbatim arm of the dual-form match.
+        try Data("open [a](note.md#sec)".utf8)
+            .write(to: vault.appendingPathComponent("source.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents.json"))
+        let appState = AppState(
+            recentsStore: store, externalOpener: { _ in true })
+        appState.openVault(at: vault)
+        await appState.scanTask?.value
+        appState.selectedFilePath = "source.md"
+        await appState.linksLoadTask?.value
+        XCTAssertEqual(appState.currentOutgoingLinks.count, 1)
+        XCTAssertEqual(appState.currentOutgoingLinks[0].targetRaw, "note.md#sec")
+
+        ReadingLinkRouter.live(appState: appState).openWikiLink("note.md#sec")
+        // Outcome SET proves the verbatim-form record was matched; its
+        // value is the panel-parity unresolved feedback, and no navigation
+        // happens on an unresolved link.
+        XCTAssertEqual(
+            appState.lastActivatedLinkOutcome, .unresolved("note.md#sec"))
+        XCTAssertEqual(appState.selectedFilePath, "source.md")
     }
 
     // MARK: - Block-source helpers
