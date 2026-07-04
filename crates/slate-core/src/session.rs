@@ -142,6 +142,10 @@ pub enum FileFilter {
     All,
     /// Only files whose extension marks them as Markdown.
     MarkdownOnly,
+    /// Markdown notes plus `.canvas` files — the openable-document set
+    /// quick open and the file tree present once Milestone T lands
+    /// (#361 backend change, consumed by #369).
+    MarkdownAndCanvas,
 }
 
 // --- Summary type ---
@@ -550,6 +554,24 @@ pub struct VaultSession {
     /// `(reference, style_id, bib_index_version)` so bibliography
     /// reload invalidates implicitly.
     render_cache: crate::citations::render::RenderCache,
+    /// Open canvas documents, keyed by opaque handle (Milestone T,
+    /// #361). Node ids are unique per file, not vault-wide, so every
+    /// canvas API call routes through a handle. One entry per
+    /// `open_canvas` call; the UI's one-`CanvasDocument`-per-path
+    /// registry (t2) sits above this.
+    canvases: Mutex<std::collections::HashMap<u64, OpenCanvasState>>,
+    /// Monotonic handle source — never reused within a session, so a
+    /// stale handle after `close_canvas` fails loudly instead of
+    /// aliasing a newer document.
+    next_canvas_handle: std::sync::atomic::AtomicU64,
+}
+
+/// Per-open-canvas state. The mutation slice (#361b, after #366) will
+/// widen this with the tolerant parse + path for `canvas_apply`'s
+/// serialize-and-save pipeline; the read surface needs only the model.
+struct OpenCanvasState {
+    file_id: i64,
+    model: crate::canvas::model::CanvasModel,
 }
 
 impl VaultSession {
@@ -588,6 +610,8 @@ impl VaultSession {
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
             render_cache: crate::citations::render::RenderCache::default(),
+            canvases: Mutex::new(std::collections::HashMap::new()),
+            next_canvas_handle: std::sync::atomic::AtomicU64::new(1),
         })
     }
 
@@ -943,6 +967,16 @@ impl VaultSession {
             crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(&tx, file_id, contents)?;
             crate::citations_db::replace_citations_for_file(&tx, file_id, contents)?;
+        } else if classify_path(path).1.as_deref() == Some("canvas") {
+            // Keep the canvas index coherent even when a `.canvas`
+            // file is written through the generic text-save path
+            // (the canvas-native save lands with #366/#372).
+            crate::canvas_db::replace_canvas_for_file(
+                &tx,
+                file_id,
+                contents,
+                &TxTitleSource { tx: &tx },
+            )?;
         }
         tx.commit()?;
 
@@ -2677,6 +2711,20 @@ fn scan_vault(
             .push(format!("re-resolve unresolved links: {e}"));
     }
 
+    // Canvas index pass (#361). Runs after the walk for the same
+    // first-scan-ordering reason as link re-resolution: a canvas
+    // card's display title can depend on ANOTHER file's frontmatter
+    // `title`, which is only guaranteed indexed once the walk is
+    // done. Canvases are re-derived every scan rather than
+    // fast-path-skipped because their titles depend on other files —
+    // a note rename/retitle must reflect in canvas rows even when the
+    // .canvas bytes didn't change. Vaults hold few canvases and one
+    // derivation is milliseconds at the 2,000-node budget, so this
+    // stays O(canvases), not O(vault).
+    if let Err(e) = reindex_all_canvases(&tx, provider, large_file_refuse_bytes) {
+        report.errors.push(format!("canvas index: {e}"));
+    }
+
     // Commit can still fail (disk full, file corruption). If it
     // does, the listener has already seen `Started` and N
     // `FileIndexed`s — fire `Failed` before propagating the error
@@ -2960,6 +3008,7 @@ fn index_file(
             |row| row.get(0),
         )?;
         purge_markdown_derivatives(tx, file_id, path, vault_index)?;
+        purge_canvas_rows(tx, file_id)?;
         report.files_indexed += 1;
         return Ok(());
     }
@@ -3235,6 +3284,7 @@ fn list_files_impl(
     let where_clause = match filter {
         FileFilter::All => "1=1",
         FileFilter::MarkdownOnly => "is_markdown = 1",
+        FileFilter::MarkdownAndCanvas => "(is_markdown = 1 OR extension = 'canvas')",
     };
 
     let total: i64 = conn.query_row(
@@ -4644,6 +4694,561 @@ fn journal_append(
     Ok(tx.last_insert_rowid())
 }
 
+// ---------------------------------------------------------------------------
+// Canvas API (Milestone T, #361). Handle-based: node ids are unique per
+// file, not vault-wide. Read shapes pinned in
+// docs/plans/09_canvas/specs/t1_spec.md §#361; the mutation surface
+// (`canvas_apply`) lands as the second #361 slice after the #366
+// serializer, per the t1 execution order.
+
+/// One outline row (depth-first flattening of the canvas model).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasOutlineRow {
+    pub node_id: String,
+    pub depth: u32,
+    /// Announcement type word: "text" | "file" | "image" | "link" | "group".
+    pub kind: String,
+    pub title: String,
+    pub group_path: Vec<String>,
+    /// 1-based position among siblings ("n of m in ⟨group‖canvas⟩").
+    pub ordinal_n: u32,
+    pub total_m: u32,
+    pub connection_count: u32,
+    pub color_name: Option<String>,
+}
+
+/// One table row (flat, sortable view).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasTableRow {
+    pub node_id: String,
+    pub kind: String,
+    pub title: String,
+    pub group_path: Vec<String>,
+    /// File path (file/image cards), URL (link cards), "" otherwise.
+    pub target: String,
+    pub connection_count: u32,
+    pub color_name: Option<String>,
+}
+
+/// One adjacency entry for a node, with the raw directional data the
+/// announcement layer (#518) phrases from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasNeighbor {
+    pub edge_id: String,
+    pub other_node: String,
+    pub other_title: String,
+    pub direction: crate::canvas::model::EdgeDirection,
+    /// Attachment side on the queried node, if pinned.
+    pub self_side: Option<crate::canvas::Side>,
+    pub label: Option<String>,
+    /// True when the queried node is the edge's `fromNode`.
+    pub self_is_from: bool,
+}
+
+/// The ⌃⌘I "Where am I?" context readback (t0 §1.4). Mark state is
+/// UI-owned and merged UI-side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasWhereAmI {
+    pub node_id: String,
+    pub title: String,
+    pub kind: String,
+    pub group_path: Vec<String>,
+    pub ordinal_n: u32,
+    pub total_m: u32,
+    pub connection_count: u32,
+    pub in_count: u32,
+    pub out_count: u32,
+    pub color_name: Option<String>,
+}
+
+/// One load warning, pre-classified so the UI can phrase t0 §5
+/// ("Canvas loaded. N unsupported items are preserved…") without
+/// string-matching.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasLoadWarning {
+    pub kind: CanvasLoadWarningKind,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasLoadWarningKind {
+    /// Whole file unusable — canvas is empty and read-only.
+    ParseFailed,
+    /// An entry is preserved in the file but not shown.
+    SkippedEntry,
+    /// A connection references a missing node.
+    DanglingEdge,
+    /// An optional field was unusable and read as absent.
+    IgnoredValue,
+}
+
+/// Result of `open_canvas`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasOpenInfo {
+    pub handle: u64,
+    pub node_count: u32,
+    pub edge_count: u32,
+    /// True when the file could not be loaded as a canvas at all; the
+    /// document must be treated as read-only (t0 §5 error state).
+    pub degraded: bool,
+    pub warnings: Vec<CanvasLoadWarning>,
+}
+
+/// Geometry argument for placement / overlap queries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasRectArg {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// A computed placement for one new card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasPlacement {
+    pub x: f64,
+    pub y: f64,
+    pub relative: crate::canvas::placement::RelativeDesc,
+}
+
+/// A computed rigid-set placement (pairwise offsets preserved).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasSetPlacement {
+    pub origins: Vec<(f64, f64)>,
+    pub relative: crate::canvas::placement::RelativeDesc,
+}
+
+/// `FileTitleSource` over the live index: a file card referencing a
+/// note titled via frontmatter (`title:`) displays that title on every
+/// canvas surface (t0 §1.1 — never a raw path).
+struct TxTitleSource<'a> {
+    tx: &'a rusqlite::Transaction<'a>,
+}
+
+impl crate::canvas::model::FileTitleSource for TxTitleSource<'_> {
+    fn title_for(&self, vault_path: &str) -> Option<String> {
+        self.tx
+            .query_row(
+                "SELECT p.value_text FROM properties p
+                 JOIN files f ON f.id = p.file_id
+                 WHERE f.path = ?1 AND p.key = 'title' AND p.value_kind = 'text'
+                 LIMIT 1",
+                rusqlite::params![vault_path],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            // `value_text` stores the JSON encoding of the property
+            // value (a text property is a JSON string) — decode it;
+            // fall back to the raw column for defensive robustness.
+            .map(|raw| serde_json::from_str::<String>(&raw).unwrap_or(raw))
+            .filter(|t| !t.trim().is_empty())
+    }
+}
+
+/// Drop a file's canvas index rows (large-file refuse, file deleted).
+fn purge_canvas_rows(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), VaultError> {
+    tx.execute(
+        "DELETE FROM canvas_nodes WHERE file_id = ?1",
+        rusqlite::params![file_id],
+    )?;
+    tx.execute(
+        "DELETE FROM canvas_edges WHERE file_id = ?1",
+        rusqlite::params![file_id],
+    )?;
+    Ok(())
+}
+
+/// Post-scan canvas pass: (re)derive index rows for every `.canvas`
+/// file in the vault. See the call site in `scan_vault` for why this
+/// runs after the walk and unconditionally.
+fn reindex_all_canvases(
+    tx: &rusqlite::Transaction,
+    provider: &dyn VaultProvider,
+    large_file_refuse_bytes: u64,
+) -> Result<(), VaultError> {
+    let canvases: Vec<(i64, String, i64)> = {
+        let mut stmt = tx.prepare(
+            "SELECT id, path, size_bytes FROM files WHERE extension = 'canvas' ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for (file_id, path, size_bytes) in canvases {
+        if size_bytes as u64 > large_file_refuse_bytes {
+            purge_canvas_rows(tx, file_id)?;
+            continue;
+        }
+        let bytes = match provider.read_file_with_cap(&path, large_file_refuse_bytes) {
+            Ok(b) => b,
+            // File vanished between walk and pass, or unreadable:
+            // leave rows for the next scan's delete-pruning rather
+            // than failing the whole scan over one canvas.
+            Err(_) => continue,
+        };
+        let source = String::from_utf8_lossy(&bytes);
+        crate::canvas_db::replace_canvas_for_file(tx, file_id, &source, &TxTitleSource { tx })?;
+    }
+    Ok(())
+}
+
+fn bad_handle(handle: u64) -> VaultError {
+    VaultError::InvalidArgument {
+        message: format!("unknown canvas handle {handle} (closed or never opened)"),
+    }
+}
+
+fn bad_node(node_id: &str) -> VaultError {
+    VaultError::InvalidArgument {
+        message: format!("canvas node {node_id:?} not found in this canvas"),
+    }
+}
+
+impl VaultSession {
+    /// Open a `.canvas` file: tolerant parse, model derivation, index
+    /// refresh (one transaction), and a session-scoped handle for all
+    /// further canvas calls. Warnings surface per t0 §5; a `degraded`
+    /// canvas is read-only.
+    pub fn open_canvas(&self, path: &str) -> Result<CanvasOpenInfo, VaultError> {
+        let text = self.read_text(path)?;
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+
+        // Ensure a files row exists (open-before-first-scan works).
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let file_id = match existing {
+            Some(id) => id,
+            None => {
+                let stat = self.provider.stat(path)?;
+                let (name, extension, is_markdown) = classify_path(path);
+                tx.execute(
+                    "INSERT INTO files
+                        (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                         content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '')",
+                    rusqlite::params![
+                        path,
+                        name,
+                        extension,
+                        stat.size_bytes as i64,
+                        stat.mtime_ms,
+                        stat.ctime_ms,
+                        content_hash(text.as_bytes()),
+                        self.config.parser_version,
+                        now_ms(),
+                        is_markdown as i64,
+                    ],
+                )?;
+                tx.query_row(
+                    "SELECT id FROM files WHERE path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )?
+            }
+        };
+
+        let (parsed, warnings, model) = crate::canvas_db::replace_canvas_for_file(
+            &tx,
+            file_id,
+            &text,
+            &TxTitleSource { tx: &tx },
+        )?;
+        tx.commit()?;
+        drop(conn);
+
+        let degraded = crate::canvas::is_load_degraded(&warnings);
+        let info_warnings = warnings.iter().map(load_warning).collect();
+        let info = CanvasOpenInfo {
+            handle: self
+                .next_canvas_handle
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            node_count: parsed.nodes.len() as u32,
+            edge_count: parsed.edges.len() as u32,
+            degraded,
+            warnings: info_warnings,
+        };
+        self.canvases
+            .lock()
+            .expect("canvas registry mutex")
+            .insert(info.handle, OpenCanvasState { file_id, model });
+        Ok(info)
+    }
+
+    /// Release a canvas handle. Idempotent: closing an unknown handle
+    /// is a no-op (close paths race with teardown in the UI).
+    pub fn close_canvas(&self, handle: u64) {
+        self.canvases
+            .lock()
+            .expect("canvas registry mutex")
+            .remove(&handle);
+    }
+
+    /// Depth-first outline rows, one per node, in reading order — a
+    /// single indexed query against the derived columns (§K).
+    pub fn canvas_outline(&self, handle: u64) -> Result<Vec<CanvasOutlineRow>, VaultError> {
+        let file_id = self.canvas_file_id(handle)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT node_id, depth, kind, title, group_path, ordinal_n, total_m,
+                    conn_count, color_name
+             FROM canvas_nodes WHERE file_id = ?1 ORDER BY order_idx",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+            Ok(CanvasOutlineRow {
+                node_id: row.get(0)?,
+                depth: row.get::<_, i64>(1)? as u32,
+                kind: row.get(2)?,
+                title: row.get(3)?,
+                group_path: parse_group_path(&row.get::<_, String>(4)?),
+                ordinal_n: row.get::<_, i64>(5)? as u32,
+                total_m: row.get::<_, i64>(6)? as u32,
+                connection_count: row.get::<_, i64>(7)? as u32,
+                color_name: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Flat table rows in reading order; the table view sorts client-side
+    /// per column (#519 v2 comparators).
+    pub fn canvas_table_rows(&self, handle: u64) -> Result<Vec<CanvasTableRow>, VaultError> {
+        let file_id = self.canvas_file_id(handle)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT node_id, kind, title, group_path, target, conn_count, color_name
+             FROM canvas_nodes WHERE file_id = ?1 ORDER BY order_idx",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+            Ok(CanvasTableRow {
+                node_id: row.get(0)?,
+                kind: row.get(1)?,
+                title: row.get(2)?,
+                group_path: parse_group_path(&row.get::<_, String>(3)?),
+                target: row.get(4)?,
+                connection_count: row.get::<_, i64>(5)? as u32,
+                color_name: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// A node's connections in document order, with directional data
+    /// for phrasing (dangling edges never appear — model contract).
+    pub fn canvas_neighbors(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Vec<CanvasNeighbor>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(node_id.to_string());
+        let neighbors = state
+            .model
+            .adjacency
+            .get(&id)
+            .ok_or_else(|| bad_node(node_id))?;
+        Ok(neighbors
+            .iter()
+            .map(|n| CanvasNeighbor {
+                edge_id: n.edge.0.clone(),
+                other_node: n.other.0.clone(),
+                other_title: state
+                    .model
+                    .summaries
+                    .get(&n.other)
+                    .map(|s| s.display_title.clone())
+                    .unwrap_or_default(),
+                direction: n.direction,
+                self_side: n.self_side,
+                label: n.label.clone(),
+                self_is_from: n.self_is_from,
+            })
+            .collect())
+    }
+
+    /// The ⌃⌘I readback context for one node (t0 §1.4).
+    pub fn canvas_where_am_i(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<CanvasWhereAmI, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(node_id.to_string());
+        let s = state
+            .model
+            .summaries
+            .get(&id)
+            .ok_or_else(|| bad_node(node_id))?;
+        Ok(CanvasWhereAmI {
+            node_id: node_id.to_string(),
+            title: s.display_title.clone(),
+            kind: s.kind_label.to_string(),
+            group_path: s.group_path.clone(),
+            ordinal_n: s.position_in_container as u32,
+            total_m: s.container_size as u32,
+            connection_count: s.connection_count as u32,
+            in_count: s.in_count as u32,
+            out_count: s.out_count as u32,
+            color_name: s.color_name.map(str::to_string),
+        })
+    }
+
+    /// Non-overlapping, grid-aligned position for a new card (#517).
+    /// `exclude` removes nodes from collision checks (re-placing an
+    /// existing card, #522).
+    pub fn canvas_place_new(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        width: f64,
+        height: f64,
+        direction_hint: Option<crate::canvas::placement::PlaceDirection>,
+        exclude: Vec<String>,
+    ) -> Result<CanvasPlacement, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let anchor_id = anchor.map(crate::canvas::NodeId);
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        let p = crate::canvas::placement::place_new(
+            &state.model,
+            anchor_id.as_ref(),
+            (width, height),
+            direction_hint,
+            &exclude,
+        );
+        Ok(CanvasPlacement {
+            x: p.x,
+            y: p.y,
+            relative: p.relative,
+        })
+    }
+
+    /// Rigid-set placement (#517 `place_set`): origins for each box,
+    /// pairwise offsets preserved exactly.
+    pub fn canvas_place_set(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        boxes: Vec<CanvasRectArg>,
+        direction_hint: Option<crate::canvas::placement::PlaceDirection>,
+        exclude: Vec<String>,
+    ) -> Result<CanvasSetPlacement, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let anchor_id = anchor.map(crate::canvas::NodeId);
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        let rects: Vec<crate::canvas::model::Rect> = boxes
+            .iter()
+            .map(|b| crate::canvas::model::Rect::new(b.x, b.y, b.width, b.height))
+            .collect();
+        let sp = crate::canvas::placement::place_set(
+            &state.model,
+            anchor_id.as_ref(),
+            &rects,
+            direction_hint,
+            &exclude,
+        );
+        Ok(CanvasSetPlacement {
+            origins: sp.origins,
+            relative: sp.relative,
+        })
+    }
+
+    /// Node ids whose rects overlap `rect` (positive-area, cards only)
+    /// — the move/resize-mode transient overlap warning query (#521).
+    pub fn canvas_check_overlap(
+        &self,
+        handle: u64,
+        rect: CanvasRectArg,
+        exclude: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(state
+            .model
+            .spatial
+            .overlapping(
+                crate::canvas::model::Rect::new(rect.x, rect.y, rect.width, rect.height),
+                &exclude,
+                false,
+            )
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
+    }
+
+    fn canvas_file_id(&self, handle: u64) -> Result<i64, VaultError> {
+        self.canvases
+            .lock()
+            .expect("canvas registry mutex")
+            .get(&handle)
+            .map(|s| s.file_id)
+            .ok_or_else(|| bad_handle(handle))
+    }
+}
+
+fn parse_group_path(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+fn load_warning(w: &crate::canvas::CanvasWarning) -> CanvasLoadWarning {
+    use crate::canvas::CanvasWarning as W;
+    let (kind, detail) = match w {
+        W::ParseFailed { reason } => (CanvasLoadWarningKind::ParseFailed, reason.clone()),
+        W::MalformedNode { index, reason } => (
+            CanvasLoadWarningKind::SkippedEntry,
+            format!("node {index}: {reason}"),
+        ),
+        W::MalformedEdge { index, reason } => (
+            CanvasLoadWarningKind::SkippedEntry,
+            format!("connection {index}: {reason}"),
+        ),
+        W::UnknownNodeType { index, node_type } => (
+            CanvasLoadWarningKind::SkippedEntry,
+            format!("node {index}: unsupported type {node_type:?}"),
+        ),
+        W::DuplicateId { index, id, .. } => (
+            CanvasLoadWarningKind::SkippedEntry,
+            format!("entry {index}: duplicate id {id:?}"),
+        ),
+        W::DanglingEdge {
+            edge_id,
+            missing_node,
+        } => (
+            CanvasLoadWarningKind::DanglingEdge,
+            format!(
+                "connection {:?} references missing node {missing_node:?}",
+                edge_id.0
+            ),
+        ),
+        W::IgnoredValue {
+            index, key, detail, ..
+        } => (
+            CanvasLoadWarningKind::IgnoredValue,
+            format!("entry {index}, {key:?}: {detail}"),
+        ),
+    };
+    CanvasLoadWarning { kind, detail }
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for `VaultSession`. The 169-test suite that used to live
@@ -4703,4 +5308,7 @@ mod tests {
 
     #[path = "reading.rs"]
     mod reading;
+
+    #[path = "canvas.rs"]
+    mod canvas;
 }

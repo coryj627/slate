@@ -348,3 +348,19 @@ Legacy baselines spot-confirmed unchanged this run (release, same machine):
 | `dir_and_rewrite/list_dir_children_10k_root` | **5.3 ms** | One lazy tree-level fetch against a 10k-file vault root (the sidebar's expand hot path). |
 | `dir_and_rewrite/plan_rewrites_500_sources` | **172.5 ms** (~345 µs/source) | The U2-3 planner over 500 link-bearing sources for one moved file — every link re-resolved against the pre/post indexes (the censused correctness path). |
 
+
+## Milestone T Wave 1 — 2026-07-04 (canvas backend, #359/#360/#517/#361/#366)
+
+New bench file `crates/slate-core/benches/canvas_bench.rs` against the
+committed 2,000-node fixture (`large_2000.canvas`, the §K scale
+budget). Gate: the full open path (parse + derive) stays interactive
+and nothing is quadratic — 2,000 nodes ≈ 5.6 ms end-to-end, so canvas
+open cost is dominated by I/O, not derivation. Apple Silicon laptop,
+release.
+
+| Bench | 2026-07 median | Meaning |
+|---|---|---|
+| `canvas_parse_2000` | **3.20 ms** | Tolerant lossless parse (serde_json + typed extraction + raw retention). |
+| `canvas_derive_2000` | **2.25 ms** | Containment tree, reading order, adjacency, summaries, spatial index. |
+| `canvas_parse_derive_2000` | **5.62 ms** | The full open path (what `open_canvas` pays before its index write). |
+| `canvas_serialize_2000` | **1.90 ms** | Canonical re-emission (per-field reconciliation, skipped-entry interleave). |

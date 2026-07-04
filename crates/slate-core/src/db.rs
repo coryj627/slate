@@ -131,6 +131,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "file_tags: honest tag dimension (inline + frontmatter) for SearchScope::Tag (#508)",
         sql: include_str!("../migrations/019_file_tags.sql"),
     },
+    Migration {
+        description: "canvas: derived node/edge index for .canvas files (Milestone T, #361)",
+        sql: include_str!("../migrations/020_canvas.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

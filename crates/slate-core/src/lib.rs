@@ -12,6 +12,7 @@
 pub mod blocks;
 pub mod blocks_db;
 pub mod canvas;
+pub mod canvas_db;
 pub mod citations;
 pub mod citations_db;
 pub mod code;
@@ -86,10 +87,12 @@ pub use templates::{
 pub use text_buffer::TextBuffer;
 
 pub use session::{
-    CancelToken, CslStyleInfo, DirListing, DirNodeSummary, FileFilter, FileMetadata, FileSummary,
-    NoteLoadBundle, NotePartsBundle, Page, Paging, RenameAffected, RenameFailed, RenameFailureKind,
-    RenameReport, RenameSkipReason, RenameSkipped, SaveReport, ScanProgress, ScanProgressListener,
-    ScanReport, SessionConfig, VaultSession,
+    CancelToken, CanvasLoadWarning, CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo,
+    CanvasOutlineRow, CanvasPlacement, CanvasRectArg, CanvasSetPlacement, CanvasTableRow,
+    CanvasWhereAmI, CslStyleInfo, DirListing, DirNodeSummary, FileFilter, FileMetadata,
+    FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RenameAffected, RenameFailed,
+    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, ScanProgress,
+    ScanProgressListener, ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
