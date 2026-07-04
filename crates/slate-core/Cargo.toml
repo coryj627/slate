@@ -78,3 +78,7 @@ proptest = { workspace = true }
 [[bench]]
 name = "scan_bench"
 harness = false
+
+[[bench]]
+name = "canvas_bench"
+harness = false

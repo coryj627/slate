@@ -243,7 +243,7 @@ fn end_str(end: EndStyle) -> &'static str {
     }
 }
 
-fn node_map(node: &Node) -> Map<String, Value> {
+pub(crate) fn node_map(node: &Node) -> Map<String, Value> {
     let mut m = node.raw.clone();
     set_str(&mut m, "id", &node.id.0);
     set_str(&mut m, "type", node.kind.type_str());
@@ -280,7 +280,7 @@ fn node_map(node: &Node) -> Map<String, Value> {
     ordered(m, CANONICAL_NODE_ORDER, !node.raw.is_empty())
 }
 
-fn edge_map(edge: &Edge) -> Map<String, Value> {
+pub(crate) fn edge_map(edge: &Edge) -> Map<String, Value> {
     let mut m = edge.raw.clone();
     set_str(&mut m, "id", &edge.id.0);
     set_str(&mut m, "fromNode", &edge.from.0.0);

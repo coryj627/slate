@@ -43,6 +43,7 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
+pub mod apply;
 pub mod model;
 pub mod placement;
 pub mod serialize;
@@ -464,7 +465,7 @@ fn opt_str(
     }
 }
 
-fn parse_color(s: &str) -> CanvasColor {
+pub(crate) fn parse_color(s: &str) -> CanvasColor {
     match s {
         "1" => CanvasColor::Preset(1),
         "2" => CanvasColor::Preset(2),
@@ -486,7 +487,7 @@ fn parse_side(s: &str) -> Option<Side> {
     }
 }
 
-fn parse_node(
+pub(crate) fn parse_node(
     item: &Value,
     index: usize,
     seen_ids: &HashSet<String>,
@@ -562,7 +563,7 @@ fn parse_node(
     })
 }
 
-fn parse_edge(
+pub(crate) fn parse_edge(
     item: &Value,
     index: usize,
     seen_ids: &HashSet<String>,

@@ -938,6 +938,9 @@ impl CancelToken {
 pub enum FileFilter {
     All,
     MarkdownOnly,
+    /// Markdown notes plus `.canvas` files (Milestone T, #361) — the
+    /// openable-document set for quick open / the file tree (#369).
+    MarkdownAndCanvas,
 }
 
 impl From<FileFilter> for core::FileFilter {
@@ -945,6 +948,7 @@ impl From<FileFilter> for core::FileFilter {
         match f {
             FileFilter::All => core::FileFilter::All,
             FileFilter::MarkdownOnly => core::FileFilter::MarkdownOnly,
+            FileFilter::MarkdownAndCanvas => core::FileFilter::MarkdownAndCanvas,
         }
     }
 }
@@ -3451,6 +3455,899 @@ impl CommandRegistry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Canvas (Milestone T, #361): 1:1 mirrors of the handle-based read API.
+// No logic here — every method delegates to core and converts shapes.
+
+/// One outline row (depth-first flattening of the canvas model).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasOutlineRow {
+    pub node_id: String,
+    pub depth: u32,
+    /// "text" | "file" | "image" | "link" | "group" (t0 §1.1 type word).
+    pub kind: String,
+    pub title: String,
+    pub group_path: Vec<String>,
+    pub ordinal_n: u32,
+    pub total_m: u32,
+    pub connection_count: u32,
+    pub color_name: Option<String>,
+}
+
+impl From<core::CanvasOutlineRow> for CanvasOutlineRow {
+    fn from(r: core::CanvasOutlineRow) -> Self {
+        CanvasOutlineRow {
+            node_id: r.node_id,
+            depth: r.depth,
+            kind: r.kind,
+            title: r.title,
+            group_path: r.group_path,
+            ordinal_n: r.ordinal_n,
+            total_m: r.total_m,
+            connection_count: r.connection_count,
+            color_name: r.color_name,
+        }
+    }
+}
+
+/// One table row (flat, sortable view — #363).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasTableRow {
+    pub node_id: String,
+    pub kind: String,
+    pub title: String,
+    pub group_path: Vec<String>,
+    pub target: String,
+    pub connection_count: u32,
+    pub color_name: Option<String>,
+}
+
+impl From<core::CanvasTableRow> for CanvasTableRow {
+    fn from(r: core::CanvasTableRow) -> Self {
+        CanvasTableRow {
+            node_id: r.node_id,
+            kind: r.kind,
+            title: r.title,
+            group_path: r.group_path,
+            target: r.target,
+            connection_count: r.connection_count,
+            color_name: r.color_name,
+        }
+    }
+}
+
+/// Direction of a connection from the queried node's perspective
+/// (t0 §1.2: "connects to" / "connected from" / "linked with").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasEdgeDirection {
+    Outgoing,
+    Incoming,
+    Bidirectional,
+    Undirected,
+}
+
+impl From<core::canvas::model::EdgeDirection> for CanvasEdgeDirection {
+    fn from(d: core::canvas::model::EdgeDirection) -> Self {
+        use core::canvas::model::EdgeDirection as D;
+        match d {
+            D::Outgoing => CanvasEdgeDirection::Outgoing,
+            D::Incoming => CanvasEdgeDirection::Incoming,
+            D::Bidirectional => CanvasEdgeDirection::Bidirectional,
+            D::Undirected => CanvasEdgeDirection::Undirected,
+        }
+    }
+}
+
+/// Which side of a node a connection attaches to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+impl From<core::canvas::Side> for CanvasSide {
+    fn from(s: core::canvas::Side) -> Self {
+        use core::canvas::Side as S;
+        match s {
+            S::Top => CanvasSide::Top,
+            S::Right => CanvasSide::Right,
+            S::Bottom => CanvasSide::Bottom,
+            S::Left => CanvasSide::Left,
+        }
+    }
+}
+
+/// One adjacency entry with the raw phrasing data (#518 consumes).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasNeighbor {
+    pub edge_id: String,
+    pub other_node: String,
+    pub other_title: String,
+    pub direction: CanvasEdgeDirection,
+    pub self_side: Option<CanvasSide>,
+    pub label: Option<String>,
+    pub self_is_from: bool,
+}
+
+impl From<core::CanvasNeighbor> for CanvasNeighbor {
+    fn from(n: core::CanvasNeighbor) -> Self {
+        CanvasNeighbor {
+            edge_id: n.edge_id,
+            other_node: n.other_node,
+            other_title: n.other_title,
+            direction: n.direction.into(),
+            self_side: n.self_side.map(Into::into),
+            label: n.label,
+            self_is_from: n.self_is_from,
+        }
+    }
+}
+
+/// The ⌃⌘I "Where am I?" readback context (t0 §1.4).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasWhereAmI {
+    pub node_id: String,
+    pub title: String,
+    pub kind: String,
+    pub group_path: Vec<String>,
+    pub ordinal_n: u32,
+    pub total_m: u32,
+    pub connection_count: u32,
+    pub in_count: u32,
+    pub out_count: u32,
+    pub color_name: Option<String>,
+}
+
+impl From<core::CanvasWhereAmI> for CanvasWhereAmI {
+    fn from(w: core::CanvasWhereAmI) -> Self {
+        CanvasWhereAmI {
+            node_id: w.node_id,
+            title: w.title,
+            kind: w.kind,
+            group_path: w.group_path,
+            ordinal_n: w.ordinal_n,
+            total_m: w.total_m,
+            connection_count: w.connection_count,
+            in_count: w.in_count,
+            out_count: w.out_count,
+            color_name: w.color_name,
+        }
+    }
+}
+
+/// Load-warning classification for t0 §5 phrasing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasLoadWarningKind {
+    ParseFailed,
+    SkippedEntry,
+    DanglingEdge,
+    IgnoredValue,
+}
+
+impl From<core::CanvasLoadWarningKind> for CanvasLoadWarningKind {
+    fn from(k: core::CanvasLoadWarningKind) -> Self {
+        use core::CanvasLoadWarningKind as K;
+        match k {
+            K::ParseFailed => CanvasLoadWarningKind::ParseFailed,
+            K::SkippedEntry => CanvasLoadWarningKind::SkippedEntry,
+            K::DanglingEdge => CanvasLoadWarningKind::DanglingEdge,
+            K::IgnoredValue => CanvasLoadWarningKind::IgnoredValue,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasLoadWarning {
+    pub kind: CanvasLoadWarningKind,
+    pub detail: String,
+}
+
+impl From<core::CanvasLoadWarning> for CanvasLoadWarning {
+    fn from(w: core::CanvasLoadWarning) -> Self {
+        CanvasLoadWarning {
+            kind: w.kind.into(),
+            detail: w.detail,
+        }
+    }
+}
+
+/// Result of `open_canvas`. A `degraded` canvas is read-only (t0 §5).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasOpenInfo {
+    pub handle: u64,
+    pub node_count: u32,
+    pub edge_count: u32,
+    pub degraded: bool,
+    pub warnings: Vec<CanvasLoadWarning>,
+}
+
+impl From<core::CanvasOpenInfo> for CanvasOpenInfo {
+    fn from(i: core::CanvasOpenInfo) -> Self {
+        CanvasOpenInfo {
+            handle: i.handle,
+            node_count: i.node_count,
+            edge_count: i.edge_count,
+            degraded: i.degraded,
+            warnings: i.warnings.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Placement direction preference / hint (#517).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasPlaceDirection {
+    Below,
+    RightOf,
+    Above,
+    LeftOf,
+}
+
+impl From<CanvasPlaceDirection> for core::canvas::placement::PlaceDirection {
+    fn from(d: CanvasPlaceDirection) -> Self {
+        use core::canvas::placement::PlaceDirection as P;
+        match d {
+            CanvasPlaceDirection::Below => P::Below,
+            CanvasPlaceDirection::RightOf => P::RightOf,
+            CanvasPlaceDirection::Above => P::Above,
+            CanvasPlaceDirection::LeftOf => P::LeftOf,
+        }
+    }
+}
+
+/// Typed relative-position description; `anchor_title` is empty for
+/// `AtOrigin`. Phrasing stays UI-side (#518 grammar tables).
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum CanvasRelativeDesc {
+    Below { anchor_title: String },
+    RightOf { anchor_title: String },
+    Above { anchor_title: String },
+    LeftOf { anchor_title: String },
+    AtOrigin,
+}
+
+impl From<core::canvas::placement::RelativeDesc> for CanvasRelativeDesc {
+    fn from(r: core::canvas::placement::RelativeDesc) -> Self {
+        use core::canvas::placement::RelativeDesc as R;
+        match r {
+            R::Below(t) => CanvasRelativeDesc::Below { anchor_title: t },
+            R::RightOf(t) => CanvasRelativeDesc::RightOf { anchor_title: t },
+            R::Above(t) => CanvasRelativeDesc::Above { anchor_title: t },
+            R::LeftOf(t) => CanvasRelativeDesc::LeftOf { anchor_title: t },
+            R::AtOrigin => CanvasRelativeDesc::AtOrigin,
+        }
+    }
+}
+
+/// Geometry argument for placement / overlap queries.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct CanvasRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl From<CanvasRect> for core::CanvasRectArg {
+    fn from(r: CanvasRect) -> Self {
+        core::CanvasRectArg {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct CanvasPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// A computed placement for one new card (#517).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasPlacement {
+    pub x: f64,
+    pub y: f64,
+    pub relative: CanvasRelativeDesc,
+}
+
+impl From<core::CanvasPlacement> for CanvasPlacement {
+    fn from(p: core::CanvasPlacement) -> Self {
+        CanvasPlacement {
+            x: p.x,
+            y: p.y,
+            relative: p.relative.into(),
+        }
+    }
+}
+
+/// A computed rigid-set placement (pairwise offsets preserved).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasSetPlacement {
+    pub origins: Vec<CanvasPoint>,
+    pub relative: CanvasRelativeDesc,
+}
+
+impl From<core::CanvasSetPlacement> for CanvasSetPlacement {
+    fn from(p: core::CanvasSetPlacement) -> Self {
+        CanvasSetPlacement {
+            origins: p
+                .origins
+                .into_iter()
+                .map(|(x, y)| CanvasPoint { x, y })
+                .collect(),
+            relative: p.relative.into(),
+        }
+    }
+}
+
+/// Connection end decoration (spec defaults: from = none, to = arrow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasEndStyle {
+    None,
+    Arrow,
+}
+
+impl From<CanvasEndStyle> for core::canvas::EndStyle {
+    fn from(e: CanvasEndStyle) -> Self {
+        match e {
+            CanvasEndStyle::None => core::canvas::EndStyle::None,
+            CanvasEndStyle::Arrow => core::canvas::EndStyle::Arrow,
+        }
+    }
+}
+
+impl From<core::canvas::EndStyle> for CanvasEndStyle {
+    fn from(e: core::canvas::EndStyle) -> Self {
+        match e {
+            core::canvas::EndStyle::None => CanvasEndStyle::None,
+            core::canvas::EndStyle::Arrow => CanvasEndStyle::Arrow,
+        }
+    }
+}
+
+impl From<CanvasSide> for core::canvas::Side {
+    fn from(s: CanvasSide) -> Self {
+        match s {
+            CanvasSide::Top => core::canvas::Side::Top,
+            CanvasSide::Right => core::canvas::Side::Right,
+            CanvasSide::Bottom => core::canvas::Side::Bottom,
+            CanvasSide::Left => core::canvas::Side::Left,
+        }
+    }
+}
+
+/// New-card payload for create/set-content ops.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum CanvasNodeContent {
+    Text {
+        text: String,
+    },
+    File {
+        file: String,
+        subpath: Option<String>,
+    },
+    Link {
+        url: String,
+    },
+}
+
+impl From<CanvasNodeContent> for core::canvas::apply::CanvasNodeContent {
+    fn from(c: CanvasNodeContent) -> Self {
+        use core::canvas::apply::CanvasNodeContent as C;
+        match c {
+            CanvasNodeContent::Text { text } => C::Text { text },
+            CanvasNodeContent::File { file, subpath } => C::File { file, subpath },
+            CanvasNodeContent::Link { url } => C::Link { url },
+        }
+    }
+}
+
+impl From<core::canvas::apply::CanvasNodeContent> for CanvasNodeContent {
+    fn from(c: core::canvas::apply::CanvasNodeContent) -> Self {
+        use core::canvas::apply::CanvasNodeContent as C;
+        match c {
+            C::Text { text } => CanvasNodeContent::Text { text },
+            C::File { file, subpath } => CanvasNodeContent::File { file, subpath },
+            C::Link { url } => CanvasNodeContent::Link { url },
+        }
+    }
+}
+
+/// One primitive canvas mutation (t1 op set). The `Restore*` variants
+/// are undo-only payloads produced by the engine — the UI passes them
+/// back verbatim inside an inverse action, never constructs them.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum CanvasOp {
+    CreateNode {
+        id: String,
+        content: CanvasNodeContent,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        color: Option<String>,
+    },
+    CreateGroup {
+        id: String,
+        label: Option<String>,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        color: Option<String>,
+    },
+    UpdateNodeGeometry {
+        id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
+    SetNodeColor {
+        id: String,
+        color: Option<String>,
+    },
+    SetNodeContent {
+        id: String,
+        content: CanvasNodeContent,
+    },
+    DeleteNode {
+        id: String,
+    },
+    AddEdge {
+        id: String,
+        from_node: String,
+        from_side: Option<CanvasSide>,
+        to_node: String,
+        to_side: Option<CanvasSide>,
+        from_end: CanvasEndStyle,
+        to_end: CanvasEndStyle,
+        label: Option<String>,
+        color: Option<String>,
+    },
+    UpdateEdge {
+        id: String,
+        from_side: Option<CanvasSide>,
+        to_side: Option<CanvasSide>,
+        from_end: CanvasEndStyle,
+        to_end: CanvasEndStyle,
+        label: Option<String>,
+        color: Option<String>,
+    },
+    DeleteEdge {
+        id: String,
+    },
+    RenameGroup {
+        id: String,
+        label: Option<String>,
+    },
+    Ungroup {
+        id: String,
+    },
+    RestoreNode {
+        node_json: String,
+        position: u32,
+    },
+    RestoreEdge {
+        edge_json: String,
+        position: u32,
+    },
+    RestoreNodeInPlace {
+        node_json: String,
+    },
+    RestoreEdgeInPlace {
+        edge_json: String,
+    },
+}
+
+impl From<CanvasOp> for core::canvas::apply::CanvasOp {
+    fn from(op: CanvasOp) -> Self {
+        use core::canvas::apply::CanvasOp as O;
+        match op {
+            CanvasOp::CreateNode {
+                id,
+                content,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => O::CreateNode {
+                id,
+                content: content.into(),
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            CanvasOp::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => O::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            CanvasOp::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => O::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            },
+            CanvasOp::SetNodeColor { id, color } => O::SetNodeColor { id, color },
+            CanvasOp::SetNodeContent { id, content } => O::SetNodeContent {
+                id,
+                content: content.into(),
+            },
+            CanvasOp::DeleteNode { id } => O::DeleteNode { id },
+            CanvasOp::AddEdge {
+                id,
+                from_node,
+                from_side,
+                to_node,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => O::AddEdge {
+                id,
+                from_node,
+                from_side: from_side.map(Into::into),
+                to_node,
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            CanvasOp::UpdateEdge {
+                id,
+                from_side,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => O::UpdateEdge {
+                id,
+                from_side: from_side.map(Into::into),
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            CanvasOp::DeleteEdge { id } => O::DeleteEdge { id },
+            CanvasOp::RenameGroup { id, label } => O::RenameGroup { id, label },
+            CanvasOp::Ungroup { id } => O::Ungroup { id },
+            CanvasOp::RestoreNode {
+                node_json,
+                position,
+            } => O::RestoreNode {
+                node_json,
+                position,
+            },
+            CanvasOp::RestoreEdge {
+                edge_json,
+                position,
+            } => O::RestoreEdge {
+                edge_json,
+                position,
+            },
+            CanvasOp::RestoreNodeInPlace { node_json } => O::RestoreNodeInPlace { node_json },
+            CanvasOp::RestoreEdgeInPlace { edge_json } => O::RestoreEdgeInPlace { edge_json },
+        }
+    }
+}
+
+impl From<core::canvas::apply::CanvasOp> for CanvasOp {
+    fn from(op: core::canvas::apply::CanvasOp) -> Self {
+        use core::canvas::apply::CanvasOp as O;
+        match op {
+            O::CreateNode {
+                id,
+                content,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => CanvasOp::CreateNode {
+                id,
+                content: content.into(),
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            O::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => CanvasOp::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            O::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => CanvasOp::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            },
+            O::SetNodeColor { id, color } => CanvasOp::SetNodeColor { id, color },
+            O::SetNodeContent { id, content } => CanvasOp::SetNodeContent {
+                id,
+                content: content.into(),
+            },
+            O::DeleteNode { id } => CanvasOp::DeleteNode { id },
+            O::AddEdge {
+                id,
+                from_node,
+                from_side,
+                to_node,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => CanvasOp::AddEdge {
+                id,
+                from_node,
+                from_side: from_side.map(Into::into),
+                to_node,
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            O::UpdateEdge {
+                id,
+                from_side,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => CanvasOp::UpdateEdge {
+                id,
+                from_side: from_side.map(Into::into),
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            O::DeleteEdge { id } => CanvasOp::DeleteEdge { id },
+            O::RenameGroup { id, label } => CanvasOp::RenameGroup { id, label },
+            O::Ungroup { id } => CanvasOp::Ungroup { id },
+            O::RestoreNode {
+                node_json,
+                position,
+            } => CanvasOp::RestoreNode {
+                node_json,
+                position,
+            },
+            O::RestoreEdge {
+                edge_json,
+                position,
+            } => CanvasOp::RestoreEdge {
+                edge_json,
+                position,
+            },
+            O::RestoreNodeInPlace { node_json } => CanvasOp::RestoreNodeInPlace { node_json },
+            O::RestoreEdgeInPlace { edge_json } => CanvasOp::RestoreEdgeInPlace { edge_json },
+        }
+    }
+}
+
+/// A named, undoable batch of ops — one committed user action.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasAction {
+    pub name: String,
+    pub ops: Vec<CanvasOp>,
+}
+
+impl From<CanvasAction> for core::canvas::apply::CanvasAction {
+    fn from(a: CanvasAction) -> Self {
+        core::canvas::apply::CanvasAction {
+            name: a.name,
+            ops: a.ops.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<core::canvas::apply::CanvasAction> for CanvasAction {
+    fn from(a: core::canvas::apply::CanvasAction) -> Self {
+        CanvasAction {
+            name: a.name,
+            ops: a.ops.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Result of `canvas_apply`: post-write hash + the inverse action for
+/// the session-scoped undo stack (#372).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasApplyResult {
+    pub new_content_hash: String,
+    pub inverse: CanvasAction,
+}
+
+impl From<core::CanvasApplyResult> for CanvasApplyResult {
+    fn from(r: core::CanvasApplyResult) -> Self {
+        CanvasApplyResult {
+            new_content_hash: r.new_content_hash,
+            inverse: r.inverse.into(),
+        }
+    }
+}
+
+#[uniffi::export]
+impl VaultSession {
+    /// Apply one committed user action (one write, one undo step);
+    /// returns the inverse action for the undo stack.
+    pub fn canvas_apply(
+        &self,
+        handle: u64,
+        action: CanvasAction,
+    ) -> Result<CanvasApplyResult, VaultError> {
+        Ok(self.inner.canvas_apply(handle, action.into())?.into())
+    }
+}
+
+#[uniffi::export]
+impl VaultSession {
+    /// Open a `.canvas` file: tolerant parse + model derivation +
+    /// index refresh; returns the handle every other canvas call takes.
+    pub fn open_canvas(&self, path: String) -> Result<CanvasOpenInfo, VaultError> {
+        Ok(self.inner.open_canvas(&path)?.into())
+    }
+
+    /// Release a canvas handle (idempotent).
+    pub fn close_canvas(&self, handle: u64) {
+        self.inner.close_canvas(handle);
+    }
+
+    /// Depth-first outline rows in reading order (#362).
+    pub fn canvas_outline(&self, handle: u64) -> Result<Vec<CanvasOutlineRow>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_outline(handle)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Flat table rows in reading order (#363).
+    pub fn canvas_table_rows(&self, handle: u64) -> Result<Vec<CanvasTableRow>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_table_rows(handle)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// A node's connections with directional phrase data (#364/#518).
+    pub fn canvas_neighbors(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Vec<CanvasNeighbor>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_neighbors(handle, &node_id)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// The ⌃⌘I readback context for one node (#518).
+    pub fn canvas_where_am_i(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<CanvasWhereAmI, VaultError> {
+        Ok(self.inner.canvas_where_am_i(handle, &node_id)?.into())
+    }
+
+    /// Non-overlapping grid-aligned position for a new card (#517).
+    pub fn canvas_place_new(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        width: f64,
+        height: f64,
+        direction_hint: Option<CanvasPlaceDirection>,
+        exclude: Vec<String>,
+    ) -> Result<CanvasPlacement, VaultError> {
+        Ok(self
+            .inner
+            .canvas_place_new(
+                handle,
+                anchor,
+                width,
+                height,
+                direction_hint.map(Into::into),
+                exclude,
+            )?
+            .into())
+    }
+
+    /// Rigid-set placement: one origin per box, offsets preserved.
+    pub fn canvas_place_set(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        boxes: Vec<CanvasRect>,
+        direction_hint: Option<CanvasPlaceDirection>,
+        exclude: Vec<String>,
+    ) -> Result<CanvasSetPlacement, VaultError> {
+        Ok(self
+            .inner
+            .canvas_place_set(
+                handle,
+                anchor,
+                boxes.into_iter().map(Into::into).collect(),
+                direction_hint.map(Into::into),
+                exclude,
+            )?
+            .into())
+    }
+
+    /// Node ids overlapping `rect` (cards only) — #521 overlap warnings.
+    pub fn canvas_check_overlap(
+        &self,
+        handle: u64,
+        rect: CanvasRect,
+        exclude: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_check_overlap(handle, rect.into(), exclude)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4051,5 +4948,125 @@ mod tests {
             rendered.cursor_byte_offset,
             Some("# Meeting: Q1 sync\n\n".len() as u64)
         );
+    }
+}
+
+#[cfg(test)]
+mod canvas_mirror_tests {
+    //! Type-mirror parity (#361): every canvas FFI shape converts from
+    //! its core counterpart without loss, and the full read API is
+    //! drivable through the FFI wrapper against a real vault.
+
+    use super::*;
+
+    #[test]
+    fn enum_mirrors_are_total() {
+        use slate_core::canvas::model::EdgeDirection as D;
+        for (c, f) in [
+            (D::Outgoing, CanvasEdgeDirection::Outgoing),
+            (D::Incoming, CanvasEdgeDirection::Incoming),
+            (D::Bidirectional, CanvasEdgeDirection::Bidirectional),
+            (D::Undirected, CanvasEdgeDirection::Undirected),
+        ] {
+            assert_eq!(CanvasEdgeDirection::from(c), f);
+        }
+        use slate_core::canvas::Side as S;
+        for (c, f) in [
+            (S::Top, CanvasSide::Top),
+            (S::Right, CanvasSide::Right),
+            (S::Bottom, CanvasSide::Bottom),
+            (S::Left, CanvasSide::Left),
+        ] {
+            assert_eq!(CanvasSide::from(c), f);
+        }
+        use slate_core::canvas::placement::RelativeDesc as R;
+        assert_eq!(
+            CanvasRelativeDesc::from(R::Below("A".into())),
+            CanvasRelativeDesc::Below {
+                anchor_title: "A".into()
+            }
+        );
+        assert_eq!(
+            CanvasRelativeDesc::from(R::AtOrigin),
+            CanvasRelativeDesc::AtOrigin
+        );
+    }
+
+    #[test]
+    fn read_api_drives_over_the_ffi_wrapper() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("b.canvas"),
+            include_str!("../../slate-core/tests/fixtures/canvas/sample.canvas"),
+        )
+        .unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+
+        let info = session.open_canvas("b.canvas".into()).expect("open canvas");
+        assert!(!info.degraded);
+        assert_eq!(info.node_count, 9);
+
+        let outline = session.canvas_outline(info.handle).unwrap();
+        assert_eq!(outline.len(), 9);
+        assert_eq!(outline[0].node_id, "grp-research");
+
+        let rows = session.canvas_table_rows(info.handle).unwrap();
+        assert_eq!(rows.len(), 9);
+
+        let neighbors = session
+            .canvas_neighbors(info.handle, "card-question".into())
+            .unwrap();
+        assert_eq!(neighbors.len(), 3);
+
+        let ctx = session
+            .canvas_where_am_i(info.handle, "card-question".into())
+            .unwrap();
+        assert_eq!(ctx.title, "Core question");
+
+        let p = session
+            .canvas_place_new(
+                info.handle,
+                Some("card-loose".into()),
+                260.0,
+                140.0,
+                Some(CanvasPlaceDirection::RightOf),
+                Vec::new(),
+            )
+            .unwrap();
+        assert!(matches!(p.relative, CanvasRelativeDesc::RightOf { .. }));
+
+        let sp = session
+            .canvas_place_set(
+                info.handle,
+                Some("card-loose".into()),
+                vec![CanvasRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 50.0,
+                }],
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(sp.origins.len(), 1);
+
+        let overlaps = session
+            .canvas_check_overlap(
+                info.handle,
+                CanvasRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+                vec!["card-question".into()],
+            )
+            .unwrap();
+        assert!(overlaps.is_empty());
+
+        session.close_canvas(info.handle);
+        assert!(session.canvas_outline(info.handle).is_err());
     }
 }
