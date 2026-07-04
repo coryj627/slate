@@ -96,6 +96,13 @@ struct SlateMacApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!appState.isVaultOpen)
 
+                // U3-4 (#468): single ⌘⇧D owner, same rationale as ⌘⇧E.
+                Button("Show Properties Source") {
+                    appState.togglePropertiesSourceCommand()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen)
+
                 Button("Show Next Tab") {
                     appState.selectNextTab()
                 }

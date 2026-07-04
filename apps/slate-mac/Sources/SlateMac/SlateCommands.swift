@@ -65,6 +65,7 @@ enum SlateCommandID {
     static let addProperty = "slate.editor.addProperty"
     static let bulkRenameProperties = "slate.editor.bulkRenameProperties"
     static let toggleViewMode = "slate.editor.toggleViewMode"
+    static let togglePropertiesSource = "slate.editor.togglePropertiesSource"
 
     // Settings
     static let openSettings = "slate.settings.open"
@@ -115,6 +116,7 @@ enum SlateCommandID {
         addProperty,
         bulkRenameProperties,
         toggleViewMode,
+        togglePropertiesSource,
         openSettings,
         openHelp,
         tasksReview,
@@ -465,6 +467,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⇧⌘E",
         hint: "Switch the current note between editing and reading mode."
     ) { [weak appState] in appState?.toggleViewMode() }
+
+    register(
+        SlateCommandID.togglePropertiesSource,
+        label: "Show Properties Source",
+        section: .editor,
+        hotkey: "⇧⌘D",
+        hint: "Switch the properties widget between fields and YAML source."
+    ) { [weak appState] in appState?.togglePropertiesSourceCommand() }
 
     register(
         SlateCommandID.citationSummary,

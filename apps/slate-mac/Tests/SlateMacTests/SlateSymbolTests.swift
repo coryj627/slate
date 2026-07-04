@@ -24,6 +24,8 @@ final class SlateSymbolTests: XCTestCase {
     /// conscious entry here.
     private static let knownMacOS15SafeSymbols: Set<String> = [
         "square.and.arrow.down", "magnifyingglass", "doc.badge.plus", "checklist",
+        // curlybraces: SF Symbols 2 (macOS 11) — U3-4 show-source toggle.
+        "curlybraces",
         "quote.bubble.fill", "books.vertical", "function",
         "chevron.left.forwardslash.chevron.right", "exclamationmark.triangle.fill",
         "arrow.down.right.and.arrow.up.left", "ellipsis", "xmark.circle.fill",
