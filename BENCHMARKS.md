@@ -364,3 +364,17 @@ release.
 | `canvas_derive_2000` | **2.25 ms** | Containment tree, reading order, adjacency, summaries, spatial index. |
 | `canvas_parse_derive_2000` | **5.62 ms** | The full open path (what `open_canvas` pays before its index write). |
 | `canvas_serialize_2000` | **1.90 ms** | Canonical re-emission (per-field reconciliation, skipped-entry interleave). |
+
+## Milestone T Wave 5 — 2026-07-04 (canvas UI at §K scale, #365)
+
+UI-side timings on the same committed 2,000-node fixture, measured by
+`MilestoneTIntegrationTests.testLargeCanvasOpensNavigatesAndWindowsResponsively`
+(real AppState + FFI + `CanvasRendererNSView` at 800×600; the suite
+asserts budgets of 500/100/50 ms so a regression fails CI, and these
+recorded values show the headroom):
+
+| Measure | Recorded | Notes |
+|---|---|---|
+| First windowed rebuild | **3.9 ms** | 13 of 2,000 cards materialized (AX windowing, viewport + 1-viewport margin). |
+| Per-pan window hop | **2.8 ms** | Ten viewport jumps averaged — window churn, edge rebuild, AX re-frame. |
+| Per-step navigator traversal | **0.18 ms** | Reading-order selection moves incl. announcement assembly. |
