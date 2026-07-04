@@ -89,7 +89,7 @@ struct PropertyEditorRow: View {
             if let err = inputValidationError {
                 Text(err)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
                     .accessibilityLabel("Validation error: \(err)")
             }
         }

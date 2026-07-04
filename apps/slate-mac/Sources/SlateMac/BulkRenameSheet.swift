@@ -68,7 +68,7 @@ struct BulkRenameSheet: View {
             if let err = appState.renameError {
                 Text(err)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
                     .accessibilityLabel("Error: \(err)")
             }
 

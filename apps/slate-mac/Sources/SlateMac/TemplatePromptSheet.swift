@@ -163,7 +163,7 @@ private struct NameStep: View {
                 if let error = appState.templateNoteNameError {
                     Text(error)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Tokens.ColorRole.destructiveText)
                         .accessibilityLabel("Validation error: \(error)")
                 }
             }

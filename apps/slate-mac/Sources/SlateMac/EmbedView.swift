@@ -190,7 +190,7 @@ struct EmbedView: View {
             "Could not decode image. MIME: \(mime). The file may be corrupt or an unsupported codec."
         return HStack(alignment: .top, spacing: 6) {
             SlateSymbol.warning.decorative
-                .foregroundStyle(.orange)
+                .foregroundStyle(Tokens.ColorRole.warningText)
             Text(verbatim: message)
                 .font(.caption)
                 .foregroundStyle(.primary)
@@ -207,7 +207,7 @@ struct EmbedView: View {
         // only cue.
         return HStack(alignment: .top, spacing: 6) {
             SlateSymbol.warning.decorative
-                .foregroundStyle(.orange)
+                .foregroundStyle(Tokens.ColorRole.warningText)
             Text(verbatim: visible)
                 .font(.callout)
                 .foregroundStyle(.primary)
