@@ -83,8 +83,34 @@ impl Rect {
         self.width() * self.height()
     }
 
+    /// Total-order comparison of two rects' areas, robust at the f64
+    /// extremes (red-team findings on #360):
+    ///
+    /// - Areas whose product overflows to `inf` are compared in log
+    ///   space, so a 4e320 area still ranks below a 4e400 one instead
+    ///   of tying and falling through to the document-order tiebreak.
+    /// - A NaN area (constructible from an `inf × 0` degenerate rect)
+    ///   ranks as `+inf`: such a rect has no strict interior, contains
+    ///   nothing, and deterministically loses every smallest-area
+    ///   contest.
+    pub fn area_cmp(a: &Rect, b: &Rect) -> std::cmp::Ordering {
+        let key = |r: &Rect| {
+            let area = r.area();
+            if area.is_nan() { f64::INFINITY } else { area }
+        };
+        let (ka, kb) = (key(a), key(b));
+        if ka == f64::INFINITY && kb == f64::INFINITY {
+            let log = |r: &Rect| r.width().log2() + r.height().log2();
+            return log(a).total_cmp(&log(b));
+        }
+        ka.total_cmp(&kb)
+    }
+
+    /// Midpoint computed as `x0/2 + x1/2` so coordinates near the f64
+    /// limit don't overflow to `inf` (red-team finding: `(x0 + x1)/2`
+    /// broke containment for rects around ±1.7e308).
     pub fn center(&self) -> (f64, f64) {
-        ((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
+        (self.x0 / 2.0 + self.x1 / 2.0, self.y0 / 2.0 + self.y1 / 2.0)
     }
 
     /// Strict interior containment: a point on the boundary is outside
@@ -264,7 +290,6 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
     struct GroupInfo<'a> {
         id: &'a NodeId,
         rect: Rect,
-        area: f64,
         doc: usize,
     }
     let groups: Vec<GroupInfo> = nodes
@@ -274,24 +299,32 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
         .map(|(doc, n)| GroupInfo {
             id: &n.id,
             rect: Rect::from_node(n),
-            area: Rect::from_node(n).area(),
             doc,
         })
         .collect();
 
     let mut parent: HashMap<NodeId, NodeId> = HashMap::new();
     for (doc, node) in nodes.iter().enumerate() {
-        let (cx, cy) = Rect::from_node(node).center();
+        let self_rect = Rect::from_node(node);
+        let (cx, cy) = self_rect.center();
         let is_group = matches!(node.kind, NodeKind::Group { .. });
-        let self_area = Rect::from_node(node).area();
         let best = groups
             .iter()
             .filter(|g| g.doc != doc && g.rect.contains_point_strict(cx, cy))
             // Cycle safety for group-in-group: the parent must be
             // strictly greater in the (area, doc) total order.
-            .filter(|g| !is_group || g.area > self_area || (g.area == self_area && g.doc > doc))
+            .filter(|g| {
+                if !is_group {
+                    return true;
+                }
+                match Rect::area_cmp(&g.rect, &self_rect) {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => g.doc > doc,
+                    std::cmp::Ordering::Less => false,
+                }
+            })
             // Smallest area wins; equal areas → later document order.
-            .min_by(|a, b| a.area.total_cmp(&b.area).then_with(|| b.doc.cmp(&a.doc)));
+            .min_by(|a, b| Rect::area_cmp(&a.rect, &b.rect).then_with(|| b.doc.cmp(&a.doc)));
         if let Some(g) = best {
             parent.insert(node.id.clone(), g.id.clone());
         }
@@ -377,9 +410,6 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
     }
 
     // --- Summaries ------------------------------------------------------------
-    // Untitled ordinals: document order at load, 1-based (t0 §1.1).
-    let mut untitled_seen = 0usize;
-    let mut base_titles: HashMap<NodeId, String> = HashMap::new();
     let link_host_counts: HashMap<String, usize> = nodes
         .iter()
         .filter_map(|n| match &n.kind {
@@ -390,23 +420,40 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
             *acc.entry(host).or_default() += 1;
             acc
         });
-    for node in nodes {
-        let derived = match &node.kind {
-            NodeKind::Text { text } => text_title(text),
-            NodeKind::File { file, subpath } => Some(file_title(file, subpath.as_deref(), titles)),
-            NodeKind::Link { url } => {
-                let host = url_host(url);
-                let ambiguous = link_host_counts.get(&host).copied().unwrap_or(0) > 1;
-                Some(link_title(url, ambiguous))
-            }
-            NodeKind::Group { label, .. } => label.clone().filter(|l| !l.trim().is_empty()),
-        };
-        let title = match derived.filter(|t| !t.is_empty()) {
-            Some(t) => t,
-            None => {
-                untitled_seen += 1;
-                format!("Untitled {untitled_seen}")
-            }
+    let derived_titles: Vec<Option<String>> = nodes
+        .iter()
+        .map(|node| {
+            let derived = match &node.kind {
+                NodeKind::Text { text } => text_title(text),
+                NodeKind::File { file, subpath } => file_title(file, subpath.as_deref(), titles),
+                NodeKind::Link { url } => {
+                    let host = url_host(url);
+                    let ambiguous = link_host_counts.get(&host).copied().unwrap_or(0) > 1;
+                    Some(link_title(url, ambiguous))
+                }
+                NodeKind::Group { label, .. } => label.clone().filter(|l| !l.trim().is_empty()),
+            };
+            derived.filter(|t| !t.is_empty())
+        })
+        .collect();
+    // Untitled ordinals: document order at load, 1-based, and always the
+    // next *free* ordinal (t0 §1.1) — a card literally titled
+    // "Untitled 2" never collides with a generated placeholder (Voice
+    // Control speakable names must be unique).
+    let taken: std::collections::HashSet<&str> =
+        derived_titles.iter().filter_map(|t| t.as_deref()).collect();
+    let mut next_ordinal = 1usize;
+    let mut base_titles: HashMap<NodeId, String> = HashMap::new();
+    for (node, derived) in nodes.iter().zip(derived_titles.iter()) {
+        let title = match derived {
+            Some(t) => t.clone(),
+            None => loop {
+                let candidate = format!("Untitled {next_ordinal}");
+                next_ordinal += 1;
+                if !taken.contains(candidate.as_str()) {
+                    break candidate;
+                }
+            },
         };
         base_titles.insert(node.id.clone(), title);
     }
@@ -437,6 +484,13 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
         let neighbors = &adjacency[&node.id];
         let (mut in_count, mut out_count) = (0usize, 0usize);
         for nb in neighbors {
+            // A self-loop both leaves and arrives at this node, so it
+            // counts on both sides regardless of arrowheads.
+            if nb.other == node.id {
+                in_count += 1;
+                out_count += 1;
+                continue;
+            }
             match nb.direction {
                 EdgeDirection::Outgoing => out_count += 1,
                 EdgeDirection::Incoming => in_count += 1,
@@ -525,8 +579,15 @@ enum MediaClass {
     Video,
 }
 
+/// Media class from the basename's real extension: a file with no `.`
+/// in its basename (even one literally named `mov`) is not media.
 fn media_class(path: &str) -> Option<MediaClass> {
-    let ext = path.rsplit('.').next()?.to_ascii_lowercase();
+    let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let (stem, ext) = base.rsplit_once('.')?;
+    if stem.is_empty() {
+        return None; // dotfile like `.mov` — hidden file, not media
+    }
+    let ext = ext.to_ascii_lowercase();
     match ext.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "heic" | "avif" | "tiff" => {
             Some(MediaClass::Image)
@@ -554,7 +615,9 @@ fn humanize_filename(path: &str) -> String {
     }
 }
 
-fn file_title(path: &str, subpath: Option<&str>, titles: &dyn FileTitleSource) -> String {
+/// `None` when no usable title can be derived (e.g. a path that ends in
+/// `/`), so the caller falls back to an "Untitled N" ordinal.
+fn file_title(path: &str, subpath: Option<&str>, titles: &dyn FileTitleSource) -> Option<String> {
     let base = titles.title_for(path).unwrap_or_else(|| {
         let name = humanize_filename(path);
         match media_class(path) {
@@ -564,16 +627,15 @@ fn file_title(path: &str, subpath: Option<&str>, titles: &dyn FileTitleSource) -
             None => name,
         }
     });
-    match subpath {
-        Some(sp) => {
-            let heading = sp.trim_start_matches('#').trim();
-            if heading.is_empty() {
-                base
-            } else {
-                format!("{base} › {heading}")
-            }
-        }
-        None => base,
+    let base = (!base.trim().is_empty()).then_some(base);
+    let heading = subpath
+        .map(|sp| sp.trim_start_matches('#').trim())
+        .filter(|h| !h.is_empty());
+    match (base, heading) {
+        (Some(b), Some(h)) => Some(format!("{b} › {h}")),
+        (Some(b), None) => Some(b),
+        (None, Some(h)) => Some(h.to_string()),
+        (None, None) => None,
     }
 }
 

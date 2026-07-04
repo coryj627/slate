@@ -320,6 +320,98 @@ fn derivation_is_deterministic() {
     }
 }
 
+// --- Red-team regression cases (2026-07-04 pass) --------------------------
+
+/// Midpoint overflow: a card around ±1.7e308 must still resolve its
+/// true center for containment (`(x0+x1)/2` used to overflow to inf).
+#[test]
+fn redteam_center_overflow_containment() {
+    let input = r#"{"nodes":[
+        {"id":"g","type":"group","x":0,"y":0,"width":1.6e308,"height":1.6e308},
+        {"id":"c","type":"text","text":"t","x":1.0e308,"y":1.0e308,"width":0.5e308,"height":0.5e308}
+    ],"edges":[]}"#;
+    let (canvas, _) = parse(input);
+    let model = derive(&canvas);
+    assert_eq!(model.tree.parent[&id("c")], id("g"));
+    assert_invariants(&canvas, &model);
+}
+
+/// Area overflow: 4e320 vs 4e400 must not tie at `inf` and fall through
+/// to the document-order tiebreak — the smaller group wins.
+#[test]
+fn redteam_area_overflow_smallest_wins() {
+    let input = r#"{"nodes":[
+        {"id":"b","type":"group","x":-1e160,"y":-1e160,"width":2e160,"height":2e160},
+        {"id":"a","type":"group","x":-1e200,"y":-1e200,"width":2e200,"height":2e200},
+        {"id":"c","type":"text","text":"t","x":-5,"y":-5,"width":10,"height":10}
+    ],"edges":[]}"#;
+    let (canvas, _) = parse(input);
+    let model = derive(&canvas);
+    assert_eq!(model.tree.parent[&id("c")], id("b"));
+    assert_eq!(model.tree.parent[&id("b")], id("a"));
+    assert_invariants(&canvas, &model);
+}
+
+/// "Next free ordinal": generated placeholders skip over a card that is
+/// literally titled "Untitled 2" (Voice Control name uniqueness).
+#[test]
+fn redteam_untitled_ordinal_skips_taken_titles() {
+    let input = r#"{"nodes":[
+        {"id":"b1","type":"text","text":"","x":0,"y":0,"width":10,"height":10},
+        {"id":"lit","type":"text","text":"Untitled 2","x":0,"y":20,"width":10,"height":10},
+        {"id":"b2","type":"text","text":"","x":0,"y":40,"width":10,"height":10}
+    ],"edges":[]}"#;
+    let (canvas, _) = parse(input);
+    let model = derive(&canvas);
+    let titles: Vec<&str> = ["b1", "lit", "b2"]
+        .iter()
+        .map(|n| model.summaries[&id(n)].display_title.as_str())
+        .collect();
+    assert_eq!(titles, ["Untitled 1", "Untitled 2", "Untitled 3"]);
+    // All distinct despite the literal collision candidate.
+    let unique: HashSet<&str> = titles.iter().copied().collect();
+    assert_eq!(unique.len(), 3);
+}
+
+/// Degenerate file paths never produce a bare "› Heading" or empty
+/// title; extensionless basenames are not media.
+#[test]
+fn redteam_degenerate_file_titles() {
+    let input = r##"{"nodes":[
+        {"id":"slash","type":"file","file":"notes/","subpath":"#Head","x":0,"y":0,"width":10,"height":10},
+        {"id":"empty","type":"file","file":"","x":0,"y":20,"width":10,"height":10},
+        {"id":"mov","type":"file","file":"mov","x":0,"y":40,"width":10,"height":10},
+        {"id":"dot","type":"file","file":".png","x":0,"y":60,"width":10,"height":10}
+    ],"edges":[]}"##;
+    let (canvas, _) = parse(input);
+    let model = derive(&canvas);
+    // Path ends in '/': heading alone, no dangling separator.
+    assert_eq!(model.summaries[&id("slash")].display_title, "Head");
+    // Empty path: Untitled fallback.
+    assert!(
+        model.summaries[&id("empty")]
+            .display_title
+            .starts_with("Untitled")
+    );
+    // Extensionless basename literally named "mov" is a file, not video.
+    assert_eq!(model.summaries[&id("mov")].display_title, "mov");
+    assert_eq!(model.summaries[&id("mov")].kind_label, "file");
+    // A dotfile isn't media either.
+    assert_eq!(model.summaries[&id("dot")].kind_label, "file");
+}
+
+/// A self-loop counts as both incoming and outgoing.
+#[test]
+fn redteam_self_edge_counts_both_ways() {
+    let (canvas, _) = parse(
+        r#"{"nodes":[{"id":"a","type":"text","text":"a","x":0,"y":0,"width":10,"height":10}],
+            "edges":[{"id":"self","fromNode":"a","toNode":"a"}]}"#,
+    );
+    let model = derive(&canvas);
+    let s = &model.summaries[&id("a")];
+    assert_eq!((s.in_count, s.out_count, s.connection_count), (1, 1, 1));
+}
+
 // --- Census machinery ----------------------------------------------------
 
 /// Deterministic xorshift* PRNG — reproducible failures, no new deps.
@@ -355,14 +447,18 @@ fn census_scale() -> (u64, usize, usize) {
 }
 
 /// Straight-line re-statement of the t1 containment rule, used as the
-/// oracle against the production derivation.
+/// oracle against the production derivation. Area comparisons go
+/// through `Rect::area_cmp` (the overflow/NaN-robust total order the
+/// red-team pass pinned) so oracle and production agree on semantics
+/// while differing in search structure.
 fn oracle_parent(canvas: &Canvas, idx: usize) -> Option<NodeId> {
+    use std::cmp::Ordering;
     let node = &canvas.nodes[idx];
-    let (cx, cy) = Rect::from_node(node).center();
-    let node_area = Rect::from_node(node).area();
+    let node_rect = Rect::from_node(node);
+    let (cx, cy) = node_rect.center();
     let node_is_group = matches!(node.kind, NodeKind::Group { .. });
 
-    let mut best: Option<(f64, usize)> = None; // (area, doc)
+    let mut best: Option<(Rect, usize)> = None;
     for (j, g) in canvas.nodes.iter().enumerate() {
         if j == idx || !matches!(g.kind, NodeKind::Group { .. }) {
             continue;
@@ -371,22 +467,23 @@ fn oracle_parent(canvas: &Canvas, idx: usize) -> Option<NodeId> {
         if !rect.contains_point_strict(cx, cy) {
             continue;
         }
-        let area = rect.area();
         if node_is_group {
-            let greater = area > node_area || (area == node_area && j > idx);
+            let greater = match Rect::area_cmp(&rect, &node_rect) {
+                Ordering::Greater => true,
+                Ordering::Equal => j > idx,
+                Ordering::Less => false,
+            };
             if !greater {
                 continue;
             }
         }
         best = match best {
-            None => Some((area, j)),
-            Some((ba, bj)) => {
-                if area < ba || (area == ba && j > bj) {
-                    Some((area, j))
-                } else {
-                    Some((ba, bj))
-                }
-            }
+            None => Some((rect, j)),
+            Some((brect, bj)) => match Rect::area_cmp(&rect, &brect) {
+                Ordering::Less => Some((rect, j)),
+                Ordering::Equal if j > bj => Some((rect, j)),
+                _ => Some((brect, bj)),
+            },
         };
     }
     best.map(|(_, j)| canvas.nodes[j].id.clone())

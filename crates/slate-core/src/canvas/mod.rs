@@ -18,7 +18,12 @@
 //!   whose root shape is unusable) degrades to an empty canvas with a
 //!   [`CanvasWarning::ParseFailed`]; callers must treat such a canvas as
 //!   read-only (see [`is_load_degraded`]) — the serializer (#366)
-//!   refuses to write over a degraded load.
+//!   refuses to write over a degraded load. Known limitation: a number
+//!   beyond f64 range (`1e999`) fails JSON parsing entirely, so one
+//!   such value degrades the whole file rather than skipping one entry;
+//!   JS tooling can hand-produce such a file but never `JSON.stringify`
+//!   one (Infinity serializes as `null`). Degraded = read-only, so this
+//!   is a fidelity limit, never data loss.
 //! - **Lossless:** every parsed node/edge retains its complete original
 //!   JSON object (insertion-ordered, `preserve_order`) in `raw`. Unknown
 //!   keys — at root, node, and edge level — ride along verbatim and are
