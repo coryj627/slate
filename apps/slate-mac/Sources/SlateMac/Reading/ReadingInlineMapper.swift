@@ -178,7 +178,7 @@ enum ReadingInlineMapper {
                 target: parts.target, url: url,
                 axLabel: nonEmpty(display, fallback: parts.target))
         case .embed:
-            guard let parts = splitWikiBody(spanText, embed: true) else { return nil }
+            guard let parts = embedParts(fromSpanText: spanText) else { return nil }
             // Alt-text contract (spec §U3-1): alias, else the target's NAME
             // (last path component, anchor stripped) — never empty, so image
             // embeds always carry a non-empty AX label.
@@ -245,6 +245,71 @@ enum ReadingInlineMapper {
             return (target, alias.isEmpty ? nil : alias)
         }
         return (String(inner), nil)
+    }
+
+    /// Divide a confirmed `.embed` span (`![[…]]`) interior into target +
+    /// alias. The ONE home for embed body parsing: the inline embed run
+    /// (`mapRun`'s `.embed` branch) and the block-level detector
+    /// (`blockEmbedTarget(inSlice:)`) both go through here, so `target` — the
+    /// cache-key form (anchors attached, e.g. `Note#Section`) that matches
+    /// `AppState.embedTargetKey` — is derived identically on both paths.
+    static func embedParts(
+        fromSpanText spanText: String
+    ) -> (target: String, alias: String?)? {
+        splitWikiBody(spanText, embed: true)
+    }
+
+    // MARK: - Block-level embed detection
+
+    /// If `slice` is a paragraph that IS a single wikilink embed — nothing but
+    /// one `![[…]]` (surrounding whitespace allowed) — return its cache-key
+    /// target (the form `AppState.embedTargetKey` composes and
+    /// `currentNoteEmbedResolutions` is keyed on). Otherwise `nil`.
+    ///
+    /// Detection uses the SAME Rust span authority the inline pipeline
+    /// consumes (`editorHighlightSpans` composed through `mappableSpans`) —
+    /// never a `"![["` string-prefix check (the no-second-classifier
+    /// invariant). "Block IS one embed" means: exactly one mappable span, of
+    /// kind `.embed`, whose byte range covers every non-whitespace byte of the
+    /// slice. A span suppressed by `mappableSpans` (an embed inside inline
+    /// code / a fence) never survives to be counted, so those correctly fail
+    /// detection and stay literal.
+    ///
+    /// Scope (pinned, #511): only WIKILINK embeds (`.embed` kind) expand in
+    /// place. Markdown image embeds (`![alt](x.png)`) classify as `.image`,
+    /// not `.embed`, so they never reach here and keep their current inline
+    /// behavior — follow-up if in-place markdown-image rendering is wanted.
+    static func blockEmbedTarget(inSlice slice: String) -> String? {
+        let spans = editorHighlightSpans(text: slice) + markdownLinkSpans(text: slice)
+        let mappable = mappableSpans(from: spans)
+        // Exactly one mappable construct, and it must be an embed.
+        guard mappable.count == 1, mappable[0].kind == .embed else { return nil }
+        let span = mappable[0]
+
+        let utf8 = Array(slice.utf8)
+        let start = Int(span.startByte)
+        let end = Int(span.endByte)
+        guard start >= 0, end <= utf8.count, start < end else { return nil }
+
+        // The span must cover every non-whitespace byte: any authored
+        // character outside the embed (before, between, after) makes this a
+        // mid-paragraph embed, which keeps the inline link-run path.
+        for i in 0..<start where !isAsciiWhitespaceByte(utf8[i]) { return nil }
+        for i in end..<utf8.count where !isAsciiWhitespaceByte(utf8[i]) { return nil }
+
+        let spanText = String(decoding: utf8[start..<end], as: UTF8.self)
+        guard let parts = embedParts(fromSpanText: spanText) else { return nil }
+        return parts.target
+    }
+
+    /// Markdown/CommonMark whitespace: space, tab, newline, carriage return,
+    /// form feed, vertical tab. Byte-level test — every one is single-byte in
+    /// UTF-8, so scanning raw bytes can't split a multibyte scalar.
+    private static func isAsciiWhitespaceByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 0x20, 0x09, 0x0A, 0x0D, 0x0C, 0x0B: return true
+        default: return false
+        }
     }
 
     // MARK: - Styling

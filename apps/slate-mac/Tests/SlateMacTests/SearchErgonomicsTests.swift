@@ -83,4 +83,76 @@ final class SearchErgonomicsTests: XCTestCase {
         state.requestSearchOverlay()
         XCTAssertFalse(state.isSearchOpen, "second invocation toggles closed")
     }
+
+    // MARK: - Tag scope (#508)
+
+    /// Closing the overlay must reset a tag scope back to `.vault` — a
+    /// sticky invisible tag filter would silently scope the next ⌘F
+    /// search to a tag the user can't see.
+    func testCloseSearchOverlayResetsTagScopeToVault() throws {
+        let (state, _) = try makeState()
+        state.setSearchScope(.tag(name: "alpha"))
+        XCTAssertEqual(state.searchScope, .tag(name: "alpha"))
+        state.closeSearchOverlay()
+        XCTAssertEqual(state.searchScope, .vault, "tag scope must not survive overlay close")
+    }
+
+    /// The retained-query re-arm (Cmd+F → Esc → Cmd+F) runs under
+    /// `.vault` scope: closing reset the scope, so the retained query
+    /// re-runs vault-wide — the invariant `testReopenWithRetainedQuery…`
+    /// depends on. Guards against the scope reset regressing that flow.
+    func testScopeResetsToVaultBeforeRetainedQueryReArm() throws {
+        let (state, _) = try makeState()
+        state.setSearchScope(.tag(name: "alpha"))
+        state.searchQuery = "kept"
+        state.closeSearchOverlay()
+        XCTAssertEqual(state.searchScope, .vault)
+        XCTAssertEqual(state.searchQuery, "kept", "close still retains the query")
+    }
+
+    /// Empty query under `.tag` scope must reach `.results` (list the
+    /// tag's files), NOT short-circuit to `.idle` the way an empty
+    /// vault-scope query does. Drives the real subject→debounce→FFI
+    /// path against a vault with one tagged and one untagged note.
+    func testEmptyQueryUnderTagScopeReachesResults() async throws {
+        let (state, dir) = try makeState()
+        let vault = dir.appendingPathComponent("vault-tag-empty")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("has an inline #alpha tag\n".utf8)
+            .write(to: vault.appendingPathComponent("tagged.md"))
+        try Data("no tags here\n".utf8)
+            .write(to: vault.appendingPathComponent("plain.md"))
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        func awaitResults(timeoutMs: Int = 3000) async -> [QueryHit]? {
+            for _ in 0..<(timeoutMs / 50) {
+                if case .results(let rows, _) = state.searchState { return rows }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            return nil
+        }
+
+        state.toggleSearchOverlay()
+        // Empty query + tag scope: setSearchScope re-arms the debouncer.
+        state.searchQuery = ""
+        state.setSearchScope(.tag(name: "alpha"))
+        let rows = await awaitResults()
+        let paths = try XCTUnwrap(rows, "tag scope + empty query must reach .results, not .idle")
+            .map { ($0.path as NSString).lastPathComponent }
+        XCTAssertEqual(paths, ["tagged.md"], "only the tagged file is listed")
+
+        // Clearing the scope drops back to vault; an empty vault-scope
+        // query idles.
+        state.clearSearchScope()
+        for _ in 0..<20 {
+            if case .idle = state.searchState { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(state.searchScope, .vault)
+        if case .idle = state.searchState {
+        } else {
+            XCTFail("empty query under vault scope must idle after clearing the tag scope")
+        }
+    }
 }

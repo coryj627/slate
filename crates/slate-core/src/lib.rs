@@ -34,6 +34,7 @@ pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod structural;
+pub mod tags_db;
 pub mod tasks;
 pub mod tasks_db;
 pub mod templates;

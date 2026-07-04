@@ -78,6 +78,28 @@ struct ReadingView: View {
         /// and 0 was correct for the pre-flip whole-file text too.
         var taskLineOffset: Int = 0
 
+        // MARK: Block-level embeds (#511)
+
+        /// Resolved embeds for THIS note, keyed by cache-key form (the exact
+        /// `AppState.currentNoteEmbedResolutions` dict). A block that is one
+        /// `![[…]]` embed looks its target up here to render an `EmbedView`
+        /// card; a missing key means "not resolved yet OR unresolvable in the
+        /// live buffer" — the render state machine (see `embedBlock`) handles
+        /// both from this one dict.
+        var embedResolutions: [String: EmbedResolution] = [:]
+        /// Request async resolution for a cache key the dict lacks. Wired to
+        /// `AppState.requestReadingEmbedResolution`; the view calls it AT MOST
+        /// once per key (a `@State` guard set), so a placeholder that stays
+        /// unresolved can't loop the resolver. `async` so the view can await
+        /// COMPLETION and only then declare the key resolved-empty — the
+        /// pending placeholder holds for exactly the in-flight window rather
+        /// than collapsing to the fallback one frame after the request fires.
+        var onResolveEmbed: (String) async -> Void = { _ in }
+        /// Jump-to-source for a block-level embed card. Wired to
+        /// `AppState.openEmbedTarget` — the SAME routing the EmbedsPanel rows
+        /// and the Cmd+E popover use.
+        var onOpenEmbedSource: (String) -> Void = { _ in }
+
         init(
             mathBlocks: [MathBlock] = [],
             codeBlocks: [CodeBlock] = [],
@@ -86,7 +108,10 @@ struct ReadingView: View {
             tasks: [TaskItem] = [],
             isDocumentDirty: Bool = false,
             onToggleTask: @escaping (TaskItem) -> Void = { _ in },
-            taskLineOffset: Int = 0
+            taskLineOffset: Int = 0,
+            embedResolutions: [String: EmbedResolution] = [:],
+            onResolveEmbed: @escaping (String) async -> Void = { _ in },
+            onOpenEmbedSource: @escaping (String) -> Void = { _ in }
         ) {
             self.mathBlocks = mathBlocks
             self.codeBlocks = codeBlocks
@@ -96,6 +121,9 @@ struct ReadingView: View {
             self.isDocumentDirty = isDocumentDirty
             self.onToggleTask = onToggleTask
             self.taskLineOffset = taskLineOffset
+            self.embedResolutions = embedResolutions
+            self.onResolveEmbed = onResolveEmbed
+            self.onOpenEmbedSource = onOpenEmbedSource
         }
     }
 
@@ -112,6 +140,24 @@ struct ReadingView: View {
     /// SwiftUI re-initializations of this struct. `@State` keeps the box
     /// stable for the lifetime of the mounted view.
     @State private var parseCache = ReadingParseCache()
+
+    /// Cache keys for which `onResolveEmbed` has already fired (#511). A
+    /// block-level embed placeholder requests resolution exactly once per key;
+    /// this guards the re-request loop a bare `.task`/`.onAppear` would create
+    /// when the resolution legitimately never lands (unsaved buffer, broken
+    /// target). Keys are never removed: a re-request would be redundant work,
+    /// and the resolution — once it arrives — flows in through `context`.
+    @State private var requestedEmbedKeys: Set<String> = []
+
+    /// Cache keys whose `onResolveEmbed` call has RETURNED (#511). Split from
+    /// `requestedEmbedKeys` so the state machine can tell "in flight" (show
+    /// the placeholder) from "completed without landing" (fall back to the
+    /// inline run). Marked in a `defer` so a task cancelled at unmount still
+    /// records terminally — though @State is discarded with the view then, so
+    /// the distinction only matters if SwiftUI ever cancels a mounted row's
+    /// task, where a stuck spinner would be strictly worse than an early
+    /// fallback.
+    @State private var completedEmbedKeys: Set<String> = []
 
     init(
         text: String,
@@ -210,8 +256,11 @@ struct ReadingView: View {
             // laziness; >2k-block perf note logged by the cache;
             // virtualization is the recorded U5-4-gated follow-up).
             VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
-                ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { _, block in
-                    blockView(block, lineStarts: parsed.lineStarts)
+                ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
+                    blockView(
+                        block, index: index,
+                        lineStarts: parsed.lineStarts,
+                        tableCells: parsed.tableCells[index])
                 }
             }
             .padding(Tokens.Spacing.lg)
@@ -228,12 +277,25 @@ struct ReadingView: View {
     // MARK: - Block dispatch
 
     @ViewBuilder
-    private func blockView(_ block: ReadingBlock, lineStarts: [Int]) -> some View {
+    private func blockView(
+        _ block: ReadingBlock, index: Int, lineStarts: [Int],
+        tableCells: ReadingTableCells?
+    ) -> some View {
         switch block.kind {
         case .heading(let level):
             headingView(block, level: level)
         case .paragraph:
-            inlineLeaf(block.source)
+            // A paragraph that IS one `![[…]]` embed (block-level) expands to
+            // an EmbedView card; anything else — prose, or an embed WITH
+            // surrounding text (mid-paragraph) — stays the inline text leaf,
+            // where the embed run keeps today's link-run navigate behavior (a
+            // SwiftUI `Text` can't host a card mid-run). Detection is the Rust
+            // span authority, not a string check (see `blockEmbedTarget`).
+            if let embedKey = ReadingInlineMapper.blockEmbedTarget(inSlice: block.source) {
+                embedBlock(key: embedKey, fallbackSlice: block.source)
+            } else {
+                inlineLeaf(block.source)
+            }
         case .listItem(let depth, let ordered, let task):
             if let taskChar = task {
                 taskRow(block, depth: depth, taskChar: taskChar, lineStarts: lineStarts)
@@ -252,13 +314,15 @@ struct ReadingView: View {
         case .diagram(let dialect):
             diagramView(block, dialect: dialect)
         case .table:
-            // Raw-block fallback per spec. The evaluated alternative —
-            // `AccessibleDataGrid` — requires structured columns/rows, so an
-            // honest mapping needs a Rust-side cell segmentation API (a
-            // second table parser in Swift would violate the no-second-
-            // classifier rule). Recorded as the follow-up; the AX label
-            // still announces "table".
-            rawSourceBlock(block.source, axLabel: "Table.")
+            // Cells come from the Rust segmentation API (#510) — the honest
+            // grid, no Swift-side pipe parser (no-second-classifier). On nil
+            // (Rust didn't recognize the slice as a table), fall back to the
+            // raw monospace source, labeled "Table." exactly as before.
+            if let cells = tableCells {
+                tableGrid(cells)
+            } else {
+                rawSourceBlock(block.source, axLabel: "Table.")
+            }
         case .thematicBreak:
             // Decorative: the visual rule carries no content (spec: hidden
             // from AX so VO continuous read flows past it).
@@ -286,6 +350,84 @@ struct ReadingView: View {
             .strikethrough(strikethrough, color: Tokens.ColorRole.textSecondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Block-level embed card (#511) + its render state machine. `key` is the
+    /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, == the
+    /// `AppState.embedTargetKey` the resolutions dict is keyed on).
+    ///
+    /// States, driven by the dict entry plus TWO per-key guard sets
+    /// (`requestedEmbedKeys` = asked, `completedEmbedKeys` = the ask
+    /// RETURNED — split so "in flight" and "came back empty" are distinct):
+    ///
+    ///  1. RESOLVED — the dict has an entry → `EmbedView` renders it. This is
+    ///     the ONE path for BOTH a real resolution (full note / section /
+    ///     block / image) AND `.unresolved` (broken target): EmbedView owns
+    ///     the honest "Unresolved embed: …" render + AX for the latter, so a
+    ///     resolved-but-broken target is never a dead block and never the
+    ///     inline fallback.
+    ///  2. PENDING — no entry, request not yet returned → placeholder row
+    ///     ("Embed, loading"); the request fires exactly once
+    ///     (`requestedEmbedKeys`) and the placeholder holds for the whole
+    ///     in-flight window (gating the fallback on `requestedEmbedKeys`
+    ///     alone would collapse to state 3 one frame after the request
+    ///     fired, flashing the inline run while the resolver was still
+    ///     running).
+    ///  3. RESOLVED-EMPTY — no entry, and the request RETURNED without
+    ///     landing this key (no session — the one path the resolver writes
+    ///     nothing). Deterministic terminal fallback: render the INLINE
+    ///     link-run, so activation still routes through the router's embed
+    ///     branch (announces "unresolved" when the target can't open) —
+    ///     never an infinite spinner.
+    @ViewBuilder
+    private func embedBlock(key: String, fallbackSlice: String) -> some View {
+        if let resolution = context.embedResolutions[key] {
+            EmbedView(
+                resolution: resolution,
+                jumpToSourceAction: { target in context.onOpenEmbedSource(target) },
+                depth: 0
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if completedEmbedKeys.contains(key) {
+            // Resolved-empty terminal: the request completed, the key never
+            // landed — fall back to the inline run so the embed is still
+            // reachable + activation announces unresolved. Never a dead block.
+            inlineLeaf(fallbackSlice)
+        } else {
+            embedPlaceholder(key: key)
+        }
+    }
+
+    /// Pending-resolution placeholder for a block-level embed. Requests the
+    /// resolution exactly once (`requestedEmbedKeys` guard) and records the
+    /// request's RETURN (`completedEmbedKeys`) so `embedBlock` only falls
+    /// back once the resolver has actually had its say. Labeled per the
+    /// house loading-row phrasing so VoiceOver announces the wait rather than
+    /// landing on an unlabeled spinner.
+    private func embedPlaceholder(key: String) -> some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading embed…")
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+        }
+        .padding(.vertical, Tokens.Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Embed, loading.")
+        .task {
+            // Request-once: the guard prevents a re-request loop when the
+            // resolution legitimately never arrives (unsaved buffer / broken
+            // target) — a struct re-init re-runs `.task`, but the @State
+            // guard set survives it, so no fresh request spawns per render.
+            guard !requestedEmbedKeys.contains(key) else { return }
+            requestedEmbedKeys.insert(key)
+            // Terminal even on cancellation: an early fallback beats a
+            // spinner no resolve is coming for.
+            defer { completedEmbedKeys.insert(key) }
+            await context.onResolveEmbed(key)
+        }
     }
 
     private func headingView(_ block: ReadingBlock, level: UInt8) -> some View {
@@ -461,6 +603,46 @@ struct ReadingView: View {
         .accessibilityHint("Wide content scrolls horizontally.")
     }
 
+    /// One body row of a rendered table. `id` is the row's index (rows are
+    /// value-identical when their cells repeat, so a positional id keeps
+    /// `ForEach` stable); `cells` has the same width as the header — Rust
+    /// normalizes ragged rows, so `cell(_:)` never indexes out of range.
+    private struct TableRow: Identifiable {
+        let id: Int
+        let cells: [String]
+
+        /// Belt-and-braces bounds guard: returns "" past the row's width even
+        /// though Rust guarantees width == header count.
+        func cell(_ column: Int) -> String {
+            column >= 0 && column < cells.count ? cells[column] : ""
+        }
+    }
+
+    /// Honest table render (#510): [`AccessibleDataGrid`] backed by the Rust
+    /// cell segmentation — header cells carry `.isHeader`, each body cell
+    /// announces "Header: value", and the summary is a focusable region. An
+    /// empty header cell stays honest (no "Column N" fabrication); the grid's
+    /// per-cell labels use it verbatim.
+    private func tableGrid(_ cells: ReadingTableCells) -> some View {
+        let columns = cells.header.enumerated().map { columnIndex, header in
+            AccessibleDataGrid<TableRow>.Column(header) { row in
+                row.cell(columnIndex)
+            }
+        }
+        let rows = cells.rows.enumerated().map { rowIndex, cellValues in
+            TableRow(id: rowIndex, cells: cellValues)
+        }
+        let columnCount = cells.header.count
+        let summary =
+            "Table: \(rows.count) \(rows.count == 1 ? "row" : "rows"), "
+            + "\(columnCount) \(columnCount == 1 ? "column" : "columns")."
+        return AccessibleDataGrid(
+            columns: columns,
+            rows: rows,
+            summary: summary,
+            accessibilityLabel: "Table")
+    }
+
     // MARK: - Specialized-model matching
 
     /// A pipeline model belongs to a segmented block when its byte offset
@@ -526,6 +708,13 @@ final class ReadingParseCache {
     struct Parsed {
         var blocks: [ReadingBlock]
         var lineStarts: [Int]
+        /// Segmented cells for each `.table` block, keyed by its index in
+        /// `blocks`. Computed EAGERLY here (once per parse), never in `body`
+        /// — the "one parse per toggle" budget forbids per-render FFI. Tables
+        /// are rare, so eager alongside the block walk is bounded and simplest.
+        /// A missing key (Rust returned nil) means the renderer falls back to
+        /// the raw-source block.
+        var tableCells: [Int: ReadingTableCells]
     }
 
     /// Documented perf boundary (spec §U3-1): the eager VStack materializes
@@ -547,9 +736,21 @@ final class ReadingParseCache {
                     + "boundary (%d); virtualization follow-up is measured in U5-4.",
                 blocks.count, Self.perfNoteBlockThreshold)
         }
+        // Eager, once-per-parse table segmentation (#510): the FFI runs here,
+        // not in `body`. Cells come from the SAME Rust parse the block walk
+        // used (no second, Swift-side pipe parser — the no-second-classifier
+        // invariant). A nil result leaves the key absent → raw-block fallback.
+        var tableCells: [Int: ReadingTableCells] = [:]
+        for (index, block) in blocks.enumerated() {
+            guard case .table = block.kind else { continue }
+            if let cells = readingTableCells(source: block.source) {
+                tableCells[index] = cells
+            }
+        }
         let parsed = Parsed(
             blocks: blocks,
-            lineStarts: ReadingBlockSource.lineStartOffsets(of: text))
+            lineStarts: ReadingBlockSource.lineStartOffsets(of: text),
+            tableCells: tableCells)
         cachedText = text
         cached = parsed
         return parsed

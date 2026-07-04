@@ -1459,9 +1459,10 @@ impl From<core::Page<core::UnresolvedLink>> for UnresolvedLinkPage {
     }
 }
 
-/// Scope of a `full_text_search` call. `File` and `Tag` are
-/// reserved for later milestones; today they return
-/// `VaultError::Cancelled`.
+/// Scope of a `full_text_search` call. `Vault`, `Folder`, and `Tag`
+/// are live; `File` (single-file find-in-page) is reserved and
+/// returns `VaultError::Unsupported`. `Tag` also lists all tagged
+/// files on an empty query — see `slate_core::SearchScope::Tag`.
 #[derive(uniffi::Enum)]
 pub enum SearchScope {
     Vault,
@@ -2851,6 +2852,34 @@ pub fn reading_blocks_source(source: String) -> Vec<ReadingBlock> {
         .into_iter()
         .map(Into::into)
         .collect()
+}
+
+/// FFI mirror of [`core::reading::ReadingTableCells`] (#510). `rows` is a
+/// list of rows, each a list of cell strings — uniffi carries `Vec<Vec<String>>`
+/// directly, so no row wrapper record is needed. Every row equals `header.len()`
+/// (Rust normalizes ragged rows), so the Swift grid indexes cells safely.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ReadingTableCells {
+    pub header: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+impl From<core::reading::ReadingTableCells> for ReadingTableCells {
+    fn from(c: core::reading::ReadingTableCells) -> Self {
+        Self {
+            header: c.header,
+            rows: c.rows,
+        }
+    }
+}
+
+/// Segment a GFM table's `source` slice into header + body cells — pure, no
+/// IO (#510). Input is exactly what [`ReadingBlock::source`] carries for a
+/// `Table` block; `None` when the slice is not a table (the Swift side falls
+/// back to the raw-source block). Cells are the flattened inline text.
+#[uniffi::export]
+pub fn reading_table_cells(source: String) -> Option<ReadingTableCells> {
+    core::reading::reading_table_cells(&source).map(Into::into)
 }
 
 // =====================================================================

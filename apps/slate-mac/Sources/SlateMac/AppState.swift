@@ -1460,6 +1460,14 @@ final class AppState: ObservableObject {
     /// edit feeds the debouncer; the actual search fires ~150 ms
     /// after the user stops typing.
     @Published var searchQuery: String = ""
+    /// Active search scope. `.vault` is the ⌘F default; the reading
+    /// view's tag activation sets `.tag(name:)` (#508) so the query
+    /// runs against the `file_tags` dimension. Reset to `.vault` on
+    /// overlay close / vault close (in `closeSearchOverlay()`) — a
+    /// sticky invisible tag filter would silently corrupt the next
+    /// ⌘F search. `private(set)`: callers mutate via `setSearchScope`
+    /// / `clearSearchScope` so scope changes always re-arm the search.
+    @Published private(set) var searchScope: SearchScope = .vault
     /// Current state of the search overlay's results panel.
     @Published private(set) var searchState: SearchState = .idle
     /// Pre-rendered audio summary for the live region. Mirrors
@@ -1957,12 +1965,34 @@ final class AppState: ObservableObject {
 
     /// Close the overlay and cancel any in-flight search. Keep
     /// `searchQuery` so a Cmd+F → Esc → Cmd+F round trip lands
-    /// back where the user was.
+    /// back where the user was — but RESET `searchScope` to `.vault`:
+    /// a tag scope set by reading-view activation is a transient,
+    /// invisible filter, and leaving it armed would silently scope the
+    /// next ⌘F search to a tag the user can't see. `closeVault()`
+    /// routes through here too, so this covers vault close as well.
     func closeSearchOverlay() {
         isSearchOpen = false
         cancelInFlightSearch()
+        searchScope = .vault
         searchState = .idle
         searchSummary = ""
+    }
+
+    /// Enter tag scope and re-arm the search. Called by the reading
+    /// view's tag activation (#508): sets `.tag(name:)` and pushes the
+    /// (typically empty) query through the debouncer, which under tag
+    /// scope lists the tag's files rather than idling.
+    func setSearchScope(_ scope: SearchScope) {
+        searchScope = scope
+        bumpSearchQuery()
+    }
+
+    /// Drop back to vault scope (the dismissible chip's clear button)
+    /// and re-arm with the current query so the results refresh
+    /// immediately under the wider scope.
+    func clearSearchScope() {
+        searchScope = .vault
+        bumpSearchQuery()
     }
 
     /// Cancel any currently-running search task. Safe to call when
@@ -1978,7 +2008,16 @@ final class AppState: ObservableObject {
     /// shouldn't invoke directly.
     private func runSearch(query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty {
+        // Empty query → idle, EXCEPT under `.tag` scope: there an empty
+        // query is meaningful (list every file with the tag), so it must
+        // reach the FFI call instead of short-circuiting. `.vault` /
+        // `.folder` keep their empty → idle behavior. Match on the scope
+        // cases so a future scope can opt in explicitly.
+        let scopeListsOnEmpty: Bool = {
+            if case .tag = searchScope { return true }
+            return false
+        }()
+        if trimmed.isEmpty && !scopeListsOnEmpty {
             cancelInFlightSearch()
             searchState = .idle
             searchSummary = ""
@@ -1995,6 +2034,10 @@ final class AppState: ObservableObject {
         searchState = .searching
         let cancel = CancelToken()
         searchCancelToken = cancel
+        // Snapshot the scope for the detached task — reading it off
+        // `self` across the actor hop would race a concurrent scope
+        // change (e.g. the user clearing the chip mid-flight).
+        let scope = searchScope
         // Explicit `@MainActor` on the Task body so the
         // post-await @Published writes are guaranteed to run on
         // the main thread (Codoki PR 86 callout). Without this the
@@ -2007,7 +2050,7 @@ final class AppState: ObservableObject {
                     do {
                         let rs = try session.fullTextSearch(
                             query: trimmed,
-                            scope: .vault,
+                            scope: scope,
                             cancel: cancel
                         )
                         return .success(rs)
@@ -3350,6 +3393,54 @@ final class AppState: ObservableObject {
         currentNoteEmbedResolutions = resolutions
         embedsLoadError = nil
         isLoadingEmbeds = false
+    }
+
+    /// Resolve ONE embed cache key against the current note and merge it into
+    /// `currentNoteEmbedResolutions` (#511, block-level reading embeds).
+    ///
+    /// The batch resolver (`loadCurrentNoteEmbedResolutions`) only sees embeds
+    /// in the SAVED-state `currentOutgoingLinks`; reading mode renders the
+    /// LIVE buffer, so a just-typed `![[…]]` can be visible with no dict
+    /// entry. The reading view's block-embed placeholder calls this once per
+    /// missing key to fill that gap. The `target` string is already the
+    /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, ==
+    /// `embedTargetKey`), so it is BOTH the resolver input and the dict key —
+    /// no re-derivation.
+    ///
+    /// Terminal by design: whatever the resolver returns (including a
+    /// synthesized `.unresolved` on a broken target or FFI failure) is written
+    /// under `target`, so the placeholder collapses to a real `EmbedView`
+    /// render and can't spin forever. When there is no session — the one path
+    /// that writes nothing — the reading view's own request-once guard keeps
+    /// the key marked, and its state machine falls back to the inline link-run
+    /// (deterministic, no re-request).
+    func requestReadingEmbedResolution(target: String) async {
+        guard let session = currentSession, let path = selectedFilePath else { return }
+        // Already landed (a racing batch, or a duplicate request the view's
+        // guard didn't cover across a re-init): don't re-resolve.
+        if currentNoteEmbedResolutions[target] != nil { return }
+
+        let resolution: EmbedResolution =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return try session.resolveEmbed(
+                        hostPath: path, target: target, alt: nil)
+                } catch let error as VaultError {
+                    return .unresolved(
+                        reason: .readError(message: Self.humanReadableVaultError(error)))
+                } catch {
+                    return .unresolved(
+                        reason: .readError(message: error.localizedDescription))
+                }
+            }
+            .value
+
+        // Drop the write if the user navigated away mid-resolve — same
+        // stale-guard the batch path uses.
+        guard selectedFilePath == path else { return }
+        // Merge (never replace): the batch may have populated other keys while
+        // this single resolve was in flight.
+        currentNoteEmbedResolutions[target] = resolution
     }
 
     // MARK: - Content pipelines (#223)
