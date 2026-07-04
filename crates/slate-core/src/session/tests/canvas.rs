@@ -524,3 +524,63 @@ fn canvas_apply_refuses_degraded_canvas() {
     // The broken file is untouched.
     assert_eq!(session.read_text("bad.canvas").unwrap(), "not json");
 }
+
+#[test]
+fn canvas_apply_journals_named_semantic_entries() {
+    use crate::canvas::apply::{CanvasAction, CanvasOp, action_from_json};
+
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    let result = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "move 'Unfiled thought'".into(),
+                ops: vec![CanvasOp::UpdateNodeGeometry {
+                    id: "card-loose".into(),
+                    x: 20.0,
+                    y: 480.0,
+                    width: 200.0,
+                    height: 100.0,
+                }],
+            },
+        )
+        .unwrap();
+
+    // The per-file journal now holds BOTH the byte-level text entry
+    // (from the save path) and the semantic CanvasApply record.
+    let conn = session.conn.lock().unwrap();
+    let file_id: i64 = conn
+        .query_row(
+            "SELECT id FROM files WHERE path = 'board.canvas'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    let entries = crate::oplog::read_oplog(&session.config.cache_dir, file_id).unwrap();
+    let semantic: Vec<_> = entries
+        .iter()
+        .filter(|e| e.op_kind == crate::oplog::OpKind::CanvasApply)
+        .collect();
+    assert_eq!(
+        semantic.len(),
+        1,
+        "one committed action = one journal entry"
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&semantic[0].payload_bytes).unwrap();
+    assert_eq!(
+        payload.get("name").and_then(|v| v.as_str()),
+        Some("move 'Unfiled thought'")
+    );
+    // The stored inverse decodes and matches what the API returned.
+    let stored_inverse = action_from_json(payload.get("inverse").unwrap()).unwrap();
+    assert_eq!(stored_inverse, result.inverse);
+    assert_eq!(semantic[0].content_hash_after, result.new_content_hash);
+
+    // Text replay (Milestone O reconstruct) ignores semantic records.
+    let replayed = crate::oplog::reconstruct_at_tail(&entries).unwrap();
+    assert_eq!(replayed, session.read_text("board.canvas").unwrap());
+}

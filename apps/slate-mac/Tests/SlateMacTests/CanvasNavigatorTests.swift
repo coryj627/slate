@@ -249,3 +249,127 @@ final class CanvasNavigatorTests: XCTestCase {
             }, "rejection names the active mode")
     }
 }
+
+/// #372: session-scoped undo/redo stacks over canvas_apply inverses,
+/// responder routing, and conflict-safe stale undo.
+@MainActor
+extension CanvasNavigatorTests {
+    func testUndoRedoRoundTripsDiskBytes() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        // Normalize once: the first save canonicalizes the fixture's
+        // foreign formatting (documented #366 behavior). One apply+undo
+        // cycle leaves the canonical baseline on disk; the assertions
+        // below are then byte-exact.
+        _ = state.canvasApply(
+            CanvasAction(
+                name: "normalize",
+                ops: [.setNodeColor(id: "a", color: "1")]),
+            to: doc)
+        state.canvasUndo()
+        doc.undoStack = []
+        doc.redoStack = []
+        let before = try XCTUnwrap(try? state.currentSession?.readText(path: "nav.canvas"))
+
+        let applied = state.canvasApply(
+            CanvasAction(
+                name: "create card",
+                ops: [
+                    .createNode(
+                        id: "u1",
+                        content: .text(text: "Undo me"),
+                        x: 0, y: 700, width: 200, height: 100, color: nil)
+                ]),
+            to: doc)
+        XCTAssertTrue(applied)
+        let mutated = try XCTUnwrap(try? state.currentSession?.readText(path: "nav.canvas"))
+        XCTAssertNotEqual(before, mutated)
+        XCTAssertEqual(doc.undoStack.map(\.name), ["create card"])
+        XCTAssertTrue(doc.outline.contains { $0.nodeId == "u1" }, "document refreshed")
+
+        // Undo: disk returns to the exact prior bytes; redo stack fills.
+        posted = []
+        state.canvasUndo()
+        XCTAssertEqual(try? state.currentSession?.readText(path: "nav.canvas"), before)
+        XCTAssertTrue(doc.undoStack.isEmpty)
+        XCTAssertEqual(doc.redoStack.map(\.name), ["create card"])
+        XCTAssertFalse(doc.outline.contains { $0.nodeId == "u1" })
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Undid: create card"), "\(posted)")
+
+        // Redo restores the mutation byte-for-byte.
+        posted = []
+        state.canvasRedo()
+        XCTAssertEqual(try? state.currentSession?.readText(path: "nav.canvas"), mutated)
+        XCTAssertEqual(doc.undoStack.map(\.name), ["create card"])
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Redid: create card"))
+
+        // A fresh action clears redo.
+        _ = state.canvasApply(
+            CanvasAction(
+                name: "recolor",
+                ops: [.setNodeColor(id: "a", color: "3")]),
+            to: doc)
+        XCTAssertTrue(doc.redoStack.isEmpty, "new action clears redo")
+        XCTAssertEqual(doc.undoStack.map(\.name), ["create card", "recolor"])
+    }
+
+    func testUndoRoutingTargetsCanvasOnlyOnCanvasTabs() async throws {
+        let state = try await makeState()
+        XCTAssertTrue(state.undoTargetsCanvas, "canvas tab active → canvas stack")
+        // A note tab takes the responder chain.
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        try Data("# n".utf8).write(to: vault.appendingPathComponent("n.md"))
+        _ = try state.currentSession?.scanInitial(cancel: CancelToken())
+        state.openFile("n.md", target: .newTab)
+        await state.noteLoadTask?.value
+        XCTAssertFalse(state.undoTargetsCanvas, "note tab active → responder chain")
+    }
+
+    func testStaleUndoAfterExternalChangeIsBlockedNotBlindApplied() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        _ = state.canvasApply(
+            CanvasAction(
+                name: "recolor", ops: [.setNodeColor(id: "a", color: "5")]),
+            to: doc)
+        XCTAssertEqual(doc.undoStack.count, 1)
+
+        // External writer changes the file behind our back.
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        try Data("{\"nodes\":[],\"edges\":[]}".utf8)
+            .write(to: vault.appendingPathComponent("nav.canvas"))
+
+        posted = []
+        state.canvasUndo()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.contains("Undo blocked") },
+            "conflict surfaces, never a blind overwrite: \(posted)")
+        XCTAssertEqual(doc.undoStack.count, 1, "the entry is retained for retry")
+        // The external content is untouched.
+        XCTAssertEqual(
+            try? state.currentSession?.readText(path: "nav.canvas"),
+            "{\"nodes\":[],\"edges\":[]}")
+    }
+
+    func testUndoStacksAreSessionScopedNotPersisted() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        _ = state.canvasApply(
+            CanvasAction(name: "recolor", ops: [.setNodeColor(id: "a", color: "2")]),
+            to: doc)
+        XCTAssertEqual(doc.undoStack.count, 1)
+
+        // Simulate reopen: releasing and recreating the document (what
+        // a restart does) starts with empty stacks; the journal keeps
+        // the durable record (backend test pins that half).
+        state.invalidateCanvasDocument(path: "nav.canvas")
+        state.openFile("nav.canvas", target: .currentTab)
+        let fresh = try XCTUnwrap(state.activeCanvasDocument)
+        XCTAssertTrue(fresh.undoStack.isEmpty)
+        XCTAssertTrue(fresh.redoStack.isEmpty)
+    }
+}

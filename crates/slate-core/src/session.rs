@@ -5363,7 +5363,27 @@ impl VaultSession {
         drop(conn);
         state.canvas = working;
         state.model = model;
+        let hash_before = state.content_hash.clone();
         state.content_hash = report.new_content_hash.clone();
+
+        // Semantic journal entry (#372): named action + inverse beside
+        // the byte-level text entry the save just wrote. Best-effort,
+        // same discipline as append_save_to_oplog — a logging hiccup
+        // must never fail the user's committed action.
+        let payload = serde_json::json!({
+            "name": action.name,
+            "action": crate::canvas::apply::action_to_json(&action),
+            "inverse": crate::canvas::apply::action_to_json(&inverse),
+        });
+        let entry = crate::oplog::OpLogEntry {
+            timestamp_ms: now_ms(),
+            user_actor_id: self.config.user_actor_id.clone(),
+            op_kind: crate::oplog::OpKind::CanvasApply,
+            content_hash_before: hash_before,
+            content_hash_after: report.new_content_hash.clone(),
+            payload_bytes: payload.to_string().into_bytes(),
+        };
+        let _ = crate::oplog::append_entry(&self.config.cache_dir, state.file_id, &entry);
 
         Ok(CanvasApplyResult {
             new_content_hash: report.new_content_hash,

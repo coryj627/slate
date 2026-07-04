@@ -251,6 +251,12 @@ final class SlateCommandsTests: XCTestCase {
         // palette would be weird UX, and toggling-to-close
         // duplicates the Esc dismissal already wired in #313.
         "⇧⌘P",
+        // #372: the system Undo/Redo pair. The menu owns the chords
+        // and routes them by focus (canvas stack vs responder chain);
+        // duplicating "Undo" as a palette row would shadow the
+        // context-dependence (which stack fires depends on focus, and
+        // the palette steals focus).
+        "⌘Z", "⇧⌘Z",
         // TemplatePromptSheet.swift's "commit" button binding.
         // In-sheet submission action, structurally identical to a
         // global chord but scoped to the sheet's responder chain
