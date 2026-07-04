@@ -20,6 +20,8 @@ Obsidian has had open screen-reader accessibility issues for [5+ years](https://
 
 The full justification — including a red-team review of the original Flutter-based plan, the decision to abandon webview-based UI stacks for stability reasons, the engagement strategy with the math accessibility community, and concrete release-gate performance targets — is in [`docs/plans/`](docs/plans/).
 
+End-user feature guides live in [`docs/help/`](docs/help/) (first entry: [Canvas](docs/help/canvas.md), drafted with Milestone T's specs).
+
 ## Repository layout
 
 ```
