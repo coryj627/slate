@@ -44,6 +44,10 @@ pub enum CommandSection {
     Tasks = 5,
     Settings = 6,
     Plugins = 7,
+    /// Canvas commands (Milestone T, #369 — program rule R1: every
+    /// canvas action is a registry command; the palette is always a
+    /// path). Registered by the canvas container and its surfaces.
+    Canvas = 8,
 }
 
 /// Metadata for a registered command. The action itself lives in

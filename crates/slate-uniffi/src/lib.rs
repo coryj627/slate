@@ -3232,6 +3232,8 @@ pub enum CommandSection {
     Tasks,
     Settings,
     Plugins,
+    /// Canvas commands (Milestone T, #369).
+    Canvas,
 }
 
 impl From<core::CommandSection> for CommandSection {
@@ -3245,6 +3247,7 @@ impl From<core::CommandSection> for CommandSection {
             core::CommandSection::Tasks => Self::Tasks,
             core::CommandSection::Settings => Self::Settings,
             core::CommandSection::Plugins => Self::Plugins,
+            core::CommandSection::Canvas => Self::Canvas,
         }
     }
 }
@@ -3260,6 +3263,7 @@ impl From<CommandSection> for core::CommandSection {
             CommandSection::Tasks => Self::Tasks,
             CommandSection::Settings => Self::Settings,
             CommandSection::Plugins => Self::Plugins,
+            CommandSection::Canvas => Self::Canvas,
         }
     }
 }
