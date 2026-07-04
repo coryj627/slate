@@ -498,3 +498,95 @@ extension CanvasNavigatorTests {
         XCTAssertNil(doc.outline.first { $0.nodeId == "g1" }?.colorName)
     }
 }
+
+/// #522: structural placement — proximity picker ordering, engine
+/// geometry, rigid-unit marked-set moves, align overlap refusal.
+@MainActor
+extension CanvasNavigatorTests {
+    func testPickerCandidatesAreProximitySortedWithGrammarLabels() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        // Anchor on 'a' (center 100,50): the Zone frame's center
+        // (210,130) is nearest, then Beta (320,50), then Gamma, Delta.
+        doc.selection.selected = "a"
+        let picker = CanvasCardPicker(
+            document: doc, purpose: .placeBelow, excluded: ["a"]
+        ) { _ in }
+        let ids = picker.candidates.map(\.id)
+        XCTAssertEqual(ids, ["g1", "b", "c", "d"], "nearest first: \(ids)")
+        XCTAssertTrue(
+            picker.candidates.allSatisfy { !$0.label.isEmpty })
+        let bLabel = picker.candidates.first { $0.id == "b" }?.label
+        XCTAssertEqual(bLabel, "Text card \"Beta\", in Zone")
+    }
+
+    func testPlaceBelowMovesViaEngineAndAnnounces() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = "c"  // move Gamma below Delta
+        posted = []
+        state.canvasPlaceRelative(target: "d", direction: .below)
+        state.canvasAnnouncer.flushForTests()
+
+        let moved = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "c" })
+        XCTAssertGreaterThanOrEqual(moved.y, 140 + 100 + 40, "below Delta with the gap")
+        XCTAssertEqual(moved.x.truncatingRemainder(dividingBy: 20), 0, "grid-aligned")
+        XCTAssertTrue(
+            posted.contains("Moved \"Gamma\" below \"Delta\"."), "\(posted)")
+        // One undo restores the old spot.
+        XCTAssertEqual(doc.undoStack.last?.name, "move \"Gamma\"")
+    }
+
+    func testMarkedSetPlacesAsRigidUnitWithOneUndoAndOneSummary() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        // Mark a (0,0) and b (220,0): offsets must survive the move.
+        doc.selection.marked = ["a", "b"]
+        doc.selection.selected = "a"
+        posted = []
+        state.canvasPlaceRelative(target: "d", direction: .below)
+        state.canvasAnnouncer.flushForTests()
+
+        let a = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "a" })
+        let b = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "b" })
+        XCTAssertEqual(b.x - a.x, 220, "pairwise offsets preserved exactly")
+        XCTAssertEqual(b.y - a.y, 0)
+        XCTAssertGreaterThanOrEqual(a.y, 240, "the unit sits below Delta")
+        // One summary, one undo entry for the whole unit.
+        XCTAssertEqual(posted.filter { $0.hasPrefix("Moved 2 cards") }.count, 1, "\(posted)")
+        XCTAssertEqual(doc.undoStack.last?.name, "move 2 cards")
+        let undoCount = doc.undoStack.count
+        state.canvasUndo()
+        XCTAssertEqual(doc.undoStack.count, undoCount - 1)
+        let aBack = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "a" })
+        XCTAssertEqual(aBack.x, 0)
+        XCTAssertEqual(aBack.y, 0)
+    }
+
+    func testAlignRefusesOverlapAndAlignsWhenClear() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        // Aligning Beta (220,0) with Alpha (0,0) keeps y=0 — no move
+        // needed but legal (no overlap at its own x).
+        doc.selection.selected = "d"  // Delta (600,140) → align with c (600,0)
+        posted = []
+        state.canvasAlignWith(target: "c")
+        state.canvasAnnouncer.flushForTests()
+        // d at (600, 0) would overlap c exactly → refused.
+        XCTAssertTrue(
+            posted.contains { $0.contains("would overlap") }, "\(posted)")
+        let d = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(d.y, 140, "refused align leaves geometry untouched")
+
+        // A clear align: Beta (220,0) aligns with Delta's row (y=140)
+        // — (220,140) collides with nothing.
+        doc.selection.selected = "b"
+        posted = []
+        state.canvasAlignWith(target: "d")
+        state.canvasAnnouncer.flushForTests()
+        let aligned = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "b" })
+        XCTAssertEqual(aligned.y, 140, "aligned tops with Delta")
+        XCTAssertEqual(aligned.x, 220, "x untouched by align")
+        XCTAssertTrue(posted.contains("Aligned \"Beta\" with \"Delta\"."), "\(posted)")
+    }
+}

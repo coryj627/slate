@@ -67,6 +67,11 @@ enum SlateCommandID {
     static let canvasSetColor = "slate.canvas.setColor"
     static let canvasClearColor = "slate.canvas.clearColor"
     static let newCanvas = "slate.file.newCanvas"
+    static let canvasPlaceBelow = "slate.canvas.placeBelow"
+    static let canvasPlaceRightOf = "slate.canvas.placeRightOf"
+    static let canvasPlaceAbove = "slate.canvas.placeAbove"
+    static let canvasPlaceLeftOf = "slate.canvas.placeLeftOf"
+    static let canvasAlignWith = "slate.canvas.alignWith"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -154,6 +159,11 @@ enum SlateCommandID {
         canvasSetColor,
         canvasClearColor,
         newCanvas,
+        canvasPlaceBelow,
+        canvasPlaceRightOf,
+        canvasPlaceAbove,
+        canvasPlaceLeftOf,
+        canvasAlignWith,
         newTab,
         closeTab,
         nextTab,
@@ -462,6 +472,44 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Remove the selected card's color."
     ) { [weak appState] in appState?.canvasSetColor(preset: nil) }
+
+    // Structural placement (#522): spatial arrangement with zero
+    // coordinates — the picker names a reference card, the engine
+    // computes the slot. Marked sets move as a rigid unit.
+    register(
+        SlateCommandID.canvasPlaceBelow,
+        label: "Canvas: Place Below…",
+        section: .canvas,
+        hint: "Move the selected card (or the marked set) just below a card you pick."
+    ) { [weak appState] in appState?.canvasOpenCardPicker(.placeBelow) }
+
+    register(
+        SlateCommandID.canvasPlaceRightOf,
+        label: "Canvas: Place Right Of…",
+        section: .canvas,
+        hint: "Move the selection just right of a card you pick."
+    ) { [weak appState] in appState?.canvasOpenCardPicker(.placeRightOf) }
+
+    register(
+        SlateCommandID.canvasPlaceAbove,
+        label: "Canvas: Place Above…",
+        section: .canvas,
+        hint: "Move the selection just above a card you pick."
+    ) { [weak appState] in appState?.canvasOpenCardPicker(.placeAbove) }
+
+    register(
+        SlateCommandID.canvasPlaceLeftOf,
+        label: "Canvas: Place Left Of…",
+        section: .canvas,
+        hint: "Move the selection just left of a card you pick."
+    ) { [weak appState] in appState?.canvasOpenCardPicker(.placeLeftOf) }
+
+    register(
+        SlateCommandID.canvasAlignWith,
+        label: "Canvas: Align With…",
+        section: .canvas,
+        hint: "Align the selected card's top edge with a card you pick. Overlaps are refused, never silent."
+    ) { [weak appState] in appState?.canvasOpenCardPicker(.alignWith) }
 
     register(
         SlateCommandID.newCanvas,
