@@ -66,7 +66,12 @@ yaml-rust2 = "0.11"
 # serde_json round-trips PropertyValue through value_text in the
 # properties table. Used for both write (serialize) and read
 # (deserialize using the row's value_kind tag to pick the variant).
-serde_json = "1"
+# `preserve_order` serves the canvas parser/serializer (Milestone T):
+# unknown JSON-Canvas fields must round-trip with their original key
+# order. It swaps serde_json::Map's backing to an insertion-ordered
+# IndexMap crate-wide; nothing in the tree relies on the old
+# alphabetical iteration order.
+serde_json = { version = "1", features = ["preserve_order"] }
 # chrono powers `{{date}}` / `{{time}}` / `{{date:FMT}}` / `{{time:FMT}}`
 # substitution in the templates engine. `default-features = false`
 # drops the system-clock plumbing (`Utc::now`, `Local`) — templates
