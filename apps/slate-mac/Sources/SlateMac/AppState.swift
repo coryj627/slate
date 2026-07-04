@@ -168,6 +168,10 @@ struct EmbedPreview: Equatable {
 enum PropertyEditAction: Equatable {
     case set(PropertyValue)
     case delete
+    /// U3-4 (#468): replace the WHOLE frontmatter source (the widget's
+    /// show-source Apply). Rides the same edit/conflict machinery as the
+    /// per-key actions — one conflict alert flow, one resolution surface.
+    case setSource(String)
 }
 
 /// Per-incident snapshot for the property-edit conflict alert.
@@ -5413,6 +5417,55 @@ final class AppState: ObservableObject {
         return task
     }
 
+    /// U3-4 (#468): commit the show-source editor's YAML draft — the
+    /// whole frontmatter block replaced through `set_frontmatter_source`
+    /// (YAML validated Rust-side FIRST; malformed input writes nothing).
+    /// Rides the property-edit machinery (`.setSource` action): same
+    /// in-flight guard, same WriteConflict alert + resolutions, and the
+    /// stage-A success refresh (fmSource + offsets + hash + rows).
+    @discardableResult
+    func applyPropertiesSource(_ draft: String) -> Task<Void, Never>? {
+        guard !isEditingProperty else { return nil }
+        guard let session = currentSession, let path = loadedFilePath else { return nil }
+        isEditingProperty = true
+        propertyEditError = nil
+        propertiesSourceError = nil
+        let expected = currentNoteContentHash
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.performPropertyEdit(
+                session: session,
+                path: path,
+                key: "",
+                action: .setSource(draft),
+                expectedHash: expected
+            )
+            return
+        }
+        propertyEditTask = task
+        return task
+    }
+
+    /// ⌘⇧D / palette: ask the widget to flip fields ⇄ source. View state
+    /// (draft, mode) lives in the widget; AppState can only signal — the
+    /// U4-4 request-token pattern. No-ops without a renderable note.
+    @Published private(set) var propertiesSourceToggleRequest: Int = 0
+
+    func togglePropertiesSourceCommand() {
+        guard loadedFilePath != nil, noteLoadError == nil else { return }
+        propertiesSourceToggleRequest &+= 1
+    }
+
+    /// Inline error for the show-source editor (U3-4): the Rust
+    /// MalformedFrontmatter line/column message, or nil. Cleared on every
+    /// apply attempt and on success — the draft is NEVER touched by the
+    /// error path (non-destructive, DoD §F).
+    @Published private(set) var propertiesSourceError: String?
+
+    /// Bumped on every successful `.setSource` commit — the widget flips
+    /// back to the fields view on this edge (the row list re-read from
+    /// disk state is the round-trip guarantee: no client-side YAML parse).
+    @Published private(set) var propertiesSourceCommitted: Int = 0
+
     /// Remove a frontmatter property. Symmetric to `setProperty`:
     /// same conflict path, same refresh on success.
     @discardableResult
@@ -5465,6 +5518,16 @@ final class AppState: ObservableObject {
                         expectedContentHash: expectedHash
                     )
                     return .success(report)
+                case .setSource(let fmSource):
+                    // Validates YAML first (MalformedFrontmatter, nothing
+                    // written), then read-current-body + compose + save —
+                    // all Rust-side (set_frontmatter_source, #469).
+                    let report = try session.setFrontmatterSource(
+                        path: path,
+                        fmSource: fmSource,
+                        expectedContentHash: expectedHash
+                    )
+                    return .success(report)
                 }
             } catch let error as VaultError {
                 return .failure(error)
@@ -5496,10 +5559,16 @@ final class AppState: ObservableObject {
             // properties — reusing it keeps the panel coherent
             // without a second round-trip.
             await loadCurrentLinks(path: path)
-            postAccessibilityAnnouncement(
-                "Property \(key) \(action == .delete ? "deleted" : "updated").",
-                priority: .medium
-            )
+            if case .setSource = action {
+                propertiesSourceError = nil
+                propertiesSourceCommitted &+= 1
+                postAccessibilityAnnouncement("Properties updated.", priority: .medium)
+            } else {
+                postAccessibilityAnnouncement(
+                    "Property \(key) \(action == .delete ? "deleted" : "updated").",
+                    priority: .medium
+                )
+            }
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
             currentPropertyEditConflict = PropertyEditConflict(
                 path: path,
@@ -5514,11 +5583,23 @@ final class AppState: ObservableObject {
                 priority: .medium
             )
         case .failure(let error):
-            propertyEditError = humanReadable(error)
-            postAccessibilityAnnouncement(
-                "Property edit failed: \(propertyEditError ?? "")",
-                priority: .high
-            )
+            if case .setSource = action,
+                case .MalformedFrontmatter(_, let reason) = error
+            {
+                // U3-4: inline, specific, non-destructive — the draft stays
+                // in the editor, focus stays put, nothing was written.
+                propertiesSourceError = reason
+                postAccessibilityAnnouncement(
+                    "Properties source not applied: \(reason)",
+                    priority: .high
+                )
+            } else {
+                propertyEditError = humanReadable(error)
+                postAccessibilityAnnouncement(
+                    "Property edit failed: \(propertyEditError ?? "")",
+                    priority: .high
+                )
+            }
         }
         isEditingProperty = false
     }

@@ -82,6 +82,9 @@ enum SlateSymbol: CaseIterable {
     /// (same metaphor, same glyph — the DoD §B consistency rule); the two
     /// roles stay distinct so their labels differ ("Tasks" vs "Tasks Review").
     case tasksLeaf
+    /// Show-source YAML toggle in the properties widget header (U3-4,
+    /// #468). `v7 == fallback` (curlybraces exists on the macOS 15 floor).
+    case showSource
     /// Bottom-left utility rail roles (U4-3, #472). Each renders in the
     /// `SidebarUtilityBar` as a labeled glyph; `v7 == fallback` (all three
     /// glyphs exist on the macOS 15 floor). Per the u4_spec SlateSymbol table.
@@ -149,6 +152,7 @@ enum SlateSymbol: CaseIterable {
         case .embed: return "Embed"
         case .diagram: return "Diagram"
         case .tasksLeaf: return "Tasks"
+        case .showSource: return "Show source"
         case .settings: return "Settings"
         case .help: return "Help"
         case .vaultSwitch: return "Switch vault"
@@ -209,6 +213,7 @@ enum SlateSymbol: CaseIterable {
                     "point.3.connected.trianglepath.dotted")
         // Shares `.tasksReview`'s glyph deliberately (DoD §B).
         case .tasksLeaf: return ("checklist", "checklist")
+        case .showSource: return ("curlybraces", "curlybraces")
         case .settings: return ("gearshape", "gearshape")
         case .help: return ("questionmark.circle", "questionmark.circle")
         case .vaultSwitch: return ("externaldrive", "externaldrive")

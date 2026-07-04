@@ -36,13 +36,30 @@ struct NotePropertiesHeader: View {
     /// See the type doc — hugs small content, scrolls long lists.
     private static let rowAreaMaxHeight: CGFloat = 280
 
+    // U3-4 (#468): show-source state is view-local — the DRAFT is
+    // uncommitted user input and must never ride a `@Published`
+    // (#448 discipline; commits go through `applyPropertiesSource`).
+    @State private var isSourceMode = false
+    @State private var sourceDraft = ""
+    /// Fields-switch guard: a dirty draft prompts before leaving source
+    /// mode (Apply / Discard / Cancel — never silent loss).
+    @State private var pendingFieldsSwitch = false
+    /// Focus return for the guard alert (WCAG 2.4.3/2.1.2): every
+    /// resolution lands VoiceOver/keyboard focus back on the header's
+    /// show-source toggle — the control that owns the mode.
+    @AccessibilityFocusState private var sourceToggleFocused: Bool
+
     var body: some View {
         // Self-hiding: no loaded note (or an error tab) → no widget. The
         // mode surfaces render their own empty/error states full-height.
         if appState.loadedFilePath != nil, appState.noteLoadError == nil {
             VStack(spacing: 0) {
                 DisclosureGroup(isExpanded: expansionBinding) {
-                    rowArea
+                    if isSourceMode {
+                        sourceEditor
+                    } else {
+                        rowArea
+                    }
                 } label: {
                     header
                 }
@@ -63,7 +80,100 @@ struct NotePropertiesHeader: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(regionLabel)
+            // ⌘⇧D / palette request (the U4-4 token pattern — AppState
+            // can't reach view state). Post-update mutation point (#448).
+            .onChange(of: appState.propertiesSourceToggleRequest) {
+                toggleSourceMode()
+            }
+            // Successful Apply → back to fields; the row list re-reads
+            // disk state (the round-trip guarantee — no Swift YAML parse).
+            .onChange(of: appState.propertiesSourceCommitted) {
+                isSourceMode = false
+                sourceDraft = ""
+                pendingFieldsSwitch = false
+            }
+            // Cross-tab/reload leak guard: a draft belongs to ONE note.
+            .onChange(of: appState.loadedFilePath) {
+                isSourceMode = false
+                sourceDraft = ""
+                pendingFieldsSwitch = false
+            }
+            .alert(
+                "Apply property source changes?",
+                isPresented: $pendingFieldsSwitch
+            ) {
+                Button("Apply") {
+                    appState.applyPropertiesSource(sourceDraft)
+                    sourceToggleFocused = true
+                }
+                Button("Discard", role: .destructive) {
+                    isSourceMode = false
+                    sourceDraft = ""
+                    postAccessibilityAnnouncement("Source changes discarded.")
+                    sourceToggleFocused = true
+                }
+                Button("Cancel", role: .cancel) {
+                    sourceToggleFocused = true
+                }
+            } message: {
+                Text("The YAML source has uncommitted edits.")
+            }
         }
+    }
+
+    // MARK: - Source mode (U3-4, #468)
+
+    private var draftIsDirty: Bool {
+        isSourceMode && sourceDraft != appState.currentNoteFMSource
+    }
+
+    /// Fields ⇄ source. Entering source is always safe (rows commit
+    /// per-key already); leaving with a dirty draft prompts.
+    private func toggleSourceMode() {
+        if isSourceMode {
+            if draftIsDirty {
+                pendingFieldsSwitch = true
+            } else {
+                isSourceMode = false
+                sourceDraft = ""
+            }
+        } else {
+            sourceDraft = appState.currentNoteFMSource
+            isSourceMode = true
+        }
+    }
+
+    private var sourceEditor: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+            TextEditor(text: $sourceDraft)
+                .font(Tokens.Typography.code)
+                .frame(minHeight: 80, maxHeight: Self.rowAreaMaxHeight)
+                .accessibilityLabel("Properties source, YAML")
+            if let error = appState.propertiesSourceError {
+                // Inline, specific, non-destructive (DoD §F): the Rust
+                // MalformedFrontmatter line/column message; the draft and
+                // focus stay put, nothing was written.
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
+                    .accessibilityLabel("Properties source error: \(error)")
+            }
+            HStack(spacing: Tokens.Spacing.sm) {
+                Button("Apply") { appState.applyPropertiesSource(sourceDraft) }
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .disabled(appState.isEditingProperty)
+                    .accessibilityHint(
+                        "Validates the YAML and rewrites the note's frontmatter. Command-Return.")
+                Button("Cancel") {
+                    isSourceMode = false
+                    sourceDraft = ""
+                    postAccessibilityAnnouncement("Source changes discarded.")
+                }
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+            }
+        }
+        .padding(.vertical, Tokens.Spacing.xxs)
     }
 
     // MARK: - Pieces
@@ -99,9 +209,17 @@ struct NotePropertiesHeader: View {
             .help("Rename property across the vault")
             .accessibilityLabel("Rename property across the vault")
             .disabled(appState.currentSession == nil)
-            // U3-4 (#468) mounts the show-source YAML toggle here — the
-            // header is its specified home; no placeholder control ships
-            // (a dead button would be an AX lie).
+            Button {
+                toggleSourceMode()
+            } label: {
+                SlateSymbol.showSource.decorative
+            }
+            .buttonStyle(.borderless)
+            .help("Show source (⇧⌘D)")
+            .accessibilityFocused($sourceToggleFocused)
+            .accessibilityLabel("Show source")
+            .accessibilityValue(isSourceMode ? "Showing source" : "Showing fields")
+            .disabled(appState.loadedFilePath == nil)
         }
     }
 
