@@ -454,6 +454,7 @@ final class AppState: ObservableObject {
             cancelNoteScopedWork()
             clearActiveNoteFields()
         }
+        editorCaretReturn[id] = nil
         let outcome = workspace.close(id)
         if closingActive {
             if let successor = outcome.focusedTab {
@@ -499,6 +500,74 @@ final class AppState: ObservableObject {
         activateTab(target)
     }
 
+    // MARK: - View mode (U3-2, #466)
+
+    /// Live caret byte offset, reported continuously by the editor
+    /// coordinator (`onCaretByteChange`). A plain stored var — NEVER
+    /// `@Published`: selection churn is per-keystroke and must not
+    /// invalidate views. Read exactly once, at switch-to-reading time.
+    private var liveEditorCaretByte: Int = 0
+
+    /// Caret to restore per tab when its editor remounts after reading
+    /// mode (U3-2 spec: "caret preserved from last editing session of this
+    /// tab, else {0,0}"). Sparse; cleared on delivery and on tab close.
+    private var editorCaretReturn: [TabID: Int] = [:]
+
+    func noteEditorCaretDidMove(toByte byte: Int) {
+        liveEditorCaretByte = byte
+    }
+
+    /// The ACTIVE tab's view mode — what `NoteContentView` renders.
+    var activeViewMode: NoteViewMode { workspace.activeViewMode }
+
+    /// ⌘⇧E / toolbar toggle: flip the active tab between editing and
+    /// reading. No-ops without a renderable note (no tab, load error, or
+    /// nothing loaded) — the button and command are enabled in the same
+    /// states, but the palette can always invoke.
+    func toggleViewMode() {
+        guard let tabID = workspace.model.activeGroup.activeTabID,
+            loadedFilePath != nil, noteLoadError == nil
+        else { return }
+        let target: NoteViewMode =
+            workspace.viewMode(for: tabID) == .editing ? .reading : .editing
+        setViewMode(target, for: tabID)
+    }
+
+    /// Mode-flip funnel (toggle button, ⌘⇧E, ReadingView's empty-state
+    /// "Switch to Editing"). Captures/restores the editor caret for the
+    /// ACTIVE tab, announces, and persists the layout (mode is per-tab
+    /// state in workspace.json).
+    func setViewMode(_ target: NoteViewMode, for tabID: TabID? = nil) {
+        guard let tabID = tabID ?? workspace.model.activeGroup.activeTabID
+        else { return }
+        guard workspace.viewMode(for: tabID) != target else { return }
+        let isActiveTab = tabID == workspace.model.activeGroup.activeTabID
+        if isActiveTab, target == .reading {
+            // Park the caret before the editor unmounts. The live buffer
+            // stays in AppState's fields — reading renders from it.
+            editorCaretReturn[tabID] = liveEditorCaretByte
+        }
+        workspace.setViewMode(target, for: tabID)
+        if isActiveTab, target == .editing {
+            // Remount: the coordinator's one-shot handler parks the caret,
+            // scrolls it visible, and makes the editor first responder
+            // (the #421 F-H1 discipline) — focus lands in the new surface.
+            cursorByteOffsetRequest.send(
+                editorCaretReturn.removeValue(forKey: tabID) ?? 0)
+        }
+        saveWorkspaceLayout()
+        if isActiveTab {
+            let announcement = target == .reading ? "Reading mode." : "Editing mode."
+            lastViewModeAnnouncement = announcement
+            postAccessibilityAnnouncement(announcement)
+        }
+    }
+
+    /// Last mode-flip announcement (U3-2). Test seam — the announcement
+    /// helper is a no-op under XCTest (no NSApp), so the exact string must
+    /// be observable here (same pattern as `lastMutationAnnouncement`).
+    private(set) var lastViewModeAnnouncement: String?
+
     // MARK: - Workspace persistence (U1-6, #458)
 
     /// Debounced layout save: any model mutation schedules a write 500ms
@@ -538,7 +607,8 @@ final class AppState: ObservableObject {
         do {
             try store.save(
                 WorkspaceStore.snapshot(
-                    of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue))
+                    of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue,
+                    viewModes: workspace.viewModes))
         } catch {
             // Layout persistence must never interrupt the user; the next
             // clean save wins.
@@ -558,7 +628,7 @@ final class AppState: ObservableObject {
         guard let restored = WorkspaceStore.model(from: snapshot),
             !restored.isEmpty
         else { return }
-        workspace.adopt(restored)
+        workspace.adopt(restored, viewModes: WorkspaceStore.viewModes(from: snapshot))
         if let tab = workspace.model.activeGroup.activeTabID {
             activateTab(tab)
         }

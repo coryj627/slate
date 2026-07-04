@@ -72,6 +72,13 @@ struct NoteEditorView: NSViewRepresentable {
     /// shortcut — used by the previewless contexts that include
     /// the editor (none today, kept for future surfaces).
     let previewEmbedAtCursor: ((String, Int) -> Void)?
+    /// Continuous caret report (U3-2): fires with the caret's UTF-8 byte
+    /// offset on every selection change, so AppState can park the caret
+    /// for the reading-mode round trip without reaching into AppKit at
+    /// toggle time. Nil disables reporting. The value lands in a plain
+    /// stored var (never a `@Published`) — per-keystroke selection churn
+    /// must not invalidate any view.
+    var onCaretByteChange: ((Int) -> Void)? = nil
 
     /// System Reduce Motion preference (WCAG 2.3.1). When `true`, the
     /// editor's scroll-routing paths jump instantly instead of using
@@ -87,7 +94,8 @@ struct NoteEditorView: NSViewRepresentable {
         Coordinator(
             text: $text,
             onSave: onSave,
-            previewEmbedAtCursor: previewEmbedAtCursor
+            previewEmbedAtCursor: previewEmbedAtCursor,
+            onCaretByteChange: onCaretByteChange
         )
     }
 
@@ -231,6 +239,7 @@ struct NoteEditorView: NSViewRepresentable {
         // updateNSView when @Environment(\.accessibilityReduceMotion)
         // flips, so this stays in sync mid-session.
         context.coordinator.reduceMotion = reduceMotion
+        context.coordinator.onCaretByteChange = onCaretByteChange
         textView.setAccessibilityLabel(accessibilityLabel)
 
         // External buffer change (e.g. file reload after a
@@ -273,6 +282,8 @@ struct NoteEditorView: NSViewRepresentable {
         var headings: [Heading] = []
         var accessibilityLabel: String = ""
         var previewEmbedAtCursor: ((String, Int) -> Void)?
+        /// Continuous caret reporter (U3-2) — see the view property.
+        var onCaretByteChange: ((Int) -> Void)?
         /// Mirror of `@Environment(\.accessibilityReduceMotion)` from
         /// the SwiftUI parent. Refreshed by `updateNSView` so the
         /// scroll-routing methods always see the current value (WCAG
@@ -321,11 +332,13 @@ struct NoteEditorView: NSViewRepresentable {
         init(
             text: Binding<String>,
             onSave: @escaping () -> Void,
-            previewEmbedAtCursor: ((String, Int) -> Void)?
+            previewEmbedAtCursor: ((String, Int) -> Void)?,
+            onCaretByteChange: ((Int) -> Void)? = nil
         ) {
             self._text = text
             self.onSave = onSave
             self.previewEmbedAtCursor = previewEmbedAtCursor
+            self.onCaretByteChange = onCaretByteChange
         }
 
         /// Re-bind point. Called from `makeNSView` on initial setup
@@ -870,6 +883,17 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         // MARK: - NSTextViewDelegate
+
+        /// U3-2: report the caret's UTF-8 byte offset on every selection
+        /// change. O(log n) via the rope conversion; the sink is a plain
+        /// stored var on AppState, so this publishes nothing.
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView, let report = onCaretByteChange else { return }
+            report(
+                EditorTextConversions.byteOffsetForUTF16Location(
+                    textView.selectedRange().location,
+                    in: textView.string))
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else {

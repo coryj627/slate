@@ -3,6 +3,14 @@
 
 import Foundation
 
+/// How a tab presents its note (U3-2, #466): the NSTextView editor or the
+/// rendered read-only ReadingView. Raw values are the `workspace.json`
+/// per-tab `"mode"` strings; `.editing` is the absent-key default.
+enum NoteViewMode: String, Codable {
+    case editing
+    case reading
+}
+
 /// The observable owner of the `WorkspaceModel` (Milestone U1).
 ///
 /// Views never mutate the model directly — every mutation funnels through
@@ -30,6 +38,32 @@ final class WorkspaceState: ObservableObject {
     /// group. The ACTIVE tab's state lives in AppState's fields; its entry
     /// here is stale while active and overwritten on park.
     private(set) var documents: [TabID: NoteDocument] = [:]
+
+    /// Per-tab view mode (U3-2, #466). Sparse: only tabs in reading mode
+    /// have an entry — absent means `.editing` (today's behavior and the
+    /// workspace.json backward-compat rule). Cleared on tab close; persisted
+    /// per tab as `"mode"` in the snapshot schema.
+    @Published private(set) var viewModes: [TabID: NoteViewMode] = [:]
+
+    func viewMode(for tabID: TabID) -> NoteViewMode {
+        viewModes[tabID] ?? .editing
+    }
+
+    /// The ACTIVE tab's mode — what `NoteContentView` renders. No active
+    /// tab (empty workspace) reads as `.editing` so the editor empty state
+    /// keeps its shape.
+    var activeViewMode: NoteViewMode {
+        guard let id = model.activeGroup.activeTabID else { return .editing }
+        return viewMode(for: id)
+    }
+
+    func setViewMode(_ mode: NoteViewMode, for tabID: TabID) {
+        if mode == .editing {
+            viewModes[tabID] = nil  // sparse: editing is the absent default
+        } else {
+            viewModes[tabID] = mode
+        }
+    }
 
     // MARK: Queries
 
@@ -242,6 +276,7 @@ final class WorkspaceState: ObservableObject {
     func close(_ tabID: TabID) -> WorkspaceModel.CloseOutcome {
         let outcome = model.closeTab(tabID)
         documents[tabID] = nil
+        viewModes[tabID] = nil
         assert(model.validate().isEmpty)
         return outcome
     }
@@ -253,6 +288,7 @@ final class WorkspaceState: ObservableObject {
     func reset() {
         model = WorkspaceModel()
         documents = [:]
+        viewModes = [:]
         activeLeaf = .outline
     }
 
@@ -260,11 +296,15 @@ final class WorkspaceState: ObservableObject {
     /// (WorkspaceStore.model(from:)) has already validated; the assert is
     /// the belt-and-suspenders. Parked documents start empty — tabs load
     /// lazily on first activation, missing files surface the existing
-    /// per-tab load-error state.
-    func adopt(_ restored: WorkspaceModel) {
+    /// per-tab load-error state. `viewModes` restores the per-tab reading
+    /// modes captured in the snapshot (U3-2); unknown ids are dropped.
+    func adopt(_ restored: WorkspaceModel, viewModes restoredModes: [TabID: NoteViewMode] = [:]) {
         assert(restored.validate().isEmpty)
         model = restored
         documents = [:]
+        let knownIDs = Set(restored.allTabs.map(\.id))
+        viewModes = restoredModes
+            .filter { knownIDs.contains($0.key) && $0.value != .editing }
     }
 
     // MARK: Splits (U1-3)
