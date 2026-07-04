@@ -29,13 +29,18 @@ struct CanvasOutlineView: View {
     @AccessibilityFocusState private var focusedRow: String?
     @Namespace private var rotorSpace
 
-    /// Interim text-card detail (t2 R14): read-only content panel.
-    @State private var detail: (title: String, text: String)?
+    /// Per-kind activation lives in the container (one semantic across
+    /// outline and table; #368 replaces it with the real actions).
+    let onActivate: (CanvasOutlineRow) -> Void
 
-    init(document: CanvasDocument, tabID: TabID) {
+    init(
+        document: CanvasDocument, tabID: TabID,
+        onActivate: @escaping (CanvasOutlineRow) -> Void
+    ) {
         self.document = document
         self.selection = document.selection
         self.tabID = tabID
+        self.onActivate = onActivate
     }
 
     /// One outline line: a node row, or a connection row nested under
@@ -97,9 +102,6 @@ struct CanvasOutlineView: View {
                 }
             }
         }
-        .sheet(isPresented: detailPresented) {
-            detailPanel
-        }
         .onAppear {
             // WCAG 2.4.3: coming back from an opened card lands on the
             // row that opened it, not the top.
@@ -150,12 +152,12 @@ struct CanvasOutlineView: View {
         .accessibilityValue(nodeValue(row))
         .accessibilityHint(activationHint(row))
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Open") { activate(row) }
+        .accessibilityAction(named: "Open") { onActivate(row) }
         .accessibilityRotorEntry(id: row.nodeId, in: rotorSpace)
         .accessibilityFocused($focusedRow, equals: row.nodeId)
-        .onTapGesture(count: 2) { activate(row) }
+        .onTapGesture(count: 2) { onActivate(row) }
         .contextMenu {
-            Button("Open") { activate(row) }
+            Button("Open") { onActivate(row) }
         }
     }
 
@@ -227,13 +229,6 @@ struct CanvasOutlineView: View {
         )
     }
 
-    private var detailPresented: Binding<Bool> {
-        Binding(
-            get: { detail != nil },
-            set: { if !$0 { detail = nil } }
-        )
-    }
-
     private func announceMove(to id: String, from previous: String?) {
         guard let row = document.outline.first(where: { $0.nodeId == id }) else { return }
         // Group boundary narration (t0 §1.2): compare containers.
@@ -280,66 +275,4 @@ struct CanvasOutlineView: View {
         }
     }
 
-    private func activate(_ row: CanvasOutlineRow) {
-        document.lastActivatedNode = row.nodeId
-        switch row.kind {
-        case "text":
-            guard let session = appState.currentSession, let handle = document.handle,
-                let text = try? session.canvasNodeText(handle: handle, nodeId: row.nodeId)
-            else { return }
-            detail = (title: row.title, text: text ?? "")
-        case "file":
-            let target = document.target(of: row.nodeId)
-            if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
-                appState.openFile(target, target: .currentTab)
-            } else {
-                appState.canvasAnnouncer.announce(
-                    .status("Opening this file kind from the canvas arrives with canvas actions."))
-            }
-        case "image":
-            appState.canvasAnnouncer.announce(
-                .status("Opening media from the canvas arrives with canvas actions."))
-        case "link":
-            let target = document.target(of: row.nodeId)
-            if let url = URL(string: target), appState.externalOpener(url) {
-                appState.canvasAnnouncer.announce(.status("Opened \(row.title) in your browser."))
-            } else {
-                appState.canvasAnnouncer.announce(.error("The link could not be opened."))
-            }
-        default:
-            break
-        }
-    }
-
-    // MARK: Interim text detail (t2 R14 — #368 replaces with the editor)
-
-    private var detailPanel: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-            Text(detail?.title ?? "")
-                .font(Tokens.Typography.body.weight(.semibold))
-            ScrollView {
-                Text(detail?.text ?? "")
-                    .font(Tokens.Typography.body)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Spacer()
-                Button("Close") { closeDetail() }
-                    .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(Tokens.Spacing.lg)
-        .frame(minWidth: 360, minHeight: 240)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Card text: \(detail?.title ?? ""). Read-only until canvas editing arrives.")
-    }
-
-    private func closeDetail() {
-        detail = nil
-        // WCAG 2.4.3: focus returns to the card row that opened it.
-        if let last = document.lastActivatedNode {
-            DispatchQueue.main.async { focusedRow = last }
-        }
-    }
 }

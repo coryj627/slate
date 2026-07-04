@@ -37,8 +37,12 @@ final class CanvasDocument: ObservableObject {
     /// connections…) — phrased by the t0 §5 banner.
     @Published private(set) var warnings: [CanvasLoadWarning] = []
 
-    /// Per-node activation targets (file path / URL) from the table
-    /// rows — fetched once at load so activation never re-queries.
+    /// Flat table rows (Type/Title/Group/Target/Connections/Color) —
+    /// the #363 surface reads these; fetched once at load.
+    @Published private(set) var tableRows: [CanvasTableRow] = []
+
+    /// Per-node activation targets (file path / URL) derived from the
+    /// table rows — activation never re-queries.
     private var targets: [String: String] = [:]
 
     /// Per-node adjacency, fetched lazily on first selection and
@@ -93,9 +97,9 @@ final class CanvasDocument: ObservableObject {
             }
             handle = info.handle
             outline = try session.canvasOutline(handle: info.handle)
+            tableRows = try session.canvasTableRows(handle: info.handle)
             targets = Dictionary(
-                uniqueKeysWithValues: try session.canvasTableRows(handle: info.handle)
-                    .map { ($0.nodeId, $0.target) })
+                uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
             neighborsCache = [:]
             state = .ready
         } catch {

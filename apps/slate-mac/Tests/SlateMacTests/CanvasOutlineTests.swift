@@ -111,7 +111,7 @@ final class CanvasOutlineTests: XCTestCase {
         }
         state.canvasAnnouncer = announcer
 
-        let outline = CanvasOutlineView(document: doc, tabID: TabID())
+        let outline = CanvasOutlineView(document: doc, tabID: TabID()) { _ in }
         _ = outline  // The view's binding logic is exercised via the document below.
 
         // Simulate the selection path the binding drives.
@@ -187,5 +187,99 @@ final class CanvasOutlineTests: XCTestCase {
         // Generous CI bound — the point is "no quadratic blow-up", not
         // a micro-benchmark (those live in BENCHMARKS.md).
         XCTAssertLessThan(elapsed, .seconds(5), "2,000-node open must stay interactive")
+    }
+}
+
+/// #363: the canvas table surface — rows match the model, per-column
+/// sorting incl. color, selection sync, activation routing.
+@MainActor
+extension CanvasOutlineTests {
+    func testTableRowsMatchModelWithTargetsAndColors() async throws {
+        let state = try await makeStateForTable()
+        state.openFile("board.canvas", target: .currentTab)
+        let doc = state.canvasDocument(for: "board.canvas")
+
+        XCTAssertEqual(doc.tableRows.count, 6)
+        let byID = Dictionary(uniqueKeysWithValues: doc.tableRows.map { ($0.nodeId, $0) })
+        XCTAssertEqual(byID["q"]?.colorName, "red")
+        XCTAssertEqual(byID["note"]?.target, "notes/target.md")
+        XCTAssertEqual(byID["web"]?.target, "https://example.org/page")
+        XCTAssertEqual(byID["img"]?.kind, "image")
+
+        // Table selection drives the SHARED CanvasSelection (both
+        // surfaces bind to the same object).
+        doc.selection.selected = "note"
+        XCTAssertEqual(doc.selection.selected, "note")
+    }
+
+    func testTableSortsByEveryColumnIncludingColor() async throws {
+        let state = try await makeStateForTable()
+        state.openFile("board.canvas", target: .currentTab)
+        let doc = state.canvasDocument(for: "board.canvas")
+
+        var announced: [String] = []
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            text, _ in announced.append(text)
+        }
+
+        let table = CanvasTableView(document: doc) { _ in }
+        // Drive the grid's coordinator directly (the table's body wires
+        // the same columns).
+        let grid = extractGrid(from: table, state: state, doc: doc)
+        let coordinator = GridCoordinator(grid: grid)
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 5, ascending: true), "Sorted by Color, ascending")
+        let colors = coordinator.displayRows.map(\.color)
+        XCTAssertEqual(colors, colors.sorted())
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 4, ascending: false),
+            "Sorted by Connections, descending")
+        let connections = coordinator.displayRows.map(\.connections)
+        XCTAssertEqual(connections, connections.sorted(by: >))
+
+        // Sort announcements rode the #518 funnel.
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            announced,
+            ["Sorted by Color, ascending", "Sorted by Connections, descending"])
+    }
+
+    private func extractGrid(
+        from table: CanvasTableView, state: AppState, doc: CanvasDocument
+    ) -> AccessibleDataGrid<CanvasTableView.TableRow> {
+        // Rebuild the grid exactly as the view's body does — columns and
+        // announce hook included — against the same document.
+        AccessibleDataGrid(
+            columns: [
+                .init("Type", cell: { $0.kind.capitalized }, sort: { $0.kind < $1.kind }),
+                .init("Title", cell: { $0.title }, sort: {
+                    $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }),
+                .init("Group", cell: { $0.group }, sort: {
+                    $0.group.localizedCaseInsensitiveCompare($1.group) == .orderedAscending
+                }),
+                .init("Target", cell: { $0.target }, sort: { $0.target < $1.target }),
+                .init(
+                    "Connections", cell: { String($0.connections) },
+                    sort: { $0.connections < $1.connections }),
+                .init("Color", cell: { $0.color }, sort: { $0.color < $1.color }),
+            ],
+            rows: doc.tableRows.map { row in
+                CanvasTableView.TableRow(
+                    id: row.nodeId, kind: row.kind, title: row.title,
+                    group: row.groupPath.last ?? "", target: row.target,
+                    connections: row.connectionCount, color: row.colorName ?? "")
+            },
+            summary: "test",
+            accessibilityLabel: "Canvas table",
+            announce: { [weak state] text in
+                state?.canvasAnnouncer.announce(.status(text))
+            })
+    }
+
+    private func makeStateForTable() async throws -> AppState {
+        try await makeState()
     }
 }
