@@ -87,12 +87,34 @@ struct CanvasOutlineView: View {
         // Navigator arrows (#364, rule R2: plain keys act only while a
         // canvas surface has focus; palette equivalents always exist —
         // VO Quick Nav users take those). ↑↓ stay native List moves.
-        .onKeyPress(.leftArrow) {
+        .onKeyPress(.leftArrow, phases: .down) { press in
+            if appState.canvasModeConsumesArrows {
+                appState.canvasModeStep(
+                    dx: -1, dy: 0, large: press.modifiers.contains(.shift))
+                return .handled
+            }
             appState.canvasFollowConnection(forward: false)
             return .handled
         }
-        .onKeyPress(.rightArrow) {
+        .onKeyPress(.rightArrow, phases: .down) { press in
+            if appState.canvasModeConsumesArrows {
+                appState.canvasModeStep(
+                    dx: 1, dy: 0, large: press.modifiers.contains(.shift))
+                return .handled
+            }
             appState.canvasFollowConnection(forward: true)
+            return .handled
+        }
+        // ↑↓ belong to the List EXCEPT while a spatial mode holds the
+        // arrows (#521): then they nudge/resize.
+        .onKeyPress(.upArrow, phases: .down) { press in
+            guard appState.canvasModeConsumesArrows else { return .ignored }
+            appState.canvasModeStep(dx: 0, dy: -1, large: press.modifiers.contains(.shift))
+            return .handled
+        }
+        .onKeyPress(.downArrow, phases: .down) { press in
+            guard appState.canvasModeConsumesArrows else { return .ignored }
+            appState.canvasModeStep(dx: 0, dy: 1, large: press.modifiers.contains(.shift))
             return .handled
         }
         .accessibilityRotor("Cards") {

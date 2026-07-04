@@ -53,6 +53,11 @@ struct CanvasContainerView: View {
         .onKeyPress(.escape) {
             modeController.handleEscape() ? .handled : .ignored
         }
+        // M2: Return commits the active spatial mode (#521).
+        .onKeyPress(.return) {
+            guard modeController.active != nil else { return .ignored }
+            return modeController.commit() ? .handled : .ignored
+        }
         // M4: leaving the canvas (tab switch/pane move) auto-cancels
         // any active mode — no mode survives without focus (WCAG 2.1.2).
         .onChange(of: appState.workspace.model.activeGroup.activeTabID) { _, newActive in

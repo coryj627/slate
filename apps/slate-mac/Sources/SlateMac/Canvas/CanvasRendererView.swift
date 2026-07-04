@@ -222,7 +222,13 @@ final class CanvasRendererNSView: NSView {
         var elements: [CanvasCardAXElement] = []
 
         for node in document.scene.nodes {
-            let canvasRect = CGRect(x: node.x, y: node.y, width: node.width, height: node.height)
+            // #521: an active move/resize mode's hypothetical geometry
+            // overrides the committed scene rect.
+            let transient = document.transientRects?[node.nodeId]
+            let canvasRect = CGRect(
+                x: transient?.x ?? node.x, y: transient?.y ?? node.y,
+                width: transient?.width ?? node.width,
+                height: transient?.height ?? node.height)
             guard window.intersects(canvasRect) else { continue }
             seen.insert(node.nodeId)
             let viewRect = canvasToView(canvasRect)
@@ -456,15 +462,29 @@ final class CanvasRendererNSView: NSView {
                 return
             }
         }
+        let shift = event.modifierFlags.contains(.shift)
+        let inMode = appState.canvasModeConsumesArrows
         switch event.keyCode {
-        case 125:  // ↓ next in reading order (R2: all four arrows navigate)
-            appState.canvasSelectAdjacent(offset: 1)
-        case 126:  // ↑ previous
-            appState.canvasSelectAdjacent(offset: -1)
-        case 123:  // ← follow connection back
-            appState.canvasFollowConnection(forward: false)
-        case 124:  // → follow connection forward
-            appState.canvasFollowConnection(forward: true)
+        case 125:  // ↓ nudge in mode; next in reading order otherwise
+            inMode
+                ? appState.canvasModeStep(dx: 0, dy: 1, large: shift)
+                : appState.canvasSelectAdjacent(offset: 1)
+        case 126:  // ↑
+            inMode
+                ? appState.canvasModeStep(dx: 0, dy: -1, large: shift)
+                : appState.canvasSelectAdjacent(offset: -1)
+        case 123:  // ←
+            inMode
+                ? appState.canvasModeStep(dx: -1, dy: 0, large: shift)
+                : appState.canvasFollowConnection(forward: false)
+        case 124:  // →
+            inMode
+                ? appState.canvasModeStep(dx: 1, dy: 0, large: shift)
+                : appState.canvasFollowConnection(forward: true)
+        case 36 where inMode:  // Return commits the mode
+            if let doc = appState.activeCanvasDocument {
+                _ = appState.canvasModeController(for: doc).commit()
+            }
         default:
             return super.keyDown(with: event)
         }
