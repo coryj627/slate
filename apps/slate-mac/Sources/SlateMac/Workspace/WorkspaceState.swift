@@ -290,6 +290,8 @@ final class WorkspaceState: ObservableObject {
         documents = [:]
         viewModes = [:]
         activeLeaf = .outline
+        focusRegion = .editor
+        lastFocusedGroup = nil
     }
 
     /// Session restore (U1-6): adopt a rebuilt model wholesale. The caller
@@ -305,6 +307,8 @@ final class WorkspaceState: ObservableObject {
         let knownIDs = Set(restored.allTabs.map(\.id))
         viewModes = restoredModes
             .filter { knownIDs.contains($0.key) && $0.value != .editing }
+        focusRegion = .editor
+        lastFocusedGroup = nil
     }
 
     // MARK: Splits (U1-3)
@@ -338,6 +342,15 @@ final class WorkspaceState: ObservableObject {
         return target
     }
 
+    /// Non-mutating spatial-neighbor probe: the interior editor group ⌘⌥`dir`
+    /// would move to, WITHOUT changing focus. Used by `resolveFocusRouting`
+    /// (and the terminal-region census) so the routing decision is side-effect
+    /// free — the mutation happens only when the outcome is applied.
+    func peekNeighbor(_ direction: WorkspaceModel.Direction) -> GroupID? {
+        var copy = model
+        return copy.focusNeighbor(direction)
+    }
+
     /// Divider drag commit (U1-3): weights for the split containing
     /// `groupID`, clamped by the model.
     func setWeights(_ weights: [Double], forSplitContaining groupID: GroupID) {
@@ -362,5 +375,146 @@ final class WorkspaceState: ObservableObject {
         return max(rect.width, rect.height) == 1
             ? min(rect.width, rect.height)
             : max(rect.width, rect.height)
+    }
+
+    // MARK: - Focus regions (U4-4, #473)
+
+    /// Where window focus lives, at the granularity ⌘⌥arrows route between.
+    ///
+    /// The workspace is three terminal regions west→east: the file tree
+    /// (westernmost), the editor groups (the split tree), and the right-pane
+    /// leaf (easternmost). Only `.editor` maps to a `WorkspaceModel` node —
+    /// tree and leaf are window chrome, NOT groups, so they live here beside
+    /// `activeLeaf` (same rationale) rather than inside the model, whose
+    /// invariants I1–I7 assume every focusable node is a `TabGroupNode`. The
+    /// 800-seed geometry census in `WorkspaceModel` is untouched: it still
+    /// owns editor↔editor moves; this layer only wraps it at the two edges.
+    enum FocusRegion: Equatable { case tree, editor, leaf }
+
+    /// The currently-focused region. Starts on `.editor` (the note is the
+    /// primary surface); a terminal move parks the editor's group in
+    /// `lastFocusedGroup` so the reverse move restores exactly it.
+    @Published private(set) var focusRegion: FocusRegion = .editor
+
+    /// The editor group that held focus when we last left `.editor` for a
+    /// terminal region — the round-trip anchor (⌘⌥← from the leaf, ⌘⌥→ from
+    /// the tree return to THIS group, not merely "the first group"). Survives
+    /// the excursion because it lives here, not in the model. Repaired to the
+    /// active group if that group is later collapsed (never dangles → I7's
+    /// "focus never lost" extends across the region boundary).
+    private(set) var lastFocusedGroup: GroupID?
+
+    /// A monotonically-bumped token the terminal-region views observe to pull
+    /// keyboard + AX focus to themselves. SwiftUI `@FocusState` /
+    /// `@AccessibilityFocusState` are view-local, so AppState can't assign
+    /// them directly; it bumps the matching request and the view mirrors it
+    /// into its own focus state on `.onChange`. Separate tokens per terminal
+    /// so a leaf request doesn't also re-fire the tree.
+    @Published private(set) var treeFocusRequest: Int = 0
+    @Published private(set) var leafFocusRequest: Int = 0
+
+    /// The decision a ⌘⌥arrow makes, as a pure value (no mutation, no
+    /// effects) — so the terminal-region routing is censusable without a
+    /// running AppState or a rendered view, exactly as `WorkspaceModel.
+    /// focusNeighbor` and `Leaf.railMove` are. `AppState.focusPane` resolves
+    /// this, then performs the matching mutation + announcement + focus
+    /// signal.
+    enum FocusRoutingOutcome: Equatable {
+        /// Interior editor move: focus this group (activate its tab, announce
+        /// "Editor pane N of M, …").
+        case editorGroup(GroupID)
+        /// Cross into the tree terminal (announce "Files.").
+        case enterTree
+        /// Cross into the leaf terminal (announce "<leaf> panel.").
+        case enterLeaf
+        /// Return to the editor region, landing on this group.
+        case returnToEditor(GroupID)
+        /// Edge — focus unchanged (the request is a no-op).
+        case none
+    }
+
+    /// Resolve a ⌘⌥arrow against the current region + model geometry. Pure:
+    /// reads `focusRegion`, `lastFocusedGroup`, and `model` (via
+    /// `focusNeighbor`, which does NOT mutate when it only probes — see the
+    /// caller: the census resolves-then-applies so probing is side-effect
+    /// free at decision time). The three-region state machine, verbatim from
+    /// u4_spec §U4-4:
+    ///
+    /// - `.tree` (westernmost): ⌘⌥→ returns to the editor; the other three
+    ///   are edges → `.none`.
+    /// - `.leaf` (easternmost): ⌘⌥← returns to the editor; ⌘⌥→ is the far
+    ///   edge; the rest → `.none`.
+    /// - `.editor`: an interior neighbor is `.editorGroup`; off a horizontal
+    ///   edge, ⌘⌥← crosses to the tree and ⌘⌥→ to the leaf; vertical edges
+    ///   have no terminal (tree/leaf flank E/W only) → `.none`.
+    ///
+    /// `neighbor` is the interior spatial neighbor in `direction` (the caller
+    /// passes `model.focusNeighbor`'s result computed on a copy so this stays
+    /// non-mutating) — nil means "no interior neighbor", i.e. an edge.
+    func resolveFocusRouting(
+        _ direction: WorkspaceModel.Direction, interiorNeighbor neighbor: GroupID?
+    ) -> FocusRoutingOutcome {
+        switch focusRegion {
+        case .tree:
+            return direction == .right ? .returnToEditor(resolvedReturnGroup) : .none
+        case .leaf:
+            return direction == .left ? .returnToEditor(resolvedReturnGroup) : .none
+        case .editor:
+            if let neighbor { return .editorGroup(neighbor) }
+            switch direction {
+            case .left: return .enterTree
+            case .right: return .enterLeaf
+            case .up, .down: return .none
+            }
+        }
+    }
+
+    /// The group a return-to-editor lands on: the parked anchor when it still
+    /// exists, else the model's current active group (a collapse ate the
+    /// anchor mid-excursion — focus still resolves, never lost).
+    var resolvedReturnGroup: GroupID {
+        if let anchor = lastFocusedGroup, model.group(anchor) != nil { return anchor }
+        return model.activeGroupID
+    }
+
+    /// Enter the file tree region (⌘⌥← from the leftmost editor group). Parks
+    /// the current editor group as the round-trip anchor and signals the tree
+    /// view to take focus.
+    func focusTreeRegion() {
+        if focusRegion == .editor { lastFocusedGroup = model.activeGroupID }
+        focusRegion = .tree
+        treeFocusRequest &+= 1
+    }
+
+    /// Enter the right-pane leaf region (⌘⌥→ from the rightmost editor group).
+    /// Parks the current editor group and signals the leaf view to take focus.
+    func focusLeafRegion() {
+        if focusRegion == .editor { lastFocusedGroup = model.activeGroupID }
+        focusRegion = .leaf
+        leafFocusRequest &+= 1
+    }
+
+    /// Return to the editor region from a terminal (⌘⌥→ from the tree, ⌘⌥←
+    /// from the leaf). Restores `lastFocusedGroup` when it still exists; falls
+    /// back to the model's current active group otherwise (a collapse ate the
+    /// anchor while we were away). Returns the group focus landed on so the
+    /// caller can activate its tab through the identity funnel and announce.
+    @discardableResult
+    func focusEditorRegion() -> GroupID {
+        focusRegion = .editor
+        if let anchor = lastFocusedGroup, model.group(anchor) != nil {
+            model.focusGroup(anchor)
+        }
+        lastFocusedGroup = nil
+        return model.activeGroupID
+    }
+
+    /// Called whenever the editor region is (re-)entered by an ordinary
+    /// interior focus move / tab activation, so a subsequent terminal move
+    /// anchors on the right group. Keeps `focusRegion` truthful without
+    /// forcing every editor-focus path through `focusEditorRegion`.
+    func markEditorRegionActive() {
+        focusRegion = .editor
+        lastFocusedGroup = nil
     }
 }

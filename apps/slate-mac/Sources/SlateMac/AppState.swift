@@ -344,6 +344,12 @@ final class AppState: ObservableObject {
         if id == workspace.model.activeGroup.activeTabID, loadedFilePath == path {
             return
         }
+        // U4-4 (#473): any tab activation lands keyboard focus in the editor
+        // content, so the focus region is now `.editor` — a subsequent
+        // ⌘⌥arrow anchors on this group, not a stale terminal region left
+        // over from before the switch. Clears `lastFocusedGroup`; the terminal
+        // return-path already restored+cleared it before reaching here.
+        workspace.markEditorRegionActive()
         // Codoki #492 (High): a save-then-close scope must not outlive its
         // tab context. If the user switches away while that save is in
         // flight, the success branch correctly skips the close (active-tab
@@ -733,17 +739,58 @@ final class AppState: ObservableObject {
             postAccessibilityAnnouncement(reason, priority: .medium)
             return
         }
+        // A split focuses the new EDITOR pane — if focus had been parked in a
+        // terminal region (⌘\ while in the tree/leaf), re-seat the region so a
+        // subsequent ⌘⌥arrow anchors on this new group (U4-4, #473).
+        workspace.markEditorRegionActive()
         announcePaneFocus(newGroup, prefix: "Split. ")
     }
 
-    /// ⌘⌥arrows. Spatial focus move; activating the neighbor's active tab
-    /// swaps the document through the identity funnel.
+    /// ⌘⌥arrows. Spatial focus move across the three terminal regions
+    /// (U4-4, #473): the file tree (westernmost), the editor split groups,
+    /// and the right-pane leaf (easternmost). Interior editor↔editor moves
+    /// are the model's geometry (`focusNeighbor`), unchanged; this method
+    /// wraps that at the two horizontal edges so ⌘⌥← off the leftmost group
+    /// enters the tree and ⌘⌥→ off the rightmost group enters the leaf, with
+    /// the reverse move returning to the exact group left behind
+    /// (`lastFocusedGroup`). Focus is never lost — I7 extended across the
+    /// region boundary.
     func focusPane(_ direction: WorkspaceModel.Direction) {
-        guard let target = workspace.focusNeighbor(direction) else { return }
-        if let tab = workspace.model.group(target)?.activeTabID {
+        // Resolve the decision purely (the same resolver the terminal-region
+        // census drives), then apply its one effect. The interior neighbor is
+        // probed non-mutating so `.none`/terminal outcomes leave the model
+        // untouched.
+        let neighbor = workspace.peekNeighbor(direction)
+        switch workspace.resolveFocusRouting(direction, interiorNeighbor: neighbor) {
+        case .editorGroup(let target):
+            workspace.focusGroup(target)
+            enterEditorGroup(target)
+        case .returnToEditor:
+            let landed = workspace.focusEditorRegion()
+            enterEditorGroup(landed)
+        case .enterTree:
+            workspace.focusTreeRegion()
+            postAccessibilityAnnouncement(
+                Self.filesRegionAnnouncement, priority: .medium)
+        case .enterLeaf:
+            workspace.focusLeafRegion()
+            postAccessibilityAnnouncement(
+                Self.leafRegionAnnouncement(workspace.activeLeaf), priority: .medium)
+        case .none:
+            return
+        }
+    }
+
+    /// Focus an editor group after a move landed on it: activate its tab
+    /// through the identity funnel (document swap) and announce. Shared by the
+    /// interior move and the return-from-terminal paths so both keep the same
+    /// funnel + announcement discipline (U1-3 invariant — never bypass
+    /// `activateTab`).
+    private func enterEditorGroup(_ groupID: GroupID) {
+        if let tab = workspace.model.group(groupID)?.activeTabID {
             activateTab(tab)
         }
-        announcePaneFocus(target)
+        announcePaneFocus(groupID)
     }
 
     /// ⌘⌥= / ⌘⌥-.
@@ -792,9 +839,35 @@ final class AppState: ObservableObject {
         let total = workspace.model.groupsInOrder.count
         let title = group.activeTab.map { filename(of: workspace.tabPath($0)) } ?? "empty"
         postAccessibilityAnnouncement(
-            "\(prefix)Editor pane \(ordinal) of \(total), \(title).",
+            Self.editorPaneAnnouncement(ordinal: ordinal, total: total, title: title, prefix: prefix),
             priority: .medium)
     }
+
+    // MARK: - Focus-routing announcement strings (U4-4, #473) — pure & testable
+    //
+    // Verbatim per u4_spec §U4-4. Factored out as pure builders so the
+    // announcement tests assert the exact string a VoiceOver user hears
+    // (the free `postAccessibilityAnnouncement` has no test spy — the string
+    // is the contract). The "Editor pane N of M, <title>." form is REUSED
+    // from U1-3 unchanged.
+
+    /// "Editor pane N of M, <title>." (U1-3 format, reused). `prefix` carries
+    /// the "Split. " lead on a fresh split; empty for a plain focus move.
+    static func editorPaneAnnouncement(
+        ordinal: Int, total: Int, title: String, prefix: String = ""
+    ) -> String {
+        "\(prefix)Editor pane \(ordinal) of \(total), \(title)."
+    }
+
+    /// "<leaf title> panel." — spoken when ⌘⌥→ enters the leaf region.
+    /// Matches the leaf-switch phrasing (`RightPaneView.activate`) so entering
+    /// the leaf and switching leaves read identically.
+    static func leafRegionAnnouncement(_ leaf: Leaf) -> String {
+        "\(leaf.title) panel."
+    }
+
+    /// "Files." — spoken when ⌘⌥← enters the file-tree region.
+    static let filesRegionAnnouncement = "Files."
 
     private func announceActiveTab(prefix: String) {
         guard let tab = workspace.activeTab else { return }
