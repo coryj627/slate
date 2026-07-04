@@ -21,6 +21,11 @@ struct CanvasContainerView: View {
     /// (WCAG 2.4.3 — the tab press deposits the user somewhere real).
     @AccessibilityFocusState private var contentFocused: Bool
 
+    /// Interim text-card detail (t2 R14): read-only content panel,
+    /// shared by outline and table activation. #368 replaces it with
+    /// the real editing component.
+    @State private var detail: (title: String, text: String)?
+
     var body: some View {
         Group {
             switch document.state {
@@ -45,6 +50,79 @@ struct CanvasContainerView: View {
                 whereAmIPanel(readback)
             }
         }
+        .sheet(isPresented: detailPresented) {
+            detailPanel
+        }
+    }
+
+    // MARK: Activation (one semantic across surfaces; #368 replaces)
+
+    /// Per-kind activation (t2 §#362): markdown file → note tab; link →
+    /// browser; text → interim read-only detail; media honestly deferred.
+    private func activate(nodeId: String, kind: String, title: String) {
+        document.lastActivatedNode = nodeId
+        switch kind {
+        case "text":
+            guard let session = appState.currentSession, let handle = document.handle,
+                let text = try? session.canvasNodeText(handle: handle, nodeId: nodeId)
+            else { return }
+            detail = (title: title, text: text ?? "")
+        case "file":
+            let target = document.target(of: nodeId)
+            if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
+                appState.openFile(target, target: .currentTab)
+            } else {
+                appState.canvasAnnouncer.announce(
+                    .status("Opening this file kind from the canvas arrives with canvas actions."))
+            }
+        case "image":
+            appState.canvasAnnouncer.announce(
+                .status("Opening media from the canvas arrives with canvas actions."))
+        case "link":
+            let target = document.target(of: nodeId)
+            if let url = URL(string: target), appState.externalOpener(url) {
+                appState.canvasAnnouncer.announce(.status("Opened \(title) in your browser."))
+            } else {
+                appState.canvasAnnouncer.announce(.error("The link could not be opened."))
+            }
+        default:
+            break
+        }
+    }
+
+    private var detailPresented: Binding<Bool> {
+        Binding(
+            get: { detail != nil },
+            set: { if !$0 { detail = nil } }
+        )
+    }
+
+    /// Interim read-only text panel (t2 R14). Esc closes; focus returns
+    /// to the canvas content (WCAG 2.4.3).
+    private var detailPanel: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+            Text(detail?.title ?? "")
+                .font(Tokens.Typography.body.weight(.semibold))
+            ScrollView {
+                Text(detail?.text ?? "")
+                    .font(Tokens.Typography.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Spacer()
+                Button("Close") {
+                    detail = nil
+                    DispatchQueue.main.async { contentFocused = true }
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(Tokens.Spacing.lg)
+        .frame(minWidth: 360, minHeight: 240)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "Card text: \(detail?.title ?? ""). Read-only until canvas editing arrives.")
     }
 
     /// t0 §1.4: the transient, focusable Where-am-I panel — the
@@ -87,11 +165,17 @@ struct CanvasContainerView: View {
             } else {
                 switch surface {
                 case .outline:
-                    CanvasOutlineView(document: document, tabID: tabID)
-                        .accessibilityFocused($contentFocused)
-                case .table: interimPlaceholder(
-                    "Canvas table view is under construction.",
-                    detail: "The sortable table surface arrives with the canvas table milestone work. Use Show Outline (Command Palette) meanwhile.")
+                    CanvasOutlineView(document: document, tabID: tabID) { row in
+                        activate(nodeId: row.nodeId, kind: row.kind, title: row.title)
+                    }
+                    .accessibilityFocused($contentFocused)
+                case .table:
+                    CanvasTableView(document: document) { nodeId in
+                        if let row = document.outline.first(where: { $0.nodeId == nodeId }) {
+                            activate(nodeId: nodeId, kind: row.kind, title: row.title)
+                        }
+                    }
+                    .accessibilityFocused($contentFocused)
                 case .visual: interimPlaceholder(
                     "Canvas visual view is under construction.",
                     detail: "The visual renderer arrives with the canvas renderer milestone work. The outline and table carry everything it will show.")
