@@ -40,12 +40,14 @@ The full V1.x scope per `05_locked_architecture_decisions.md`. K and L are close
 |---|---|---|
 | K — Content pipelines (math, code, Mermaid) | [milestone 11](https://github.com/coryj627/slate/milestone/11) | ✅ Closed. Data path #257; user-facing sidebar surfaces #410. Implements `05` §6.2–6.4 (inline NSTextAttachment rendering stays deferred to V1.x). |
 | L — Citations + bibliography | [milestone 12](https://github.com/coryj627/slate/milestone/12) | ✅ Closed. Implements `05` §6.5; vault-shipped `slate.json` config contract fixed by #411. |
-| M — Sync detection + diagnostics + CLI v1 | [milestone 13](https://github.com/coryj627/slate/milestone/13) | Implements `05` §7.2 phase 1 + §8.3 Tier 2 (CLI). Local HTTP API ships separately later. |
+| M — Sync detection + diagnostics + CLI v1 | [milestone 13](https://github.com/coryj627/slate/milestone/13) | Implements `05` §7.2 phase 1 + §10 Tier 2 (CLI). Local HTTP API ships separately later. **Plan + executable spec: [`09_sync_cli/`](09_sync_cli/00_plan.md)** (2026-07-03; supersedes the GH milestone description where they differ — leaf not sidebar, read-only CLI). |
 | N — Bases v1 | [milestone 14](https://github.com/coryj627/slate/milestone/14) | Implements `05` §8. Biggest scope item in V1.x; recommended after K–M. |
-| O — Local history + change tracking | [milestone 15](https://github.com/coryj627/slate/milestone/15) | Implements `05` §7.5, §8.9, and `03` §11. Consumes F's op-log infra + N's Bases AST. |
+| O — Local history + change tracking | [milestone 15](https://github.com/coryj627/slate/milestone/15) | Implements `05` §7.5, §8.9, and `03` §11. Consumes F's op-log infra; temporal-query slice (O-6 only) consumes N's Bases AST. **Plan + executable spec: [`10_local_history/`](10_local_history/00_plan.md)** (2026-07-03; supersedes the GH milestone description where they differ — save-point versions, two derived tables, leaf UI). |
 | P — Graph view | [milestone 16](https://github.com/coryj627/slate/milestone/16) | Implements `05` §5.2 + `01` §7 Phase 1 and accessible-equivalents portion of Phase 2. |
 
-Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migrations, tests, accessibility checkpoints, tester-feedback questions, and definition of done. Individual issues link back to their milestone.
+Each GitHub Milestone carries the full Rust + Swift work breakdown, schema migrations, tests, accessibility checkpoints, tester-feedback questions, and definition of done — **except M and O, whose authoritative contract lives in-repo** ([`09_sync_cli/`](09_sync_cli/00_plan.md), [`10_local_history/`](10_local_history/00_plan.md)); their GH milestone descriptions are the older sketch and yield to the specs where they differ. Individual issues link back to their milestone.
+
+The UI-parity program (Milestone U, U0–U5 — tabs/splits, file tree, reading/editing modes, right-pane leaves, presentation polish) runs alongside V1.x and is tracked separately in [`08_ui_parity/00_program.md`](08_ui_parity/00_program.md) (GH milestones 23–28). M and O's UI surfaces build on U's leaf architecture.
 
 ## At a glance
 
