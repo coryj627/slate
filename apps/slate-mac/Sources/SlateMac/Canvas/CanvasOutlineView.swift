@@ -149,6 +149,7 @@ struct CanvasOutlineView: View {
         .accessibilityLabel(CanvasCardRef(kind: row.kind, title: row.title).phrase)
         .accessibilityValue(nodeValue(row))
         .accessibilityHint(activationHint(row))
+        .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: "Open") { activate(row) }
         .accessibilityRotorEntry(id: row.nodeId, in: rotorSpace)
         .accessibilityFocused($focusedRow, equals: row.nodeId)
@@ -181,6 +182,7 @@ struct CanvasOutlineView: View {
         .accessibilityLabel(connectionPhrase(neighbor))
         .accessibilityValue("connection \(ordinal) of \(total)")
         .accessibilityHint("Opens the connected card's row.")
+        .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: "Jump to Card") { jump(to: neighbor.otherNode) }
         .onTapGesture(count: 2) { jump(to: neighbor.otherNode) }
     }
