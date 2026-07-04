@@ -17,23 +17,21 @@ import SwiftUI
 /// conveying information).
 struct TasksPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = true
 
     var body: some View {
-        // Hide entirely when no note is selected. Matches
-        // `BacklinksPanel`'s behaviour so VoiceOver doesn't
-        // enumerate an empty section.
-        if appState.selectedFilePath == nil {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+        // The Tasks LEAF in the right-pane rail (U4-2, #471). The self-hiding
+        // `EmptyView` gate is now a labeled leaf empty state (DoD §A) and the
+        // `DisclosureGroup` a non-collapsible header row (the rail selects).
+        // Bindings, the toggle interaction, and row AX are unchanged.
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its tasks.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Tasks")
     }
 
     private var header: some View {

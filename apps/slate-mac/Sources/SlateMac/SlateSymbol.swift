@@ -59,13 +59,29 @@ enum SlateSymbol: CaseIterable {
     case folderOpen
     /// Outline leaf in the right-pane rail (U4-1, #470). The other nine leaf
     /// roles either already exist (`.citationSummary`/`.bibliography`/`.math`/
-    /// `.code`, reused by the rail) or land with U4-2 when their leaves gain
-    /// content — the rail only renders leaves whose content is registered.
+    /// `.code`, reused by the rail) or land here in U4-2 (below) with their
+    /// leaves' content — the rail only renders leaves whose content is
+    /// registered.
     case outline
     /// Row disclosure triangle for the file tree (U2-4, #462). Rendered
     /// `decorative` and rotated by the row per expand state; the folder row's
     /// AX value states expanded/collapsed, so the glyph itself is unlabeled.
     case disclosure
+    // Right-pane leaf roles landed with their content in U4-2 (#471). The
+    // remaining four leaf roles (`.math`/`.code`/`.citationSummary`/
+    // `.bibliography`) already exist above and are reused by the rail.
+    /// Backlinks leaf — inbound links to the active note.
+    case backlinks
+    /// Outgoing-links leaf — links FROM the active note.
+    case outgoingLinks
+    /// Embeds leaf — `![[…]]` transclusions in the active note.
+    case embed
+    /// Diagrams leaf — Mermaid diagram blocks in the active note.
+    case diagram
+    /// Tasks leaf. Deliberately shares `.tasksReview`'s `checklist` glyph
+    /// (same metaphor, same glyph — the DoD §B consistency rule); the two
+    /// roles stay distinct so their labels differ ("Tasks" vs "Tasks Review").
+    case tasksLeaf
 
     /// The resolved SF Symbol name for the running OS. `private` so call
     /// sites can't reach past the labeled/decorative builders to name a raw
@@ -104,6 +120,11 @@ enum SlateSymbol: CaseIterable {
         case .folderOpen: return "Open folder"
         case .disclosure: return "Disclosure"
         case .outline: return "Outline"
+        case .backlinks: return "Backlinks"
+        case .outgoingLinks: return "Outgoing links"
+        case .embed: return "Embed"
+        case .diagram: return "Diagram"
+        case .tasksLeaf: return "Tasks"
         }
     }
 
@@ -145,6 +166,16 @@ enum SlateSymbol: CaseIterable {
         case .folderOpen: return ("folder.fill", "folder.fill")
         case .disclosure: return ("chevron.right", "chevron.right")
         case .outline: return ("list.bullet.indent", "list.bullet.indent")
+        // U4-2 leaf roles (u4_spec SlateSymbol table). Each glyph exists on the
+        // macOS 15 floor, so v7 == fallback until a v7-only glyph is preferred.
+        case .backlinks: return ("arrow.uturn.backward", "arrow.uturn.backward")
+        case .outgoingLinks: return ("arrow.up.right", "arrow.up.right")
+        case .embed: return ("photo.on.rectangle", "photo.on.rectangle")
+        case .diagram:
+            return ("point.3.connected.trianglepath.dotted",
+                    "point.3.connected.trianglepath.dotted")
+        // Shares `.tasksReview`'s glyph deliberately (DoD §B).
+        case .tasksLeaf: return ("checklist", "checklist")
         }
     }
 

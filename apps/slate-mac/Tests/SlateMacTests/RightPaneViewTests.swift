@@ -39,17 +39,22 @@ final class RightPaneViewTests: XCTestCase {
     // MARK: - Rail keyboard navigation (pure function)
 
     /// ↑/↓ step through the registered leaves in order, clamped at the ends
-    /// (no wrap — a segmented picker's arrow-within behavior). The registered
-    /// order in U4-1 is [outline, citations, bibliography].
+    /// (no wrap — a segmented picker's arrow-within behavior). As of U4-2 all
+    /// ten leaves are registered, in the rail/registry order
+    /// [outline, backlinks, outgoingLinks, embeds, math, code, diagrams, tasks,
+    /// citations, bibliography].
     func testRailMoveSteppingAndClamping() {
         // Down from the top advances; down from the bottom is a no-op (clamp).
-        XCTAssertEqual(Leaf.railMove(from: .outline, .down), .citations)
+        XCTAssertEqual(Leaf.railMove(from: .outline, .down), .backlinks)
+        XCTAssertEqual(Leaf.railMove(from: .backlinks, .down), .outgoingLinks)
+        XCTAssertEqual(Leaf.railMove(from: .tasks, .down), .citations)
         XCTAssertEqual(Leaf.railMove(from: .citations, .down), .bibliography)
         XCTAssertNil(Leaf.railMove(from: .bibliography, .down), "clamped at the end")
 
         // Up mirrors it.
         XCTAssertEqual(Leaf.railMove(from: .bibliography, .up), .citations)
-        XCTAssertEqual(Leaf.railMove(from: .citations, .up), .outline)
+        XCTAssertEqual(Leaf.railMove(from: .outgoingLinks, .up), .backlinks)
+        XCTAssertEqual(Leaf.railMove(from: .backlinks, .up), .outline)
         XCTAssertNil(Leaf.railMove(from: .outline, .up), "clamped at the start")
     }
 
@@ -62,11 +67,13 @@ final class RightPaneViewTests: XCTestCase {
     }
 
     /// An origin that isn't in the supplied order yields no move (defensive:
-    /// an unregistered leaf could never be the highlight, but the function
-    /// stays total).
-    func testRailMoveFromUnregisteredOriginIsNoMove() {
-        XCTAssertNil(Leaf.railMove(from: .tasks, .down))
-        XCTAssertNil(Leaf.railMove(from: .backlinks, .up))
+    /// the function stays total even for an origin outside the given order).
+    /// All ten `Leaf` cases are registered now, so this is exercised via an
+    /// explicit restricted order rather than a real unregistered leaf.
+    func testRailMoveFromOriginOutsideOrderIsNoMove() {
+        let order: [Leaf] = [.outline, .citations, .bibliography]
+        XCTAssertNil(Leaf.railMove(from: .tasks, .down, in: order))
+        XCTAssertNil(Leaf.railMove(from: .backlinks, .up, in: order))
     }
 
     /// The mapping is defined over an arbitrary order, so U4-2 growing the
@@ -81,43 +88,64 @@ final class RightPaneViewTests: XCTestCase {
 
     // MARK: - Leaf registry & metadata
 
-    /// U4-1 ships exactly the three current detail tabs live, outline first.
-    func testRegisteredLeavesAreTheThreeDetailTabsOutlineFirst() {
-        XCTAssertEqual(Leaf.registered, [.outline, .citations, .bibliography])
-        // The other seven exist in the enum (U4-2 registers them) but aren't
-        // rendered yet.
-        for leaf in [Leaf.backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams, .tasks]
-        {
-            XCTAssertFalse(leaf.isRegistered, "\(leaf) must not render until U4-2")
+    /// U4-2 registers all ten leaves in the rail/registry order (outline first
+    /// — most used, matches the old default tab): the three detail tabs U4-1
+    /// seeded plus the seven ported out of the retired sidebar stack.
+    func testAllTenLeavesRegisteredInRailOrder() {
+        XCTAssertEqual(
+            Leaf.registered,
+            [
+                .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
+                .tasks, .citations, .bibliography,
+            ])
+        // Every case is now registered — no leaf presents a selectable-but-
+        // blank rail icon.
+        for leaf in Leaf.allCases {
+            XCTAssertTrue(leaf.isRegistered, "\(leaf) must be registered as of U4-2")
         }
         XCTAssertEqual(Leaf.allCases.count, 10, "the full leaf vocabulary is declared")
+        // The registry is exactly the case set (no duplicates, none missing).
+        XCTAssertEqual(Set(Leaf.registered), Set(Leaf.allCases))
+        XCTAssertEqual(Leaf.registered.count, Leaf.allCases.count)
     }
 
     /// Every leaf has a non-empty title (the rail label / help / announcement)
-    /// and a resolvable symbol; the registered three carry their intended
-    /// roles.
+    /// and its intended semantic symbol role (u4_spec SlateSymbol table). The
+    /// tasks leaf deliberately shares `.tasksReview`'s glyph via `.tasksLeaf`.
     func testLeafTitlesAndSymbols() {
         for leaf in Leaf.allCases {
             XCTAssertFalse(leaf.title.isEmpty, "\(leaf) has no title")
         }
         XCTAssertEqual(Leaf.outline.symbol, .outline)
+        XCTAssertEqual(Leaf.backlinks.symbol, .backlinks)
+        XCTAssertEqual(Leaf.outgoingLinks.symbol, .outgoingLinks)
+        XCTAssertEqual(Leaf.embeds.symbol, .embed)
+        XCTAssertEqual(Leaf.math.symbol, .math)
+        XCTAssertEqual(Leaf.code.symbol, .code)
+        XCTAssertEqual(Leaf.diagrams.symbol, .diagram)
+        XCTAssertEqual(Leaf.tasks.symbol, .tasksLeaf)
         XCTAssertEqual(Leaf.citations.symbol, .citationSummary)
         XCTAssertEqual(Leaf.bibliography.symbol, .bibliography)
     }
 
     // MARK: - Persistence
 
-    /// Unknown / absent / not-yet-registered tokens fall back to `.outline`;
-    /// a known registered token round-trips.
+    /// Unknown / absent tokens fall back to `.outline`; every known token
+    /// round-trips now that all ten leaves are registered (U4-2).
     func testLeafPersistedInitFallback() {
         XCTAssertEqual(Leaf(persisted: nil), .outline)
         XCTAssertEqual(Leaf(persisted: "not-a-leaf"), .outline)
-        // A valid rawValue that isn't registered yet must not resurrect a blank
-        // pane — falls back until U4-2 registers it.
-        XCTAssertEqual(Leaf(persisted: "backlinks"), .outline)
+        // Every valid rawValue is registered, so each round-trips to itself.
+        XCTAssertEqual(Leaf(persisted: "outline"), .outline)
+        XCTAssertEqual(Leaf(persisted: "backlinks"), .backlinks)
+        XCTAssertEqual(Leaf(persisted: "outgoingLinks"), .outgoingLinks)
+        XCTAssertEqual(Leaf(persisted: "embeds"), .embeds)
+        XCTAssertEqual(Leaf(persisted: "math"), .math)
+        XCTAssertEqual(Leaf(persisted: "code"), .code)
+        XCTAssertEqual(Leaf(persisted: "diagrams"), .diagrams)
+        XCTAssertEqual(Leaf(persisted: "tasks"), .tasks)
         XCTAssertEqual(Leaf(persisted: "citations"), .citations)
         XCTAssertEqual(Leaf(persisted: "bibliography"), .bibliography)
-        XCTAssertEqual(Leaf(persisted: "outline"), .outline)
     }
 
     /// `activeLeaf` round-trips through the `WorkspaceStore` snapshot schema.

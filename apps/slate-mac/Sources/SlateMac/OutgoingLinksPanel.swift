@@ -7,31 +7,27 @@ import SwiftUI
 /// note — resolved internal, unresolved internal, and external —
 /// in document order. Bound to `AppState.currentOutgoingLinks`.
 ///
-/// Default state is EXPANDED (#424) — the collapsed default hid
-/// every entry from a VoiceOver walk (only the count was announced),
-/// which the 2026-06-10 VO feature test flagged as F-C2. This is the
-/// tester-feedback revisit the original acceptance criteria
-/// promised; it also restores consistency with every sibling panel.
+/// The Outgoing-links LEAF in the right-pane rail (U4-2, #471). Bindings
+/// and row AX are unchanged from the sidebar-stack panel it replaces; the
+/// self-hiding `EmptyView` gate is now a labeled leaf empty state (DoD §A)
+/// and the `DisclosureGroup` is now a non-collapsible header row (the rail
+/// selects; the disclosure was a stack-era space-saver). Every entry is in
+/// the leaf's AX tree with no collapse to walk past — the #424 (F-C2)
+/// concern that a collapsed disclosure hid entries from VoiceOver is moot
+/// now the disclosure is gone.
 struct OutgoingLinksPanel: View {
     @EnvironmentObject private var appState: AppState
-    // #424 (F-C2): expanded by default — a collapsed disclosure
-    // hides its entries from a VoiceOver walk entirely (only the
-    // count is announced), so link entries were invisible until a
-    // sighted-style expand. Matches EmbedsPanel's default.
-    @State private var isExpanded = true
 
     var body: some View {
-        if appState.selectedFilePath == nil {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its outgoing links.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Outgoing links")
     }
 
     private var header: some View {

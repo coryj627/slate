@@ -16,23 +16,25 @@ import SwiftUI
 /// the editor's responder chain.
 struct EmbedsPanel: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isExpanded = true
 
     var body: some View {
-        // Hide when no note is selected OR when the loaded note has
-        // no embeds. `EmptyView` removes the panel from the AX tree
-        // so VoiceOver doesn't enumerate an empty section.
-        if appState.selectedFilePath == nil || embedLinks.isEmpty {
-            EmptyView()
-        } else {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                content
-            } label: {
-                header
+        // The Embeds LEAF in the right-pane rail (U4-2, #471). The stack panel
+        // self-hid when no note was selected OR the note had no embeds; a leaf
+        // must never be a blank rectangle (DoD §A), so each of those cases is
+        // now its own labeled empty state. Populated content moves from a
+        // `DisclosureGroup` into a non-collapsible header row. Bindings and
+        // row AX are otherwise unchanged.
+        Group {
+            if appState.selectedFilePath == nil {
+                LeafEmptyState(message: "Select a note to see its embeds.")
+            } else if embedLinks.isEmpty {
+                LeafEmptyState(message: "This note has no embeds.")
+            } else {
+                LeafSection { header } content: { content }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Embeds")
     }
 
     private var header: some View {
