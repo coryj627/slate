@@ -1459,9 +1459,10 @@ impl From<core::Page<core::UnresolvedLink>> for UnresolvedLinkPage {
     }
 }
 
-/// Scope of a `full_text_search` call. `File` and `Tag` are
-/// reserved for later milestones; today they return
-/// `VaultError::Cancelled`.
+/// Scope of a `full_text_search` call. `Vault`, `Folder`, and `Tag`
+/// are live; `File` (single-file find-in-page) is reserved and
+/// returns `VaultError::Unsupported`. `Tag` also lists all tagged
+/// files on an empty query — see `slate_core::SearchScope::Tag`.
 #[derive(uniffi::Enum)]
 pub enum SearchScope {
     Vault,

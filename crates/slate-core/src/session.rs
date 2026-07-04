@@ -939,6 +939,7 @@ impl VaultSession {
             replace_headings(&tx, file_id, contents)?;
             crate::links_db::replace_links_for_file(&tx, file_id, path, contents, &vault_index)?;
             crate::properties_db::replace_properties_for_file(&tx, file_id, contents)?;
+            crate::tags_db::replace_tags_for_file(&tx, file_id, contents)?;
             crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(&tx, file_id, contents)?;
             crate::citations_db::replace_citations_for_file(&tx, file_id, contents)?;
@@ -2043,10 +2044,11 @@ impl VaultSession {
     }
 
     /// Run a full-text search across the vault. `scope` lets callers
-    /// narrow to a folder; `cancel` cooperates the same way it does
-    /// for `scan_initial` — the result-collection loop checks the
-    /// token between rows. Reserved scopes (`File`, `Tag`) return
-    /// `VaultError::Cancelled` for now.
+    /// narrow to a folder or tag; `cancel` cooperates the same way it
+    /// does for `scan_initial` — the result-collection loop checks the
+    /// token between rows. The reserved `File` scope returns
+    /// `VaultError::Unsupported`; `Tag` is live (see
+    /// `search_db::SearchScope::Tag`).
     pub fn full_text_search(
         &self,
         query: &str,
@@ -3085,6 +3087,7 @@ fn index_markdown_derivatives(
     replace_headings(tx, file_id, body_text)?;
     crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
+    crate::tags_db::replace_tags_for_file(tx, file_id, body_text)?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, body_text)?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, body_text)?;
     crate::citations_db::replace_citations_for_file(tx, file_id, body_text)?;
@@ -3147,6 +3150,7 @@ fn purge_markdown_derivatives(
     replace_headings(tx, file_id, "")?;
     crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
+    crate::tags_db::replace_tags_for_file(tx, file_id, "")?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, "")?;
     crate::citations_db::replace_citations_for_file(tx, file_id, "")?;
