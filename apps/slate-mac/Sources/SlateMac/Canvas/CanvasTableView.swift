@@ -74,7 +74,17 @@ struct CanvasTableView: View {
             accessibilityLabel: "Canvas table",
             selection: selectionBinding,
             onActivate: { onActivate($0.id) },
-            rowActions: [.init("Open") { [onActivate] row in onActivate(row.id) }],
+            rowActions: [
+                .init("Open") { [onActivate] row in onActivate(row.id) },
+                .init("Toggle Mark") { [appState, document] row in
+                    appState.canvasSelect(nodeId: row.id, in: document, announce: false)
+                    appState.canvasToggleMark()
+                },
+                .init("Delete") { [appState, document] row in
+                    appState.canvasSelect(nodeId: row.id, in: document, announce: false)
+                    appState.canvasDeleteSelection()
+                },
+            ],
             announce: { [weak appState] text in
                 appState?.canvasAnnouncer.announce(.status(text))
             }

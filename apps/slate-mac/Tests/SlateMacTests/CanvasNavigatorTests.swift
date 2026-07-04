@@ -1027,3 +1027,110 @@ extension CanvasNavigatorTests {
         XCTAssertNil(state.canvasDocuments["nav.canvas"], "document released with the last tab")
     }
 }
+
+/// #368 part 2: the real text-card editor (Esc commits, one action,
+/// one undo), creation for every card kind, Locate… repointing, and
+/// Remove from Group.
+@MainActor
+extension CanvasNavigatorTests {
+    func testEditCardCommitIsOneActionOneUndo() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        state.canvasEditCard()
+        let request = try XCTUnwrap(state.canvasCardEditor)
+        XCTAssertEqual(request.initialText, "Alpha")
+
+        let undoBefore = doc.undoStack.count
+        posted = []
+        state.canvasCommitCardEdit(nodeId: "a", newText: "Alpha revised")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertNil(state.canvasCardEditor, "commit dismisses the editor")
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1, "one undo step")
+        XCTAssertTrue(posted.contains("Updated \"Alpha\"."), "\(posted)")
+        let text = try state.currentSession?.canvasNodeText(
+            handle: doc.handle ?? 0, nodeId: "a")
+        XCTAssertEqual(text ?? nil, "Alpha revised")
+
+        state.canvasUndo()
+        let reverted = try state.currentSession?.canvasNodeText(
+            handle: doc.handle ?? 0, nodeId: "a")
+        XCTAssertEqual(reverted ?? nil, "Alpha")
+    }
+
+    func testEditCardNoChangeWritesNothing() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "b", in: doc, announce: false)
+        state.canvasEditCard()
+        let undoBefore = doc.undoStack.count
+        posted = []
+        state.canvasCommitCardEdit(nodeId: "b", newText: "Beta")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.undoStack.count, undoBefore, "no-op commit adds no undo entry")
+        XCTAssertTrue(posted.contains("No changes."))
+        XCTAssertNil(state.canvasCardEditor)
+    }
+
+    func testNewCardLandsInEditMode() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        state.canvasNewCard()
+        let request = try XCTUnwrap(state.canvasCardEditor, "G22: new card lands in edit mode")
+        XCTAssertEqual(request.initialText, "")
+        XCTAssertEqual(doc.selection.selected, request.nodeId)
+    }
+
+    func testAddFileCardAndLocateRepoint() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "c", in: doc, announce: false)
+        posted = []
+        state.canvasAddFileCard(path: "notes/first.md")
+        state.canvasAnnouncer.flushForTests()
+        let fileRow = try XCTUnwrap(doc.outline.first { $0.kind == "file" })
+        XCTAssertEqual(doc.target(of: fileRow.nodeId), "notes/first.md")
+        XCTAssertTrue(
+            posted.contains { $0.contains("first.md") }, "creation announced: \(posted)")
+
+        // Locate… repoints the SAME card — one action, one undo.
+        let undoBefore = doc.undoStack.count
+        state.canvasLocate(nodeId: fileRow.nodeId, path: "notes/second.md")
+        XCTAssertEqual(doc.target(of: fileRow.nodeId), "notes/second.md")
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1)
+        state.canvasUndo()
+        XCTAssertEqual(doc.target(of: fileRow.nodeId), "notes/first.md")
+    }
+
+    func testAddLinkCardValidatesURL() async throws {
+        let (state, doc) = try await normalizedState()
+        let countBefore = doc.outline.count
+        posted = []
+        state.canvasAddLinkCard(url: "not a url")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.outline.count, countBefore, "garbage URL creates nothing")
+        XCTAssertTrue(posted.contains { $0.contains("URL") })
+
+        state.canvasAddLinkCard(url: "https://example.com/x")
+        let linkRow = try XCTUnwrap(doc.outline.first { $0.kind == "link" })
+        XCTAssertEqual(doc.target(of: linkRow.nodeId), "https://example.com/x")
+    }
+
+    func testRemoveFromGroupPlacesOutsideAndUndoes() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        XCTAssertEqual(doc.outline.first { $0.nodeId == "a" }?.groupPath, ["Zone"])
+        posted = []
+        state.canvasRemoveFromGroup()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            doc.outline.first { $0.nodeId == "a" }?.groupPath, [],
+            "card left the group via engine placement")
+        XCTAssertTrue(posted.contains("Removed from group \"Zone\"."), "\(posted)")
+        state.canvasUndo()
+        XCTAssertEqual(doc.outline.first { $0.nodeId == "a" }?.groupPath, ["Zone"])
+
+        // Ungrouped card: honest status, no mutation.
+        state.canvasSelect(nodeId: "c", in: doc, announce: false)
+        let undoBefore = doc.undoStack.count
+        state.canvasRemoveFromGroup()
+        XCTAssertEqual(doc.undoStack.count, undoBefore)
+    }
+}

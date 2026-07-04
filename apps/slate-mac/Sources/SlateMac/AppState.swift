@@ -358,6 +358,9 @@ final class AppState: ObservableObject {
     /// the reusable proximity-sorted picker in the container.
     @Published var canvasCardPicker: CanvasCardPickerRequest?
 
+    /// #368: the open text-card edit session (sheet; Esc commits — M8).
+    @Published var canvasCardEditor: CanvasCardEditorRequest?
+
     /// Transient move/resize geometry (#521, the t4 pipeline
     /// exception): held UI-side while a spatial mode is active,
     /// committed as ONE canvas_apply on Return, dropped on Esc.

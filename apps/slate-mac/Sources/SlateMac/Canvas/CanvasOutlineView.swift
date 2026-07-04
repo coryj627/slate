@@ -186,12 +186,66 @@ struct CanvasOutlineView: View {
         .accessibilityHint(activationHint(row))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: "Open") { onActivate(row) }
+        .accessibilityAction(named: "Toggle Mark") {
+            selecting(row) { appState.canvasToggleMark() }
+        }
+        .accessibilityAction(named: "Delete") {
+            selecting(row) { appState.canvasDeleteSelection() }
+        }
         .accessibilityRotorEntry(id: row.nodeId, in: rotorSpace)
         .accessibilityFocused($focusedRow, equals: row.nodeId)
         .onTapGesture(count: 2) { onActivate(row) }
+        // t0 M6 visible-control rule (#368): every core verb on the
+        // row's context menu — Switch Control / Voice Control never
+        // depend on chords. Each verb selects the row first.
         .contextMenu {
             Button("Open") { onActivate(row) }
+            if row.kind == "text" {
+                Button("Edit Card Text…") {
+                    selecting(row) { appState.canvasEditCard() }
+                }
+            }
+            if row.kind == "group" {
+                Button("Rename Group…") {
+                    selecting(row) { appState.canvasPromptRenameGroup() }
+                }
+            }
+            if row.kind == "file" || row.kind == "image" {
+                Button("Locate File…") {
+                    selecting(row) { appState.canvasOpenLocate() }
+                }
+            }
+            Divider()
+            Button("Toggle Mark") {
+                selecting(row) { appState.canvasToggleMark() }
+            }
+            Button("Connect To…") {
+                selecting(row) { appState.canvasOpenConnectPicker() }
+            }
+            Button("Set Color…") {
+                selecting(row) { appState.canvasPromptSetColor() }
+            }
+            Divider()
+            Button("Move into Group…") {
+                selecting(row) { appState.canvasPromptMoveIntoGroup() }
+            }
+            if !row.groupPath.isEmpty {
+                Button("Remove from Group") {
+                    selecting(row) { appState.canvasRemoveFromGroup() }
+                }
+            }
+            Divider()
+            Button(row.kind == "group" ? "Ungroup" : "Delete", role: .destructive) {
+                selecting(row) { appState.canvasDeleteSelection() }
+            }
         }
+    }
+
+    /// Context-menu verbs act on the selection: select the row the
+    /// menu was opened on, then run the selection-scoped verb.
+    private func selecting(_ row: CanvasOutlineRow, then verb: () -> Void) {
+        appState.canvasSelect(nodeId: row.nodeId, in: document, announce: false)
+        verb()
     }
 
     /// t0 §1.2 standard context + §3 inspectability: position, marked
