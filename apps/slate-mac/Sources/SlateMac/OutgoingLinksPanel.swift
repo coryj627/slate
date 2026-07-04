@@ -82,7 +82,7 @@ struct OutgoingLinksPanel: View {
                         // link:" prefix so the state is unmistakable for
                         // both sighted and screen-reader users (the
                         // acceptance criteria require both).
-                        .strikethrough(link.isUnresolved, color: .orange)
+                        .strikethrough(link.isUnresolved, color: Tokens.ColorRole.warningText)
                     badge(for: link)
                 }
                 if !link.snippet.isEmpty {
@@ -138,7 +138,7 @@ struct OutgoingLinksPanel: View {
             badgeText("External")
         } else if link.isUnresolved {
             badgeText("Unresolved")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Tokens.ColorRole.warningText)
         } else if link.isEmbed {
             badgeText("Embed")
         }
@@ -168,9 +168,12 @@ struct OutgoingLinksPanel: View {
 
     private func linkColor(for link: OutgoingLink) -> Color {
         if link.isUnresolved {
-            return .orange
+            // Unresolved-link target text: the amber "needs attention" role
+            // (APCA-gated ≥ 78 both appearances). Raw `.orange` measured Lc ≈ 43
+            // on this leaf's surface — below the project floor (U5-3, #476).
+            return Tokens.ColorRole.warningText
         }
-        return .primary
+        return Tokens.ColorRole.textPrimary
     }
 
     private func accessibilityLabel(for link: OutgoingLink) -> String {

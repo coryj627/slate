@@ -270,7 +270,7 @@ private struct ContentBlocksErrorRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             SlateSymbol.warning.decorative
-                .foregroundStyle(.orange)
+                .foregroundStyle(Tokens.ColorRole.warningText)
             Text(verbatim: message)
                 .font(.caption)
                 .foregroundStyle(.primary)

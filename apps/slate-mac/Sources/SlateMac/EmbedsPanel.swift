@@ -60,7 +60,7 @@ struct EmbedsPanel: View {
         } else if let err = appState.embedsLoadError {
             HStack(alignment: .top, spacing: 6) {
                 SlateSymbol.warning.decorative
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Tokens.ColorRole.warningText)
                 Text(verbatim: "Could not resolve embeds: \(err)")
                     .font(.caption)
                     .foregroundStyle(.primary)

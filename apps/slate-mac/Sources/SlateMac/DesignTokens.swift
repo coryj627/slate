@@ -71,7 +71,24 @@ enum Tokens {
         static let destructiveFill = Color(nsColor: .tokenDestructiveFill)
         static let onDestructiveFill = Color(nsColor: .tokenOnDestructiveFill)
         static let destructiveText = Color(nsColor: .tokenDestructiveText)
+        // Warning/attention — an accent-colored foreground for non-error
+        // "needs attention" states (an unresolved wikilink, an embed that
+        // couldn't resolve). Split TEXT-only like accent/destructive: the
+        // amber that reads as "warning" is inherently light, so the light-mode
+        // value is a dark amber-brown (clears the APCA floor on `surface` AND
+        // `surfaceSecondary`) and the dark-mode value a pale amber. Gated in
+        // `contrastPairings`. Replaces the raw `.orange` literals U1–U4 left in
+        // the link/embed leaves (U5-3, #476) — those measured Lc ≈ 43 (light),
+        // below the project floor; this role is measured ≥ 78.
+        static let warningText = Color(nsColor: .tokenWarningText)
         static let selection = Color(nsColor: .tokenSelection)
+        // Text that sits ON the `selection` fill. `selection` is the highlight
+        // behind a selected row's label, so the label's foreground must clear
+        // the APCA floor against it in both appearances (gated below). Kept a
+        // distinct role from `textPrimary` so a future theme (Milestone R) can
+        // re-tune the selection fill and its text together without touching the
+        // on-surface text roles (U5-3, #476).
+        static let onSelection = Color(nsColor: .tokenOnSelection)
         static let separator = Color(nsColor: .tokenSeparator)
     }
 
@@ -88,8 +105,11 @@ enum Tokens {
         ("accentText on surfaceSecondary", .tokenAccentText, .tokenSurfaceSecondary),
         ("destructiveText on surface", .tokenDestructiveText, .tokenSurface),
         ("destructiveText on surfaceSecondary", .tokenDestructiveText, .tokenSurfaceSecondary),
+        ("warningText on surface", .tokenWarningText, .tokenSurface),
+        ("warningText on surfaceSecondary", .tokenWarningText, .tokenSurfaceSecondary),
         ("onAccentFill on accentFill", .tokenOnAccentFill, .tokenAccentFill),
         ("onDestructiveFill on destructiveFill", .tokenOnDestructiveFill, .tokenDestructiveFill),
+        ("onSelection on selection", .tokenOnSelection, .tokenSelection),
     ]
 }
 
@@ -138,6 +158,21 @@ extension NSColor {
         light: srgb(1.00, 1.00, 1.00), dark: srgb(1.00, 1.00, 1.00))
     static let tokenDestructiveText = tokenDynamic(
         light: srgb(0.659, 0.00, 0.078), dark: srgb(0.960, 0.800, 0.810))
+
+    // Warning/attention TEXT — dark amber-brown in light, pale amber in dark.
+    // Measured APCA (both surfaces, both appearances) all clear |Lc| > 78 —
+    // the tightest is warningText-on-surfaceSecondary (light 78.5, dark 84.0);
+    // system `.orange` in the same slots measured ≈ 43/-60, below the floor.
+    static let tokenWarningText = tokenDynamic(
+        light: srgb(0.46, 0.27, 0.00), dark: srgb(1.00, 0.86, 0.58))
+
+    // Text ON the selection fill. Shares `textPrimary`'s tuned values (the
+    // selection fill is a light wash in light / muted blue in dark, so primary
+    // text clears the floor over it — measured light 87.2, dark 89.3) but kept
+    // a NAMED role so the selection pairing is gated and theme-swappable
+    // independently of on-surface text.
+    static let tokenOnSelection = tokenDynamic(
+        light: srgb(0.09, 0.09, 0.10), dark: srgb(0.96, 0.96, 0.97))
 
     // Non-text roles (selection fill, hairline separator). These are decorative
     // dividers/highlights redundant with spacing and selection state, so they

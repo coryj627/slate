@@ -28,7 +28,9 @@ final class DesignTokensTests: XCTestCase {
             ("accentText", .tokenAccentText),
             ("destructiveFill", .tokenDestructiveFill),
             ("destructiveText", .tokenDestructiveText),
+            ("warningText", .tokenWarningText),
             ("selection", .tokenSelection),
+            ("onSelection", .tokenOnSelection),
             ("separator", .tokenSeparator),
         ])
     }

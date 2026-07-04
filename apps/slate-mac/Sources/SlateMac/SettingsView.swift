@@ -433,7 +433,7 @@ struct BibliographySettingsTab: View {
                 Section {
                     Text(error)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Tokens.ColorRole.destructiveText)
                         .accessibilityLabel("Bibliography settings error: \(error)")
                 }
             }

@@ -57,7 +57,7 @@ struct AddPropertySheet: View {
             if let err = inlineError {
                 Text(err)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
                     .accessibilityLabel("Validation error: \(err)")
                     .accessibilityAddTraits(.isStaticText)
             }
