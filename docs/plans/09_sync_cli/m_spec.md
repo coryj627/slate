@@ -1,6 +1,7 @@
 # M executable spec — Sync detection + diagnostics + CLI v1
 
-Issues: M-1..M-6 (to be filed on GH [milestone 13](https://github.com/coryj627/slate/milestone/13); one PR per issue).
+Issues: [#532](https://github.com/coryj627/slate/issues/532) (M-1) · [#533](https://github.com/coryj627/slate/issues/533) (M-2) · [#534](https://github.com/coryj627/slate/issues/534) (M-3) · [#535](https://github.com/coryj627/slate/issues/535) (M-4) · [#536](https://github.com/coryj627/slate/issues/536) (M-5) · [#537](https://github.com/coryj627/slate/issues/537) (M-6).
+Milestone: [GH 13](https://github.com/coryj627/slate/milestone/13). One PR per issue.
 Plan: [00_plan.md](00_plan.md). U-program Presentation-Ready DoD applies to M-3; backend norms
 (fmt/clippy pre-push, censuses for correctness invariants, one PR per issue) apply throughout.
 
@@ -51,7 +52,7 @@ Baseline facts (verified 2026-07-03, this worktree):
 
 ---
 
-## M-1 · Sync detector engine (#TBD) — PR 1
+## M-1 · Sync detector engine (#532) — PR 1
 
 ### Rust: new module `crates/slate-core/src/sync_detect.rs`
 
@@ -168,7 +169,7 @@ Mirror `SyncProviderKind`, `RiskLevel` (uniffi::Enum), `DetectedSyncProvider`,
 - Determinism: detection of a fixture with all seven systems returns providers in table order.
 - `supported=false` path: session opened with a mock provider (no fs root) → empty report, no error.
 
-## M-2 · LiveSync config reader (#TBD) — PR 2
+## M-2 · LiveSync config reader (#533) — PR 2
 
 ### Rust: `sync_detect.rs` additions
 
@@ -225,7 +226,7 @@ Mirror `LiveSyncConfigStatus` (uniffi::Enum with associated record) + `LiveSyncC
   (only `couchDB_DBNAME`) → `Parsed` with the rest `None`. None of these panic (fuzz 1k random
   byte-strings through the parser).
 
-## M-3 · Sync diagnostics leaf (#TBD) — PR 3
+## M-3 · Sync diagnostics leaf (#534) — PR 3
 
 ### Leaf registration
 
@@ -311,7 +312,7 @@ States (LeafSection/LeafEmptyState discipline):
 - Appearance snapshots (both modes) for the populated multi-provider state; `a11y-check` 100 at
   the PR tip.
 
-## M-4 · `slate-cli` scaffold: formats, exit codes, Ctrl-C, `open`, `sync-check` (#TBD) — PR 4
+## M-4 · `slate-cli` scaffold: formats, exit codes, Ctrl-C, `open`, `sync-check` (#535) — PR 4
 
 ### Crate layout
 
@@ -398,7 +399,7 @@ information, not failure); scripts branch on json.
 - SIGINT (cfg(unix)): spawn `slate open` on a large generated fixture (5k files), send SIGINT
   ~50ms in → exit code 130; reopen the same vault normally → exit 0 (no cache corruption).
 
-## M-5 · CLI query commands: `read`, `list`, `search`, `links`, `properties` (#TBD) — PR 5
+## M-5 · CLI query commands: `read`, `list`, `search`, `links`, `properties` (#536) — PR 5
 
 ### slate-core additions (properties need two small queries; SQL over the existing `properties` table)
 
@@ -472,7 +473,7 @@ linking file, remaining columns empty; outgoing rows have `direction=out`, `path
   search loop checks the token per row — this covers the DoD's "scan/search" cancellation claim
   beyond M-4's scan test).
 
-## M-6 · CLI `tasks` + `render-template` (#TBD) — PR 6
+## M-6 · CLI `tasks` + `render-template` (#537) — PR 6
 
 ### `slate tasks <vault-path> [--filter due-today|overdue|this-week|all] [--include-completed]`
 

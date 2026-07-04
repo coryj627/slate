@@ -47,12 +47,12 @@ recovery, `StructuredDiff`, per-op FFI accessors, temporal query operators, and 
 
 | ID | Issue | Track | Depends on | Labels |
 |----|-------|-------|-----------|--------|
-| O-1 | Op-log v2: durable identity (header path, `PathChanged`, reconcile) + semantic annotations | Rust | — | `backend`, `schema` |
-| O-2 | Compaction + retention: background job, atomic rewrite, race-safe locking, remnant reclamation, and the `VaultEventListener` error channel (built here — `05` §4.4 is an unimplemented sketch today) | Rust | O-1 | `backend` |
-| O-3 | Version-history + deleted-file-recovery session APIs (+ uniffi) | Rust | O-1 (not O-2) | `backend` |
-| O-4 | StructuredDiff engine + changes-since-last-open | Rust | O-3 | `backend` |
-| O-5 | History leaf + retention settings (Mac UI) | Swift | O-2, O-3, O-4 | `swift-ui`, `a11y` |
-| O-6 | Temporal query operators (`oplog_events` + `oplog.*` filters) | Rust | O-1, **Milestone N** | `backend`, `blocked` until N |
+| O-1 ([#539](https://github.com/coryj627/slate/issues/539)) | Op-log v2: durable identity (header path, `PathChanged`, reconcile) + semantic annotations | Rust | — | `backend`, `schema` |
+| O-2 ([#540](https://github.com/coryj627/slate/issues/540)) | Compaction + retention: background job, atomic rewrite, race-safe locking, remnant reclamation, and the `VaultEventListener` error channel (built here — `05` §4.4 is an unimplemented sketch today) | Rust | O-1 | `backend` |
+| O-3 ([#541](https://github.com/coryj627/slate/issues/541)) | Version-history + deleted-file-recovery session APIs (+ uniffi) | Rust | O-1 (not O-2) | `backend` |
+| O-4 ([#542](https://github.com/coryj627/slate/issues/542)) | StructuredDiff engine + changes-since-last-open | Rust | O-3 | `backend` |
+| O-5 ([#543](https://github.com/coryj627/slate/issues/543)) | History leaf + retention settings (Mac UI) | Swift | O-2, O-3, O-4 | `swift-ui`, `a11y` |
+| O-6 ([#544](https://github.com/coryj627/slate/issues/544)) | Temporal query operators (`oplog_events` + `oplog.*` filters) | Rust | O-1, **Milestone N** | `backend`, `blocked` until N |
 
 ```
 O-1 ──▶ O-2 ──────────────┐
