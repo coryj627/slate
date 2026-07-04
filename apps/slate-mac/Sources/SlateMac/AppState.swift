@@ -3395,6 +3395,54 @@ final class AppState: ObservableObject {
         isLoadingEmbeds = false
     }
 
+    /// Resolve ONE embed cache key against the current note and merge it into
+    /// `currentNoteEmbedResolutions` (#511, block-level reading embeds).
+    ///
+    /// The batch resolver (`loadCurrentNoteEmbedResolutions`) only sees embeds
+    /// in the SAVED-state `currentOutgoingLinks`; reading mode renders the
+    /// LIVE buffer, so a just-typed `![[…]]` can be visible with no dict
+    /// entry. The reading view's block-embed placeholder calls this once per
+    /// missing key to fill that gap. The `target` string is already the
+    /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, ==
+    /// `embedTargetKey`), so it is BOTH the resolver input and the dict key —
+    /// no re-derivation.
+    ///
+    /// Terminal by design: whatever the resolver returns (including a
+    /// synthesized `.unresolved` on a broken target or FFI failure) is written
+    /// under `target`, so the placeholder collapses to a real `EmbedView`
+    /// render and can't spin forever. When there is no session — the one path
+    /// that writes nothing — the reading view's own request-once guard keeps
+    /// the key marked, and its state machine falls back to the inline link-run
+    /// (deterministic, no re-request).
+    func requestReadingEmbedResolution(target: String) async {
+        guard let session = currentSession, let path = selectedFilePath else { return }
+        // Already landed (a racing batch, or a duplicate request the view's
+        // guard didn't cover across a re-init): don't re-resolve.
+        if currentNoteEmbedResolutions[target] != nil { return }
+
+        let resolution: EmbedResolution =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    return try session.resolveEmbed(
+                        hostPath: path, target: target, alt: nil)
+                } catch let error as VaultError {
+                    return .unresolved(
+                        reason: .readError(message: Self.humanReadableVaultError(error)))
+                } catch {
+                    return .unresolved(
+                        reason: .readError(message: error.localizedDescription))
+                }
+            }
+            .value
+
+        // Drop the write if the user navigated away mid-resolve — same
+        // stale-guard the batch path uses.
+        guard selectedFilePath == path else { return }
+        // Merge (never replace): the batch may have populated other keys while
+        // this single resolve was in flight.
+        currentNoteEmbedResolutions[target] = resolution
+    }
+
     // MARK: - Content pipelines (#223)
 
     /// Load math blocks for `path` via the math pipeline and publish

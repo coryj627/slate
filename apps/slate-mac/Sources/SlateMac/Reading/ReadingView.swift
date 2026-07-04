@@ -78,6 +78,25 @@ struct ReadingView: View {
         /// and 0 was correct for the pre-flip whole-file text too.
         var taskLineOffset: Int = 0
 
+        // MARK: Block-level embeds (#511)
+
+        /// Resolved embeds for THIS note, keyed by cache-key form (the exact
+        /// `AppState.currentNoteEmbedResolutions` dict). A block that is one
+        /// `![[…]]` embed looks its target up here to render an `EmbedView`
+        /// card; a missing key means "not resolved yet OR unresolvable in the
+        /// live buffer" — the render state machine (see `embedBlock`) handles
+        /// both from this one dict.
+        var embedResolutions: [String: EmbedResolution] = [:]
+        /// Request async resolution for a cache key the dict lacks. Wired to
+        /// `AppState.requestReadingEmbedResolution`; the view calls it AT MOST
+        /// once per key (a `@State` guard set), so a placeholder that stays
+        /// unresolved can't loop the resolver.
+        var onResolveEmbed: (String) -> Void = { _ in }
+        /// Jump-to-source for a block-level embed card. Wired to
+        /// `AppState.openEmbedTarget` — the SAME routing the EmbedsPanel rows
+        /// and the Cmd+E popover use.
+        var onOpenEmbedSource: (String) -> Void = { _ in }
+
         init(
             mathBlocks: [MathBlock] = [],
             codeBlocks: [CodeBlock] = [],
@@ -86,7 +105,10 @@ struct ReadingView: View {
             tasks: [TaskItem] = [],
             isDocumentDirty: Bool = false,
             onToggleTask: @escaping (TaskItem) -> Void = { _ in },
-            taskLineOffset: Int = 0
+            taskLineOffset: Int = 0,
+            embedResolutions: [String: EmbedResolution] = [:],
+            onResolveEmbed: @escaping (String) -> Void = { _ in },
+            onOpenEmbedSource: @escaping (String) -> Void = { _ in }
         ) {
             self.mathBlocks = mathBlocks
             self.codeBlocks = codeBlocks
@@ -96,6 +118,9 @@ struct ReadingView: View {
             self.isDocumentDirty = isDocumentDirty
             self.onToggleTask = onToggleTask
             self.taskLineOffset = taskLineOffset
+            self.embedResolutions = embedResolutions
+            self.onResolveEmbed = onResolveEmbed
+            self.onOpenEmbedSource = onOpenEmbedSource
         }
     }
 
@@ -112,6 +137,14 @@ struct ReadingView: View {
     /// SwiftUI re-initializations of this struct. `@State` keeps the box
     /// stable for the lifetime of the mounted view.
     @State private var parseCache = ReadingParseCache()
+
+    /// Cache keys for which `onResolveEmbed` has already fired (#511). A
+    /// block-level embed placeholder requests resolution exactly once per key;
+    /// this guards the re-request loop a bare `.task`/`.onAppear` would create
+    /// when the resolution legitimately never lands (unsaved buffer, broken
+    /// target). Keys are never removed: a re-request would be redundant work,
+    /// and the resolution — once it arrives — flows in through `context`.
+    @State private var requestedEmbedKeys: Set<String> = []
 
     init(
         text: String,
@@ -239,7 +272,17 @@ struct ReadingView: View {
         case .heading(let level):
             headingView(block, level: level)
         case .paragraph:
-            inlineLeaf(block.source)
+            // A paragraph that IS one `![[…]]` embed (block-level) expands to
+            // an EmbedView card; anything else — prose, or an embed WITH
+            // surrounding text (mid-paragraph) — stays the inline text leaf,
+            // where the embed run keeps today's link-run navigate behavior (a
+            // SwiftUI `Text` can't host a card mid-run). Detection is the Rust
+            // span authority, not a string check (see `blockEmbedTarget`).
+            if let embedKey = ReadingInlineMapper.blockEmbedTarget(inSlice: block.source) {
+                embedBlock(key: embedKey, fallbackSlice: block.source)
+            } else {
+                inlineLeaf(block.source)
+            }
         case .listItem(let depth, let ordered, let task):
             if let taskChar = task {
                 taskRow(block, depth: depth, taskChar: taskChar, lineStarts: lineStarts)
@@ -294,6 +337,79 @@ struct ReadingView: View {
             .strikethrough(strikethrough, color: Tokens.ColorRole.textSecondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Block-level embed card (#511) + its render state machine. `key` is the
+    /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, == the
+    /// `AppState.embedTargetKey` the resolutions dict is keyed on).
+    ///
+    /// States, driven by ONE input (is `key` in `context.embedResolutions`?)
+    /// plus the per-key "already requested" guard:
+    ///
+    ///  1. RESOLVED — the dict has an entry → `EmbedView` renders it. This is
+    ///     the ONE path for BOTH a real resolution (full note / section /
+    ///     block / image) AND `.unresolved` (broken target): EmbedView owns
+    ///     the honest "Unresolved embed: …" render + AX for the latter, so a
+    ///     resolved-but-broken target is never a dead block and never the
+    ///     inline fallback.
+    ///  2. PENDING — no entry, and we haven't asked → placeholder row
+    ///     ("Embed, loading") + fire `onResolveEmbed(key)` exactly once
+    ///     (recorded in `requestedEmbedKeys`, so no re-request loop).
+    ///  3. RESOLVED-EMPTY — no entry, and we already asked → the resolve pass
+    ///     completed without landing this key (live/unsaved buffer whose embed
+    ///     the saved-state resolver never saw, or a batch that legitimately
+    ///     lacks it). Deterministic terminal fallback: render the INLINE
+    ///     link-run, so activation still routes through the router's embed
+    ///     branch (announces "unresolved" when the target can't open) — never
+    ///     an infinite spinner.
+    ///
+    /// The pending→resolved-empty transition is edge-triggered by the guard
+    /// set, so the placeholder is shown for exactly the window between "first
+    /// seen" and "resolve pass returned", then collapses to the fallback.
+    @ViewBuilder
+    private func embedBlock(key: String, fallbackSlice: String) -> some View {
+        if let resolution = context.embedResolutions[key] {
+            EmbedView(
+                resolution: resolution,
+                jumpToSourceAction: { target in context.onOpenEmbedSource(target) },
+                depth: 0
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if requestedEmbedKeys.contains(key) {
+            // Resolved-empty terminal: the request completed, the key never
+            // landed — fall back to the inline run so the embed is still
+            // reachable + activation announces unresolved. Never a dead block.
+            inlineLeaf(fallbackSlice)
+        } else {
+            embedPlaceholder(key: key)
+        }
+    }
+
+    /// Pending-resolution placeholder for a block-level embed. Requests the
+    /// resolution exactly once (`requestedEmbedKeys` guard). Labeled per the
+    /// house loading-row phrasing so VoiceOver announces the wait rather than
+    /// landing on an unlabeled spinner.
+    private func embedPlaceholder(key: String) -> some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading embed…")
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+        }
+        .padding(.vertical, Tokens.Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Embed, loading.")
+        .onAppear {
+            // Request-once: the guard prevents a re-request loop when the
+            // resolution legitimately never arrives (unsaved buffer / broken
+            // target). `.onAppear` (not `.task`) so a struct re-init that
+            // re-runs body doesn't spawn a fresh async request per render.
+            guard !requestedEmbedKeys.contains(key) else { return }
+            requestedEmbedKeys.insert(key)
+            context.onResolveEmbed(key)
+        }
     }
 
     private func headingView(_ block: ReadingBlock, level: UInt8) -> some View {
