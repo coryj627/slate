@@ -38,6 +38,14 @@ enum SlateCommandID {
     // View
     static let toggleSearch = "slate.view.toggleSearch"
 
+    // Canvas (Milestone T, #369). Registered under the FFI
+    // CommandSection.canvas (landed cross-language with this issue).
+    // Program rule R1: every canvas action is a registry command; these
+    // three are the surface switchers the container mirrors.
+    static let canvasShowOutline = "slate.canvas.showOutline"
+    static let canvasShowTable = "slate.canvas.showTable"
+    static let canvasShowVisual = "slate.canvas.showVisual"
+
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
     // cross-language change deferred to U1-5's registry pass. ⌘1…⌘9
@@ -99,6 +107,9 @@ enum SlateCommandID {
         jumpToBibliography,
         quickOpen,
         toggleSearch,
+        canvasShowOutline,
+        canvasShowTable,
+        canvasShowVisual,
         newTab,
         closeTab,
         nextTab,
@@ -223,6 +234,29 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⇧⌘N",
         hint: "Open the template picker to create a new note."
     ) { [weak appState] in appState?.openTemplatePicker() }
+
+    // ----- Canvas (Milestone T, #369) -----
+
+    register(
+        SlateCommandID.canvasShowOutline,
+        label: "Canvas: Show Outline",
+        section: .canvas,
+        hint: "Show the active canvas as a structured outline."
+    ) { [weak appState] in appState?.showCanvasSurface(.outline) }
+
+    register(
+        SlateCommandID.canvasShowTable,
+        label: "Canvas: Show Table",
+        section: .canvas,
+        hint: "Show the active canvas as a sortable table."
+    ) { [weak appState] in appState?.showCanvasSurface(.table) }
+
+    register(
+        SlateCommandID.canvasShowVisual,
+        label: "Canvas: Show Visual",
+        section: .canvas,
+        hint: "Show the active canvas as the visual spatial view."
+    ) { [weak appState] in appState?.showCanvasSurface(.visual) }
 
     // ----- File management (U2-5, #463) -----
 

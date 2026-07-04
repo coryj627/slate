@@ -23,6 +23,11 @@ struct TabBarView: View {
     /// with the active tab's bolded title (never color alone).
     var isFocusedGroup: Bool = true
 
+    private var activeTabIsCanvas: Bool {
+        if case .canvas = group.activeTab?.item { return true }
+        return false
+    }
+
     /// Tab-strip row height (u5_spec §U5-2 density target: 30pt). A fixed
     /// SHAPE height, not text — the titles inside are `Tokens.Typography`
     /// roles and still scale with Dynamic Type (WCAG 1.4.4); the 24pt hit
@@ -31,7 +36,12 @@ struct TabBarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            modeToggle
+            // The reading/editing toggle is a note-editor affordance; a
+            // canvas tab has no note mode (#369) — its surfaces switch
+            // via the canvas commands and the container's switcher.
+            if !activeTabIsCanvas {
+                modeToggle
+            }
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Tokens.Spacing.xxs) {
@@ -113,13 +123,21 @@ struct TabBarView: View {
         }
     }
 
-    /// "tab N of M[, edited]" — the VoiceOver value for one tab. Static so
-    /// tests pin the exact strings.
-    static func accessibilityValue(index: Int, count: Int, isDirty: Bool) -> String {
+    /// "tab N of M[, edited][, canvas]" — the VoiceOver value for one tab.
+    /// Static so tests pin the exact strings. The kind rides in the value
+    /// (t0 §3 inspectability), not the label, so the speakable name stays
+    /// the filename for Voice Control.
+    static func accessibilityValue(
+        index: Int, count: Int, isDirty: Bool, isCanvas: Bool = false
+    ) -> String {
         "tab \(index + 1) of \(count)" + (isDirty ? ", edited" : "")
+            + (isCanvas ? ", canvas" : "")
     }
 
     private func isDirty(_ tab: WorkspaceTab) -> Bool {
+        // Canvas tabs are never dirty: mutations write through on commit
+        // (#369 decision 4).
+        if case .canvas = tab.item { return false }
         if tab.id == group.activeTabID {
             return appState.hasUnsavedChanges
         }
@@ -144,6 +162,13 @@ struct TabBarView: View {
                 appState.selectTab(id: tab.id)
             } label: {
                 HStack(spacing: Tokens.Spacing.xs) {
+                    if case .canvas = tab.item {
+                        // Kind marker (decorative: the AX value carries
+                        // "canvas" — see accessibilityValue below).
+                        SlateSymbol.canvas.decorative
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    }
                     Text(title(tab))
                         .font(active ? Tokens.Typography.body.weight(.semibold) : Tokens.Typography.body)
                         .foregroundStyle(
@@ -166,7 +191,9 @@ struct TabBarView: View {
             // outer `surface` fill below; focus stays the system ring.
             .buttonStyle(.interactiveRow())
             .accessibilityValue(
-                Self.accessibilityValue(index: index, count: group.tabs.count, isDirty: dirty)
+                Self.accessibilityValue(
+                    index: index, count: group.tabs.count, isDirty: dirty,
+                    isCanvas: { if case .canvas = tab.item { return true }; return false }())
             )
             .accessibilityAddTraits(active ? [.isSelected] : [])
             .accessibilityHint(

@@ -52,6 +52,10 @@ enum SlateSymbol: CaseIterable {
     // the icon vocabulary is settled; not yet rendered by any call site.
     case newTab
     case closeTab
+    /// Canvas tab glyph (Milestone T, #369) — marks `.canvas` tabs in
+    /// the tab strip so the file kind is visible at a glance (the tab's
+    /// AX value carries "canvas" for VoiceOver).
+    case canvas
     case splitRight
     case readingMode
     case editingMode
@@ -139,6 +143,7 @@ enum SlateSymbol: CaseIterable {
         case .taskComplete: return "Completed"
         case .taskIncomplete: return "Not completed"
         case .newTab: return "New tab"
+        case .canvas: return "Canvas"
         case .closeTab: return "Close tab"
         case .splitRight: return "Split right"
         case .readingMode: return "Reading mode"
@@ -205,6 +210,7 @@ enum SlateSymbol: CaseIterable {
         // glyph is chosen for a role, it drops into the `v7` slot the same way
         // and the `fallback` keeps macOS 15–25 correct.
         case .newTab: return ("plus", "plus")
+        case .canvas: return ("rectangle.3.group", "rectangle.3.group")
         case .closeTab: return ("xmark", "xmark")
         case .splitRight: return ("rectangle.split.2x1", "rectangle.split.2x1")
         case .readingMode: return ("text.book.closed", "book")

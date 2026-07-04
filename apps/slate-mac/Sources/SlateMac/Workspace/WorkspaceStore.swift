@@ -95,6 +95,12 @@ struct WorkspaceStore {
         /// Absent restores as expanded (the default) — same compatibility
         /// rules as `mode`.
         var propsCollapsed: Bool?
+        /// Canvas tabs only (#369): the active sub-surface ("table" or
+        /// "visual") or absent. Absent (or any unknown string) restores
+        /// as the outline — the structured-first default. Additive and
+        /// optional, so pre-T snapshots decode unchanged and older
+        /// builds ignore the key.
+        var activeCanvasSurface: String?
     }
 
     struct Item: Codable, Equatable {
@@ -103,12 +109,13 @@ struct WorkspaceStore {
     }
 
     /// Unknown tab kinds decode to nil instead of failing the whole
-    /// snapshot (forward compatibility with N/T/P tab types).
+    /// snapshot (forward compatibility with N/P tab types).
     private struct FailableTab: Codable {
         let tab: Tab?
         init(from decoder: Decoder) throws {
             let decoded = try? Tab(from: decoder)
-            self.tab = (decoded?.item.kind == "markdown") ? decoded : nil
+            let known = ["markdown", "canvas"]
+            self.tab = (decoded.map { known.contains($0.item.kind) } == true) ? decoded : nil
         }
         func encode(to encoder: Encoder) throws {
             try tab?.encode(to: encoder)
@@ -149,14 +156,16 @@ struct WorkspaceStore {
     static func snapshot(
         of model: WorkspaceModel, activeLeaf: String? = nil,
         viewModes: [TabID: NoteViewMode] = [:],
-        propertiesCollapsed: Set<TabID> = []
+        propertiesCollapsed: Set<TabID> = [],
+        canvasSurfaces: [TabID: CanvasSurface] = [:]
     ) -> Snapshot {
         Snapshot(
             version: schemaVersion,
             activeGroup: model.activeGroupID.raw,
             root: node(
                 of: modelRoot(model), viewModes: viewModes,
-                propertiesCollapsed: propertiesCollapsed),
+                propertiesCollapsed: propertiesCollapsed,
+                canvasSurfaces: canvasSurfaces),
             activeLeaf: activeLeaf)
     }
 
@@ -176,6 +185,33 @@ struct WorkspaceStore {
             }
         case .split(_, _, let children):
             for child in children { collectCollapsed(child, into: &out) }
+        }
+    }
+
+    /// The per-tab canvas sub-surfaces captured in a snapshot (#369).
+    /// Sparse: only non-outline entries are stored; unknown strings drop
+    /// (restore falls back to the outline — structured-first default).
+    static func canvasSurfaces(from snapshot: Snapshot) -> [TabID: CanvasSurface] {
+        var out: [TabID: CanvasSurface] = [:]
+        collectCanvasSurfaces(snapshot.root, into: &out)
+        return out
+    }
+
+    private static func collectCanvasSurfaces(
+        _ node: Node, into out: inout [TabID: CanvasSurface]
+    ) {
+        switch node {
+        case .group(_, _, let tabs):
+            for tab in tabs {
+                if let raw = tab.activeCanvasSurface,
+                    let surface = CanvasSurface(rawValue: raw),
+                    surface != .outline
+                {
+                    out[TabID(raw: tab.id)] = surface
+                }
+            }
+        case .split(_, _, let children):
+            for child in children { collectCanvasSurfaces(child, into: &out) }
         }
     }
 
@@ -214,7 +250,8 @@ struct WorkspaceStore {
 
     private static func node(
         of splitNode: SplitNode, viewModes: [TabID: NoteViewMode] = [:],
-        propertiesCollapsed: Set<TabID> = []
+        propertiesCollapsed: Set<TabID> = [],
+        canvasSurfaces: [TabID: CanvasSurface] = [:]
     ) -> Node {
         switch splitNode {
         case .group(let group):
@@ -226,7 +263,8 @@ struct WorkspaceStore {
                         id: tab.id.raw, item: item(of: tab.item),
                         // Sparse: only non-default state is written.
                         mode: viewModes[tab.id].map(\.rawValue),
-                        propsCollapsed: propertiesCollapsed.contains(tab.id) ? true : nil)
+                        propsCollapsed: propertiesCollapsed.contains(tab.id) ? true : nil,
+                        activeCanvasSurface: canvasSurfaces[tab.id].map(\.rawValue))
                 })
         case .split(let branch):
             return .split(
@@ -235,7 +273,8 @@ struct WorkspaceStore {
                 children: branch.children.map {
                     node(
                         of: $0, viewModes: viewModes,
-                        propertiesCollapsed: propertiesCollapsed)
+                        propertiesCollapsed: propertiesCollapsed,
+                        canvasSurfaces: canvasSurfaces)
                 })
         }
     }
@@ -244,6 +283,8 @@ struct WorkspaceStore {
         switch editorItem {
         case .markdown(let path):
             return Item(kind: "markdown", path: path)
+        case .canvas(let path):
+            return Item(kind: "canvas", path: path)
         }
     }
 
@@ -264,9 +305,12 @@ struct WorkspaceStore {
     private static func splitNode(from node: Node) -> SplitNode? {
         switch node {
         case .group(let id, let activeTab, let tabs):
-            let workspaceTabs = tabs.map { tab in
-                WorkspaceTab(
-                    id: TabID(raw: tab.id), item: .markdown(path: tab.item.path))
+            let workspaceTabs = tabs.map { tab -> WorkspaceTab in
+                let item: EditorItem =
+                    tab.item.kind == "canvas"
+                    ? .canvas(path: tab.item.path)
+                    : .markdown(path: tab.item.path)
+                return WorkspaceTab(id: TabID(raw: tab.id), item: item)
             }
             // Repair a dangling active pointer (dropped unknown-kind tab).
             let active: TabID? = {

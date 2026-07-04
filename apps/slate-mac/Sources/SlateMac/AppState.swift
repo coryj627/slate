@@ -330,11 +330,16 @@ final class AppState: ObservableObject {
     /// (the tab must stay open while the user resolves).
     var pendingTabCloseAfterSave: TabID?
 
+    /// Open canvas documents keyed by vault-relative path (Milestone T,
+    /// #369) — one per path (t2), shared by every pane/tab showing that
+    /// canvas. Not @Published: views observe each document directly.
+    var canvasDocuments: [String: CanvasDocument] = [:]
+
     /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
     /// mirrors `selectedFilePath` for the sidebar highlight; the
     /// `$selectedFilePath` sink must not run the selection funnel again on
     /// that assignment. Synchronous sink ⇒ a plain flag suffices.
-    private var isActivatingTab = false
+    var isActivatingTab = false
 
     /// The single tab-switch funnel (U1-2): snapshot the outgoing tab,
     /// select `id`, restore its parked buffer (or disk-load on first
@@ -342,9 +347,12 @@ final class AppState: ObservableObject {
     /// selection. Identity-keyed, so two tabs holding the SAME path switch
     /// correctly (a path-keyed funnel cannot distinguish them).
     func activateTab(_ id: TabID) {
-        guard let tab = workspace.model.tab(id),
-            case .markdown(let path) = tab.item
-        else { return }
+        guard let tab = workspace.model.tab(id) else { return }
+        if case .canvas(let path) = tab.item {
+            activateCanvasTab(id, path: path)
+            return
+        }
+        guard case .markdown(let path) = tab.item else { return }
         if id == workspace.model.activeGroup.activeTabID, loadedFilePath == path {
             return
         }
@@ -411,6 +419,13 @@ final class AppState: ObservableObject {
     /// active tab reads the live fields; parked tabs read their document.
     func requestCloseTab(_ id: TabID? = nil) {
         guard let target = id ?? workspace.model.activeGroup.activeTabID else { return }
+        // Canvas tabs are never dirty (#369 decision: mutations write
+        // through on commit), so the close gate is bypassed by design —
+        // asserted by CanvasTabRoutingTests.
+        if case .canvas = workspace.model.tab(target)?.item {
+            performCloseTab(target)
+            return
+        }
         let isActive = target == workspace.model.activeGroup.activeTabID
         let dirty =
             isActive
@@ -469,7 +484,9 @@ final class AppState: ObservableObject {
             clearActiveNoteFields()
         }
         editorCaretReturn[id] = nil
+        let closedItem = workspace.model.tab(id)?.item
         let outcome = workspace.close(id)
+        releaseCanvasDocumentIfUnreferenced(closedItem)
         if closingActive {
             if let successor = outcome.focusedTab {
                 activateTab(successor)
@@ -696,7 +713,8 @@ final class AppState: ObservableObject {
                 WorkspaceStore.snapshot(
                     of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue,
                     viewModes: workspace.viewModes,
-                    propertiesCollapsed: workspace.propertiesCollapsed))
+                    propertiesCollapsed: workspace.propertiesCollapsed,
+                    canvasSurfaces: workspace.canvasSurfaces))
         } catch {
             // Layout persistence must never interrupt the user; the next
             // clean save wins.
@@ -718,7 +736,8 @@ final class AppState: ObservableObject {
         else { return }
         workspace.adopt(
             restored, viewModes: WorkspaceStore.viewModes(from: snapshot),
-            propertiesCollapsed: WorkspaceStore.propertiesCollapsed(from: snapshot))
+            propertiesCollapsed: WorkspaceStore.propertiesCollapsed(from: snapshot),
+            canvasSurfaces: WorkspaceStore.canvasSurfaces(from: snapshot))
         if let tab = workspace.model.activeGroup.activeTabID {
             activateTab(tab)
         }
@@ -748,6 +767,12 @@ final class AppState: ObservableObject {
         // restores (activateTab) do not. Recorded once per call, before
         // the target branch, so all three targets bump recency equally.
         recordFileOpen(path: path)
+        // Milestone T (#369): .canvas paths take the canvas arm of the
+        // funnel — the note loader must never read a canvas as text.
+        if path.lowercased().hasSuffix(".canvas") {
+            openCanvasFile(path, target: target)
+            return
+        }
         switch target {
         case .currentTab:
             if selectedFilePath != path {
@@ -2106,6 +2131,13 @@ final class AppState: ObservableObject {
         // itself and updates `selectedFilePath` as a mirror; the sink must
         // not run the funnel a second time on that assignment.
         if isActivatingTab { return }
+        // Milestone T (#369): a canvas selection reaching the sink (e.g.
+        // a direct selectedFilePath write) reroutes to the canvas arm —
+        // never the note loader.
+        if let path, path.lowercased().hasSuffix(".canvas") {
+            openCanvasFile(path, target: .currentTab)
+            return
+        }
         // U1-2: a selection naming a path that is already open as ANOTHER
         // tab in the active group is a tab switch, not a navigation —
         // route through the tab funnel (snapshot/restore, no dirty gate:
@@ -2230,7 +2262,7 @@ final class AppState: ObservableObject {
     /// refreshes). Shared by the selection funnel and `activateTab`.
     /// Comment history: #421 cursor park; audit #257 M1 orphaned pipelines;
     /// red-team M1+M2 refresh-task cancellation.
-    private func cancelNoteScopedWork() {
+    func cancelNoteScopedWork() {
         noteLoadTask?.cancel()
         noteLoadTask = nil
         // #421: a pending {{cursor}} park belongs to the note that
@@ -2259,7 +2291,7 @@ final class AppState: ObservableObject {
 
     /// Clear the active-note fields for a transition. Shared by the
     /// selection funnel and `activateTab`.
-    private func clearActiveNoteFields() {
+    func clearActiveNoteFields() {
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
@@ -2281,7 +2313,7 @@ final class AppState: ObservableObject {
     /// transition (their cached payloads are whole rendered content of the
     /// PREVIOUS file); links/properties intentionally hold stale values
     /// until the new load lands (#90 anti-flicker discipline).
-    private func clearTransitionSensitiveCollections() {
+    func clearTransitionSensitiveCollections() {
         currentNoteEmbedResolutions = [:]
         // Drop any open embed-preview popover too — its target may
         // not exist in the new file's embed set.
@@ -2627,7 +2659,8 @@ final class AppState: ObservableObject {
             // U1-2: tabs belong to a vault; a fresh open starts clean (and
             // must reset BEFORE the selection clear so the funnel doesn't
             // park the previous vault's buffer).
-            workspace.reset()
+            releaseAllCanvasDocuments()
+        workspace.reset()
             pendingTabClose = nil
             pendingTabCloseAfterSave = nil
             selectedFilePath = nil
@@ -2947,6 +2980,7 @@ final class AppState: ObservableObject {
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
         // close only the ACTIVE tab, leaving siblings pointing into a
         // closed vault.
+        releaseAllCanvasDocuments()
         workspace.reset()
         pendingTabClose = nil
         pendingTabCloseAfterSave = nil
@@ -3108,7 +3142,9 @@ final class AppState: ObservableObject {
                     var cursor: String? = nil
                     repeat {
                         let page = try session.listFiles(
-                            filter: .markdownOnly,
+                            // Milestone T (#369): quick open lists the
+                            // openable-document set — notes AND canvases.
+                            filter: .markdownAndCanvas,
                             paging: Paging(cursor: cursor, limit: 1_000)
                         )
                         all.append(contentsOf: page.items)
@@ -5378,10 +5414,16 @@ final class AppState: ObservableObject {
     ) {
         // Parked tabs whose path is within the deleted subtree.
         for tab in workspace.model.allTabs {
-            guard case .markdown(let tabPath) = tab.item,
-                Self.pathIsWithin(tabPath, path: path, isDirectory: isDirectory)
-            else { continue }
-            _ = workspace.invalidateParkedDocuments(forPath: tabPath)
+            let tabPath = tab.item.path
+            guard Self.pathIsWithin(tabPath, path: path, isDirectory: isDirectory) else {
+                continue
+            }
+            switch tab.item {
+            case .markdown:
+                _ = workspace.invalidateParkedDocuments(forPath: tabPath)
+            case .canvas:
+                invalidateCanvasDocument(path: tabPath)
+            }
         }
         if activeWasDeleted {
             let deletedName = loadedFilePath.map { ($0 as NSString).lastPathComponent }
