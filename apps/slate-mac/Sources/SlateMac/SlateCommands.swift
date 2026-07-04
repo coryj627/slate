@@ -46,6 +46,13 @@ enum SlateCommandID {
     static let canvasShowTable = "slate.canvas.showTable"
     static let canvasShowVisual = "slate.canvas.showVisual"
     static let canvasWhereAmI = "slate.canvas.whereAmI"
+    static let canvasNextCard = "slate.canvas.nextCard"
+    static let canvasPreviousCard = "slate.canvas.previousCard"
+    static let canvasEnterGroup = "slate.canvas.enterGroup"
+    static let canvasExitGroup = "slate.canvas.exitGroup"
+    static let canvasFollowForward = "slate.canvas.followConnectionForward"
+    static let canvasFollowBack = "slate.canvas.followConnectionBack"
+    static let canvasTracePath = "slate.canvas.tracePath"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -112,6 +119,13 @@ enum SlateCommandID {
         canvasShowTable,
         canvasShowVisual,
         canvasWhereAmI,
+        canvasNextCard,
+        canvasPreviousCard,
+        canvasEnterGroup,
+        canvasExitGroup,
+        canvasFollowForward,
+        canvasFollowBack,
+        canvasTracePath,
         newTab,
         closeTab,
         nextTab,
@@ -267,6 +281,58 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌃⌘I",
         hint: "Read the selected card's full context: position, group, connections, color, and marks."
     ) { [weak appState] in appState?.canvasWhereAmI() }
+
+    // Navigator movements (#364). Plain arrows work while a canvas
+    // surface has focus (rule R2); these palette rows are the
+    // always-available equivalents (VO Quick Nav intercepts arrows).
+    register(
+        SlateCommandID.canvasNextCard,
+        label: "Canvas: Next Card",
+        section: .canvas,
+        hint: "Select the next card in reading order."
+    ) { [weak appState] in appState?.canvasSelectAdjacent(offset: 1) }
+
+    register(
+        SlateCommandID.canvasPreviousCard,
+        label: "Canvas: Previous Card",
+        section: .canvas,
+        hint: "Select the previous card in reading order."
+    ) { [weak appState] in appState?.canvasSelectAdjacent(offset: -1) }
+
+    register(
+        SlateCommandID.canvasEnterGroup,
+        label: "Canvas: Enter Group",
+        section: .canvas,
+        hint: "Move into the selected group's first card."
+    ) { [weak appState] in appState?.canvasEnterGroup() }
+
+    register(
+        SlateCommandID.canvasExitGroup,
+        label: "Canvas: Exit Group",
+        section: .canvas,
+        hint: "Move out to the containing group."
+    ) { [weak appState] in appState?.canvasExitGroup() }
+
+    register(
+        SlateCommandID.canvasFollowForward,
+        label: "Canvas: Follow Connection Forward",
+        section: .canvas,
+        hint: "Jump along the selected card's first outgoing connection."
+    ) { [weak appState] in appState?.canvasFollowConnection(forward: true) }
+
+    register(
+        SlateCommandID.canvasFollowBack,
+        label: "Canvas: Follow Connection Back",
+        section: .canvas,
+        hint: "Jump along the selected card's first incoming connection."
+    ) { [weak appState] in appState?.canvasFollowConnection(forward: false) }
+
+    register(
+        SlateCommandID.canvasTracePath,
+        label: "Canvas: Trace Path from Selected Card",
+        section: .canvas,
+        hint: "Walk the outgoing chain, announcing each hop and the visited count."
+    ) { [weak appState] in appState?.canvasTracePath() }
 
     // ----- File management (U2-5, #463) -----
 

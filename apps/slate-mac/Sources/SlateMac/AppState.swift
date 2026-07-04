@@ -346,6 +346,10 @@ final class AppState: ObservableObject {
     /// dismisses (panel-local, not a t0 M5 ladder rung).
     @Published var canvasWhereAmIReadback: String?
 
+    /// Per-canvas mode controllers (t0 §2, #364) keyed by path —
+    /// created lazily; #521/#523 enter modes through them.
+    var canvasModeControllers: [String: CanvasModeController] = [:]
+
     /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
     /// mirrors `selectedFilePath` for the sidebar highlight; the
     /// `$selectedFilePath` sink must not run the selection funnel again on

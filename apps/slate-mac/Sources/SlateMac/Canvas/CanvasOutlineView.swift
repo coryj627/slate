@@ -84,6 +84,17 @@ struct CanvasOutlineView: View {
                 .id(line.id)
         }
         .accessibilityLabel("Canvas outline")
+        // Navigator arrows (#364, rule R2: plain keys act only while a
+        // canvas surface has focus; palette equivalents always exist —
+        // VO Quick Nav users take those). ↑↓ stay native List moves.
+        .onKeyPress(.leftArrow) {
+            appState.canvasFollowConnection(forward: false)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            appState.canvasFollowConnection(forward: true)
+            return .handled
+        }
         .accessibilityRotor("Cards") {
             ForEach(document.outline.filter { $0.kind != "group" }, id: \.nodeId) { row in
                 AccessibilityRotorEntry(Text(row.title), id: row.nodeId, in: rotorSpace)

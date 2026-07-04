@@ -45,6 +45,21 @@ struct CanvasContainerView: View {
             // async hop lets SwiftUI mount the destination first.
             DispatchQueue.main.async { contentFocused = true }
         }
+        // M3 (t0 §2): active mode is inspectable from the container's
+        // AX value — never announcement-only (braille rule §3).
+        .accessibilityValue(modeController.containerAXValue ?? "")
+        // M5: one Esc press consumes one ladder rung (mode → filter →
+        // surface). Unconsumed presses bubble to the workspace.
+        .onKeyPress(.escape) {
+            modeController.handleEscape() ? .handled : .ignored
+        }
+        // M4: leaving the canvas (tab switch/pane move) auto-cancels
+        // any active mode — no mode survives without focus (WCAG 2.1.2).
+        .onChange(of: appState.workspace.model.activeGroup.activeTabID) { _, newActive in
+            if newActive != tabID {
+                modeController.handleFocusDeparture()
+            }
+        }
         .overlay(alignment: .bottom) {
             if let readback = appState.canvasWhereAmIReadback {
                 whereAmIPanel(readback)
@@ -153,6 +168,10 @@ struct CanvasContainerView: View {
 
     private var surface: CanvasSurface {
         appState.workspace.canvasSurface(for: tabID)
+    }
+
+    private var modeController: CanvasModeController {
+        appState.canvasModeController(for: document)
     }
 
     // MARK: Ready
