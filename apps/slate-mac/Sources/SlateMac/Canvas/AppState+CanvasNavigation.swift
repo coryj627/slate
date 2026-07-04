@@ -24,8 +24,17 @@ extension AppState {
 
     /// Move selection to the next/previous card in reading order.
     func canvasSelectAdjacent(offset: Int) {
-        guard let doc = activeCanvasDocument, !doc.outline.isEmpty else { return }
-        let order = doc.outline.map(\.nodeId)
+        guard let doc = activeCanvasDocument else { return }
+        // #373: movement walks the FILTERED set while a filter is on
+        // (a view, never a mutation — Esc restores the full canvas).
+        let rows = doc.filteredOutline
+        guard !rows.isEmpty else {
+            if doc.filterActive {
+                canvasAnnouncer.announce(.status("No cards match the filter."))
+            }
+            return
+        }
+        let order = rows.map(\.nodeId)
         let currentIndex = doc.selection.selected.flatMap { order.firstIndex(of: $0) }
         let target: Int
         if let currentIndex {

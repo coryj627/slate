@@ -242,6 +242,32 @@ extension AppState {
                 "Converted to note \(cleanPath). The card now points at it."))
     }
 
+    // MARK: In-canvas filter (#373)
+
+    /// ⌘F (canvas-scoped): reveal + focus the filter field.
+    func canvasFocusFilter() {
+        guard activeCanvasDocument != nil else { return }
+        canvasFilterFocusToken += 1
+    }
+
+    /// Esc rung / palette: clear the filter and say what came back.
+    func canvasClearFilter() {
+        guard let doc = activeCanvasDocument else { return }
+        guard doc.filterActive || !doc.filterText.isEmpty else { return }
+        doc.filterText = ""
+        canvasAnnouncer.announce(
+            .filter("Filter cleared — \(doc.outline.count) cards."))
+    }
+
+    /// Debounced result count (t0 §1.5 — the announcer's filter
+    /// category coalesces keystroke bursts).
+    func canvasAnnounceFilterCount(doc: CanvasDocument) {
+        guard doc.filterActive else { return }
+        let count = doc.filteredOutline.count
+        canvasAnnouncer.announce(
+            .filter("\(count) card\(count == 1 ? "" : "s") match."))
+    }
+
     // MARK: `#heading` subpath open-to-anchor (t5)
 
     /// Open a note and scroll to a heading once the load lands —

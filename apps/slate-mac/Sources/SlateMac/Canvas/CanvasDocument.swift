@@ -72,6 +72,34 @@ final class CanvasDocument: ObservableObject {
     /// order + edges).
     @Published private(set) var scene = CanvasScene(nodes: [], edges: [])
 
+    /// In-canvas filter (#373): a VIEW over the outline/table — never
+    /// a mutation; filtered-out cards stay in the file. Esc clears it
+    /// (the t0 M5 ladder rung between mode and surface).
+    @Published var filterText: String = ""
+
+    /// True when a non-empty filter narrows the surfaces.
+    var filterActive: Bool {
+        !filterText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Rows matching the filter (title / kind / group / target — the
+    /// quick-open-style contains match). Full outline when inactive.
+    var filteredOutline: [CanvasOutlineRow] {
+        guard filterActive else { return outline }
+        return outline.filter(matchesFilter)
+    }
+
+    func matchesFilter(_ row: CanvasOutlineRow) -> Bool {
+        let needle = filterText.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return true }
+        if row.title.localizedCaseInsensitiveContains(needle) { return true }
+        if row.kind.localizedCaseInsensitiveContains(needle) { return true }
+        if row.groupPath.contains(where: { $0.localizedCaseInsensitiveContains(needle) }) {
+            return true
+        }
+        return target(of: row.nodeId).localizedCaseInsensitiveContains(needle)
+    }
+
     /// Hypothetical geometry while a move/resize mode is active
     /// (#521): the renderer draws these instead of the scene rects;
     /// nil when no mode holds a transient.

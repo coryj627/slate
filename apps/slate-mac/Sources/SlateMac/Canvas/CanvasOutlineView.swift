@@ -58,9 +58,11 @@ struct CanvasOutlineView: View {
         }
     }
 
+    private var rows: [CanvasOutlineRow] { document.filteredOutline }
+
     private var lines: [Line] {
         var out: [Line] = []
-        for row in document.outline {
+        for row in rows {
             out.append(.node(row))
             // Connection rows materialize under the SELECTED card only:
             // linear reading stays concise at 2,000 nodes; #364's
@@ -118,12 +120,12 @@ struct CanvasOutlineView: View {
             return .handled
         }
         .accessibilityRotor("Cards") {
-            ForEach(document.outline.filter { $0.kind != "group" }, id: \.nodeId) { row in
+            ForEach(rows.filter { $0.kind != "group" }, id: \.nodeId) { row in
                 AccessibilityRotorEntry(Text(row.title), id: row.nodeId, in: rotorSpace)
             }
         }
         .accessibilityRotor("Groups") {
-            ForEach(document.outline.filter { $0.kind == "group" }, id: \.nodeId) { row in
+            ForEach(rows.filter { $0.kind == "group" }, id: \.nodeId) { row in
                 AccessibilityRotorEntry(Text(row.title), id: row.nodeId, in: rotorSpace)
             }
         }
@@ -266,6 +268,8 @@ struct CanvasOutlineView: View {
         var value = "\(row.ordinalN) of \(row.totalM) in \(row.groupPath.last ?? "canvas")"
         if let color = row.colorName { value += ", \(color)" }
         if selection.marked.contains(row.nodeId) { value += ", marked" }
+        // t0 §3: filter state is pull-readable on every row.
+        if document.filterActive { value += ", filtered" }
         return value
     }
 

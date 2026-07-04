@@ -87,6 +87,8 @@ enum SlateCommandID {
     static let canvasCreateConnectedCardDirectional = "slate.canvas.createConnectedCardDirectional"
     static let canvasDuplicate = "slate.canvas.duplicate"
     static let canvasConvertToNote = "slate.canvas.convertToNote"
+    static let canvasFilterCards = "slate.canvas.filterCards"
+    static let canvasClearFilter = "slate.canvas.clearFilter"
     static let canvasAddNote = "slate.canvas.addNote"
     static let canvasAddMedia = "slate.canvas.addMedia"
     static let canvasAddLink = "slate.canvas.addLink"
@@ -204,6 +206,8 @@ enum SlateCommandID {
         canvasCreateConnectedCardDirectional,
         canvasDuplicate,
         canvasConvertToNote,
+        canvasFilterCards,
+        canvasClearFilter,
         canvasAddNote,
         canvasAddMedia,
         canvasAddLink,
@@ -675,6 +679,21 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Create a vault note from the text card; the card then points at it."
     ) { [weak appState] in appState?.canvasPromptConvertToNote() }
+
+    // #373: in-canvas filter (a view, never a mutation).
+    register(
+        SlateCommandID.canvasFilterCards,
+        label: "Canvas: Filter Cards…",
+        section: .canvas,
+        hint: "Focus the filter field (⌘F on a canvas): narrows by title, type, group, or target."
+    ) { [weak appState] in appState?.canvasFocusFilter() }
+
+    register(
+        SlateCommandID.canvasClearFilter,
+        label: "Canvas: Clear Filter",
+        section: .canvas,
+        hint: "Show every card again (also the Escape rung while filtering)."
+    ) { [weak appState] in appState?.canvasClearFilter() }
 
     // #368 part 2: editor + creation for every card kind + repoint.
     register(

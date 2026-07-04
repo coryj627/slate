@@ -41,7 +41,10 @@ struct CanvasTableView: View {
     }
 
     private var rows: [TableRow] {
-        document.tableRows.map { row in
+        // #373: the filter narrows the table too (a view, not a
+        // mutation); ids come from the same filtered outline set.
+        let keep = document.filterActive ? Set(document.filteredOutline.map(\.nodeId)) : nil
+        return document.tableRows.filter { keep?.contains($0.nodeId) ?? true }.map { row in
             TableRow(
                 id: row.nodeId,
                 kind: row.kind,

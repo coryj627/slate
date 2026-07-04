@@ -184,8 +184,15 @@ extension AppState {
                 marked: doc.selection.marked.contains(nodeId),
                 activeMode: nil,  // mode stack lands with #364 (Wave 3)
                 filterSummary: nil)  // filter lands with #373 (Wave 5)
-            canvasWhereAmIReadback = text
-            canvasAnnouncer.announce(.status(text))
+            // #373: the navigator's "filtered" cue — Where-am-I always
+            // discloses an active filter and its result count.
+            var full = text
+            if doc.filterActive {
+                full +=
+                    " Filter active: \(doc.filteredOutline.count) of \(doc.outline.count) cards match."
+            }
+            canvasWhereAmIReadback = full
+            canvasAnnouncer.announce(.status(full))
         } catch {
             canvasAnnouncer.announce(.error("Where am I failed: \(error.localizedDescription)"))
         }
