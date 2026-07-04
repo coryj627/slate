@@ -153,3 +153,61 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(edge.toArrow)
     }
 }
+
+/// #520: viewport commands — transforms per command, silence of
+/// auto-pan vs announced zooms, follow-selection default.
+@MainActor
+extension CanvasRendererTests {
+    func testViewportCommandsTransformAndAnnounce() async throws {
+        let (state, doc, _) = try await makeView()
+        var posted: [String] = []
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            text, _ in posted.append(text)
+        }
+        doc.viewport.viewSize = CGSize(width: 800, height: 600)
+
+        XCTAssertEqual(doc.viewport.scale, 1.0)
+        XCTAssertTrue(doc.viewport.followSelection, "follow-selection defaults ON")
+
+        state.canvasZoomIn()
+        XCTAssertEqual(doc.viewport.scale, 1.25, accuracy: 0.001)
+        state.canvasZoomOut()
+        XCTAssertEqual(doc.viewport.scale, 1.0, accuracy: 0.001)
+        state.canvasActualSize()
+        XCTAssertEqual(doc.viewport.scale, 1.0, accuracy: 0.001)
+
+        // Fit: the whole scene (origin cluster + far card) fits — the
+        // scale clamps small and both extremes land inside the view.
+        state.canvasFitCanvas()
+        XCTAssertEqual(doc.viewport.scale, CanvasViewport.minScale, accuracy: 0.02)
+
+        // Zoom to selection.
+        state.canvasSelect(nodeId: "i1", in: doc, announce: false)
+        state.canvasZoomToSelection()
+        XCTAssertGreaterThan(doc.viewport.scale, 1.0, "a 200pt card zooms past 100%")
+
+        state.canvasToggleFollowSelection()
+        XCTAssertFalse(doc.viewport.followSelection)
+
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Zoom 125 percent."), "\(posted)")
+        XCTAssertTrue(posted.contains { $0.hasPrefix("Fit canvas.") })
+        XCTAssertTrue(posted.contains { $0.hasPrefix("Zoomed to selection.") })
+        XCTAssertTrue(posted.contains("Viewport stays put."))
+    }
+
+    func testZoomKeepsViewCenterStationary() async throws {
+        let (_, doc, _) = try await makeView()
+        doc.viewport.viewSize = CGSize(width: 800, height: 600)
+        doc.viewport.offset = CGPoint(x: 100, y: 100)
+        let centerBefore = CGPoint(
+            x: doc.viewport.offset.x + 400 / doc.viewport.scale,
+            y: doc.viewport.offset.y + 300 / doc.viewport.scale)
+        doc.viewport.zoom(by: 2.0)
+        let centerAfter = CGPoint(
+            x: doc.viewport.offset.x + 400 / doc.viewport.scale,
+            y: doc.viewport.offset.y + 300 / doc.viewport.scale)
+        XCTAssertEqual(centerBefore.x, centerAfter.x, accuracy: 0.5)
+        XCTAssertEqual(centerBefore.y, centerAfter.y, accuracy: 0.5)
+    }
+}

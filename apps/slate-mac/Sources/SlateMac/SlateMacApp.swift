@@ -176,6 +176,27 @@ struct SlateMacApp: App {
                 .keyboardShortcut("i", modifiers: [.control, .command])
                 .disabled(!appState.isVaultOpen)
 
+                // #520 viewport chords: one modifier apart from the
+                // ⌥⌘=/⌥⌘- pane-grow chords — the drift test asserts
+                // both exist and differ. Disabled unless a canvas tab
+                // is active, so note-editing keeps the keys free.
+                Button("Canvas: Zoom In") {
+                    appState.canvasZoomIn()
+                }
+                .keyboardShortcut("=", modifiers: [.command])
+                .disabled(appState.activeCanvasDocument == nil)
+
+                Button("Canvas: Zoom Out") {
+                    appState.canvasZoomOut()
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+                .disabled(appState.activeCanvasDocument == nil)
+
+                Button("Canvas: Actual Size") {
+                    appState.canvasActualSize()
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+                .disabled(appState.activeCanvasDocument == nil)
 
                 Divider()
 

@@ -17,9 +17,47 @@ final class CanvasViewport: ObservableObject {
     /// Viewport-follows-selection (t2 decision 6): default ON; the
     /// auto-pan itself is silent (t0 §1.5 no-doubling).
     @Published var followSelection: Bool = true
-func clampScale(_ value: CGFloat) -> CGFloat {
+    /// Last laid-out renderer size — lets fit/zoom-to-selection math
+    /// run from commands without reaching into the view (#520).
+    var viewSize: CGSize = CGSize(width: 800, height: 600)
+
+    func clampScale(_ value: CGFloat) -> CGFloat {
         min(Self.maxScale, max(Self.minScale, value))
     }
+
+    /// Zoom keeping the view center stationary (#520).
+    func zoom(by factor: CGFloat) {
+        setScale(scale * factor)
+    }
+
+    func setScale(_ newScale: CGFloat) {
+        let clamped = clampScale(newScale)
+        // Keep the canvas point at the view center fixed.
+        let centerCanvas = CGPoint(
+            x: offset.x + viewSize.width / (2 * scale),
+            y: offset.y + viewSize.height / (2 * scale))
+        scale = clamped
+        offset = CGPoint(
+            x: centerCanvas.x - viewSize.width / (2 * clamped),
+            y: centerCanvas.y - viewSize.height / (2 * clamped))
+    }
+
+    /// Fit a canvas-space rect (with padding) into the view (#520:
+    /// Fit Canvas ⇧1 / Zoom to Selection ⇧2).
+    func fit(rect: CGRect, padding: CGFloat = 40) {
+        guard rect.width > 0 || rect.height > 0 else { return }
+        let padded = rect.insetBy(dx: -padding, dy: -padding)
+        let fitScale = min(
+            viewSize.width / max(padded.width, 1),
+            viewSize.height / max(padded.height, 1))
+        scale = clampScale(fitScale)
+        offset = CGPoint(
+            x: padded.midX - viewSize.width / (2 * scale),
+            y: padded.midY - viewSize.height / (2 * scale))
+    }
+
+    /// The zoom level as the announced/inspectable percentage (#520).
+    var zoomPercent: Int { Int((scale * 100).rounded()) }
 }
 
 /// The visual canvas surface (Milestone T, #367) — read-only in this
@@ -118,12 +156,14 @@ final class CanvasRendererNSView: NSView {
         let firstBind = self.document !== document
         self.document = document
         self.appState = appState
+        document.viewport.viewSize = bounds.size
         if firstBind {
             refreshFromDocument()
         }
     }
 
     @objc private func frameChanged() {
+        viewport?.viewSize = bounds.size
         rebuildVisible()
     }
 
@@ -215,6 +255,7 @@ final class CanvasRendererNSView: NSView {
 
         rebuildEdges(window: window)
         updateSelectionIndicator()
+        setAccessibilityValue("Zoom \(viewport?.zoomPercent ?? 100) percent")
     }
 
     private func makeCardLayer(for node: CanvasSceneNode) -> CALayer {
@@ -398,6 +439,23 @@ final class CanvasRendererNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         guard let appState else { return super.keyDown(with: event) }
+        // ⇧1 fit canvas / ⇧2 zoom to selection: typing keys, so rule
+        // R2 applies strictly — surface focus only, palette
+        // equivalents always (#520).
+        if event.modifierFlags.contains(.shift),
+            let chars = event.charactersIgnoringModifiers
+        {
+            if chars == "1" || chars == "!" {
+                appState.canvasFitCanvas()
+                rebuildVisible()
+                return
+            }
+            if chars == "2" || chars == "@" {
+                appState.canvasZoomToSelection()
+                rebuildVisible()
+                return
+            }
+        }
         switch event.keyCode {
         case 125:  // ↓ next in reading order (R2: all four arrows navigate)
             appState.canvasSelectAdjacent(offset: 1)

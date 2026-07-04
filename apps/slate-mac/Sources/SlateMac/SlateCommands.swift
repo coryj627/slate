@@ -53,6 +53,12 @@ enum SlateCommandID {
     static let canvasFollowForward = "slate.canvas.followConnectionForward"
     static let canvasFollowBack = "slate.canvas.followConnectionBack"
     static let canvasTracePath = "slate.canvas.tracePath"
+    static let canvasZoomIn = "slate.canvas.zoomIn"
+    static let canvasZoomOut = "slate.canvas.zoomOut"
+    static let canvasActualSize = "slate.canvas.actualSize"
+    static let canvasFitCanvas = "slate.canvas.fitCanvas"
+    static let canvasZoomToSelection = "slate.canvas.zoomToSelection"
+    static let canvasToggleFollowSelection = "slate.canvas.toggleFollowSelection"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -126,6 +132,12 @@ enum SlateCommandID {
         canvasFollowForward,
         canvasFollowBack,
         canvasTracePath,
+        canvasZoomIn,
+        canvasZoomOut,
+        canvasActualSize,
+        canvasFitCanvas,
+        canvasZoomToSelection,
+        canvasToggleFollowSelection,
         newTab,
         closeTab,
         nextTab,
@@ -333,6 +345,54 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Walk the outgoing chain, announcing each hop and the visited count."
     ) { [weak appState] in appState?.canvasTracePath() }
+
+    // Viewport (#520). ⌘=/⌘-/⌘0 bind in the menu scoped to canvas
+    // tabs; ⇧1/⇧2 are typing keys on the visual surface only (R2) —
+    // these palette rows are the always-available equivalents.
+    register(
+        SlateCommandID.canvasZoomIn,
+        label: "Canvas: Zoom In",
+        section: .canvas,
+        hotkey: "⌘=",
+        hint: "Zoom the visual canvas in. The zoom level is announced."
+    ) { [weak appState] in appState?.canvasZoomIn() }
+
+    register(
+        SlateCommandID.canvasZoomOut,
+        label: "Canvas: Zoom Out",
+        section: .canvas,
+        hotkey: "⌘-",
+        hint: "Zoom the visual canvas out."
+    ) { [weak appState] in appState?.canvasZoomOut() }
+
+    register(
+        SlateCommandID.canvasActualSize,
+        label: "Canvas: Actual Size",
+        section: .canvas,
+        hotkey: "⌘0",
+        hint: "Reset the visual canvas zoom to 100 percent."
+    ) { [weak appState] in appState?.canvasActualSize() }
+
+    register(
+        SlateCommandID.canvasFitCanvas,
+        label: "Canvas: Fit Canvas",
+        section: .canvas,
+        hint: "Zoom so every card is visible. Shift-1 on the visual surface."
+    ) { [weak appState] in appState?.canvasFitCanvas() }
+
+    register(
+        SlateCommandID.canvasZoomToSelection,
+        label: "Canvas: Zoom to Selection",
+        section: .canvas,
+        hint: "Zoom to the selected card. Shift-2 on the visual surface."
+    ) { [weak appState] in appState?.canvasZoomToSelection() }
+
+    register(
+        SlateCommandID.canvasToggleFollowSelection,
+        label: "Canvas: Toggle Viewport Follows Selection",
+        section: .canvas,
+        hint: "When on (the default), the visual view pans to keep the selection visible."
+    ) { [weak appState] in appState?.canvasToggleFollowSelection() }
 
     // ----- File management (U2-5, #463) -----
 
