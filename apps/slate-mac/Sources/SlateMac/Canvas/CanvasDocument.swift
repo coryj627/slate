@@ -37,6 +37,18 @@ final class CanvasDocument: ObservableObject {
     /// connections…) — phrased by the t0 §5 banner.
     @Published private(set) var warnings: [CanvasLoadWarning] = []
 
+    /// Per-node activation targets (file path / URL) from the table
+    /// rows — fetched once at load so activation never re-queries.
+    private var targets: [String: String] = [:]
+
+    /// Per-node adjacency, fetched lazily on first selection and
+    /// cached (invalidated on reload).
+    private var neighborsCache: [String: [CanvasNeighbor]] = [:]
+
+    /// The row whose activation opened a card — focus restoration
+    /// target when the user returns (WCAG 2.4.3, #362).
+    var lastActivatedNode: String?
+
     /// Shared selection + marks for every pane showing this canvas.
     let selection = CanvasSelection()
 
@@ -81,6 +93,10 @@ final class CanvasDocument: ObservableObject {
             }
             handle = info.handle
             outline = try session.canvasOutline(handle: info.handle)
+            targets = Dictionary(
+                uniqueKeysWithValues: try session.canvasTableRows(handle: info.handle)
+                    .map { ($0.nodeId, $0.target) })
+            neighborsCache = [:]
             state = .ready
         } catch {
             handle = nil
@@ -109,6 +125,21 @@ final class CanvasDocument: ObservableObject {
             }
         }
         return "\(displayName) could not be opened: \(error.localizedDescription)"
+    }
+
+    /// Activation target for a node ("" when none).
+    func target(of nodeId: String) -> String {
+        targets[nodeId] ?? ""
+    }
+
+    /// Adjacency for one node (cached; empty on any failure — the
+    /// outline degrades to no connection rows, never an error state).
+    func neighbors(of nodeId: String, session: VaultSession?) -> [CanvasNeighbor] {
+        if let cached = neighborsCache[nodeId] { return cached }
+        guard let session, let handle else { return [] }
+        let result = (try? session.canvasNeighbors(handle: handle, nodeId: nodeId)) ?? []
+        neighborsCache[nodeId] = result
+        return result
     }
 
     /// Filename without extension — never a raw path in UI copy.
