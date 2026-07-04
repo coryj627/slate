@@ -232,6 +232,56 @@ final class FileManagementCommandsTests: XCTestCase {
         XCTAssertNil(state.currentNoteText, "the stale buffer is cleared")
     }
 
+    /// THE dangerous variant: renaming the ACTIVE note while its buffer is
+    /// DIRTY. `rebindActiveIfRetargeted` touches `selectedFilePath`, which
+    /// drives the load pipeline — an unguarded reload here would clobber the
+    /// unsaved edits with disk content. The buffer, dirty flag, and caret
+    /// anchor (content hash) must all survive the rename untouched.
+    func testRenameOfDirtyActiveNotePreservesUnsavedBuffer() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        let dirty = "# a.md\nEDITED, unsaved ✏️\n"
+        state.updateEditorText(dirty)
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        await state.renameEntry(path: "a.md", isDirectory: false, to: "alpha.md")?.value
+        await state.noteLoadTask?.value
+
+        XCTAssertEqual(state.loadedFilePath, "alpha.md")
+        XCTAssertEqual(
+            state.currentNoteText, dirty,
+            "rename must never clobber an unsaved buffer with disk content")
+        XCTAssertTrue(state.hasUnsavedChanges, "dirty flag survives the rename")
+    }
+
+    /// Same property for a PARKED tab: a dirty background buffer follows the
+    /// rename through the document rebind (NoteDocument.path is immutable, so
+    /// retarget mints a fresh document carrying the old buffer state).
+    func testRenameOfDirtyParkedNotePreservesItsBuffer() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        let dirty = "# a.md\nparked and dirty\n"
+        state.updateEditorText(dirty)
+
+        // Park a.md by opening b.md in a NEW tab, then rename a.md from the tree.
+        state.openFile("b.md", target: .newTab)
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.loadedFilePath, "b.md")
+
+        await state.renameEntry(path: "a.md", isDirectory: false, to: "alpha.md")?.value
+
+        // Switch back: the retargeted tab restores the dirty buffer.
+        state.selectPreviousTab()
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.loadedFilePath, "alpha.md")
+        XCTAssertEqual(
+            state.currentNoteText, dirty,
+            "parked dirty buffer must survive the rename rebind")
+        XCTAssertTrue(state.hasUnsavedChanges)
+    }
+
     func testRenameRetargetsAFolderDescendantOpenInATab() async throws {
         let (state, _) = try await makeVault(files: ["proj/a.md"])
         state.selectedFilePath = "proj/a.md"
