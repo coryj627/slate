@@ -3784,6 +3784,457 @@ impl From<core::CanvasSetPlacement> for CanvasSetPlacement {
     }
 }
 
+/// Connection end decoration (spec defaults: from = none, to = arrow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasEndStyle {
+    None,
+    Arrow,
+}
+
+impl From<CanvasEndStyle> for core::canvas::EndStyle {
+    fn from(e: CanvasEndStyle) -> Self {
+        match e {
+            CanvasEndStyle::None => core::canvas::EndStyle::None,
+            CanvasEndStyle::Arrow => core::canvas::EndStyle::Arrow,
+        }
+    }
+}
+
+impl From<core::canvas::EndStyle> for CanvasEndStyle {
+    fn from(e: core::canvas::EndStyle) -> Self {
+        match e {
+            core::canvas::EndStyle::None => CanvasEndStyle::None,
+            core::canvas::EndStyle::Arrow => CanvasEndStyle::Arrow,
+        }
+    }
+}
+
+impl From<CanvasSide> for core::canvas::Side {
+    fn from(s: CanvasSide) -> Self {
+        match s {
+            CanvasSide::Top => core::canvas::Side::Top,
+            CanvasSide::Right => core::canvas::Side::Right,
+            CanvasSide::Bottom => core::canvas::Side::Bottom,
+            CanvasSide::Left => core::canvas::Side::Left,
+        }
+    }
+}
+
+/// New-card payload for create/set-content ops.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum CanvasNodeContent {
+    Text {
+        text: String,
+    },
+    File {
+        file: String,
+        subpath: Option<String>,
+    },
+    Link {
+        url: String,
+    },
+}
+
+impl From<CanvasNodeContent> for core::canvas::apply::CanvasNodeContent {
+    fn from(c: CanvasNodeContent) -> Self {
+        use core::canvas::apply::CanvasNodeContent as C;
+        match c {
+            CanvasNodeContent::Text { text } => C::Text { text },
+            CanvasNodeContent::File { file, subpath } => C::File { file, subpath },
+            CanvasNodeContent::Link { url } => C::Link { url },
+        }
+    }
+}
+
+impl From<core::canvas::apply::CanvasNodeContent> for CanvasNodeContent {
+    fn from(c: core::canvas::apply::CanvasNodeContent) -> Self {
+        use core::canvas::apply::CanvasNodeContent as C;
+        match c {
+            C::Text { text } => CanvasNodeContent::Text { text },
+            C::File { file, subpath } => CanvasNodeContent::File { file, subpath },
+            C::Link { url } => CanvasNodeContent::Link { url },
+        }
+    }
+}
+
+/// One primitive canvas mutation (t1 op set). The `Restore*` variants
+/// are undo-only payloads produced by the engine — the UI passes them
+/// back verbatim inside an inverse action, never constructs them.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum CanvasOp {
+    CreateNode {
+        id: String,
+        content: CanvasNodeContent,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        color: Option<String>,
+    },
+    CreateGroup {
+        id: String,
+        label: Option<String>,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        color: Option<String>,
+    },
+    UpdateNodeGeometry {
+        id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
+    SetNodeColor {
+        id: String,
+        color: Option<String>,
+    },
+    SetNodeContent {
+        id: String,
+        content: CanvasNodeContent,
+    },
+    DeleteNode {
+        id: String,
+    },
+    AddEdge {
+        id: String,
+        from_node: String,
+        from_side: Option<CanvasSide>,
+        to_node: String,
+        to_side: Option<CanvasSide>,
+        from_end: CanvasEndStyle,
+        to_end: CanvasEndStyle,
+        label: Option<String>,
+        color: Option<String>,
+    },
+    UpdateEdge {
+        id: String,
+        from_side: Option<CanvasSide>,
+        to_side: Option<CanvasSide>,
+        from_end: CanvasEndStyle,
+        to_end: CanvasEndStyle,
+        label: Option<String>,
+        color: Option<String>,
+    },
+    DeleteEdge {
+        id: String,
+    },
+    RenameGroup {
+        id: String,
+        label: Option<String>,
+    },
+    Ungroup {
+        id: String,
+    },
+    RestoreNode {
+        node_json: String,
+        position: u32,
+    },
+    RestoreEdge {
+        edge_json: String,
+        position: u32,
+    },
+    RestoreNodeInPlace {
+        node_json: String,
+    },
+    RestoreEdgeInPlace {
+        edge_json: String,
+    },
+}
+
+impl From<CanvasOp> for core::canvas::apply::CanvasOp {
+    fn from(op: CanvasOp) -> Self {
+        use core::canvas::apply::CanvasOp as O;
+        match op {
+            CanvasOp::CreateNode {
+                id,
+                content,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => O::CreateNode {
+                id,
+                content: content.into(),
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            CanvasOp::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => O::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            CanvasOp::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => O::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            },
+            CanvasOp::SetNodeColor { id, color } => O::SetNodeColor { id, color },
+            CanvasOp::SetNodeContent { id, content } => O::SetNodeContent {
+                id,
+                content: content.into(),
+            },
+            CanvasOp::DeleteNode { id } => O::DeleteNode { id },
+            CanvasOp::AddEdge {
+                id,
+                from_node,
+                from_side,
+                to_node,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => O::AddEdge {
+                id,
+                from_node,
+                from_side: from_side.map(Into::into),
+                to_node,
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            CanvasOp::UpdateEdge {
+                id,
+                from_side,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => O::UpdateEdge {
+                id,
+                from_side: from_side.map(Into::into),
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            CanvasOp::DeleteEdge { id } => O::DeleteEdge { id },
+            CanvasOp::RenameGroup { id, label } => O::RenameGroup { id, label },
+            CanvasOp::Ungroup { id } => O::Ungroup { id },
+            CanvasOp::RestoreNode {
+                node_json,
+                position,
+            } => O::RestoreNode {
+                node_json,
+                position,
+            },
+            CanvasOp::RestoreEdge {
+                edge_json,
+                position,
+            } => O::RestoreEdge {
+                edge_json,
+                position,
+            },
+            CanvasOp::RestoreNodeInPlace { node_json } => O::RestoreNodeInPlace { node_json },
+            CanvasOp::RestoreEdgeInPlace { edge_json } => O::RestoreEdgeInPlace { edge_json },
+        }
+    }
+}
+
+impl From<core::canvas::apply::CanvasOp> for CanvasOp {
+    fn from(op: core::canvas::apply::CanvasOp) -> Self {
+        use core::canvas::apply::CanvasOp as O;
+        match op {
+            O::CreateNode {
+                id,
+                content,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => CanvasOp::CreateNode {
+                id,
+                content: content.into(),
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            O::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => CanvasOp::CreateGroup {
+                id,
+                label,
+                x,
+                y,
+                width,
+                height,
+                color,
+            },
+            O::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => CanvasOp::UpdateNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            },
+            O::SetNodeColor { id, color } => CanvasOp::SetNodeColor { id, color },
+            O::SetNodeContent { id, content } => CanvasOp::SetNodeContent {
+                id,
+                content: content.into(),
+            },
+            O::DeleteNode { id } => CanvasOp::DeleteNode { id },
+            O::AddEdge {
+                id,
+                from_node,
+                from_side,
+                to_node,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => CanvasOp::AddEdge {
+                id,
+                from_node,
+                from_side: from_side.map(Into::into),
+                to_node,
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            O::UpdateEdge {
+                id,
+                from_side,
+                to_side,
+                from_end,
+                to_end,
+                label,
+                color,
+            } => CanvasOp::UpdateEdge {
+                id,
+                from_side: from_side.map(Into::into),
+                to_side: to_side.map(Into::into),
+                from_end: from_end.into(),
+                to_end: to_end.into(),
+                label,
+                color,
+            },
+            O::DeleteEdge { id } => CanvasOp::DeleteEdge { id },
+            O::RenameGroup { id, label } => CanvasOp::RenameGroup { id, label },
+            O::Ungroup { id } => CanvasOp::Ungroup { id },
+            O::RestoreNode {
+                node_json,
+                position,
+            } => CanvasOp::RestoreNode {
+                node_json,
+                position,
+            },
+            O::RestoreEdge {
+                edge_json,
+                position,
+            } => CanvasOp::RestoreEdge {
+                edge_json,
+                position,
+            },
+            O::RestoreNodeInPlace { node_json } => CanvasOp::RestoreNodeInPlace { node_json },
+            O::RestoreEdgeInPlace { edge_json } => CanvasOp::RestoreEdgeInPlace { edge_json },
+        }
+    }
+}
+
+/// A named, undoable batch of ops — one committed user action.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasAction {
+    pub name: String,
+    pub ops: Vec<CanvasOp>,
+}
+
+impl From<CanvasAction> for core::canvas::apply::CanvasAction {
+    fn from(a: CanvasAction) -> Self {
+        core::canvas::apply::CanvasAction {
+            name: a.name,
+            ops: a.ops.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<core::canvas::apply::CanvasAction> for CanvasAction {
+    fn from(a: core::canvas::apply::CanvasAction) -> Self {
+        CanvasAction {
+            name: a.name,
+            ops: a.ops.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Result of `canvas_apply`: post-write hash + the inverse action for
+/// the session-scoped undo stack (#372).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasApplyResult {
+    pub new_content_hash: String,
+    pub inverse: CanvasAction,
+}
+
+impl From<core::CanvasApplyResult> for CanvasApplyResult {
+    fn from(r: core::CanvasApplyResult) -> Self {
+        CanvasApplyResult {
+            new_content_hash: r.new_content_hash,
+            inverse: r.inverse.into(),
+        }
+    }
+}
+
+#[uniffi::export]
+impl VaultSession {
+    /// Apply one committed user action (one write, one undo step);
+    /// returns the inverse action for the undo stack.
+    pub fn canvas_apply(
+        &self,
+        handle: u64,
+        action: CanvasAction,
+    ) -> Result<CanvasApplyResult, VaultError> {
+        Ok(self.inner.canvas_apply(handle, action.into())?.into())
+    }
+}
+
 #[uniffi::export]
 impl VaultSession {
     /// Open a `.canvas` file: tolerant parse + model derivation +

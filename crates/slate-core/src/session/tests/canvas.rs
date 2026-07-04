@@ -318,3 +318,141 @@ fn canvas_rows_pruned_when_file_deleted() {
         .unwrap();
     assert_eq!(orphans, 0);
 }
+
+#[test]
+fn canvas_apply_writes_reindexes_and_returns_inverse() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let (_tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    let disk_before = session.read_text("board.canvas").unwrap();
+
+    // One action = create card + connect it (the create-connected-card
+    // shape, #525) = one write, one inverse.
+    let result = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "create connected card".into(),
+                ops: vec![
+                    CanvasOp::CreateNode {
+                        id: "cc-1".into(),
+                        content: CanvasNodeContent::Text {
+                            text: "Connected thought".into(),
+                        },
+                        x: 0.0,
+                        y: 640.0,
+                        width: 260.0,
+                        height: 140.0,
+                        color: None,
+                    },
+                    CanvasOp::AddEdge {
+                        id: "cc-1-edge".into(),
+                        from_node: "card-loose".into(),
+                        from_side: None,
+                        to_node: "cc-1".into(),
+                        to_side: None,
+                        from_end: crate::canvas::EndStyle::None,
+                        to_end: crate::canvas::EndStyle::Arrow,
+                        label: None,
+                        color: None,
+                    },
+                ],
+            },
+        )
+        .unwrap();
+
+    // Written through to disk…
+    let disk_after = session.read_text("board.canvas").unwrap();
+    assert!(disk_after.contains("Connected thought"));
+    assert_ne!(disk_before, disk_after);
+    // …reindexed (outline sees the new card with a connection)…
+    let outline = session.canvas_outline(info.handle).unwrap();
+    let new_row = outline.iter().find(|r| r.node_id == "cc-1").unwrap();
+    assert_eq!(new_row.title, "Connected thought");
+    assert_eq!(new_row.connection_count, 1);
+    // …and the handle's model followed (navigation sees it too).
+    let neighbors = session.canvas_neighbors(info.handle, "cc-1").unwrap();
+    assert_eq!(neighbors.len(), 1);
+    assert_eq!(neighbors[0].other_title, "Unfiled thought");
+
+    // Undo via the returned inverse: disk returns to the exact bytes.
+    let undo = session.canvas_apply(info.handle, result.inverse).unwrap();
+    assert_eq!(session.read_text("board.canvas").unwrap(), disk_before);
+    assert!(session.canvas_neighbors(info.handle, "cc-1").is_err());
+
+    // Redo via the undo's inverse.
+    session.canvas_apply(info.handle, undo.inverse).unwrap();
+    assert_eq!(session.read_text("board.canvas").unwrap(), disk_after);
+}
+
+#[test]
+fn canvas_apply_conflicts_on_external_change_and_rejects_bad_ops() {
+    use crate::canvas::apply::{CanvasAction, CanvasOp};
+
+    let (tmp, session) = canvas_vault();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    // Invalid op: rejected, nothing written.
+    let disk = session.read_text("board.canvas").unwrap();
+    let err = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "bad".into(),
+                ops: vec![CanvasOp::DeleteNode { id: "ghost".into() }],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, VaultError::InvalidArgument { .. }));
+    assert_eq!(session.read_text("board.canvas").unwrap(), disk);
+
+    // External writer changes the file → next apply must conflict,
+    // never blind-overwrite (t0 §5).
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file("board.canvas", b"{\"nodes\":[],\"edges\":[]}")
+        .unwrap();
+    let err = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "move".into(),
+                ops: vec![CanvasOp::UpdateNodeGeometry {
+                    id: "card-loose".into(),
+                    x: 20.0,
+                    y: 480.0,
+                    width: 200.0,
+                    height: 100.0,
+                }],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, VaultError::WriteConflict { .. }), "{err:?}");
+}
+
+#[test]
+fn canvas_apply_refuses_degraded_canvas() {
+    use crate::canvas::apply::{CanvasAction, CanvasOp};
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("bad.canvas", b"not json").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("bad.canvas").unwrap();
+    assert!(info.degraded);
+    let err = session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "any".into(),
+                ops: vec![CanvasOp::DeleteNode { id: "x".into() }],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, VaultError::InvalidArgument { .. }));
+    // The broken file is untouched.
+    assert_eq!(session.read_text("bad.canvas").unwrap(), "not json");
+}

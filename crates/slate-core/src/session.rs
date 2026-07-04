@@ -566,12 +566,16 @@ pub struct VaultSession {
     next_canvas_handle: std::sync::atomic::AtomicU64,
 }
 
-/// Per-open-canvas state. The mutation slice (#361b, after #366) will
-/// widen this with the tolerant parse + path for `canvas_apply`'s
-/// serialize-and-save pipeline; the read surface needs only the model.
+/// Per-open-canvas state: the tolerant parse (the write surface
+/// mutates it), the derived model (serves navigation queries), and the
+/// content hash the next save conflict-checks against.
 struct OpenCanvasState {
+    path: String,
     file_id: i64,
+    canvas: crate::canvas::Canvas,
     model: crate::canvas::model::CanvasModel,
+    content_hash: String,
+    degraded: bool,
 }
 
 impl VaultSession {
@@ -975,7 +979,7 @@ impl VaultSession {
                 &tx,
                 file_id,
                 contents,
-                &TxTitleSource { tx: &tx },
+                &DbTitleSource { conn: &tx },
             )?;
         }
         tx.commit()?;
@@ -4369,6 +4373,7 @@ impl VaultSession {
                 }),
             }
         }
+
         (rewritten, failed)
     }
 
@@ -4818,16 +4823,25 @@ pub struct CanvasSetPlacement {
     pub relative: crate::canvas::placement::RelativeDesc,
 }
 
+/// Result of `canvas_apply`: the post-write content hash (the next
+/// apply conflict-checks against it) and the inverse action for the
+/// session-scoped undo stack (#372).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasApplyResult {
+    pub new_content_hash: String,
+    pub inverse: crate::canvas::apply::CanvasAction,
+}
+
 /// `FileTitleSource` over the live index: a file card referencing a
 /// note titled via frontmatter (`title:`) displays that title on every
 /// canvas surface (t0 §1.1 — never a raw path).
-struct TxTitleSource<'a> {
-    tx: &'a rusqlite::Transaction<'a>,
+struct DbTitleSource<'a> {
+    conn: &'a rusqlite::Connection,
 }
 
-impl crate::canvas::model::FileTitleSource for TxTitleSource<'_> {
+impl crate::canvas::model::FileTitleSource for DbTitleSource<'_> {
     fn title_for(&self, vault_path: &str) -> Option<String> {
-        self.tx
+        self.conn
             .query_row(
                 "SELECT p.value_text FROM properties p
                  JOIN files f ON f.id = p.file_id
@@ -4894,7 +4908,12 @@ fn reindex_all_canvases(
             Err(_) => continue,
         };
         let source = String::from_utf8_lossy(&bytes);
-        crate::canvas_db::replace_canvas_for_file(tx, file_id, &source, &TxTitleSource { tx })?;
+        crate::canvas_db::replace_canvas_for_file(
+            tx,
+            file_id,
+            &source,
+            &DbTitleSource { conn: tx },
+        )?;
     }
     Ok(())
 }
@@ -4964,7 +4983,7 @@ impl VaultSession {
             &tx,
             file_id,
             &text,
-            &TxTitleSource { tx: &tx },
+            &DbTitleSource { conn: &tx },
         )?;
         tx.commit()?;
         drop(conn);
@@ -4980,10 +4999,17 @@ impl VaultSession {
             degraded,
             warnings: info_warnings,
         };
-        self.canvases
-            .lock()
-            .expect("canvas registry mutex")
-            .insert(info.handle, OpenCanvasState { file_id, model });
+        self.canvases.lock().expect("canvas registry mutex").insert(
+            info.handle,
+            OpenCanvasState {
+                path: path.to_string(),
+                file_id,
+                canvas: parsed,
+                model,
+                content_hash: content_hash(text.as_bytes()),
+                degraded,
+            },
+        );
         Ok(info)
     }
 
@@ -5193,6 +5219,62 @@ impl VaultSession {
             .into_iter()
             .map(|n| n.0)
             .collect())
+    }
+
+    /// Apply one committed user action to an open canvas: mutate the
+    /// typed model (atomic per action), serialize (#366), conflict-
+    /// checked atomic write, reindex, refresh the handle's model — and
+    /// return the inverse action for the undo stack (#372 consumes).
+    ///
+    /// One `canvas_apply` = one write = one undo step; bulk marked-set
+    /// operations batch their ops into one action (t1 pipeline).
+    pub fn canvas_apply(
+        &self,
+        handle: u64,
+        action: crate::canvas::apply::CanvasAction,
+    ) -> Result<CanvasApplyResult, VaultError> {
+        let mut canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases
+            .get_mut(&handle)
+            .ok_or_else(|| bad_handle(handle))?;
+        if state.degraded {
+            return Err(VaultError::InvalidArgument {
+                message: "canvas failed to load and is read-only (t0 §5); \
+                          fix the file on disk and reopen"
+                    .to_string(),
+            });
+        }
+
+        // Mutate a working copy; `apply` guarantees all-or-nothing.
+        let mut working = state.canvas.clone();
+        let inverse = crate::canvas::apply::apply(&mut working, &action).map_err(|e| {
+            VaultError::InvalidArgument {
+                message: format!("canvas action {:?} rejected: {e}", action.name),
+            }
+        })?;
+
+        // Serialize + conflict-checked atomic write + reindex (the
+        // save path's canvas branch re-derives the DB rows in the same
+        // transaction). Conflict = external writer changed the file
+        // since open/last apply → typed WriteConflict for t0 §5.
+        let new_text = crate::canvas::serialize::serialize(&working);
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let report =
+            self.save_text_locked(&mut conn, &state.path, &new_text, Some(&state.content_hash))?;
+
+        // Refresh the handle: new parse-equivalent state + model.
+        let tx = conn.transaction()?;
+        let model = crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
+        drop(tx);
+        drop(conn);
+        state.canvas = working;
+        state.model = model;
+        state.content_hash = report.new_content_hash.clone();
+
+        Ok(CanvasApplyResult {
+            new_content_hash: report.new_content_hash,
+            inverse,
+        })
     }
 
     fn canvas_file_id(&self, handle: u64) -> Result<i64, VaultError> {
