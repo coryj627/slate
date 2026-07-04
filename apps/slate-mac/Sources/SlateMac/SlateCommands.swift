@@ -45,6 +45,7 @@ enum SlateCommandID {
     static let canvasShowOutline = "slate.canvas.showOutline"
     static let canvasShowTable = "slate.canvas.showTable"
     static let canvasShowVisual = "slate.canvas.showVisual"
+    static let canvasWhereAmI = "slate.canvas.whereAmI"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -110,6 +111,7 @@ enum SlateCommandID {
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
+        canvasWhereAmI,
         newTab,
         closeTab,
         nextTab,
@@ -257,6 +259,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Show the active canvas as the visual spatial view."
     ) { [weak appState] in appState?.showCanvasSurface(.visual) }
+
+    register(
+        SlateCommandID.canvasWhereAmI,
+        label: "Canvas: Where Am I?",
+        section: .canvas,
+        hotkey: "⌃⌘I",
+        hint: "Read the selected card's full context: position, group, connections, color, and marks."
+    ) { [weak appState] in appState?.canvasWhereAmI() }
 
     // ----- File management (U2-5, #463) -----
 

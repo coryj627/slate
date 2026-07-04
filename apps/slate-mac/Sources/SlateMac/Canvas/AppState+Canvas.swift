@@ -143,7 +143,43 @@ extension AppState {
     func showCanvasSurface(_ surface: CanvasSurface) {
         guard let tab = workspace.activeTab, case .canvas = tab.item else { return }
         workspace.setCanvasSurface(surface, for: tab.id)
-        postAccessibilityAnnouncement(
-            "Canvas \(surface.title.lowercased()) view.", priority: .medium)
+        canvasAnnouncer.announce(.status("Canvas \(surface.title.lowercased()) view."))
+    }
+
+    /// ⌃⌘I (t0 §1.4, #518): one pull-based verbose readback of the
+    /// selected card's full context — announced AND rendered in a
+    /// focusable transient panel so braille users read it at leisure.
+    func canvasWhereAmI() {
+        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else { return }
+        let doc = canvasDocument(for: path)
+        guard let handle = doc.handle, let session = currentSession else { return }
+        guard case .ready = doc.state else {
+            canvasAnnouncer.announce(.status("Canvas is not readable."))
+            return
+        }
+        // Fall back to the first card in reading order when nothing is
+        // selected yet (fresh landing) — "where am I" always answers.
+        guard let nodeId = doc.selection.selected ?? doc.outline.first?.nodeId else {
+            canvasAnnouncer.announce(.status("Canvas is empty."))
+            return
+        }
+        do {
+            let ctx = try session.canvasWhereAmI(handle: handle, nodeId: nodeId)
+            let text = canvasAnnouncer.whereAmIText(
+                ctx,
+                marked: doc.selection.marked.contains(nodeId),
+                activeMode: nil,  // mode stack lands with #364 (Wave 3)
+                filterSummary: nil)  // filter lands with #373 (Wave 5)
+            canvasWhereAmIReadback = text
+            canvasAnnouncer.announce(.status(text))
+        } catch {
+            canvasAnnouncer.announce(.error("Where am I failed: \(error.localizedDescription)"))
+        }
+    }
+
+    /// Persist a live verbosity change (#518 setting).
+    func setCanvasVerbosity(_ verbosity: CanvasVerbosity) {
+        canvasAnnouncer.verbosity = verbosity
+        preferencesStore.saveCanvasPrefs(CanvasPrefs(verbosity: verbosity))
     }
 }

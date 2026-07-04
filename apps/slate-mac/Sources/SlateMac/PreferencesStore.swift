@@ -19,6 +19,7 @@ import Foundation
 final class PreferencesStore {
     static let mathKey = "slate.prefs.math"
     static let codeKey = "slate.prefs.code"
+    static let canvasKey = "slate.prefs.canvas"
 
     private let defaults: UserDefaults
 
@@ -45,6 +46,16 @@ final class PreferencesStore {
 
     func saveCodePrefs(_ prefs: CodePrefs) {
         encode(prefs, key: Self.codeKey)
+    }
+
+    // MARK: - Canvas (Milestone T, #518)
+
+    func loadCanvasPrefs() -> CanvasPrefs {
+        decode(CanvasPrefs.self, key: Self.canvasKey) ?? CanvasPrefs()
+    }
+
+    func saveCanvasPrefs(_ prefs: CanvasPrefs) {
+        encode(prefs, key: Self.canvasKey)
     }
 
     // MARK: - Internals

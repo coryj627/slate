@@ -40,6 +40,37 @@ struct CanvasContainerView: View {
             // async hop lets SwiftUI mount the destination first.
             DispatchQueue.main.async { contentFocused = true }
         }
+        .overlay(alignment: .bottom) {
+            if let readback = appState.canvasWhereAmIReadback {
+                whereAmIPanel(readback)
+            }
+        }
+    }
+
+    /// t0 §1.4: the transient, focusable Where-am-I panel — the
+    /// pull-based counterpart to the announcement, so braille users
+    /// read the same string at leisure.
+    private func whereAmIPanel(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+            Text("Where am I?")
+                .font(Tokens.Typography.body.weight(.semibold))
+            Text(text)
+                .font(Tokens.Typography.body)
+                .textSelection(.enabled)
+            Button("Close") {
+                appState.canvasWhereAmIReadback = nil
+            }
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(Tokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                .fill(Tokens.ColorRole.surface)
+                .shadow(radius: 4)
+        )
+        .padding(Tokens.Spacing.md)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Where am I? \(text)")
     }
 
     private var surface: CanvasSurface {
@@ -131,7 +162,23 @@ struct CanvasContainerView: View {
     private var selectionBinding: Binding<String?> {
         Binding(
             get: { document.selection.selected },
-            set: { document.selection.selected = $0 }
+            set: { newValue in
+                document.selection.selected = newValue
+                // Selection narration rides the #518 funnel (DoD §H) —
+                // rapid arrowing coalesces to the resting card.
+                if let id = newValue,
+                    let row = document.outline.first(where: { $0.nodeId == id })
+                {
+                    appState.canvasAnnouncer.announce(
+                        .movedTo(
+                            card: CanvasCardRef(kind: row.kind, title: row.title),
+                            ordinal: row.ordinalN, total: row.totalM,
+                            container: row.groupPath.last,
+                            connectionCount: row.connectionCount,
+                            colorName: row.colorName,
+                            marked: document.selection.marked.contains(id)))
+                }
+            }
         )
     }
 
