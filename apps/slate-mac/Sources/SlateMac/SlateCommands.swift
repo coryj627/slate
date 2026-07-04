@@ -19,6 +19,12 @@ import Foundation
 enum SlateCommandID {
     // File
     static let newFromTemplate = "slate.file.newFromTemplate"
+    // File management (U2-5, #463). Act on the tree's selected node.
+    static let newNote = "slate.file.newNote"
+    static let newFolder = "slate.file.newFolder"
+    static let renameEntry = "slate.file.rename"
+    static let moveTo = "slate.file.moveTo"
+    static let deleteEntry = "slate.file.delete"
 
     // Navigation
     static let jumpToBibliography = "slate.navigation.jumpToBibliography"
@@ -77,6 +83,11 @@ enum SlateCommandID {
     /// without a registration here fail the test loudly.
     static let all: [String] = [
         newFromTemplate,
+        newNote,
+        newFolder,
+        renameEntry,
+        moveTo,
+        deleteEntry,
         jumpToBibliography,
         toggleSearch,
         newTab,
@@ -201,6 +212,52 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⇧⌘N",
         hint: "Open the template picker to create a new note."
     ) { [weak appState] in appState?.openTemplatePicker() }
+
+    // ----- File management (U2-5, #463) -----
+
+    register(
+        SlateCommandID.newNote,
+        label: "New Note",
+        section: .file,
+        hotkey: "⌘N",
+        hint: "Create an untitled note in the selected folder, then rename it."
+    ) { [weak appState] in appState?.newNoteCommand() }
+
+    register(
+        SlateCommandID.newFolder,
+        label: "New Folder…",
+        section: .file,
+        // No global shortcut (spec §U2-5) — context menu + palette only.
+        hint: "Create a new folder in the selected folder, then rename it."
+    ) { [weak appState] in appState?.newFolderCommand() }
+
+    register(
+        SlateCommandID.renameEntry,
+        label: "Rename…",
+        section: .file,
+        hotkey: "⌥⌘R",
+        hint: "Rename the selected file or folder in place."
+    ) { [weak appState] in appState?.renameSelectedCommand() }
+
+    register(
+        SlateCommandID.moveTo,
+        label: "Move to…",
+        section: .file,
+        hotkey: "⇧⌘M",
+        hint: "Move the selected file or folder to another folder."
+    ) { [weak appState] in appState?.moveSelectedCommand() }
+
+    register(
+        SlateCommandID.deleteEntry,
+        label: "Move to Trash",
+        section: .file,
+        // No hotkeyHint: ⌘⌫ is tree-focused-only (spec §U2-5), delivered by the
+        // file tree's own key handling — not a menu-bar chord. Registering a
+        // hotkeyHint here would make it a drift-check orphan (no menu binding)
+        // AND collide with PropertyEditorRow's sheet-scoped ⌘⌫ in
+        // `deliberatelyUnregisteredChords`. The palette row invokes on Return.
+        hint: "Move the selected file or folder to the Trash."
+    ) { [weak appState] in appState?.deleteSelectedCommand() }
 
     // ----- Navigation -----
 

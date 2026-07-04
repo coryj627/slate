@@ -37,6 +37,10 @@ final class SlateSymbolTests: XCTestCase {
         // predate SF Symbols 7 (gearshape/questionmark.circle/checkmark since
         // v1; externaldrive since v2/macOS 11), so they're on the macOS 15 floor.
         "gearshape", "questionmark.circle", "externaldrive", "checkmark",
+        // U2-5 (#463): file-management command roles. All predate SF Symbols 7
+        // (folder.badge.plus / square.and.pencil / trash since v1;
+        // arrow.turn.down.right since v1), so they're on the macOS 15 floor.
+        "folder.badge.plus", "square.and.pencil", "arrow.turn.down.right", "trash",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated

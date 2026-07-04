@@ -93,6 +93,19 @@ enum SlateSymbol: CaseIterable {
     /// surface — the source-lint funnels every glyph through this layer, so the
     /// menu's selection cue lives here rather than as a raw `systemImage:`.
     case checkmark
+    // File-management command roles (U2-5, #463). Each renders in the tree's
+    // context menu + the command palette; `v7 == fallback` (all five glyphs
+    // exist on the macOS 15 floor). Per the u2_spec SlateSymbol additions table.
+    /// "New Folder" — creates a child directory in the selected folder / root.
+    case newFolder
+    /// "New Note" — creates an untitled `.md` in the selected folder / root.
+    case newNote
+    /// "Move to…" — opens the folder picker for a file/folder move.
+    case moveTo
+    /// "Rename" — renames the selected file or folder in place.
+    case rename
+    /// "Move to Trash" — sends the selected file/folder to the system trash.
+    case trash
 
     /// The resolved SF Symbol name for the running OS. `private` so call
     /// sites can't reach past the labeled/decorative builders to name a raw
@@ -140,6 +153,11 @@ enum SlateSymbol: CaseIterable {
         case .help: return "Help"
         case .vaultSwitch: return "Switch vault"
         case .checkmark: return "Current"
+        case .newFolder: return "New folder"
+        case .newNote: return "New note"
+        case .moveTo: return "Move to"
+        case .rename: return "Rename"
+        case .trash: return "Move to Trash"
         }
     }
 
@@ -195,6 +213,13 @@ enum SlateSymbol: CaseIterable {
         case .help: return ("questionmark.circle", "questionmark.circle")
         case .vaultSwitch: return ("externaldrive", "externaldrive")
         case .checkmark: return ("checkmark", "checkmark")
+        // U2-5 file-management roles (u2_spec SlateSymbol additions table). Each
+        // glyph exists on the macOS 15 floor, so v7 == fallback.
+        case .newFolder: return ("folder.badge.plus", "folder.badge.plus")
+        case .newNote: return ("square.and.pencil", "square.and.pencil")
+        case .moveTo: return ("arrow.turn.down.right", "arrow.turn.down.right")
+        case .rename: return ("pencil", "pencil")
+        case .trash: return ("trash", "trash")
         }
     }
 
