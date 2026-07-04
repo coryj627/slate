@@ -82,8 +82,10 @@ struct CanvasTableView: View {
     }
 
     private var summary: String {
-        let cards = rows.filter { $0.kind != "group" }.count
-        let groups = rows.count - cards
+        // Straight off tableRows — `rows` would pay an extra O(n)
+        // display-row map per render (Codoki #612).
+        let cards = document.tableRows.filter { $0.kind != "group" }.count
+        let groups = document.tableRows.count - cards
         return "Canvas table: \(cards) card\(cards == 1 ? "" : "s"), \(groups) group\(groups == 1 ? "" : "s")."
     }
 
