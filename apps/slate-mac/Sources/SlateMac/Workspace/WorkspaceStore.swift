@@ -91,6 +91,10 @@ struct WorkspaceStore {
         /// pre-U3 snapshots, forward compatible for older builds (unknown
         /// keys are ignored by Codable).
         var mode: String?
+        /// Per-tab properties-widget collapse (U3-3): `true` or absent.
+        /// Absent restores as expanded (the default) — same compatibility
+        /// rules as `mode`.
+        var propsCollapsed: Bool?
     }
 
     struct Item: Codable, Equatable {
@@ -144,13 +148,35 @@ struct WorkspaceStore {
 
     static func snapshot(
         of model: WorkspaceModel, activeLeaf: String? = nil,
-        viewModes: [TabID: NoteViewMode] = [:]
+        viewModes: [TabID: NoteViewMode] = [:],
+        propertiesCollapsed: Set<TabID> = []
     ) -> Snapshot {
         Snapshot(
             version: schemaVersion,
             activeGroup: model.activeGroupID.raw,
-            root: node(of: modelRoot(model), viewModes: viewModes),
+            root: node(
+                of: modelRoot(model), viewModes: viewModes,
+                propertiesCollapsed: propertiesCollapsed),
             activeLeaf: activeLeaf)
+    }
+
+    /// The per-tab collapsed set captured in a snapshot (U3-3). Sparse:
+    /// only `true` entries are stored.
+    static func propertiesCollapsed(from snapshot: Snapshot) -> Set<TabID> {
+        var out: Set<TabID> = []
+        collectCollapsed(snapshot.root, into: &out)
+        return out
+    }
+
+    private static func collectCollapsed(_ node: Node, into out: inout Set<TabID>) {
+        switch node {
+        case .group(_, _, let tabs):
+            for tab in tabs where tab.propsCollapsed == true {
+                out.insert(TabID(raw: tab.id))
+            }
+        case .split(_, _, let children):
+            for child in children { collectCollapsed(child, into: &out) }
+        }
     }
 
     /// The per-tab view modes captured in a snapshot (U3-2). Only non-default
@@ -187,7 +213,8 @@ struct WorkspaceStore {
     }
 
     private static func node(
-        of splitNode: SplitNode, viewModes: [TabID: NoteViewMode] = [:]
+        of splitNode: SplitNode, viewModes: [TabID: NoteViewMode] = [:],
+        propertiesCollapsed: Set<TabID> = []
     ) -> Node {
         switch splitNode {
         case .group(let group):
@@ -197,14 +224,19 @@ struct WorkspaceStore {
                 tabs: group.tabs.map { tab in
                     Tab(
                         id: tab.id.raw, item: item(of: tab.item),
-                        // Sparse: only non-default modes are written.
-                        mode: viewModes[tab.id].map(\.rawValue))
+                        // Sparse: only non-default state is written.
+                        mode: viewModes[tab.id].map(\.rawValue),
+                        propsCollapsed: propertiesCollapsed.contains(tab.id) ? true : nil)
                 })
         case .split(let branch):
             return .split(
                 axis: branch.axis == .horizontal ? "horizontal" : "vertical",
                 weights: branch.weights,
-                children: branch.children.map { node(of: $0, viewModes: viewModes) })
+                children: branch.children.map {
+                    node(
+                        of: $0, viewModes: viewModes,
+                        propertiesCollapsed: propertiesCollapsed)
+                })
         }
     }
 

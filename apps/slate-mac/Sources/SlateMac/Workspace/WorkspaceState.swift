@@ -65,6 +65,23 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    /// Per-tab properties-widget expansion (U3-3, #467). Sparse like
+    /// `viewModes`: only COLLAPSED tabs have an entry — expanded is the
+    /// default and the absent-key state in workspace.json.
+    @Published private(set) var propertiesCollapsed: Set<TabID> = []
+
+    func isPropertiesExpanded(for tabID: TabID) -> Bool {
+        !propertiesCollapsed.contains(tabID)
+    }
+
+    func setPropertiesExpanded(_ expanded: Bool, for tabID: TabID) {
+        if expanded {
+            propertiesCollapsed.remove(tabID)
+        } else {
+            propertiesCollapsed.insert(tabID)
+        }
+    }
+
     // MARK: Queries
 
     var activeTab: WorkspaceTab? { model.activeGroup.activeTab }
@@ -297,6 +314,7 @@ final class WorkspaceState: ObservableObject {
         let outcome = model.closeTab(tabID)
         documents[tabID] = nil
         viewModes[tabID] = nil
+        propertiesCollapsed.remove(tabID)
         assert(model.validate().isEmpty)
         return outcome
     }
@@ -309,6 +327,7 @@ final class WorkspaceState: ObservableObject {
         model = WorkspaceModel()
         documents = [:]
         viewModes = [:]
+        propertiesCollapsed = []
         activeLeaf = .outline
         focusRegion = .editor
         lastFocusedGroup = nil
@@ -320,13 +339,18 @@ final class WorkspaceState: ObservableObject {
     /// lazily on first activation, missing files surface the existing
     /// per-tab load-error state. `viewModes` restores the per-tab reading
     /// modes captured in the snapshot (U3-2); unknown ids are dropped.
-    func adopt(_ restored: WorkspaceModel, viewModes restoredModes: [TabID: NoteViewMode] = [:]) {
+    func adopt(
+        _ restored: WorkspaceModel,
+        viewModes restoredModes: [TabID: NoteViewMode] = [:],
+        propertiesCollapsed restoredCollapsed: Set<TabID> = []
+    ) {
         assert(restored.validate().isEmpty)
         model = restored
         documents = [:]
         let knownIDs = Set(restored.allTabs.map(\.id))
         viewModes = restoredModes
             .filter { knownIDs.contains($0.key) && $0.value != .editing }
+        propertiesCollapsed = restoredCollapsed.intersection(knownIDs)
         focusRegion = .editor
         lastFocusedGroup = nil
     }

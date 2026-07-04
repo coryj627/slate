@@ -691,7 +691,8 @@ final class AppState: ObservableObject {
             try store.save(
                 WorkspaceStore.snapshot(
                     of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue,
-                    viewModes: workspace.viewModes))
+                    viewModes: workspace.viewModes,
+                    propertiesCollapsed: workspace.propertiesCollapsed))
         } catch {
             // Layout persistence must never interrupt the user; the next
             // clean save wins.
@@ -711,7 +712,9 @@ final class AppState: ObservableObject {
         guard let restored = WorkspaceStore.model(from: snapshot),
             !restored.isEmpty
         else { return }
-        workspace.adopt(restored, viewModes: WorkspaceStore.viewModes(from: snapshot))
+        workspace.adopt(
+            restored, viewModes: WorkspaceStore.viewModes(from: snapshot),
+            propertiesCollapsed: WorkspaceStore.propertiesCollapsed(from: snapshot))
         if let tab = workspace.model.activeGroup.activeTabID {
             activateTab(tab)
         }
