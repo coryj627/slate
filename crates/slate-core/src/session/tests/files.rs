@@ -167,6 +167,9 @@ fn read_text_refuses_files_grown_after_stat_toctou() {
         fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
             self.inner.rename(from, to)
         }
+        fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+            self.inner.create_dir(relative)
+        }
         fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
             // Lie about the size: report 1 byte.
             let mut stat = self.inner.stat(relative)?;

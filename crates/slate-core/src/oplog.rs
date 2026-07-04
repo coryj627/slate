@@ -348,6 +348,20 @@ pub struct OpLogEntry {
 
 /// Path to the oplog file for `file_id` under the given cache dir.
 /// The directory itself is created lazily by `append_entry`.
+/// Reconstruct the file's bytes as they stood immediately AFTER the entry
+/// whose `hash_after` equals `target_hash` (U2-2 undo: restore a rewritten
+/// file to its recorded pre-op state). Walks prefix reconstructions in
+/// order, so a hash that occurs more than once resolves to its FIRST
+/// occurrence — any occurrence has identical bytes by the hash contract.
+/// `None` when no entry produced that hash (journal/op-log divergence —
+/// the caller surfaces a typed error, never a clobber).
+pub fn reconstruct_at_hash(entries: &[OpLogEntry], target_hash: &str) -> Option<String> {
+    let position = entries
+        .iter()
+        .position(|e| e.content_hash_after == target_hash)?;
+    reconstruct_at_tail(&entries[..=position]).ok()
+}
+
 pub fn oplog_path(cache_dir: &Path, file_id: i64) -> PathBuf {
     cache_dir.join("oplog").join(format!("{file_id}.oplog"))
 }

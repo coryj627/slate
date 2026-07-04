@@ -3729,6 +3729,650 @@ fn classify_path(path: &str) -> (String, Option<String>, bool) {
     (name, extension, is_markdown)
 }
 
+// ---------------------------------------------------------------------------
+// Structural mutations (U2-2, #460): folder/file create / rename / move /
+// delete + the journal-backed undo. See `docs/plans/08_ui_parity/specs/
+// u2_spec.md` §U2-2 for the normative semantics and `crate::structural` for
+// the shared types.
+//
+// Concurrency: every mutation holds the connection mutex for its whole body
+// (single-writer discipline, same as `set_property`). Ordering within a
+// mutation: validate → collision-check → FILESYSTEM op → one SQLite
+// transaction (index updates + journal append). The tx only runs after the
+// fs op succeeded; if the tx fails, the fs op is reverted best-effort and
+// the error surfaces (never a silently split state).
+
+impl VaultSession {
+    /// Create an empty folder. Journaled; undo deletes it if still empty.
+    pub fn create_folder(
+        &self,
+        path: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        validate_save_path(path)?;
+        validate_leaf_component(leaf_name(path))?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
+            return Err(VaultError::DestinationExists { path: existing });
+        }
+        self.provider.create_dir(path)?;
+        self.with_structural_tx(conn, |tx| {
+            upsert_dir_row(tx, path)?;
+            journal_append(
+                tx,
+                crate::structural::StructuralOpKind::CreateFolder,
+                &crate::structural::StructuralOpPayload {
+                    from: path.to_string(),
+                    to: path.to_string(),
+                    ..Default::default()
+                },
+            )
+        })
+        .map(|op_id| crate::structural::StructuralReport {
+            op_id,
+            moved: Vec::new(),
+            rewritten: Vec::new(),
+            failed: Vec::new(),
+        })
+    }
+
+    /// Rename a folder in place (same parent, new final component).
+    pub fn rename_folder(
+        &self,
+        path: &str,
+        new_name: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let new_path = sibling_path(path, new_name)?;
+        self.structural_move_folder(
+            path,
+            &new_path,
+            crate::structural::StructuralOpKind::RenameFolder,
+        )
+    }
+
+    /// Move a folder under a new parent ("" = vault root).
+    pub fn move_folder(
+        &self,
+        path: &str,
+        new_parent: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let new_path = child_path(new_parent, leaf_name(path))?;
+        self.structural_move_folder(
+            path,
+            &new_path,
+            crate::structural::StructuralOpKind::MoveFolder,
+        )
+    }
+
+    /// Rename a file in place.
+    pub fn rename_file(
+        &self,
+        path: &str,
+        new_name: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let new_path = sibling_path(path, new_name)?;
+        self.structural_move_file(
+            path,
+            &new_path,
+            crate::structural::StructuralOpKind::RenameFile,
+        )
+    }
+
+    /// Move a file under a new parent ("" = vault root).
+    pub fn move_file(
+        &self,
+        path: &str,
+        new_parent: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let new_path = child_path(new_parent, leaf_name(path))?;
+        self.structural_move_file(
+            path,
+            &new_path,
+            crate::structural::StructuralOpKind::MoveFile,
+        )
+    }
+
+    /// Move a file to the system trash. Journaled for auditability; NOT
+    /// undoable via `undo_structural` (the bytes are in the trash).
+    pub fn delete_file(&self, path: &str) -> Result<(), VaultError> {
+        validate_save_path(path)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        self.provider.delete(path)?;
+        self.with_structural_tx(conn, |tx| {
+            tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+            journal_append(
+                tx,
+                crate::structural::StructuralOpKind::DeleteFile,
+                &crate::structural::StructuralOpPayload {
+                    from: path.to_string(),
+                    to: path.to_string(),
+                    ..Default::default()
+                },
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Move a folder (recursively) to the system trash. Journaled; not
+    /// undoable via `undo_structural`.
+    pub fn delete_folder(&self, path: &str) -> Result<(), VaultError> {
+        validate_save_path(path)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        self.provider.delete(path)?;
+        self.with_structural_tx(conn, |tx| {
+            let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
+            tx.execute(
+                "DELETE FROM files WHERE path >= ?1 AND path < ?2",
+                rusqlite::params![lo, hi],
+            )?;
+            tx.execute(
+                "DELETE FROM dirs WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
+                rusqlite::params![path, lo, hi],
+            )?;
+            journal_append(
+                tx,
+                crate::structural::StructuralOpKind::DeleteFolder,
+                &crate::structural::StructuralOpPayload {
+                    from: path.to_string(),
+                    to: path.to_string(),
+                    ..Default::default()
+                },
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Undo the LATEST structural op (op_id must be MAX(id) — out-of-order
+    /// undo would re-introduce the multi-file consistency problem the
+    /// journal exists to avoid). The undo itself is journaled as the
+    /// inverse op, so the ledger stays append-only and undoing an undo is
+    /// a redo. Rewritten files (U2-3) are restored byte-exactly via their
+    /// recorded pre-op hashes, conflict-guarded per file.
+    pub fn undo_structural(
+        &self,
+        op_id: i64,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        use crate::structural::{StructuralOpKind, StructuralOpPayload};
+        let (kind, payload) = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let (max_id, kind_str, payload_json): (i64, String, String) = conn
+                .query_row(
+                    "SELECT id, kind, payload FROM structural_ops ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(|_| VaultError::InvalidArgument {
+                    message: "no structural operations to undo".into(),
+                })?;
+            if max_id != op_id {
+                return Err(VaultError::InvalidArgument {
+                    message: format!(
+                        "only the latest structural op is undoable (latest is {max_id}, got {op_id})"
+                    ),
+                });
+            }
+            let kind =
+                StructuralOpKind::parse(&kind_str).ok_or_else(|| VaultError::InvalidArgument {
+                    message: format!("unknown structural op kind {kind_str:?}"),
+                })?;
+            if !kind.undoable() {
+                return Err(VaultError::InvalidArgument {
+                    message: format!(
+                        "{} is not undoable (the content is in the system trash)",
+                        kind.as_str()
+                    ),
+                });
+            }
+            let payload = StructuralOpPayload::from_json(&payload_json).ok_or_else(|| {
+                VaultError::InvalidArgument {
+                    message: "corrupt structural journal payload".into(),
+                }
+            })?;
+            (kind, payload)
+            // Mutex drops here: the inverse op below re-acquires it through
+            // the public mutation, which owns full validation + journaling.
+        };
+
+        let mut report = match kind {
+            StructuralOpKind::CreateFolder => {
+                // Inverse: remove the folder iff still empty.
+                let conn = self.conn.lock().expect("session connection mutex");
+                let (lo, hi) = subtree_bounds(&payload.from).expect("non-root folder path");
+                let occupied: i64 = conn.query_row(
+                    "SELECT (SELECT COUNT(*) FROM files WHERE path >= ?1 AND path < ?2)
+                          + (SELECT COUNT(*) FROM dirs  WHERE path >= ?1 AND path < ?2)",
+                    rusqlite::params![lo, hi],
+                    |row| row.get(0),
+                )?;
+                if occupied > 0 {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "cannot undo create_folder: {:?} is no longer empty",
+                            payload.from
+                        ),
+                    });
+                }
+                self.provider.delete(&payload.from)?;
+                self.with_structural_tx(conn, |tx| {
+                    tx.execute(
+                        "DELETE FROM dirs WHERE path = ?1",
+                        rusqlite::params![payload.from],
+                    )?;
+                    journal_append(
+                        tx,
+                        StructuralOpKind::DeleteFolder,
+                        &StructuralOpPayload {
+                            from: payload.from.clone(),
+                            to: payload.from.clone(),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .map(|new_op| crate::structural::StructuralReport {
+                    op_id: new_op,
+                    moved: Vec::new(),
+                    rewritten: Vec::new(),
+                    failed: Vec::new(),
+                })?
+            }
+            StructuralOpKind::RenameFolder | StructuralOpKind::MoveFolder => {
+                self.structural_move_folder(&payload.to, &payload.from, kind)?
+            }
+            StructuralOpKind::RenameFile | StructuralOpKind::MoveFile => {
+                self.structural_move_file(&payload.to, &payload.from, kind)?
+            }
+            StructuralOpKind::DeleteFile | StructuralOpKind::DeleteFolder => {
+                unreachable!("undoable() filtered deletes above")
+            }
+        };
+
+        // Restore U2-3 rewrites byte-exactly: each rewritten file goes back
+        // to its pre-op bytes via the per-file op-log, guarded by the
+        // recorded post-op hash so an external edit since the op surfaces
+        // as a per-file WriteConflict in the report, never a clobber.
+        for rewrite in &payload.rewrites {
+            match self.restore_file_to_hash(
+                &rewrite.path,
+                &rewrite.hash_before,
+                &rewrite.hash_after,
+            ) {
+                Ok(()) => report.rewritten.push(rewrite.clone()),
+                Err(VaultError::WriteConflict { .. }) => {
+                    report.failed.push(crate::structural::RewriteFailure {
+                        path: rewrite.path.clone(),
+                        kind: crate::structural::RewriteFailureKind::WriteConflict,
+                    })
+                }
+                Err(other) => report.failed.push(crate::structural::RewriteFailure {
+                    path: rewrite.path.clone(),
+                    kind: crate::structural::RewriteFailureKind::Other(other.to_string()),
+                }),
+            }
+        }
+        Ok(report)
+    }
+
+    // ----- internals -----
+
+    fn structural_move_folder(
+        &self,
+        from: &str,
+        to: &str,
+        kind: crate::structural::StructuralOpKind,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        validate_save_path(from)?;
+        validate_save_path(to)?;
+        if to == from {
+            return Err(VaultError::InvalidArgument {
+                message: "destination equals source".into(),
+            });
+        }
+        if to.starts_with(&format!("{from}/")) {
+            return Err(VaultError::InvalidArgument {
+                message: "cannot move a folder into its own subtree".into(),
+            });
+        }
+        let conn = self.conn.lock().expect("session connection mutex");
+        let dir_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM dirs WHERE path = ?1",
+                rusqlite::params![from],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !dir_exists {
+            return Err(VaultError::InvalidPath {
+                path: from.to_string(),
+                reason: "no such folder in the index".into(),
+            });
+        }
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+            return Err(VaultError::DestinationExists { path: existing });
+        }
+
+        // Collect the per-file mapping BEFORE mutating anything.
+        let (lo, hi) = subtree_bounds(from).expect("non-root folder path");
+        let moved: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2 ORDER BY path")?;
+            let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                let old = row?;
+                let new = format!("{to}{}", &old[from.len()..]);
+                out.push((old, new));
+            }
+            out
+        };
+
+        self.provider.rename(from, to)?;
+        let tx_result = self.with_structural_tx(conn, |tx| {
+            rename_prefix_in_index(tx, from, to)?;
+            journal_append(
+                tx,
+                kind,
+                &crate::structural::StructuralOpPayload {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    moved: moved.clone(),
+                    ..Default::default()
+                },
+            )
+        });
+        let op_id = match tx_result {
+            Ok(id) => id,
+            Err(e) => {
+                // Best-effort fs revert so state can't silently split.
+                let _ = self.provider.rename(to, from);
+                return Err(e);
+            }
+        };
+        Ok(crate::structural::StructuralReport {
+            op_id,
+            moved,
+            rewritten: Vec::new(),
+            failed: Vec::new(),
+        })
+    }
+
+    fn structural_move_file(
+        &self,
+        from: &str,
+        to: &str,
+        kind: crate::structural::StructuralOpKind,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        validate_save_path(from)?;
+        validate_save_path(to)?;
+        if to == from {
+            return Err(VaultError::InvalidArgument {
+                message: "destination equals source".into(),
+            });
+        }
+        let conn = self.conn.lock().expect("session connection mutex");
+        let file_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1",
+                rusqlite::params![from],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !file_exists {
+            return Err(VaultError::InvalidPath {
+                path: from.to_string(),
+                reason: "no such file in the index".into(),
+            });
+        }
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+            return Err(VaultError::DestinationExists { path: existing });
+        }
+
+        self.provider.rename(from, to)?;
+        let (name, extension, is_markdown) = classify_path(to);
+        let tx_result = self.with_structural_tx(conn, |tx| {
+            tx.execute(
+                "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+                 WHERE path = ?5",
+                rusqlite::params![to, name, extension, is_markdown as i64, from],
+            )?;
+            journal_append(
+                tx,
+                kind,
+                &crate::structural::StructuralOpPayload {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    moved: vec![(from.to_string(), to.to_string())],
+                    ..Default::default()
+                },
+            )
+        });
+        let op_id = match tx_result {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = self.provider.rename(to, from);
+                return Err(e);
+            }
+        };
+        Ok(crate::structural::StructuralReport {
+            op_id,
+            moved: vec![(from.to_string(), to.to_string())],
+            rewritten: Vec::new(),
+            failed: Vec::new(),
+        })
+    }
+
+    /// Run `body` inside one transaction on the already-locked connection.
+    fn with_structural_tx<T>(
+        &self,
+        mut conn: std::sync::MutexGuard<'_, Connection>,
+        body: impl FnOnce(&rusqlite::Transaction) -> Result<T, VaultError>,
+    ) -> Result<T, VaultError> {
+        let tx = conn.transaction()?;
+        let out = body(&tx)?;
+        tx.commit()?;
+        Ok(out)
+    }
+
+    /// Restore `path` to the exact bytes whose hash is `hash_before`, via
+    /// the per-file op-log, conflict-guarded on `expected_current`.
+    fn restore_file_to_hash(
+        &self,
+        path: &str,
+        hash_before: &str,
+        expected_current: &str,
+    ) -> Result<(), VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        // Inline id lookup (NOT the public read_oplog — it takes the mutex
+        // this method already holds).
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(file_id) = file_id else {
+            return Err(VaultError::InvalidPath {
+                path: path.to_string(),
+                reason: "no such file in the index".into(),
+            });
+        };
+        let entries =
+            crate::oplog::read_oplog(&self.config.cache_dir, file_id).map_err(VaultError::Io)?;
+        let contents =
+            crate::oplog::reconstruct_at_hash(&entries, hash_before).ok_or_else(|| {
+                VaultError::InvalidArgument {
+                    message: format!("op-log for {path:?} has no state with hash {hash_before}"),
+                }
+            })?;
+        self.save_text_locked(&mut conn, path, &contents, Some(expected_current))
+            .map(|_| ())
+    }
+}
+
+/// Final path component (files or folders; input is a validated relative
+/// path, so the component is non-empty).
+fn leaf_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The path of `path`'s sibling named `new_name` (rename-in-place).
+fn sibling_path(path: &str, new_name: &str) -> Result<String, VaultError> {
+    validate_leaf_component(new_name)?;
+    Ok(match path.rfind('/') {
+        Some(idx) => format!("{}/{new_name}", &path[..idx]),
+        None => new_name.to_string(),
+    })
+}
+
+/// The path of `leaf` placed under `parent` ("" = vault root).
+fn child_path(parent: &str, leaf: &str) -> Result<String, VaultError> {
+    if !parent.is_empty() {
+        validate_save_path(parent)?;
+    }
+    validate_leaf_component(leaf)?;
+    Ok(if parent.is_empty() {
+        leaf.to_string()
+    } else {
+        format!("{parent}/{leaf}")
+    })
+}
+
+/// Single non-empty component, no separators, not dot-prefixed, and not
+/// the reserved `.slate` (redundant with dot-prefix, kept for the explicit
+/// error the spec names).
+fn validate_leaf_component(name: &str) -> Result<(), VaultError> {
+    if name.is_empty() {
+        return Err(VaultError::InvalidArgument {
+            message: "name must not be empty".into(),
+        });
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(VaultError::InvalidArgument {
+            message: "name must be a single path component".into(),
+        });
+    }
+    if name.starts_with('.') {
+        return Err(VaultError::InvalidArgument {
+            message: "dot-prefixed names are reserved".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Case-insensitive existence check across BOTH index tables (APFS default
+/// is case-insensitive; a differing-case collision would shadow on disk).
+/// Returns the existing entry's exact path for the error message.
+fn index_entry_case_insensitive(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<String>, VaultError> {
+    let lowered = path.to_lowercase();
+    let hit: Option<String> = conn
+        .query_row(
+            "SELECT path FROM files WHERE lower(path) = ?1
+             UNION ALL
+             SELECT path FROM dirs WHERE lower(path) = ?1
+             LIMIT 1",
+            rusqlite::params![lowered],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(hit)
+}
+
+/// Rename every index row under `from` (files + dirs + the dir row itself)
+/// to live under `to`, preserving ids. Range-scan + per-row UPDATE — the
+/// U2-1 discipline (GLOB/LIKE are wildcard-unsafe against legal filenames).
+fn rename_prefix_in_index(
+    tx: &rusqlite::Transaction,
+    from: &str,
+    to: &str,
+) -> Result<(), VaultError> {
+    let (lo, hi) = subtree_bounds(from).expect("non-root folder path");
+
+    let file_rows: Vec<(i64, String)> = {
+        let mut stmt = tx.prepare("SELECT id, path FROM files WHERE path >= ?1 AND path < ?2")?;
+        let rows = stmt.query_map(rusqlite::params![lo, hi], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for (id, old_path) in file_rows {
+        let new_path = format!("{to}{}", &old_path[from.len()..]);
+        let (name, extension, is_markdown) = classify_path(&new_path);
+        tx.execute(
+            "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+             WHERE id = ?5",
+            rusqlite::params![new_path, name, extension, is_markdown as i64, id],
+        )?;
+    }
+
+    let dir_rows: Vec<(i64, String)> = {
+        let mut stmt =
+            tx.prepare("SELECT id, path FROM dirs WHERE path = ?1 OR (path >= ?2 AND path < ?3)")?;
+        let rows = stmt.query_map(rusqlite::params![from, lo, hi], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for (id, old_path) in dir_rows {
+        let new_path = if old_path == from {
+            to.to_string()
+        } else {
+            format!("{to}{}", &old_path[from.len()..])
+        };
+        let name = leaf_name(&new_path).to_string();
+        let parent = match new_path.rfind('/') {
+            Some(idx) => new_path[..idx].to_string(),
+            None => String::new(),
+        };
+        tx.execute(
+            "UPDATE dirs SET path = ?1, parent_path = ?2, name = ?3 WHERE id = ?4",
+            rusqlite::params![new_path, parent, name, id],
+        )?;
+    }
+    Ok(())
+}
+
+/// Insert (or keep) a `dirs` row for `path`, plus any missing ancestor
+/// rows (`create_dir` creates parents; the index must agree).
+fn upsert_dir_row(tx: &rusqlite::Transaction, path: &str) -> Result<(), VaultError> {
+    let mut ancestors: Vec<&str> = Vec::new();
+    let mut end = path.len();
+    loop {
+        ancestors.push(&path[..end]);
+        match path[..end].rfind('/') {
+            Some(idx) => end = idx,
+            None => break,
+        }
+    }
+    for dir in ancestors.into_iter().rev() {
+        let name = leaf_name(dir).to_string();
+        let parent = match dir.rfind('/') {
+            Some(idx) => dir[..idx].to_string(),
+            None => String::new(),
+        };
+        tx.execute(
+            "INSERT INTO dirs (path, parent_path, name) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO NOTHING",
+            rusqlite::params![dir, parent, name],
+        )?;
+    }
+    Ok(())
+}
+
+/// Append one journal row; returns its id.
+fn journal_append(
+    tx: &rusqlite::Transaction,
+    kind: crate::structural::StructuralOpKind,
+    payload: &crate::structural::StructuralOpPayload,
+) -> Result<i64, VaultError> {
+    tx.execute(
+        "INSERT INTO structural_ops (timestamp_ms, kind, payload) VALUES (?1, ?2, ?3)",
+        rusqlite::params![now_ms(), kind.as_str(), payload.to_json()],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for `VaultSession`. The 169-test suite that used to live
@@ -3752,6 +4396,9 @@ mod tests {
 
     #[path = "dir_tree.rs"]
     mod dir_tree;
+
+    #[path = "structural.rs"]
+    mod structural;
 
     #[path = "search.rs"]
     mod search;

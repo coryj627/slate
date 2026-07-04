@@ -93,6 +93,8 @@ pub enum VaultError {
     /// untouched.
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String },
+    #[error("destination already exists: {path}")]
+    DestinationExists { path: String },
 
     /// Save failed because the on-disk file no longer matches the
     /// `expected_content_hash` the caller supplied. Surfaces the
@@ -155,6 +157,7 @@ impl From<core::VaultError> for VaultError {
             core::VaultError::InvalidArgument { message } => {
                 VaultError::InvalidArgument { message }
             }
+            core::VaultError::DestinationExists { path } => VaultError::DestinationExists { path },
             core::VaultError::WriteConflict {
                 current_content_hash,
                 expected_content_hash,
@@ -280,6 +283,56 @@ impl VaultSession {
     /// (each with immediate child-dir / child-file counts) then a page of
     /// its child files. `parent_path = ""` lists the root. Directories
     /// come first, then files, each sorted case-insensitively (#459).
+    /// U2-2 (#460): structural mutations. Semantics in
+    /// `docs/plans/08_ui_parity/specs/u2_spec.md` §U2-2.
+    pub fn create_folder(&self, path: String) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.create_folder(&path)?.into())
+    }
+
+    pub fn rename_folder(
+        &self,
+        path: String,
+        new_name: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.rename_folder(&path, &new_name)?.into())
+    }
+
+    pub fn move_folder(
+        &self,
+        path: String,
+        new_parent: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.move_folder(&path, &new_parent)?.into())
+    }
+
+    pub fn delete_folder(&self, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.delete_folder(&path)?)
+    }
+
+    pub fn rename_file(
+        &self,
+        path: String,
+        new_name: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.rename_file(&path, &new_name)?.into())
+    }
+
+    pub fn move_file(
+        &self,
+        path: String,
+        new_parent: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.move_file(&path, &new_parent)?.into())
+    }
+
+    pub fn delete_file(&self, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.delete_file(&path)?)
+    }
+
+    pub fn undo_structural(&self, op_id: i64) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.undo_structural(op_id)?.into())
+    }
+
     pub fn list_dir_children(
         &self,
         parent_path: String,
@@ -1119,6 +1172,89 @@ pub struct DirNodeSummary {
     pub name: String,
     pub child_dir_count: u32,
     pub child_file_count: u32,
+}
+
+/// U2-2 (#460): structural-mutation report mirrors.
+#[derive(uniffi::Record)]
+pub struct StructuralReport {
+    pub op_id: i64,
+    pub moved: Vec<MovedPath>,
+    pub rewritten: Vec<RewriteOutcome>,
+    pub failed: Vec<RewriteFailure>,
+}
+
+/// Tuple structs don't cross uniffi; `(old, new)` becomes a record.
+#[derive(uniffi::Record)]
+pub struct MovedPath {
+    pub old_path: String,
+    pub new_path: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct RewriteOutcome {
+    pub path: String,
+    pub hash_before: String,
+    pub hash_after: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct RewriteFailure {
+    pub path: String,
+    pub kind: RewriteFailureKind,
+}
+
+/// Flattened (uniffi enums carry no per-variant payload here; the detail
+/// string rides alongside).
+#[derive(uniffi::Record)]
+pub struct RewriteFailureKind {
+    pub kind: String,
+    pub detail: String,
+}
+
+impl From<core::structural::StructuralReport> for StructuralReport {
+    fn from(r: core::structural::StructuralReport) -> Self {
+        Self {
+            op_id: r.op_id,
+            moved: r
+                .moved
+                .into_iter()
+                .map(|(old_path, new_path)| MovedPath { old_path, new_path })
+                .collect(),
+            rewritten: r.rewritten.into_iter().map(Into::into).collect(),
+            failed: r.failed.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<core::structural::RewriteOutcome> for RewriteOutcome {
+    fn from(r: core::structural::RewriteOutcome) -> Self {
+        Self {
+            path: r.path,
+            hash_before: r.hash_before,
+            hash_after: r.hash_after,
+        }
+    }
+}
+
+impl From<core::structural::RewriteFailure> for RewriteFailure {
+    fn from(f: core::structural::RewriteFailure) -> Self {
+        let (kind, detail) = match f.kind {
+            core::structural::RewriteFailureKind::WriteConflict => {
+                ("write_conflict".to_string(), String::new())
+            }
+            core::structural::RewriteFailureKind::MalformedFrontmatter => {
+                ("malformed_frontmatter".to_string(), String::new())
+            }
+            core::structural::RewriteFailureKind::Cancelled => {
+                ("cancelled".to_string(), String::new())
+            }
+            core::structural::RewriteFailureKind::Other(detail) => ("other".to_string(), detail),
+        };
+        Self {
+            path: f.path,
+            kind: RewriteFailureKind { kind, detail },
+        }
+    }
 }
 
 impl From<core::DirNodeSummary> for DirNodeSummary {

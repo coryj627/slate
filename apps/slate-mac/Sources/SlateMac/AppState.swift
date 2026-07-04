@@ -3337,6 +3337,8 @@ final class AppState: ObservableObject {
             return "Citation style \(path) couldn't be loaded: \(reason)."
         case .PrefsUnreadable(let path, let reason):
             return "Preferences file \(path) couldn't be loaded: \(reason)."
+        case .DestinationExists(let path):
+            return "Something named \(path) already exists there."
         }
     }
 
@@ -5171,6 +5173,8 @@ final class AppState: ObservableObject {
             return "Citation style \(path) couldn't be loaded: \(reason)."
         case .PrefsUnreadable(let path, let reason):
             return "Preferences file \(path) couldn't be loaded: \(reason)."
+        case .DestinationExists(let path):
+            return "Something named \(path) already exists there. Choose a different name."
         }
     }
 }

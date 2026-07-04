@@ -63,6 +63,9 @@ impl crate::VaultProvider for CancellingProvider {
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         self.inner.rename(from, to)
     }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
     fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
         self.inner.stat(relative)
     }
@@ -93,6 +96,9 @@ impl crate::VaultProvider for ZeroCtimeProvider {
     }
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         self.inner.rename(from, to)
+    }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
     }
     fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
         let mut stat = self.inner.stat(relative)?;

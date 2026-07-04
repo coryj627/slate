@@ -33,6 +33,7 @@ pub mod properties_db;
 pub mod reading;
 pub mod search_db;
 pub mod session;
+pub mod structural;
 pub mod tasks;
 pub mod tasks_db;
 pub mod templates;
@@ -140,6 +141,10 @@ pub enum VaultError {
     /// file is left untouched.
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String },
+    /// A structural mutation's destination already exists (case-insensitive
+    /// on APFS). There is deliberately no overwrite path (DoD §F).
+    #[error("destination already exists: {path}")]
+    DestinationExists { path: String },
 
     /// Returned from `save_text` when an `expected_content_hash` was
     /// supplied and the on-disk file no longer matches it — i.e. an
