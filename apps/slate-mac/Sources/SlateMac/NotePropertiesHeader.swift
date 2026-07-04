@@ -157,7 +157,7 @@ struct NotePropertiesHeader: View {
                 // MalformedFrontmatter line/column message; the draft and
                 // focus stay put, nothing was written.
                 Text(error)
-                    .font(.caption)
+                    .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.destructiveText)
                     .accessibilityLabel("Properties source error: \(error)")
             }
@@ -192,7 +192,7 @@ struct NotePropertiesHeader: View {
         let suffix = count == 1 ? "item" : "items"
         return HStack {
             Text("Properties, \(count) \(suffix)")
-                .font(.headline)
+                .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             Button {
@@ -235,9 +235,9 @@ struct NotePropertiesHeader: View {
             VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                 if appState.currentNoteProperties.isEmpty {
                     Text("No properties yet. Add one to start.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 2)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                        .padding(.vertical, Tokens.Spacing.xxs)
                         .accessibilityLabel("No properties yet. Add one to start.")
                 } else if let path = appState.loadedFilePath {
                     ForEach(Array(appState.currentNoteProperties.enumerated()), id: \.offset) {

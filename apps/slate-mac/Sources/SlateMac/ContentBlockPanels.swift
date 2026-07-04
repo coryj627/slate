@@ -58,7 +58,7 @@ private struct BlockRowFooter: View {
             appState.lineScrollRequest.send(Int(line))
         } label: {
             Text(verbatim: "Jump to source — line \(line)")
-                .font(.caption)
+                .font(Tokens.Typography.caption)
         }
         .buttonStyle(.link)
         // WCAG 2.5.3 label-in-name: the visible text must be a
@@ -103,7 +103,7 @@ struct MathBlocksPanel: View {
         let count = appState.currentNoteMathBlocks.count
         let suffix = count == 1 ? "entry" : "entries"
         return Text(verbatim: "Math, \(count) \(suffix)")
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
@@ -114,15 +114,15 @@ struct MathBlocksPanel: View {
         } else if let err = appState.mathBlocksLoadError {
             ContentBlocksErrorRow(message: "Could not load math blocks: \(err)")
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 ForEach(
                     Array(appState.currentNoteMathBlocks.enumerated()), id: \.offset
                 ) { _, block in
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                         MathView(block: block)
                         BlockRowFooter(line: block.line, kindLabel: "Math block")
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, Tokens.Spacing.xxs)
                 }
             }
         }
@@ -168,7 +168,7 @@ struct CodeBlocksPanel: View {
         let count = panelBlocks.count
         let suffix = count == 1 ? "entry" : "entries"
         return Text(verbatim: "Code blocks, \(count) \(suffix)")
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
@@ -179,15 +179,15 @@ struct CodeBlocksPanel: View {
         } else if let err = appState.codeBlocksLoadError {
             ContentBlocksErrorRow(message: "Could not load code blocks: \(err)")
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 ForEach(
                     Array(panelBlocks.enumerated()), id: \.offset
                 ) { _, block in
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                         CodeBlockView(block: block)
                         BlockRowFooter(line: block.line, kindLabel: "Code block")
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, Tokens.Spacing.xxs)
                 }
             }
         }
@@ -220,7 +220,7 @@ struct DiagramsPanel: View {
         let count = appState.currentNoteDiagramBlocks.count
         let suffix = count == 1 ? "entry" : "entries"
         return Text(verbatim: "Diagrams, \(count) \(suffix)")
-            .font(.headline)
+            .font(Tokens.Typography.sectionHeader)
             .accessibilityAddTraits(.isHeader)
     }
 
@@ -231,15 +231,15 @@ struct DiagramsPanel: View {
         } else if let err = appState.diagramBlocksLoadError {
             ContentBlocksErrorRow(message: "Could not load diagrams: \(err)")
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 ForEach(
                     Array(appState.currentNoteDiagramBlocks.enumerated()), id: \.offset
                 ) { _, block in
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                         MermaidView(block: block)
                         BlockRowFooter(line: block.line, kindLabel: "Diagram")
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, Tokens.Spacing.xxs)
                 }
             }
         }
@@ -252,13 +252,14 @@ private struct ContentBlocksLoadingRow: View {
     let message: String
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Tokens.Spacing.sm) {
             ProgressView()
                 .controlSize(.small)
             Text(verbatim: message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Tokens.Spacing.xs)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
     }
@@ -268,14 +269,14 @@ private struct ContentBlocksErrorRow: View {
     let message: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
+        HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
             SlateSymbol.warning.decorative
                 .foregroundStyle(Tokens.ColorRole.warningText)
             Text(verbatim: message)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Tokens.Spacing.xs)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
     }

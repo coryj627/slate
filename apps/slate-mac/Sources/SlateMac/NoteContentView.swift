@@ -89,25 +89,27 @@ struct NoteContentView: View {
     // MARK: - States
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Spacing.sm) {
             Spacer()
             Text("Select a file to read.")
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
             Text("Reading lands in a follow-up milestone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer()
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Detail area. Select a file in the sidebar to read its content.")
     }
 
     private var loadingState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Tokens.Spacing.md) {
             ProgressView()
             Text(loadingMessage)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -115,14 +117,15 @@ struct NoteContentView: View {
     }
 
     private func errorState(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
             Text("Could not load file")
-                .font(.headline)
+                .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Text(message)
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
-        .padding()
+        .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -251,7 +254,7 @@ struct NoteContentView: View {
         // Type doesn't push the body past the visible area
         // (WCAG 1.4.10). Body scrolls if it exceeds the cap.
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                 // Audit #209: textual spatial-bearing cue. The
                 // popover can't visually anchor at the cursor's
                 // screen position without geometry plumbing, so
@@ -259,8 +262,10 @@ struct NoteContentView: View {
                 // — VoiceOver users + magnifier users both
                 // benefit.
                 Text(verbatim: previewHeaderText(preview))
+                    // Emphasized caption: a semantic Dynamic-Type style (scales);
+                    // Tokens.Typography has no bold-caption role, so kept direct.
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .accessibilityAddTraits(.isHeader)
 
                 EmbedView(
@@ -286,7 +291,7 @@ struct NoteContentView: View {
                 // the popover renders.
                 .focused($popoverInitialFocus, equals: .closeButton)
             }
-            .padding(12)
+            .padding(Tokens.Spacing.md)
         }
         .frame(
             minWidth: 420,
