@@ -34,6 +34,10 @@ enum CanvasPrompt: Identifiable, Equatable {
     case addLink
     /// #368 t0 §5: repoint a file card at a new vault path.
     case locate(nodeId: String, title: String, files: [String])
+    /// #525: direction chooser for Create Connected Card.
+    case connectedDirection
+    /// #525: path prompt for Convert Card to Note.
+    case convertToNote(nodeId: String, suggested: String)
 
     var id: String {
         switch self {
@@ -50,6 +54,8 @@ enum CanvasPrompt: Identifiable, Equatable {
         case .addMedia: return "addMedia"
         case .addLink: return "addLink"
         case .locate: return "locate"
+        case .connectedDirection: return "connectedDirection"
+        case .convertToNote: return "convertToNote"
         }
     }
 

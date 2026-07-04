@@ -1134,3 +1134,147 @@ extension CanvasNavigatorTests {
         XCTAssertEqual(doc.undoStack.count, undoBefore)
     }
 }
+
+/// #525: parity extras — create-connected-card, duplicate (single +
+/// marked set + group expansion), convert-to-note, subpath open.
+@MainActor
+extension CanvasNavigatorTests {
+    func testCreateConnectedCardIsOneActionWithEdgeAndEditor() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        let undoBefore = doc.undoStack.count
+        let edgesBefore = doc.scene.edges.count
+        posted = []
+        state.canvasCreateConnectedCard()
+        state.canvasAnnouncer.flushForTests()
+
+        let editor = try XCTUnwrap(state.canvasCardEditor, "lands in edit mode")
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1, "card + edge = ONE action")
+        XCTAssertEqual(doc.scene.edges.count, edgesBefore + 1)
+        let edge = try XCTUnwrap(
+            doc.scene.edges.first { $0.toNode == editor.nodeId })
+        XCTAssertEqual(edge.fromNode, "d")
+        XCTAssertTrue(
+            posted.contains { $0.hasPrefix("Created connected card") && $0.contains("Delta") },
+            "\(posted)")
+
+        // One undo removes BOTH the card and its connection.
+        state.canvasCardEditor = nil
+        state.canvasUndo()
+        XCTAssertEqual(doc.scene.edges.count, edgesBefore)
+        XCTAssertNil(doc.outline.first { $0.nodeId == editor.nodeId })
+    }
+
+    func testDuplicateSingleCardCopiesContent() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "c", in: doc, announce: false)
+        let undoBefore = doc.undoStack.count
+        posted = []
+        state.canvasDuplicate()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1)
+        let copies = doc.outline.filter { $0.title == "Gamma" }
+        XCTAssertEqual(copies.count, 2, "duplicate carries the text content")
+        XCTAssertTrue(posted.contains { $0.hasPrefix("Duplicated \"Gamma\"") }, "\(posted)")
+        // No overlap with the source (engine placement).
+        let ids = copies.map(\.nodeId)
+        let rects = ids.compactMap { id in doc.scene.nodes.first { $0.nodeId == id } }
+        XCTAssertEqual(rects.count, 2)
+        let disjoint =
+            rects[0].x + rects[0].width <= rects[1].x || rects[1].x + rects[1].width <= rects[0].x
+            || rects[0].y + rects[0].height <= rects[1].y
+            || rects[1].y + rects[1].height <= rects[0].y
+        XCTAssertTrue(disjoint, "copies must not stack on the source")
+    }
+
+    func testDuplicateGroupExpandsToMembersAsOneAction() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "g1", in: doc, announce: false)
+        let undoBefore = doc.undoStack.count
+        let countBefore = doc.outline.count
+        posted = []
+        state.canvasDuplicate()
+        state.canvasAnnouncer.flushForTests()
+        // Group frame + Alpha + Beta = 3 new entries, ONE action.
+        XCTAssertEqual(doc.outline.count, countBefore + 3)
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1)
+        XCTAssertEqual(doc.outline.filter { $0.title == "Zone" }.count, 2)
+        XCTAssertEqual(doc.outline.filter { $0.title == "Alpha" }.count, 2)
+        XCTAssertTrue(posted.contains("Duplicated 3 cards — one undo restores."), "\(posted)")
+        // The duplicated members are inside the duplicated frame
+        // (geometric parenting preserved by rigid set placement).
+        let newZone = try XCTUnwrap(
+            doc.outline.filter { $0.title == "Zone" }.first { $0.nodeId != "g1" })
+        let newAlpha = try XCTUnwrap(
+            doc.outline.filter { $0.title == "Alpha" }.first { $0.nodeId != "a" })
+        XCTAssertEqual(newAlpha.groupPath.last, newZone.title)
+
+        state.canvasUndo()
+        XCTAssertEqual(doc.outline.count, countBefore, "one undo restores all 3")
+    }
+
+    func testConvertCardToNoteCreatesFileAndRetargets() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "b", in: doc, announce: false)
+        posted = []
+        state.canvasConvertToNote(nodeId: "b", path: "Beta.md")
+        state.canvasAnnouncer.flushForTests()
+
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        let noteURL = vault.appendingPathComponent("Beta.md")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: noteURL.path))
+        XCTAssertEqual(try String(contentsOf: noteURL, encoding: .utf8), "Beta")
+        let row = try XCTUnwrap(doc.outline.first { $0.nodeId == "b" })
+        XCTAssertEqual(row.kind, "file", "card retargeted at the note")
+        XCTAssertEqual(doc.target(of: "b"), "Beta.md")
+        XCTAssertTrue(posted.contains { $0.hasPrefix("Converted to note Beta.md") })
+
+        // Canvas undo restores the TEXT card; the note file remains
+        // (U2 convention: file ops journal separately).
+        state.canvasUndo()
+        XCTAssertEqual(doc.outline.first { $0.nodeId == "b" }?.kind, "text")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: noteURL.path))
+
+        // Bad extension: honest error, nothing written.
+        state.canvasConvertToNote(nodeId: "b", path: "nope.txt")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains { $0.contains("must end in .md") })
+    }
+
+    func testSubpathCardTitleAndSceneCarrySubpath() async throws {
+        // Dedicated vault: a note with a heading + a canvas whose file
+        // card narrows to it (t5: "Note › Heading" display).
+        let vault = tempDir.appendingPathComponent("vault-sub-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("# Top\n\n## Target Head\n\nBody.\n".utf8)
+            .write(to: vault.appendingPathComponent("n.md"))
+        let canvas = """
+            {"nodes":[{"id":"f1","type":"file","file":"n.md","subpath":"#Target Head",\
+            "x":0,"y":0,"width":200,"height":100}],"edges":[]}
+            """
+        try Data(canvas.utf8).write(to: vault.appendingPathComponent("s.canvas"))
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("s.canvas", target: .currentTab)
+        let doc = state.canvasDocument(for: "s.canvas")
+
+        let row = try XCTUnwrap(doc.outline.first { $0.nodeId == "f1" })
+        XCTAssertTrue(row.title.hasSuffix("› Target Head"), row.title)
+        XCTAssertEqual(
+            doc.scene.nodes.first { $0.nodeId == "f1" }?.subpath, "#Target Head")
+
+        // Open-to-anchor: the load lands, then the anchor routes.
+        var anchors: [String] = []
+        let sub = state.scrollAnchorRequest.sink { anchors.append($0) }
+        state.canvasOpenFileAtHeading(path: "n.md", heading: "Target Head")
+        for _ in 0..<40 where anchors.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        sub.cancel()
+        XCTAssertEqual(anchors.count, 1, "anchor scroll fired once")
+        XCTAssertEqual(state.selectedFilePath, "n.md")
+    }
+}

@@ -83,6 +83,10 @@ enum SlateCommandID {
     static let canvasDeleteConnection = "slate.canvas.deleteConnection"
     static let canvasEditConnection = "slate.canvas.editConnection"
     static let canvasEditCard = "slate.canvas.editCard"
+    static let canvasCreateConnectedCard = "slate.canvas.createConnectedCard"
+    static let canvasCreateConnectedCardDirectional = "slate.canvas.createConnectedCardDirectional"
+    static let canvasDuplicate = "slate.canvas.duplicate"
+    static let canvasConvertToNote = "slate.canvas.convertToNote"
     static let canvasAddNote = "slate.canvas.addNote"
     static let canvasAddMedia = "slate.canvas.addMedia"
     static let canvasAddLink = "slate.canvas.addLink"
@@ -196,6 +200,10 @@ enum SlateCommandID {
         canvasDeleteConnection,
         canvasEditConnection,
         canvasEditCard,
+        canvasCreateConnectedCard,
+        canvasCreateConnectedCardDirectional,
+        canvasDuplicate,
+        canvasConvertToNote,
         canvasAddNote,
         canvasAddMedia,
         canvasAddLink,
@@ -637,6 +645,36 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Change one of the selected card's connection labels or direction."
     ) { [weak appState] in appState?.canvasPromptEditConnection() }
+
+    // #525 parity extras: the mind-mapping loop, keyboard-first.
+    register(
+        SlateCommandID.canvasCreateConnectedCard,
+        label: "Canvas: Create Connected Card",
+        section: .canvas,
+        hotkey: "⌃⌥⌘N",
+        hint: "New text card below the selection, already connected, ready to type."
+    ) { [weak appState] in appState?.canvasCreateConnectedCard() }
+
+    register(
+        SlateCommandID.canvasCreateConnectedCardDirectional,
+        label: "Canvas: Create Connected Card (Choose Direction)…",
+        section: .canvas,
+        hint: "Pick the side first, then the connected card is created there."
+    ) { [weak appState] in appState?.canvasPromptConnectedDirection() }
+
+    register(
+        SlateCommandID.canvasDuplicate,
+        label: "Canvas: Duplicate",
+        section: .canvas,
+        hint: "Duplicate the selected card or the marked set — one action, one undo."
+    ) { [weak appState] in appState?.canvasDuplicate() }
+
+    register(
+        SlateCommandID.canvasConvertToNote,
+        label: "Canvas: Convert Card to Note…",
+        section: .canvas,
+        hint: "Create a vault note from the text card; the card then points at it."
+    ) { [weak appState] in appState?.canvasPromptConvertToNote() }
 
     // #368 part 2: editor + creation for every card kind + repoint.
     register(

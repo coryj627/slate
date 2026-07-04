@@ -4874,6 +4874,9 @@ pub struct CanvasSceneNode {
     /// Raw color ("1".."6" or hex), if set.
     pub color: Option<String>,
     pub color_name: Option<String>,
+    /// File-card `#heading` subpath, verbatim (t5 #525: open-to-anchor
+    /// + faithful duplication). `None` for non-file nodes.
+    pub subpath: Option<String>,
 }
 
 /// One connection's render data (visual renderer, #367).
@@ -5452,6 +5455,10 @@ impl VaultSession {
                         .color
                         .as_ref()
                         .map(|c| crate::canvas::color_name(c).to_string()),
+                    subpath: match &node.kind {
+                        crate::canvas::NodeKind::File { subpath, .. } => subpath.clone(),
+                        _ => None,
+                    },
                 }
             })
             .collect();

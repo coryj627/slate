@@ -199,11 +199,22 @@ struct CanvasOutlineView: View {
         // row's context menu — Switch Control / Voice Control never
         // depend on chords. Each verb selects the row first.
         .contextMenu {
-            Button("Open") { onActivate(row) }
+            // Link cards say what Open does (t5: never a raw-URL blob,
+            // and the browser hand-off is explicit).
+            Button(row.kind == "link" ? "Open in Browser" : "Open") { onActivate(row) }
             if row.kind == "text" {
                 Button("Edit Card Text…") {
                     selecting(row) { appState.canvasEditCard() }
                 }
+                Button("Convert to Note…") {
+                    selecting(row) { appState.canvasPromptConvertToNote() }
+                }
+            }
+            Button("Create Connected Card") {
+                selecting(row) { appState.canvasCreateConnectedCard() }
+            }
+            Button("Duplicate") {
+                selecting(row) { appState.canvasDuplicate() }
             }
             if row.kind == "group" {
                 Button("Rename Group…") {

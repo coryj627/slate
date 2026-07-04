@@ -4243,6 +4243,7 @@ pub struct CanvasSceneNode {
     pub height: f64,
     pub color: Option<String>,
     pub color_name: Option<String>,
+    pub subpath: Option<String>,
 }
 
 impl From<core::CanvasSceneNode> for CanvasSceneNode {
@@ -4257,6 +4258,7 @@ impl From<core::CanvasSceneNode> for CanvasSceneNode {
             height: n.height,
             color: n.color,
             color_name: n.color_name,
+            subpath: n.subpath,
         }
     }
 }
