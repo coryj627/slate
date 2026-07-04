@@ -68,6 +68,13 @@ struct MainSplitView: View {
         }
         .navigationTitle(vaultTitle)
         .toolbar { mainToolbar }
+        // Toolbar command glyphs render monochrome (U5-1, DoD §B rendering-mode
+        // consistency): flat single-weight icons, the command-bar convention.
+        // The environment set here propagates into the toolbar items' glyphs.
+        // No `glassEffect` on the toolbar — the native `.toolbar` already adopts
+        // Liquid Glass on macOS 26 and the system material below 26; only the
+        // rendering mode is ours to pin.
+        .slateSymbolSurface(.toolbar)
         .overlay(alignment: .top) {
             if appState.isSearchOpen {
                 SearchOverlay()

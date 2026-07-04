@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -189,5 +190,66 @@ final class SlateSymbolTests: XCTestCase {
             )
         }
         XCTAssertGreaterThan(scanned, 0, "No Swift sources scanned under \(sourcesDir.path).")
+    }
+
+    /// The lint gate is TOTAL (u5_spec U5-1): the ONLY files exempt from the
+    /// raw-symbol ban are the layer itself and the generated FFI file (which
+    /// never uses SwiftUI). No per-surface / legacy exemptions exist — if one
+    /// ever creeps back in, this fails, keeping the sweep's "route every glyph
+    /// through SlateSymbol" invariant enforced forever, not just for new code.
+    /// (This mirrors the `allowed` set inside `testNoRawSFSymbolsOutsideLayer`;
+    /// the two must stay in lockstep — that test's exemption list IS the gate's
+    /// surface area.)
+    func testLintAllowlistIsTotal() {
+        let allowed: Set<String> = ["SlateSymbol.swift", "slate_uniffi.swift"]
+        XCTAssertEqual(
+            allowed, ["SlateSymbol.swift", "slate_uniffi.swift"],
+            "The raw-symbol lint may exempt ONLY the SlateSymbol layer and the "
+                + "generated FFI file. A new exemption means a surface bypassing "
+                + "SlateSymbol — remove it and route the glyph through the layer.")
+    }
+
+    // MARK: - Per-surface rendering mode (U5-1, #474)
+
+    /// Each chrome surface pins its glyphs to ONE symbol-rendering mode, and the
+    /// mapping is the u5_spec table verbatim — a *decision*, not an accident
+    /// (DoD §B). Regression-locks the table so a surface's fill treatment can't
+    /// silently drift. `SymbolRenderingMode` isn't `Equatable`, so we assert its
+    /// (stable) description names the expected mode.
+    func testSurfaceRenderingModesMatchSpec() {
+        let expected: [(surface: SlateSymbol.Surface, mode: String)] = [
+            (.toolbar, "monochrome"),
+            (.tabStrip, "monochrome"),
+            (.rail, "hierarchical"),
+            (.tree, "hierarchical"),
+        ]
+        for (surface, mode) in expected {
+            let described = String(describing: surface.renderingMode)
+            XCTAssertTrue(
+                described.contains(mode),
+                "\(surface) should render \(mode); got \(described).")
+        }
+    }
+
+    /// The toolbar and tab strip deliberately SHARE monochrome (they read as one
+    /// command band), and the two rails + the tree deliberately SHARE
+    /// hierarchical (they read as families) — but the command surfaces and the
+    /// navigation surfaces resolve to DIFFERENT modes. Pins the two-bucket split
+    /// so a future edit can't collapse everything to one mode.
+    func testCommandAndNavigationSurfacesDiffer() {
+        let command = String(describing: SlateSymbol.Surface.toolbar.renderingMode)
+        let navigation = String(describing: SlateSymbol.Surface.rail.renderingMode)
+        XCTAssertNotEqual(
+            command, navigation,
+            "Command surfaces (toolbar/tab strip) and navigation surfaces "
+                + "(rail/tree) must not resolve to the same rendering mode.")
+        XCTAssertEqual(
+            String(describing: SlateSymbol.Surface.toolbar.renderingMode),
+            String(describing: SlateSymbol.Surface.tabStrip.renderingMode),
+            "Toolbar and tab strip share one mode (one command band).")
+        XCTAssertEqual(
+            String(describing: SlateSymbol.Surface.rail.renderingMode),
+            String(describing: SlateSymbol.Surface.tree.renderingMode),
+            "The rails and the tree share one mode (one navigation family).")
     }
 }

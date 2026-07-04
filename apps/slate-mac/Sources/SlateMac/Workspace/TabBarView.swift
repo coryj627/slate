@@ -45,7 +45,13 @@ struct TabBarView: View {
             allTabsMenu
         }
         .frame(height: 30)
-        .background(Tokens.ColorRole.surfaceSecondary)
+        // macOS 26 Liquid Glass on the strip; the exact `surfaceSecondary`
+        // token below 26 (U5-1) — appearance-only, no layout change.
+        .slateChromeMaterial(fallback: Tokens.ColorRole.surfaceSecondary)
+        // Tab-strip glyphs (mode toggle, close, all-tabs) render monochrome so
+        // the strip reads as one continuous command band with the toolbar
+        // (U5-1, DoD §B rendering-mode consistency).
+        .slateSymbolSurface(.tabStrip)
         // Focused-pane indicator (U1-3): the strip of the focused group
         // carries a 2pt accent top border. Never the only cue — the pane's
         // AX label + the active tab's bolded title travel with it.

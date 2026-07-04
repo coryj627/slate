@@ -167,6 +167,16 @@ enum SlateSymbol: CaseIterable {
 
     /// `(v7, fallback)` glyph names. `v7` is used on macOS 26+, `fallback` on
     /// macOS 15–25. `fallback` must exist on the macOS 15 floor (tested).
+    ///
+    /// **U5-1 v7 audit (#474).** Every role below was audited against the SF
+    /// Symbols 7 catalogue (macOS 26 = the `2025` release in the SF Symbols app's
+    /// `name_availability.plist`; 645 new symbols). Outcome: no role has a
+    /// materially better v7-only glyph, so `v7 == fallback` stays for all of
+    /// them. The two roles that already diverge (`readingMode`, `editingMode`)
+    /// were reconfirmed sensible and kept. The seam is the point: when SF
+    /// Symbols later adds a better glyph for a role, its name drops into the `v7`
+    /// slot as a one-liner and the floor-safe `fallback` keeps macOS 15–25
+    /// correct — the audit just found nothing to change this cycle.
     var names: (v7: String, fallback: String) {
         switch self {
         case .save: return ("square.and.arrow.down", "square.and.arrow.down")
@@ -267,5 +277,79 @@ extension SlateSymbol {
     var decorative: some View {
         Image(systemName: systemName)
             .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Per-surface rendering mode (U5-1, #474; DoD §B consistency)
+
+extension SlateSymbol {
+    /// The chrome surfaces that host `SlateSymbol` glyphs, each pinned to ONE
+    /// symbol-rendering mode so a glyph's fill treatment is a per-surface
+    /// *decision*, not whatever happened to inherit (DoD §B "rendering-mode
+    /// consistency per surface"). Applied once at the container level via
+    /// `.slateSymbolSurface(_:)`, which sets the SwiftUI environment so every
+    /// descendant `Image(systemName:)` — i.e. every `label`/`image`/`decorative`
+    /// glyph in that surface — renders the same way.
+    ///
+    /// The mode assignment is the u5_spec table verbatim:
+    ///   - `toolbar`   → `.monochrome` (flat, single-weight command glyphs)
+    ///   - `tabStrip`  → `.monochrome` (matches the toolbar; the strip reads as
+    ///                    one continuous command band)
+    ///   - `rail`      → `.hierarchical` (the leaf/utility rail's larger glyphs
+    ///                    gain depth from a single accent — the Obsidian-rail feel)
+    ///   - `tree`      → `.hierarchical` (folder glyphs get the same subtle depth;
+    ///                    open/closed folders read as a family)
+    enum Surface {
+        case toolbar
+        case tabStrip
+        case rail
+        case tree
+
+        /// The one rendering mode this surface pins its glyphs to.
+        var renderingMode: SymbolRenderingMode {
+            switch self {
+            case .toolbar, .tabStrip: return .monochrome
+            case .rail, .tree: return .hierarchical
+            }
+        }
+    }
+}
+
+extension View {
+    /// Pin every `SlateSymbol` glyph inside this container to its surface's
+    /// rendering mode (U5-1). `.symbolRenderingMode` is an environment modifier,
+    /// so applying it once at the container level reaches all descendant
+    /// `Image(systemName:)` glyphs — the "applied at the container level" the
+    /// u5_spec calls for. No per-glyph styling at the call sites.
+    func slateSymbolSurface(_ surface: SlateSymbol.Surface) -> some View {
+        symbolRenderingMode(surface.renderingMode)
+    }
+}
+
+// MARK: - macOS 26 (Tahoe) control material (U5-1, #474)
+
+extension View {
+    /// Adopt the macOS 26 Liquid Glass control material for a custom chrome
+    /// container (tab strip, leaf rail, utility bar), falling back BELOW 26 to
+    /// the exact solid token background the surface shipped with — so the
+    /// macOS 15–25 appearance is byte-for-byte unchanged (u5_spec: "the 15–25
+    /// path pinned by existing snapshots"; "No conditional layout differences").
+    ///
+    /// Both branches are backgrounds, not layout, so switching between them
+    /// never moves a pixel of the surface's own geometry — the identity the
+    /// snapshot smoke tests rely on. `glassEffect` is a no-op on the layout
+    /// pass; the fallback `.background` matches today's call.
+    ///
+    /// Native `.toolbar { }` is deliberately NOT routed through here: on
+    /// macOS 26 SwiftUI already renders the window toolbar in Liquid Glass, and
+    /// below 26 it already uses the system toolbar material — there is no custom
+    /// background to swap, and forcing one would fight the system chrome.
+    @ViewBuilder
+    func slateChromeMaterial(fallback: Color) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular, in: .rect)
+        } else {
+            background(fallback)
+        }
     }
 }
