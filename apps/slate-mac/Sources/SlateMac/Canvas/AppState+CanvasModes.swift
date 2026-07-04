@@ -19,6 +19,13 @@ extension AppState {
     static let canvasGridStepLarge: Double = 100
     static let canvasMinCardSize: Double = 40
 
+    /// `Int(Double)` traps on NaN/Inf/≥2^63 — reachable via hostile
+    /// .canvas geometry the parser tolerates (red-team #521 finding 3).
+    static func canvasSafeInt(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(max(value, -9e15), 9e15))
+    }
+
     struct CanvasTransientState {
         /// Moving/resizing ids in reading order (rigid unit for moves).
         var ids: [String]
@@ -69,7 +76,8 @@ extension AppState {
         guard entered else { return }
         canvasTransient = CanvasTransientState(
             ids: moving, originals: originals, rects: originals,
-            isResize: false, wasOverlapping: false)
+            isResize: false,
+            wasOverlapping: canvasEntryOverlap(doc: doc, ids: moving, rects: originals))
         doc.transientRects = originals
     }
 
@@ -104,7 +112,9 @@ extension AppState {
         guard entered else { return }
         canvasTransient = CanvasTransientState(
             ids: [selected], originals: [selected: rect], rects: [selected: rect],
-            isResize: true, wasOverlapping: false)
+            isResize: true,
+            wasOverlapping: canvasEntryOverlap(
+                doc: doc, ids: [selected], rects: [selected: rect]))
         doc.transientRects = [selected: rect]
     }
 
@@ -117,6 +127,21 @@ extension AppState {
             _ = controller.commit()
         } else {
             canvasEnterResizeMode()
+        }
+    }
+
+    /// Entry-time overlap state, so the first "Overlapping another
+    /// card" is a real ONSET, not a restatement of the status quo
+    /// (red-team #521 finding 4).
+    private func canvasEntryOverlap(
+        doc: CanvasDocument, ids: [String], rects: [String: CanvasRect]
+    ) -> Bool {
+        guard let session = currentSession, let handle = doc.handle else { return false }
+        return ids.contains { id in
+            guard let rect = rects[id] else { return false }
+            let hits =
+                (try? session.canvasCheckOverlap(handle: handle, rect: rect, exclude: ids)) ?? []
+            return !hits.isEmpty
         }
     }
 
@@ -148,7 +173,7 @@ extension AppState {
             canvasTransient = transient
             doc.transientRects = transient.rects
             canvasAnnounceTransient(doc: doc, transient: &transient, describe: {
-                "\(Int(rect.width)) by \(Int(rect.height))"
+                "\(Self.canvasSafeInt(rect.width)) by \(Self.canvasSafeInt(rect.height))"
             })
         } else {
             for (id, rect) in transient.rects {
@@ -192,8 +217,14 @@ extension AppState {
         transient.rects[id] = CanvasRect(x: rect.x, y: rect.y, width: width, height: height)
         canvasTransient = transient
         doc.transientRects = transient.rects
-        canvasAnnouncer.announce(
-            .status("Resized to \(label): \(Int(width)) by \(Int(height))."))
+        // Through the overlap tracker (red-team #521 finding 5): a
+        // preset that lands on another card must warn like a step.
+        var mutable = transient
+        canvasAnnounceTransient(
+            doc: doc, transient: &mutable,
+            describe: {
+                "Resized to \(label): \(Self.canvasSafeInt(width)) by \(Self.canvasSafeInt(height))"
+            })
     }
 
     // MARK: Commit / cancel plumbing

@@ -748,3 +748,88 @@ extension CanvasNavigatorTests {
         XCTAssertNil(state.canvasModeController(for: doc).active)
     }
 }
+
+/// Red-team #521 regressions: mutation guards while a mode is active,
+/// mode-state teardown on release, entry-time overlap seeding.
+@MainActor
+extension CanvasNavigatorTests {
+    func testUndoRefusedWhileModeActiveAndCommitStaysExact() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        state.canvasEnterMoveMode()
+        state.canvasModeStep(dx: 1, dy: 0, large: true)
+        let undoBefore = doc.undoStack.count
+        posted = []
+        state.canvasUndo()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.undoStack.count, undoBefore, "undo refused mid-mode")
+        XCTAssertTrue(
+            posted.contains { $0.contains("move or resize is in progress") }, "\(posted)")
+        XCTAssertNotNil(state.canvasTransient, "mode survives the refused undo")
+
+        // Out-of-band verbs are refused too (the clobber path).
+        let outlineBefore = doc.outline.count
+        state.canvasDeleteSelection()
+        XCTAssertEqual(doc.outline.count, outlineBefore, "delete refused mid-mode")
+
+        // The mode's own commit still works and writes the stepped rect.
+        _ = state.canvasModeController(for: doc).commit()
+        XCTAssertNil(state.canvasTransient)
+        let node = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(node.x, 700, "commit wrote the transient, exactly")
+        state.canvasUndo()
+        XCTAssertEqual(doc.scene.nodes.first { $0.nodeId == "d" }?.x, 600)
+    }
+
+    func testInvalidateDropsModeControllerAndTransient() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        state.canvasEnterMoveMode()
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        XCTAssertNotNil(state.canvasTransient)
+
+        state.invalidateCanvasDocument(path: "nav.canvas")
+        XCTAssertNil(state.canvasTransient, "transient dies with the document")
+        XCTAssertNil(state.canvasModeControllers["nav.canvas"], "controller dies too")
+
+        // Reopen: a fresh mode enters cleanly (no phantom M7 block).
+        state.openFile("nav.canvas", target: .currentTab)
+        let doc2 = state.canvasDocument(for: "nav.canvas")
+        state.canvasSelect(nodeId: "d", in: doc2, announce: false)
+        state.canvasEnterMoveMode()
+        XCTAssertNotNil(state.canvasTransient, "fresh mode enters after reopen")
+        _ = state.canvasModeController(for: doc2).cancel()
+    }
+
+    func testEntryOverlapSeedsSoOnsetIsATransition() async throws {
+        let (state, doc) = try await normalizedState()
+        // Move Beta onto Alpha first so move mode STARTS overlapped.
+        state.canvasSelect(nodeId: "b", in: doc, announce: false)
+        let alpha = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "a" })
+        _ = state.canvasApply(
+            CanvasAction(
+                name: "setup",
+                ops: [
+                    .updateNodeGeometry(
+                        id: "b", x: alpha.x + 20, y: alpha.y + 20, width: 200, height: 100)
+                ]),
+            to: doc)
+        state.canvasEnterMoveMode()
+        posted = []
+        // One tiny step that stays overlapping: NO onset announcement.
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertFalse(
+            posted.contains { $0.contains("Overlapping another card") },
+            "already-overlapped entry must not fake an onset: \(posted)")
+        // Step clear: the OFFSET announces (flush per step — the
+        // coalescer keeps only the latest text within its window).
+        for _ in 0..<6 {
+            state.canvasModeStep(dx: 1, dy: 0, large: true)
+            state.canvasAnnouncer.flushForTests()
+        }
+        XCTAssertTrue(
+            posted.contains { $0.contains("Clear of overlaps") }, "\(posted)")
+        _ = state.canvasModeController(for: doc).cancel()
+    }
+}

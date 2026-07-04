@@ -14,7 +14,11 @@ import Foundation
 /// - **M3** while active, the canvas container's `accessibilityValue`
 ///   carries "⟨Mode⟩: ⟨card⟩" — state is inspectable (braille rule
 ///   t0 §3), never merely announced.
-/// - **M4** focus departure (tab switch, palette, pane-focus chord)
+/// - **M4** focus departure = tab switch / pane move. DELIBERATELY not
+///   the palette: resize presets and Commit/Cancel Mode are palette
+///   commands, so opening it must keep the mode alive. Out-of-band
+///   mutations mid-mode are refused at `canvasApply`/undo/redo instead
+///   (red-team #521).
 ///   auto-cancels with restoration + announcement. No mode survives
 ///   without focus; no keyboard trap (WCAG 2.1.2).
 /// - **M5** the Esc ladder consumes exactly one rung per press:
