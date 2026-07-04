@@ -2150,6 +2150,7 @@ final class AppState: ObservableObject {
         currentNoteFMSource = ""
         bodyByteOffset = 0
         bodyLineOffset = 0
+        propertiesSourceError = nil
         loadedFilePath = nil
         hasUnsavedChanges = false
         currentSaveConflict = nil
@@ -5457,9 +5458,18 @@ final class AppState: ObservableObject {
 
     /// Inline error for the show-source editor (U3-4): the Rust
     /// MalformedFrontmatter line/column message, or nil. Cleared on every
-    /// apply attempt and on success — the draft is NEVER touched by the
-    /// error path (non-destructive, DoD §F).
+    /// apply attempt, on success, on source-mode exit (the widget's
+    /// Cancel/Discard call `clearPropertiesSourceError`), and on note
+    /// transitions (`clearActiveNoteFields`) — a stale message must never
+    /// greet the next source session (Codoki #530). The draft is NEVER
+    /// touched by the error path (non-destructive, DoD §F).
     @Published private(set) var propertiesSourceError: String?
+
+    /// The widget's exit paths reset the inline error without widening
+    /// the setter (state mutations stay funneled through AppState).
+    func clearPropertiesSourceError() {
+        propertiesSourceError = nil
+    }
 
     /// Bumped on every successful `.setSource` commit — the widget flips
     /// back to the fields view on this edge (the row list re-read from

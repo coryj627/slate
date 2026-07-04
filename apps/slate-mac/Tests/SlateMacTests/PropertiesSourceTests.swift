@@ -124,6 +124,26 @@ final class PropertiesSourceTests: XCTestCase {
         XCTAssertNil(state.currentSaveConflict, "hash handoff kept the chain")
     }
 
+    /// Codoki #530: a malformed-YAML error must not greet the NEXT source
+    /// session — exits and note transitions clear it (the view calls
+    /// `clearPropertiesSourceError`; teardown clears on note switch).
+    func testSourceErrorClearsOnExitAndNoteTransition() async throws {
+        let (state, _) = try await makeLoadedState()
+        state.applyPropertiesSource("title: \"unterminated\n")
+        await state.propertyEditTask?.value
+        XCTAssertNotNil(state.propertiesSourceError)
+
+        state.clearPropertiesSourceError()
+        XCTAssertNil(state.propertiesSourceError, "the widget's exit paths reset it")
+
+        // And a note transition clears it structurally (teardown path).
+        state.applyPropertiesSource("title: \"unterminated\n")
+        await state.propertyEditTask?.value
+        XCTAssertNotNil(state.propertiesSourceError)
+        state.selectedFilePath = nil
+        XCTAssertNil(state.propertiesSourceError, "note teardown clears the inline error")
+    }
+
     func testToggleCommandGuardsAndBumps() async throws {
         let (state, _) = try await makeLoadedState()
         XCTAssertEqual(state.propertiesSourceToggleRequest, 0)

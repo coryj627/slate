@@ -97,6 +97,7 @@ struct NotePropertiesHeader: View {
                 isSourceMode = false
                 sourceDraft = ""
                 pendingFieldsSwitch = false
+                appState.clearPropertiesSourceError()
             }
             .alert(
                 "Apply property source changes?",
@@ -109,6 +110,7 @@ struct NotePropertiesHeader: View {
                 Button("Discard", role: .destructive) {
                     isSourceMode = false
                     sourceDraft = ""
+                    appState.clearPropertiesSourceError()
                     postAccessibilityAnnouncement("Source changes discarded.")
                     sourceToggleFocused = true
                 }
@@ -136,6 +138,7 @@ struct NotePropertiesHeader: View {
             } else {
                 isSourceMode = false
                 sourceDraft = ""
+                appState.clearPropertiesSourceError()
             }
         } else {
             sourceDraft = appState.currentNoteFMSource
@@ -167,6 +170,7 @@ struct NotePropertiesHeader: View {
                 Button("Cancel") {
                     isSourceMode = false
                     sourceDraft = ""
+                    appState.clearPropertiesSourceError()
                     postAccessibilityAnnouncement("Source changes discarded.")
                 }
                 .keyboardShortcut(.cancelAction)
