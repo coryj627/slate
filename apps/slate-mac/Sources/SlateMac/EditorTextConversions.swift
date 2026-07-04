@@ -45,4 +45,12 @@ enum EditorTextConversions {
         Int(textByteToUtf16(text: text, byteOffset: UInt32(clamping: byteOffset)))
     }
 
+    /// UTF-16 location → UTF-8 byte offset (the inverse of the above; used
+    /// to capture the caret when the editor unmounts for reading mode,
+    /// U3-2). Past EOF clamps to the end; mid-surrogate snaps to a char
+    /// boundary on the Rust side.
+    static func byteOffsetForUTF16Location(_ utf16Location: Int, in text: String) -> Int {
+        Int(textUtf16ToByte(text: text, utf16Offset: UInt32(clamping: utf16Location)))
+    }
+
 }

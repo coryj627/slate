@@ -64,6 +64,7 @@ enum SlateCommandID {
     static let citationSummary = "slate.editor.citationSummary"
     static let addProperty = "slate.editor.addProperty"
     static let bulkRenameProperties = "slate.editor.bulkRenameProperties"
+    static let toggleViewMode = "slate.editor.toggleViewMode"
 
     // Settings
     static let openSettings = "slate.settings.open"
@@ -113,6 +114,7 @@ enum SlateCommandID {
         citationSummary,
         addProperty,
         bulkRenameProperties,
+        toggleViewMode,
         openSettings,
         openHelp,
         tasksReview,
@@ -455,6 +457,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌘S",
         hint: "Save the current note to disk."
     ) { [weak appState] in appState?.saveCurrentNote() }
+
+    register(
+        SlateCommandID.toggleViewMode,
+        label: "Toggle Reading Mode",
+        section: .editor,
+        hotkey: "⇧⌘E",
+        hint: "Switch the current note between editing and reading mode."
+    ) { [weak appState] in appState?.toggleViewMode() }
 
     register(
         SlateCommandID.citationSummary,

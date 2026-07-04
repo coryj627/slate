@@ -25,6 +25,7 @@ struct TabBarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            modeToggle
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Tokens.Spacing.xxs) {
@@ -58,6 +59,46 @@ struct TabBarView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tabs")
+    }
+
+    /// The reading/editing toggle at the strip's leading edge (U3-2, #466).
+    /// Shows the TARGET mode's glyph + label ("Reading mode" enters
+    /// reading); `accessibilityValue` carries the CURRENT mode so VoiceOver
+    /// reads "Reading mode, button, Currently editing". Toggling a
+    /// non-focused group's strip focuses that group first — one funnel,
+    /// the group's own active tab flips. Hidden for empty groups (nothing
+    /// to render) — the ⌘⇧E menu item stays the single shortcut owner.
+    @ViewBuilder
+    private var modeToggle: some View {
+        if let activeTabID = group.activeTabID {
+            let current = appState.workspace.viewMode(for: activeTabID)
+            let target: NoteViewMode = current == .editing ? .reading : .editing
+            Button {
+                // Non-focused group: focus it FIRST through the identity
+                // funnel (activateTab restores that pane's document into
+                // the live fields — never mutate mode across a bypassed
+                // focus change). Focused group: activateTab is the cheap
+                // same-tab path.
+                appState.activateTab(activeTabID)
+                appState.setViewMode(target, for: activeTabID)
+            } label: {
+                (target == .reading
+                    ? SlateSymbol.readingMode : SlateSymbol.editingMode)
+                    .decorative
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, Tokens.Spacing.xs)
+            .accessibilityLabel(
+                target == .reading ? "Reading mode" : "Editing mode")
+            .accessibilityValue(
+                Text(current == .editing ? "Currently editing" : "Currently reading"))
+            .accessibilityHint("Switches this pane's note view. Shift-Command-E.")
+            .help(
+                (target == .reading ? "Reading mode" : "Editing mode")
+                    + " (⇧⌘E)")
+        }
     }
 
     /// "tab N of M[, edited]" — the VoiceOver value for one tab. Static so

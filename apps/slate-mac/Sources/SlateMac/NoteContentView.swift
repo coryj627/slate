@@ -20,6 +20,10 @@ import SwiftUI
 /// VoiceOver's heading rotor (VO+H) walks them in document order.
 struct NoteContentView: View {
     @EnvironmentObject private var appState: AppState
+    /// Observed directly: `viewModes` lives on WorkspaceState, and nested
+    /// ObservableObject changes are not forwarded through `appState` (the
+    /// U1 WorkspaceTreeView lesson). Callers pass `appState.workspace`.
+    @ObservedObject var workspace: WorkspaceState
 
     @State private var announcedFilePath: String?
     /// Respect the system "Reduce motion" setting (WCAG 2.3.1). When
@@ -48,6 +52,12 @@ struct NoteContentView: View {
     enum PopoverInitialFocusTarget: Hashable {
         case closeButton
     }
+
+    /// U3-2: VoiceOver focus target for the reading surface. Set when the
+    /// mode flips to reading so AX focus lands on the first content the
+    /// new surface owns (the editing direction is handled by the caret
+    /// one-shot, which makes the editor first responder).
+    @AccessibilityFocusState private var readingSurfaceFocused: Bool
 
     var body: some View {
         Group {
@@ -116,7 +126,51 @@ struct NoteContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    @ViewBuilder
     private func contentState(_ text: String) -> some View {
+        // U3-2 (#466): one mode mounted at a time — `if` (never the
+        // ZStack-retention pattern): an offscreen editor duplicates the
+        // whole text tree for VO and double-fires publishers; the reading
+        // view's scroll position is cheap to lose, and the editor caret
+        // round-trips via AppState's caret park.
+        if workspace.activeViewMode == .reading {
+            readingSurface(text)
+        } else {
+            editorSurface(text)
+        }
+    }
+
+    /// The rendered read-only surface (U3-1's ReadingView, live buffer in).
+    private func readingSurface(_ text: String) -> some View {
+        ReadingView(
+            text: text,
+            pathLabel: displayName,
+            onSwitchToEditing: { [appState] in
+                appState.setViewMode(.editing)
+            },
+            router: .live(appState: appState),
+            context: ReadingView.ReadingBlockContext(
+                mathBlocks: appState.currentNoteMathBlocks,
+                codeBlocks: appState.currentNoteCodeBlocks,
+                diagramBlocks: appState.currentNoteDiagramBlocks,
+                citations: appState.currentNoteCitations,
+                tasks: appState.currentNoteTasks,
+                isDocumentDirty: appState.hasUnsavedChanges,
+                onToggleTask: { [appState] item in
+                    appState.toggleCurrentTask(item)
+                }
+            )
+        )
+        .accessibilityFocused($readingSurfaceFocused)
+        .onAppear {
+            // Mode flip → focus lands in the new surface (WCAG 2.4.3).
+            // onAppear (not onChange of mode): the reading surface also
+            // mounts via tab switches onto reading-mode tabs.
+            readingSurfaceFocused = true
+        }
+    }
+
+    private func editorSurface(_ text: String) -> some View {
         // Editor: the read-only sectioned shape that lived here
         // before #63 has moved to NoteEditorView (NSTextView
         // wrapper). Scroll routing goes through the wrapper's
@@ -146,6 +200,9 @@ struct NoteContentView: View {
                 .eraseToAnyPublisher(),
             previewEmbedAtCursor: { [appState] target, line in
                 appState.requestEmbedPreview(target: target, sourceLine: line)
+            },
+            onCaretUTF16Change: { [appState] location in
+                appState.noteEditorCaretDidMove(toUTF16: location)
             }
         )
         .onAppear { _ = text }

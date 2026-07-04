@@ -72,6 +72,17 @@ struct NoteEditorView: NSViewRepresentable {
     /// shortcut — used by the previewless contexts that include
     /// the editor (none today, kept for future surfaces).
     let previewEmbedAtCursor: ((String, Int) -> Void)?
+    /// Continuous caret report (U3-2): fires with the caret's RAW UTF-16
+    /// location on every selection change (and once on attach/restamp, so
+    /// a fresh mount is never unreported — Codoki #515), letting AppState
+    /// park the caret for the reading-mode round trip without reaching
+    /// into AppKit at toggle time. The handoff is a plain Int — the
+    /// UTF-8 conversion happens ONCE at toggle time in AppState, never
+    /// here: a per-keystroke rope build over the whole document is the
+    /// exact O(n)-per-keystroke class #404 eliminated. Nil disables.
+    /// The value lands in a plain stored var (never a `@Published`) —
+    /// selection churn must not invalidate any view.
+    var onCaretUTF16Change: ((Int) -> Void)? = nil
 
     /// System Reduce Motion preference (WCAG 2.3.1). When `true`, the
     /// editor's scroll-routing paths jump instantly instead of using
@@ -87,7 +98,8 @@ struct NoteEditorView: NSViewRepresentable {
         Coordinator(
             text: $text,
             onSave: onSave,
-            previewEmbedAtCursor: previewEmbedAtCursor
+            previewEmbedAtCursor: previewEmbedAtCursor,
+            onCaretUTF16Change: onCaretUTF16Change
         )
     }
 
@@ -231,6 +243,7 @@ struct NoteEditorView: NSViewRepresentable {
         // updateNSView when @Environment(\.accessibilityReduceMotion)
         // flips, so this stays in sync mid-session.
         context.coordinator.reduceMotion = reduceMotion
+        context.coordinator.onCaretUTF16Change = onCaretUTF16Change
         textView.setAccessibilityLabel(accessibilityLabel)
 
         // External buffer change (e.g. file reload after a
@@ -264,6 +277,10 @@ struct NoteEditorView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
             context.coordinator.scheduleHighlight(debounced: false)
         }
+        // U3-2 (Codoki #515): after any restamp/update pass, re-report the
+        // caret so the parked value can never lag a programmatic content
+        // swap (cheap: a raw Int handoff).
+        context.coordinator.reportCaretLocation()
     }
 
     @MainActor
@@ -273,6 +290,8 @@ struct NoteEditorView: NSViewRepresentable {
         var headings: [Heading] = []
         var accessibilityLabel: String = ""
         var previewEmbedAtCursor: ((String, Int) -> Void)?
+        /// Continuous caret reporter (U3-2) — see the view property.
+        var onCaretUTF16Change: ((Int) -> Void)?
         /// Mirror of `@Environment(\.accessibilityReduceMotion)` from
         /// the SwiftUI parent. Refreshed by `updateNSView` so the
         /// scroll-routing methods always see the current value (WCAG
@@ -321,11 +340,13 @@ struct NoteEditorView: NSViewRepresentable {
         init(
             text: Binding<String>,
             onSave: @escaping () -> Void,
-            previewEmbedAtCursor: ((String, Int) -> Void)?
+            previewEmbedAtCursor: ((String, Int) -> Void)?,
+            onCaretUTF16Change: ((Int) -> Void)? = nil
         ) {
             self._text = text
             self.onSave = onSave
             self.previewEmbedAtCursor = previewEmbedAtCursor
+            self.onCaretUTF16Change = onCaretUTF16Change
         }
 
         /// Re-bind point. Called from `makeNSView` on initial setup
@@ -434,6 +455,12 @@ struct NoteEditorView: NSViewRepresentable {
                 name: NSColor.systemColorsDidChangeNotification,
                 object: nil
             )
+
+            // U3-2 (Codoki #515): a freshly attached editor reports its
+            // caret immediately — the {0,0} mount reset happens before the
+            // delegate wiring, so without this a mount followed directly by
+            // a reading-mode toggle would park a stale location.
+            reportCaretLocation()
         }
 
         @objc private func systemColorPreferencesChanged() {
@@ -870,6 +897,22 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         // MARK: - NSTextViewDelegate
+
+        /// U3-2: report the caret's raw UTF-16 location on every selection
+        /// change — a plain Int handoff into a non-published AppState var
+        /// (no conversion, no publish; see the view property's perf note).
+        func textViewDidChangeSelection(_ notification: Notification) {
+            reportCaretLocation()
+        }
+
+        /// One-shot form, also called from `attach` and the restamp path in
+        /// `updateNSView`: a freshly mounted or re-stamped editor reports
+        /// its caret even if no selection event ever fires before the user
+        /// toggles to reading mode (Codoki #515).
+        func reportCaretLocation() {
+            guard let textView, let report = onCaretUTF16Change else { return }
+            report(textView.selectedRange().location)
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else {

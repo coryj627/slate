@@ -85,6 +85,17 @@ struct SlateMacApp: App {
             // Tab navigation lives under View alongside the palette/search
             // items — one menu for "where am I looking" commands.
             CommandGroup(after: .toolbar) {
+                // U3-2 (#466): the single ⌘⇧E registration — the per-group
+                // strip buttons carry the visual affordance without a
+                // shortcut (duplicate shortcuts across split panes are
+                // undefined in SwiftUI). Menu-bar placement also keeps the
+                // chord alive with sidebar focus (the #422 lesson).
+                Button("Toggle Reading Mode") {
+                    appState.toggleViewMode()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen)
+
                 Button("Show Next Tab") {
                     appState.selectNextTab()
                 }

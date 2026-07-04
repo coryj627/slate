@@ -86,6 +86,11 @@ struct WorkspaceStore {
     struct Tab: Codable, Equatable {
         var id: UUID
         var item: Item
+        /// Per-tab view mode (U3-2): `"reading"` or absent. Absent (or any
+        /// unknown string) restores as editing — backward compatible with
+        /// pre-U3 snapshots, forward compatible for older builds (unknown
+        /// keys are ignored by Codable).
+        var mode: String?
     }
 
     struct Item: Codable, Equatable {
@@ -137,12 +142,41 @@ struct WorkspaceStore {
 
     // MARK: Model ⇄ snapshot
 
-    static func snapshot(of model: WorkspaceModel, activeLeaf: String? = nil) -> Snapshot {
+    static func snapshot(
+        of model: WorkspaceModel, activeLeaf: String? = nil,
+        viewModes: [TabID: NoteViewMode] = [:]
+    ) -> Snapshot {
         Snapshot(
             version: schemaVersion,
             activeGroup: model.activeGroupID.raw,
-            root: node(of: modelRoot(model)),
+            root: node(of: modelRoot(model), viewModes: viewModes),
             activeLeaf: activeLeaf)
+    }
+
+    /// The per-tab view modes captured in a snapshot (U3-2). Only non-default
+    /// entries are stored, so the result is sparse; unknown strings are
+    /// dropped (restore falls back to editing).
+    static func viewModes(from snapshot: Snapshot) -> [TabID: NoteViewMode] {
+        var out: [TabID: NoteViewMode] = [:]
+        collectModes(snapshot.root, into: &out)
+        return out
+    }
+
+    private static func collectModes(
+        _ node: Node, into out: inout [TabID: NoteViewMode]
+    ) {
+        switch node {
+        case .group(_, _, let tabs):
+            for tab in tabs {
+                if let raw = tab.mode, let mode = NoteViewMode(rawValue: raw),
+                    mode != .editing
+                {
+                    out[TabID(raw: tab.id)] = mode
+                }
+            }
+        case .split(_, _, let children):
+            for child in children { collectModes(child, into: &out) }
+        }
     }
 
     private static func modelRoot(_ model: WorkspaceModel) -> SplitNode {
@@ -152,20 +186,25 @@ struct WorkspaceStore {
         Mirror(reflecting: model).descendant("root") as! SplitNode
     }
 
-    private static func node(of splitNode: SplitNode) -> Node {
+    private static func node(
+        of splitNode: SplitNode, viewModes: [TabID: NoteViewMode] = [:]
+    ) -> Node {
         switch splitNode {
         case .group(let group):
             return .group(
                 id: group.id.raw,
                 activeTab: group.activeTabID?.raw,
                 tabs: group.tabs.map { tab in
-                    Tab(id: tab.id.raw, item: item(of: tab.item))
+                    Tab(
+                        id: tab.id.raw, item: item(of: tab.item),
+                        // Sparse: only non-default modes are written.
+                        mode: viewModes[tab.id].map(\.rawValue))
                 })
         case .split(let branch):
             return .split(
                 axis: branch.axis == .horizontal ? "horizontal" : "vertical",
                 weights: branch.weights,
-                children: branch.children.map(node(of:)))
+                children: branch.children.map { node(of: $0, viewModes: viewModes) })
         }
     }
 

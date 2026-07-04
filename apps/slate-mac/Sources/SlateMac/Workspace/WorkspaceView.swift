@@ -78,7 +78,7 @@ private struct TabGroupView: View {
     private func paneContent(isFocused: Bool, hasSplits: Bool) -> some View {
         if isFocused || !hasSplits {
             // The focused pane (or the only pane): the live document.
-            NoteContentView()
+            NoteContentView(workspace: appState.workspace)
         } else {
             ParkedPaneView(group: group)
         }
