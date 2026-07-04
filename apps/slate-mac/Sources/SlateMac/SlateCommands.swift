@@ -59,6 +59,14 @@ enum SlateCommandID {
     static let canvasFitCanvas = "slate.canvas.fitCanvas"
     static let canvasZoomToSelection = "slate.canvas.zoomToSelection"
     static let canvasToggleFollowSelection = "slate.canvas.toggleFollowSelection"
+    static let canvasNewCard = "slate.canvas.newCard"
+    static let canvasNewGroup = "slate.canvas.newGroup"
+    static let canvasDelete = "slate.canvas.delete"
+    static let canvasRenameGroup = "slate.canvas.renameGroup"
+    static let canvasMoveIntoGroup = "slate.canvas.moveIntoGroup"
+    static let canvasSetColor = "slate.canvas.setColor"
+    static let canvasClearColor = "slate.canvas.clearColor"
+    static let newCanvas = "slate.file.newCanvas"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -138,6 +146,14 @@ enum SlateCommandID {
         canvasFitCanvas,
         canvasZoomToSelection,
         canvasToggleFollowSelection,
+        canvasNewCard,
+        canvasNewGroup,
+        canvasDelete,
+        canvasRenameGroup,
+        canvasMoveIntoGroup,
+        canvasSetColor,
+        canvasClearColor,
+        newCanvas,
         newTab,
         closeTab,
         nextTab,
@@ -393,6 +409,66 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "When on (the default), the visual view pans to keep the selection visible."
     ) { [weak appState] in appState?.canvasToggleFollowSelection() }
+
+    // Authoring verbs (#368). Prompt-driven ones open container
+    // sheets (M6 visible controls); direct ones commit through the
+    // one mutation pipeline.
+    register(
+        SlateCommandID.canvasNewCard,
+        label: "Canvas: New Card",
+        section: .canvas,
+        hotkey: "⌥⌘N",
+        hint: "Create a text card next to the selection — placement is automatic and announced."
+    ) { [weak appState] in appState?.canvasNewCard() }
+
+    register(
+        SlateCommandID.canvasNewGroup,
+        label: "Canvas: New Group…",
+        section: .canvas,
+        hint: "Create a labeled group next to the selection."
+    ) { [weak appState] in appState?.canvasPromptNewGroup() }
+
+    register(
+        SlateCommandID.canvasDelete,
+        label: "Canvas: Delete Selection",
+        section: .canvas,
+        hint: "Delete the selected card, or ungroup the selected group keeping its cards. Undo with Command-Z."
+    ) { [weak appState] in appState?.canvasDeleteSelection() }
+
+    register(
+        SlateCommandID.canvasRenameGroup,
+        label: "Canvas: Rename Group…",
+        section: .canvas,
+        hint: "Rename the selected group — group labels are the skeleton of the reading order."
+    ) { [weak appState] in appState?.canvasPromptRenameGroup() }
+
+    register(
+        SlateCommandID.canvasMoveIntoGroup,
+        label: "Canvas: Move into Group…",
+        section: .canvas,
+        hint: "Move the selected card inside a group by name — no dragging or coordinates."
+    ) { [weak appState] in appState?.canvasPromptMoveIntoGroup() }
+
+    register(
+        SlateCommandID.canvasSetColor,
+        label: "Canvas: Set Color…",
+        section: .canvas,
+        hint: "Color the selected card by name: red, orange, yellow, green, cyan, or purple."
+    ) { [weak appState] in appState?.canvasPromptSetColor() }
+
+    register(
+        SlateCommandID.canvasClearColor,
+        label: "Canvas: Clear Color",
+        section: .canvas,
+        hint: "Remove the selected card's color."
+    ) { [weak appState] in appState?.canvasSetColor(preset: nil) }
+
+    register(
+        SlateCommandID.newCanvas,
+        label: "New Canvas",
+        section: .file,
+        hint: "Create an empty canvas file in the vault and open it."
+    ) { [weak appState] in appState?.canvasNewCanvasFile() }
 
     // ----- File management (U2-5, #463) -----
 

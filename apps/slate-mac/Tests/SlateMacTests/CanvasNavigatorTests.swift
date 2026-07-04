@@ -373,3 +373,105 @@ extension CanvasNavigatorTests {
         XCTAssertTrue(fresh.redoStack.isEmpty)
     }
 }
+
+/// #368 core verbs: engine placement, one-write-one-undo mutations,
+/// t0 §1.3 confirmations, and the new-canvas file path.
+@MainActor
+extension CanvasNavigatorTests {
+    func testNewCardPlacesViaEngineAndAnnouncesRelatively() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.selected = "d"  // (600,140) — free space below
+
+        let countBefore = doc.outline.count
+        state.canvasNewCard()
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertEqual(doc.outline.count, countBefore + 1)
+        let created = try XCTUnwrap(doc.selection.selected)
+        XCTAssertNotEqual(created, "d", "selection lands on the new card")
+        let node = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == created })
+        // Engine placement: grid-aligned, non-overlapping, below anchor.
+        XCTAssertEqual(node.x.truncatingRemainder(dividingBy: 20), 0)
+        XCTAssertEqual(node.y.truncatingRemainder(dividingBy: 20), 0)
+        XCTAssertGreaterThanOrEqual(node.y, 240 + 40, "below 'Delta' with the gap")
+        XCTAssertTrue(
+            posted.contains { $0.hasPrefix("Created text card") && $0.contains("below \"Delta\"") },
+            "\(posted)")
+        // One undo step reverts the creation.
+        XCTAssertEqual(doc.undoStack.map(\.name).last, "create card")
+        state.canvasUndo()
+        XCTAssertEqual(doc.outline.count, countBefore)
+    }
+
+    func testDeleteAndColorVerbsAnnouncePerGrammar() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        doc.selection.selected = "a"
+        state.canvasSetColor(preset: 5)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Set \"Alpha\" to cyan."), "\(posted)")
+        let alpha = doc.tableRows.first { $0.nodeId == "a" }
+        XCTAssertEqual(alpha?.colorName, "cyan")
+
+        posted = []
+        state.canvasDeleteSelection()
+        state.canvasAnnouncer.flushForTests()
+        // Destructive confirmation carries the undo hint (standard).
+        XCTAssertTrue(
+            posted.contains("Deleted Text card \"Alpha\" — ⌘Z to undo"), "\(posted)")
+        XCTAssertFalse(doc.outline.contains { $0.nodeId == "a" })
+        XCTAssertNil(doc.selection.selected)
+        // Incident connections went with it; a single undo restores all.
+        state.canvasUndo()
+        XCTAssertTrue(doc.outline.contains { $0.nodeId == "a" })
+        XCTAssertEqual(
+            doc.neighbors(of: "a", session: state.currentSession).count, 3)
+    }
+
+    func testGroupVerbsRenameUngroupAndMoveInto() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        doc.selection.selected = "g1"
+        state.canvasRenameGroup(to: "Renamed Zone")
+        XCTAssertEqual(
+            doc.outline.first { $0.nodeId == "g1" }?.title, "Renamed Zone")
+
+        // Move a root card into the group by name (no coordinates).
+        doc.selection.selected = "c"
+        state.canvasMoveIntoGroup(groupId: "g1")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Moved into group \"Renamed Zone\"."), "\(posted)")
+        XCTAssertEqual(
+            doc.outline.first { $0.nodeId == "c" }?.groupPath, ["Renamed Zone"])
+
+        // Ungroup keeps children.
+        doc.selection.selected = "g1"
+        let cardCount = doc.outline.count
+        state.canvasDeleteSelection()
+        XCTAssertEqual(doc.outline.count, cardCount - 1, "only the frame went away")
+        XCTAssertTrue(doc.outline.contains { $0.nodeId == "a" })
+    }
+
+    func testNewCanvasFileCreatesOpensAndAnnounces() async throws {
+        let state = try await makeState()
+        state.canvasNewCanvasFile()
+        state.canvasAnnouncer.flushForTests()
+        guard case .canvas(let path) = state.workspace.activeTab?.item else {
+            return XCTFail("new canvas should open as the active tab")
+        }
+        XCTAssertEqual(path, "Untitled Canvas.canvas")
+        let doc = state.canvasDocument(for: path)
+        XCTAssertEqual(doc.state, .ready)
+        XCTAssertTrue(doc.outline.isEmpty, "empty canvas — onboarding state")
+        XCTAssertTrue(posted.contains("Created canvas \"Untitled Canvas\"."))
+        // Collision-avoidance on the second create.
+        state.canvasNewCanvasFile()
+        guard case .canvas(let second) = state.workspace.activeTab?.item else {
+            return XCTFail("second canvas opens")
+        }
+        XCTAssertEqual(second, "Untitled Canvas 2.canvas")
+    }
+}

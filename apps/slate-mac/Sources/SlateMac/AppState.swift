@@ -350,6 +350,10 @@ final class AppState: ObservableObject {
     /// created lazily; #521/#523 enter modes through them.
     var canvasModeControllers: [String: CanvasModeController] = [:]
 
+    /// The pending canvas input prompt (#368): non-nil presents the
+    /// matching sheet in the canvas container (M6 visible controls).
+    @Published var canvasPrompt: CanvasPrompt?
+
     /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
     /// mirrors `selectedFilePath` for the sidebar highlight; the
     /// `$selectedFilePath` sink must not run the selection funnel again on
