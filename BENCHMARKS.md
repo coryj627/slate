@@ -280,3 +280,71 @@ The mid curve is now **flat**: `mid/8mb` (245 µs) is ~3× `mid/1mb` (was ~11×)
 - After any non-trivial change to the `FsVaultProvider` IO surface (`list_dir`, `stat`, `read_file`).
 - After any change to `editor_spans::highlight_spans` / `highlight_spans_in_range`, the scanners they compose, or the ranged safe-window / fallback logic. Refresh the Swift end-to-end row too via `SLATE_BENCH=1 swift test -c release --filter HighlightBenchmarkTests` (it also catches FFI-marshalling regressions the Rust bench can't).
 - Before each milestone build that ships to testers — record the numbers in this file as a new dated baseline so regressions are visible.
+
+
+## Milestone U verification (2026-07-04, U5-4 #477)
+
+### Full-scale census run — release, `SLATE_CENSUS_FULL=1`
+
+Every census in the program, run once at full spec scale in release mode
+(Apple Silicon laptop). All clean. These are the program's correctness
+invariants: workspace-model geometry (Swift, in the regular suite),
+structural path integrity + journaled undo, link-graph referential
+stability + byte-exact move undo, the split/compose round-trip law, the
+widget/body edit interleave, reading-block body coverage, and dir-tree
+id stability.
+
+| Census (slate-core, release) | Scale | Result | Wall time |
+|---|---|---|---|
+| `census_structural_mutations_path_integrity` | 500 vaults × 200 ops | ok | ~14.8 min (chunk: 890s for the pair) |
+| `census_structural_undo_round_trip` | 500 × 200 | ok | ″ |
+| `census_link_graph_referential_stability_session` | 120 seeds | ok | 65s (chunk of 3) |
+| `census_move_undo_restores_bytes` | full | ok | ″ |
+| `census_referential_stability_over_random_moves` (pure planner) | 2 000 seeds | ok | ″ |
+| `census_split_compose_round_trip` | 100k documents | ok | 606s (chunk of 5) |
+| `census_widget_body_edit_interleave` | full | ok | ″ |
+| `census_reading_blocks_cover_body_exactly` | full | ok | ″ |
+| `census_dir_ids_stable_across_rescans` | full | ok | ″ |
+| `census_dir_tree_matches_filesystem` | full | ok | ″ |
+
+Swift-side censuses (workspace model 800-seed geometry/focus, U4-4
+terminal-region routing 800-seed) run in the regular `swift test` suite
+on every CI push — green at program close.
+
+### Milestone U interaction budgets
+
+State-layer latencies (the synchronous funnels the views bind), measured
+by `InteractionBudgetTests` — each has a hard `ContinuousClock` ceiling
+that fails the suite on an order-of-magnitude regression, plus an XCTest
+`measure` baseline recorded here.
+
+| Interaction | Ceiling (per op) | Measured (2026-07 baseline, XCTest `measure` avg) |
+|---|---|---|
+| Tab switch (snapshot ⊕ restore funnel, parked path) | < 50 ms | **~69 µs** (0.138 ms per switch-pair) |
+| Mode toggle (editing ⇄ reading, incl. caret park + workspace.json persist) | < 50 ms | **~0.65 ms** (1.3 ms per toggle-pair; dominated by the layout write) |
+| Leaf switch (rail activation) | < 10 ms | **< 1 µs** (6 µs per 10-leaf sweep) |
+| Tree expand + flatten + collapse, 10k-file folder (cached level) | < 500 ms | **~2.2 ms** |
+
+### The #404 keystroke guarantee, post-U3-5 (body-only buffer)
+
+The program's hardest performance promise: keystroke cost stays FLAT in
+document size, and the U3-5 body-only flip must not regress it (the
+buffer now receives the body; `fm_end == 0` path).
+
+| Bench (criterion, release) | 2026-07 median | Meaning |
+|---|---|---|
+| `doc_buffer_keystroke/tail_8mb` | **261.5 µs** | One keystroke at the tail of an 8 MB document through the stateful DocumentBuffer — matches the pre-flip #404 baseline (245 µs, within run noise). **The flip held the budget.** |
+| `editor_highlight_ranged/ranged_tail_edit_8mb` | 65.0 ms | The stateless ranged fallback (window re-parse) — unchanged class. |
+| `editor_highlight_ranged/whole_document_8mb` | 463.0 ms | The stateless whole-document pass — the "why #404 exists" number; never on the keystroke path. |
+
+Legacy baselines spot-confirmed unchanged this run (release, same machine):
+`first_open_and_scan` 1k = 78 ms · 10k = 1.54 s; `reopen_with_cache`
+1k = 14.7 ms · 10k = 153 ms — the historical baseline classes hold.
+
+### U2 baselines (new benches added this PR — the u2_spec rows)
+
+| Bench | 2026-07 median | Meaning |
+|---|---|---|
+| `dir_and_rewrite/list_dir_children_10k_root` | **5.3 ms** | One lazy tree-level fetch against a 10k-file vault root (the sidebar's expand hot path). |
+| `dir_and_rewrite/plan_rewrites_500_sources` | **172.5 ms** (~345 µs/source) | The U2-3 planner over 500 link-bearing sources for one moved file — every link re-resolved against the pre/post indexes (the censused correctness path). |
+

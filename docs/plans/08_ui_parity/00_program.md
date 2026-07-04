@@ -1,6 +1,6 @@
 # 08 — UI Parity Program (Milestone U): Obsidian-parity, presentation-ready macOS workspace
 
-**Status:** 🚧 In progress (updated 2026-07-03, evening). **U0 ✅ complete** (PRs #479, #482, #483, #484). **U1 (workspace shell) ✅ complete** — tabs, splits, focus routing, and store landed; `EditorItem` reserves the base/canvas/graph tab kinds. **U2, U3, U4 in flight** (U2-2 file mutations #502, U2-3 link integrity #503, U3-1 reading blocks #504, U4-2 panel port #505, U4-3 utility bar #506 merged; see GH milestones 25–27 for the remainder). **U5 not started.** Sequenced **ahead of** Canvas (T) and Graph (P) per owner decision 2026-07-03; Canvas specs now live in [`../09_canvas/`](../09_canvas/00_program.md) and gate their authoring wave on U3's editor seam.
+**Status:** ✅ **PROGRAM COMPLETE** (updated 2026-07-05). All 25 issues closed; GH milestones 24–28 closed. Per-issue PRs: **U0** #479/#482/#483/#484 · **U1** #490 (U1-1) #491 (U1-4) #492 (U1-2) #494 (U1-3) #496 (U1-5) #498 (U1-6) · **U2** #493 (U2-1) #502 (U2-2) #497+#503 (U2-3, planner + session integration) #499 (U2-4) #512 (U2-5) #513 (U2-6) · **U3** #500+#528 (U3-5, Rust + the deferred Swift flip) #504+#514 (U3-1, Rust + view) #515 (U3-2) #528 (U3-3) #530 (U3-4) · **U4** #501 (U4-1) #505 (U4-2) #506 (U4-3) #516 (U4-4) · **U5** #545 (U5-1) #547 (U5-2) #538 (U5-3) + the verification-sweep PR (U5-4). Deltas from plan, as executed: U1 internal order U1-1→U1-4→U1-2→U1-3→U1-5→U1-6 (migration before tab UI); U1-6 promoted from stretch; U2-3 split into a pure-planner PR + a session-integration PR; U3-5's editor flip deliberately deferred into U3-3; the quick switcher deferred to #495. Sequenced ahead of Canvas (T) and Graph (P) per owner decision 2026-07-03.
 
 **Strategic goal.** Slate's functionality and its accessibility are in a decent place. This program brings the *presentation* to parity with what users expect from an app like Obsidian — a tabbed, split-pane workspace; an in-note properties experience; a real reading/editing split; a proper file tree with folder management; docked right-hand panels; and a coherent macOS 26 / SF Symbols v7 visual language — **without ceding one inch of the accessibility bar**, and while raising the app to a **presentation-ready** finish across visual polish, dark/light modes, reliability, and performance.
 
@@ -32,11 +32,11 @@ U0 Baseline ──┬──▶ U1 Shell (tabs + splits) ──┬──▶ U3 Ed
 | ID | Milestone | Status | Depends on | Runs parallel with | Primary surfaces |
 |----|-----------|--------|-----------|--------------------|------------------|
 | **U0** | Baseline & design foundation | ✅ complete | — | — | Deployment target, `SlateSymbol` icon layer, design tokens, test harness |
-| **U1** | Workspace shell: tabs + split panes | ⬜ not started | U0 | U2 | `WorkspaceModel`, tab bar, split panes, `MainSplitView` migration |
-| **U2** | File tree + full file management | ⬜ not started | U0 | U1 | slate-core directory API + mutations + link-rewrite, `FileTreeSidebar` |
-| **U3** | Editor: reading/editing + inline properties | ⬜ not started | U1 | U4 | Reading view, mode toggle, in-note properties widget |
-| **U4** | Right-hand leaves + utility rail | ⬜ not started | U1 | U3 | Leaf container + icon rail, panel port, utility icons |
-| **U5** | Iconography & presentation polish | ⬜ not started | U3, U4 | — | Icon application, layout/density polish, dark/light pass, verification sweep |
+| **U1** | Workspace shell: tabs + split panes | ✅ complete | U0 | U2 | `WorkspaceModel`, tab bar, split panes, `MainSplitView` migration |
+| **U2** | File tree + full file management | ✅ complete | U0 | U1 | slate-core directory API + mutations + link-rewrite, `FileTreeSidebar` |
+| **U3** | Editor: reading/editing + inline properties | ✅ complete | U1 | U4 | Reading view, mode toggle, in-note properties widget |
+| **U4** | Right-hand leaves + utility rail | ✅ complete | U1 | U3 | Leaf container + icon rail, panel port, utility icons |
+| **U5** | Iconography & presentation polish | ✅ complete | U3, U4 | — | Icon application, layout/density polish, dark/light pass, verification sweep |
 
 **Execution order:** `U0 → (U1 ∥ U2) → (U3 ∥ U4) → U5`. U1 (center workspace) and U2 (left sidebar + core) touch disjoint surfaces and can run concurrently in separate worktrees.
 
