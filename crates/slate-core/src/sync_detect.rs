@@ -616,6 +616,143 @@ fn audio_summary(providers: &[DetectedSyncProvider], has_multi_sync_warning: boo
     summary
 }
 
+// --- LiveSync config reader (M-2, #533) --------------------------------
+
+/// Result of reading the LiveSync plugin config. Read failures are
+/// data, not errors — the diagnostics panel renders every variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveSyncConfigStatus {
+    /// No `data.json` (the plugin may still be detected via
+    /// `manifest.json` — "plugin present, no config found").
+    NotPresent,
+    Parsed(LiveSyncConfig),
+    /// Unreadable/unparseable — never a hard error.
+    Malformed {
+        reason: String,
+    },
+}
+
+/// The credential-free subset of the LiveSync plugin's `data.json`.
+///
+/// **Structural credential safety:** these six fields are the ONLY
+/// values ever read out of the JSON. `couchDB_USER`,
+/// `couchDB_PASSWORD`, `passphrase`, and every other key are never
+/// copied into any output type — no "redaction"; fields that aren't
+/// read can't leak. Enforced by the planted-credential round-trip
+/// test (the M-2 DoD gate).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSyncConfig {
+    /// Host (+ optional port) extracted from `couchDB_URI`. NEVER
+    /// contains userinfo, path, query, or fragment. `None` when the
+    /// URI is absent/unparseable.
+    pub server_host: Option<String>,
+    /// `couchDB_DBNAME` verbatim (a database name, not a credential).
+    pub database: Option<String>,
+    /// `"liveSync"`.
+    pub live_sync_enabled: Option<bool>,
+    /// `"syncOnSave"`.
+    pub sync_on_save: Option<bool>,
+    /// `"syncOnStart"`.
+    pub sync_on_start: Option<bool>,
+    /// `"encrypt"`.
+    pub end_to_end_encryption: Option<bool>,
+}
+
+/// Defensive size bound on `data.json` (m_spec §M-2).
+const LIVESYNC_CONFIG_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Read the LiveSync plugin config at
+/// `{vault_root}/.obsidian/plugins/obsidian-livesync/data.json`.
+///
+/// Field-tolerant (`serde_json::Value` — the plugin's schema drifts):
+/// absent fields land as `None`. Every failure mode maps to a status
+/// variant; this function never errors and never panics.
+pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
+    let path = vault_root.join(".obsidian/plugins/obsidian-livesync/data.json");
+    let metadata = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return LiveSyncConfigStatus::NotPresent;
+        }
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("config file unreadable: {e}"),
+            };
+        }
+    };
+    if metadata.len() > LIVESYNC_CONFIG_MAX_BYTES {
+        return LiveSyncConfigStatus::Malformed {
+            reason: "config file too large".to_string(),
+        };
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return LiveSyncConfigStatus::NotPresent;
+        }
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("config file unreadable: {e}"),
+            };
+        }
+    };
+    parse_livesync_config(&bytes)
+}
+
+/// Parse `data.json` bytes. Split from the file read so the fuzz test
+/// can drive arbitrary byte strings through the parser.
+fn parse_livesync_config(bytes: &[u8]) -> LiveSyncConfigStatus {
+    let value: serde_json::Value = match serde_json::from_slice(bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("invalid JSON: {e}"),
+            };
+        }
+    };
+    let Some(obj) = value.as_object() else {
+        return LiveSyncConfigStatus::Malformed {
+            reason: "config is not a JSON object".to_string(),
+        };
+    };
+    // The structural allow-list: these are the only keys ever read.
+    LiveSyncConfigStatus::Parsed(LiveSyncConfig {
+        server_host: obj
+            .get("couchDB_URI")
+            .and_then(|v| v.as_str())
+            .and_then(extract_host),
+        database: obj
+            .get("couchDB_DBNAME")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        live_sync_enabled: obj.get("liveSync").and_then(|v| v.as_bool()),
+        sync_on_save: obj.get("syncOnSave").and_then(|v| v.as_bool()),
+        sync_on_start: obj.get("syncOnStart").and_then(|v| v.as_bool()),
+        end_to_end_encryption: obj.get("encrypt").and_then(|v| v.as_bool()),
+    })
+}
+
+/// Manual `host[:port]` extraction from a URI string (no `url` crate,
+/// m_spec §M-2): strip `scheme://`, cut the authority at the first
+/// `/` / `?` / `#`, then drop userinfo up to and including the last
+/// `@`. Extraction failure → `None` (the config still parses).
+fn extract_host(uri: &str) -> Option<String> {
+    let after_scheme = uri.trim().split_once("://")?.1;
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
 // --- Tests ------------------------------------------------------------
 
 #[cfg(test)]
@@ -1287,6 +1424,177 @@ mod tests {
                 "census vault v{i} produced a false positive: {report:#?}"
             );
             assert_eq!(report.audio_summary, "No sync systems detected.");
+        }
+    }
+
+    // --- LiveSync config reader (M-2, #533) ------------------------------
+
+    /// Plant a `data.json` under a tempdir vault and read it back.
+    fn vault_with_livesync_data(json: &[u8]) -> (tempfile::TempDir, LiveSyncConfigStatus) {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("data.json"), json).unwrap();
+        let status = read_livesync_config(tmp.path());
+        (tmp, status)
+    }
+
+    /// The M-2 DoD credential gate: a realistic config with planted
+    /// credentials round-trips, and the ENTIRE debug-formatted output
+    /// contains none of the planted secrets. Structural allow-listing,
+    /// not redaction.
+    #[test]
+    fn livesync_config_never_contains_planted_credentials() {
+        let json = br#"{
+            "couchDB_URI": "https://alice:hunter2@couch.example.com:5984/db",
+            "couchDB_USER": "alice",
+            "couchDB_PASSWORD": "hunter2",
+            "couchDB_DBNAME": "obsidian-notes",
+            "passphrase": "secret123",
+            "liveSync": true,
+            "syncOnSave": false,
+            "syncOnStart": true,
+            "encrypt": true,
+            "customChunkSize": 100
+        }"#;
+        let (_tmp, status) = vault_with_livesync_data(json);
+        let LiveSyncConfigStatus::Parsed(config) = &status else {
+            panic!("expected Parsed, got {status:?}");
+        };
+        assert_eq!(
+            config.server_host.as_deref(),
+            Some("couch.example.com:5984")
+        );
+        assert_eq!(config.database.as_deref(), Some("obsidian-notes"));
+        assert_eq!(config.live_sync_enabled, Some(true));
+        assert_eq!(config.sync_on_save, Some(false));
+        assert_eq!(config.sync_on_start, Some(true));
+        assert_eq!(config.end_to_end_encryption, Some(true));
+
+        let debug_dump = format!("{status:?}");
+        for secret in ["alice", "hunter2", "secret123"] {
+            assert!(
+                !debug_dump.contains(secret),
+                "credential {secret:?} leaked into output: {debug_dump}"
+            );
+        }
+    }
+
+    #[test]
+    fn livesync_host_extraction_variants() {
+        // Userinfo + port dropped down to host:port.
+        assert_eq!(
+            extract_host("https://user:pass@couch.example.com:5984/db"),
+            Some("couch.example.com:5984".to_string())
+        );
+        // Bare IP, no path.
+        assert_eq!(
+            extract_host("http://10.0.0.5:5984"),
+            Some("10.0.0.5:5984".to_string())
+        );
+        // Query/fragment never leak.
+        assert_eq!(
+            extract_host("https://h.example.com?token=x#frag"),
+            Some("h.example.com".to_string())
+        );
+        // Garbage URIs → None.
+        assert_eq!(extract_host("not a uri"), None);
+        assert_eq!(extract_host(""), None);
+        assert_eq!(extract_host("https://"), None);
+        assert_eq!(extract_host("https://user@"), None);
+    }
+
+    #[test]
+    fn livesync_garbage_uri_still_parses_with_no_host() {
+        let (_tmp, status) =
+            vault_with_livesync_data(br#"{"couchDB_URI": "garbage", "couchDB_DBNAME": "db"}"#);
+        let LiveSyncConfigStatus::Parsed(config) = status else {
+            panic!("expected Parsed");
+        };
+        assert_eq!(config.server_host, None);
+        assert_eq!(config.database.as_deref(), Some("db"));
+    }
+
+    #[test]
+    fn livesync_missing_file_is_not_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::NotPresent
+        );
+    }
+
+    #[test]
+    fn livesync_invalid_json_is_malformed_with_reason() {
+        let (_tmp, status) = vault_with_livesync_data(b"{not json");
+        let LiveSyncConfigStatus::Malformed { reason } = status else {
+            panic!("expected Malformed, got {status:?}");
+        };
+        assert!(!reason.is_empty());
+    }
+
+    #[test]
+    fn livesync_non_object_json_is_malformed() {
+        let (_tmp, status) = vault_with_livesync_data(b"[1, 2, 3]");
+        assert!(matches!(status, LiveSyncConfigStatus::Malformed { .. }));
+    }
+
+    #[test]
+    fn livesync_partial_json_parses_with_nones() {
+        let (_tmp, status) = vault_with_livesync_data(br#"{"couchDB_DBNAME": "only-db"}"#);
+        let LiveSyncConfigStatus::Parsed(config) = status else {
+            panic!("expected Parsed");
+        };
+        assert_eq!(config.database.as_deref(), Some("only-db"));
+        assert_eq!(config.server_host, None);
+        assert_eq!(config.live_sync_enabled, None);
+        assert_eq!(config.sync_on_save, None);
+        assert_eq!(config.sync_on_start, None);
+        assert_eq!(config.end_to_end_encryption, None);
+    }
+
+    #[test]
+    fn livesync_schema_drift_wrong_types_parse_as_none() {
+        // The plugin's schema drifts: wrong-typed fields degrade to
+        // None instead of failing the whole parse.
+        let (_tmp, status) = vault_with_livesync_data(
+            br#"{"liveSync": "yes", "couchDB_DBNAME": 42, "couchDB_URI": false}"#,
+        );
+        let LiveSyncConfigStatus::Parsed(config) = status else {
+            panic!("expected Parsed");
+        };
+        assert_eq!(config.live_sync_enabled, None);
+        assert_eq!(config.database, None);
+        assert_eq!(config.server_host, None);
+    }
+
+    #[test]
+    fn livesync_oversized_file_is_malformed() {
+        let big = vec![b' '; (LIVESYNC_CONFIG_MAX_BYTES + 1) as usize];
+        let (_tmp, status) = vault_with_livesync_data(&big);
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file too large".to_string()
+            }
+        );
+    }
+
+    /// 1k random byte-strings through the parser — no panics; every
+    /// outcome is a status variant (m_spec §M-2).
+    #[test]
+    fn livesync_fuzz_random_bytes_never_panic() {
+        let mut rng = SplitMix64(0xF0CC_F0CC);
+        for _ in 0..1_000 {
+            let len = rng.below(512);
+            let bytes: Vec<u8> = (0..len).map(|_| (rng.next() & 0xFF) as u8).collect();
+            let status = parse_livesync_config(&bytes);
+            match status {
+                LiveSyncConfigStatus::Parsed(_) | LiveSyncConfigStatus::Malformed { .. } => {}
+                LiveSyncConfigStatus::NotPresent => {
+                    panic!("parser must never return NotPresent")
+                }
+            }
         }
     }
 }

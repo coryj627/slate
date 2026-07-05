@@ -80,7 +80,8 @@ pub use oplog::{
 };
 pub use reading::{ReadingBlock, ReadingBlockKind, reading_blocks_source};
 pub use sync_detect::{
-    DetectedSyncProvider, RiskLevel, SyncDetectionReport, SyncProviderKind, detect_sync_providers,
+    DetectedSyncProvider, LiveSyncConfig, LiveSyncConfigStatus, RiskLevel, SyncDetectionReport,
+    SyncProviderKind, detect_sync_providers, read_livesync_config,
 };
 pub use tasks::{TaskItem, extract_tasks};
 pub use tasks_db::{TaskFilter, TaskWithLocation};
