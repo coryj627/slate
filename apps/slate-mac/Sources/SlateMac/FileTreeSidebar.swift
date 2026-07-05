@@ -1108,8 +1108,41 @@ struct FileTreeSidebar: View {
                 }
                 Spacer(minLength: 0)
             }
+            .contentShape(Rectangle())
+            // `.onDrag` on a macOS `List` row swallows the row's native
+            // single-click SELECTION: a click on the label content starts a
+            // potential drag, so the List never registers it and the file
+            // doesn't open — only a click on the empty cell padding selects.
+            // Drive selection with a PRIMARY tap, exactly as the folder rows
+            // do for their toggle (a simultaneous tap loses the race to the
+            // drag; the primary tap wins). Sets the same `listSelection` the
+            // List would, flowing through `.onChange(of: listSelection)` →
+            // openFile (⌘-click new-tab honored, since the modifier is live).
+            // The a11y gate requires `.isButton` on any `.onTapGesture`
+            // target; a file row that opens on activation is an honest button
+            // (its hint already says "Opens the note").
+            //
+            // ⌘-click (U1-5 new-tab) is handled DIRECTLY, not via the
+            // selection mirror: routing it only through `listSelection`
+            // drops the open when the ⌘-clicked row is *already* selected
+            // (assigning the same value is a no-op, so `.onChange` never
+            // fires and the new tab is never created — a dead shortcut on
+            // the currently-open file). Opening here and returning keeps
+            // `listSelection` untouched, so `.onChange` can't double-open;
+            // the current tab's highlight is unchanged (a background tab
+            // was created), matching the mirror the onChange path restores.
+            // Plain click still flows through the mirror → `.onChange` →
+            // `openFile(.currentTab)` exactly as before.
+            .onTapGesture {
+                if appState.openTargetFromCurrentEvent() == .newTab {
+                    appState.openFile(node.path, target: .newTab)
+                    return
+                }
+                if let rid = rowID(forPath: node.path) { listSelection = rid }
+            }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
+            .accessibilityAddTraits(.isButton)
             .accessibilityHint(
                 "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, move, and delete actions are in the context menu.")
             // U2-5 file-management rotor actions.
