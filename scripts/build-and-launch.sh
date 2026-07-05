@@ -44,7 +44,10 @@ fi
 # Refresh the dated launcher symlink: drop any prior ones so only the
 # newest remains, then link the current build with a build-time stamp.
 # (.gitignore covers /slate-mac-*.app so these never show in git status.)
-rm -f slate-mac-*.app
+# `-type l` deletes only symlinks — a stray real .app *directory* at the
+# root is left untouched (and can't abort the script under `set -e`, the
+# way `rm -f` on a directory would); a no-match `find` is a clean no-op.
+find . -maxdepth 1 -type l -name 'slate-mac-*.app' -delete
 LINK="slate-mac-$(date +%Y-%m-%d-%H-%M).app"
 ln -sfn "$BUNDLE" "$LINK"
 echo "==> Launcher ready: $ROOT/$LINK -> $BUNDLE"
