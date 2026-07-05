@@ -59,7 +59,12 @@ struct CanvasContainerView: View {
             return .ignored
         }
         .onChange(of: appState.canvasFilterFocusToken) { _, _ in
-            filterFocused = true
+            // The token is global; only the ACTIVE canvas takes focus,
+            // or ⌘F would grab the wrong window's field when several
+            // canvases are open (Codoki #626).
+            if document === appState.activeCanvasDocument {
+                filterFocused = true
+            }
         }
         .onChange(of: document.filterText) { _, _ in
             appState.canvasAnnounceFilterCount(doc: document)
