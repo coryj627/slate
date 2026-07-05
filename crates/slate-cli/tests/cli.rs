@@ -611,6 +611,53 @@ fn read_human_prints_verbatim_content() {
         .stdout(predicate::str::contains("Plain body."));
 }
 
+/// The §M-5 verbatim contract, byte-exact: a note that ends in `\n`
+/// prints with exactly that `\n` — no extra blank line from a shared
+/// line terminator (codex adversarial finding, round 1).
+#[test]
+fn read_human_stdout_is_byte_verbatim_with_trailing_newline() {
+    let dir = TempDir::new().unwrap();
+    let content = "# T\n\nbody line\n";
+    fs::write(dir.path().join("n.md"), content).unwrap();
+    let out = slate()
+        .arg("read")
+        .arg(dir.path())
+        .arg("n.md")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        content,
+        "human stdout must be the file bytes exactly"
+    );
+}
+
+/// The §M-5 verbatim contract, byte-exact: a note WITHOUT a trailing
+/// newline must not gain one.
+#[test]
+fn read_human_stdout_is_byte_verbatim_without_trailing_newline() {
+    let dir = TempDir::new().unwrap();
+    let content = "no trailing newline here";
+    fs::write(dir.path().join("n.md"), content).unwrap();
+    let out = slate()
+        .arg("read")
+        .arg(dir.path())
+        .arg("n.md")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        content,
+        "no terminator may be appended to a verbatim body"
+    );
+}
+
 #[test]
 fn read_json_has_path_and_content() {
     let vault = seed_query_vault();

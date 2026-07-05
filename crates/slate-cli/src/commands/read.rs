@@ -54,11 +54,12 @@ pub fn run(
         "path": note_path,
         "content": content,
     });
-    // Human format is the content verbatim — no framing. `emit` appends
-    // exactly one trailing newline, matching the global contract; a file
-    // that already ends in `\n` therefore prints with a single blank
-    // line's worth of terminator, which is the conventional cat-like
-    // behavior for text on a terminal.
+    // Human format is the content byte-for-byte — no framing and NO
+    // appended terminator (`human_verbatim`). The §M-5 contract is
+    // "`read_text` to stdout verbatim": a note without a trailing
+    // newline must not gain one, and a note with one must not gain a
+    // blank line. Fidelity matters for piping to `diff`, hashing, and
+    // copy/paste (codex adversarial finding, round 1).
     let human = content;
     // tsv is never emitted for `read` (dispatch exits 2 first), so the
     // body is empty by contract.
@@ -70,7 +71,7 @@ pub fn run(
             data,
             human,
             tsv,
-            human_verbatim: false,
+            human_verbatim: true,
         },
     ))
 }
