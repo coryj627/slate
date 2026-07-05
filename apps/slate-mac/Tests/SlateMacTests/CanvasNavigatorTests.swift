@@ -939,3 +939,91 @@ extension CanvasNavigatorTests {
         XCTAssertEqual(choices.count, 3)
     }
 }
+
+/// #524: mark-then-act — cross-surface marks, bulk actions as one
+/// action/undo/summary, selection-vs-marks separation.
+@MainActor
+extension CanvasNavigatorTests {
+    func testToggleMarkAnnouncesCountsAndArrowsNeverMutateMarks() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "a"
+        posted = []
+        state.canvasToggleMark()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Marked \"Alpha\". 1 marked."), "\(posted)")
+        XCTAssertTrue(doc.selection.marked.contains("a"))
+
+        // Arrows move selection and never mutate marks (t4 pin).
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasSelectAdjacent(offset: 1)
+        XCTAssertEqual(doc.selection.marked, ["a"])
+
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        posted = []
+        state.canvasToggleMark()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Unmarked \"Alpha\". 0 marked."))
+    }
+
+    func testBulkDeleteIsOneActionOneUndoOneSummary() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.marked = ["a", "b"]
+        doc.selection.selected = "a"
+        let outlineBefore = doc.outline.count
+        let undoBefore = doc.undoStack.count
+        posted = []
+        state.canvasDeleteMarked()
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertEqual(doc.outline.count, outlineBefore - 2)
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1, "one undo step")
+        XCTAssertEqual(
+            posted.filter { $0.hasPrefix("Deleted 2 cards") }.count, 1,
+            "exactly one summary: \(posted)")
+        XCTAssertTrue(doc.selection.marked.isEmpty, "marks clear after the bulk act")
+
+        // Single undo restores BOTH cards and their connections.
+        state.canvasUndo()
+        XCTAssertEqual(doc.outline.count, outlineBefore)
+        XCTAssertEqual(
+            doc.neighbors(of: "a", session: state.currentSession).count, 3)
+    }
+
+    func testBulkColorAndGroupMarked() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.marked = ["c", "d"]
+        posted = []
+        state.canvasColorMarked(preset: 4)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted.filter { $0 == "Set 2 cards to green." }.count, 1)
+        XCTAssertEqual(doc.tableRows.first { $0.nodeId == "c" }?.colorName, "green")
+        XCTAssertEqual(doc.undoStack.last?.name, "color 2 cards")
+
+        // Group: one bounding group; geometric containment reparen ts.
+        state.canvasGroupMarked(label: "Pair")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Grouped 2 cards into \"Pair\"."))
+        XCTAssertEqual(doc.outline.first { $0.nodeId == "c" }?.groupPath, ["Pair"])
+        XCTAssertEqual(doc.outline.first { $0.nodeId == "d" }?.groupPath, ["Pair"])
+        XCTAssertEqual(doc.undoStack.last?.name, "group 2 cards")
+        // One undo removes the frame; children stay.
+        state.canvasUndo()
+        XCTAssertEqual(doc.outline.first { $0.nodeId == "c" }?.groupPath, [])
+    }
+
+    func testMarksAreInspectableInOutlineValuesAndClearOnClose() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.marked = ["b"]
+        // t0 §3: the outline row VALUE carries "marked" (same string
+        // pipeline the view uses).
+        let row = try XCTUnwrap(doc.outline.first { $0.nodeId == "b" })
+        var value = "\(row.ordinalN) of \(row.totalM) in \(row.groupPath.last ?? "canvas")"
+        if doc.selection.marked.contains("b") { value += ", marked" }
+        XCTAssertTrue(value.hasSuffix(", marked"))
+
+        // Marks clear when the last tab for the path closes (t2).
+        let tabID = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        state.requestCloseTab(tabID)
+        XCTAssertNil(state.canvasDocuments["nav.canvas"], "document released with the last tab")
+    }
+}

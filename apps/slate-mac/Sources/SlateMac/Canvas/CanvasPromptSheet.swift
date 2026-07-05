@@ -98,6 +98,17 @@ struct CanvasPromptSheet: View {
                     appState.canvasEditConnection(
                         edgeId: edgeId, label: text, direction: direction)
                 }
+            case .marksList:
+                marksListBody
+            case .groupMarked:
+                Text("Group Marked Cards")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                TextField("Group label", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Group label")
+                commitRow("Group") {
+                    appState.canvasGroupMarked(label: text)
+                }
             case .setColor:
                 Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
                 // Color is never color-alone: named buttons (1.4.1).
@@ -138,6 +149,54 @@ struct CanvasPromptSheet: View {
         case .connectLabel: return "Connect"
         case .pickConnection: return "Choose Connection"
         case .editConnection: return "Edit Connection"
+        case .marksList: return "Marked Cards"
+        case .groupMarked: return "Group Marked Cards"
+        }
+    }
+
+    /// #524: the focusable marks list — the pull-based counterpart to
+    /// mark announcements (t0 §3). Each row jumps or unmarks; Clear
+    /// All empties the set.
+    @ViewBuilder
+    private var marksListBody: some View {
+        let doc = appState.activeCanvasDocument
+        let markedRows: [CanvasOutlineRow] =
+            doc.map { d in d.outline.filter { d.selection.marked.contains($0.nodeId) } } ?? []
+        Text("Marked Cards (\(markedRows.count))")
+            .font(Tokens.Typography.body.weight(.semibold))
+        List(markedRows, id: \.nodeId) { row in
+            HStack(spacing: Tokens.Spacing.sm) {
+                Text(row.title)
+                    .font(Tokens.Typography.body)
+                Spacer()
+                Button("Jump") {
+                    if let d = doc {
+                        appState.canvasSelect(nodeId: row.nodeId, in: d)
+                    }
+                    appState.canvasPrompt = nil
+                }
+                .accessibilityLabel("Jump to \(row.title)")
+                Button("Unmark") {
+                    doc?.selection.marked.remove(row.nodeId)
+                    if doc?.selection.marked.isEmpty == true {
+                        appState.canvasPrompt = nil
+                    }
+                }
+                .accessibilityLabel("Unmark \(row.title)")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(row.title), marked")
+        }
+        .frame(minHeight: 160, maxHeight: 260)
+        .accessibilityLabel("Marked cards")
+        HStack {
+            Button("Clear All Marks") {
+                appState.canvasClearMarks()
+                appState.canvasPrompt = nil
+            }
+            Spacer()
+            Button("Close") { appState.canvasPrompt = nil }
+                .keyboardShortcut(.cancelAction)
         }
     }
 

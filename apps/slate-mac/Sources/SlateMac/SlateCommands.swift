@@ -82,6 +82,11 @@ enum SlateCommandID {
     static let canvasConnectMode = "slate.canvas.connectMode"
     static let canvasDeleteConnection = "slate.canvas.deleteConnection"
     static let canvasEditConnection = "slate.canvas.editConnection"
+    static let canvasToggleMark = "slate.canvas.toggleMark"
+    static let canvasShowMarks = "slate.canvas.showMarks"
+    static let canvasClearMarks = "slate.canvas.clearMarks"
+    static let canvasGroupMarked = "slate.canvas.groupMarked"
+    static let canvasDeleteMarked = "slate.canvas.deleteMarked"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -184,6 +189,11 @@ enum SlateCommandID {
         canvasConnectMode,
         canvasDeleteConnection,
         canvasEditConnection,
+        canvasToggleMark,
+        canvasShowMarks,
+        canvasClearMarks,
+        canvasGroupMarked,
+        canvasDeleteMarked,
         newTab,
         closeTab,
         nextTab,
@@ -615,6 +625,43 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Change one of the selected card's connection labels or direction."
     ) { [weak appState] in appState?.canvasPromptEditConnection() }
+
+    // Mark-then-act (#524, decision 4: no shift-range selection).
+    register(
+        SlateCommandID.canvasToggleMark,
+        label: "Canvas: Toggle Mark",
+        section: .canvas,
+        hotkey: "⌃⌘M",
+        hint: "Mark or unmark the selected card. Bulk actions apply to every marked card at once."
+    ) { [weak appState] in appState?.canvasToggleMark() }
+
+    register(
+        SlateCommandID.canvasShowMarks,
+        label: "Canvas: Show Marked Cards",
+        section: .canvas,
+        hint: "Open the marks list: jump to or unmark any marked card."
+    ) { [weak appState] in appState?.canvasShowMarksList() }
+
+    register(
+        SlateCommandID.canvasClearMarks,
+        label: "Canvas: Clear All Marks",
+        section: .canvas,
+        hint: "Unmark every marked card."
+    ) { [weak appState] in appState?.canvasClearMarks() }
+
+    register(
+        SlateCommandID.canvasGroupMarked,
+        label: "Canvas: Group Marked Cards…",
+        section: .canvas,
+        hint: "Wrap the marked cards in a new labeled group — one action, one undo."
+    ) { [weak appState] in appState?.canvasPromptGroupMarked() }
+
+    register(
+        SlateCommandID.canvasDeleteMarked,
+        label: "Canvas: Delete Marked Cards",
+        section: .canvas,
+        hint: "Delete every marked card and its connections — one summary, one undo."
+    ) { [weak appState] in appState?.canvasDeleteMarked() }
 
     register(
         SlateCommandID.newCanvas,
