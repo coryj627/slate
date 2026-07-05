@@ -424,8 +424,16 @@ fn sigint_during_open_exits_130_and_reopens_clean() {
         match open_then_sigint(&bin, vault.path(), delay) {
             SigintOutcome::Graceful130 => {
                 reached_graceful = true;
-                // The interrupt must never corrupt the cache: reopen clean.
-                let _ = fs::remove_dir_all(vault.path().join(".slate"));
+                // The interrupt must never corrupt the cache: reopen
+                // against the INTERRUPTED cache (Codoki PR #637 High —
+                // deleting it first would mask corruption and reduce
+                // the assertion to "a fresh scan works"). The cache
+                // file must still be present for this to prove
+                // anything.
+                assert!(
+                    vault.path().join(".slate/cache.sqlite").exists(),
+                    "interrupted open should leave the cache file behind"
+                );
                 assert_reopens_clean(vault.path());
                 break;
             }
