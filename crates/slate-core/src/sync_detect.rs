@@ -670,19 +670,52 @@ const LIVESYNC_CONFIG_MAX_BYTES: u64 = 1024 * 1024;
 pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     use std::io::Read;
     let path = vault_root.join(".obsidian/plugins/obsidian-livesync/data.json");
-    // Open ONCE and read through the open handle. Never re-open by path
-    // after a stat: a separate `metadata(path)` + `read(path)` pair is a
-    // TOCTOU window a hostile vault can swing (swap the file, or point it
-    // at a FIFO/char device whose stat length is 0 so a naive bound check
-    // passes and the subsequent read blocks or exhausts memory).
+
+    // **Vault-escape guard.** Canonicalize the target and require it to
+    // stay under the canonicalized vault root — the same boundary
+    // `vault::fs` enforces (fs.rs:300-309). Without it, a hostile vault
+    // could point `data.json` at a regular JSON file OUTSIDE the vault
+    // (another user's LiveSync config) and have us surface its
+    // host/database. Canonicalize resolves symlinks, so a symlink to an
+    // outside file lands outside the root and is refused here.
+    // NotFound canonicalization → `NotPresent` (no file to read).
+    let canonical_target = match std::fs::canonicalize(&path) {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return LiveSyncConfigStatus::NotPresent;
+        }
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("config file unreadable: {e}"),
+            };
+        }
+    };
+    // Fall back to the raw root if canonicalization fails (matching the
+    // detector's degrade-never-error rule); if BOTH canonicalize, the
+    // containment check is authoritative.
+    if let Ok(canonical_root) = std::fs::canonicalize(vault_root)
+        && !canonical_target.starts_with(&canonical_root)
+    {
+        return LiveSyncConfigStatus::Malformed {
+            reason: "config path escapes the vault".to_string(),
+        };
+    }
+
+    // Open ONCE (the canonical target) and read through the open handle.
+    // Never re-open by path after a stat: a separate `metadata` + `read`
+    // pair is a TOCTOU window a hostile vault can swing (swap the file, or
+    // point it at a FIFO/char device whose stat length is 0 so a naive
+    // bound check passes and the subsequent read blocks or exhausts
+    // memory).
     //
-    // On Unix the open itself is the hazard: opening a FIFO read-only
-    // blocks until a writer connects, so a hostile vault could hang us
-    // before any metadata check. `open_nonblocking` adds `O_NONBLOCK`
-    // there so the open returns immediately for special files; the
-    // regular-file guard below then rejects them. `O_NONBLOCK` is a
-    // no-op for the regular files we actually go on to read.
-    let file = match open_nonblocking(&path) {
+    // `open_guarded` adds `O_NOFOLLOW | O_NONBLOCK` on Unix: `O_NOFOLLOW`
+    // refuses a symlink hot-swapped onto the final component in the
+    // canonicalize→open race (the canonical final component is a real
+    // file, so this only bites a racing attacker — same rationale as
+    // `vault::fs::open_nofollow`); `O_NONBLOCK` keeps a FIFO/special file
+    // from blocking the open. Both are no-ops for the regular files we go
+    // on to read. The regular-file guard below rejects anything else.
+    let file = match open_guarded(&canonical_target) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return LiveSyncConfigStatus::NotPresent;
@@ -695,8 +728,6 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     };
     // Reject non-regular files (directory, FIFO, char/block device, socket)
     // using the OPEN handle's metadata — race-free, no second path lookup.
-    // A directory would fail the read anyway, but a FIFO/device would hang;
-    // this rejects all of them uniformly before any read.
     match file.metadata() {
         Ok(m) if m.is_file() => {}
         Ok(_) => {
@@ -728,21 +759,25 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     parse_livesync_config(&bytes)
 }
 
-/// Open a file for reading with `O_NONBLOCK` on Unix so a FIFO/special
-/// file at the path can't block the open (the caller rejects it via the
-/// open handle's metadata immediately after). `O_NONBLOCK` has no effect
-/// on the regular files we actually read. On non-Unix, a plain open.
+/// Open a file for reading with `O_NOFOLLOW | O_NONBLOCK` on Unix:
+/// - `O_NOFOLLOW` refuses a final-component symlink (TOCTOU escape guard,
+///   mirroring `vault::fs::open_nofollow`);
+/// - `O_NONBLOCK` stops a FIFO/special file from blocking the open (the
+///   caller rejects non-regular files via the open handle's metadata).
+///
+/// Both flags are no-ops for the regular files we actually read. On
+/// non-Unix, a plain open (the platforms slate ships to are Unix-likes).
 #[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+fn open_guarded(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NONBLOCK)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
 }
 
 #[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+fn open_guarded(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
@@ -1738,10 +1773,11 @@ mod tests {
         );
     }
 
-    /// `data.json` symlinked to a character device (`/dev/null`): the
-    /// open succeeds, but the regular-file guard rejects it — the read
-    /// (which on a blocking special file could hang) never runs. This is
-    /// the TOCTOU/non-regular-file DoS vector the M-2 bound must resist.
+    /// `data.json` symlinked to a character device (`/dev/null`):
+    /// `/dev/null` is outside the vault, so the vault-escape guard
+    /// refuses it before any read (and, had it been in-vault, the
+    /// regular-file guard would still reject the char device). Either
+    /// way the blocking-special-file read never runs.
     #[cfg(unix)]
     #[test]
     fn livesync_symlink_to_special_file_is_malformed() {
@@ -1752,14 +1788,70 @@ mod tests {
         assert_eq!(
             read_livesync_config(tmp.path()),
             LiveSyncConfigStatus::Malformed {
-                reason: "config file is not a regular file".to_string(),
+                reason: "config path escapes the vault".to_string(),
             }
         );
     }
 
+    /// **Vault-escape credential guard (adversarial-review r4).** A
+    /// hostile vault symlinks `data.json` at a regular JSON file OUTSIDE
+    /// the vault (e.g. another user's real LiveSync config). The reader
+    /// must refuse it — NO allow-listed field from the outside file may
+    /// surface. Canonicalization lands the target outside the root and
+    /// the escape guard fires.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlink_escaping_vault_is_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("other-vault-data.json");
+        std::fs::write(
+            &secret,
+            br#"{"couchDB_URI": "https://secret.example.com:5984/x", "couchDB_DBNAME": "victim-db"}"#,
+        )
+        .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::os::unix::fs::symlink(&secret, plugin.join("data.json")).unwrap();
+
+        let status = read_livesync_config(tmp.path());
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            },
+            "outside file must not be parsed"
+        );
+        // Belt and suspenders: nothing from the outside file leaked.
+        let dump = format!("{status:?}");
+        assert!(!dump.contains("secret.example.com"));
+        assert!(!dump.contains("victim-db"));
+    }
+
+    /// A `data.json` symlinked to a regular JSON file that stays INSIDE
+    /// the vault is legitimate and still read — the escape guard is
+    /// scoped to escapes, not all symlinks.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlink_inside_vault_is_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        // Real config elsewhere inside the vault; data.json points at it.
+        let real = tmp.path().join("real-data.json");
+        std::fs::write(&real, br#"{"couchDB_DBNAME": "inside-db"}"#).unwrap();
+        std::os::unix::fs::symlink(&real, plugin.join("data.json")).unwrap();
+
+        let LiveSyncConfigStatus::Parsed(config) = read_livesync_config(tmp.path()) else {
+            panic!("expected Parsed for an in-vault symlink");
+        };
+        assert_eq!(config.database.as_deref(), Some("inside-db"));
+    }
+
     /// `data.json` is a FIFO with no writer connected. A blocking
-    /// `File::open` would hang here forever; the `O_NONBLOCK` open in
-    /// `open_nonblocking` returns immediately and the regular-file guard
+    /// `File::open` would hang here forever; the `O_NONBLOCK` in
+    /// `open_guarded` returns immediately and the regular-file guard
     /// rejects it. If this test ever hangs, the non-blocking open
     /// regressed. (Direct FIFO — not via symlink — per the review.)
     #[cfg(unix)]
