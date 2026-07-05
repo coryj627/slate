@@ -669,72 +669,29 @@ const LIVESYNC_CONFIG_MAX_BYTES: u64 = 1024 * 1024;
 /// variant; this function never errors and never panics.
 pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     use std::io::Read;
-    let path = vault_root.join(".obsidian/plugins/obsidian-livesync/data.json");
 
-    // **Vault-escape guard.** Canonicalize the target and require it to
-    // stay under the canonicalized vault root — the same boundary
-    // `vault::fs` enforces (fs.rs:300-309). Without it, a hostile vault
-    // could point `data.json` at a regular JSON file OUTSIDE the vault
-    // (another user's LiveSync config) and have us surface its
-    // host/database. Canonicalize resolves symlinks, so a symlink to an
-    // outside file lands outside the root and is refused here.
-    // NotFound canonicalization → `NotPresent` (no file to read).
-    let canonical_target = match std::fs::canonicalize(&path) {
-        Ok(p) => p,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return LiveSyncConfigStatus::NotPresent;
-        }
-        Err(e) => {
-            return LiveSyncConfigStatus::Malformed {
-                reason: format!("config file unreadable: {e}"),
-            };
-        }
-    };
-    // Fail CLOSED if the root can't be canonicalized: unlike detection
-    // (which degrades on canonicalize failure, m_spec §M-1), a
-    // credential-bearing read must be able to prove containment before
-    // it reads. No proof → refuse. (In practice a non-canonicalizable
-    // root usually means the whole path is gone, so the target
-    // canonicalize above already returned NotPresent.)
-    let canonical_root = match std::fs::canonicalize(vault_root) {
-        Ok(r) => r,
-        Err(e) => {
-            return LiveSyncConfigStatus::Malformed {
-                reason: format!("vault root unreadable: {e}"),
-            };
-        }
-    };
-    if !canonical_target.starts_with(&canonical_root) {
-        return LiveSyncConfigStatus::Malformed {
-            reason: "config path escapes the vault".to_string(),
-        };
-    }
-
-    // Snapshot the containment-checked target's identity BEFORE the
-    // open, so we can prove the file we actually opened is the same one
-    // we canonicalized and contained (see the re-verification below).
-    let expected_id = FileId::of_path(&canonical_target);
-
-    // Open ONCE (the canonical target) and read through the open handle.
-    // Never re-open by path after a stat: a separate `metadata` + `read`
-    // pair is a TOCTOU window a hostile vault can swing (swap the file, or
-    // point it at a FIFO/char device whose stat length is 0 so a naive
-    // bound check passes and the subsequent read blocks or exhausts
-    // memory).
-    //
-    // `open_guarded` adds `O_NOFOLLOW | O_NONBLOCK` on Unix: `O_NOFOLLOW`
-    // refuses a symlink hot-swapped onto the final component in the
-    // canonicalize→open race (the canonical final component is a real
-    // file, so this only bites a racing attacker — same rationale as
-    // `vault::fs::open_nofollow`); `O_NONBLOCK` keeps a FIFO/special file
-    // from blocking the open. Both are no-ops for the regular files we go
-    // on to read. The regular-file guard below rejects anything else.
-    let file = match open_guarded(&canonical_target) {
+    // **Vault-escape guard — root-anchored, no-follow open.** The config
+    // lives at a FIXED relative path under the vault:
+    // `.obsidian/plugins/obsidian-livesync/data.json`. `open_config_in`
+    // walks that path one component at a time, opening each with
+    // `O_NOFOLLOW` relative to the previous directory fd (never
+    // re-resolving an absolute path), so a hostile vault cannot swap ANY
+    // component — parent OR final — for a symlink to an outside tree: a
+    // symlinked component is refused (`EscapeRefused`) instead of
+    // traversed. This binds containment to the opened fd atomically,
+    // closing the canonicalize→open parent-swap race for good. It also
+    // opens the final component `O_NONBLOCK` so a FIFO can't block. On
+    // non-Unix (no `openat`) it falls back to a canonicalize+contain
+    // open; the platforms slate ships to are Unix-likes.
+    let file = match open_config_in(vault_root) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return LiveSyncConfigStatus::NotPresent;
+        Err(OpenConfigError::NotPresent) => return LiveSyncConfigStatus::NotPresent,
+        Err(OpenConfigError::EscapeRefused) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            };
         }
-        Err(e) => {
+        Err(OpenConfigError::Io(e)) => {
             return LiveSyncConfigStatus::Malformed {
                 reason: format!("config file unreadable: {e}"),
             };
@@ -742,8 +699,8 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     };
     // Reject non-regular files (directory, FIFO, char/block device, socket)
     // using the OPEN handle's metadata — race-free, no second path lookup.
-    let opened_meta = match file.metadata() {
-        Ok(m) if m.is_file() => m,
+    match file.metadata() {
+        Ok(m) if m.is_file() => {}
         Ok(_) => {
             return LiveSyncConfigStatus::Malformed {
                 reason: "config file is not a regular file".to_string(),
@@ -754,23 +711,6 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
                 reason: format!("config file unreadable: {e}"),
             };
         }
-    };
-    // **Parent-swap re-verification.** `O_NOFOLLOW` only guards the FINAL
-    // path component; a hostile vault could still swap an already-checked
-    // parent (`.obsidian`, `plugins`) for a symlink to an outside tree
-    // between the containment check and the open, so `open_guarded` might
-    // have resolved to an outside file. Require the opened handle's
-    // (device, inode) to match the identity we contained. Any mismatch
-    // means the path resolved somewhere else mid-flight → fail closed, so
-    // no outside file's fields can surface. (Unix-only; `FileId::of_meta`
-    // is `None` on other targets and the check is skipped there, matching
-    // the plain-open fallback.)
-    if let Some(expected) = expected_id
-        && FileId::of_meta(&opened_meta) != Some(expected)
-    {
-        return LiveSyncConfigStatus::Malformed {
-            reason: "config path escapes the vault".to_string(),
-        };
     }
     // Cap the read at `MAX + 1` bytes regardless of the reported length, so
     // a growing/replaced/special file can never make us materialize more
@@ -790,59 +730,167 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     parse_livesync_config(&bytes)
 }
 
-/// Open a file for reading with `O_NOFOLLOW | O_NONBLOCK` on Unix:
-/// - `O_NOFOLLOW` refuses a final-component symlink (TOCTOU escape guard,
-///   mirroring `vault::fs::open_nofollow`);
-/// - `O_NONBLOCK` stops a FIFO/special file from blocking the open (the
-///   caller rejects non-regular files via the open handle's metadata).
+/// The fixed relative path components of the LiveSync config under a
+/// vault root — the intermediates are directories, the last is the file.
+const LIVESYNC_CONFIG_COMPONENTS: [&str; 4] =
+    [".obsidian", "plugins", "obsidian-livesync", "data.json"];
+
+/// Failure modes of [`open_config_in`], mapped to status variants by the
+/// caller.
+enum OpenConfigError {
+    /// A component doesn't exist — no config to read.
+    NotPresent,
+    /// A component is a symlink (a swap/escape attempt) — refused.
+    EscapeRefused,
+    /// Any other I/O failure.
+    Io(std::io::Error),
+}
+
+/// Open the LiveSync `data.json` under `vault_root`, refusing to
+/// traverse a symlinked component at ANY level (Unix `openat` walk).
 ///
-/// Both flags are no-ops for the regular files we actually read. On
-/// non-Unix, a plain open (the platforms slate ships to are Unix-likes).
+/// Each component of [`LIVESYNC_CONFIG_COMPONENTS`] is opened with
+/// `O_NOFOLLOW` relative to the previous directory fd; intermediates
+/// additionally require `O_DIRECTORY`, the final file adds `O_NONBLOCK`
+/// (no FIFO hang). Because the walk never re-resolves an absolute path
+/// and every hop refuses a symlink, an attacker cannot swap a parent (or
+/// the final file) for a symlink to escape the vault — a symlinked hop
+/// makes `openat` fail and an `fstatat(AT_SYMLINK_NOFOLLOW)` classifies
+/// it as [`OpenConfigError::EscapeRefused`] (the raw errno for a refused
+/// symlink is `ELOOP` on Linux but `ENOTDIR`/`ELOOP` varies by platform,
+/// so we consult the entry type rather than trust the errno). This is
+/// the race-free containment guarantee (stronger than `vault::fs`, which
+/// documents-and-accepts the parent-swap residual, fs.rs:328-332).
 #[cfg(unix)]
-fn open_guarded(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
+fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    // RAII for the intermediate directory fds so an early return can't
+    // leak them.
+    struct Fd(libc::c_int);
+    impl Drop for Fd {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is an fd we own and haven't handed off.
+            unsafe { libc::close(self.0) };
+        }
+    }
+
+    /// Is `comp` (relative to `dirfd`) a symlink? Uses `fstatat` with
+    /// `AT_SYMLINK_NOFOLLOW` (lstat semantics). Used to disambiguate an
+    /// `openat` failure: a symlinked component can surface as `ELOOP`
+    /// OR `ENOTDIR` (a symlink isn't a directory) depending on platform.
+    fn entry_is_symlink(dirfd: libc::c_int, comp_c: &std::ffi::CStr) -> bool {
+        // SAFETY: zeroed `stat` is a valid target; `dirfd` is owned; the
+        // C string is valid; `AT_SYMLINK_NOFOLLOW` means no traversal.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let rc =
+            unsafe { libc::fstatat(dirfd, comp_c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+        rc == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFLNK
+    }
+
+    // Classify an `openat` failure for `comp` under `dirfd`: a symlinked
+    // component → escape; genuinely absent / not-a-dir → not present;
+    // otherwise a real I/O error.
+    fn classify(
+        dirfd: libc::c_int,
+        comp_c: &std::ffi::CStr,
+        err: std::io::Error,
+    ) -> OpenConfigError {
+        if entry_is_symlink(dirfd, comp_c) {
+            return OpenConfigError::EscapeRefused;
+        }
+        match err.raw_os_error() {
+            Some(e) if e == libc::ENOENT || e == libc::ENOTDIR || e == libc::ELOOP => {
+                OpenConfigError::NotPresent
+            }
+            _ => OpenConfigError::Io(err),
+        }
+    }
+
+    // Open the vault root directory. Following symlinks in the trusted
+    // vault-root path itself is fine — the attack surface is the
+    // fixed subtree BELOW the root, which the no-follow walk covers.
+    let root_c = std::ffi::CString::new(vault_root.as_os_str().as_bytes())
+        .map_err(|_| OpenConfigError::NotPresent)?;
+    // SAFETY: valid C string; flags are constants; returns an fd or -1.
+    let root_fd = unsafe {
+        libc::open(
+            root_c.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(match err.raw_os_error() {
+            Some(e) if e == libc::ENOENT || e == libc::ENOTDIR => OpenConfigError::NotPresent,
+            _ => OpenConfigError::Io(err),
+        });
+    }
+    let mut dir = Fd(root_fd);
+
+    // Walk the intermediate directory components with `O_NOFOLLOW`.
+    let (file_name, dirs) = LIVESYNC_CONFIG_COMPONENTS
+        .split_last()
+        .expect("component list is non-empty");
+    for comp in dirs {
+        let c = std::ffi::CString::new(*comp).map_err(|_| OpenConfigError::NotPresent)?;
+        // SAFETY: `dir.0` is an open dir fd we own; `c` is a valid C
+        // string; flags are constants.
+        let next = unsafe {
+            libc::openat(
+                dir.0,
+                c.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if next < 0 {
+            return Err(classify(dir.0, &c, std::io::Error::last_os_error()));
+        }
+        dir = Fd(next);
+    }
+
+    // Final component: the file, `O_NOFOLLOW` (a symlinked data.json is
+    // refused) + `O_NONBLOCK` (a FIFO can't block the open).
+    let file_c = std::ffi::CString::new(*file_name).map_err(|_| OpenConfigError::NotPresent)?;
+    // SAFETY: `dir.0` is an open dir fd we own; `file_c` is valid; flags
+    // are constants.
+    let file_fd = unsafe {
+        libc::openat(
+            dir.0,
+            file_c.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if file_fd < 0 {
+        return Err(classify(dir.0, &file_c, std::io::Error::last_os_error()));
+    }
+    // SAFETY: `file_fd` is a fresh fd we own and don't touch again.
+    Ok(unsafe { std::fs::File::from_raw_fd(file_fd) })
 }
 
+/// Non-Unix fallback: no `openat`, so canonicalize the target and
+/// require it to stay under the canonicalized vault root (the
+/// `vault::fs` boundary). Weaker than the Unix walk (no parent-swap
+/// race close), but the platforms slate ships to are Unix-likes.
 #[cfg(not(unix))]
-fn open_guarded(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
-
-/// A file's `(device, inode)` identity — stable across a path→open
-/// window on Unix, so it detects a mid-flight parent-directory swap.
-/// `None` on non-Unix (no `st_dev`/`st_ino`); the caller skips the
-/// re-verification there, matching the plain-open fallback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileId {
-    dev: u64,
-    ino: u64,
-}
-
-impl FileId {
-    #[cfg(unix)]
-    fn of_meta(meta: &std::fs::Metadata) -> Option<FileId> {
-        use std::os::unix::fs::MetadataExt;
-        Some(FileId {
-            dev: meta.dev(),
-            ino: meta.ino(),
-        })
+fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
+    let mut path = vault_root.to_path_buf();
+    for comp in LIVESYNC_CONFIG_COMPONENTS {
+        path.push(comp);
     }
-
-    #[cfg(not(unix))]
-    fn of_meta(_meta: &std::fs::Metadata) -> Option<FileId> {
-        None
+    let canonical_target = match std::fs::canonicalize(&path) {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OpenConfigError::NotPresent);
+        }
+        Err(e) => return Err(OpenConfigError::Io(e)),
+    };
+    let canonical_root = std::fs::canonicalize(vault_root).map_err(OpenConfigError::Io)?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(OpenConfigError::EscapeRefused);
     }
-
-    /// Identity of the file the path currently resolves to (follows
-    /// symlinks — the canonical target is already symlink-free, this is
-    /// a pre-open snapshot). `None` if it can't be stat'd or on non-Unix.
-    fn of_path(path: &Path) -> Option<FileId> {
-        std::fs::metadata(path).ok().and_then(|m| Self::of_meta(&m))
-    }
+    std::fs::File::open(&canonical_target).map_err(OpenConfigError::Io)
 }
 
 /// Parse `data.json` bytes. Split from the file read so the fuzz test
@@ -1837,11 +1885,10 @@ mod tests {
         );
     }
 
-    /// `data.json` symlinked to a character device (`/dev/null`):
-    /// `/dev/null` is outside the vault, so the vault-escape guard
-    /// refuses it before any read (and, had it been in-vault, the
-    /// regular-file guard would still reject the char device). Either
-    /// way the blocking-special-file read never runs.
+    /// `data.json` symlinked to a character device (`/dev/null`): the
+    /// final `openat` is `O_NOFOLLOW`, so the symlink itself is refused
+    /// (`EscapeRefused`) before any read — the blocking/special-file read
+    /// never runs, regardless of where the symlink points.
     #[cfg(unix)]
     #[test]
     fn livesync_symlink_to_special_file_is_malformed() {
@@ -1861,8 +1908,7 @@ mod tests {
     /// hostile vault symlinks `data.json` at a regular JSON file OUTSIDE
     /// the vault (e.g. another user's real LiveSync config). The reader
     /// must refuse it — NO allow-listed field from the outside file may
-    /// surface. Canonicalization lands the target outside the root and
-    /// the escape guard fires.
+    /// surface. The final `openat` `O_NOFOLLOW` refuses the symlink.
     #[cfg(unix)]
     #[test]
     fn livesync_symlink_escaping_vault_is_refused() {
@@ -1893,31 +1939,70 @@ mod tests {
         assert!(!dump.contains("victim-db"));
     }
 
-    /// A `data.json` symlinked to a regular JSON file that stays INSIDE
-    /// the vault is legitimate and still read — the escape guard is
-    /// scoped to escapes, not all symlinks.
+    /// The no-follow walk refuses a symlinked `data.json` unconditionally
+    /// — even one pointing at a regular file INSIDE the vault. A real
+    /// plugin always writes a regular file there; refusing the symlink
+    /// form is the safe, strict posture (no target-classification races).
     #[cfg(unix)]
     #[test]
-    fn livesync_symlink_inside_vault_is_read() {
+    fn livesync_symlink_at_config_path_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
         std::fs::create_dir_all(&plugin).unwrap();
-        // Real config elsewhere inside the vault; data.json points at it.
         let real = tmp.path().join("real-data.json");
         std::fs::write(&real, br#"{"couchDB_DBNAME": "inside-db"}"#).unwrap();
         std::os::unix::fs::symlink(&real, plugin.join("data.json")).unwrap();
 
-        let LiveSyncConfigStatus::Parsed(config) = read_livesync_config(tmp.path()) else {
-            panic!("expected Parsed for an in-vault symlink");
-        };
-        assert_eq!(config.database.as_deref(), Some("inside-db"));
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            }
+        );
     }
 
-    /// `data.json` is a FIFO with no writer connected. A blocking
-    /// `File::open` would hang here forever; the `O_NONBLOCK` in
-    /// `open_guarded` returns immediately and the regular-file guard
-    /// rejects it. If this test ever hangs, the non-blocking open
-    /// regressed. (Direct FIFO — not via symlink — per the review.)
+    /// **Parent-component swap (adversarial-review r6).** A hostile vault
+    /// makes an INTERMEDIATE component (`.obsidian`) a symlink to an
+    /// outside tree that contains a complete, valid
+    /// `plugins/obsidian-livesync/data.json`. The root-anchored no-follow
+    /// walk must refuse to traverse the symlinked parent — none of the
+    /// outside file's allow-listed fields may surface. This is the race
+    /// the earlier canonicalize+contain approach couldn't fully close.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlinked_parent_component_is_refused() {
+        // Outside tree with a fully valid config subtree.
+        let outside = tempfile::tempdir().unwrap();
+        let outside_plugin = outside.path().join("plugins/obsidian-livesync");
+        std::fs::create_dir_all(&outside_plugin).unwrap();
+        std::fs::write(
+            outside_plugin.join("data.json"),
+            br#"{"couchDB_URI": "https://evil.example.com:5984/x", "couchDB_DBNAME": "stolen-db"}"#,
+        )
+        .unwrap();
+
+        // Vault whose `.obsidian` is a symlink INTO that outside tree.
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".obsidian")).unwrap();
+
+        let status = read_livesync_config(tmp.path());
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            },
+            "a symlinked parent must not be traversed"
+        );
+        let dump = format!("{status:?}");
+        assert!(!dump.contains("evil.example.com"));
+        assert!(!dump.contains("stolen-db"));
+    }
+
+    /// `data.json` is a FIFO with no writer connected. A blocking open
+    /// would hang here forever; the `O_NONBLOCK` on the final `openat`
+    /// returns immediately and the regular-file guard rejects it. If this
+    /// test ever hangs, the non-blocking open regressed. (Direct FIFO —
+    /// not via symlink — per the review.)
     #[cfg(unix)]
     #[test]
     fn livesync_fifo_at_config_path_does_not_hang() {
