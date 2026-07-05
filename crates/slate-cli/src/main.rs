@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 use commands::render_template::parse_prompt_kv;
 use commands::tasks::TaskFilterChoice;
@@ -172,6 +173,29 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
         format: OutputFormat,
     },
+    /// Print a shell-completion script to stdout (#639).
+    ///
+    /// A meta-command like `--help`: it reads no vault, so it takes **no
+    /// `<vault-path>`** — the §M-4 "vault-path first" rule is for the
+    /// vault-reading commands only (see `commands::completions`). The
+    /// generated script comes straight from this CLI's clap grammar, so
+    /// it never drifts from the real command set.
+    ///
+    /// Install by redirecting stdout to your shell's completion path.
+    ///
+    /// zsh: `slate completions zsh > ~/.zfunc/_slate` (with `~/.zfunc`
+    /// on your `fpath`).
+    ///
+    /// bash: `slate completions bash > ~/.local/share/bash-completion/completions/slate`.
+    ///
+    /// fish: `slate completions fish > ~/.config/fish/completions/slate.fish`.
+    Completions {
+        /// The shell to generate completions for. Unknown shells are a
+        /// usage error (exit 2) — the choices are clap_complete's own
+        /// `Shell` set (bash, zsh, fish, elvish, powershell).
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 impl Command {
@@ -187,6 +211,10 @@ impl Command {
             Command::List { .. } => "list",
             Command::Links { .. } => "links",
             Command::Properties { .. } => "properties",
+            // `completions` never reaches the json envelope (it is
+            // handled before dispatch and writes a raw script), so this
+            // name is only for exhaustiveness; keep it truthful anyway.
+            Command::Completions { .. } => "completions",
         }
     }
 }
@@ -195,6 +223,21 @@ fn main() -> ExitCode {
     // clap handles `--help`/`--version`/usage errors itself, exiting 2
     // on a usage error (the contract's exit code) before we get here.
     let cli = Cli::parse();
+
+    // `completions` is a meta-command (like `--help`): it opens no
+    // session, has no vault, and emits a raw script — not the json
+    // envelope — so it short-circuits here, before the Ctrl-C handler
+    // and the dispatch/emit machinery. See `commands::completions`.
+    if let Command::Completions { shell } = cli.command {
+        let stdout = std::io::stdout();
+        return match commands::completions::run(shell, &mut stdout.lock()) {
+            Ok(()) => ExitCode::SUCCESS,
+            // A write failure (e.g. a broken pipe from `… | head`) maps
+            // to exit 1 with the standard `slate: ` prefix, matching the
+            // emit-error path below.
+            Err(e) => fail(EXIT_RUNTIME, &CliError::Io(e)),
+        };
+    }
 
     // --- Ctrl-C handling (installed BEFORE any session open) ---------
     //
@@ -337,6 +380,12 @@ fn dispatch(
             let (vault, output) = commands::properties::run(&vault_path, key.as_deref(), cancel)?;
             Ok((vault, format, output))
         }
+        // `completions` is intercepted in `main` (it emits a raw script,
+        // not a vault envelope) and never reaches `dispatch`. It is only
+        // named here to keep the match exhaustive over `Command`.
+        Command::Completions { .. } => unreachable!(
+            "completions is handled in main before dispatch and never produces a vault envelope"
+        ),
     }
 }
 

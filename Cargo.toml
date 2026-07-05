@@ -94,6 +94,11 @@ unicode-normalization = "0.1"
 # CLI integration tests (`crates/slate-cli/tests/cli.rs`) against
 # tempfile fixture vaults.
 clap = { version = "4", features = ["derive"] }
+# clap_complete generates the shell-completion scripts for
+# `slate completions <shell>` (#639) straight from the derive grammar —
+# it consumes the same `clap::Command` clap already built, so the
+# completions never drift from the real verb/flag surface. Tracks clap 4.
+clap_complete = "4"
 ctrlc = "3"
 assert_cmd = "2"
 predicates = "3"
