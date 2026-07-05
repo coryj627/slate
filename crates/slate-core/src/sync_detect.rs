@@ -668,9 +668,15 @@ const LIVESYNC_CONFIG_MAX_BYTES: u64 = 1024 * 1024;
 /// absent fields land as `None`. Every failure mode maps to a status
 /// variant; this function never errors and never panics.
 pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
+    use std::io::Read;
     let path = vault_root.join(".obsidian/plugins/obsidian-livesync/data.json");
-    let metadata = match std::fs::metadata(&path) {
-        Ok(m) => m,
+    // Open ONCE and read through the open handle. Never re-open by path
+    // after a stat: a separate `metadata(path)` + `read(path)` pair is a
+    // TOCTOU window a hostile vault can swing (swap the file, or point it
+    // at a FIFO/char device whose stat length is 0 so a naive bound check
+    // passes and the subsequent read blocks or exhausts memory).
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return LiveSyncConfigStatus::NotPresent;
         }
@@ -680,22 +686,38 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
             };
         }
     };
-    if metadata.len() > LIVESYNC_CONFIG_MAX_BYTES {
+    // Reject non-regular files (directory, FIFO, char/block device, socket)
+    // using the OPEN handle's metadata — race-free, no second path lookup.
+    // A directory would fail the read anyway, but a FIFO/device would hang;
+    // this rejects all of them uniformly before any read.
+    match file.metadata() {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
+            };
+        }
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("config file unreadable: {e}"),
+            };
+        }
+    }
+    // Cap the read at `MAX + 1` bytes regardless of the reported length, so
+    // a growing/replaced/special file can never make us materialize more
+    // than the cap in memory. `> MAX` after the read means "too large".
+    let cap = LIVESYNC_CONFIG_MAX_BYTES.saturating_add(1);
+    let mut bytes: Vec<u8> = Vec::new();
+    if let Err(e) = file.take(cap).read_to_end(&mut bytes) {
+        return LiveSyncConfigStatus::Malformed {
+            reason: format!("config file unreadable: {e}"),
+        };
+    }
+    if bytes.len() as u64 > LIVESYNC_CONFIG_MAX_BYTES {
         return LiveSyncConfigStatus::Malformed {
             reason: "config file too large".to_string(),
         };
     }
-    let bytes = match std::fs::read(&path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return LiveSyncConfigStatus::NotPresent;
-        }
-        Err(e) => {
-            return LiveSyncConfigStatus::Malformed {
-                reason: format!("config file unreadable: {e}"),
-            };
-        }
-    };
     parse_livesync_config(&bytes)
 }
 
@@ -1576,6 +1598,57 @@ mod tests {
             status,
             LiveSyncConfigStatus::Malformed {
                 reason: "config file too large".to_string()
+            }
+        );
+    }
+
+    /// Boundary: a file of exactly `MAX` bytes is under the bound and
+    /// reaches the parser (spaces aren't valid JSON → `invalid JSON`,
+    /// NOT `too large`). Proves the cap is inclusive, not off-by-one.
+    #[test]
+    fn livesync_at_bound_file_reaches_parser() {
+        let at_bound = vec![b' '; LIVESYNC_CONFIG_MAX_BYTES as usize];
+        let (_tmp, status) = vault_with_livesync_data(&at_bound);
+        let LiveSyncConfigStatus::Malformed { reason } = status else {
+            panic!("expected Malformed, got {status:?}");
+        };
+        assert!(
+            reason.starts_with("invalid JSON"),
+            "expected a parse failure, not the size guard: {reason}"
+        );
+    }
+
+    /// A `data.json` that is a directory (not a regular file) is rejected
+    /// before any read — a hostile vault can't make us treat a directory
+    /// as config.
+    #[test]
+    fn livesync_directory_at_config_path_is_malformed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(plugin.join("data.json")).unwrap();
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
+            }
+        );
+    }
+
+    /// `data.json` symlinked to a character device (`/dev/null`): the
+    /// open succeeds, but the regular-file guard rejects it — the read
+    /// (which on a blocking special file could hang) never runs. This is
+    /// the TOCTOU/non-regular-file DoS vector the M-2 bound must resist.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlink_to_special_file_is_malformed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::os::unix::fs::symlink("/dev/null", plugin.join("data.json")).unwrap();
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
             }
         );
     }
