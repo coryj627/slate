@@ -176,6 +176,14 @@ struct SlateMacApp: App {
                 .keyboardShortcut("i", modifiers: [.control, .command])
                 .disabled(!appState.isVaultOpen)
 
+                // #368: ⌥⌘N New Card — canvas-scoped (⌘N stays New
+                // Note; the allocation table keeps ⌘N free for notes).
+                Button("Canvas: New Card") {
+                    appState.canvasNewCard()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(appState.activeCanvasDocument == nil)
+
                 // #520 viewport chords: one modifier apart from the
                 // ⌥⌘=/⌥⌘- pane-grow chords — the drift test asserts
                 // both exist and differ. Disabled unless a canvas tab

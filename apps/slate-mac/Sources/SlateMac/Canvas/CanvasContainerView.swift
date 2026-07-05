@@ -68,6 +68,16 @@ struct CanvasContainerView: View {
         .sheet(isPresented: detailPresented) {
             detailPanel
         }
+        .sheet(item: promptBinding) { prompt in
+            CanvasPromptSheet(prompt: prompt)
+        }
+    }
+
+    private var promptBinding: Binding<CanvasPrompt?> {
+        Binding(
+            get: { appState.canvasPrompt },
+            set: { appState.canvasPrompt = $0 }
+        )
     }
 
     // MARK: Activation (one semantic across surfaces; #368 replaces)
