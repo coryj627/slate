@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/slate-core",
     "crates/slate-uniffi",
+    "crates/slate-cli",
 ]
 
 [workspace.package]
@@ -84,6 +85,18 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # of the same name land adjacent and in a stable order. Already resolved
 # transitively (via `idna`); pinning it as a direct dep is cheap.
 unicode-normalization = "0.1"
+
+# --- Milestone M `slate` CLI (M-4, #535) ------------------------------
+# clap parses `slate <command> <vault-path> [--format …]`; the derive
+# feature drives the per-command arg structs. ctrlc installs the
+# process-wide SIGINT handler that cancels the shared `CancelToken`
+# (and hard-exits on a second Ctrl-C). assert_cmd + predicates drive the
+# CLI integration tests (`crates/slate-cli/tests/cli.rs`) against
+# tempfile fixture vaults.
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+assert_cmd = "2"
+predicates = "3"
 
 [profile.dev]
 # Faster incremental builds during development.

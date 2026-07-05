@@ -1,0 +1,41 @@
+[package]
+name = "slate-cli"
+description = "The `slate` command-line tool — a read-only shell interface to a Slate vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# One shared binary name, `slate`, per plan decision #6
+# (docs/plans/09_sync_cli/00_plan.md) and `05` §10.
+[[bin]]
+name = "slate"
+path = "src/main.rs"
+
+[dependencies]
+# The CLI is a native Rust consumer of the core engine — it links
+# slate-core directly, NOT slate-uniffi. There is no FFI layer in the
+# loop (m_spec §M-4 crate layout).
+slate-core = { path = "../slate-core" }
+clap = { workspace = true }
+ctrlc = { workspace = true }
+serde_json = { workspace = true }
+# rusqlite is pulled in solely to pattern-match the post-`busy_timeout`
+# `SQLITE_BUSY`/locked error code that slate-core surfaces as
+# `VaultError::Db(DbError::Sqlite(rusqlite::Error))`. Matching the typed
+# `ErrorCode` beats sniffing the Display string. `bundled` keeps the
+# workspace on the single vendored SQLite build (no system-lib link).
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+# The unix SIGINT/cancellation test classifies a signal-2 death (the
+# child's Ctrl-C handler hadn't armed yet) via `libc::SIGINT`. Test-only.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
