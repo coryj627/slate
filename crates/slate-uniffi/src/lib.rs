@@ -907,6 +907,15 @@ impl VaultSession {
     pub fn detect_sync(&self) -> Result<SyncDetectionReport, VaultError> {
         Ok(self.inner.detect_sync()?.into())
     }
+
+    /// Read the LiveSync plugin's config, credential-free (M-2, #533).
+    ///
+    /// Same no-fs-root rule as `detect_sync`: `NotPresent`, never an
+    /// error. Only the six allow-listed fields are ever read out of
+    /// the plugin's JSON.
+    pub fn livesync_config(&self) -> Result<LiveSyncConfigStatus, VaultError> {
+        Ok(self.inner.livesync_config()?.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -1040,6 +1049,53 @@ impl From<core::sync_detect::SyncDetectionReport> for SyncDetectionReport {
             multi_sync_warning: r.multi_sync_warning,
             audio_summary: r.audio_summary,
             supported: r.supported,
+        }
+    }
+}
+
+/// Mirrors `slate_core::sync_detect::LiveSyncConfig` (M-2, #533) —
+/// the credential-free allow-listed subset of the plugin's data.json.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LiveSyncConfig {
+    /// Host (+ optional port) only — never userinfo/path/query/fragment.
+    pub server_host: Option<String>,
+    pub database: Option<String>,
+    pub live_sync_enabled: Option<bool>,
+    pub sync_on_save: Option<bool>,
+    pub sync_on_start: Option<bool>,
+    pub end_to_end_encryption: Option<bool>,
+}
+
+impl From<core::sync_detect::LiveSyncConfig> for LiveSyncConfig {
+    fn from(c: core::sync_detect::LiveSyncConfig) -> Self {
+        Self {
+            server_host: c.server_host,
+            database: c.database,
+            live_sync_enabled: c.live_sync_enabled,
+            sync_on_save: c.sync_on_save,
+            sync_on_start: c.sync_on_start,
+            end_to_end_encryption: c.end_to_end_encryption,
+        }
+    }
+}
+
+/// Mirrors `slate_core::sync_detect::LiveSyncConfigStatus`.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum LiveSyncConfigStatus {
+    NotPresent,
+    Parsed { config: LiveSyncConfig },
+    Malformed { reason: String },
+}
+
+impl From<core::sync_detect::LiveSyncConfigStatus> for LiveSyncConfigStatus {
+    fn from(s: core::sync_detect::LiveSyncConfigStatus) -> Self {
+        use core::sync_detect::LiveSyncConfigStatus as S;
+        match s {
+            S::NotPresent => Self::NotPresent,
+            S::Parsed(config) => Self::Parsed {
+                config: config.into(),
+            },
+            S::Malformed { reason } => Self::Malformed { reason },
         }
     }
 }

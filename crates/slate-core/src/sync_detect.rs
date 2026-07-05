@@ -616,6 +616,416 @@ fn audio_summary(providers: &[DetectedSyncProvider], has_multi_sync_warning: boo
     summary
 }
 
+// --- LiveSync config reader (M-2, #533) --------------------------------
+
+/// Result of reading the LiveSync plugin config. Read failures are
+/// data, not errors — the diagnostics panel renders every variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveSyncConfigStatus {
+    /// No `data.json` (the plugin may still be detected via
+    /// `manifest.json` — "plugin present, no config found").
+    NotPresent,
+    Parsed(LiveSyncConfig),
+    /// Unreadable/unparseable — never a hard error.
+    Malformed {
+        reason: String,
+    },
+}
+
+/// The credential-free subset of the LiveSync plugin's `data.json`.
+///
+/// **Structural credential safety:** these six fields are the ONLY
+/// values ever read out of the JSON. `couchDB_USER`,
+/// `couchDB_PASSWORD`, `passphrase`, and every other key are never
+/// copied into any output type — no "redaction"; fields that aren't
+/// read can't leak. Enforced by the planted-credential round-trip
+/// test (the M-2 DoD gate).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSyncConfig {
+    /// Host (+ optional port) extracted from `couchDB_URI`. NEVER
+    /// contains userinfo, path, query, or fragment. `None` when the
+    /// URI is absent/unparseable.
+    pub server_host: Option<String>,
+    /// `couchDB_DBNAME` verbatim (a database name, not a credential).
+    pub database: Option<String>,
+    /// `"liveSync"`.
+    pub live_sync_enabled: Option<bool>,
+    /// `"syncOnSave"`.
+    pub sync_on_save: Option<bool>,
+    /// `"syncOnStart"`.
+    pub sync_on_start: Option<bool>,
+    /// `"encrypt"`.
+    pub end_to_end_encryption: Option<bool>,
+}
+
+/// Defensive size bound on `data.json` (m_spec §M-2).
+const LIVESYNC_CONFIG_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Read the LiveSync plugin config at
+/// `{vault_root}/.obsidian/plugins/obsidian-livesync/data.json`.
+///
+/// Field-tolerant (`serde_json::Value` — the plugin's schema drifts):
+/// absent fields land as `None`. Every failure mode maps to a status
+/// variant; this function never errors and never panics.
+pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
+    use std::io::Read;
+
+    // **Vault-escape guard — root-anchored, no-follow open.** The config
+    // lives at a FIXED relative path under the vault:
+    // `.obsidian/plugins/obsidian-livesync/data.json`. `open_config_in`
+    // walks that path one component at a time, opening each with
+    // `O_NOFOLLOW` relative to the previous directory fd (never
+    // re-resolving an absolute path), so a hostile vault cannot swap ANY
+    // component — parent OR final — for a symlink to an outside tree: a
+    // symlinked component is refused (`EscapeRefused`) instead of
+    // traversed. This binds containment to the opened fd atomically,
+    // closing the canonicalize→open parent-swap race for good. It also
+    // opens the final component `O_NONBLOCK` so a FIFO can't block. On
+    // non-Unix (no `openat`) it falls back to a canonicalize+contain
+    // open; the platforms slate ships to are Unix-likes.
+    let file = match open_config_in(vault_root) {
+        Ok(f) => f,
+        Err(OpenConfigError::NotPresent) => return LiveSyncConfigStatus::NotPresent,
+        Err(OpenConfigError::EscapeRefused) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            };
+        }
+        Err(OpenConfigError::Io(e)) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("config file unreadable: {e}"),
+            };
+        }
+    };
+    // Reject non-regular files (directory, FIFO, char/block device, socket)
+    // using the OPEN handle's metadata — race-free, no second path lookup.
+    match file.metadata() {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
+            };
+        }
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("config file unreadable: {e}"),
+            };
+        }
+    }
+    // Cap the read at `MAX + 1` bytes regardless of the reported length, so
+    // a growing/replaced/special file can never make us materialize more
+    // than the cap in memory. `> MAX` after the read means "too large".
+    let cap = LIVESYNC_CONFIG_MAX_BYTES.saturating_add(1);
+    let mut bytes: Vec<u8> = Vec::new();
+    if let Err(e) = file.take(cap).read_to_end(&mut bytes) {
+        return LiveSyncConfigStatus::Malformed {
+            reason: format!("config file unreadable: {e}"),
+        };
+    }
+    if bytes.len() as u64 > LIVESYNC_CONFIG_MAX_BYTES {
+        return LiveSyncConfigStatus::Malformed {
+            reason: "config file too large".to_string(),
+        };
+    }
+    parse_livesync_config(&bytes)
+}
+
+/// The fixed relative path components of the LiveSync config under a
+/// vault root — the intermediates are directories, the last is the file.
+const LIVESYNC_CONFIG_COMPONENTS: [&str; 4] =
+    [".obsidian", "plugins", "obsidian-livesync", "data.json"];
+
+/// Failure modes of [`open_config_in`], mapped to status variants by the
+/// caller.
+enum OpenConfigError {
+    /// A component doesn't exist — no config to read.
+    NotPresent,
+    /// A component is a symlink (a swap/escape attempt) — refused.
+    EscapeRefused,
+    /// Any other I/O failure.
+    Io(std::io::Error),
+}
+
+/// Open the LiveSync `data.json` under `vault_root`, refusing to
+/// traverse a symlinked component at ANY level (Unix `openat` walk).
+///
+/// Each component of [`LIVESYNC_CONFIG_COMPONENTS`] is opened with
+/// `O_NOFOLLOW` relative to the previous directory fd; intermediates
+/// additionally require `O_DIRECTORY`, the final file adds `O_NONBLOCK`
+/// (no FIFO hang). Because the walk never re-resolves an absolute path
+/// and every hop refuses a symlink, an attacker cannot swap a parent (or
+/// the final file) for a symlink to escape the vault — a symlinked hop
+/// makes `openat` fail and an `fstatat(AT_SYMLINK_NOFOLLOW)` classifies
+/// it as [`OpenConfigError::EscapeRefused`] (the raw errno for a refused
+/// symlink is `ELOOP` on Linux but `ENOTDIR`/`ELOOP` varies by platform,
+/// so we consult the entry type rather than trust the errno). This is
+/// the race-free containment guarantee (stronger than `vault::fs`, which
+/// documents-and-accepts the parent-swap residual, fs.rs:328-332).
+#[cfg(unix)]
+fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    // RAII for the intermediate directory fds so an early return can't
+    // leak them.
+    struct Fd(libc::c_int);
+    impl Drop for Fd {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is an fd we own and haven't handed off.
+            unsafe { libc::close(self.0) };
+        }
+    }
+
+    /// Is `comp` (relative to `dirfd`) a symlink? Uses `fstatat` with
+    /// `AT_SYMLINK_NOFOLLOW` (lstat semantics). Used to disambiguate an
+    /// `openat` failure: a symlinked component can surface as `ELOOP`
+    /// OR `ENOTDIR` (a symlink isn't a directory) depending on platform.
+    fn entry_is_symlink(dirfd: libc::c_int, comp_c: &std::ffi::CStr) -> bool {
+        // SAFETY: zeroed `stat` is a valid target; `dirfd` is owned; the
+        // C string is valid; `AT_SYMLINK_NOFOLLOW` means no traversal.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let rc =
+            unsafe { libc::fstatat(dirfd, comp_c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+        rc == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFLNK
+    }
+
+    // Classify an `openat` failure for `comp` under `dirfd`: a symlinked
+    // component → escape; genuinely absent / not-a-dir → not present;
+    // otherwise a real I/O error.
+    fn classify(
+        dirfd: libc::c_int,
+        comp_c: &std::ffi::CStr,
+        err: std::io::Error,
+    ) -> OpenConfigError {
+        if entry_is_symlink(dirfd, comp_c) {
+            return OpenConfigError::EscapeRefused;
+        }
+        match err.raw_os_error() {
+            Some(e) if e == libc::ENOENT || e == libc::ENOTDIR || e == libc::ELOOP => {
+                OpenConfigError::NotPresent
+            }
+            _ => OpenConfigError::Io(err),
+        }
+    }
+
+    // Open the vault root directory. Following symlinks in the trusted
+    // vault-root path itself is fine — the attack surface is the
+    // fixed subtree BELOW the root, which the no-follow walk covers.
+    let root_c = std::ffi::CString::new(vault_root.as_os_str().as_bytes())
+        .map_err(|_| OpenConfigError::NotPresent)?;
+    // SAFETY: valid C string; flags are constants; returns an fd or -1.
+    let root_fd = unsafe {
+        libc::open(
+            root_c.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(match err.raw_os_error() {
+            Some(e) if e == libc::ENOENT || e == libc::ENOTDIR => OpenConfigError::NotPresent,
+            _ => OpenConfigError::Io(err),
+        });
+    }
+    let mut dir = Fd(root_fd);
+
+    // Walk the intermediate directory components with `O_NOFOLLOW`.
+    let (file_name, dirs) = LIVESYNC_CONFIG_COMPONENTS
+        .split_last()
+        .expect("component list is non-empty");
+    for comp in dirs {
+        let c = std::ffi::CString::new(*comp).map_err(|_| OpenConfigError::NotPresent)?;
+        // SAFETY: `dir.0` is an open dir fd we own; `c` is a valid C
+        // string; flags are constants.
+        let next = unsafe {
+            libc::openat(
+                dir.0,
+                c.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if next < 0 {
+            return Err(classify(dir.0, &c, std::io::Error::last_os_error()));
+        }
+        dir = Fd(next);
+    }
+
+    // Final component: the file, `O_NOFOLLOW` (a symlinked data.json is
+    // refused) + `O_NONBLOCK` (a FIFO can't block the open).
+    let file_c = std::ffi::CString::new(*file_name).map_err(|_| OpenConfigError::NotPresent)?;
+    // SAFETY: `dir.0` is an open dir fd we own; `file_c` is valid; flags
+    // are constants.
+    let file_fd = unsafe {
+        libc::openat(
+            dir.0,
+            file_c.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if file_fd < 0 {
+        return Err(classify(dir.0, &file_c, std::io::Error::last_os_error()));
+    }
+    // SAFETY: `file_fd` is a fresh fd we own and don't touch again.
+    Ok(unsafe { std::fs::File::from_raw_fd(file_fd) })
+}
+
+/// Non-Unix fallback: no `openat`, so canonicalize the target and
+/// require it to stay under the canonicalized vault root (the
+/// `vault::fs` boundary). Weaker than the Unix walk (no parent-swap
+/// race close), but the platforms slate ships to are Unix-likes.
+#[cfg(not(unix))]
+fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
+    let mut path = vault_root.to_path_buf();
+    for comp in LIVESYNC_CONFIG_COMPONENTS {
+        path.push(comp);
+    }
+    let canonical_target = match std::fs::canonicalize(&path) {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OpenConfigError::NotPresent);
+        }
+        Err(e) => return Err(OpenConfigError::Io(e)),
+    };
+    let canonical_root = std::fs::canonicalize(vault_root).map_err(OpenConfigError::Io)?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(OpenConfigError::EscapeRefused);
+    }
+    std::fs::File::open(&canonical_target).map_err(OpenConfigError::Io)
+}
+
+/// Parse `data.json` bytes. Split from the file read so the fuzz test
+/// can drive arbitrary byte strings through the parser.
+fn parse_livesync_config(bytes: &[u8]) -> LiveSyncConfigStatus {
+    let value: serde_json::Value = match serde_json::from_slice(bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("invalid JSON: {e}"),
+            };
+        }
+    };
+    let Some(obj) = value.as_object() else {
+        return LiveSyncConfigStatus::Malformed {
+            reason: "config is not a JSON object".to_string(),
+        };
+    };
+    // The structural allow-list: these are the only keys ever read.
+    LiveSyncConfigStatus::Parsed(LiveSyncConfig {
+        server_host: obj
+            .get("couchDB_URI")
+            .and_then(|v| v.as_str())
+            .and_then(extract_host),
+        database: obj
+            .get("couchDB_DBNAME")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        live_sync_enabled: obj.get("liveSync").and_then(|v| v.as_bool()),
+        sync_on_save: obj.get("syncOnSave").and_then(|v| v.as_bool()),
+        sync_on_start: obj.get("syncOnStart").and_then(|v| v.as_bool()),
+        end_to_end_encryption: obj.get("encrypt").and_then(|v| v.as_bool()),
+    })
+}
+
+/// Manual `host[:port]` extraction from a URI string (no `url` crate,
+/// m_spec §M-2): strip `scheme://`, cut the authority at the first
+/// `/` / `?` / `#`, drop userinfo up to and including the last `@`,
+/// then **validate** the remaining `host[:port]` against a strict
+/// grammar and fail closed on anything that isn't host-shaped.
+///
+/// The validation is a credential-safety guard, not cosmetics. Two
+/// malformed shapes both leak userinfo without care:
+/// - `https://alice:hunter2/x@host/db` — the `/` terminates the
+///   authority at `alice:hunter2` (RFC 3986); a naive "drop up to `@`"
+///   would return the userinfo `alice:hunter2`.
+/// - `https://alice:1234/x@host/db` — worse, `alice:1234` *looks like*
+///   a valid `host:port`, so a shape check alone still emits the
+///   password `1234`.
+///
+/// Both are caught the same way: a `@` that appears **after** the first
+/// path delimiter proves userinfo was stranded by a malformed
+/// authority, so the whole extraction fails closed. Combined with the
+/// strict `host[:port]` shape check on the userinfo-stripped authority,
+/// no userinfo can surface. Extraction/validation failure → `None`
+/// (the config still parses).
+fn extract_host(uri: &str) -> Option<String> {
+    let after_scheme = uri.trim().split_once("://")?.1;
+    let (authority, rest) = match after_scheme.find(['/', '?', '#']) {
+        Some(i) => (&after_scheme[..i], &after_scheme[i..]),
+        None => (after_scheme, ""),
+    };
+    // A stray `@` in the part past the authority delimiter means the
+    // URI's userinfo was split off by that delimiter (malformed) — the
+    // `alice:1234/x@host` leak. Refuse to guess: fail closed.
+    if rest.contains('@') {
+        return None;
+    }
+    // Drop userinfo up to and including the last `@` within the
+    // authority. Whatever remains must still pass the strict shape
+    // check below (userinfo colon-pairs that aren't host-shaped are
+    // rejected there).
+    let host = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    if is_valid_host_port(host) {
+        Some(host.to_string())
+    } else {
+        None
+    }
+}
+
+/// Strict `host[:port]` validator — fail closed. Accepts:
+/// - a reg-name / IPv4 host (`[A-Za-z0-9.-]+`) with an optional
+///   `:port` (all digits), or
+/// - a bracketed IPv6 literal `[...]` with an optional `:port`.
+///
+/// Rejects userinfo remnants (`alice:hunter2`), whitespace, control
+/// characters, empty hosts, and anything else not host-shaped — so no
+/// credential-looking text can ever surface as `server_host`.
+fn is_valid_host_port(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    // IPv6 literal: `[...]` optionally followed by `:port`.
+    if let Some(rest) = host.strip_prefix('[') {
+        let Some((inner, after)) = rest.split_once(']') else {
+            return false;
+        };
+        // Inner is hex digits, ':', and '.' (v4-mapped) — non-empty.
+        if inner.is_empty()
+            || !inner
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+        {
+            return false;
+        }
+        return after.is_empty() || is_valid_port(after);
+    }
+    // reg-name / IPv4 host, optionally `:port`.
+    let (name, port) = match host.split_once(':') {
+        Some((name, port)) => (name, Some(port)),
+        None => (host, None),
+    };
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return false;
+    }
+    match port {
+        Some(port) => is_valid_port(port),
+        None => true,
+    }
+}
+
+/// A port suffix `:port` (the caller passes the text after the `:`):
+/// non-empty and all ASCII digits.
+fn is_valid_port(port: &str) -> bool {
+    let digits = port.strip_prefix(':').unwrap_or(port);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 // --- Tests ------------------------------------------------------------
 
 #[cfg(test)]
@@ -1287,6 +1697,441 @@ mod tests {
                 "census vault v{i} produced a false positive: {report:#?}"
             );
             assert_eq!(report.audio_summary, "No sync systems detected.");
+        }
+    }
+
+    // --- LiveSync config reader (M-2, #533) ------------------------------
+
+    /// Plant a `data.json` under a tempdir vault and read it back.
+    fn vault_with_livesync_data(json: &[u8]) -> (tempfile::TempDir, LiveSyncConfigStatus) {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("data.json"), json).unwrap();
+        let status = read_livesync_config(tmp.path());
+        (tmp, status)
+    }
+
+    /// The M-2 DoD credential gate: a realistic config with planted
+    /// credentials round-trips, and the ENTIRE debug-formatted output
+    /// contains none of the planted secrets. Structural allow-listing,
+    /// not redaction.
+    #[test]
+    fn livesync_config_never_contains_planted_credentials() {
+        let json = br#"{
+            "couchDB_URI": "https://alice:hunter2@couch.example.com:5984/db",
+            "couchDB_USER": "alice",
+            "couchDB_PASSWORD": "hunter2",
+            "couchDB_DBNAME": "obsidian-notes",
+            "passphrase": "secret123",
+            "liveSync": true,
+            "syncOnSave": false,
+            "syncOnStart": true,
+            "encrypt": true,
+            "customChunkSize": 100
+        }"#;
+        let (_tmp, status) = vault_with_livesync_data(json);
+        let LiveSyncConfigStatus::Parsed(config) = &status else {
+            panic!("expected Parsed, got {status:?}");
+        };
+        assert_eq!(
+            config.server_host.as_deref(),
+            Some("couch.example.com:5984")
+        );
+        assert_eq!(config.database.as_deref(), Some("obsidian-notes"));
+        assert_eq!(config.live_sync_enabled, Some(true));
+        assert_eq!(config.sync_on_save, Some(false));
+        assert_eq!(config.sync_on_start, Some(true));
+        assert_eq!(config.end_to_end_encryption, Some(true));
+
+        let debug_dump = format!("{status:?}");
+        for secret in ["alice", "hunter2", "secret123"] {
+            assert!(
+                !debug_dump.contains(secret),
+                "credential {secret:?} leaked into output: {debug_dump}"
+            );
+        }
+    }
+
+    #[test]
+    fn livesync_host_extraction_variants() {
+        // Userinfo + port dropped down to host:port.
+        assert_eq!(
+            extract_host("https://user:pass@couch.example.com:5984/db"),
+            Some("couch.example.com:5984".to_string())
+        );
+        // Bare IP, no path.
+        assert_eq!(
+            extract_host("http://10.0.0.5:5984"),
+            Some("10.0.0.5:5984".to_string())
+        );
+        // Query/fragment never leak.
+        assert_eq!(
+            extract_host("https://h.example.com?token=x#frag"),
+            Some("h.example.com".to_string())
+        );
+        // Garbage URIs → None.
+        assert_eq!(extract_host("not a uri"), None);
+        assert_eq!(extract_host(""), None);
+        assert_eq!(extract_host("https://"), None);
+        assert_eq!(extract_host("https://user@"), None);
+    }
+
+    #[test]
+    fn livesync_garbage_uri_still_parses_with_no_host() {
+        let (_tmp, status) =
+            vault_with_livesync_data(br#"{"couchDB_URI": "garbage", "couchDB_DBNAME": "db"}"#);
+        let LiveSyncConfigStatus::Parsed(config) = status else {
+            panic!("expected Parsed");
+        };
+        assert_eq!(config.server_host, None);
+        assert_eq!(config.database.as_deref(), Some("db"));
+    }
+
+    #[test]
+    fn livesync_missing_file_is_not_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::NotPresent
+        );
+    }
+
+    #[test]
+    fn livesync_invalid_json_is_malformed_with_reason() {
+        let (_tmp, status) = vault_with_livesync_data(b"{not json");
+        let LiveSyncConfigStatus::Malformed { reason } = status else {
+            panic!("expected Malformed, got {status:?}");
+        };
+        assert!(!reason.is_empty());
+    }
+
+    #[test]
+    fn livesync_non_object_json_is_malformed() {
+        let (_tmp, status) = vault_with_livesync_data(b"[1, 2, 3]");
+        assert!(matches!(status, LiveSyncConfigStatus::Malformed { .. }));
+    }
+
+    #[test]
+    fn livesync_partial_json_parses_with_nones() {
+        let (_tmp, status) = vault_with_livesync_data(br#"{"couchDB_DBNAME": "only-db"}"#);
+        let LiveSyncConfigStatus::Parsed(config) = status else {
+            panic!("expected Parsed");
+        };
+        assert_eq!(config.database.as_deref(), Some("only-db"));
+        assert_eq!(config.server_host, None);
+        assert_eq!(config.live_sync_enabled, None);
+        assert_eq!(config.sync_on_save, None);
+        assert_eq!(config.sync_on_start, None);
+        assert_eq!(config.end_to_end_encryption, None);
+    }
+
+    #[test]
+    fn livesync_schema_drift_wrong_types_parse_as_none() {
+        // The plugin's schema drifts: wrong-typed fields degrade to
+        // None instead of failing the whole parse.
+        let (_tmp, status) = vault_with_livesync_data(
+            br#"{"liveSync": "yes", "couchDB_DBNAME": 42, "couchDB_URI": false}"#,
+        );
+        let LiveSyncConfigStatus::Parsed(config) = status else {
+            panic!("expected Parsed");
+        };
+        assert_eq!(config.live_sync_enabled, None);
+        assert_eq!(config.database, None);
+        assert_eq!(config.server_host, None);
+    }
+
+    #[test]
+    fn livesync_oversized_file_is_malformed() {
+        let big = vec![b' '; (LIVESYNC_CONFIG_MAX_BYTES + 1) as usize];
+        let (_tmp, status) = vault_with_livesync_data(&big);
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file too large".to_string()
+            }
+        );
+    }
+
+    /// Boundary: a file of exactly `MAX` bytes is under the bound and
+    /// reaches the parser (spaces aren't valid JSON → `invalid JSON`,
+    /// NOT `too large`). Proves the cap is inclusive, not off-by-one.
+    #[test]
+    fn livesync_at_bound_file_reaches_parser() {
+        let at_bound = vec![b' '; LIVESYNC_CONFIG_MAX_BYTES as usize];
+        let (_tmp, status) = vault_with_livesync_data(&at_bound);
+        let LiveSyncConfigStatus::Malformed { reason } = status else {
+            panic!("expected Malformed, got {status:?}");
+        };
+        assert!(
+            reason.starts_with("invalid JSON"),
+            "expected a parse failure, not the size guard: {reason}"
+        );
+    }
+
+    /// A `data.json` that is a directory (not a regular file) is rejected
+    /// before any read — a hostile vault can't make us treat a directory
+    /// as config.
+    #[test]
+    fn livesync_directory_at_config_path_is_malformed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(plugin.join("data.json")).unwrap();
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
+            }
+        );
+    }
+
+    /// `data.json` symlinked to a character device (`/dev/null`): the
+    /// final `openat` is `O_NOFOLLOW`, so the symlink itself is refused
+    /// (`EscapeRefused`) before any read — the blocking/special-file read
+    /// never runs, regardless of where the symlink points.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlink_to_special_file_is_malformed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::os::unix::fs::symlink("/dev/null", plugin.join("data.json")).unwrap();
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            }
+        );
+    }
+
+    /// **Vault-escape credential guard (adversarial-review r4).** A
+    /// hostile vault symlinks `data.json` at a regular JSON file OUTSIDE
+    /// the vault (e.g. another user's real LiveSync config). The reader
+    /// must refuse it — NO allow-listed field from the outside file may
+    /// surface. The final `openat` `O_NOFOLLOW` refuses the symlink.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlink_escaping_vault_is_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("other-vault-data.json");
+        std::fs::write(
+            &secret,
+            br#"{"couchDB_URI": "https://secret.example.com:5984/x", "couchDB_DBNAME": "victim-db"}"#,
+        )
+        .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::os::unix::fs::symlink(&secret, plugin.join("data.json")).unwrap();
+
+        let status = read_livesync_config(tmp.path());
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            },
+            "outside file must not be parsed"
+        );
+        // Belt and suspenders: nothing from the outside file leaked.
+        let dump = format!("{status:?}");
+        assert!(!dump.contains("secret.example.com"));
+        assert!(!dump.contains("victim-db"));
+    }
+
+    /// The no-follow walk refuses a symlinked `data.json` unconditionally
+    /// — even one pointing at a regular file INSIDE the vault. A real
+    /// plugin always writes a regular file there; refusing the symlink
+    /// form is the safe, strict posture (no target-classification races).
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlink_at_config_path_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        let real = tmp.path().join("real-data.json");
+        std::fs::write(&real, br#"{"couchDB_DBNAME": "inside-db"}"#).unwrap();
+        std::os::unix::fs::symlink(&real, plugin.join("data.json")).unwrap();
+
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            }
+        );
+    }
+
+    /// **Parent-component swap (adversarial-review r6).** A hostile vault
+    /// makes an INTERMEDIATE component (`.obsidian`) a symlink to an
+    /// outside tree that contains a complete, valid
+    /// `plugins/obsidian-livesync/data.json`. The root-anchored no-follow
+    /// walk must refuse to traverse the symlinked parent — none of the
+    /// outside file's allow-listed fields may surface. This is the race
+    /// the earlier canonicalize+contain approach couldn't fully close.
+    #[cfg(unix)]
+    #[test]
+    fn livesync_symlinked_parent_component_is_refused() {
+        // Outside tree with a fully valid config subtree.
+        let outside = tempfile::tempdir().unwrap();
+        let outside_plugin = outside.path().join("plugins/obsidian-livesync");
+        std::fs::create_dir_all(&outside_plugin).unwrap();
+        std::fs::write(
+            outside_plugin.join("data.json"),
+            br#"{"couchDB_URI": "https://evil.example.com:5984/x", "couchDB_DBNAME": "stolen-db"}"#,
+        )
+        .unwrap();
+
+        // Vault whose `.obsidian` is a symlink INTO that outside tree.
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".obsidian")).unwrap();
+
+        let status = read_livesync_config(tmp.path());
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            },
+            "a symlinked parent must not be traversed"
+        );
+        let dump = format!("{status:?}");
+        assert!(!dump.contains("evil.example.com"));
+        assert!(!dump.contains("stolen-db"));
+    }
+
+    /// `data.json` is a FIFO with no writer connected. A blocking open
+    /// would hang here forever; the `O_NONBLOCK` on the final `openat`
+    /// returns immediately and the regular-file guard rejects it. If this
+    /// test ever hangs, the non-blocking open regressed. (Direct FIFO —
+    /// not via symlink — per the review.)
+    #[cfg(unix)]
+    #[test]
+    fn livesync_fifo_at_config_path_does_not_hang() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        let fifo = plugin.join("data.json");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // 0o600 rw-------; return value 0 == success.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
+            }
+        );
+    }
+
+    /// Credential-safety regression: userinfo must never leak into
+    /// `server_host` via a malformed authority. A path/query delimiter
+    /// that appears *before* the `@` terminates the authority at the
+    /// userinfo (RFC 3986), and a naive "drop up to `@`" would return
+    /// the password. Strict `host[:port]` validation fails closed here.
+    #[test]
+    fn livesync_extract_host_fails_closed_on_userinfo_leak() {
+        // A `@` stranded after the first authority delimiter means the
+        // userinfo was split off by a malformed authority → fail closed,
+        // for `/`, `?`, and `#`, whether the password is alphabetic…
+        assert_eq!(
+            extract_host("https://alice:hunter2/extra@couch.example.com/db"),
+            None
+        );
+        assert_eq!(
+            extract_host("https://alice:hunter2?x@couch.example.com/db"),
+            None
+        );
+        assert_eq!(
+            extract_host("https://alice:hunter2#f@couch.example.com/db"),
+            None
+        );
+        // …or NUMERIC — the dangerous case, since `alice:1234` on its own
+        // is shaped exactly like a valid `host:port`. The stranded `@`
+        // is what proves it's userinfo; without this guard `1234` would
+        // leak (adversarial-review r3 finding).
+        assert_eq!(
+            extract_host("https://alice:1234/extra@couch.example.com/db"),
+            None
+        );
+        assert_eq!(
+            extract_host("https://alice:1234?x@couch.example.com/db"),
+            None
+        );
+        assert_eq!(
+            extract_host("https://alice:1234#f@couch.example.com/db"),
+            None
+        );
+        // Whitespace / control characters are not host-shaped → None.
+        assert_eq!(extract_host("https://ali ce@host .com"), None);
+        assert_eq!(extract_host("https://ho\tst.com"), None);
+        assert_eq!(extract_host("https://host\n.com"), None);
+        // A non-numeric password with no `@` at all is still not
+        // host-shaped (`hunter2` isn't a port) → None.
+        assert_eq!(extract_host("https://alice:hunter2"), None);
+    }
+
+    /// A bare `label:digits` authority with NO `@` anywhere is
+    /// indistinguishable from a legitimate `host:port` (`localhost:5984`,
+    /// an internal hostname, a container name) — CouchDB URIs routinely
+    /// use exactly this. It is accepted as a host; only a stranded `@`
+    /// (see the leak test) turns a `name:digits` value into userinfo.
+    /// Documenting the deliberate boundary so it isn't "fixed" into an
+    /// over-rejection that breaks real configs.
+    #[test]
+    fn livesync_extract_host_accepts_bare_host_port() {
+        assert_eq!(
+            extract_host("http://localhost:5984"),
+            Some("localhost:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("http://couchdb:5984/db"),
+            Some("couchdb:5984".to_string())
+        );
+    }
+
+    /// The valid host shapes the extractor must still accept, including
+    /// a bracketed IPv6 literal (defensive support) — regression guard
+    /// against the strict validator over-rejecting.
+    #[test]
+    fn livesync_extract_host_accepts_valid_shapes() {
+        assert_eq!(
+            extract_host("https://couch.example.com:5984/db"),
+            Some("couch.example.com:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("http://10.0.0.5:5984"),
+            Some("10.0.0.5:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("https://user:pass@couch.example.com:5984/db"),
+            Some("couch.example.com:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("https://host-name.internal"),
+            Some("host-name.internal".to_string())
+        );
+        // Bracketed IPv6, with and without a port.
+        assert_eq!(
+            extract_host("https://[2001:db8::1]:5984/db"),
+            Some("[2001:db8::1]:5984".to_string())
+        );
+        assert_eq!(extract_host("https://[::1]"), Some("[::1]".to_string()));
+    }
+
+    /// 1k random byte-strings through the parser — no panics; every
+    /// outcome is a status variant (m_spec §M-2).
+    #[test]
+    fn livesync_fuzz_random_bytes_never_panic() {
+        let mut rng = SplitMix64(0xF0CC_F0CC);
+        for _ in 0..1_000 {
+            let len = rng.below(512);
+            let bytes: Vec<u8> = (0..len).map(|_| (rng.next() & 0xFF) as u8).collect();
+            let status = parse_livesync_config(&bytes);
+            match status {
+                LiveSyncConfigStatus::Parsed(_) | LiveSyncConfigStatus::Malformed { .. } => {}
+                LiveSyncConfigStatus::NotPresent => {
+                    panic!("parser must never return NotPresent")
+                }
+            }
         }
     }
 }

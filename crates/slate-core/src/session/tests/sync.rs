@@ -43,6 +43,40 @@ fn detect_sync_clean_vault_reports_empty() {
     assert_eq!(report.audio_summary, "No sync systems detected.");
 }
 
+/// M-2 (#533): `livesync_config()` reads the plugin config off the
+/// same `fs_root()` derivation.
+#[test]
+fn livesync_config_reads_from_vault_root() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"# hi").unwrap();
+    });
+    let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("data.json"),
+        br#"{"couchDB_DBNAME": "notes", "liveSync": true}"#,
+    )
+    .unwrap();
+
+    let status = session.livesync_config().expect("livesync_config");
+    let crate::sync_detect::LiveSyncConfigStatus::Parsed(config) = status else {
+        panic!("expected Parsed, got {status:?}");
+    };
+    assert_eq!(config.database.as_deref(), Some("notes"));
+    assert_eq!(config.live_sync_enabled, Some(true));
+}
+
+#[test]
+fn livesync_config_not_present_on_clean_vault() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"# hi").unwrap();
+    });
+    assert_eq!(
+        session.livesync_config().expect("livesync_config"),
+        crate::sync_detect::LiveSyncConfigStatus::NotPresent
+    );
+}
+
 /// A session whose `cache_dir` is a bare relative path has no
 /// filesystem root (`fs_root()` → `None`): detection is unsupported —
 /// an empty report with `supported = false`, NOT an error. This is the
@@ -71,5 +105,11 @@ fn detect_sync_without_fs_root_reports_unsupported() {
     assert_eq!(
         report.audio_summary,
         "Sync detection isn't available for this vault type."
+    );
+
+    // M-2: same fs_root rule — no root reads no config.
+    assert_eq!(
+        session.livesync_config().expect("livesync_config"),
+        crate::sync_detect::LiveSyncConfigStatus::NotPresent
     );
 }

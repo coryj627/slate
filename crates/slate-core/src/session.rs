@@ -2514,6 +2514,20 @@ impl VaultSession {
         }
     }
 
+    /// Read the LiveSync plugin's config, credential-free (M-2, #533).
+    ///
+    /// Same `fs_root` rule as [`Self::detect_sync`]: a session without
+    /// a filesystem root reads no config — `Ok(NotPresent)`, not an
+    /// error. Read/parse failures are data (`Malformed { reason }`);
+    /// the six allow-listed fields are the only values ever read out
+    /// of the JSON.
+    pub fn livesync_config(&self) -> Result<crate::sync_detect::LiveSyncConfigStatus, VaultError> {
+        match self.fs_root() {
+            Some(root) => Ok(crate::sync_detect::read_livesync_config(&root)),
+            None => Ok(crate::sync_detect::LiveSyncConfigStatus::NotPresent),
+        }
+    }
+
     /// Every bibliography entry currently indexed, ordered by year
     /// desc then title asc.
     pub fn get_bibliography_entries(
