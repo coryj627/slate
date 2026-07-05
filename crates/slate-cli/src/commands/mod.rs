@@ -6,4 +6,6 @@
 //! `sync-check`) — no business logic lives in the CLI layer.
 
 pub mod open;
+pub mod render_template;
 pub mod sync_check;
+pub mod tasks;
