@@ -36,6 +36,7 @@ pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod structural;
+pub mod sync_detect;
 pub mod tags_db;
 pub mod tasks;
 pub mod tasks_db;
@@ -78,6 +79,9 @@ pub use oplog::{
     EditOp, OpKind, OpLogEntry, decode_edit_batch, encode_edit_batch, reconstruct_at_tail,
 };
 pub use reading::{ReadingBlock, ReadingBlockKind, reading_blocks_source};
+pub use sync_detect::{
+    DetectedSyncProvider, RiskLevel, SyncDetectionReport, SyncProviderKind, detect_sync_providers,
+};
 pub use tasks::{TaskItem, extract_tasks};
 pub use tasks_db::{TaskFilter, TaskWithLocation};
 pub use templates::{

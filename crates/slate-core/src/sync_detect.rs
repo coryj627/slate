@@ -1,0 +1,1292 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Milestone M sync detection (M-1, #532).
+//!
+//! Detects external sync systems managing a vault — LiveSync, iCloud
+//! Drive, Dropbox, OneDrive, Google Drive, Git, Syncthing — from their
+//! on-disk markers. Detection is filesystem-probe based, not index
+//! based: the scanner deliberately skips dot-prefixed entries, so
+//! markers like `.stfolder` or `.icloud` placeholders never reach the
+//! SQLite index (plan decision #5, `docs/plans/09_sync_cli/00_plan.md`).
+//!
+//! `detect_sync_providers` is a pure function over a vault root: no
+//! SQLite, no session state, no unbounded walks — every probe is an
+//! exact path, a bounded `ancestors()` walk, or a single `read_dir` of
+//! the root. The detector-evidence table in
+//! `docs/plans/09_sync_cli/m_spec.md` §M-1 is normative for probe
+//! rules, risk levels, and recommendation copy.
+
+use std::path::{Component, Path, PathBuf};
+
+// --- Public types (mirrored over uniffi) -----------------------------
+
+/// The sync systems the detector knows about, in the normative table
+/// order (which is also the report's provider order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SyncProviderKind {
+    LiveSync,
+    ICloudDrive,
+    Dropbox,
+    OneDrive,
+    GoogleDrive,
+    Git,
+    Syncthing,
+}
+
+impl SyncProviderKind {
+    /// Normative display name — used in `audio_summary`, human CLI
+    /// output, and the diagnostics-panel row labels.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::LiveSync => "LiveSync",
+            Self::ICloudDrive => "iCloud Drive",
+            Self::Dropbox => "Dropbox",
+            Self::OneDrive => "OneDrive",
+            Self::GoogleDrive => "Google Drive",
+            Self::Git => "Git",
+            Self::Syncthing => "Syncthing",
+        }
+    }
+}
+
+/// How much risk the detected system carries for a vault Slate is
+/// writing into. Ordering matters: the multi-sync warning counts
+/// providers with `risk_level >= Medium`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+/// One detected sync system plus the markers that produced the
+/// detection and the user-facing recommendation copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetectedSyncProvider {
+    pub kind: SyncProviderKind,
+    /// Markers that produced the detection. Vault-relative when the
+    /// marker is inside the vault; absolute when it is an
+    /// ancestor/location signal.
+    pub evidence_paths: Vec<String>,
+    pub risk_level: RiskLevel,
+    /// Full recommendation sentence(s) — the exact user-facing copy
+    /// from the normative table.
+    pub recommendation: String,
+}
+
+/// The full detection result for one vault root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncDetectionReport {
+    /// Detected providers in detector-table order — deterministic for
+    /// tests and TSV consumers.
+    pub providers: Vec<DetectedSyncProvider>,
+    /// `Some(copy)` when ≥ 2 providers with risk ≥ Medium are detected.
+    /// Git is Low-risk and therefore never triggers (or appears in)
+    /// the warning, though it still appears in `providers`.
+    pub multi_sync_warning: Option<String>,
+    /// Pre-rendered VoiceOver summary, same pattern as
+    /// `QueryResultSet::summary`.
+    pub audio_summary: String,
+    /// `false` when the session has no filesystem root
+    /// (provider-abstracted session): detection unsupported,
+    /// `providers` empty.
+    pub supported: bool,
+}
+
+impl SyncDetectionReport {
+    /// Report for a session with no filesystem root. Not an error —
+    /// the host renders from the `supported` flag.
+    pub(crate) fn unsupported() -> Self {
+        Self {
+            providers: Vec::new(),
+            multi_sync_warning: None,
+            audio_summary: "Sync detection isn't available for this vault type.".to_string(),
+            supported: false,
+        }
+    }
+}
+
+// --- Recommendation copy (normative table) ---------------------------
+
+const REC_LIVESYNC: &str = "Self-hosted LiveSync replicates your saves at the file level. \
+     Avoid editing the same note simultaneously in Slate and Obsidian.";
+const REC_ICLOUD: &str = "This vault is inside iCloud Drive. Files may be evicted to the \
+     cloud; Slate reads them transparently, but first-touch latency can spike and mid-write \
+     eviction is outside Slate's control.";
+const REC_DROPBOX: &str = "This vault is inside a Dropbox-synced folder. Dropbox replicates \
+     whole files on save; concurrent edits from another device can produce conflicted copies.";
+const REC_ONEDRIVE: &str = "This vault is inside a OneDrive-synced folder. OneDrive replicates \
+     whole files on save; concurrent edits from another device can produce conflicted copies.";
+const REC_GOOGLE_DRIVE: &str = "This vault is inside a Google Drive–synced folder. Drive \
+     replicates whole files on save; concurrent edits from another device can produce \
+     conflicted copies.";
+const REC_GIT: &str = "This vault is a Git working tree. Slate's writes go through the \
+     working tree like any editor; commit on your own cadence.";
+const REC_SYNCTHING: &str = "This vault is a Syncthing folder. Syncthing replicates whole \
+     files on save; concurrent edits from another device can produce conflicts.";
+
+/// OneDrive plants this GUID-named marker file at every sync root.
+const ONEDRIVE_MARKER: &str = ".849C9593-D756-4E56-8D6E-42412F2A707B";
+
+/// iCloud file-provider xattr (current) and the legacy clouddocs
+/// xattr prefix.
+const ICLOUD_XATTR_FPFS: &str = "com.apple.fileprovider.fpfs#P";
+const ICLOUD_XATTR_CLOUDDOCS_PREFIX: &str = "com.apple.clouddocs.";
+
+// --- Probe seam -------------------------------------------------------
+
+/// Filesystem probes the detector runs through. Split behind a trait so
+/// fixture tests can exercise every detector arm — including the
+/// `$HOME`-prefix and xattr arms CI runners can't plant reliably —
+/// without touching the real environment.
+trait FsProbe {
+    fn exists(&self, path: &Path) -> bool;
+    fn is_dir(&self, path: &Path) -> bool;
+    /// Names of the direct children of `path`; empty on any error.
+    fn read_dir_names(&self, path: &Path) -> Vec<String>;
+    /// Extended-attribute names on `path`; empty on any error.
+    fn xattr_names(&self, path: &Path) -> Vec<String>;
+    /// `None` on canonicalization failure — the caller falls back to
+    /// the raw path (detection degrades, never errors).
+    fn canonicalize(&self, path: &Path) -> Option<PathBuf>;
+    fn home(&self) -> Option<PathBuf>;
+}
+
+/// The real filesystem.
+struct RealFs;
+
+impl FsProbe for RealFs {
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    fn read_dir_names(&self, path: &Path) -> Vec<String> {
+        std::fs::read_dir(path)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn xattr_names(&self, path: &Path) -> Vec<String> {
+        listxattr_names(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Option<PathBuf> {
+        std::fs::canonicalize(path).ok()
+    }
+
+    fn home(&self) -> Option<PathBuf> {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
+/// `listxattr(2)` via libc — no new dependency (m_spec §M-1 rules).
+/// Any failure (including the buffer-size race between the two calls)
+/// degrades to "no xattrs": detection degrades, never errors.
+#[cfg(target_os = "macos")]
+fn listxattr_names(path: &Path) -> Vec<String> {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return Vec::new();
+    };
+    // SAFETY: c_path is a valid NUL-terminated string; a NULL buffer
+    // with size 0 asks for the required buffer length.
+    let len = unsafe { libc::listxattr(c_path.as_ptr(), std::ptr::null_mut(), 0, 0) };
+    if len <= 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; len as usize];
+    // SAFETY: buf is a live allocation of exactly `len` bytes.
+    let n = unsafe {
+        libc::listxattr(
+            c_path.as_ptr(),
+            buf.as_mut_ptr().cast::<libc::c_char>(),
+            buf.len(),
+            0,
+        )
+    };
+    if n <= 0 {
+        return Vec::new();
+    }
+    buf.truncate(n as usize);
+    split_xattr_name_buffer(&buf)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn listxattr_names(path: &Path) -> Vec<String> {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return Vec::new();
+    };
+    // SAFETY: as the macOS arm; Linux listxattr has no options arg.
+    let len = unsafe { libc::listxattr(c_path.as_ptr(), std::ptr::null_mut(), 0) };
+    if len <= 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; len as usize];
+    // SAFETY: buf is a live allocation of exactly `len` bytes.
+    let n = unsafe {
+        libc::listxattr(
+            c_path.as_ptr(),
+            buf.as_mut_ptr().cast::<libc::c_char>(),
+            buf.len(),
+        )
+    };
+    if n <= 0 {
+        return Vec::new();
+    }
+    buf.truncate(n as usize);
+    split_xattr_name_buffer(&buf)
+}
+
+#[cfg(not(unix))]
+fn listxattr_names(_path: &Path) -> Vec<String> {
+    Vec::new()
+}
+
+/// `listxattr` returns NUL-separated names in one buffer.
+#[cfg(unix)]
+fn split_xattr_name_buffer(buf: &[u8]) -> Vec<String> {
+    buf.split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect()
+}
+
+// --- Detection --------------------------------------------------------
+
+/// Detect external sync systems managing the vault at `vault_root`.
+///
+/// Pure function; no SQLite, no session state. Synchronous and cheap
+/// (a fixed set of exact-path probes plus two path-depth-bounded
+/// ancestor walks); no `CancelToken`. Hosts call it off-main like any
+/// FFI call.
+pub fn detect_sync_providers(vault_root: &Path) -> SyncDetectionReport {
+    detect_with_probe(vault_root, &RealFs)
+}
+
+fn detect_with_probe(root: &Path, fs: &dyn FsProbe) -> SyncDetectionReport {
+    // Canonicalize once for the location-based probes; fall back to
+    // the raw path on failure (m_spec: detection degrades, never
+    // errors).
+    let canon = fs.canonicalize(root).unwrap_or_else(|| root.to_path_buf());
+    // `$HOME` gates the prefix probes only; when unset those are
+    // skipped and the marker probes still run.
+    let home = fs.home();
+
+    let mut providers = Vec::new();
+
+    // Detector-table order is the output order — deterministic by
+    // construction.
+    if let Some(p) = detect_livesync(root, fs) {
+        providers.push(p);
+    }
+    if let Some(p) = detect_icloud(root, &canon, home.as_deref(), fs) {
+        providers.push(p);
+    }
+    if let Some(p) = detect_dropbox(root, &canon, home.as_deref(), fs) {
+        providers.push(p);
+    }
+    if let Some(p) = detect_onedrive(root, &canon, fs) {
+        providers.push(p);
+    }
+    if let Some(p) = detect_google_drive(root, &canon, home.as_deref(), fs) {
+        providers.push(p);
+    }
+    if let Some(p) = detect_git(root, fs) {
+        providers.push(p);
+    }
+    if let Some(p) = detect_syncthing(root, fs) {
+        providers.push(p);
+    }
+
+    let multi_sync_warning = multi_sync_warning(&providers);
+    let audio_summary = audio_summary(&providers, multi_sync_warning.is_some());
+    SyncDetectionReport {
+        providers,
+        multi_sync_warning,
+        audio_summary,
+        supported: true,
+    }
+}
+
+/// dir `{root}/.obsidian/plugins/obsidian-livesync/` exists AND
+/// contains `manifest.json` or `data.json`.
+fn detect_livesync(root: &Path, fs: &dyn FsProbe) -> Option<DetectedSyncProvider> {
+    let plugin_dir = root.join(".obsidian/plugins/obsidian-livesync");
+    if !fs.is_dir(&plugin_dir) {
+        return None;
+    }
+    let evidence: Vec<String> = ["manifest.json", "data.json"]
+        .iter()
+        .filter(|f| fs.exists(&plugin_dir.join(f)))
+        .map(|f| format!(".obsidian/plugins/obsidian-livesync/{f}"))
+        .collect();
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::LiveSync,
+        evidence_paths: evidence,
+        risk_level: RiskLevel::High,
+        recommendation: REC_LIVESYNC.to_string(),
+    })
+}
+
+/// (a) canonicalized root under `$HOME/Library/Mobile Documents/`, OR
+/// (b) root or any ancestor up to `$HOME` carries the file-provider or
+/// legacy clouddocs xattr, OR (c) ≥ 1 `*.icloud` placeholder among the
+/// direct children of the vault root.
+fn detect_icloud(
+    root: &Path,
+    canon: &Path,
+    home: Option<&Path>,
+    fs: &dyn FsProbe,
+) -> Option<DetectedSyncProvider> {
+    let mut evidence = Vec::new();
+
+    if let Some(home) = home {
+        // (a) location prefix.
+        if canon.starts_with(home.join("Library/Mobile Documents")) {
+            evidence.push(canon.display().to_string());
+        }
+        // (b) xattr walk — root and every ancestor that is still under
+        // `$HOME` (bounded by path depth; no read_dir on ancestors).
+        for ancestor in canon.ancestors() {
+            if !ancestor.starts_with(home) {
+                break;
+            }
+            let has_icloud_xattr = fs.xattr_names(ancestor).iter().any(|name| {
+                name == ICLOUD_XATTR_FPFS || name.starts_with(ICLOUD_XATTR_CLOUDDOCS_PREFIX)
+            });
+            if has_icloud_xattr {
+                evidence.push(ancestor.display().to_string());
+            }
+        }
+    }
+
+    // (c) placeholder children — one read_dir of the root only;
+    // placeholders deeper in the tree are caught by (a)/(b). Sorted:
+    // read_dir order is platform-dependent and evidence must be
+    // deterministic.
+    let mut placeholders: Vec<String> = fs
+        .read_dir_names(root)
+        .into_iter()
+        .filter(|name| name.ends_with(".icloud"))
+        .collect();
+    placeholders.sort();
+    evidence.extend(placeholders);
+
+    let evidence = dedup_preserving_order(evidence);
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::ICloudDrive,
+        evidence_paths: evidence,
+        risk_level: RiskLevel::Medium,
+        recommendation: REC_ICLOUD.to_string(),
+    })
+}
+
+/// (a) `{root}/.dropbox` file or `{root}/.dropbox.cache` dir, OR (b)
+/// any ancestor of root contains `.dropbox.cache`, OR (c) canonicalized
+/// root has prefix `$HOME/Library/CloudStorage/Dropbox`.
+fn detect_dropbox(
+    root: &Path,
+    canon: &Path,
+    home: Option<&Path>,
+    fs: &dyn FsProbe,
+) -> Option<DetectedSyncProvider> {
+    let mut evidence = Vec::new();
+
+    let marker = root.join(".dropbox");
+    if fs.exists(&marker) && !fs.is_dir(&marker) {
+        evidence.push(".dropbox".to_string());
+    }
+    if fs.is_dir(&root.join(".dropbox.cache")) {
+        evidence.push(".dropbox.cache".to_string());
+    }
+
+    // (b) ancestor walk to `/` — a single named-marker existence check
+    // per ancestor, never a read_dir. skip(1): the root itself is
+    // covered by (a).
+    for ancestor in canon.ancestors().skip(1) {
+        let cache = ancestor.join(".dropbox.cache");
+        if fs.is_dir(&cache) {
+            evidence.push(cache.display().to_string());
+        }
+    }
+
+    // (c) macOS file-provider mount, mounted at
+    // `$HOME/Library/CloudStorage/Dropbox`. The normative table is an
+    // exact *path* prefix (`.../CloudStorage/Dropbox`), so this is a
+    // component-exact match via `Path::starts_with` — NOT a
+    // component-`starts_with`. Lookalike CloudStorage siblings like
+    // `DropboxBackups` (or a hypothetical `Dropbox-Acme`) are outside
+    // the contract and must not fire a false Medium-risk Dropbox
+    // detection that could spuriously trip the multi-sync warning.
+    if let Some(home) = home
+        && canon.starts_with(home.join("Library/CloudStorage/Dropbox"))
+    {
+        evidence.push(canon.display().to_string());
+    }
+
+    let evidence = dedup_preserving_order(evidence);
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::Dropbox,
+        evidence_paths: evidence,
+        risk_level: RiskLevel::Medium,
+        recommendation: REC_DROPBOX.to_string(),
+    })
+}
+
+/// (a) canonicalized root contains a component exactly `OneDrive` or
+/// starting `OneDrive-`, OR (b) the OneDrive sync-root marker file
+/// exists at the root.
+fn detect_onedrive(root: &Path, canon: &Path, fs: &dyn FsProbe) -> Option<DetectedSyncProvider> {
+    let mut evidence = Vec::new();
+
+    let has_onedrive_component = canon.components().any(|c| {
+        matches!(c, Component::Normal(name)
+            if name.to_str().is_some_and(|s| s == "OneDrive" || s.starts_with("OneDrive-")))
+    });
+    if has_onedrive_component {
+        evidence.push(canon.display().to_string());
+    }
+    // The normative table's arm (b) is a marker *file*; a directory of
+    // that exact GUID name is a lookalike and must not fire (same
+    // file-vs-directory discipline the Dropbox `.dropbox` and Syncthing
+    // `.stignore` arms enforce — Git is the sole dir-or-file exception,
+    // by explicit spec wording).
+    let marker = root.join(ONEDRIVE_MARKER);
+    if fs.exists(&marker) && !fs.is_dir(&marker) {
+        evidence.push(ONEDRIVE_MARKER.to_string());
+    }
+
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::OneDrive,
+        evidence_paths: evidence,
+        risk_level: RiskLevel::Medium,
+        recommendation: REC_ONEDRIVE.to_string(),
+    })
+}
+
+/// (a) canonicalized root under `$HOME/Library/CloudStorage/GoogleDrive-*`,
+/// OR (b) Drive's transfer-staging dirs exist at the root.
+fn detect_google_drive(
+    root: &Path,
+    canon: &Path,
+    home: Option<&Path>,
+    fs: &dyn FsProbe,
+) -> Option<DetectedSyncProvider> {
+    let mut evidence = Vec::new();
+
+    if let Some(home) = home
+        && cloud_storage_component_starts_with(canon, home, "GoogleDrive-")
+    {
+        evidence.push(canon.display().to_string());
+    }
+    for staging_dir in [".tmp.driveupload", ".tmp.drivedownload"] {
+        if fs.is_dir(&root.join(staging_dir)) {
+            evidence.push(staging_dir.to_string());
+        }
+    }
+
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::GoogleDrive,
+        evidence_paths: evidence,
+        risk_level: RiskLevel::Medium,
+        recommendation: REC_GOOGLE_DRIVE.to_string(),
+    })
+}
+
+/// `{root}/.git` exists — dir **or** file (worktrees use a `.git` file).
+fn detect_git(root: &Path, fs: &dyn FsProbe) -> Option<DetectedSyncProvider> {
+    if !fs.exists(&root.join(".git")) {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::Git,
+        evidence_paths: vec![".git".to_string()],
+        risk_level: RiskLevel::Low,
+        recommendation: REC_GIT.to_string(),
+    })
+}
+
+/// dir `{root}/.stfolder/` or file `{root}/.stignore` exists.
+fn detect_syncthing(root: &Path, fs: &dyn FsProbe) -> Option<DetectedSyncProvider> {
+    let mut evidence = Vec::new();
+    if fs.is_dir(&root.join(".stfolder")) {
+        evidence.push(".stfolder".to_string());
+    }
+    let stignore = root.join(".stignore");
+    if fs.exists(&stignore) && !fs.is_dir(&stignore) {
+        evidence.push(".stignore".to_string());
+    }
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(DetectedSyncProvider {
+        kind: SyncProviderKind::Syncthing,
+        evidence_paths: evidence,
+        risk_level: RiskLevel::Medium,
+        recommendation: REC_SYNCTHING.to_string(),
+    })
+}
+
+/// True when `canon` is under `$HOME/Library/CloudStorage/<component>`
+/// with `<component>` starting with `component_prefix`.
+fn cloud_storage_component_starts_with(canon: &Path, home: &Path, component_prefix: &str) -> bool {
+    let Ok(under_cloud_storage) = canon.strip_prefix(home.join("Library/CloudStorage")) else {
+        return false;
+    };
+    match under_cloud_storage.components().next() {
+        Some(Component::Normal(name)) => name
+            .to_str()
+            .is_some_and(|s| s.starts_with(component_prefix)),
+        _ => false,
+    }
+}
+
+fn dedup_preserving_order(paths: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    paths
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect()
+}
+
+/// "Multiple sync systems…" copy when ≥ 2 providers of risk ≥ Medium
+/// are detected. Git (Low) never appears in — or triggers — the
+/// warning.
+fn multi_sync_warning(providers: &[DetectedSyncProvider]) -> Option<String> {
+    let medium_or_higher: Vec<&str> = providers
+        .iter()
+        .filter(|p| p.risk_level >= RiskLevel::Medium)
+        .map(|p| p.kind.display_name())
+        .collect();
+    if medium_or_higher.len() < 2 {
+        return None;
+    }
+    Some(format!(
+        "Multiple sync systems are managing this vault ({}). Consider disabling all but \
+         one — overlapping sync tools can corrupt each other's state.",
+        medium_or_higher.join(", ")
+    ))
+}
+
+/// Pre-rendered VoiceOver summary, same pattern as
+/// `QueryResultSet::summary`.
+fn audio_summary(providers: &[DetectedSyncProvider], has_multi_sync_warning: bool) -> String {
+    if providers.is_empty() {
+        return "No sync systems detected.".to_string();
+    }
+    let names: Vec<&str> = providers.iter().map(|p| p.kind.display_name()).collect();
+    let mut summary = if providers.len() == 1 {
+        format!("1 sync system detected: {}.", names[0])
+    } else {
+        format!(
+            "{} sync systems detected: {}.",
+            providers.len(),
+            names.join(", ")
+        )
+    };
+    if has_multi_sync_warning {
+        summary.push_str(" Warning: multiple sync systems on one vault.");
+    }
+    summary
+}
+
+// --- Tests ------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Seam fixture: an in-memory filesystem the full detector table
+    /// runs against without touching real `$HOME` or xattrs.
+    #[derive(Default)]
+    struct FakeFs {
+        files: BTreeSet<PathBuf>,
+        dirs: BTreeSet<PathBuf>,
+        xattrs: BTreeMap<PathBuf, Vec<String>>,
+        home: Option<PathBuf>,
+        canonicalize_fails: bool,
+    }
+
+    impl FakeFs {
+        fn with_home(home: &str) -> Self {
+            Self {
+                home: Some(PathBuf::from(home)),
+                ..Self::default()
+            }
+        }
+
+        fn file(mut self, path: &str) -> Self {
+            let path = PathBuf::from(path);
+            self.add_parent_dirs(&path);
+            self.files.insert(path);
+            self
+        }
+
+        fn dir(mut self, path: &str) -> Self {
+            let path = PathBuf::from(path);
+            self.add_parent_dirs(&path);
+            self.dirs.insert(path);
+            self
+        }
+
+        fn xattr(mut self, path: &str, name: &str) -> Self {
+            self.xattrs
+                .entry(PathBuf::from(path))
+                .or_default()
+                .push(name.to_string());
+            self
+        }
+
+        fn canonicalize_fails(mut self) -> Self {
+            self.canonicalize_fails = true;
+            self
+        }
+
+        fn add_parent_dirs(&mut self, path: &Path) {
+            let mut ancestor = path.parent();
+            while let Some(dir) = ancestor {
+                if dir.as_os_str().is_empty() {
+                    break;
+                }
+                self.dirs.insert(dir.to_path_buf());
+                ancestor = dir.parent();
+            }
+        }
+    }
+
+    impl FsProbe for FakeFs {
+        fn exists(&self, path: &Path) -> bool {
+            self.files.contains(path) || self.dirs.contains(path)
+        }
+
+        fn is_dir(&self, path: &Path) -> bool {
+            self.dirs.contains(path)
+        }
+
+        fn read_dir_names(&self, path: &Path) -> Vec<String> {
+            self.files
+                .iter()
+                .chain(self.dirs.iter())
+                .filter(|p| p.parent() == Some(path))
+                .filter_map(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect()
+        }
+
+        fn xattr_names(&self, path: &Path) -> Vec<String> {
+            self.xattrs.get(path).cloned().unwrap_or_default()
+        }
+
+        fn canonicalize(&self, path: &Path) -> Option<PathBuf> {
+            if self.canonicalize_fails {
+                None
+            } else {
+                Some(path.to_path_buf())
+            }
+        }
+
+        fn home(&self) -> Option<PathBuf> {
+            self.home.clone()
+        }
+    }
+
+    const ROOT: &str = "/Users/u/vault";
+
+    fn detect(fs: &FakeFs) -> SyncDetectionReport {
+        detect_with_probe(Path::new(ROOT), fs)
+    }
+
+    fn kinds(report: &SyncDetectionReport) -> Vec<SyncProviderKind> {
+        report.providers.iter().map(|p| p.kind).collect()
+    }
+
+    fn single(report: &SyncDetectionReport, kind: SyncProviderKind) -> DetectedSyncProvider {
+        assert_eq!(
+            kinds(report),
+            vec![kind],
+            "expected exactly one {kind:?} detection, got: {report:#?}"
+        );
+        report.providers[0].clone()
+    }
+
+    // --- LiveSync ------------------------------------------------------
+
+    #[test]
+    fn livesync_fires_on_manifest() {
+        let fs = FakeFs::with_home("/Users/u")
+            .file("/Users/u/vault/.obsidian/plugins/obsidian-livesync/manifest.json");
+        let p = single(&detect(&fs), SyncProviderKind::LiveSync);
+        assert_eq!(
+            p.evidence_paths,
+            vec![".obsidian/plugins/obsidian-livesync/manifest.json"]
+        );
+        assert_eq!(p.risk_level, RiskLevel::High);
+        assert_eq!(p.recommendation, REC_LIVESYNC);
+    }
+
+    #[test]
+    fn livesync_fires_on_data_json() {
+        let fs = FakeFs::with_home("/Users/u")
+            .file("/Users/u/vault/.obsidian/plugins/obsidian-livesync/data.json");
+        let p = single(&detect(&fs), SyncProviderKind::LiveSync);
+        assert_eq!(
+            p.evidence_paths,
+            vec![".obsidian/plugins/obsidian-livesync/data.json"]
+        );
+    }
+
+    #[test]
+    fn livesync_plugin_dir_without_config_files_does_not_fire() {
+        let fs =
+            FakeFs::with_home("/Users/u").dir("/Users/u/vault/.obsidian/plugins/obsidian-livesync");
+        assert!(detect(&fs).providers.is_empty());
+    }
+
+    // --- iCloud Drive ----------------------------------------------------
+
+    #[test]
+    fn icloud_fires_on_mobile_documents_prefix() {
+        let root = "/Users/u/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        let report = detect_with_probe(Path::new(root), &fs);
+        let p = single(&report, SyncProviderKind::ICloudDrive);
+        assert_eq!(p.evidence_paths, vec![root.to_string()]);
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+        assert_eq!(p.recommendation, REC_ICLOUD);
+    }
+
+    #[test]
+    fn icloud_fires_on_fileprovider_xattr_on_ancestor() {
+        let fs = FakeFs::with_home("/Users/u")
+            .dir(ROOT)
+            .xattr("/Users/u", ICLOUD_XATTR_FPFS);
+        let p = single(&detect(&fs), SyncProviderKind::ICloudDrive);
+        assert_eq!(p.evidence_paths, vec!["/Users/u".to_string()]);
+    }
+
+    #[test]
+    fn icloud_fires_on_legacy_clouddocs_xattr_on_root() {
+        let fs = FakeFs::with_home("/Users/u")
+            .dir(ROOT)
+            .xattr(ROOT, "com.apple.clouddocs.security");
+        let p = single(&detect(&fs), SyncProviderKind::ICloudDrive);
+        assert_eq!(p.evidence_paths, vec![ROOT.to_string()]);
+    }
+
+    #[test]
+    fn icloud_xattr_walk_stops_at_home() {
+        // The xattr sits ABOVE $HOME — outside the bounded walk, so it
+        // must not fire.
+        let fs = FakeFs::with_home("/Users/u")
+            .dir(ROOT)
+            .xattr("/Users", ICLOUD_XATTR_FPFS);
+        assert!(detect(&fs).providers.is_empty());
+    }
+
+    #[test]
+    fn icloud_fires_on_placeholder_children() {
+        let fs = FakeFs::with_home("/Users/u")
+            .file("/Users/u/vault/.note.md.icloud")
+            .file("/Users/u/vault/.older.md.icloud");
+        let p = single(&detect(&fs), SyncProviderKind::ICloudDrive);
+        // Sorted for determinism, vault-relative names.
+        assert_eq!(
+            p.evidence_paths,
+            vec![
+                ".note.md.icloud".to_string(),
+                ".older.md.icloud".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn icloud_placeholder_deeper_than_root_does_not_fire() {
+        let fs = FakeFs::with_home("/Users/u").file("/Users/u/vault/sub/.note.md.icloud");
+        assert!(detect(&fs).providers.is_empty());
+    }
+
+    // --- Dropbox ---------------------------------------------------------
+
+    #[test]
+    fn dropbox_fires_on_marker_file() {
+        let fs = FakeFs::with_home("/Users/u").file("/Users/u/vault/.dropbox");
+        let p = single(&detect(&fs), SyncProviderKind::Dropbox);
+        assert_eq!(p.evidence_paths, vec![".dropbox".to_string()]);
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+        assert_eq!(p.recommendation, REC_DROPBOX);
+    }
+
+    #[test]
+    fn dropbox_marker_as_dir_does_not_fire() {
+        // The table says FILE `.dropbox`; a directory of that name is a
+        // lookalike.
+        let fs = FakeFs::with_home("/Users/u").dir("/Users/u/vault/.dropbox");
+        assert!(detect(&fs).providers.is_empty());
+    }
+
+    #[test]
+    fn dropbox_fires_on_cache_dir() {
+        let fs = FakeFs::with_home("/Users/u").dir("/Users/u/vault/.dropbox.cache");
+        let p = single(&detect(&fs), SyncProviderKind::Dropbox);
+        assert_eq!(p.evidence_paths, vec![".dropbox.cache".to_string()]);
+    }
+
+    #[test]
+    fn dropbox_fires_on_ancestor_cache_dir() {
+        let fs = FakeFs::with_home("/Users/u")
+            .dir(ROOT)
+            .dir("/Users/u/.dropbox.cache");
+        let p = single(&detect(&fs), SyncProviderKind::Dropbox);
+        assert_eq!(
+            p.evidence_paths,
+            vec!["/Users/u/.dropbox.cache".to_string()]
+        );
+    }
+
+    #[test]
+    fn dropbox_fires_on_cloudstorage_prefix() {
+        let root = "/Users/u/Library/CloudStorage/Dropbox/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        let report = detect_with_probe(Path::new(root), &fs);
+        let p = single(&report, SyncProviderKind::Dropbox);
+        assert_eq!(p.evidence_paths, vec![root.to_string()]);
+    }
+
+    #[test]
+    fn dropbox_cloudstorage_lookalike_sibling_does_not_fire() {
+        // The normative table's arm (c) is an exact path prefix
+        // `$HOME/Library/CloudStorage/Dropbox` (component-exact
+        // "Dropbox"). A sibling CloudStorage folder whose component
+        // merely *starts with* "Dropbox" is a lookalike outside the
+        // contract — it must NOT produce a false Medium Dropbox
+        // detection.
+        let root = "/Users/u/Library/CloudStorage/DropboxBackups/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        assert!(
+            detect_with_probe(Path::new(root), &fs).providers.is_empty(),
+            "DropboxBackups is a CloudStorage lookalike, not a Dropbox mount"
+        );
+    }
+
+    // --- OneDrive --------------------------------------------------------
+
+    #[test]
+    fn onedrive_fires_on_exact_path_component() {
+        let root = "/Users/u/OneDrive/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        let report = detect_with_probe(Path::new(root), &fs);
+        let p = single(&report, SyncProviderKind::OneDrive);
+        assert_eq!(p.evidence_paths, vec![root.to_string()]);
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+        assert_eq!(p.recommendation, REC_ONEDRIVE);
+    }
+
+    #[test]
+    fn onedrive_fires_on_dashed_path_component() {
+        let root = "/Users/u/OneDrive-Contoso/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        single(
+            &detect_with_probe(Path::new(root), &fs),
+            SyncProviderKind::OneDrive,
+        );
+    }
+
+    #[test]
+    fn onedrive_component_prefix_without_dash_does_not_fire() {
+        // "OneDriveBackup" is neither exactly "OneDrive" nor
+        // "OneDrive-" prefixed.
+        let root = "/Users/u/OneDriveBackup/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        assert!(detect_with_probe(Path::new(root), &fs).providers.is_empty());
+    }
+
+    #[test]
+    fn onedrive_fires_on_sync_root_marker_file() {
+        let fs = FakeFs::with_home("/Users/u")
+            .file("/Users/u/vault/.849C9593-D756-4E56-8D6E-42412F2A707B");
+        let p = single(&detect(&fs), SyncProviderKind::OneDrive);
+        assert_eq!(p.evidence_paths, vec![ONEDRIVE_MARKER.to_string()]);
+    }
+
+    #[test]
+    fn onedrive_marker_as_dir_does_not_fire() {
+        // The table says marker FILE; a directory of that exact GUID
+        // name is a lookalike (mirrors the Dropbox/Syncthing
+        // file-vs-directory discipline).
+        let fs = FakeFs::with_home("/Users/u")
+            .dir("/Users/u/vault/.849C9593-D756-4E56-8D6E-42412F2A707B");
+        assert!(detect(&fs).providers.is_empty());
+    }
+
+    // --- Google Drive ------------------------------------------------------
+
+    #[test]
+    fn google_drive_fires_on_cloudstorage_prefix() {
+        let root = "/Users/u/Library/CloudStorage/GoogleDrive-cj@example.com/My Drive/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root);
+        let report = detect_with_probe(Path::new(root), &fs);
+        let p = single(&report, SyncProviderKind::GoogleDrive);
+        assert_eq!(p.evidence_paths, vec![root.to_string()]);
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+        assert_eq!(p.recommendation, REC_GOOGLE_DRIVE);
+    }
+
+    #[test]
+    fn google_drive_fires_on_staging_dirs() {
+        let fs = FakeFs::with_home("/Users/u")
+            .dir("/Users/u/vault/.tmp.driveupload")
+            .dir("/Users/u/vault/.tmp.drivedownload");
+        let p = single(&detect(&fs), SyncProviderKind::GoogleDrive);
+        assert_eq!(
+            p.evidence_paths,
+            vec![
+                ".tmp.driveupload".to_string(),
+                ".tmp.drivedownload".to_string()
+            ]
+        );
+    }
+
+    // --- Git ----------------------------------------------------------------
+
+    #[test]
+    fn git_fires_on_git_dir() {
+        let fs = FakeFs::with_home("/Users/u").dir("/Users/u/vault/.git");
+        let p = single(&detect(&fs), SyncProviderKind::Git);
+        assert_eq!(p.evidence_paths, vec![".git".to_string()]);
+        assert_eq!(p.risk_level, RiskLevel::Low);
+        assert_eq!(p.recommendation, REC_GIT);
+    }
+
+    #[test]
+    fn git_fires_on_git_file() {
+        // Worktrees use a `.git` FILE pointing at the real gitdir.
+        let fs = FakeFs::with_home("/Users/u").file("/Users/u/vault/.git");
+        single(&detect(&fs), SyncProviderKind::Git);
+    }
+
+    // --- Syncthing ------------------------------------------------------------
+
+    #[test]
+    fn syncthing_fires_on_stfolder() {
+        let fs = FakeFs::with_home("/Users/u").dir("/Users/u/vault/.stfolder");
+        let p = single(&detect(&fs), SyncProviderKind::Syncthing);
+        assert_eq!(p.evidence_paths, vec![".stfolder".to_string()]);
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+        assert_eq!(p.recommendation, REC_SYNCTHING);
+    }
+
+    #[test]
+    fn syncthing_fires_on_stignore() {
+        let fs = FakeFs::with_home("/Users/u").file("/Users/u/vault/.stignore");
+        let p = single(&detect(&fs), SyncProviderKind::Syncthing);
+        assert_eq!(p.evidence_paths, vec![".stignore".to_string()]);
+    }
+
+    // --- Cross-cutting rules -----------------------------------------------
+
+    #[test]
+    fn home_unset_skips_prefix_probes_but_marker_probes_still_run() {
+        let root = "/Users/u/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault";
+        let fs = FakeFs::default().dir(root).dir(&format!("{root}/.git"));
+        let report = detect_with_probe(Path::new(root), &fs);
+        // Location says iCloud, but with no $HOME the prefix probe is
+        // skipped; the in-vault Git marker still fires.
+        assert_eq!(kinds(&report), vec![SyncProviderKind::Git]);
+    }
+
+    #[test]
+    fn canonicalize_failure_degrades_to_raw_path() {
+        let root = "/Users/u/OneDrive/vault";
+        let fs = FakeFs::with_home("/Users/u").dir(root).canonicalize_fails();
+        // Path-component probe still sees the raw path.
+        single(
+            &detect_with_probe(Path::new(root), &fs),
+            SyncProviderKind::OneDrive,
+        );
+    }
+
+    #[test]
+    fn multi_sync_warning_fires_for_two_medium_or_higher() {
+        let fs = FakeFs::with_home("/Users/u")
+            .file("/Users/u/vault/.obsidian/plugins/obsidian-livesync/manifest.json")
+            .file("/Users/u/vault/.note.md.icloud");
+        let report = detect(&fs);
+        assert_eq!(
+            kinds(&report),
+            vec![SyncProviderKind::LiveSync, SyncProviderKind::ICloudDrive]
+        );
+        let warning = report.multi_sync_warning.expect("warning expected");
+        assert_eq!(
+            warning,
+            "Multiple sync systems are managing this vault (LiveSync, iCloud Drive). \
+             Consider disabling all but one — overlapping sync tools can corrupt each \
+             other's state."
+        );
+        assert_eq!(
+            report.audio_summary,
+            "2 sync systems detected: LiveSync, iCloud Drive. Warning: multiple sync \
+             systems on one vault."
+        );
+    }
+
+    #[test]
+    fn git_plus_icloud_yields_no_multi_sync_warning() {
+        // Git is Low risk; the rule is ≥ 2 providers of risk ≥ Medium.
+        let fs = FakeFs::with_home("/Users/u")
+            .dir("/Users/u/vault/.git")
+            .file("/Users/u/vault/.note.md.icloud");
+        let report = detect(&fs);
+        assert_eq!(
+            kinds(&report),
+            vec![SyncProviderKind::ICloudDrive, SyncProviderKind::Git]
+        );
+        assert_eq!(report.multi_sync_warning, None);
+        assert_eq!(
+            report.audio_summary,
+            "2 sync systems detected: iCloud Drive, Git."
+        );
+    }
+
+    #[test]
+    fn dropbox_plus_icloud_yields_multi_sync_warning() {
+        let fs = FakeFs::with_home("/Users/u")
+            .file("/Users/u/vault/.dropbox")
+            .file("/Users/u/vault/.note.md.icloud");
+        let report = detect(&fs);
+        let warning = report.multi_sync_warning.expect("warning expected");
+        // iCloud sorts before Dropbox in table order.
+        assert!(warning.contains("(iCloud Drive, Dropbox)"), "{warning}");
+        // Git absent from the warning even when present in providers:
+        // pinned by git_plus_icloud test; here both participants are
+        // Medium.
+    }
+
+    #[test]
+    fn all_seven_systems_detected_in_table_order() {
+        let root = "/Users/u/Library/CloudStorage/GoogleDrive-x/OneDrive-y/vault";
+        let fs = FakeFs::with_home("/Users/u")
+            .file(&format!(
+                "{root}/.obsidian/plugins/obsidian-livesync/manifest.json"
+            ))
+            .file(&format!("{root}/.note.md.icloud"))
+            .file(&format!("{root}/.dropbox"))
+            .dir(&format!("{root}/.git"))
+            .dir(&format!("{root}/.stfolder"));
+        // Location covers GoogleDrive (CloudStorage prefix) and
+        // OneDrive (path component); in-vault markers cover the rest.
+        let report = detect_with_probe(Path::new(root), &fs);
+        assert_eq!(
+            kinds(&report),
+            vec![
+                SyncProviderKind::LiveSync,
+                SyncProviderKind::ICloudDrive,
+                SyncProviderKind::Dropbox,
+                SyncProviderKind::OneDrive,
+                SyncProviderKind::GoogleDrive,
+                SyncProviderKind::Git,
+                SyncProviderKind::Syncthing,
+            ]
+        );
+        assert_eq!(
+            report.audio_summary,
+            "7 sync systems detected: LiveSync, iCloud Drive, Dropbox, OneDrive, \
+             Google Drive, Git, Syncthing. Warning: multiple sync systems on one vault."
+        );
+        assert!(report.multi_sync_warning.is_some());
+        // Git appears in providers but never in the warning copy.
+        assert!(
+            !report
+                .multi_sync_warning
+                .as_deref()
+                .unwrap()
+                .contains("Git")
+        );
+    }
+
+    #[test]
+    fn audio_summary_singular_form() {
+        let fs = FakeFs::with_home("/Users/u").file("/Users/u/vault/.note.md.icloud");
+        assert_eq!(
+            detect(&fs).audio_summary,
+            "1 sync system detected: iCloud Drive."
+        );
+    }
+
+    #[test]
+    fn empty_vault_detects_nothing() {
+        let fs = FakeFs::with_home("/Users/u").dir(ROOT);
+        let report = detect(&fs);
+        assert!(report.providers.is_empty());
+        assert_eq!(report.multi_sync_warning, None);
+        assert_eq!(report.audio_summary, "No sync systems detected.");
+        assert!(report.supported);
+    }
+
+    // --- Real-filesystem integration (marker-file arms only; the
+    // xattr/$HOME-prefix arms are seam-tested above — CI runners can't
+    // plant xattrs reliably) -------------------------------------------
+
+    #[test]
+    fn real_fs_detects_planted_markers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let plugin = root.join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("manifest.json"), "{}").unwrap();
+        std::fs::write(root.join(".note.md.icloud"), "").unwrap();
+        std::fs::write(root.join(".dropbox"), "").unwrap();
+        std::fs::write(root.join(ONEDRIVE_MARKER), "").unwrap();
+        std::fs::create_dir(root.join(".tmp.driveupload")).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::write(root.join(".stignore"), "").unwrap();
+
+        let report = detect_sync_providers(root);
+        assert_eq!(
+            kinds(&report),
+            vec![
+                SyncProviderKind::LiveSync,
+                SyncProviderKind::ICloudDrive,
+                SyncProviderKind::Dropbox,
+                SyncProviderKind::OneDrive,
+                SyncProviderKind::GoogleDrive,
+                SyncProviderKind::Git,
+                SyncProviderKind::Syncthing,
+            ]
+        );
+        assert!(report.supported);
+    }
+
+    #[test]
+    fn real_fs_git_file_worktree_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".git"),
+            "gitdir: /elsewhere/.git/worktrees/x",
+        )
+        .unwrap();
+        let report = detect_sync_providers(tmp.path());
+        assert_eq!(kinds(&report), vec![SyncProviderKind::Git]);
+    }
+
+    #[test]
+    fn real_fs_clean_vault_detects_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("note.md"), "# hi").unwrap();
+        let report = detect_sync_providers(tmp.path());
+        assert!(
+            report.providers.is_empty(),
+            "clean tempdir vault must produce zero detections, got: {report:#?}"
+        );
+    }
+
+    // --- Negative census -------------------------------------------------
+
+    /// Deterministic split-mix RNG (census convention, no rand dep).
+    struct SplitMix64(u64);
+    impl SplitMix64 {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    fn census_scale() -> u64 {
+        if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+            10_000
+        } else {
+            2_000
+        }
+    }
+
+    /// 10k randomized lookalike vaults (SLATE_CENSUS_FULL=1; 2k in the
+    /// default dev run) → zero detections on every one. The lookalike
+    /// list is part of the fixture — extended whenever a false positive
+    /// is ever found in the wild.
+    #[test]
+    fn census_sync_detect_no_false_positives() {
+        // (name, is_dir) — every entry is a near-miss for some probe.
+        const LOOKALIKES: &[(&str, bool)] = &[
+            ("dropbox-notes.md", false),
+            ("git", true),
+            ("stfolder.md", false),
+            ("OneDriveBackup.md", false), // a FILE named like the component
+            (".gitignore", false),
+            (".obsidian/plugins/other-plugin", true),
+            (".obsidian/plugins/obsidian-livesync-notes", true), // prefix lookalike
+            ("Dropbox", true),                                   // plain dir, not the marker file
+            ("dropbox.cache", true),                             // missing the leading dot
+            ("tmp.driveupload", true),                           // missing the leading dot
+            ("notes-icloud.md", false),                          // contains "icloud", wrong suffix
+            ("icloud", true),
+            ("stignore", false), // missing the leading dot
+            (".stversions-notes.md", false),
+            ("OneDrive.md", false),
+            (".849C9593-D756-4E56-8D6E-42412F2A707B-backup", false), // suffix ruins the marker
+            (".849C9593-D756-4E56-8D6E-42412F2A707B", true), // exact GUID name but a DIR, not the file marker
+            ("GoogleDrive-stuff", true), // component under the vault, not CloudStorage
+            ("Library/Mobile Documents-notes", true),
+        ];
+        const NESTS: &[&str] = &["", "notes", "daily/2026", "projects/alpha/deep"];
+
+        let mut rng = SplitMix64(0x5EED_5EED);
+        for i in 0..census_scale() {
+            let root = PathBuf::from(format!("/Users/u/vaults/v{i}"));
+            let mut fs = FakeFs::with_home("/Users/u").dir(root.to_str().unwrap());
+            let entries = rng.below(8) + 1;
+            for _ in 0..entries {
+                let (name, is_dir) = LOOKALIKES[rng.below(LOOKALIKES.len())];
+                let nest = NESTS[rng.below(NESTS.len())];
+                let path = if nest.is_empty() {
+                    root.join(name)
+                } else {
+                    root.join(nest).join(name)
+                };
+                let path = path.to_str().unwrap().to_string();
+                fs = if is_dir {
+                    fs.dir(&path)
+                } else {
+                    fs.file(&path)
+                };
+            }
+            let report = detect_with_probe(&root, &fs);
+            assert!(
+                report.providers.is_empty(),
+                "census vault v{i} produced a false positive: {report:#?}"
+            );
+            assert_eq!(report.audio_summary, "No sync systems detected.");
+        }
+    }
+}
