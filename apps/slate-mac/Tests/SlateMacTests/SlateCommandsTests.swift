@@ -1020,3 +1020,28 @@ final class SlateCommandsTests: XCTestCase {
         }
     }
 }
+
+/// #526: docs/help/canvas.md's shortcut table drifts against the
+/// registry — every canvas-section command with a hotkey must appear
+/// in the doc with that exact chord.
+@MainActor
+extension SlateCommandsTests {
+    func testCanvasHelpDocCarriesEveryCanvasChord() throws {
+        let docURL = Self.projectRoot
+            .appendingPathComponent("docs")
+            .appendingPathComponent("help")
+            .appendingPathComponent("canvas.md")
+        let doc = try String(contentsOf: docURL, encoding: .utf8)
+        let appState = AppState()
+        let canvasChords = appState.commandRegistry.list()
+            .filter { $0.section == .canvas }
+            .compactMap { command in command.hotkeyHint.map { (command.label, $0) } }
+        XCTAssertFalse(canvasChords.isEmpty, "registry lists canvas chords")
+        for (label, hotkey) in canvasChords {
+            XCTAssertTrue(
+                doc.contains(hotkey),
+                "docs/help/canvas.md is missing the chord \(hotkey) (\(label)) — update the reference table"
+            )
+        }
+    }
+}
