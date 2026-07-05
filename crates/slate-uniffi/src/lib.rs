@@ -897,6 +897,16 @@ impl VaultSession {
             .map(Into::into)
             .collect())
     }
+
+    /// Detect external sync systems managing this vault (M-1, #532).
+    ///
+    /// Filesystem-probe based (sync markers never reach the index).
+    /// Sessions without a filesystem root return a report with
+    /// `supported == false` rather than an error. Synchronous and
+    /// cheap; dispatch off the UI thread like any FFI call.
+    pub fn detect_sync(&self) -> Result<SyncDetectionReport, VaultError> {
+        Ok(self.inner.detect_sync()?.into())
+    }
 }
 
 /// Cooperative cancellation token exposed to foreign callers.
@@ -930,6 +940,107 @@ impl CancelToken {
     /// want to short-circuit work before invoking an FFI call.
     pub fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
+    }
+}
+
+// --- Milestone M sync detection (M-1, #532) ---------------------------
+
+/// Mirrors `slate_core::sync_detect::SyncProviderKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SyncProviderKind {
+    LiveSync,
+    ICloudDrive,
+    Dropbox,
+    OneDrive,
+    GoogleDrive,
+    Git,
+    Syncthing,
+}
+
+impl From<core::sync_detect::SyncProviderKind> for SyncProviderKind {
+    fn from(k: core::sync_detect::SyncProviderKind) -> Self {
+        use core::sync_detect::SyncProviderKind as K;
+        match k {
+            K::LiveSync => Self::LiveSync,
+            K::ICloudDrive => Self::ICloudDrive,
+            K::Dropbox => Self::Dropbox,
+            K::OneDrive => Self::OneDrive,
+            K::GoogleDrive => Self::GoogleDrive,
+            K::Git => Self::Git,
+            K::Syncthing => Self::Syncthing,
+        }
+    }
+}
+
+/// Mirrors `slate_core::sync_detect::RiskLevel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<core::sync_detect::RiskLevel> for RiskLevel {
+    fn from(r: core::sync_detect::RiskLevel) -> Self {
+        use core::sync_detect::RiskLevel as R;
+        match r {
+            R::Low => Self::Low,
+            R::Medium => Self::Medium,
+            R::High => Self::High,
+        }
+    }
+}
+
+/// Mirrors `slate_core::sync_detect::DetectedSyncProvider`, plus the
+/// pre-rendered `display_name` — uniffi enums can't carry methods, and
+/// the normative display-name table must stay in core (single source
+/// for the M-3 row labels and CLI output).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DetectedSyncProvider {
+    pub kind: SyncProviderKind,
+    pub display_name: String,
+    /// Vault-relative when the marker is inside the vault; absolute
+    /// when it is an ancestor/location signal.
+    pub evidence_paths: Vec<String>,
+    pub risk_level: RiskLevel,
+    /// Full recommendation sentence(s) — exact user-facing copy.
+    pub recommendation: String,
+}
+
+impl From<core::sync_detect::DetectedSyncProvider> for DetectedSyncProvider {
+    fn from(p: core::sync_detect::DetectedSyncProvider) -> Self {
+        Self {
+            display_name: p.kind.display_name().to_string(),
+            kind: p.kind.into(),
+            evidence_paths: p.evidence_paths,
+            risk_level: p.risk_level.into(),
+            recommendation: p.recommendation,
+        }
+    }
+}
+
+/// Mirrors `slate_core::sync_detect::SyncDetectionReport`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SyncDetectionReport {
+    /// Detector-table order, deterministic.
+    pub providers: Vec<DetectedSyncProvider>,
+    /// `Some(copy)` when ≥ 2 providers with risk ≥ Medium are detected.
+    pub multi_sync_warning: Option<String>,
+    /// Pre-rendered VoiceOver summary.
+    pub audio_summary: String,
+    /// `false` when the session has no filesystem root: detection
+    /// unsupported, `providers` empty.
+    pub supported: bool,
+}
+
+impl From<core::sync_detect::SyncDetectionReport> for SyncDetectionReport {
+    fn from(r: core::sync_detect::SyncDetectionReport) -> Self {
+        Self {
+            providers: r.providers.into_iter().map(Into::into).collect(),
+            multi_sync_warning: r.multi_sync_warning,
+            audio_summary: r.audio_summary,
+            supported: r.supported,
+        }
     }
 }
 

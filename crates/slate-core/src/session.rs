@@ -2474,18 +2474,44 @@ impl VaultSession {
         Ok(out)
     }
 
-    /// Resolve the vault root for bibliography path resolution.
-    /// `.slate` is always at `<root>/.slate`, so the cache dir's
-    /// parent is the canonical lookup. Errors only if `cache_dir`
-    /// itself has no parent — defensive for in-memory test setups.
-    fn vault_root_for_bibliography(&self) -> Result<std::path::PathBuf, VaultError> {
+    /// Filesystem root of the vault, when the session has one.
+    ///
+    /// `.slate` is always at `<root>/.slate` (locked storage layout),
+    /// so the cache dir's parent is the canonical derivation — the ONE
+    /// rooted-ness convention shared by every filesystem-facing
+    /// feature (bibliography, sync detection), so a session is never
+    /// "rooted" for one and "unsupported" for another. `None` when
+    /// `cache_dir` has no parent or an empty one (a bare relative
+    /// path) — provider-abstracted/in-memory setups, where resolving
+    /// vault paths against the process CWD would be meaningless.
+    fn fs_root(&self) -> Option<std::path::PathBuf> {
         self.config
             .cache_dir
             .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .map(std::path::Path::to_path_buf)
-            .ok_or_else(|| VaultError::Unsupported {
-                feature: "bibliography on non-filesystem vault".to_string(),
-            })
+    }
+
+    /// Resolve the vault root for bibliography path resolution.
+    fn vault_root_for_bibliography(&self) -> Result<std::path::PathBuf, VaultError> {
+        self.fs_root().ok_or_else(|| VaultError::Unsupported {
+            feature: "bibliography on non-filesystem vault".to_string(),
+        })
+    }
+
+    /// Detect external sync systems managing this vault (M-1, #532).
+    ///
+    /// Filesystem-probe based — sync markers are dot-prefixed and the
+    /// scanner skips hidden entries, so the index can never see them.
+    /// Sessions without a filesystem root return a report with
+    /// `supported == false` rather than an error: the host renders
+    /// from the flag. Synchronous and cheap (bounded exact-path
+    /// probes); callers dispatch off-main like any FFI call.
+    pub fn detect_sync(&self) -> Result<crate::sync_detect::SyncDetectionReport, VaultError> {
+        match self.fs_root() {
+            Some(root) => Ok(crate::sync_detect::detect_sync_providers(&root)),
+            None => Ok(crate::sync_detect::SyncDetectionReport::unsupported()),
+        }
     }
 
     /// Every bibliography entry currently indexed, ordered by year
@@ -5610,6 +5636,9 @@ mod tests {
 
     #[path = "misc.rs"]
     mod misc;
+
+    #[path = "sync.rs"]
+    mod sync;
 
     #[path = "citations.rs"]
     mod citations;
