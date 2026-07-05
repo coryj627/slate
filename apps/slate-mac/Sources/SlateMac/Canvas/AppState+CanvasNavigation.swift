@@ -184,6 +184,68 @@ extension AppState {
                 marked: doc.selection.marked.contains(nodeId)))
     }
 
+    // MARK: Viewport commands (#520)
+
+    private func announceZoom(_ doc: CanvasDocument) {
+        canvasAnnouncer.announce(.status("Zoom \(doc.viewport.zoomPercent) percent."))
+    }
+
+    func canvasZoomIn() {
+        guard let doc = activeCanvasDocument else { return }
+        doc.viewport.zoom(by: CanvasViewport.zoomStep)
+        announceZoom(doc)
+    }
+
+    func canvasZoomOut() {
+        guard let doc = activeCanvasDocument else { return }
+        doc.viewport.zoom(by: 1 / CanvasViewport.zoomStep)
+        announceZoom(doc)
+    }
+
+    func canvasActualSize() {
+        guard let doc = activeCanvasDocument else { return }
+        doc.viewport.setScale(1.0)
+        announceZoom(doc)
+    }
+
+    func canvasFitCanvas() {
+        guard let doc = activeCanvasDocument, !doc.scene.nodes.isEmpty else { return }
+        var rect = CGRect.null
+        for node in doc.scene.nodes {
+            rect = rect.union(
+                CGRect(x: node.x, y: node.y, width: node.width, height: node.height))
+        }
+        doc.viewport.fit(rect: rect)
+        canvasAnnouncer.announce(
+            .status("Fit canvas. Zoom \(doc.viewport.zoomPercent) percent."))
+    }
+
+    func canvasZoomToSelection() {
+        guard let doc = activeCanvasDocument else { return }
+        guard let selected = doc.selection.selected,
+            let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
+        else {
+            canvasAnnouncer.announce(.status("Nothing selected."))
+            return
+        }
+        doc.viewport.fit(
+            rect: CGRect(x: node.x, y: node.y, width: node.width, height: node.height),
+            padding: 120)
+        canvasAnnouncer.announce(
+            .status("Zoomed to selection. Zoom \(doc.viewport.zoomPercent) percent."))
+    }
+
+    /// Viewport-follows-selection toggle (default ON; the auto-pan
+    /// itself stays silent — t0 §1.5 no-doubling).
+    func canvasToggleFollowSelection() {
+        guard let doc = activeCanvasDocument else { return }
+        doc.viewport.followSelection.toggle()
+        canvasAnnouncer.announce(
+            .status(
+                doc.viewport.followSelection
+                    ? "Viewport follows selection." : "Viewport stays put."))
+    }
+
     /// The per-document mode controller (t0 §2), created on first use.
     /// Focus departure and Esc route through the container.
     func canvasModeController(for doc: CanvasDocument) -> CanvasModeController {
