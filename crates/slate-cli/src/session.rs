@@ -51,6 +51,17 @@ pub enum CliError {
     CacheBusy,
     /// The operation was cancelled by Ctrl-C (exit 130).
     Cancelled,
+    /// A command-level usage error surfaced *after* clap parsing (exit
+    /// 2) — e.g. `render-template --format tsv`, which clap can't reject
+    /// because `tsv` is a valid `--format` value, but which is
+    /// meaningless for a document body. Carries the message printed on
+    /// stderr (with the global `slate: ` prefix).
+    Usage { message: String },
+    /// `render-template --strict` found unfilled `{{prompt:…}}` markers
+    /// (exit 1). The per-prompt `slate: warning: unfilled prompt 'Label'`
+    /// lines were already emitted to stderr; this is the terminal
+    /// "refusing to render with gaps" summary.
+    StrictUnfilledPrompts { count: usize },
     /// Any other `VaultError` — surfaced with its `Display` text (exit
     /// 1). Every command's message is informative because `VaultError`
     /// already carries a specific message per variant.
@@ -71,6 +82,14 @@ impl std::fmt::Display for CliError {
                 "vault cache is busy (is Slate open?) — retry in a moment"
             ),
             CliError::Cancelled => write!(f, "cancelled"),
+            CliError::Usage { message } => write!(f, "{message}"),
+            CliError::StrictUnfilledPrompts { count } => {
+                let plural = if *count == 1 { "prompt" } else { "prompts" };
+                write!(
+                    f,
+                    "{count} unfilled {plural} (--strict); supply every --prompt or drop --strict"
+                )
+            }
             CliError::Vault(e) => write!(f, "{e}"),
             CliError::Io(e) => write!(f, "{e}"),
         }

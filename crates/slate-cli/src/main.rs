@@ -32,6 +32,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Parser, Subcommand};
 
+use commands::render_template::parse_prompt_kv;
+use commands::tasks::TaskFilterChoice;
 use output::{CommandOutput, OutputFormat, emit};
 use session::CliError;
 use slate_core::session::CancelToken;
@@ -40,6 +42,9 @@ use slate_core::session::CancelToken;
 const EXIT_CANCELLED: u8 = 130;
 /// Exit code for a runtime error.
 const EXIT_RUNTIME: u8 = 1;
+/// Exit code for a usage error surfaced after clap parsing (matches
+/// clap's own usage exit code — see the global contract in §M-4).
+const EXIT_USAGE: u8 = 2;
 
 /// The `slate` command-line interface to a Slate vault.
 ///
@@ -70,6 +75,46 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
         format: OutputFormat,
     },
+    /// List a vault's Markdown tasks, filtered by a due-date window.
+    ///
+    /// Due-date windows use UTC calendar days, matching how Slate stores
+    /// and displays due dates.
+    Tasks {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Which due-date window to show (default: all).
+        #[arg(long, value_enum, default_value_t = TaskFilterChoice::default())]
+        filter: TaskFilterChoice,
+        /// Include completed tasks (ignored for --filter overdue, which
+        /// always excludes completed tasks).
+        #[arg(long)]
+        include_completed: bool,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
+    /// Render a vault template and print the resulting note body.
+    RenderTemplate {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Vault-relative path to the template (e.g. Templates/Daily.md).
+        template_path: String,
+        /// A prompt response as key=value (split at the first '='; repeat
+        /// for multiple). The key is the template's prompt slug.
+        #[arg(long = "prompt", value_parser = parse_prompt_kv)]
+        prompts: Vec<(String, String)>,
+        /// Title for {{title}} (defaults to the template's file stem).
+        #[arg(long)]
+        title: Option<String>,
+        /// Fail (exit 1) if any {{prompt:…}} marker is left unfilled,
+        /// instead of warning and rendering the marker literally.
+        #[arg(long)]
+        strict: bool,
+        /// Output format (tsv is rejected — a document body is not a
+        /// table).
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
 }
 
 impl Command {
@@ -78,6 +123,8 @@ impl Command {
         match self {
             Command::Open { .. } => "open",
             Command::SyncCheck { .. } => "sync-check",
+            Command::Tasks { .. } => "tasks",
+            Command::RenderTemplate { .. } => "render-template",
         }
     }
 }
@@ -125,6 +172,9 @@ fn main() -> ExitCode {
             // interrupt is the user's own action, not a fault.
             ExitCode::from(EXIT_CANCELLED)
         }
+        // A post-parse usage error (e.g. `render-template --format tsv`)
+        // exits 2, matching clap's own usage exit code.
+        Err(e @ CliError::Usage { .. }) => fail(EXIT_USAGE, &e),
         Err(e) => fail(EXIT_RUNTIME, &e),
     }
 }
@@ -142,6 +192,37 @@ fn dispatch(
         }
         Command::SyncCheck { vault_path, format } => {
             let (vault, output) = commands::sync_check::run(&vault_path)?;
+            Ok((vault, format, output))
+        }
+        Command::Tasks {
+            vault_path,
+            filter,
+            include_completed,
+            format,
+        } => {
+            let (vault, output) =
+                commands::tasks::run(&vault_path, filter, include_completed, cancel)?;
+            Ok((vault, format, output))
+        }
+        Command::RenderTemplate {
+            vault_path,
+            template_path,
+            prompts,
+            title,
+            strict,
+            format,
+        } => {
+            // `format` is passed into `run` so the tsv rejection is a
+            // usage error (exit 2) decided before any work; it's also
+            // returned for `emit` (json/human only reach the emit step).
+            let (vault, output) = commands::render_template::run(
+                &vault_path,
+                &template_path,
+                &prompts,
+                title.as_deref(),
+                strict,
+                format,
+            )?;
             Ok((vault, format, output))
         }
     }

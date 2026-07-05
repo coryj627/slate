@@ -64,7 +64,15 @@ pub fn run(raw_path: &Path) -> Result<(String, CommandOutput), CliError> {
     let human = render_human(&report, &livesync);
     let tsv = render_tsv(&report);
 
-    Ok((abs_path, CommandOutput { data, human, tsv }))
+    Ok((
+        abs_path,
+        CommandOutput {
+            data,
+            human,
+            tsv,
+            human_verbatim: false,
+        },
+    ))
 }
 
 // --- Wire-string slugs (the `slate.cli.v1` contract) -----------------
