@@ -785,23 +785,37 @@ fn parse_livesync_config(bytes: &[u8]) -> LiveSyncConfigStatus {
 /// then **validate** the remaining `host[:port]` against a strict
 /// grammar and fail closed on anything that isn't host-shaped.
 ///
-/// The validation is a credential-safety guard, not cosmetics: a
-/// malformed URI like `https://alice:hunter2/x@host/db` has its
-/// authority terminated by the `/` at `alice:hunter2` (RFC 3986), so a
-/// naive "drop up to `@`" would return the userinfo `alice:hunter2` —
-/// leaking the password. Requiring a valid `host[:port]` shape makes
-/// every such case return `None` instead. Extraction/validation
-/// failure → `None` (the config still parses).
+/// The validation is a credential-safety guard, not cosmetics. Two
+/// malformed shapes both leak userinfo without care:
+/// - `https://alice:hunter2/x@host/db` — the `/` terminates the
+///   authority at `alice:hunter2` (RFC 3986); a naive "drop up to `@`"
+///   would return the userinfo `alice:hunter2`.
+/// - `https://alice:1234/x@host/db` — worse, `alice:1234` *looks like*
+///   a valid `host:port`, so a shape check alone still emits the
+///   password `1234`.
+///
+/// Both are caught the same way: a `@` that appears **after** the first
+/// path delimiter proves userinfo was stranded by a malformed
+/// authority, so the whole extraction fails closed. Combined with the
+/// strict `host[:port]` shape check on the userinfo-stripped authority,
+/// no userinfo can surface. Extraction/validation failure → `None`
+/// (the config still parses).
 fn extract_host(uri: &str) -> Option<String> {
     let after_scheme = uri.trim().split_once("://")?.1;
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+    let (authority, rest) = match after_scheme.find(['/', '?', '#']) {
+        Some(i) => (&after_scheme[..i], &after_scheme[i..]),
+        None => (after_scheme, ""),
+    };
+    // A stray `@` in the part past the authority delimiter means the
+    // URI's userinfo was split off by that delimiter (malformed) — the
+    // `alice:1234/x@host` leak. Refuse to guess: fail closed.
+    if rest.contains('@') {
+        return None;
+    }
     // Drop userinfo up to and including the last `@` within the
-    // authority. Any `@` that lived past the first path delimiter is
-    // already gone (it's in the path, not the authority) — so a
-    // leftover userinfo colon-pair is caught by the validator below.
+    // authority. Whatever remains must still pass the strict shape
+    // check below (userinfo colon-pairs that aren't host-shaped are
+    // rejected there).
     let host = match authority.rfind('@') {
         Some(at) => &authority[at + 1..],
         None => authority,
@@ -1774,28 +1788,63 @@ mod tests {
     /// the password. Strict `host[:port]` validation fails closed here.
     #[test]
     fn livesync_extract_host_fails_closed_on_userinfo_leak() {
-        // `/` before `@`: authority is `alice:hunter2` — NOT a valid
-        // host:port (port isn't digits) → None, no `hunter2` leak.
+        // A `@` stranded after the first authority delimiter means the
+        // userinfo was split off by a malformed authority → fail closed,
+        // for `/`, `?`, and `#`, whether the password is alphabetic…
         assert_eq!(
             extract_host("https://alice:hunter2/extra@couch.example.com/db"),
             None
         );
-        // `?` before `@`: same shape.
         assert_eq!(
             extract_host("https://alice:hunter2?x@couch.example.com/db"),
             None
         );
-        // `#` before `@`.
         assert_eq!(
             extract_host("https://alice:hunter2#f@couch.example.com/db"),
+            None
+        );
+        // …or NUMERIC — the dangerous case, since `alice:1234` on its own
+        // is shaped exactly like a valid `host:port`. The stranded `@`
+        // is what proves it's userinfo; without this guard `1234` would
+        // leak (adversarial-review r3 finding).
+        assert_eq!(
+            extract_host("https://alice:1234/extra@couch.example.com/db"),
+            None
+        );
+        assert_eq!(
+            extract_host("https://alice:1234?x@couch.example.com/db"),
+            None
+        );
+        assert_eq!(
+            extract_host("https://alice:1234#f@couch.example.com/db"),
             None
         );
         // Whitespace / control characters are not host-shaped → None.
         assert_eq!(extract_host("https://ali ce@host .com"), None);
         assert_eq!(extract_host("https://ho\tst.com"), None);
         assert_eq!(extract_host("https://host\n.com"), None);
-        // A password with no `@` at all still must not surface.
+        // A non-numeric password with no `@` at all is still not
+        // host-shaped (`hunter2` isn't a port) → None.
         assert_eq!(extract_host("https://alice:hunter2"), None);
+    }
+
+    /// A bare `label:digits` authority with NO `@` anywhere is
+    /// indistinguishable from a legitimate `host:port` (`localhost:5984`,
+    /// an internal hostname, a container name) — CouchDB URIs routinely
+    /// use exactly this. It is accepted as a host; only a stranded `@`
+    /// (see the leak test) turns a `name:digits` value into userinfo.
+    /// Documenting the deliberate boundary so it isn't "fixed" into an
+    /// over-rejection that breaks real configs.
+    #[test]
+    fn livesync_extract_host_accepts_bare_host_port() {
+        assert_eq!(
+            extract_host("http://localhost:5984"),
+            Some("localhost:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("http://couchdb:5984/db"),
+            Some("couchdb:5984".to_string())
+        );
     }
 
     /// The valid host shapes the extractor must still accept, including
