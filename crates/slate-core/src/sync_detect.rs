@@ -400,7 +400,7 @@ fn detect_icloud(
 
 /// (a) `{root}/.dropbox` file or `{root}/.dropbox.cache` dir, OR (b)
 /// any ancestor of root contains `.dropbox.cache`, OR (c) canonicalized
-/// root under `$HOME/Library/CloudStorage/Dropbox*`.
+/// root has prefix `$HOME/Library/CloudStorage/Dropbox`.
 fn detect_dropbox(
     root: &Path,
     canon: &Path,
@@ -427,12 +427,16 @@ fn detect_dropbox(
         }
     }
 
-    // (c) macOS file-provider mount. The component is "Dropbox" for
-    // personal accounts and "Dropbox-<Team>" for business — a string
-    // prefix match on the single CloudStorage component covers both
-    // (same shape as the GoogleDrive- probe).
+    // (c) macOS file-provider mount, mounted at
+    // `$HOME/Library/CloudStorage/Dropbox`. The normative table is an
+    // exact *path* prefix (`.../CloudStorage/Dropbox`), so this is a
+    // component-exact match via `Path::starts_with` — NOT a
+    // component-`starts_with`. Lookalike CloudStorage siblings like
+    // `DropboxBackups` (or a hypothetical `Dropbox-Acme`) are outside
+    // the contract and must not fire a false Medium-risk Dropbox
+    // detection that could spuriously trip the multi-sync warning.
     if let Some(home) = home
-        && cloud_storage_component_starts_with(canon, home, "Dropbox")
+        && canon.starts_with(home.join("Library/CloudStorage/Dropbox"))
     {
         evidence.push(canon.display().to_string());
     }
@@ -870,11 +874,19 @@ mod tests {
     }
 
     #[test]
-    fn dropbox_fires_on_business_cloudstorage_prefix() {
-        let root = "/Users/u/Library/CloudStorage/Dropbox-Acme/vault";
+    fn dropbox_cloudstorage_lookalike_sibling_does_not_fire() {
+        // The normative table's arm (c) is an exact path prefix
+        // `$HOME/Library/CloudStorage/Dropbox` (component-exact
+        // "Dropbox"). A sibling CloudStorage folder whose component
+        // merely *starts with* "Dropbox" is a lookalike outside the
+        // contract — it must NOT produce a false Medium Dropbox
+        // detection.
+        let root = "/Users/u/Library/CloudStorage/DropboxBackups/vault";
         let fs = FakeFs::with_home("/Users/u").dir(root);
-        let report = detect_with_probe(Path::new(root), &fs);
-        single(&report, SyncProviderKind::Dropbox);
+        assert!(
+            detect_with_probe(Path::new(root), &fs).providers.is_empty(),
+            "DropboxBackups is a CloudStorage lookalike, not a Dropbox mount"
+        );
     }
 
     // --- OneDrive --------------------------------------------------------
