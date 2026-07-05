@@ -675,7 +675,14 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     // TOCTOU window a hostile vault can swing (swap the file, or point it
     // at a FIFO/char device whose stat length is 0 so a naive bound check
     // passes and the subsequent read blocks or exhausts memory).
-    let file = match std::fs::File::open(&path) {
+    //
+    // On Unix the open itself is the hazard: opening a FIFO read-only
+    // blocks until a writer connects, so a hostile vault could hang us
+    // before any metadata check. `open_nonblocking` adds `O_NONBLOCK`
+    // there so the open returns immediately for special files; the
+    // regular-file guard below then rejects them. `O_NONBLOCK` is a
+    // no-op for the regular files we actually go on to read.
+    let file = match open_nonblocking(&path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return LiveSyncConfigStatus::NotPresent;
@@ -721,6 +728,24 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     parse_livesync_config(&bytes)
 }
 
+/// Open a file for reading with `O_NONBLOCK` on Unix so a FIFO/special
+/// file at the path can't block the open (the caller rejects it via the
+/// open handle's metadata immediately after). `O_NONBLOCK` has no effect
+/// on the regular files we actually read. On non-Unix, a plain open.
+#[cfg(unix)]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
 /// Parse `data.json` bytes. Split from the file read so the fuzz test
 /// can drive arbitrary byte strings through the parser.
 fn parse_livesync_config(bytes: &[u8]) -> LiveSyncConfigStatus {
@@ -756,23 +781,88 @@ fn parse_livesync_config(bytes: &[u8]) -> LiveSyncConfigStatus {
 
 /// Manual `host[:port]` extraction from a URI string (no `url` crate,
 /// m_spec §M-2): strip `scheme://`, cut the authority at the first
-/// `/` / `?` / `#`, then drop userinfo up to and including the last
-/// `@`. Extraction failure → `None` (the config still parses).
+/// `/` / `?` / `#`, drop userinfo up to and including the last `@`,
+/// then **validate** the remaining `host[:port]` against a strict
+/// grammar and fail closed on anything that isn't host-shaped.
+///
+/// The validation is a credential-safety guard, not cosmetics: a
+/// malformed URI like `https://alice:hunter2/x@host/db` has its
+/// authority terminated by the `/` at `alice:hunter2` (RFC 3986), so a
+/// naive "drop up to `@`" would return the userinfo `alice:hunter2` —
+/// leaking the password. Requiring a valid `host[:port]` shape makes
+/// every such case return `None` instead. Extraction/validation
+/// failure → `None` (the config still parses).
 fn extract_host(uri: &str) -> Option<String> {
     let after_scheme = uri.trim().split_once("://")?.1;
     let authority = after_scheme
         .split(['/', '?', '#'])
         .next()
         .unwrap_or_default();
+    // Drop userinfo up to and including the last `@` within the
+    // authority. Any `@` that lived past the first path delimiter is
+    // already gone (it's in the path, not the authority) — so a
+    // leftover userinfo colon-pair is caught by the validator below.
     let host = match authority.rfind('@') {
         Some(at) => &authority[at + 1..],
         None => authority,
     };
-    if host.is_empty() {
-        None
-    } else {
+    if is_valid_host_port(host) {
         Some(host.to_string())
+    } else {
+        None
     }
+}
+
+/// Strict `host[:port]` validator — fail closed. Accepts:
+/// - a reg-name / IPv4 host (`[A-Za-z0-9.-]+`) with an optional
+///   `:port` (all digits), or
+/// - a bracketed IPv6 literal `[...]` with an optional `:port`.
+///
+/// Rejects userinfo remnants (`alice:hunter2`), whitespace, control
+/// characters, empty hosts, and anything else not host-shaped — so no
+/// credential-looking text can ever surface as `server_host`.
+fn is_valid_host_port(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    // IPv6 literal: `[...]` optionally followed by `:port`.
+    if let Some(rest) = host.strip_prefix('[') {
+        let Some((inner, after)) = rest.split_once(']') else {
+            return false;
+        };
+        // Inner is hex digits, ':', and '.' (v4-mapped) — non-empty.
+        if inner.is_empty()
+            || !inner
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+        {
+            return false;
+        }
+        return after.is_empty() || is_valid_port(after);
+    }
+    // reg-name / IPv4 host, optionally `:port`.
+    let (name, port) = match host.split_once(':') {
+        Some((name, port)) => (name, Some(port)),
+        None => (host, None),
+    };
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return false;
+    }
+    match port {
+        Some(port) => is_valid_port(port),
+        None => true,
+    }
+}
+
+/// A port suffix `:port` (the caller passes the text after the `:`):
+/// non-empty and all ASCII digits.
+fn is_valid_port(port: &str) -> bool {
+    let digits = port.strip_prefix(':').unwrap_or(port);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 // --- Tests ------------------------------------------------------------
@@ -1651,6 +1741,90 @@ mod tests {
                 reason: "config file is not a regular file".to_string(),
             }
         );
+    }
+
+    /// `data.json` is a FIFO with no writer connected. A blocking
+    /// `File::open` would hang here forever; the `O_NONBLOCK` open in
+    /// `open_nonblocking` returns immediately and the regular-file guard
+    /// rejects it. If this test ever hangs, the non-blocking open
+    /// regressed. (Direct FIFO — not via symlink — per the review.)
+    #[cfg(unix)]
+    #[test]
+    fn livesync_fifo_at_config_path_does_not_hang() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        let fifo = plugin.join("data.json");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // 0o600 rw-------; return value 0 == success.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+        assert_eq!(
+            read_livesync_config(tmp.path()),
+            LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
+            }
+        );
+    }
+
+    /// Credential-safety regression: userinfo must never leak into
+    /// `server_host` via a malformed authority. A path/query delimiter
+    /// that appears *before* the `@` terminates the authority at the
+    /// userinfo (RFC 3986), and a naive "drop up to `@`" would return
+    /// the password. Strict `host[:port]` validation fails closed here.
+    #[test]
+    fn livesync_extract_host_fails_closed_on_userinfo_leak() {
+        // `/` before `@`: authority is `alice:hunter2` — NOT a valid
+        // host:port (port isn't digits) → None, no `hunter2` leak.
+        assert_eq!(
+            extract_host("https://alice:hunter2/extra@couch.example.com/db"),
+            None
+        );
+        // `?` before `@`: same shape.
+        assert_eq!(
+            extract_host("https://alice:hunter2?x@couch.example.com/db"),
+            None
+        );
+        // `#` before `@`.
+        assert_eq!(
+            extract_host("https://alice:hunter2#f@couch.example.com/db"),
+            None
+        );
+        // Whitespace / control characters are not host-shaped → None.
+        assert_eq!(extract_host("https://ali ce@host .com"), None);
+        assert_eq!(extract_host("https://ho\tst.com"), None);
+        assert_eq!(extract_host("https://host\n.com"), None);
+        // A password with no `@` at all still must not surface.
+        assert_eq!(extract_host("https://alice:hunter2"), None);
+    }
+
+    /// The valid host shapes the extractor must still accept, including
+    /// a bracketed IPv6 literal (defensive support) — regression guard
+    /// against the strict validator over-rejecting.
+    #[test]
+    fn livesync_extract_host_accepts_valid_shapes() {
+        assert_eq!(
+            extract_host("https://couch.example.com:5984/db"),
+            Some("couch.example.com:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("http://10.0.0.5:5984"),
+            Some("10.0.0.5:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("https://user:pass@couch.example.com:5984/db"),
+            Some("couch.example.com:5984".to_string())
+        );
+        assert_eq!(
+            extract_host("https://host-name.internal"),
+            Some("host-name.internal".to_string())
+        );
+        // Bracketed IPv6, with and without a port.
+        assert_eq!(
+            extract_host("https://[2001:db8::1]:5984/db"),
+            Some("[2001:db8::1]:5984".to_string())
+        );
+        assert_eq!(extract_host("https://[::1]"), Some("[::1]".to_string()));
     }
 
     /// 1k random byte-strings through the parser — no panics; every
