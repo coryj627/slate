@@ -85,9 +85,17 @@ if [[ "$BINDINGS_ONLY" == "1" ]]; then
     exit 0
 fi
 
-echo "==> swift build ($APP_DIR)"
+echo "==> swift build ($APP_DIR, $PROFILE)"
 cd "$APP_DIR"
-swift build
+# Mirror PROFILE into SwiftPM's configuration so a release build lands
+# at .build/release/ (where BINARY/APP_BUNDLE below look for it) instead
+# of the debug default.
+SWIFT_CONFIG_FLAG=""
+if [[ "$PROFILE" == "release" ]]; then
+    SWIFT_CONFIG_FLAG="-c release"
+fi
+# shellcheck disable=SC2086
+swift build $SWIFT_CONFIG_FLAG
 
 BINARY=".build/$PROFILE/SlateMac"
 ABS_BINARY="$WORKSPACE_ROOT/$APP_DIR/$BINARY"
