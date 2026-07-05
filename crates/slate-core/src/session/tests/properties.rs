@@ -233,15 +233,16 @@ fn list_property_keys_counts_each_file_once_per_key() {
     // Every distinct dotted key is present exactly once, each on one
     // file.
     assert!(keys.iter().all(|k| k.file_count == 1));
-    // No duplicate keys in the output.
-    let mut names: Vec<&str> = keys.iter().map(|k| k.key.as_str()).collect();
-    let dedup_len = {
-        let mut n = names.clone();
-        n.dedup();
-        n.len()
-    };
-    names.sort();
-    assert_eq!(names.len(), dedup_len, "keys must be distinct");
+    // The m_spec §M-5 contract in one assertion: output order equals
+    // its own sorted+deduped form iff the keys are BOTH key-sorted and
+    // distinct. (Codoki PR #646: the previous shape deduped an
+    // UNSORTED clone — adjacent-only, so ["a","b","a"] passed — and
+    // never asserted sortedness at all.)
+    let names: Vec<&str> = keys.iter().map(|k| k.key.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(names, sorted, "keys must be key-sorted and distinct");
 }
 
 #[test]
