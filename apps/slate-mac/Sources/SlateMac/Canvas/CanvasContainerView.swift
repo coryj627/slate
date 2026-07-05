@@ -71,6 +71,22 @@ struct CanvasContainerView: View {
         .sheet(item: promptBinding) { prompt in
             CanvasPromptSheet(prompt: prompt)
         }
+        .sheet(item: cardPickerBinding) { request in
+            CanvasCardPicker(
+                document: document,
+                purpose: request.purpose,
+                excluded: Set(appState.canvasMovingSet(in: document))
+            ) { picked in
+                appState.canvasHandleCardPick(request.purpose, target: picked)
+            }
+        }
+    }
+
+    private var cardPickerBinding: Binding<CanvasCardPickerRequest?> {
+        Binding(
+            get: { appState.canvasCardPicker },
+            set: { appState.canvasCardPicker = $0 }
+        )
     }
 
     private var promptBinding: Binding<CanvasPrompt?> {

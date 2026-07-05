@@ -291,3 +291,148 @@ extension AppState {
         }
     }
 }
+
+
+/// Structural placement commands (#522): spatial arrangement with zero
+/// coordinates — pick a reference card, the engine computes the slot
+/// (never UI math), the announcement names the relation.
+extension AppState {
+    func canvasOpenCardPicker(_ purpose: CanvasCardPickerPurpose) {
+        guard let doc = activeCanvasDocument else { return }
+        guard doc.selection.selected != nil else {
+            canvasAnnouncer.announce(.status("Nothing selected."))
+            return
+        }
+        canvasCardPicker = CanvasCardPickerRequest(purpose: purpose)
+    }
+
+    /// The ids that move for a structural placement: the marked set
+    /// when marks exist (rigid unit, #524 semantics), else the
+    /// selected card.
+    func canvasMovingSet(in doc: CanvasDocument) -> [String] {
+        if !doc.selection.marked.isEmpty {
+            // Reading order keeps the op list deterministic.
+            return doc.outline.map(\.nodeId).filter { doc.selection.marked.contains($0) }
+        }
+        return doc.selection.selected.map { [$0] } ?? []
+    }
+
+    /// "Place ⟨direction⟩ ⟨target⟩": engine placement with the moving
+    /// card/set excluded from collision, one action, one undo, one
+    /// announcement.
+    func canvasPlaceRelative(target: String, direction: CanvasPlaceDirection) {
+        guard let doc = activeCanvasDocument, let session = currentSession,
+            let handle = doc.handle
+        else { return }
+        let moving = canvasMovingSet(in: doc)
+        guard !moving.isEmpty, !moving.contains(target) else {
+            canvasAnnouncer.announce(.status("Pick a card outside the moving set."))
+            return
+        }
+        let nodesById = Dictionary(
+            uniqueKeysWithValues: doc.scene.nodes.map { ($0.nodeId, $0) })
+        do {
+            if moving.count == 1, let id = moving.first, let node = nodesById[id] {
+                let placement = try session.canvasPlaceNew(
+                    handle: handle, anchor: target,
+                    width: node.width, height: node.height,
+                    directionHint: direction, exclude: moving)
+                let row = doc.outline.first { $0.nodeId == id }
+                let ok = canvasApply(
+                    CanvasAction(
+                        name: "move \"\(row?.title ?? id)\"",
+                        ops: [
+                            .updateNodeGeometry(
+                                id: id, x: placement.x, y: placement.y,
+                                width: node.width, height: node.height)
+                        ]),
+                    to: doc)
+                guard ok else { return }
+                canvasAnnouncer.announce(
+                    .confirmation(
+                        "Moved \"\(row?.title ?? id)\" "
+                            + CanvasAnnouncer.relativePhrase(placement.relative) + "."))
+            } else {
+                // Rigid unit: pairwise offsets preserved by the engine.
+                let boxes = moving.compactMap { id -> CanvasRect? in
+                    nodesById[id].map {
+                        CanvasRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                    }
+                }
+                let placement = try session.canvasPlaceSet(
+                    handle: handle, anchor: target, boxes: boxes,
+                    directionHint: direction, exclude: moving)
+                var ops: [CanvasOp] = []
+                for (id, origin) in zip(moving, placement.origins) {
+                    guard let node = nodesById[id] else { continue }
+                    ops.append(
+                        .updateNodeGeometry(
+                            id: id, x: origin.x, y: origin.y,
+                            width: node.width, height: node.height))
+                }
+                let ok = canvasApply(
+                    CanvasAction(name: "move \(moving.count) cards", ops: ops), to: doc)
+                guard ok else { return }
+                canvasAnnouncer.announce(
+                    .bulk(
+                        "Moved \(moving.count) cards "
+                            + CanvasAnnouncer.relativePhrase(placement.relative) + "."))
+            }
+        } catch {
+            canvasAnnouncer.announce(.error("Placement failed: \(error.localizedDescription)"))
+        }
+    }
+
+    /// "Align with ⟨target⟩": top edges align (same reading row); the
+    /// engine's overlap check gates it — a collision is announced,
+    /// never silently stacked (G20 spirit).
+    func canvasAlignWith(target: String) {
+        guard let doc = activeCanvasDocument, let session = currentSession,
+            let handle = doc.handle,
+            let selected = doc.selection.selected,
+            let node = doc.scene.nodes.first(where: { $0.nodeId == selected }),
+            let targetNode = doc.scene.nodes.first(where: { $0.nodeId == target })
+        else { return }
+        do {
+            let overlaps = try session.canvasCheckOverlap(
+                handle: handle,
+                rect: CanvasRect(
+                    x: node.x, y: targetNode.y, width: node.width, height: node.height),
+                exclude: [selected])
+            guard overlaps.isEmpty else {
+                canvasAnnouncer.announce(
+                    .error("Aligning would overlap another card — not moved."))
+                return
+            }
+            let row = doc.outline.first { $0.nodeId == selected }
+            let targetRow = doc.outline.first { $0.nodeId == target }
+            let ok = canvasApply(
+                CanvasAction(
+                    name: "align \"\(row?.title ?? selected)\"",
+                    ops: [
+                        .updateNodeGeometry(
+                            id: selected, x: node.x, y: targetNode.y,
+                            width: node.width, height: node.height)
+                    ]),
+                to: doc)
+            guard ok else { return }
+            canvasAnnouncer.announce(
+                .confirmation(
+                    "Aligned \"\(row?.title ?? selected)\" with \"\(targetRow?.title ?? target)\"."
+                ))
+        } catch {
+            canvasAnnouncer.announce(.error("Align failed: \(error.localizedDescription)"))
+        }
+    }
+
+    /// Route a completed pick to its verb.
+    func canvasHandleCardPick(_ purpose: CanvasCardPickerPurpose, target: String) {
+        switch purpose {
+        case .placeBelow: canvasPlaceRelative(target: target, direction: .below)
+        case .placeRightOf: canvasPlaceRelative(target: target, direction: .rightOf)
+        case .placeAbove: canvasPlaceRelative(target: target, direction: .above)
+        case .placeLeftOf: canvasPlaceRelative(target: target, direction: .leftOf)
+        case .alignWith: canvasAlignWith(target: target)
+        }
+    }
+}

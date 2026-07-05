@@ -354,6 +354,10 @@ final class AppState: ObservableObject {
     /// matching sheet in the canvas container (M6 visible controls).
     @Published var canvasPrompt: CanvasPrompt?
 
+    /// The pending card-picker request (#522/#523): non-nil presents
+    /// the reusable proximity-sorted picker in the container.
+    @Published var canvasCardPicker: CanvasCardPickerRequest?
+
     /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
     /// mirrors `selectedFilePath` for the sidebar highlight; the
     /// `$selectedFilePath` sink must not run the selection funnel again on
