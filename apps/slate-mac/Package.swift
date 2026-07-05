@@ -3,11 +3,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import PackageDescription
+import Foundation
 
 // SwiftUI Mac app for Slate. Calls the Rust `slate-core` library through
 // the `slate-uniffi` FFI wrapper. Built as a SwiftPM executable while we
 // bootstrap; this will graduate to an Xcode project once it needs a
 // real .app bundle, entitlements, and code signing.
+
+// Link against the Cargo target dir matching the active build profile.
+// build-mac-app.sh exports SLATE_LINK_PROFILE (debug|release) so a
+// `swift build -c release` links target/release — where `cargo build
+// --release` put the fresh dylib — instead of a stale target/debug.
+// Defaults to "debug": the profile a bare `swift build` / `swift test`
+// uses, so existing debug/test flows are unchanged.
+let slateLinkProfile = ProcessInfo.processInfo.environment["SLATE_LINK_PROFILE"] ?? "debug"
+let slateCargoLibDir = "../../target/\(slateLinkProfile)"
 
 let package = Package(
     name: "SlateMac",
@@ -64,7 +74,7 @@ let package = Package(
                 // build-mac-app.sh script ensures the dylib is built
                 // before swift build runs.
                 .unsafeFlags([
-                    "-L", "../../target/debug",
+                    "-L", slateCargoLibDir,
                 ]),
             ]
         ),
@@ -77,7 +87,7 @@ let package = Package(
                 // find the dylib produced by build-mac-app.sh.
                 .linkedLibrary("slate_uniffi"),
                 .unsafeFlags([
-                    "-L", "../../target/debug",
+                    "-L", slateCargoLibDir,
                 ]),
             ]
         ),

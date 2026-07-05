@@ -87,6 +87,9 @@ fi
 
 echo "==> swift build ($APP_DIR, $PROFILE)"
 cd "$APP_DIR"
+# Point Package.swift's linker -L at target/$PROFILE (it reads this),
+# so a release swift build links the release dylib, not a stale debug one.
+export SLATE_LINK_PROFILE="$PROFILE"
 # Mirror PROFILE into SwiftPM's configuration so a release build lands
 # at .build/release/ (where BINARY/APP_BUNDLE below look for it) instead
 # of the debug default.
