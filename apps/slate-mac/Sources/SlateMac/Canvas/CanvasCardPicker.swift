@@ -11,6 +11,9 @@ enum CanvasCardPickerPurpose: Equatable {
     case placeAbove
     case placeLeftOf
     case alignWith
+    /// #523: the primary connect flow — proximity picker, sides
+    /// auto-defaulted, optional label step.
+    case connectTo
 
     var title: String {
         switch self {
@@ -19,6 +22,7 @@ enum CanvasCardPickerPurpose: Equatable {
         case .placeAbove: return "Place Above"
         case .placeLeftOf: return "Place Left Of"
         case .alignWith: return "Align With"
+        case .connectTo: return "Connect To"
         }
     }
 
@@ -28,7 +32,7 @@ enum CanvasCardPickerPurpose: Equatable {
         case .placeRightOf: return .rightOf
         case .placeAbove: return .above
         case .placeLeftOf: return .leftOf
-        case .alignWith: return nil
+        case .alignWith, .connectTo: return nil
         }
     }
 }

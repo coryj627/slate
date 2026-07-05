@@ -833,3 +833,109 @@ extension CanvasNavigatorTests {
         _ = state.canvasModeController(for: doc).cancel()
     }
 }
+
+/// #523: connect flow — auto sides, labels, direction round-trips,
+/// connect mode reusing navigator movements, edit/delete.
+@MainActor
+extension CanvasNavigatorTests {
+    func testConnectPickerFlowAutoSidesAndLabel() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "c"  // Gamma (600,0)
+        posted = []
+        state.canvasConnect(from: "c", to: "d", label: "feeds")  // d below c
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains("Connected \"Gamma\" to \"Delta\", labelled \"feeds\"."),
+            "\(posted)")
+        let edge = try XCTUnwrap(
+            doc.scene.edges.first { $0.fromNode == "c" && $0.toNode == "d" })
+        // Auto sides: d is directly below c → bottom→top.
+        XCTAssertEqual(edge.fromSide, .bottom)
+        XCTAssertEqual(edge.toSide, .top)
+        XCTAssertFalse(edge.fromArrow)
+        XCTAssertTrue(edge.toArrow, "default: one-way arrow at the target")
+        XCTAssertEqual(edge.label, "feeds")
+        // One undo removes it.
+        state.canvasUndo()
+        XCTAssertNil(doc.scene.edges.first { $0.fromNode == "c" && $0.toNode == "d" })
+    }
+
+    func testConnectModeReusesNavigatorAndConfirmsWithReturn() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "a"
+        state.canvasEnterConnectMode()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.hasPrefix("Connect mode — \"Alpha\".") }, "\(posted)")
+        XCTAssertEqual(
+            state.canvasModeController(for: doc).containerAXValue,
+            "Connect mode: \"Alpha\"")
+
+        // Navigator movements work verbatim while the mode is armed
+        // (no transient → arrows stay navigation).
+        XCTAssertFalse(state.canvasModeConsumesArrows)
+        state.canvasSelectAdjacent(offset: 1)  // → b… walk to d
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasSelectAdjacent(offset: 1)
+        XCTAssertEqual(doc.selection.selected, "d")
+
+        posted = []
+        _ = state.canvasModeController(for: doc).commit()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains("Connected \"Alpha\" to \"Delta\"."), "\(posted)")
+        XCTAssertNotNil(doc.scene.edges.first { $0.fromNode == "a" && $0.toNode == "d" })
+
+        // Esc path: origin restored.
+        doc.selection.selected = "a"
+        state.canvasEnterConnectMode()
+        state.canvasSelectAdjacent(offset: 1)
+        posted = []
+        _ = state.canvasModeController(for: doc).cancel()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.selection.selected, "a", "Esc returns to the origin")
+        XCTAssertTrue(posted.contains { $0.contains("back at \"Alpha\"") })
+    }
+
+    func testEditConnectionDirectionAndLabelRoundTrips() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "a"
+        // ab1 exists a→b labelled "first".
+        state.canvasEditConnection(
+            edgeId: "ab1", label: "rewired", direction: .both)
+        let edge = try XCTUnwrap(doc.scene.edges.first { $0.edgeId == "ab1" })
+        XCTAssertEqual(edge.label, "rewired")
+        XCTAssertTrue(edge.fromArrow)
+        XCTAssertTrue(edge.toArrow)
+
+        // Direction: none (undirected link).
+        state.canvasEditConnection(edgeId: "ab1", label: "", direction: .none)
+        let undirected = try XCTUnwrap(doc.scene.edges.first { $0.edgeId == "ab1" })
+        XCTAssertNil(undirected.label, "empty label clears")
+        XCTAssertFalse(undirected.fromArrow)
+        XCTAssertFalse(undirected.toArrow)
+        // The outline phrases it as linked-with now.
+        let neighbors = doc.neighbors(of: "a", session: state.currentSession)
+        XCTAssertEqual(
+            neighbors.first { $0.edgeId == "ab1" }?.direction, .undirected)
+    }
+
+    func testDeleteConnectionSingleAndChoices() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "d"  // exactly one connection (dc)
+        posted = []
+        state.canvasPromptDeleteConnection()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertNil(doc.scene.edges.first { $0.edgeId == "dc" }, "single choice deletes directly")
+        XCTAssertTrue(posted.contains { $0.hasPrefix("Deleted connection") })
+
+        // Multi-choice card opens the picker prompt instead.
+        doc.selection.selected = "a"
+        state.canvasPromptDeleteConnection()
+        guard case .pickConnection(let choices, let toDelete)? = state.canvasPrompt else {
+            return XCTFail("expected the connection picker prompt")
+        }
+        XCTAssertTrue(toDelete)
+        XCTAssertEqual(choices.count, 3)
+    }
+}
