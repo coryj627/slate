@@ -2701,6 +2701,11 @@ final class AppState: ObservableObject {
             // M-3 (#534): likewise the previous vault's sync report —
             // nil puts the diagnostics panel back into its loading
             // state until this vault's post-scan load publishes.
+            // #638: and the previous vault's marker watcher, so a late
+            // debounced event can't fire a refresh under the new vault
+            // (the load-side session guard would catch it anyway —
+            // this just stops the noise at the source).
+            stopSyncMarkerWatcher()
             syncReport = nil
             liveSyncConfig = nil
             syncDiagnosticsError = nil
@@ -2732,6 +2737,11 @@ final class AppState: ObservableObject {
                 // new vault's funnel runs its own load.
                 guard !Task.isCancelled else { return }
                 await self?.loadSyncDiagnostics()
+                // #638: arm live marker re-detection AFTER the initial
+                // load so the watch and the first publish can't
+                // interleave. Same cancellation rule as above.
+                guard !Task.isCancelled else { return }
+                self?.startSyncMarkerWatcher()
             }
             // Milestone L #281: read `.slate/prefs.json` so the
             // Settings panel + style picker reflect the persisted
@@ -3030,6 +3040,7 @@ final class AppState: ObservableObject {
         currentVaultURL = nil
         files = []
         scanError = nil
+        stopSyncMarkerWatcher()  // #638: no vault, no watch
         syncReport = nil
         liveSyncConfig = nil
         syncDiagnosticsError = nil
@@ -3265,6 +3276,48 @@ final class AppState: ObservableObject {
     /// behavior, not a guarantee — codex adversarial round 2). A nil
     /// hook is a single optional check on the load path.
     var syncDiagnosticsPublishGate: (() async -> Void)?
+
+    /// Live marker re-detection (#638): a bounded directory watch on
+    /// the detector's in-vault probe locations, debounced into
+    /// `refreshSyncDiagnostics()`. Started from the post-scan
+    /// continuation, torn down on vault close/switch. The
+    /// announce-once gate above is what makes "newly risky
+    /// mid-session" (git init, LiveSync install) announce exactly
+    /// once without any watcher-side state.
+    private var syncMarkerWatcher: SyncMarkerWatcher?
+
+    /// Watcher debounce — injectable so tests don't wait
+    /// production-scale quiet periods (`internal` for @testable).
+    var syncMarkerWatcherDebounce: TimeInterval = 2.5
+
+    /// Arm the marker watcher for the current vault (#638). Called
+    /// after the initial diagnostics load in the post-scan funnel;
+    /// idempotent per vault (re-arming stops the previous watcher).
+    func startSyncMarkerWatcher() {
+        syncMarkerWatcher?.stop()
+        syncMarkerWatcher = nil
+        guard let vaultURL = currentVaultURL else { return }
+        let watcher = SyncMarkerWatcher(
+            root: vaultURL,
+            debounceInterval: syncMarkerWatcherDebounce
+        ) { [weak self] in
+            // Delivered on the main queue; hop onto the actor and run
+            // the exact funnel the Refresh command uses — the
+            // session-identity guard in loadSyncDiagnostics makes a
+            // late event after a vault switch harmless.
+            Task { @MainActor [weak self] in
+                self?.refreshSyncDiagnostics()
+            }
+        }
+        syncMarkerWatcher = watcher
+        watcher.start()
+    }
+
+    /// Tear down the marker watcher (vault close/switch).
+    func stopSyncMarkerWatcher() {
+        syncMarkerWatcher?.stop()
+        syncMarkerWatcher = nil
+    }
 
     /// Re-run detection + config read. Wired to the panel's Refresh
     /// button, the `slate.diagnostics.refreshSync` command, and its
