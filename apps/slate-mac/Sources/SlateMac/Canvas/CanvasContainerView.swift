@@ -121,7 +121,15 @@ struct CanvasContainerView: View {
         case "file", "image":
             let target = document.target(of: nodeId)
             if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
-                appState.openFile(target, target: .currentTab)
+                // #525: `#heading` subpath cards open to the anchor.
+                let subpath = document.scene.nodes
+                    .first { $0.nodeId == nodeId }?.subpath?
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+                if let subpath, !subpath.isEmpty {
+                    appState.canvasOpenFileAtHeading(path: target, heading: subpath)
+                } else {
+                    appState.openFile(target, target: .currentTab)
+                }
             } else if let vault = appState.currentVaultURL,
                 FileManager.default.fileExists(
                     atPath: vault.appendingPathComponent(target).path),

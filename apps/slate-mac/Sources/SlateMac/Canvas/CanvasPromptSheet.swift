@@ -137,6 +137,41 @@ struct CanvasPromptSheet: View {
                     prompt: "Pick the vault file this card should point at.",
                     files: files
                 ) { appState.canvasLocate(nodeId: nodeId, path: $0) }
+            case .connectedDirection:
+                Text("Create Connected Card")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                Text("The new card is placed on the side you pick, already connected.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                ForEach(
+                    [
+                        ("Below", CanvasPlaceDirection.below),
+                        ("Right", .rightOf),
+                        ("Above", .above),
+                        ("Left", .leftOf),
+                    ], id: \.0
+                ) { title, direction in
+                    Button(title) {
+                        appState.canvasPrompt = nil
+                        appState.canvasCreateConnectedCard(direction: direction)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Place \(title.lowercased())")
+                }
+                Button("Cancel") { appState.canvasPrompt = nil }
+                    .keyboardShortcut(.cancelAction)
+            case .convertToNote(let nodeId, _):
+                Text("Convert Card to Note")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                Text("Creates a vault note with the card's text; the card then points at it.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                TextField("Note path", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Note path, ends in .md")
+                commitRow("Convert") {
+                    appState.canvasConvertToNote(nodeId: nodeId, path: text)
+                }
             case .setColor:
                 Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
                 // Color is never color-alone: named buttons (1.4.1).
@@ -183,6 +218,8 @@ struct CanvasPromptSheet: View {
         case .addMedia: return "Add Media"
         case .addLink: return "Add Link Card"
         case .locate: return "Locate File"
+        case .connectedDirection: return "Create Connected Card"
+        case .convertToNote: return "Convert Card to Note"
         }
     }
 
