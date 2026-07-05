@@ -91,7 +91,13 @@ struct CanvasCardPicker: View {
             }
             out.append(Candidate(id: row.nodeId, label: label, distance: distance))
         }
-        return out.sorted { $0.distance < $1.distance }
+        // Swift's sort is NOT stable — pin equal-distance ties to
+        // reading order with an explicit secondary key (Codoki #618).
+        return out.enumerated()
+            .sorted {
+                ($0.element.distance, $0.offset) < ($1.element.distance, $1.offset)
+            }
+            .map(\.element)
     }
 
     private func pickerLabel(_ row: CanvasOutlineRow) -> String {
