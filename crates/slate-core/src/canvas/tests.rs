@@ -79,10 +79,11 @@ fn sample_parses_every_node_kind() {
     assert_eq!(bg.image.as_deref(), Some("assets/corkboard.png"));
     assert_eq!(bg.style, Some(BackgroundStyle::Cover));
 
-    // Hex color is carried verbatim and phrases as "custom color".
+    // Hex is carried verbatim and phrases as nearest preset + custom
+    // (t5 G7 pin, #370).
     let loose = node(&canvas, "card-loose");
     assert_eq!(loose.color, Some(CanvasColor::Hex("#8850c8".into())));
-    assert_eq!(color_name(loose.color.as_ref().unwrap()), "custom color");
+    assert_eq!(color_name(loose.color.as_ref().unwrap()), "purple (custom)");
 
     // Document order is preserved (reading-order tiebreak input for #360).
     let ids: Vec<&str> = canvas.nodes.iter().map(|n| n.id.0.as_str()).collect();
@@ -307,8 +308,18 @@ fn color_names_are_pinned() {
     for (preset, name) in expected {
         assert_eq!(color_name(&CanvasColor::Preset(preset)), name);
     }
+    // Nearest-preset mapping for customs (#370): family + "(custom)".
     assert_eq!(
         color_name(&CanvasColor::Hex("#aabbcc".into())),
+        "purple (custom)"
+    );
+    assert_eq!(
+        color_name(&CanvasColor::Hex("#fb464c".into())),
+        "red (custom)"
+    );
+    assert_eq!(color_name(&CanvasColor::Hex("#f00".into())), "red (custom)");
+    assert_eq!(
+        color_name(&CanvasColor::Hex("bogus".into())),
         "custom color"
     );
 }

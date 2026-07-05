@@ -5256,7 +5256,7 @@ impl VaultSession {
             connection_count: s.connection_count as u32,
             in_count: s.in_count as u32,
             out_count: s.out_count as u32,
-            color_name: s.color_name.map(str::to_string),
+            color_name: s.color_name.clone(),
         })
     }
 
@@ -5451,10 +5451,7 @@ impl VaultSession {
                         crate::canvas::CanvasColor::Preset(p) => p.to_string(),
                         crate::canvas::CanvasColor::Hex(h) => h.clone(),
                     }),
-                    color_name: node
-                        .color
-                        .as_ref()
-                        .map(|c| crate::canvas::color_name(c).to_string()),
+                    color_name: node.color.as_ref().map(crate::canvas::color_name),
                     subpath: match &node.kind {
                         crate::canvas::NodeKind::File { subpath, .. } => subpath.clone(),
                         _ => None,

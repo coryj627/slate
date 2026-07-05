@@ -194,7 +194,7 @@ pub struct CardSummary {
     /// Connections pointing out (outgoing + bidirectional + undirected).
     pub out_count: usize,
     /// Pinned color name (t0 §1.1), when the node has a color.
-    pub color_name: Option<&'static str>,
+    pub color_name: Option<String>,
 }
 
 /// Spatial queries over the canvas: overlap checks for placement (#517)
