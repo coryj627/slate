@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 
 use slate_core::VaultError;
 use slate_core::db::DbError;
-use slate_core::session::VaultSession;
+use slate_core::session::{CancelToken, VaultSession};
+
+use crate::progress::StderrProgress;
 
 /// A validated, canonicalized vault handle plus the pre-open cache
 /// state. Produced by [`open_vault`]; consumed by the `open` command.
@@ -46,16 +48,20 @@ pub struct OpenedVault {
 pub enum CliError {
     /// The vault path is not an existing directory (exit 1).
     NotAVaultDirectory { path: String },
+    /// A `read`/`links` note-path isn't in the index (exit 1). The
+    /// existence check runs before the query so a typo can't be
+    /// mistaken for "isolated note" / "empty file" (m_spec §M-5).
+    NoSuchNote { path: String },
     /// The `.slate` cache is locked by another process after the
     /// built-in 5s busy_timeout elapsed (exit 1, friendly retry copy).
     CacheBusy,
     /// The operation was cancelled by Ctrl-C (exit 130).
     Cancelled,
     /// A command-level usage error surfaced *after* clap parsing (exit
-    /// 2) — e.g. `render-template --format tsv`, which clap can't reject
-    /// because `tsv` is a valid `--format` value, but which is
-    /// meaningless for a document body. Carries the message printed on
-    /// stderr (with the global `slate: ` prefix).
+    /// 2) — e.g. `read --format tsv` or `render-template --format tsv`,
+    /// which clap can't reject because `tsv` is a valid `--format`
+    /// value, but which is meaningless for a document body. Carries the
+    /// message printed on stderr (with the global `slate: ` prefix).
     Usage { message: String },
     /// `render-template --strict` found unfilled `{{prompt:…}}` markers
     /// (exit 1). The per-prompt `slate: warning: unfilled prompt 'Label'`
@@ -77,6 +83,7 @@ impl std::fmt::Display for CliError {
             CliError::NotAVaultDirectory { path } => {
                 write!(f, "not a vault directory: {path}")
             }
+            CliError::NoSuchNote { path } => write!(f, "no such note: {path}"),
             CliError::CacheBusy => write!(
                 f,
                 "vault cache is busy (is Slate open?) — retry in a moment"
@@ -162,6 +169,31 @@ pub fn open_vault(raw_path: &Path) -> Result<OpenedVault, CliError> {
         abs_path,
         cache_was_warm,
     })
+}
+
+/// Open a vault **and** run the initial scan, returning the live
+/// session and its absolute path. The one-liner every query command
+/// (`read`, `list`, `search`, `links`, `properties`) needs: those verbs
+/// all read the index, so they must open + scan before querying (unlike
+/// `open`, which needs the `ScanReport`, and `sync-check`, which builds
+/// no index at all).
+///
+/// Wires the shared `CancelToken` through the scan so a Ctrl-C mid-index
+/// aborts to exit 130, and attaches the throttled stderr progress
+/// listener (TTY-gated inside [`StderrProgress`]). The `cache_was_warm`
+/// bit `open_vault` records is dropped here — query commands don't
+/// report cold/warm.
+pub fn open_and_scan(
+    raw_path: &Path,
+    cancel: &CancelToken,
+) -> Result<(VaultSession, String), CliError> {
+    let OpenedVault {
+        session, abs_path, ..
+    } = open_vault(raw_path)?;
+    session
+        .scan_initial_with_progress(cancel, Some(StderrProgress::listener()))
+        .map_err(map_vault_error)?;
+    Ok((session, abs_path))
 }
 
 /// Best-effort absolute path for the `vault` envelope field.

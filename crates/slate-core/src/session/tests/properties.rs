@@ -193,6 +193,163 @@ fn files_with_property_pagination_dedupes_multi_match_files() {
     assert_eq!(seen, expected, "paging dropped or duplicated rows");
 }
 
+// --- list_property_keys / files_with_property_key (M-5, #536) --------
+
+#[test]
+fn list_property_keys_returns_distinct_keys_sorted_with_file_counts() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"---\nauthor: Alice\nstatus: draft\n---\n")
+            .unwrap();
+        p.write_file("b.md", b"---\nauthor: Bob\n---\n").unwrap();
+        p.write_file("c.md", b"---\nstatus: done\ntags:\n  - x\n---\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let keys = session.list_property_keys().unwrap();
+    // Key-sorted: author, status, tags.
+    let pairs: Vec<(&str, u64)> = keys
+        .iter()
+        .map(|k| (k.key.as_str(), k.file_count))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![("author", 2), ("status", 2), ("tags", 1)],
+        "keys must be DISTINCT, key-sorted, with distinct-file counts"
+    );
+}
+
+#[test]
+fn list_property_keys_counts_each_file_once_per_key() {
+    // A file carrying the same key across two dotted rows (person.name
+    // + person) must still count once for each distinct key.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("one.md", b"---\nperson:\n  name: A\n  email: a@x\n---\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let keys = session.list_property_keys().unwrap();
+    // Every distinct dotted key is present exactly once, each on one
+    // file.
+    assert!(keys.iter().all(|k| k.file_count == 1));
+    // No duplicate keys in the output.
+    let mut names: Vec<&str> = keys.iter().map(|k| k.key.as_str()).collect();
+    let dedup_len = {
+        let mut n = names.clone();
+        n.dedup();
+        n.len()
+    };
+    names.sort();
+    assert_eq!(names.len(), dedup_len, "keys must be distinct");
+}
+
+#[test]
+fn list_property_keys_empty_when_no_frontmatter() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("plain.md", b"# no frontmatter here\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(session.list_property_keys().unwrap().is_empty());
+}
+
+#[test]
+fn files_with_property_key_matches_any_value() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"---\nstatus: draft\n---\n").unwrap();
+        p.write_file("b.md", b"---\nstatus: done\n---\n").unwrap();
+        p.write_file("c.md", b"---\nauthor: X\n---\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session
+        .files_with_property_key("status", Paging::first(100))
+        .unwrap();
+    let mut paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+    // Both `draft` and `done` — the value is irrelevant, only the key.
+    assert_eq!(paths, vec!["a.md", "b.md"]);
+    assert_eq!(page.total_filtered, 2);
+}
+
+#[test]
+fn files_with_property_key_matches_list_valued_key() {
+    // A key whose value is a list (`tags`) still counts the file — the
+    // parent `properties` row carries the key even though elements live
+    // in `properties_list_values`.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"---\ntags:\n  - x\n  - y\n---\n")
+            .unwrap();
+        p.write_file("b.md", b"---\ntitle: T\n---\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session
+        .files_with_property_key("tags", Paging::first(100))
+        .unwrap();
+    let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["a.md"]);
+}
+
+#[test]
+fn files_with_property_key_missing_key_is_empty_not_error() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"---\nstatus: draft\n---\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session
+        .files_with_property_key("nonexistent", Paging::first(100))
+        .unwrap();
+    assert!(page.items.is_empty());
+    assert_eq!(page.total_filtered, 0);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn files_with_property_key_pagination_drains_each_file_once() {
+    // The CLI drains this via next_cursor; a file carrying the key on
+    // two dotted rows must appear exactly once, and paging must cover
+    // every match with no duplicate or dropped rows.
+    let (_tmp, session) = make_vault(|p| {
+        for letter in ["a", "b", "c", "d", "e"] {
+            p.write_file(
+                &format!("{letter}.md"),
+                // Two dotted rows under `meta` → two `properties` rows
+                // with key `meta.x` / `meta.y`; we query `meta.x`, which
+                // is on exactly one row per file, but DISTINCT protects
+                // against any JOIN fan-out.
+                b"---\nmeta:\n  x: 1\n  y: 2\n---\n",
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let mut seen: Vec<String> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let paging = match &cursor {
+            Some(c) => Paging::after(c.clone(), 2),
+            None => Paging::first(2),
+        };
+        let page = session.files_with_property_key("meta.x", paging).unwrap();
+        for f in &page.items {
+            seen.push(f.path.clone());
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let expected: Vec<String> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|s| format!("{s}.md"))
+        .collect();
+    assert_eq!(seen, expected, "paging dropped or duplicated rows");
+}
+
 #[test]
 fn files_without_frontmatter_have_empty_properties() {
     let (_tmp, session) = make_vault(|p| {

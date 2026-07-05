@@ -78,6 +78,7 @@ pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{
     EditOp, OpKind, OpLogEntry, decode_edit_batch, encode_edit_batch, reconstruct_at_tail,
 };
+pub use properties_db::PropertyKeySummary;
 pub use reading::{ReadingBlock, ReadingBlockKind, reading_blocks_source};
 pub use sync_detect::{
     DetectedSyncProvider, LiveSyncConfig, LiveSyncConfigStatus, RiskLevel, SyncDetectionReport,
