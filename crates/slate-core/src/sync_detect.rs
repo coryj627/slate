@@ -690,16 +690,30 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
             };
         }
     };
-    // Fall back to the raw root if canonicalization fails (matching the
-    // detector's degrade-never-error rule); if BOTH canonicalize, the
-    // containment check is authoritative.
-    if let Ok(canonical_root) = std::fs::canonicalize(vault_root)
-        && !canonical_target.starts_with(&canonical_root)
-    {
+    // Fail CLOSED if the root can't be canonicalized: unlike detection
+    // (which degrades on canonicalize failure, m_spec §M-1), a
+    // credential-bearing read must be able to prove containment before
+    // it reads. No proof → refuse. (In practice a non-canonicalizable
+    // root usually means the whole path is gone, so the target
+    // canonicalize above already returned NotPresent.)
+    let canonical_root = match std::fs::canonicalize(vault_root) {
+        Ok(r) => r,
+        Err(e) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: format!("vault root unreadable: {e}"),
+            };
+        }
+    };
+    if !canonical_target.starts_with(&canonical_root) {
         return LiveSyncConfigStatus::Malformed {
             reason: "config path escapes the vault".to_string(),
         };
     }
+
+    // Snapshot the containment-checked target's identity BEFORE the
+    // open, so we can prove the file we actually opened is the same one
+    // we canonicalized and contained (see the re-verification below).
+    let expected_id = FileId::of_path(&canonical_target);
 
     // Open ONCE (the canonical target) and read through the open handle.
     // Never re-open by path after a stat: a separate `metadata` + `read`
@@ -728,8 +742,8 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     };
     // Reject non-regular files (directory, FIFO, char/block device, socket)
     // using the OPEN handle's metadata — race-free, no second path lookup.
-    match file.metadata() {
-        Ok(m) if m.is_file() => {}
+    let opened_meta = match file.metadata() {
+        Ok(m) if m.is_file() => m,
         Ok(_) => {
             return LiveSyncConfigStatus::Malformed {
                 reason: "config file is not a regular file".to_string(),
@@ -740,6 +754,23 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
                 reason: format!("config file unreadable: {e}"),
             };
         }
+    };
+    // **Parent-swap re-verification.** `O_NOFOLLOW` only guards the FINAL
+    // path component; a hostile vault could still swap an already-checked
+    // parent (`.obsidian`, `plugins`) for a symlink to an outside tree
+    // between the containment check and the open, so `open_guarded` might
+    // have resolved to an outside file. Require the opened handle's
+    // (device, inode) to match the identity we contained. Any mismatch
+    // means the path resolved somewhere else mid-flight → fail closed, so
+    // no outside file's fields can surface. (Unix-only; `FileId::of_meta`
+    // is `None` on other targets and the check is skipped there, matching
+    // the plain-open fallback.)
+    if let Some(expected) = expected_id
+        && FileId::of_meta(&opened_meta) != Some(expected)
+    {
+        return LiveSyncConfigStatus::Malformed {
+            reason: "config path escapes the vault".to_string(),
+        };
     }
     // Cap the read at `MAX + 1` bytes regardless of the reported length, so
     // a growing/replaced/special file can never make us materialize more
@@ -779,6 +810,39 @@ fn open_guarded(path: &Path) -> std::io::Result<std::fs::File> {
 #[cfg(not(unix))]
 fn open_guarded(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
+}
+
+/// A file's `(device, inode)` identity — stable across a path→open
+/// window on Unix, so it detects a mid-flight parent-directory swap.
+/// `None` on non-Unix (no `st_dev`/`st_ino`); the caller skips the
+/// re-verification there, matching the plain-open fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileId {
+    #[cfg(unix)]
+    fn of_meta(meta: &std::fs::Metadata) -> Option<FileId> {
+        use std::os::unix::fs::MetadataExt;
+        Some(FileId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn of_meta(_meta: &std::fs::Metadata) -> Option<FileId> {
+        None
+    }
+
+    /// Identity of the file the path currently resolves to (follows
+    /// symlinks — the canonical target is already symlink-free, this is
+    /// a pre-open snapshot). `None` if it can't be stat'd or on non-Unix.
+    fn of_path(path: &Path) -> Option<FileId> {
+        std::fs::metadata(path).ok().and_then(|m| Self::of_meta(&m))
+    }
 }
 
 /// Parse `data.json` bytes. Split from the file read so the fuzz test
