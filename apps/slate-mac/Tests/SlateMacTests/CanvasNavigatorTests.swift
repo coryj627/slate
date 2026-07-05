@@ -475,3 +475,26 @@ extension CanvasNavigatorTests {
         XCTAssertEqual(second, "Untitled Canvas 2.canvas")
     }
 }
+
+/// Codoki #617: Set Color on a GROUP is a real, announced mutation —
+/// JSON Canvas groups carry `color` like any node (the spec's group
+/// node inherits the generic node fields), the backend applies it
+/// with a snapshot inverse, and the outline value phrases the name.
+/// Pinned here so the "silent no-op on groups" concern stays refuted.
+@MainActor
+extension CanvasNavigatorTests {
+    func testSetColorOnGroupMutatesAnnouncesAndUndoes() async throws {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        state.canvasSelect(nodeId: "g1", in: doc, announce: false)
+        posted = []
+        state.canvasSetColor(preset: 4)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Set \"Zone\" to green."), "\(posted)")
+        XCTAssertEqual(
+            doc.outline.first { $0.nodeId == "g1" }?.colorName, "green",
+            "the group's color is a modeled, spoken attribute")
+        state.canvasUndo()
+        XCTAssertNil(doc.outline.first { $0.nodeId == "g1" }?.colorName)
+    }
+}
