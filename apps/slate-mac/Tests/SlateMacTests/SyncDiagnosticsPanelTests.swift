@@ -234,6 +234,65 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         XCTAssertEqual(announcer.posts.count, 1, "refresh must not re-announce")
     }
 
+    /// Adversarial (codex + the #328 red-team P1 pattern): a refresh
+    /// runs in its OWN Task — a vault switch cancels the scanTask
+    /// funnel but never that refresh. Without the
+    /// `currentSession === session` recheck after the detached probe,
+    /// a refresh started under vault A that resumes after a switch to
+    /// vault B publishes A's report over B's freshly-reset state AND
+    /// fires A's assertive announcement under B's gate, poisoning B's
+    /// announce-once. Pin: the stale load must bail, and B's own
+    /// funnel must still publish B's report and post B's announcement.
+    func testStaleRefreshAfterVaultSwitchNeitherPublishesNorAnnounces() async throws {
+        let announcer = RecordingAnnouncer()
+        // Vault A: LiveSync (High) + Git (Low) → announces on open with
+        // a 2-system summary that is distinguishable from B's below.
+        let state = try await openVault(named: "race-a", announcer: announcer) {
+            try self.plantLiveSync($0)
+            try self.plantGit($0)
+        }
+        XCTAssertEqual(announcer.posts.count, 1)
+        let vaultASummary = try XCTUnwrap(state.syncReport?.audioSummary)
+        XCTAssertEqual(
+            state.syncReport?.providers.map(\.kind), [.liveSync, .git])
+
+        // Start a refresh that captures vault A's session, and yield so
+        // it advances to its detached-probe suspension point before the
+        // switch below (the main actor is serial: the enqueued task
+        // runs to its first await, then control returns here).
+        let staleRefresh = Task { await state.loadSyncDiagnostics() }
+        await Task.yield()
+
+        // Switch to vault B (LiveSync only — also announce-worthy, with
+        // a DIFFERENT 1-system summary) while the refresh is in flight.
+        let vaultB = tempDir.appendingPathComponent("race-b")
+        try FileManager.default.createDirectory(
+            at: vaultB, withIntermediateDirectories: true)
+        try plantLiveSync(vaultB)
+        state.openVault(at: vaultB)
+
+        // The stale refresh resumes against B's session and must bail:
+        // no publish of A's providers, no announcement of A's summary.
+        await staleRefresh.value
+        XCTAssertNotEqual(
+            state.syncReport?.providers.map(\.kind), [.liveSync, .git],
+            "stale refresh must not publish vault A's report over vault B")
+
+        // B's own funnel completes: B's report, and B's OWN
+        // announcement — proving the stale refresh neither announced
+        // A's summary under B's path nor poisoned B's announce-once gate.
+        await state.scanTask?.value
+        XCTAssertEqual(state.syncReport?.providers.map(\.kind), [.liveSync])
+        XCTAssertEqual(announcer.posts.count, 2, "vault B still announces once")
+        XCTAssertEqual(
+            announcer.posts.last?.message,
+            state.syncReport?.audioSummary,
+            "the second announcement is B's own summary")
+        XCTAssertNotEqual(
+            announcer.posts.last?.message, vaultASummary,
+            "vault A's summary must never fire after the switch")
+    }
+
     // MARK: - Panel state matrix (each state renders in both
     // appearances — the Presentation-Ready render smoke — with the
     // state selection logic pinned above by the loading tests)

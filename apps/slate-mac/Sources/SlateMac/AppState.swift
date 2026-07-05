@@ -3285,8 +3285,15 @@ final class AppState: ObservableObject {
                 }
             }.value
         // A vault switch mid-load: don't publish a stale report over
-        // the new vault's freshly-reset state.
-        guard !Task.isCancelled else { return }
+        // the new vault's freshly-reset state. `Task.isCancelled` only
+        // covers the scanTask funnel — `refreshSyncDiagnostics()` runs
+        // in its own Task that a vault switch never cancels, so a
+        // refresh started under vault A resuming after a switch to B
+        // would otherwise publish A's report AND fire A's assertive
+        // announcement under B's gate (poisoning B's announce-once).
+        // The session-identity recheck is the #328 red-team P1 pattern
+        // every other post-await publish in this file uses.
+        guard !Task.isCancelled, currentSession === session else { return }
         switch result {
         case .success(let (report, config)):
             syncReport = report
