@@ -83,6 +83,7 @@ private struct TabGroupView: View {
         if case .canvas(let path) = group.activeTab?.item {
             CanvasContainerView(
                 document: appState.canvasDocument(for: path),
+                workspace: appState.workspace,
                 tabID: group.activeTab?.id ?? TabID(raw: UUID()))
         } else if isFocused || !hasSplits {
             // The focused pane (or the only pane): the live document.

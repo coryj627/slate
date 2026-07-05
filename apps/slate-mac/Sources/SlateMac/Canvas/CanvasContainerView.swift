@@ -15,6 +15,11 @@ import SwiftUI
 struct CanvasContainerView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var document: CanvasDocument
+    // The active surface lives on `workspace` (a nested ObservableObject);
+    // observe it directly, or a surface switch — which changes no AppState
+    // @Published field — never re-renders this view (the ancestor that
+    // observes `workspace` diffs equal because `model` is unchanged).
+    @ObservedObject var workspace: WorkspaceState
     let tabID: TabID
 
     /// Focus lands on the canvas content when a canvas opens
@@ -202,7 +207,7 @@ struct CanvasContainerView: View {
     }
 
     private var surface: CanvasSurface {
-        appState.workspace.canvasSurface(for: tabID)
+        workspace.canvasSurface(for: tabID)
     }
 
     private var modeController: CanvasModeController {
@@ -296,8 +301,8 @@ struct CanvasContainerView: View {
 
     private var surfaceBinding: Binding<CanvasSurface> {
         Binding(
-            get: { appState.workspace.canvasSurface(for: tabID) },
-            set: { appState.workspace.setCanvasSurface($0, for: tabID) }
+            get: { workspace.canvasSurface(for: tabID) },
+            set: { workspace.setCanvasSurface($0, for: tabID) }
         )
     }
 
