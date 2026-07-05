@@ -240,57 +240,73 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
     /// `currentSession === session` recheck after the detached probe,
     /// a refresh started under vault A that resumes after a switch to
     /// vault B publishes A's report over B's freshly-reset state AND
-    /// fires A's assertive announcement under B's gate, poisoning B's
-    /// announce-once. Pin: the stale load must bail, and B's own
-    /// funnel must still publish B's report and post B's announcement.
+    /// fires A's assertive announcement under B's path, poisoning B's
+    /// announce-once gate.
+    ///
+    /// The interleaving is pinned DETERMINISTICALLY via the
+    /// `syncDiagnosticsPublishGate` seam (codex round 2: a
+    /// `Task.yield()`-based ordering is scheduler behavior, not a
+    /// guarantee — the test could go green vacuously): the stale load
+    /// is parked inside the race window (post-probe, pre-guard) on a
+    /// suspended continuation, the vault switch completes fully, and
+    /// only then is the load released into the guard.
     func testStaleRefreshAfterVaultSwitchNeitherPublishesNorAnnounces() async throws {
         let announcer = RecordingAnnouncer()
-        // Vault A: LiveSync (High) + Git (Low) → announces on open with
-        // a 2-system summary that is distinguishable from B's below.
+        // Vault A: LiveSync (High) + Git (Low) → announces on open.
         let state = try await openVault(named: "race-a", announcer: announcer) {
             try self.plantLiveSync($0)
             try self.plantGit($0)
         }
         XCTAssertEqual(announcer.posts.count, 1)
-        let vaultASummary = try XCTUnwrap(state.syncReport?.audioSummary)
         XCTAssertEqual(
             state.syncReport?.providers.map(\.kind), [.liveSync, .git])
 
-        // Start a refresh that captures vault A's session, and yield so
-        // it advances to its detached-probe suspension point before the
-        // switch below (the main actor is serial: the enqueued task
-        // runs to its first await, then control returns here).
+        // Park the NEXT load inside the race window: the gate signals
+        // entry (the refresh has finished its probe against vault A's
+        // session and sits just before the publish guard), then
+        // suspends until the stream is finished.
+        let entered = expectation(description: "stale refresh parked in the race window")
+        let (gateStream, release) = AsyncStream.makeStream(of: Void.self)
+        state.syncDiagnosticsPublishGate = {
+            entered.fulfill()
+            for await _ in gateStream {}
+        }
         let staleRefresh = Task { await state.loadSyncDiagnostics() }
-        await Task.yield()
+        await fulfillment(of: [entered], timeout: 10)
+        // The refresh is now deterministically suspended in the
+        // window. Uninstall the gate so vault B's own funnel below
+        // runs ungated.
+        state.syncDiagnosticsPublishGate = nil
 
-        // Switch to vault B (LiveSync only — also announce-worthy, with
-        // a DIFFERENT 1-system summary) while the refresh is in flight.
-        let vaultB = tempDir.appendingPathComponent("race-b")
-        try FileManager.default.createDirectory(
-            at: vaultB, withIntermediateDirectories: true)
-        try plantLiveSync(vaultB)
-        state.openVault(at: vaultB)
+        // Switch to a CLEAN vault B and let its funnel finish
+        // completely: empty report, no announcement.
+        try await reopenVault(named: "race-b", in: state)
+        XCTAssertEqual(state.syncReport?.providers.isEmpty, true)
+        XCTAssertEqual(announcer.posts.count, 1)
 
-        // The stale refresh resumes against B's session and must bail:
-        // no publish of A's providers, no announcement of A's summary.
+        // Release the parked refresh: it resumes holding vault A's
+        // session and must bail at the identity guard — publishing A's
+        // report over B's empty one, or firing A's High-risk
+        // announcement under B's path, is the regression.
+        release.finish()
         await staleRefresh.value
-        XCTAssertNotEqual(
-            state.syncReport?.providers.map(\.kind), [.liveSync, .git],
+        XCTAssertEqual(
+            state.syncReport?.providers.isEmpty, true,
             "stale refresh must not publish vault A's report over vault B")
+        XCTAssertEqual(
+            announcer.posts.count, 1,
+            "vault A's announcement must not fire under vault B")
 
-        // B's own funnel completes: B's report, and B's OWN
-        // announcement — proving the stale refresh neither announced
-        // A's summary under B's path nor poisoned B's announce-once gate.
-        await state.scanTask?.value
-        XCTAssertEqual(state.syncReport?.providers.map(\.kind), [.liveSync])
-        XCTAssertEqual(announcer.posts.count, 2, "vault B still announces once")
+        // The announce-once gate survived un-poisoned: a fresh
+        // announce-worthy vault C still announces its own summary.
+        try await reopenVault(named: "race-c", in: state) {
+            try self.plantLiveSync($0)
+        }
+        XCTAssertEqual(announcer.posts.count, 2, "vault C still announces once")
         XCTAssertEqual(
             announcer.posts.last?.message,
             state.syncReport?.audioSummary,
-            "the second announcement is B's own summary")
-        XCTAssertNotEqual(
-            announcer.posts.last?.message, vaultASummary,
-            "vault A's summary must never fire after the switch")
+            "the second announcement is vault C's own summary")
     }
 
     // MARK: - Panel state matrix (each state renders in both

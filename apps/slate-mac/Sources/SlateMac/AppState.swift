@@ -3257,6 +3257,15 @@ final class AppState: ObservableObject {
     /// was closed and reopened mid-session.
     private var syncAnnouncedVaultPath: String?
 
+    /// M-3 (#534) race-test seam — ALWAYS nil in production. When set,
+    /// `loadSyncDiagnostics` awaits it after the detached probe
+    /// returns and BEFORE the publish guard, so the stale-refresh
+    /// regression test can deterministically park a load inside the
+    /// race window (a `Task.yield()`-based interleaving is scheduler
+    /// behavior, not a guarantee — codex adversarial round 2). A nil
+    /// hook is a single optional check on the load path.
+    var syncDiagnosticsPublishGate: (() async -> Void)?
+
     /// Re-run detection + config read. Wired to the panel's Refresh
     /// button, the `slate.diagnostics.refreshSync` command, and its
     /// View-menu item.
@@ -3284,6 +3293,10 @@ final class AppState: ObservableObject {
                     return .failure(.Io(message: error.localizedDescription))
                 }
             }.value
+        // Race-test seam: parks the load inside the race window
+        // (post-probe, pre-guard). Nil in production — see the
+        // property doc.
+        if let gate = syncDiagnosticsPublishGate { await gate() }
         // A vault switch mid-load: don't publish a stale report over
         // the new vault's freshly-reset state. `Task.isCancelled` only
         // covers the scanTask funnel — `refreshSyncDiagnostics()` runs
