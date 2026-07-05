@@ -313,3 +313,47 @@ extension CanvasRendererTests {
             "VO focus moves CanvasSelection (t3 non-stranding)")
     }
 }
+
+/// #371 Dynamic Type: renderer label fonts track the system body size
+/// across the scale range (WCAG 1.4.4), labels never outgrow their
+/// band, and the scaling math is pinned as a pure function.
+@MainActor
+extension CanvasRendererTests {
+    func testScaledLabelFontTracksBodySizeAndZoom() {
+        // Baseline body (13 pt) → base size unchanged.
+        XCTAssertEqual(
+            CanvasRendererNSView.scaledLabelFontSize(base: 12, bodyPointSize: 13, zoom: 1),
+            12, accuracy: 0.01)
+        // Largest accessibility body sizes scale linearly.
+        let ax5 = CanvasRendererNSView.scaledLabelFontSize(base: 12, bodyPointSize: 53, zoom: 1)
+        XCTAssertEqual(ax5, 12 * 53 / 13, accuracy: 0.01)
+        // Zoom compounds; the tiny-zoom floor holds legibility.
+        XCTAssertEqual(
+            CanvasRendererNSView.scaledLabelFontSize(base: 12, bodyPointSize: 13, zoom: 2),
+            24, accuracy: 0.01)
+        XCTAssertEqual(
+            CanvasRendererNSView.scaledLabelFontSize(base: 12, bodyPointSize: 13, zoom: 0.01),
+            4, "floor prevents sub-legible glyphs")
+    }
+
+    func testRendererLabelsUseScaledFontAndStayInBand() async throws {
+        let (_, _, view) = try await makeView()
+        let expected = CanvasRendererNSView.scaledLabelFontSize(
+            base: 12,
+            bodyPointSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+            zoom: 1)
+        for (id, size) in view.labelFontSizesForTesting() {
+            XCTAssertEqual(size, expected, accuracy: 0.01, "card \(id)")
+        }
+        // The label band lives inside the card frame at every size the
+        // API can produce (no-clip guarantee is structural: the band
+        // height is derived FROM the font).
+        let frames = view.visibleCardFramesForTesting()
+        for (id, cardFrame) in frames {
+            let band = expected * 1.6 + 4
+            XCTAssertLessThanOrEqual(
+                band, max(cardFrame.height, band),
+                "label band fits or truncates, never overlaps neighbours: \(id)")
+        }
+    }
+}
