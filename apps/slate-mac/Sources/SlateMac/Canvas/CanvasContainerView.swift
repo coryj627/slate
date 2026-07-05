@@ -21,10 +21,6 @@ struct CanvasContainerView: View {
     /// (WCAG 2.4.3 — the tab press deposits the user somewhere real).
     @AccessibilityFocusState private var contentFocused: Bool
 
-    /// Interim text-card detail (t2 R14): read-only content panel,
-    /// shared by outline and table activation. #368 replaces it with
-    /// the real editing component.
-    @State private var detail: (title: String, text: String)?
 
     var body: some View {
         Group {
@@ -70,8 +66,13 @@ struct CanvasContainerView: View {
                 whereAmIPanel(readback)
             }
         }
-        .sheet(isPresented: detailPresented) {
-            detailPanel
+        .sheet(item: cardEditorBinding) { request in
+            CanvasCardEditorSheet(request: request)
+                .onDisappear {
+                    // Focus returns to the canvas content (t0 M8 /
+                    // WCAG 2.4.3) — the card row keeps selection.
+                    DispatchQueue.main.async { contentFocused = true }
+                }
         }
         .sheet(item: promptBinding) { prompt in
             CanvasPromptSheet(prompt: prompt)
@@ -85,6 +86,13 @@ struct CanvasContainerView: View {
                 appState.canvasHandleCardPick(request.purpose, target: picked)
             }
         }
+    }
+
+    private var cardEditorBinding: Binding<CanvasCardEditorRequest?> {
+        Binding(
+            get: { appState.canvasCardEditor },
+            set: { appState.canvasCardEditor = $0 }
+        )
     }
 
     private var cardPickerBinding: Binding<CanvasCardPickerRequest?> {
@@ -101,29 +109,32 @@ struct CanvasContainerView: View {
         )
     }
 
-    // MARK: Activation (one semantic across surfaces; #368 replaces)
+    // MARK: Activation (one semantic across surfaces, t2 §#362)
 
-    /// Per-kind activation (t2 §#362): markdown file → note tab; link →
-    /// browser; text → interim read-only detail; media honestly deferred.
+    /// Per-kind activation: text → the #368 card editor; markdown file
+    /// → note tab; media file → default app; link → browser.
     private func activate(nodeId: String, kind: String, title: String) {
         document.lastActivatedNode = nodeId
         switch kind {
         case "text":
-            guard let session = appState.currentSession, let handle = document.handle,
-                let text = try? session.canvasNodeText(handle: handle, nodeId: nodeId)
-            else { return }
-            detail = (title: title, text: text ?? "")
-        case "file":
+            appState.canvasEditCard(nodeId: nodeId)
+        case "file", "image":
             let target = document.target(of: nodeId)
             if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
                 appState.openFile(target, target: .currentTab)
+            } else if let vault = appState.currentVaultURL,
+                FileManager.default.fileExists(
+                    atPath: vault.appendingPathComponent(target).path),
+                appState.externalOpener(vault.appendingPathComponent(target))
+            {
+                appState.canvasAnnouncer.announce(
+                    .status("Opened \(title) in its default app."))
             } else {
                 appState.canvasAnnouncer.announce(
-                    .status("Opening this file kind from the canvas arrives with canvas actions."))
+                    .error(
+                        "\(target.isEmpty ? title : target) is missing from the vault. Use Locate File to repoint this card."
+                    ))
             }
-        case "image":
-            appState.canvasAnnouncer.announce(
-                .status("Opening media from the canvas arrives with canvas actions."))
         case "link":
             let target = document.target(of: nodeId)
             if let url = URL(string: target), appState.externalOpener(url) {
@@ -134,41 +145,6 @@ struct CanvasContainerView: View {
         default:
             break
         }
-    }
-
-    private var detailPresented: Binding<Bool> {
-        Binding(
-            get: { detail != nil },
-            set: { if !$0 { detail = nil } }
-        )
-    }
-
-    /// Interim read-only text panel (t2 R14). Esc closes; focus returns
-    /// to the canvas content (WCAG 2.4.3).
-    private var detailPanel: some View {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-            Text(detail?.title ?? "")
-                .font(Tokens.Typography.body.weight(.semibold))
-            ScrollView {
-                Text(detail?.text ?? "")
-                    .font(Tokens.Typography.body)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Spacer()
-                Button("Close") {
-                    detail = nil
-                    DispatchQueue.main.async { contentFocused = true }
-                }
-                .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(Tokens.Spacing.lg)
-        .frame(minWidth: 360, minHeight: 240)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "Card text: \(detail?.title ?? ""). Read-only until canvas editing arrives.")
     }
 
     /// t0 §1.4: the transient, focusable Where-am-I panel — the
@@ -273,24 +249,25 @@ struct CanvasContainerView: View {
 
     // MARK: Empty / error states
 
-    /// Actionable onboarding (t2 §369.5 Wave-2 copy — #368 updates it
-    /// to lead with New Card once that command ships).
+    /// Actionable onboarding (#368: leads with New Card).
     private var emptyOnboarding: some View {
         VStack(spacing: Tokens.Spacing.sm) {
             Spacer()
             Text("Canvas is empty.")
                 .font(Tokens.Typography.body)
-            Text("Open the Command Palette (⌘⇧P) — every canvas action is there.")
-                .font(Tokens.Typography.body)
-                .foregroundStyle(Tokens.ColorRole.textSecondary)
-                .multilineTextAlignment(.center)
+            Text(
+                "Press ⌥⌘N to create your first card. Every other canvas action is in the Command Palette (⌘⇧P)."
+            )
+            .font(Tokens.Typography.body)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
+            .multilineTextAlignment(.center)
             Spacer()
         }
         .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Canvas is empty. Open the Command Palette, Command Shift P — every canvas action is there."
+            "Canvas is empty. Press Option Command N to create your first card. Every other canvas action is in the Command Palette, Command Shift P."
         )
         .accessibilityFocused($contentFocused)
     }

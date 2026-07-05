@@ -26,6 +26,14 @@ enum CanvasPrompt: Identifiable, Equatable {
     case marksList
     /// #524: label prompt for Group Marked Cards.
     case groupMarked
+    /// #368 R5: vault-note picker for Add Note to Canvas….
+    case addNote(files: [String])
+    /// #368 R5: vault-media picker for Add Media….
+    case addMedia(files: [String])
+    /// #368 R5: URL prompt for Add Link Card.
+    case addLink
+    /// #368 t0 §5: repoint a file card at a new vault path.
+    case locate(nodeId: String, title: String, files: [String])
 
     var id: String {
         switch self {
@@ -38,6 +46,10 @@ enum CanvasPrompt: Identifiable, Equatable {
         case .editConnection: return "editConnection"
         case .marksList: return "marksList"
         case .groupMarked: return "groupMarked"
+        case .addNote: return "addNote"
+        case .addMedia: return "addMedia"
+        case .addLink: return "addLink"
+        case .locate: return "locate"
         }
     }
 
@@ -53,9 +65,8 @@ extension AppState {
     }
 
     /// New Card (⌥⌘N): text card auto-placed adjacent to the selection
-    /// (interview decision 1), announced relatively, selected.
-    /// The Wave-4 editor lands the card in edit mode; until #368's
-    /// editor slice merges, selection + announcement are the landing.
+    /// (interview decision 1), announced relatively, selected, and
+    /// landed in edit mode (G22) via the #368 card editor.
     func canvasNewCard() {
         guard let doc = activeCanvasDocument, let session = currentSession,
             let handle = doc.handle
@@ -84,6 +95,9 @@ extension AppState {
                     CanvasAnnouncer.createdText(
                         card: CanvasCardRef(kind: "text", title: "Untitled"),
                         relative: placement.relative)))
+            // G22: a new text card lands in edit mode.
+            canvasCardEditor = CanvasCardEditorRequest(
+                nodeId: id, title: "Untitled", initialText: "")
         } catch {
             canvasAnnouncer.announce(.error("New card failed: \(error.localizedDescription)"))
         }

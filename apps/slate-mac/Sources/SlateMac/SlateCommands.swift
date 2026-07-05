@@ -82,6 +82,12 @@ enum SlateCommandID {
     static let canvasConnectMode = "slate.canvas.connectMode"
     static let canvasDeleteConnection = "slate.canvas.deleteConnection"
     static let canvasEditConnection = "slate.canvas.editConnection"
+    static let canvasEditCard = "slate.canvas.editCard"
+    static let canvasAddNote = "slate.canvas.addNote"
+    static let canvasAddMedia = "slate.canvas.addMedia"
+    static let canvasAddLink = "slate.canvas.addLink"
+    static let canvasRemoveFromGroup = "slate.canvas.removeFromGroup"
+    static let canvasLocateFile = "slate.canvas.locateFile"
     static let canvasToggleMark = "slate.canvas.toggleMark"
     static let canvasShowMarks = "slate.canvas.showMarks"
     static let canvasClearMarks = "slate.canvas.clearMarks"
@@ -189,6 +195,12 @@ enum SlateCommandID {
         canvasConnectMode,
         canvasDeleteConnection,
         canvasEditConnection,
+        canvasEditCard,
+        canvasAddNote,
+        canvasAddMedia,
+        canvasAddLink,
+        canvasRemoveFromGroup,
+        canvasLocateFile,
         canvasToggleMark,
         canvasShowMarks,
         canvasClearMarks,
@@ -625,6 +637,49 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Change one of the selected card's connection labels or direction."
     ) { [weak appState] in appState?.canvasPromptEditConnection() }
+
+    // #368 part 2: editor + creation for every card kind + repoint.
+    register(
+        SlateCommandID.canvasEditCard,
+        label: "Canvas: Edit Card Text…",
+        section: .canvas,
+        hint: "Open the selected text card in the editor. Escape saves and returns."
+    ) { [weak appState] in appState?.canvasEditCard() }
+
+    register(
+        SlateCommandID.canvasAddNote,
+        label: "Canvas: Add Note to Canvas…",
+        section: .canvas,
+        hint: "Pick a vault note; a file card is placed next to your selection."
+    ) { [weak appState] in appState?.canvasOpenAddNote() }
+
+    register(
+        SlateCommandID.canvasAddMedia,
+        label: "Canvas: Add Media…",
+        section: .canvas,
+        hint: "Pick a vault media file; a file card is placed next to your selection."
+    ) { [weak appState] in appState?.canvasOpenAddMedia() }
+
+    register(
+        SlateCommandID.canvasAddLink,
+        label: "Canvas: Add Link Card…",
+        section: .canvas,
+        hint: "Paste or type a URL; a link card is placed next to your selection."
+    ) { [weak appState] in appState?.canvasOpenAddLink() }
+
+    register(
+        SlateCommandID.canvasRemoveFromGroup,
+        label: "Canvas: Remove from Group",
+        section: .canvas,
+        hint: "Move the selected card out of its enclosing group, placed by the engine."
+    ) { [weak appState] in appState?.canvasRemoveFromGroup() }
+
+    register(
+        SlateCommandID.canvasLocateFile,
+        label: "Canvas: Locate File…",
+        section: .canvas,
+        hint: "Repoint the selected file card at a different vault file."
+    ) { [weak appState] in appState?.canvasOpenLocate() }
 
     // Mark-then-act (#524, decision 4: no shift-range selection).
     register(

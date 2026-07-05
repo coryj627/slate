@@ -109,6 +109,34 @@ struct CanvasPromptSheet: View {
                 commitRow("Group") {
                     appState.canvasGroupMarked(label: text)
                 }
+            case .addNote(let files):
+                filePickBody(
+                    heading: "Add Note to Canvas",
+                    prompt: "Pick a note — a file card is placed next to your selection.",
+                    files: files
+                ) { appState.canvasAddFileCard(path: $0) }
+            case .addMedia(let files):
+                filePickBody(
+                    heading: "Add Media",
+                    prompt: "Pick a media file — a file card is placed next to your selection.",
+                    files: files
+                ) { appState.canvasAddFileCard(path: $0) }
+            case .addLink:
+                Text("Add Link Card")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                TextField("URL", text: $text, prompt: Text("https://…"))
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.URL)
+                    .accessibilityLabel("Link URL")
+                commitRow("Add") {
+                    appState.canvasAddLinkCard(url: text)
+                }
+            case .locate(let nodeId, let title, let files):
+                filePickBody(
+                    heading: "Locate File for \"\(title)\"",
+                    prompt: "Pick the vault file this card should point at.",
+                    files: files
+                ) { appState.canvasLocate(nodeId: nodeId, path: $0) }
             case .setColor:
                 Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
                 // Color is never color-alone: named buttons (1.4.1).
@@ -151,6 +179,10 @@ struct CanvasPromptSheet: View {
         case .editConnection: return "Edit Connection"
         case .marksList: return "Marked Cards"
         case .groupMarked: return "Group Marked Cards"
+        case .addNote: return "Add Note to Canvas"
+        case .addMedia: return "Add Media"
+        case .addLink: return "Add Link Card"
+        case .locate: return "Locate File"
         }
     }
 
@@ -196,6 +228,50 @@ struct CanvasPromptSheet: View {
             }
             Spacer()
             Button("Close") { appState.canvasPrompt = nil }
+                .keyboardShortcut(.cancelAction)
+        }
+    }
+
+    /// #368 R5: the shared quick-open-style vault-file picker — filter
+    /// field + list, one activation commits. Used by Add Note, Add
+    /// Media, and Locate….
+    @ViewBuilder
+    private func filePickBody(
+        heading: String, prompt: String, files: [String],
+        commit: @escaping (String) -> Void
+    ) -> some View {
+        let filtered =
+            text.isEmpty
+            ? files
+            : files.filter { $0.localizedCaseInsensitiveContains(text) }
+        Text(heading)
+            .font(Tokens.Typography.body.weight(.semibold))
+        Text(prompt)
+            .font(Tokens.Typography.caption)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
+        TextField("Filter", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel("Filter files")
+        List(filtered.prefix(200), id: \.self) { path in
+            Button {
+                appState.canvasPrompt = nil
+                commit(path)
+            } label: {
+                Text(path)
+                    .font(Tokens.Typography.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(path)
+        }
+        .frame(minHeight: 180, maxHeight: 280)
+        .accessibilityLabel("\(heading): \(filtered.count) file\(filtered.count == 1 ? "" : "s")")
+        HStack {
+            Text("\(filtered.count) of \(files.count) files")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Spacer()
+            Button("Cancel") { appState.canvasPrompt = nil }
                 .keyboardShortcut(.cancelAction)
         }
     }
