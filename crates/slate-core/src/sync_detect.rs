@@ -466,7 +466,13 @@ fn detect_onedrive(root: &Path, canon: &Path, fs: &dyn FsProbe) -> Option<Detect
     if has_onedrive_component {
         evidence.push(canon.display().to_string());
     }
-    if fs.exists(&root.join(ONEDRIVE_MARKER)) {
+    // The normative table's arm (b) is a marker *file*; a directory of
+    // that exact GUID name is a lookalike and must not fire (same
+    // file-vs-directory discipline the Dropbox `.dropbox` and Syncthing
+    // `.stignore` arms enforce — Git is the sole dir-or-file exception,
+    // by explicit spec wording).
+    let marker = root.join(ONEDRIVE_MARKER);
+    if fs.exists(&marker) && !fs.is_dir(&marker) {
         evidence.push(ONEDRIVE_MARKER.to_string());
     }
 
@@ -929,6 +935,16 @@ mod tests {
         assert_eq!(p.evidence_paths, vec![ONEDRIVE_MARKER.to_string()]);
     }
 
+    #[test]
+    fn onedrive_marker_as_dir_does_not_fire() {
+        // The table says marker FILE; a directory of that exact GUID
+        // name is a lookalike (mirrors the Dropbox/Syncthing
+        // file-vs-directory discipline).
+        let fs = FakeFs::with_home("/Users/u")
+            .dir("/Users/u/vault/.849C9593-D756-4E56-8D6E-42412F2A707B");
+        assert!(detect(&fs).providers.is_empty());
+    }
+
     // --- Google Drive ------------------------------------------------------
 
     #[test]
@@ -1239,6 +1255,7 @@ mod tests {
             (".stversions-notes.md", false),
             ("OneDrive.md", false),
             (".849C9593-D756-4E56-8D6E-42412F2A707B-backup", false), // suffix ruins the marker
+            (".849C9593-D756-4E56-8D6E-42412F2A707B", true), // exact GUID name but a DIR, not the file marker
             ("GoogleDrive-stuff", true), // component under the vault, not CloudStorage
             ("Library/Mobile Documents-notes", true),
         ];
