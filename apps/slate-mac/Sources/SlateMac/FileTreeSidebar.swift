@@ -1121,7 +1121,23 @@ struct FileTreeSidebar: View {
             // The a11y gate requires `.isButton` on any `.onTapGesture`
             // target; a file row that opens on activation is an honest button
             // (its hint already says "Opens the note").
+            //
+            // ⌘-click (U1-5 new-tab) is handled DIRECTLY, not via the
+            // selection mirror: routing it only through `listSelection`
+            // drops the open when the ⌘-clicked row is *already* selected
+            // (assigning the same value is a no-op, so `.onChange` never
+            // fires and the new tab is never created — a dead shortcut on
+            // the currently-open file). Opening here and returning keeps
+            // `listSelection` untouched, so `.onChange` can't double-open;
+            // the current tab's highlight is unchanged (a background tab
+            // was created), matching the mirror the onChange path restores.
+            // Plain click still flows through the mirror → `.onChange` →
+            // `openFile(.currentTab)` exactly as before.
             .onTapGesture {
+                if appState.openTargetFromCurrentEvent() == .newTab {
+                    appState.openFile(node.path, target: .newTab)
+                    return
+                }
                 if let rid = rowID(forPath: node.path) { listSelection = rid }
             }
             .accessibilityElement(children: .combine)
