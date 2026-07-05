@@ -4,15 +4,17 @@
 import SwiftUI
 
 /// A right-pane leaf: one selectable panel in the trailing utility rail
-/// (Milestone U4-1, #470; all ten leaves live as of U4-2, #471).
+/// (Milestone U4-1, #470; all ten U-program leaves live as of U4-2, #471;
+/// M-3 #534 adds the eleventh, `.syncDiagnostics`).
 ///
-/// The full ten-case vocabulary is the rail's iteration + persistence order.
-/// All ten leaves are `registered`: the three former detail-column tabs
-/// (`.outline`, `.citations`, `.bibliography`) that U4-1 seeded, plus the
+/// The full vocabulary is the rail's iteration + persistence order. All
+/// eleven leaves are `registered`: the three former detail-column tabs
+/// (`.outline`, `.citations`, `.bibliography`) that U4-1 seeded, the
 /// seven panels U4-2 ported out of the retired left-sidebar stack
 /// (`.backlinks`, `.outgoingLinks`, `.embeds`, `.math`, `.code`, `.diagrams`,
-/// `.tasks`). The rail renders every registered leaf, so it shows ten icons
-/// and the pane replaces both the old segmented picker AND the sidebar stack.
+/// `.tasks`), plus M-3's vault-level `.syncDiagnostics`. The rail renders
+/// every registered leaf, so it shows eleven icons and the pane replaces
+/// both the old segmented picker AND the sidebar stack.
 ///
 /// `rawValue` is the persistence token stored in `workspace.json`; an unknown
 /// token decodes to `.outline` (see `Leaf.init(persisted:)`).
@@ -27,6 +29,9 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     case tasks
     case citations
     case bibliography
+    /// Vault-level sync diagnostics (Milestone M-3, #534) — the eleventh
+    /// leaf, vault-scoped like `.bibliography`.
+    case syncDiagnostics
 
     var id: String { rawValue }
 
@@ -44,6 +49,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .tasks: return "Tasks"
         case .citations: return "Citations"
         case .bibliography: return "Bibliography"
+        case .syncDiagnostics: return "Sync"
         }
     }
 
@@ -65,19 +71,21 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .tasks: return .tasksLeaf
         case .citations: return .citationSummary
         case .bibliography: return .bibliography
+        case .syncDiagnostics: return .syncDiagnostics
         }
     }
 
     /// Leaves whose content is live, in rail order (outline first — most used,
     /// matches the old default tab; the order is the registry declaration
-    /// order per u4_spec §U4-2). All ten leaves are registered as of U4-2
-    /// (#471): the seven former sidebar-stack panels ported into the leaf host
-    /// alongside the three detail tabs U4-1 seeded. The rail iterates exactly
-    /// this list, so an unregistered leaf can never present a
-    /// selectable-but-blank icon.
+    /// order per u4_spec §U4-2). Ten leaves as of U4-2 (#471): the seven
+    /// former sidebar-stack panels ported into the leaf host alongside the
+    /// three detail tabs U4-1 seeded. M-3 (#534) appends `.syncDiagnostics`
+    /// LAST — vault-level diagnostics, least-frequently visited. The rail
+    /// iterates exactly this list, so an unregistered leaf can never present
+    /// a selectable-but-blank icon.
     static let registered: [Leaf] = [
         .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-        .tasks, .citations, .bibliography,
+        .tasks, .citations, .bibliography, .syncDiagnostics,
     ]
 
     var isRegistered: Bool { Self.registered.contains(self) }
@@ -245,8 +253,9 @@ struct RightPaneView: View {
             .accessibilityFocused($leafAXFocused)
     }
 
-    /// Maps a leaf to its panel view. All ten leaves are registered (U4-2), so
-    /// the switch is exhaustive over `Leaf` — no default arm. The seven panels
+    /// Maps a leaf to its panel view. All eleven leaves are registered (U4-2
+    /// + M-3), so the switch is exhaustive over `Leaf` — no default arm. The
+    /// seven panels
     /// ported here from the retired sidebar stack are unchanged in binding and
     /// AX; only their outer self-hiding `EmptyView` gates became labeled leaf
     /// empty states (a leaf must never be a blank rectangle — DoD §A). Registry
@@ -275,6 +284,8 @@ struct RightPaneView: View {
             CitationsPanel()
         case .bibliography:
             BibliographyPanel()
+        case .syncDiagnostics:
+            SyncDiagnosticsPanel()
         }
     }
 

@@ -164,6 +164,16 @@ struct SlateMacApp: App {
                 .keyboardShortcut(.rightArrow, modifiers: [.control, .command])
                 .disabled(!appState.isVaultOpen)
 
+                // M-3 (#534): panel-scoped command's menu home (the
+                // registry invariant is menu↔palette unification; the
+                // workspace-tabs precedent above is the normative home
+                // for View-section commands). No hotkey — refresh is a
+                // rare, deliberate action.
+                Button("Refresh sync diagnostics") {
+                    appState.refreshSyncDiagnostics()
+                }
+                .disabled(!appState.isVaultOpen)
+
                 Divider()
 
                 // Milestone T (#518): the ⌃⌘I Where-am-I chord lives in

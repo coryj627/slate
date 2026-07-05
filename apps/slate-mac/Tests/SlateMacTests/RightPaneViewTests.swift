@@ -42,16 +42,19 @@ final class RightPaneViewTests: XCTestCase {
     /// (no wrap — a segmented picker's arrow-within behavior). As of U4-2 all
     /// ten leaves are registered, in the rail/registry order
     /// [outline, backlinks, outgoingLinks, embeds, math, code, diagrams, tasks,
-    /// citations, bibliography].
+    /// citations, bibliography, syncDiagnostics].
     func testRailMoveSteppingAndClamping() {
         // Down from the top advances; down from the bottom is a no-op (clamp).
         XCTAssertEqual(Leaf.railMove(from: .outline, .down), .backlinks)
         XCTAssertEqual(Leaf.railMove(from: .backlinks, .down), .outgoingLinks)
         XCTAssertEqual(Leaf.railMove(from: .tasks, .down), .citations)
         XCTAssertEqual(Leaf.railMove(from: .citations, .down), .bibliography)
-        XCTAssertNil(Leaf.railMove(from: .bibliography, .down), "clamped at the end")
+        // M-3 (#534): syncDiagnostics is the new rail tail.
+        XCTAssertEqual(Leaf.railMove(from: .bibliography, .down), .syncDiagnostics)
+        XCTAssertNil(Leaf.railMove(from: .syncDiagnostics, .down), "clamped at the end")
 
         // Up mirrors it.
+        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .bibliography)
         XCTAssertEqual(Leaf.railMove(from: .bibliography, .up), .citations)
         XCTAssertEqual(Leaf.railMove(from: .outgoingLinks, .up), .backlinks)
         XCTAssertEqual(Leaf.railMove(from: .backlinks, .up), .outline)
@@ -91,22 +94,25 @@ final class RightPaneViewTests: XCTestCase {
     /// U4-2 registers all ten leaves in the rail/registry order (outline first
     /// — most used, matches the old default tab): the three detail tabs U4-1
     /// seeded plus the seven ported out of the retired sidebar stack.
-    func testAllTenLeavesRegisteredInRailOrder() {
+    func testAllElevenLeavesRegisteredInRailOrder() {
         XCTAssertEqual(
             Leaf.registered,
             [
                 .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-                .tasks, .citations, .bibliography,
+                .tasks, .citations, .bibliography, .syncDiagnostics,
             ])
         // Every case is now registered — no leaf presents a selectable-but-
         // blank rail icon.
         for leaf in Leaf.allCases {
             XCTAssertTrue(leaf.isRegistered, "\(leaf) must be registered as of U4-2")
         }
-        XCTAssertEqual(Leaf.allCases.count, 10, "the full leaf vocabulary is declared")
+        XCTAssertEqual(Leaf.allCases.count, 11, "the full leaf vocabulary is declared")
         // The registry is exactly the case set (no duplicates, none missing).
         XCTAssertEqual(Set(Leaf.registered), Set(Leaf.allCases))
         XCTAssertEqual(Leaf.registered.count, Leaf.allCases.count)
+        // M-3 (#534): sync diagnostics is registered LAST — vault-level
+        // diagnostics, least-frequently visited (m_spec §M-3).
+        XCTAssertEqual(Leaf.registered.last, .syncDiagnostics)
     }
 
     /// Every leaf has a non-empty title (the rail label / help / announcement)
@@ -126,6 +132,8 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.tasks.symbol, .tasksLeaf)
         XCTAssertEqual(Leaf.citations.symbol, .citationSummary)
         XCTAssertEqual(Leaf.bibliography.symbol, .bibliography)
+        XCTAssertEqual(Leaf.syncDiagnostics.symbol, .syncDiagnostics)
+        XCTAssertEqual(Leaf.syncDiagnostics.title, "Sync")
     }
 
     // MARK: - Persistence
@@ -146,6 +154,9 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf(persisted: "tasks"), .tasks)
         XCTAssertEqual(Leaf(persisted: "citations"), .citations)
         XCTAssertEqual(Leaf(persisted: "bibliography"), .bibliography)
+        // M-3 (#534): the new leaf round-trips; older builds decode the
+        // token to `.outline` by the same unknown-token fallback above.
+        XCTAssertEqual(Leaf(persisted: "syncDiagnostics"), .syncDiagnostics)
     }
 
     /// `activeLeaf` round-trips through the `WorkspaceStore` snapshot schema.
