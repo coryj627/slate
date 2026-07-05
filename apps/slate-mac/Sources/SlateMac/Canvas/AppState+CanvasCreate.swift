@@ -56,13 +56,23 @@ extension AppState {
     /// changed, silence-with-status when it didn't. NSTextView's own
     /// allowsUndo covers keystroke undo *inside* the session; after
     /// commit, ⌘Z on the canvas restores the previous text as one step.
+    ///
+    /// Data-safety (adversarial review): the editor sheet holds the
+    /// ONLY copy of `newText`, so it is dismissed only on a successful
+    /// apply or a true no-op — NOT when `canvasApply` fails (e.g. a
+    /// WriteConflict: the .canvas changed on disk). On failure the
+    /// sheet stays open with the draft so the user can retry/reload
+    /// rather than silently losing the edit.
     func canvasCommitCardEdit(nodeId: String, newText: String) {
-        defer { canvasCardEditor = nil }
         guard let doc = activeCanvasDocument,
             let editor = canvasCardEditor, editor.nodeId == nodeId
-        else { return }
+        else {
+            canvasCardEditor = nil
+            return
+        }
         guard newText != editor.initialText else {
             canvasAnnouncer.announce(.status("No changes."))
+            canvasCardEditor = nil
             return
         }
         let ok = canvasApply(
@@ -70,7 +80,10 @@ extension AppState {
                 name: "edit \"\(editor.title)\"",
                 ops: [.setNodeContent(id: nodeId, content: .text(text: newText))]),
             to: doc)
+        // Apply failed (the funnel already surfaced why) — keep the
+        // editor open so the draft is not lost.
         guard ok else { return }
+        canvasCardEditor = nil
         canvasAnnouncer.announce(.confirmation("Updated \"\(editor.title)\"."))
     }
 

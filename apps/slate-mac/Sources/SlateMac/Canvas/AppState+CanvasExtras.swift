@@ -215,14 +215,33 @@ extension AppState {
             canvasAnnouncer.announce(.error("The note path must end in .md."))
             return
         }
+        // The `files` snapshot is a cheap early bail; it is NOT the
+        // collision guard — a file present on disk but absent from the
+        // (possibly stale/unscanned) list would slip through. The real
+        // guard is the backend's create-if-absent contract below.
         guard !files.contains(where: { $0.path == cleanPath }) else {
             canvasAnnouncer.announce(.error("\(cleanPath) already exists. Pick another name."))
             return
         }
         let text = (try? session.canvasNodeText(handle: handle, nodeId: nodeId)) ?? ""
         do {
+            // Data-safety (adversarial review): expectedContentHash ""
+            // is the create-IF-ABSENT idiom — the on-disk hash of a
+            // missing file is "" (session.rs read_disk_contents_and_hash),
+            // so an existing file mismatches and returns WriteConflict
+            // rather than being overwritten with the card text. `nil`
+            // would save unconditionally and clobber it.
             _ = try session.saveText(
-                path: cleanPath, contents: text, expectedContentHash: nil)
+                path: cleanPath, contents: text, expectedContentHash: "")
+        } catch let error as VaultError {
+            if case .WriteConflict = error {
+                canvasAnnouncer.announce(
+                    .error("\(cleanPath) already exists on disk. Pick another name."))
+            } else {
+                canvasAnnouncer.announce(
+                    .error("Could not create \(cleanPath): \(error.localizedDescription)"))
+            }
+            return
         } catch {
             canvasAnnouncer.announce(
                 .error("Could not create \(cleanPath): \(error.localizedDescription)"))
