@@ -1278,3 +1278,65 @@ extension CanvasNavigatorTests {
         XCTAssertEqual(state.selectedFilePath, "n.md")
     }
 }
+
+/// #373: the in-canvas filter — a view, never a mutation; navigator
+/// honors the filtered set; Esc rung; coalesced count announcements.
+@MainActor
+extension CanvasNavigatorTests {
+    func testFilterNarrowsOutlineAndTableAndNavigatorHonorsIt() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.filterText = "gamma"
+        XCTAssertEqual(doc.filteredOutline.map(\.title), ["Gamma"])
+
+        // Navigator walks ONLY matches while active.
+        doc.selection.selected = nil
+        state.canvasSelectAdjacent(offset: 1)
+        XCTAssertEqual(doc.selection.selected, "c")
+        posted = []
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("End of canvas."), "\(posted)")
+
+        // Kind + group-label matches work; the file stays untouched
+        // (a view, never a mutation).
+        doc.filterText = "group"
+        XCTAssertEqual(doc.filteredOutline.map(\.nodeId), ["g1"])
+        doc.filterText = "zone"
+        XCTAssertTrue(Set(doc.filteredOutline.map(\.nodeId)).isSuperset(of: ["g1", "a", "b"]))
+        doc.filterText = ""
+        XCTAssertEqual(doc.filteredOutline.count, doc.outline.count)
+    }
+
+    func testFilterCountAnnouncesAndClearRestores() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.filterText = "alp"
+        posted = []
+        state.canvasAnnounceFilterCount(doc: doc)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("1 card match."), "\(posted)")
+
+        posted = []
+        state.canvasClearFilter()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.filterText, "")
+        XCTAssertTrue(posted.contains("Filter cleared — 5 cards."), "\(posted)")
+
+        // No-match narration on movement.
+        doc.filterText = "zzz-nothing"
+        posted = []
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("No cards match the filter."), "\(posted)")
+        doc.filterText = ""
+    }
+
+    func testWhereAmIDisclosesActiveFilter() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "a", in: doc, announce: false)
+        doc.filterText = "alpha"
+        state.canvasWhereAmI()
+        let readback = try XCTUnwrap(state.canvasWhereAmIReadback)
+        XCTAssertTrue(
+            readback.contains("Filter active: 1 of 5 cards match."), readback)
+    }
+}

@@ -21,6 +21,9 @@ struct CanvasContainerView: View {
     /// (WCAG 2.4.3 — the tab press deposits the user somewhere real).
     @AccessibilityFocusState private var contentFocused: Bool
 
+    /// #373: keyboard focus for the in-canvas filter field (⌘F).
+    @FocusState private var filterFocused: Bool
+
 
     var body: some View {
         Group {
@@ -47,7 +50,24 @@ struct CanvasContainerView: View {
         // M5: one Esc press consumes one ladder rung (mode → filter →
         // surface). Unconsumed presses bubble to the workspace.
         .onKeyPress(.escape) {
-            modeController.handleEscape() ? .handled : .ignored
+            if modeController.handleEscape() { return .handled }
+            if document.filterActive || filterFocused {
+                appState.canvasClearFilter()
+                filterFocused = false
+                return .handled
+            }
+            return .ignored
+        }
+        .onChange(of: appState.canvasFilterFocusToken) { _, _ in
+            // The token is global; only the ACTIVE canvas takes focus,
+            // or ⌘F would grab the wrong window's field when several
+            // canvases are open (Codoki #626).
+            if document === appState.activeCanvasDocument {
+                filterFocused = true
+            }
+        }
+        .onChange(of: document.filterText) { _, _ in
+            appState.canvasAnnounceFilterCount(doc: document)
         }
         // M2: Return commits the active spatial mode (#521).
         .onKeyPress(.return) {
@@ -232,6 +252,25 @@ struct CanvasContainerView: View {
             .fixedSize()
             .accessibilityHint("Switches between the canvas outline, table, and visual views.")
 
+            HStack(spacing: Tokens.Spacing.sm) {
+                TextField("Filter cards", text: filterBinding, prompt: Text("Filter cards (⌘F)"))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+                    .focused($filterFocused)
+                    .accessibilityLabel("Filter cards")
+                    .accessibilityHint(
+                        "Narrows the outline and table by title, type, group, or target. Escape clears."
+                    )
+                if document.filterActive {
+                    // t0 §3: the result summary is pull-readable.
+                    Text("\(document.filteredOutline.count) of \(document.outline.count) cards match")
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    Button("Clear") { appState.canvasClearFilter() }
+                        .accessibilityLabel("Clear filter")
+                }
+            }
+
             if document.preservedItemCount > 0 {
                 // Pull-readable, not announcement-only (t0 §3): a
                 // focusable banner; #362's outline footer adds the
@@ -246,6 +285,13 @@ struct CanvasContainerView: View {
         }
         .padding(.horizontal, Tokens.Spacing.md)
         .padding(.vertical, Tokens.Spacing.xs)
+    }
+
+    private var filterBinding: Binding<String> {
+        Binding(
+            get: { document.filterText },
+            set: { document.filterText = $0 }
+        )
     }
 
     private var surfaceBinding: Binding<CanvasSurface> {

@@ -361,6 +361,10 @@ final class AppState: ObservableObject {
     /// #368: the open text-card edit session (sheet; Esc commits — M8).
     @Published var canvasCardEditor: CanvasCardEditorRequest?
 
+    /// #373: bumped to move keyboard focus into the canvas filter
+    /// field (⌘F while a canvas has focus).
+    @Published var canvasFilterFocusToken = 0
+
     /// Transient move/resize geometry (#521, the t4 pipeline
     /// exception): held UI-side while a spatial mode is active,
     /// committed as ONE canvas_apply on Return, dropped on Esc.
