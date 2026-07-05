@@ -6,7 +6,7 @@
 # picks it up). If you hit "cargo: command not found", source
 # the rustup env once: `. "$HOME/.cargo/env"`.
 
-.PHONY: help check test fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings swift-cli mac-app mac-app-run bench clean
+.PHONY: help check test fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings swift-cli mac-app mac-app-run mac-app-launch bench clean
 
 help:
 	@echo "Slate — common commands"
@@ -23,6 +23,7 @@ help:
 	@echo "  make swift-cli     build + run the Swift command-line smoke test"
 	@echo "  make mac-app       build the SwiftUI smoke-test app"
 	@echo "  make mac-app-run   build + launch the SwiftUI smoke-test app"
+	@echo "  make mac-app-launch  release build + dated launcher, then open (manual AT testing)"
 	@echo "  make bench         run the criterion benchmark suite (BENCHMARKS.md baseline)"
 	@echo "  make clean         cargo clean + remove SwiftPM build artifacts"
 	@echo
@@ -67,6 +68,13 @@ mac-app:
 
 mac-app-run:
 	./scripts/build-mac-app.sh --run
+
+# Build RELEASE + .app bundle, refresh a dated slate-mac-<date>.app
+# launcher symlink at the repo root, and open it. One-command manual
+# testing (e.g. accessibility smoke passes). Pass --no-open to build
+# + relink without launching.
+mac-app-launch:
+	./scripts/build-and-launch.sh
 
 # Criterion suite for slate-core. Full run is ~15–20 min on a modern
 # laptop because the 50k-file cold scan dominates. Pass extra args
