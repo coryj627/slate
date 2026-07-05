@@ -114,6 +114,16 @@ enum SlateSymbol: CaseIterable {
     /// "Move to Trash" — sends the selected file/folder to the system trash.
     case trash
 
+    // Milestone M sync diagnostics (M-3, #534) — per the m_spec SlateSymbol
+    // additions table. `.warning` above is reused for the High-risk badge and
+    // the multi-sync warning row (reuse, don't add a non-fill twin).
+    /// Sync-diagnostics leaf in the right-pane rail.
+    case syncDiagnostics
+    /// Medium-risk badge glyph — shape+text, never color alone (m_spec §M-3).
+    case riskMedium
+    /// Low-risk badge glyph — shape+text, never color alone (m_spec §M-3).
+    case riskLow
+
     /// The resolved SF Symbol name for the running OS. `private` so call
     /// sites can't reach past the labeled/decorative builders to name a raw
     /// symbol (only the builders below, in this file, use it).
@@ -167,6 +177,9 @@ enum SlateSymbol: CaseIterable {
         case .moveTo: return "Move to"
         case .rename: return "Rename"
         case .trash: return "Move to Trash"
+        case .syncDiagnostics: return "Sync"
+        case .riskMedium: return "Medium risk"
+        case .riskLow: return "Low risk"
         }
     }
 
@@ -241,6 +254,15 @@ enum SlateSymbol: CaseIterable {
         case .moveTo: return ("arrow.turn.down.right", "arrow.turn.down.right")
         case .rename: return ("pencil", "pencil")
         case .trash: return ("trash", "trash")
+        // Milestone M (M-3, #534): the leaf glyph is the one genuinely
+        // v7-divergent role today (the trianglehead arrows are SF Symbols 7);
+        // arrow.triangle.2.circlepath is SF Symbols 1-era, floor-safe. The two
+        // badge glyphs predate SF Symbols 7, so v7 == fallback.
+        case .syncDiagnostics:
+            return ("arrow.trianglehead.2.clockwise.rotate.90",
+                    "arrow.triangle.2.circlepath")
+        case .riskMedium: return ("exclamationmark.circle", "exclamationmark.circle")
+        case .riskLow: return ("info.circle", "info.circle")
         }
     }
 

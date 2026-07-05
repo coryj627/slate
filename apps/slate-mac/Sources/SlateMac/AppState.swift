@@ -1774,12 +1774,19 @@ final class AppState: ObservableObject {
         currentVaultURL.map { FileRecentsStore(vaultRoot: $0) }
     }
 
+    /// Accessibility-announcement seam (M-3, #534; shared with O-5).
+    /// The default wraps the global `postAccessibilityAnnouncement`;
+    /// tests inject a recording fake to assert the announce gates.
+    private let announcer: AnnouncementPosting
+
     init(
         recentsStore: RecentVaultsStore? = nil,
         externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
         preferencesStore: PreferencesStore = PreferencesStore(),
-        commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil
+        commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil,
+        announcer: AnnouncementPosting = AppKitAnnouncementPoster()
     ) {
+        self.announcer = announcer
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
         // Support location can't be set up. Better degraded than crash
@@ -2691,6 +2698,12 @@ final class AppState: ObservableObject {
             // don't briefly flash in the new vault's sidebar.
             files = []
             scanError = nil
+            // M-3 (#534): likewise the previous vault's sync report —
+            // nil puts the diagnostics panel back into its loading
+            // state until this vault's post-scan load publishes.
+            syncReport = nil
+            liveSyncConfig = nil
+            syncDiagnosticsError = nil
             // U1-2: tabs belong to a vault; a fresh open starts clean (and
             // must reset BEFORE the selection clear so the funnel doesn't
             // park the previous vault's buffer).
@@ -2712,6 +2725,13 @@ final class AppState: ObservableObject {
             scanTask?.cancel()
             scanTask = Task { [weak self] in
                 await self?.loadFiles()
+                // M-3 (#534): sync diagnostics, once per vault open —
+                // the post-scan continuation. The probes don't touch
+                // the index, so this runs even when the scan itself
+                // errored; a vault switch cancels this task and the
+                // new vault's funnel runs its own load.
+                guard !Task.isCancelled else { return }
+                await self?.loadSyncDiagnostics()
             }
             // Milestone L #281: read `.slate/prefs.json` so the
             // Settings panel + style picker reflect the persisted
@@ -3010,6 +3030,9 @@ final class AppState: ObservableObject {
         currentVaultURL = nil
         files = []
         scanError = nil
+        syncReport = nil
+        liveSyncConfig = nil
+        syncDiagnosticsError = nil
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
@@ -3213,6 +3236,100 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled else { return }
             scanError = error.localizedDescription
         }
+    }
+
+    // MARK: - Sync diagnostics (Milestone M-3, #534)
+
+    /// Latest sync-detection report for the open vault. `nil` while
+    /// the first load is in flight — the panel's loading state.
+    @Published private(set) var syncReport: SyncDetectionReport?
+    /// LiveSync plugin config status, loaded alongside the report.
+    @Published private(set) var liveSyncConfig: LiveSyncConfigStatus?
+    /// Specific failure message when either FFI call failed; the
+    /// panel renders it with a Retry button.
+    @Published private(set) var syncDiagnosticsError: String?
+
+    /// Vault path the assertive sync announcement last fired for —
+    /// the announce-once gate (the `announcedFilePath` pattern from
+    /// CitationsPanel, vault-scoped). Reopening the same vault stays
+    /// silent; a different vault re-arms. Deliberately NOT cleared on
+    /// close: the risk story hasn't changed just because the vault
+    /// was closed and reopened mid-session.
+    private var syncAnnouncedVaultPath: String?
+
+    /// M-3 (#534) race-test seam — ALWAYS nil in production. When set,
+    /// `loadSyncDiagnostics` awaits it after the detached probe
+    /// returns and BEFORE the publish guard, so the stale-refresh
+    /// regression test can deterministically park a load inside the
+    /// race window (a `Task.yield()`-based interleaving is scheduler
+    /// behavior, not a guarantee — codex adversarial round 2). A nil
+    /// hook is a single optional check on the load path.
+    var syncDiagnosticsPublishGate: (() async -> Void)?
+
+    /// Re-run detection + config read. Wired to the panel's Refresh
+    /// button, the `slate.diagnostics.refreshSync` command, and its
+    /// View-menu item.
+    func refreshSyncDiagnostics() {
+        Task { [weak self] in
+            await self?.loadSyncDiagnostics()
+        }
+    }
+
+    /// Load `detect_sync` + `livesync_config` off the main actor and
+    /// publish (M-3, #534). Both are bounded filesystem probes — cheap,
+    /// but they leave the main actor like every other FFI call. Errors
+    /// land in `syncDiagnosticsError` for the panel's error state.
+    func loadSyncDiagnostics() async {
+        guard let session = currentSession else { return }
+        let result: Result<(SyncDetectionReport, LiveSyncConfigStatus), VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    let report = try session.detectSync()
+                    let config = try session.livesyncConfig()
+                    return .success((report, config))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }.value
+        // Race-test seam: parks the load inside the race window
+        // (post-probe, pre-guard). Nil in production — see the
+        // property doc.
+        if let gate = syncDiagnosticsPublishGate { await gate() }
+        // A vault switch mid-load: don't publish a stale report over
+        // the new vault's freshly-reset state. `Task.isCancelled` only
+        // covers the scanTask funnel — `refreshSyncDiagnostics()` runs
+        // in its own Task that a vault switch never cancels, so a
+        // refresh started under vault A resuming after a switch to B
+        // would otherwise publish A's report AND fire A's assertive
+        // announcement under B's gate (poisoning B's announce-once).
+        // The session-identity recheck is the #328 red-team P1 pattern
+        // every other post-await publish in this file uses.
+        guard !Task.isCancelled, currentSession === session else { return }
+        switch result {
+        case .success(let (report, config)):
+            syncReport = report
+            liveSyncConfig = config
+            syncDiagnosticsError = nil
+            announceSyncFindingsIfNeeded(report)
+        case .failure(let error):
+            syncDiagnosticsError = humanReadable(error)
+        }
+    }
+
+    /// Assertive announcement for risky sync states (m_spec §M-3):
+    /// iff the report carries a multi-sync warning OR any High-risk
+    /// provider, post the pre-rendered `audioSummary` at `.high`
+    /// priority — at most once per vault. Low/Medium-only and empty
+    /// reports stay silent: the leaf is discoverable, not shouty.
+    private func announceSyncFindingsIfNeeded(_ report: SyncDetectionReport) {
+        guard let vaultPath = currentVaultURL?.path else { return }
+        guard syncAnnouncedVaultPath != vaultPath else { return }
+        let hasHighRisk = report.providers.contains { $0.riskLevel == .high }
+        guard report.multiSyncWarning != nil || hasHighRisk else { return }
+        syncAnnouncedVaultPath = vaultPath
+        announcer.post(report.audioSummary, priority: .high)
     }
 
     /// Read the selected note's bytes + indexed headings off the main

@@ -37,6 +37,12 @@ enum SlateCommandID {
 
     // View
     static let toggleSearch = "slate.view.toggleSearch"
+    /// Sync diagnostics refresh (M-3, #534). Panel-scoped command —
+    /// registry + View menu + palette per the m_spec §M-3 rule (the
+    /// registry invariant is menu↔palette unification); O-5's
+    /// `slate.history.showPanel` uses the same home by explicit
+    /// cross-reference.
+    static let refreshSyncDiagnostics = "slate.diagnostics.refreshSync"
 
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
@@ -161,6 +167,7 @@ enum SlateCommandID {
         jumpToBibliography,
         quickOpen,
         toggleSearch,
+        refreshSyncDiagnostics,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -855,6 +862,15 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌘F",
         hint: "Toggle the vault-wide search overlay."
     ) { [weak appState] in appState?.toggleSearchOverlay() }
+
+    // ----- Sync diagnostics (M-3, #534) -----
+
+    register(
+        SlateCommandID.refreshSyncDiagnostics,
+        label: "Refresh sync diagnostics",
+        section: .view,
+        hint: "Re-run sync-system detection and reload the LiveSync config."
+    ) { [weak appState] in appState?.refreshSyncDiagnostics() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 
