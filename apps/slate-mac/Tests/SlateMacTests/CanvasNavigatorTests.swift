@@ -590,3 +590,246 @@ extension CanvasNavigatorTests {
         XCTAssertTrue(posted.contains("Aligned \"Beta\" with \"Delta\"."), "\(posted)")
     }
 }
+
+/// #521: move & resize modes — grid nudges, rigid sets, overlap
+/// onset/offset, single-entry commits, exact-restore cancels.
+@MainActor
+extension CanvasNavigatorTests {
+    private func normalizedState() async throws -> (AppState, CanvasDocument) {
+        let state = try await makeState()
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        // Canonicalize once so disk comparisons are byte-exact.
+        _ = state.canvasApply(
+            CanvasAction(name: "normalize", ops: [.setNodeColor(id: "a", color: "1")]),
+            to: doc)
+        state.canvasUndo()
+        doc.undoStack = []
+        doc.redoStack = []
+        return (state, doc)
+    }
+
+    func testMoveModeNudgesCommitOnceAndAnnounceRelatively() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "d"  // Delta (600,140)
+        state.canvasEnterMoveMode()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains {
+                $0.hasPrefix("Move mode — \"Delta\".") && $0.contains("Escape to cancel")
+            }, "M1 entry names mode, object, exits: \(posted)")
+        // M3: inspectable while active.
+        XCTAssertEqual(
+            state.canvasModeController(for: doc).containerAXValue, "Move mode: \"Delta\"")
+
+        let undoCountBefore = doc.undoStack.count
+        let diskBefore = try XCTUnwrap(try? state.currentSession?.readText(path: "nav.canvas"))
+
+        // Nudge: 2 small + 1 large step right, 1 small down.
+        posted = []
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        state.canvasModeStep(dx: 1, dy: 0, large: true)
+        state.canvasModeStep(dx: 0, dy: 1, large: false)
+        // Transient only: nothing on disk yet.
+        XCTAssertEqual(
+            try? state.currentSession?.readText(path: "nav.canvas"), diskBefore,
+            "nudges never touch disk before commit")
+        // Coalesced: the resting description is one debounced post.
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            posted.count, 1, "held-arrow narration coalesces to the resting position: \(posted)")
+
+        // Commit: ONE canvas_apply capturing start→end.
+        _ = state.canvasModeController(for: doc).commit()
+        let moved = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(moved.x, 600 + 20 + 20 + 100)
+        XCTAssertEqual(moved.y, 140 + 20)
+        XCTAssertEqual(doc.undoStack.count, undoCountBefore + 1, "one undo step for the mode")
+        XCTAssertNil(doc.transientRects)
+        // Undo restores the exact pre-mode geometry.
+        state.canvasUndo()
+        let restored = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(restored.x, 600)
+        XCTAssertEqual(restored.y, 140)
+    }
+
+    func testMoveModeCancelRestoresExactGeometryWithNoWrite() async throws {
+        let (state, doc) = try await normalizedState()
+        let diskBefore = try XCTUnwrap(try? state.currentSession?.readText(path: "nav.canvas"))
+        doc.selection.selected = "d"
+        state.canvasEnterMoveMode()
+        state.canvasModeStep(dx: 1, dy: 1, large: true)
+        posted = []
+        _ = state.canvasModeController(for: doc).cancel()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Move cancelled — card returned."), "\(posted)")
+        XCTAssertNil(doc.transientRects)
+        XCTAssertEqual(
+            try? state.currentSession?.readText(path: "nav.canvas"), diskBefore,
+            "cancel = zero backend calls, byte-identical disk")
+        let node = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(node.x, 600)
+        XCTAssertEqual(node.y, 140)
+    }
+
+    func testMoveModeOverlapOnsetAndOffsetAreFlagged() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "d"  // (600,140); c sits at (600,0)
+        state.canvasEnterMoveMode()
+        state.canvasAnnouncer.flushForTests()
+        posted = []
+        // One large step up: d → (600,40) overlaps c (0..100 rows).
+        state.canvasModeStep(dx: 0, dy: -1, large: true)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.contains("Overlapping another card") },
+            "onset flagged (G20): \(posted)")
+        posted = []
+        state.canvasModeStep(dx: 0, dy: 1, large: true)  // back down, clear
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.contains("Clear of overlaps") },
+            "offset flagged: \(posted)")
+        _ = state.canvasModeController(for: doc).cancel()
+    }
+
+    func testMarkedSetMovesRigidlyInMoveMode() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.marked = ["a", "b"]
+        doc.selection.selected = "a"
+        state.canvasEnterMoveMode()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.hasPrefix("Move mode — 2 cards.") }, "\(posted)")
+        state.canvasModeStep(dx: 0, dy: 1, large: true)
+        _ = state.canvasModeController(for: doc).commit()
+        let a = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "a" })
+        let b = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "b" })
+        XCTAssertEqual(a.x, 0)
+        XCTAssertEqual(a.y, 100)
+        XCTAssertEqual(b.x, 220, "offsets preserved through the nudge")
+        XCTAssertEqual(b.y, 100)
+        XCTAssertEqual(doc.undoStack.last?.name, "move 2 cards")
+    }
+
+    func testResizeModeArrowsMinimumAndPresets() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = "d"
+        state.canvasCommitOrEnterResize()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(
+            posted.contains { $0.hasPrefix("Resize mode — \"Delta\".") }, "\(posted)")
+
+        // Width +20 (→), height +100 (⇧↓).
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        state.canvasModeStep(dx: 0, dy: 1, large: true)
+        // Minimum size: shrinking width below 40 is refused.
+        posted = []
+        for _ in 0..<20 { state.canvasModeStep(dx: -1, dy: 0, large: true) }
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Minimum size."), "\(posted)")
+
+        // Preset then commit (⌃⌘R toggles commit while active).
+        state.canvasResizeDefaultSize()
+        state.canvasCommitOrEnterResize()
+        let node = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(node.width, 260)
+        XCTAssertEqual(node.height, 140)
+        XCTAssertEqual(doc.undoStack.last?.name, "resize \"Delta\"")
+    }
+
+    func testModeEntryWithoutSelectionAnnounces() async throws {
+        let (state, doc) = try await normalizedState()
+        doc.selection.selected = nil
+        posted = []
+        state.canvasEnterMoveMode()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Nothing selected."))
+        XCTAssertNil(state.canvasModeController(for: doc).active)
+    }
+}
+
+/// Red-team #521 regressions: mutation guards while a mode is active,
+/// mode-state teardown on release, entry-time overlap seeding.
+@MainActor
+extension CanvasNavigatorTests {
+    func testUndoRefusedWhileModeActiveAndCommitStaysExact() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        state.canvasEnterMoveMode()
+        state.canvasModeStep(dx: 1, dy: 0, large: true)
+        let undoBefore = doc.undoStack.count
+        posted = []
+        state.canvasUndo()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.undoStack.count, undoBefore, "undo refused mid-mode")
+        XCTAssertTrue(
+            posted.contains { $0.contains("move or resize is in progress") }, "\(posted)")
+        XCTAssertNotNil(state.canvasTransient, "mode survives the refused undo")
+
+        // Out-of-band verbs are refused too (the clobber path).
+        let outlineBefore = doc.outline.count
+        state.canvasDeleteSelection()
+        XCTAssertEqual(doc.outline.count, outlineBefore, "delete refused mid-mode")
+
+        // The mode's own commit still works and writes the stepped rect.
+        _ = state.canvasModeController(for: doc).commit()
+        XCTAssertNil(state.canvasTransient)
+        let node = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "d" })
+        XCTAssertEqual(node.x, 700, "commit wrote the transient, exactly")
+        state.canvasUndo()
+        XCTAssertEqual(doc.scene.nodes.first { $0.nodeId == "d" }?.x, 600)
+    }
+
+    func testInvalidateDropsModeControllerAndTransient() async throws {
+        let (state, doc) = try await normalizedState()
+        state.canvasSelect(nodeId: "d", in: doc, announce: false)
+        state.canvasEnterMoveMode()
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        XCTAssertNotNil(state.canvasTransient)
+
+        state.invalidateCanvasDocument(path: "nav.canvas")
+        XCTAssertNil(state.canvasTransient, "transient dies with the document")
+        XCTAssertNil(state.canvasModeControllers["nav.canvas"], "controller dies too")
+
+        // Reopen: a fresh mode enters cleanly (no phantom M7 block).
+        state.openFile("nav.canvas", target: .currentTab)
+        let doc2 = state.canvasDocument(for: "nav.canvas")
+        state.canvasSelect(nodeId: "d", in: doc2, announce: false)
+        state.canvasEnterMoveMode()
+        XCTAssertNotNil(state.canvasTransient, "fresh mode enters after reopen")
+        _ = state.canvasModeController(for: doc2).cancel()
+    }
+
+    func testEntryOverlapSeedsSoOnsetIsATransition() async throws {
+        let (state, doc) = try await normalizedState()
+        // Move Beta onto Alpha first so move mode STARTS overlapped.
+        state.canvasSelect(nodeId: "b", in: doc, announce: false)
+        let alpha = try XCTUnwrap(doc.scene.nodes.first { $0.nodeId == "a" })
+        _ = state.canvasApply(
+            CanvasAction(
+                name: "setup",
+                ops: [
+                    .updateNodeGeometry(
+                        id: "b", x: alpha.x + 20, y: alpha.y + 20, width: 200, height: 100)
+                ]),
+            to: doc)
+        state.canvasEnterMoveMode()
+        posted = []
+        // One tiny step that stays overlapping: NO onset announcement.
+        state.canvasModeStep(dx: 1, dy: 0, large: false)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertFalse(
+            posted.contains { $0.contains("Overlapping another card") },
+            "already-overlapped entry must not fake an onset: \(posted)")
+        // Step clear: the OFFSET announces (flush per step — the
+        // coalescer keeps only the latest text within its window).
+        for _ in 0..<6 {
+            state.canvasModeStep(dx: 1, dy: 0, large: true)
+            state.canvasAnnouncer.flushForTests()
+        }
+        XCTAssertTrue(
+            posted.contains { $0.contains("Clear of overlaps") }, "\(posted)")
+        _ = state.canvasModeController(for: doc).cancel()
+    }
+}

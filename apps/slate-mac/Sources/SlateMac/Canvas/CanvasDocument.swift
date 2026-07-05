@@ -72,6 +72,11 @@ final class CanvasDocument: ObservableObject {
     /// order + edges).
     @Published private(set) var scene = CanvasScene(nodes: [], edges: [])
 
+    /// Hypothetical geometry while a move/resize mode is active
+    /// (#521): the renderer draws these instead of the scene rects;
+    /// nil when no mode holds a transient.
+    @Published var transientRects: [String: CanvasRect]?
+
     /// FFI handle; valid while non-nil. Node ids are unique per file,
     /// so every canvas call routes through this.
     private(set) var handle: UInt64?

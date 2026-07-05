@@ -211,3 +211,105 @@ extension CanvasRendererTests {
         XCTAssertEqual(centerBefore.y, centerAfter.y, accuracy: 0.5)
     }
 }
+
+/// Red-team #367 regressions: observation-driven invalidation, sticky
+/// speakable names, transient-aware indicator/window/hit-test,
+/// follow-selection wiring.
+@MainActor
+extension CanvasRendererTests {
+    /// Let the scheduled main-actor observation tasks fire.
+    private func drainMainQueue() async {
+        for _ in 0..<8 { await Task.yield() }
+    }
+
+    func testPaletteZoomInvalidatesWithoutManualRebuild() async throws {
+        let (state, _, view) = try await makeView()
+        let before = try XCTUnwrap(view.visibleCardFramesForTesting()["i2"])
+        state.canvasZoomIn()  // palette command — NO manual rebuild call
+        await drainMainQueue()
+        let after = try XCTUnwrap(view.visibleCardFramesForTesting()["i2"])
+        XCTAssertEqual(after.width, before.width * 1.25, accuracy: 0.5,
+            "viewport observation must rebuild frames (red-team F1)")
+    }
+
+    func testPaletteSelectionAutoPansWhenFollowIsOn() async throws {
+        let (state, doc, view) = try await makeView()
+        XCTAssertTrue(doc.viewport.followSelection)
+        state.canvasSelect(nodeId: "far", in: doc, announce: false)
+        await drainMainQueue()
+        XCTAssertNotNil(view.visibleCardFramesForTesting()["far"],
+            "selection observation + follow-selection materializes the target (F5/F7)")
+
+        // Follow OFF: palette selection repaints but does not pan.
+        doc.viewport.followSelection = false
+        await drainMainQueue()
+        let offsetBefore = doc.viewport.offset
+        state.canvasSelect(nodeId: "i1", in: doc, announce: false)
+        await drainMainQueue()
+        XCTAssertEqual(doc.viewport.offset, offsetBefore,
+            "follow-selection OFF: no observation-driven pan (F7)")
+    }
+
+    func testRenameRefreshesLabelAndSurvivorsKeepOrdinals() async throws {
+        let (state, doc, view) = try await makeView()
+        XCTAssertTrue(view.speakableLabelsForTesting().contains("Ideas 2"))
+        // Rename the FIRST duplicate; the survivor must keep "Ideas 2"
+        // (session-sticky, no renumber) and the renamed card re-labels.
+        _ = state.canvasApply(
+            CanvasAction(
+                name: "rename",
+                ops: [.setNodeContent(id: "i1", content: .text(text: "Fresh"))]),
+            to: doc)
+        await drainMainQueue()
+        view.refreshFromDocument()
+        let labels = view.speakableLabelsForTesting()
+        XCTAssertTrue(labels.contains("Fresh"), "\(labels)")
+        XCTAssertTrue(labels.contains("Ideas 2"), "survivor keeps its ordinal: \(labels)")
+        XCTAssertFalse(labels.contains("Ideas"), "old label gone after rename: \(labels)")
+        XCTAssertEqual(labels.count, Set(labels).count, "uniqueness holds: \(labels)")
+    }
+
+    func testMoveTransientKeepsSelectionMaterializedIndicatorAndHitTest() async throws {
+        let (state, doc, view) = try await makeView()
+        state.canvasSelect(nodeId: "i1", in: doc, announce: false)
+        // Preview far outside the window, as a long move-mode drag.
+        doc.transientRects = [
+            "i1": CanvasRect(x: 5000, y: 5000, width: 200, height: 100)
+        ]
+        view.refreshFromDocument()
+        let frames = view.visibleCardFramesForTesting()
+        XCTAssertNotNil(frames["i1"],
+            "selected card materializes even when its preview leaves the window (F2)")
+
+        // Hit-test: the vacated spot no longer selects i1; a click on
+        // another card's committed rect still does (F6).
+        XCTAssertNotEqual(view.hitTestNode(atViewPoint: CGPoint(x: 100, y: 50))?.nodeId, "i1")
+        XCTAssertEqual(
+            view.hitTestNode(atViewPoint: CGPoint(x: 400, y: 50))?.nodeId, "i2")
+
+        // Scroll chases the PREVIEW (F2b): after scroll the window
+        // contains the transient rect.
+        view.scrollSelectionIntoView()
+        let after = try XCTUnwrap(view.visibleCardFramesForTesting()["i1"])
+        XCTAssertTrue(
+            CGRect(x: 0, y: 0, width: 800, height: 600).intersects(after),
+            "auto-pan followed the transient: \(after)")
+        doc.transientRects = nil
+    }
+
+    func testAXFocusSyncSelectsSilently() async throws {
+        // Keep the AppState alive — the element's closure holds it weak.
+        let (state, doc, view) = try await makeView()
+        defer { _ = state }
+        // Simulate VO cursor landing on i2's element (F5).
+        let frames = view.visibleCardFramesForTesting()
+        XCTAssertNotNil(frames["i2"])
+        let element = try XCTUnwrap(
+            view.accessibilityChildren()?
+                .compactMap { $0 as? CanvasCardAXElement }
+                .first { $0.nodeId == "i2" })
+        element.setAccessibilityFocused(true)
+        XCTAssertEqual(doc.selection.selected, "i2",
+            "VO focus moves CanvasSelection (t3 non-stranding)")
+    }
+}

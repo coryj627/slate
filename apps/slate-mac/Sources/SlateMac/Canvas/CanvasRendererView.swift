@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import SwiftUI
 
 /// Zoom/pan state for one canvas (shared with #520's viewport
@@ -102,10 +103,24 @@ struct CanvasRendererView: NSViewRepresentable {
 final class CanvasCardAXElement: NSAccessibilityElement {
     var nodeId: String = ""
     var onPress: (() -> Void)?
+    /// Red-team #367 F5 (t3 non-stranding): VO next/prev sets AX focus
+    /// on the element; syncing it into `CanvasSelection` drives the
+    /// auto-pan that materializes the next window, so pure VO
+    /// traversal never dead-ends at the window edge. Silent — VO
+    /// already speaks the element it landed on.
+    var onAXFocus: (() -> Void)?
+    private var axFocused = false
 
     override func accessibilityPerformPress() -> Bool {
         onPress?()
         return onPress != nil
+    }
+
+    override func isAccessibilityFocused() -> Bool { axFocused }
+
+    override func setAccessibilityFocused(_ focused: Bool) {
+        axFocused = focused
+        if focused { onAXFocus?() }
     }
 }
 
@@ -121,11 +136,20 @@ final class CanvasRendererNSView: NSView {
 
     private var cardLayers: [String: CALayer] = [:]
     private var axElements: [CanvasCardAXElement] = []
+    private var subscriptions: Set<AnyCancellable> = []
+    /// Last selection the renderer auto-panned for — dedupes the
+    /// observation-driven pan against the synchronous keyboard one.
+    private var lastAutoPannedSelection: String?
 
     /// Speakable names, deduplicated for Voice Control (t0 §1.1 /
     /// t3 uniqueness test): duplicate display titles get a stable
     /// reading-order ordinal suffix ("Ideas", "Ideas 2").
     private(set) var speakableNames: [String: String] = [:]
+    /// Session-sticky assignments (red-team #367 F4): survivors keep
+    /// their name across mutations — deletes never renumber, renames
+    /// re-assign only the renamed card, and a rematerialized element
+    /// can never collide with a reused ordinal.
+    private var assignedSpeakable: [String: (title: String, name: String)] = [:]
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -158,7 +182,46 @@ final class CanvasRendererNSView: NSView {
         self.appState = appState
         document.viewport.viewSize = bounds.size
         if firstBind {
+            // Red-team #367 F1/F5/F7: the renderer OBSERVES its inputs —
+            // palette viewport commands, selection moves from any
+            // surface, and scene/transient refreshes all invalidate
+            // without needing renderer focus or a SwiftUI pass.
+            subscriptions.removeAll()
+            // Main-actor task hops (not main-queue dispatch): the
+            // willChange fires pre-mutation, and a queued main-actor
+            // job runs after the mutating call finishes its turn.
+            document.viewport.objectWillChange
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.rebuildVisible() }
+                }
+                .store(in: &subscriptions)
+            document.selection.objectWillChange
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.selectionDidChange() }
+                }
+                .store(in: &subscriptions)
+            document.objectWillChange
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.refreshFromDocument() }
+                }
+                .store(in: &subscriptions)
             refreshFromDocument()
+        }
+    }
+
+    /// Selection moved (any surface): repaint, and — when
+    /// follow-selection is ON (t2 decision 6, the F7 wiring) — auto-pan
+    /// silently. The keyboard path pans unconditionally (2.4.11) via
+    /// its own synchronous call; `lastAutoPannedSelection` dedupes.
+    private func selectionDidChange() {
+        guard let document else { return }
+        if let selected = document.selection.selected,
+            selected != lastAutoPannedSelection,
+            document.viewport.followSelection
+        {
+            scrollSelectionIntoView()
+        } else {
+            rebuildVisible()
         }
     }
 
@@ -175,14 +238,37 @@ final class CanvasRendererNSView: NSView {
     }
 
     private func computeSpeakableNames() {
-        speakableNames = [:]
-        guard let document else { return }
-        var counts: [String: Int] = [:]
-        for node in document.scene.nodes {
-            let n = (counts[node.title] ?? 0) + 1
-            counts[node.title] = n
-            speakableNames[node.nodeId] = n == 1 ? node.title : "\(node.title) \(n)"
+        guard let document else {
+            speakableNames = [:]
+            return
         }
+        var result: [String: String] = [:]
+        var used: Set<String> = []
+        // Pass 1: survivors with unchanged titles keep their name
+        // (t0 §1.1: ordinals hold for the session).
+        for node in document.scene.nodes {
+            if let assigned = assignedSpeakable[node.nodeId], assigned.title == node.title {
+                result[node.nodeId] = assigned.name
+                used.insert(assigned.name)
+            }
+        }
+        // Pass 2: new/renamed cards take the first non-colliding name
+        // in reading order.
+        for node in document.scene.nodes where result[node.nodeId] == nil {
+            var candidate = node.title
+            var n = 1
+            while used.contains(candidate) {
+                n += 1
+                candidate = "\(node.title) \(n)"
+            }
+            result[node.nodeId] = candidate
+            used.insert(candidate)
+        }
+        speakableNames = result
+        assignedSpeakable = Dictionary(
+            uniqueKeysWithValues: document.scene.nodes.compactMap { node in
+                result[node.nodeId].map { (node.nodeId, (title: node.title, name: $0)) }
+            })
     }
 
     private var viewport: CanvasViewport? { document?.viewport }
@@ -222,8 +308,18 @@ final class CanvasRendererNSView: NSView {
         var elements: [CanvasCardAXElement] = []
 
         for node in document.scene.nodes {
-            let canvasRect = CGRect(x: node.x, y: node.y, width: node.width, height: node.height)
-            guard window.intersects(canvasRect) else { continue }
+            // #521: an active move/resize mode's hypothetical geometry
+            // overrides the committed scene rect.
+            let transient = document.transientRects?[node.nodeId]
+            let canvasRect = CGRect(
+                x: transient?.x ?? node.x, y: transient?.y ?? node.y,
+                width: transient?.width ?? node.width,
+                height: transient?.height ?? node.height)
+            // Red-team #367 F2: the SELECTED card always materializes —
+            // a long move-mode drag past the window must never strand
+            // the VO cursor on a vanished element.
+            guard window.intersects(canvasRect) || node.nodeId == document.selection.selected
+            else { continue }
             seen.insert(node.nodeId)
             let viewRect = canvasToView(canvasRect)
 
@@ -242,6 +338,15 @@ final class CanvasRendererNSView: NSView {
 
             let element = axElement(for: node)
             element.setAccessibilityFrame(screenRect(from: viewRect))
+            // Red-team #367 F4: labels re-stamp on every pass — a
+            // reused element must not speak a pre-rename title.
+            let speakable = speakableNames[node.nodeId] ?? node.title
+            element.setAccessibilityLabel(
+                node.kind == "group" ? "Group \(speakable)" : speakable)
+            // t0 §3: marked state is pull-readable on the element
+            // everywhere the card appears.
+            element.setAccessibilityValue(
+                document.selection.marked.contains(node.nodeId) ? "marked" : "")
             elements.append(element)
         }
 
@@ -298,6 +403,12 @@ final class CanvasRendererNSView: NSView {
             appState.canvasSelect(nodeId: node.nodeId, in: document)
             self.updateSelectionIndicator()
         }
+        element.onAXFocus = { [weak self] in
+            guard let self, let document = self.document, let appState = self.appState,
+                document.selection.selected != node.nodeId
+            else { return }
+            appState.canvasSelect(nodeId: node.nodeId, in: document, announce: false)
+        }
         return element
     }
 
@@ -318,8 +429,16 @@ final class CanvasRendererNSView: NSView {
         for node in document.scene.nodes { byId[node.nodeId] = node }
         for edge in document.scene.edges {
             guard let from = byId[edge.fromNode], let to = byId[edge.toNode] else { continue }
-            let fromRect = CGRect(x: from.x, y: from.y, width: from.width, height: from.height)
-            let toRect = CGRect(x: to.x, y: to.y, width: to.width, height: to.height)
+            let fromTransient = document.transientRects?[edge.fromNode]
+            let toTransient = document.transientRects?[edge.toNode]
+            let fromRect = CGRect(
+                x: fromTransient?.x ?? from.x, y: fromTransient?.y ?? from.y,
+                width: fromTransient?.width ?? from.width,
+                height: fromTransient?.height ?? from.height)
+            let toRect = CGRect(
+                x: toTransient?.x ?? to.x, y: toTransient?.y ?? to.y,
+                width: toTransient?.width ?? to.width,
+                height: toTransient?.height ?? to.height)
             guard window.intersects(fromRect) || window.intersects(toRect) else { continue }
             let start = canvasToView(anchorPoint(on: fromRect, side: edge.fromSide, toward: toRect))
             let end = canvasToView(anchorPoint(on: toRect, side: edge.toSide, toward: fromRect))
@@ -386,8 +505,14 @@ final class CanvasRendererNSView: NSView {
             selectionLayer.path = nil
             return
         }
+        // #521 preview: the ring tracks the transient, not the
+        // committed rect (red-team #367 F3).
+        let transient = document.transientRects?[selected]
         let viewRect = canvasToView(
-            CGRect(x: node.x, y: node.y, width: node.width, height: node.height)
+            CGRect(
+                x: transient?.x ?? node.x, y: transient?.y ?? node.y,
+                width: transient?.width ?? node.width,
+                height: transient?.height ?? node.height)
         ).insetBy(dx: -3, dy: -3)
         selectionLayer.path = CGPath(
             roundedRect: viewRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
@@ -403,16 +528,24 @@ final class CanvasRendererNSView: NSView {
             let node = document.scene.nodes.first(where: { $0.nodeId == selected }),
             bounds.width > 0
         else { return }
+        lastAutoPannedSelection = selected
+        // Track the PREVIEW during a move (red-team #367 F2): panning
+        // to the committed rect would chase where the card was.
+        let transient = document.transientRects?[selected]
+        let x = transient?.x ?? node.x
+        let y = transient?.y ?? node.y
+        let width = transient?.width ?? node.width
+        let height = transient?.height ?? node.height
         let visibleWidth = bounds.width / viewport.scale
         let visibleHeight = bounds.height / viewport.scale
         var origin = viewport.offset
-        if node.x < origin.x { origin.x = node.x - 40 }
-        if node.y < origin.y { origin.y = node.y - 40 }
-        if node.x + node.width > origin.x + visibleWidth {
-            origin.x = node.x + node.width - visibleWidth + 40
+        if x < origin.x { origin.x = x - 40 }
+        if y < origin.y { origin.y = y - 40 }
+        if x + width > origin.x + visibleWidth {
+            origin.x = x + width - visibleWidth + 40
         }
-        if node.y + node.height > origin.y + visibleHeight {
-            origin.y = node.y + node.height - visibleHeight + 40
+        if y + height > origin.y + visibleHeight {
+            origin.y = y + height - visibleHeight + 40
         }
         if origin != viewport.offset {
             viewport.offset = origin
@@ -426,14 +559,25 @@ final class CanvasRendererNSView: NSView {
         window?.makeFirstResponder(self)
         guard let document, let appState else { return }
         let viewPoint = convert(event.locationInWindow, from: nil)
-        // Topmost by document order = LAST hit in scene order (t1 tiebreak).
-        let hit = document.scene.nodes.last { node in
-            canvasToView(CGRect(x: node.x, y: node.y, width: node.width, height: node.height))
-                .contains(viewPoint)
-        }
+        let hit = hitTestNode(atViewPoint: viewPoint)
         if let hit {
             appState.canvasSelect(nodeId: hit.nodeId, in: document)
             updateSelectionIndicator()
+        }
+    }
+
+    /// Topmost by document order = LAST hit in scene order (t1
+    /// tiebreak), against the DRAWN rects — a mid-move preview is what
+    /// the user sees, so it is what a click means (red-team #367 F6).
+    func hitTestNode(atViewPoint viewPoint: CGPoint) -> CanvasSceneNode? {
+        guard let document else { return nil }
+        return document.scene.nodes.last { node in
+            let transient = document.transientRects?[node.nodeId]
+            let rect = CGRect(
+                x: transient?.x ?? node.x, y: transient?.y ?? node.y,
+                width: transient?.width ?? node.width,
+                height: transient?.height ?? node.height)
+            return canvasToView(rect).contains(viewPoint)
         }
     }
 
@@ -456,15 +600,29 @@ final class CanvasRendererNSView: NSView {
                 return
             }
         }
+        let shift = event.modifierFlags.contains(.shift)
+        let inMode = appState.canvasModeConsumesArrows
         switch event.keyCode {
-        case 125:  // ↓ next in reading order (R2: all four arrows navigate)
-            appState.canvasSelectAdjacent(offset: 1)
-        case 126:  // ↑ previous
-            appState.canvasSelectAdjacent(offset: -1)
-        case 123:  // ← follow connection back
-            appState.canvasFollowConnection(forward: false)
-        case 124:  // → follow connection forward
-            appState.canvasFollowConnection(forward: true)
+        case 125:  // ↓ nudge in mode; next in reading order otherwise
+            inMode
+                ? appState.canvasModeStep(dx: 0, dy: 1, large: shift)
+                : appState.canvasSelectAdjacent(offset: 1)
+        case 126:  // ↑
+            inMode
+                ? appState.canvasModeStep(dx: 0, dy: -1, large: shift)
+                : appState.canvasSelectAdjacent(offset: -1)
+        case 123:  // ←
+            inMode
+                ? appState.canvasModeStep(dx: -1, dy: 0, large: shift)
+                : appState.canvasFollowConnection(forward: false)
+        case 124:  // →
+            inMode
+                ? appState.canvasModeStep(dx: 1, dy: 0, large: shift)
+                : appState.canvasFollowConnection(forward: true)
+        case 36 where inMode:  // Return commits the mode
+            if let doc = appState.activeCanvasDocument {
+                _ = appState.canvasModeController(for: doc).commit()
+            }
         default:
             return super.keyDown(with: event)
         }
@@ -481,7 +639,9 @@ final class CanvasRendererNSView: NSView {
 
     override func magnify(with event: NSEvent) {
         guard let viewport else { return }
-        viewport.scale = viewport.clampScale(viewport.scale * (1 + event.magnification))
+        // Through setScale so the pinch keeps the view center fixed
+        // like every other zoom path (red-team #367 F8).
+        viewport.setScale(viewport.scale * (1 + event.magnification))
         rebuildVisible()
     }
 

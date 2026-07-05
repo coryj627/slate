@@ -72,6 +72,12 @@ enum SlateCommandID {
     static let canvasPlaceAbove = "slate.canvas.placeAbove"
     static let canvasPlaceLeftOf = "slate.canvas.placeLeftOf"
     static let canvasAlignWith = "slate.canvas.alignWith"
+    static let canvasMoveMode = "slate.canvas.moveMode"
+    static let canvasResizeMode = "slate.canvas.resizeMode"
+    static let canvasCommitMode = "slate.canvas.commitMode"
+    static let canvasCancelMode = "slate.canvas.cancelMode"
+    static let canvasResizeDefault = "slate.canvas.resizeDefaultSize"
+    static let canvasResizeFit = "slate.canvas.resizeFitContent"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -164,6 +170,12 @@ enum SlateCommandID {
         canvasPlaceAbove,
         canvasPlaceLeftOf,
         canvasAlignWith,
+        canvasMoveMode,
+        canvasResizeMode,
+        canvasCommitMode,
+        canvasCancelMode,
+        canvasResizeDefault,
+        canvasResizeFit,
         newTab,
         closeTab,
         nextTab,
@@ -510,6 +522,59 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Align the selected card's top edge with a card you pick. Overlaps are refused, never silent."
     ) { [weak appState] in appState?.canvasOpenCardPicker(.alignWith) }
+
+    // Spatial modes (#521, t0 §2). Palette rows are the M6 visible-
+    // control path: enter, commit, and cancel are all reachable
+    // without the keyboard-only chords.
+    register(
+        SlateCommandID.canvasMoveMode,
+        label: "Canvas: Move Mode",
+        section: .canvas,
+        hotkey: "⌃⌘G",
+        hint: "Grab the selection. Arrows nudge on the grid, Shift for big steps, Return places, Escape cancels."
+    ) { [weak appState] in appState?.canvasEnterMoveMode() }
+
+    register(
+        SlateCommandID.canvasResizeMode,
+        label: "Canvas: Resize Mode",
+        section: .canvas,
+        hotkey: "⌃⌘R",
+        hint: "Resize the selected card. Left and Right change width, Up and Down change height."
+    ) { [weak appState] in appState?.canvasCommitOrEnterResize() }
+
+    register(
+        SlateCommandID.canvasCommitMode,
+        label: "Canvas: Commit Mode",
+        section: .canvas,
+        hint: "Apply the active move or resize (same as Return)."
+    ) { [weak appState] in
+        guard let appState, let doc = appState.activeCanvasDocument else { return }
+        _ = appState.canvasModeController(for: doc).commit()
+    }
+
+    register(
+        SlateCommandID.canvasCancelMode,
+        label: "Canvas: Cancel Mode",
+        section: .canvas,
+        hint: "Cancel the active move or resize and restore the prior position (same as Escape)."
+    ) { [weak appState] in
+        guard let appState, let doc = appState.activeCanvasDocument else { return }
+        _ = appState.canvasModeController(for: doc).cancel()
+    }
+
+    register(
+        SlateCommandID.canvasResizeDefault,
+        label: "Canvas: Resize to Default Size",
+        section: .canvas,
+        hint: "In resize mode, set the card to the default 260 by 140."
+    ) { [weak appState] in appState?.canvasResizeDefaultSize() }
+
+    register(
+        SlateCommandID.canvasResizeFit,
+        label: "Canvas: Resize to Fit Content",
+        section: .canvas,
+        hint: "In resize mode, size the card to its text."
+    ) { [weak appState] in appState?.canvasResizeFitContent() }
 
     register(
         SlateCommandID.newCanvas,

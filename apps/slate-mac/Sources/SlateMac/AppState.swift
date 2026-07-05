@@ -358,6 +358,11 @@ final class AppState: ObservableObject {
     /// the reusable proximity-sorted picker in the container.
     @Published var canvasCardPicker: CanvasCardPickerRequest?
 
+    /// Transient move/resize geometry (#521, the t4 pipeline
+    /// exception): held UI-side while a spatial mode is active,
+    /// committed as ONE canvas_apply on Return, dropped on Esc.
+    var canvasTransient: CanvasTransientState?
+
     /// Re-entrancy latch: `activateTab` runs the tab funnel itself and then
     /// mirrors `selectedFilePath` for the sidebar highlight; the
     /// `$selectedFilePath` sink must not run the selection funnel again on

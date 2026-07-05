@@ -112,6 +112,17 @@ extension AppState {
             doc.close(session: session)
         }
         canvasDocuments[path] = nil
+        dropCanvasModeState(for: path)
+    }
+
+    /// Red-team #521 (2): a released/invalidated document must take its
+    /// mode controller and any transient with it — a phantom mode
+    /// otherwise M7-blocks the reopened canvas and leaks the transient.
+    private func dropCanvasModeState(for path: String) {
+        if canvasModeControllers[path]?.active != nil {
+            canvasTransient = nil
+        }
+        canvasModeControllers[path] = nil
     }
 
     /// Deleted-from-disk canvas: drop the document so the next
@@ -123,6 +134,7 @@ extension AppState {
             doc.close(session: session)
         }
         canvasDocuments[path] = nil
+        dropCanvasModeState(for: path)
     }
 
     /// Vault close: release every canvas handle.
@@ -133,6 +145,8 @@ extension AppState {
             }
         }
         canvasDocuments = [:]
+        canvasModeControllers = [:]
+        canvasTransient = nil
     }
 
     /// Palette command action: switch the active canvas tab's surface
@@ -191,6 +205,17 @@ extension AppState {
     /// the funnel (conflicts assertively, t0 §5) and return false.
     @discardableResult
     func canvasApply(_ action: CanvasAction, to doc: CanvasDocument) -> Bool {
+        // Red-team #521 (1): a mutation while a spatial mode holds a
+        // transient would invalidate the mode's start snapshot — a
+        // later Return would silently clobber this change with
+        // entry-time absolute rects. The mode's OWN commit clears
+        // `canvasTransient` before calling here, so this guard only
+        // stops out-of-band verbs (palette/menu) mid-mode.
+        guard canvasTransient == nil else {
+            canvasAnnouncer.announce(
+                .error("A move or resize is in progress. Return to place it or Escape to cancel first."))
+            return false
+        }
         guard let session = currentSession, let handle = doc.handle else { return false }
         do {
             let result = try session.canvasApply(handle: handle, action: action)
@@ -218,6 +243,11 @@ extension AppState {
     /// becomes the redo entry. "Undid: ⟨name⟩" per t0 §1.3.
     func canvasUndo() {
         guard let doc = activeCanvasDocument else { return }
+        guard canvasTransient == nil else {
+            canvasAnnouncer.announce(
+                .error("A move or resize is in progress. Return to place it or Escape to cancel first."))
+            return
+        }
         guard let entry = doc.undoStack.popLast() else {
             canvasAnnouncer.announce(.status("Nothing to undo."))
             return
@@ -240,6 +270,11 @@ extension AppState {
     /// ⇧⌘Z symmetric to `canvasUndo`.
     func canvasRedo() {
         guard let doc = activeCanvasDocument else { return }
+        guard canvasTransient == nil else {
+            canvasAnnouncer.announce(
+                .error("A move or resize is in progress. Return to place it or Escape to cancel first."))
+            return
+        }
         guard let entry = doc.redoStack.popLast() else {
             canvasAnnouncer.announce(.status("Nothing to redo."))
             return

@@ -65,6 +65,9 @@ enum CanvasEvent: Equatable {
     case bulk(String)
     /// Mode lifecycle strings (t0 §2 — #364/#521/#523 consume).
     case mode(String)
+    /// Move/resize transient narration (#521): coalesced like
+    /// navigation so a held arrow announces the resting position.
+    case transientGeometry(String)
     /// Filter narration (#373 consumes; coalesced).
     case filter(String)
     /// Errors and conflicts: assertive (§1.5 priority rule).
@@ -111,7 +114,7 @@ final class CanvasAnnouncer: ObservableObject {
         let text = phrase(event)
         guard !text.isEmpty else { return }
         switch event {
-        case .movedTo, .groupEntered, .groupLeft, .connectionTraversed:
+        case .movedTo, .groupEntered, .groupLeft, .connectionTraversed, .transientGeometry:
             debounce(.navigation, text: text, priority: .medium)
         case .filter:
             debounce(.filter, text: text, priority: .medium)
@@ -178,7 +181,8 @@ final class CanvasAnnouncer: ObservableObject {
             if let label { text += ", labelled \"\(label)\"" }
             return text
         case .confirmation(let text), .bulk(let text), .mode(let text),
-            .filter(let text), .error(let text), .status(let text):
+            .filter(let text), .error(let text), .status(let text),
+            .transientGeometry(let text):
             return text
         case .destructiveConfirmation(let text):
             // The undo hint rides at standard+ (§1.3); terse users
