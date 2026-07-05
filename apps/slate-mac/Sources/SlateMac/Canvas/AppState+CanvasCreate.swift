@@ -85,24 +85,28 @@ extension AppState {
     }
 
     /// Media files: everything in the vault that isn't a note/canvas.
-    /// Listed fresh (the sidebar list is markdown+canvas only).
+    /// Listed fresh (the sidebar list is markdown+canvas only). Filter
+    /// PER PAGE (Codoki #622): on a large vault, accumulating every
+    /// path before filtering spikes peak memory for a set the UI
+    /// truncates to 200 anyway.
     private var canvasMediaPaths: [String] {
         guard let session = currentSession else { return [] }
-        var all: [String] = []
+        var media: [String] = []
         var cursor: String? = nil
         repeat {
             guard
                 let page = try? session.listFiles(
                     filter: .all, paging: Paging(cursor: cursor, limit: 1_000))
             else { break }
-            all.append(contentsOf: page.items.map(\.path))
+            media.append(
+                contentsOf: page.items.map(\.path).filter {
+                    let lower = $0.lowercased()
+                    return !lower.hasSuffix(".md") && !lower.hasSuffix(".markdown")
+                        && !lower.hasSuffix(".canvas")
+                })
             cursor = page.nextCursor
         } while cursor != nil
-        return all.filter {
-            let lower = $0.lowercased()
-            return !lower.hasSuffix(".md") && !lower.hasSuffix(".markdown")
-                && !lower.hasSuffix(".canvas")
-        }
+        return media
     }
 
     func canvasOpenAddNote() {
