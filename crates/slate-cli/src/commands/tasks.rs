@@ -36,7 +36,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 
-use slate_core::session::Paging;
+use slate_core::session::{Page, Paging};
 use slate_core::{TaskFilter, TaskWithLocation};
 
 use crate::output::{CommandOutput, tsv_row};
@@ -152,6 +152,44 @@ fn due_date_string(due_ms: Option<i64>) -> Option<String> {
     Some(dt.format("%Y-%m-%d").to_string())
 }
 
+/// Drain a paged task query to exhaustion, checking `cancel` between
+/// pages so a Ctrl-C during a large-vault drain aborts to exit 130
+/// promptly instead of paging on.
+///
+/// `fetch` is called with each successive [`Paging`] and returns one
+/// page (the `run` path threads `session.tasks_in_vault` through it).
+/// `tasks_in_vault` itself takes no cancel token — each page is a bounded
+/// SQLite query, not a long scan — so cancellation is honored here in the
+/// CLI layer with no new core plumbing (Codex adversarial-review, M-6).
+/// The token is checked before each fetch and once more after the last
+/// page, so an interrupt during the final fetch still exits 130 rather
+/// than committing to a "success" result.
+fn drain_tasks<F>(
+    cancel: &slate_core::session::CancelToken,
+    mut fetch: F,
+) -> Result<Vec<TaskWithLocation>, CliError>
+where
+    F: FnMut(Paging) -> Result<Page<TaskWithLocation>, CliError>,
+{
+    let mut tasks: Vec<TaskWithLocation> = Vec::new();
+    let mut paging = Paging::first(DRAIN_PAGE);
+    loop {
+        if cancel.is_cancelled() {
+            return Err(CliError::Cancelled);
+        }
+        let page = fetch(paging)?;
+        tasks.extend(page.items);
+        match page.next_cursor {
+            Some(cursor) => paging = Paging::after(cursor, DRAIN_PAGE),
+            None => break,
+        }
+    }
+    if cancel.is_cancelled() {
+        return Err(CliError::Cancelled);
+    }
+    Ok(tasks)
+}
+
 /// Run `slate tasks`. Opens + scans the vault, drains the filtered task
 /// query to exhaustion, and renders the result. Returns the absolute
 /// vault path (for the json envelope) plus the rendered output.
@@ -174,26 +212,27 @@ pub fn run(
 
     let filter = build_filter(choice, now_epoch_ms(), include_completed);
 
-    // Drain every page of the filtered query. Re-cloning the filter per
-    // page is cheap (it's `Clone` and holds only scalars).
-    let mut tasks: Vec<TaskWithLocation> = Vec::new();
-    let mut paging = Paging::first(DRAIN_PAGE);
-    loop {
-        let page = session
+    // Drain every page of the filtered query, checking the shared cancel
+    // token between pages (see [`drain_tasks`]).
+    let tasks = drain_tasks(cancel, |paging| {
+        session
             .tasks_in_vault(filter.clone(), paging)
-            .map_err(map_vault_error)?;
-        tasks.extend(page.items);
-        match page.next_cursor {
-            Some(cursor) => paging = Paging::after(cursor, DRAIN_PAGE),
-            None => break,
-        }
-    }
+            .map_err(map_vault_error)
+    })?;
 
     let data = build_data(choice, &tasks);
     let human = render_human(&tasks);
     let tsv = render_tsv(&tasks);
 
-    Ok((abs_path, CommandOutput { data, human, tsv }))
+    Ok((
+        abs_path,
+        CommandOutput {
+            data,
+            human,
+            tsv,
+            human_verbatim: false,
+        },
+    ))
 }
 
 /// Assemble the json `data` object (the stability contract).
@@ -387,5 +426,75 @@ mod tests {
             Some("2026-06-14".into())
         );
         assert_eq!(due_date_string(None), None);
+    }
+
+    // --- drain cancellation ------------------------------------------
+
+    use slate_core::session::CancelToken;
+
+    /// An empty single-page result (no more pages).
+    fn last_page() -> Page<TaskWithLocation> {
+        Page {
+            items: Vec::new(),
+            next_cursor: None,
+            total_filtered: 0,
+        }
+    }
+
+    #[test]
+    fn drain_tasks_aborts_before_any_fetch_when_pre_cancelled() {
+        // A token cancelled before the drain starts must abort at the
+        // first check — the fetch closure is never called.
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let mut fetched = false;
+        let result = drain_tasks(&cancel, |_paging| {
+            fetched = true;
+            Ok(last_page())
+        });
+        assert!(matches!(result, Err(CliError::Cancelled)));
+        assert!(!fetched, "no page should be fetched after cancellation");
+    }
+
+    #[test]
+    fn drain_tasks_aborts_between_pages_on_cancellation() {
+        // Cancel after the first page is fetched: the loop's next
+        // top-of-iteration check must abort to Cancelled rather than
+        // fetching page two.
+        let cancel = CancelToken::new();
+        let mut calls = 0u32;
+        let result = drain_tasks(&cancel, |_paging| {
+            calls += 1;
+            // First page reports more to come; then we cancel.
+            cancel.cancel();
+            Ok(Page {
+                items: Vec::new(),
+                next_cursor: Some("next".to_string()),
+                total_filtered: 0,
+            })
+        });
+        assert!(matches!(result, Err(CliError::Cancelled)));
+        assert_eq!(calls, 1, "must not fetch a second page after cancel");
+    }
+
+    #[test]
+    fn drain_tasks_completes_when_not_cancelled() {
+        // Uninterrupted drain of two pages returns every item.
+        let cancel = CancelToken::new();
+        let mut calls = 0u32;
+        let result = drain_tasks(&cancel, |_paging| {
+            calls += 1;
+            if calls == 1 {
+                Ok(Page {
+                    items: Vec::new(),
+                    next_cursor: Some("next".to_string()),
+                    total_filtered: 0,
+                })
+            } else {
+                Ok(last_page())
+            }
+        });
+        assert!(result.is_ok());
+        assert_eq!(calls, 2, "both pages drained");
     }
 }

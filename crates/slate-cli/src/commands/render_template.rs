@@ -173,8 +173,10 @@ pub fn run(
     });
 
     // Human/json only reach here (tsv rejected above). The human body is
-    // the rendered note verbatim; `emit` appends the single trailing
-    // newline the global contract mandates.
+    // the rendered note VERBATIM (m_spec §M-6: "stdout = RenderedTemplate
+    // .body verbatim"): `human_verbatim` tells `emit` not to append the
+    // usual trailing newline, so `render-template … > note.md` reproduces
+    // the body byte-for-byte and matches the json `body` field.
     let human = rendered.body;
 
     Ok((
@@ -185,6 +187,7 @@ pub fn run(
             // tsv is never emitted for this command (rejected above); an
             // empty string keeps the struct total without inviting use.
             tsv: String::new(),
+            human_verbatim: true,
         },
     ))
 }

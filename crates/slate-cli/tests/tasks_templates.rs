@@ -485,6 +485,73 @@ fn render_template_tsv_is_rejected_with_exit_two() {
         ));
 }
 
+/// The human body must be emitted VERBATIM (m_spec §M-6): a template
+/// body with no trailing newline must not gain one, so
+/// `render-template … > note.md` reproduces the body byte-for-byte.
+#[test]
+fn render_template_human_body_has_no_appended_newline() {
+    let vault = TempDir::new().unwrap();
+    let templates = vault.path().join("Templates");
+    fs::create_dir_all(&templates).unwrap();
+    // Note: NO trailing newline in the template file.
+    fs::write(templates.join("NoNl.md"), "line one\nline two").unwrap();
+
+    let out = slate()
+        .arg("render-template")
+        .arg(vault.path())
+        .arg("Templates/NoNl.md")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Byte-exact: exactly the body, nothing appended.
+    assert_eq!(out, b"line one\nline two");
+}
+
+/// A template body that already ends in `\n` must not gain a blank line
+/// — the human emitter writes it verbatim, and the bytes match the json
+/// `body` field exactly.
+#[test]
+fn render_template_human_body_preserves_single_trailing_newline() {
+    let vault = TempDir::new().unwrap();
+    let templates = vault.path().join("Templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("Nl.md"), "body\n").unwrap();
+
+    // Human stdout is exactly "body\n" (one newline, not two).
+    let human = slate()
+        .arg("render-template")
+        .arg(vault.path())
+        .arg("Templates/Nl.md")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(human, b"body\n");
+
+    // And the json `body` field carries the identical bytes.
+    let json_out = slate()
+        .arg("render-template")
+        .arg(vault.path())
+        .arg("Templates/Nl.md")
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: Value = serde_json::from_str(std::str::from_utf8(&json_out).unwrap()).unwrap();
+    assert_eq!(v["data"]["body"], "body\n");
+    assert_eq!(
+        std::str::from_utf8(&human).unwrap(),
+        v["data"]["body"].as_str().unwrap(),
+        "human stdout and json body must be byte-identical"
+    );
+}
+
 #[test]
 fn render_template_prompt_value_may_contain_equals() {
     let vault = TempDir::new().unwrap();

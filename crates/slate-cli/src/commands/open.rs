@@ -67,7 +67,15 @@ pub fn run(
     let human = render_human(&abs_path, &report, markdown_files, cache);
     let tsv = render_tsv(&report, markdown_files, cache);
 
-    Ok((abs_path, CommandOutput { data, human, tsv }))
+    Ok((
+        abs_path,
+        CommandOutput {
+            data,
+            human,
+            tsv,
+            human_verbatim: false,
+        },
+    ))
 }
 
 /// Human format (m_spec §M-4):

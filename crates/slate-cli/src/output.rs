@@ -50,12 +50,24 @@ pub enum OutputFormat {
 pub struct CommandOutput {
     /// The `data` object for the json envelope — the stability contract.
     pub data: serde_json::Value,
-    /// The human-format body (no trailing newline; [`emit`] adds one).
+    /// The human-format body. By default [`emit`] appends a single
+    /// trailing newline (the global human contract); when
+    /// [`human_verbatim`](Self::human_verbatim) is set, the bytes are
+    /// written **exactly** with no appended newline.
     pub human: String,
     /// The tsv-format body: header row then data rows, already
     /// tab-joined and value-flattened via [`tsv_cell`]. Empty when the
     /// command documents "use --format json for the full report".
     pub tsv: String,
+    /// When `true`, the human format is a verbatim document body and
+    /// [`emit`] writes [`human`](Self::human) with **no** trailing
+    /// newline appended. This is the `read` / `render-template` contract
+    /// (m_spec §M-5/§M-6: "stdout = the body verbatim"): a template body
+    /// ending in `\n` must not gain a blank line, and one without a
+    /// trailing newline must not gain one — so `slate render-template …
+    /// > note.md` reproduces the body byte-for-byte, matching the json
+    /// `body` field. `false` for every table/summary command.
+    pub human_verbatim: bool,
 }
 
 /// Render `output` in `format` to stdout, applying the json envelope
@@ -76,7 +88,12 @@ pub fn emit(
     match format {
         OutputFormat::Human => {
             w.write_all(output.human.as_bytes())?;
-            w.write_all(b"\n")?;
+            // Verbatim document bodies (`read`, `render-template`) are
+            // emitted exactly; every other command's human output gets
+            // the single trailing newline the global contract mandates.
+            if !output.human_verbatim {
+                w.write_all(b"\n")?;
+            }
         }
         OutputFormat::Tsv => {
             w.write_all(output.tsv.as_bytes())?;
