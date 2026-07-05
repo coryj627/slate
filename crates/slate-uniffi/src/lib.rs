@@ -527,6 +527,25 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    /// Every distinct frontmatter property key in the vault, key-sorted,
+    /// each with the count of files that carry it (m_spec §M-5). For the
+    /// app's future property browser.
+    pub fn list_property_keys(&self) -> Result<Vec<PropertyKeySummary>, VaultError> {
+        let keys = self.inner.list_property_keys()?;
+        Ok(keys.into_iter().map(Into::into).collect())
+    }
+
+    /// Paged list of files carrying property `key` with any value
+    /// (m_spec §M-5) — the key-only companion to `files_with_property`.
+    pub fn files_with_property_key(
+        &self,
+        key: String,
+        paging: Paging,
+    ) -> Result<FileSummaryPage, VaultError> {
+        let page = self.inner.files_with_property_key(&key, paging.into())?;
+        Ok(page.into())
+    }
+
     /// Full-text search. Cancellable via the supplied `cancel`
     /// token. Reserved scopes (`File`, `Tag`) return
     /// `VaultError::Cancelled` until those code paths land.
@@ -1309,6 +1328,24 @@ impl From<core::FileSummary> for FileSummary {
             mtime_ms: s.mtime_ms,
             size_bytes: s.size_bytes,
             is_markdown: s.is_markdown,
+        }
+    }
+}
+
+/// One distinct property key + the count of files that carry it
+/// (m_spec §M-5). Mirrors `core::PropertyKeySummary` across the FFI
+/// boundary for the app's future property browser.
+#[derive(uniffi::Record)]
+pub struct PropertyKeySummary {
+    pub key: String,
+    pub file_count: u64,
+}
+
+impl From<core::PropertyKeySummary> for PropertyKeySummary {
+    fn from(s: core::PropertyKeySummary) -> Self {
+        Self {
+            key: s.key,
+            file_count: s.file_count,
         }
     }
 }

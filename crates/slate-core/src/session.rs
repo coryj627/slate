@@ -136,7 +136,7 @@ impl SessionConfig {
 // --- Filter ---
 
 /// Filter applied to `list_files` (and, later, to other vault queries).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileFilter {
     /// Every indexed file.
     All,
@@ -1514,6 +1514,29 @@ impl VaultSession {
     ) -> Result<Page<FileSummary>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::properties_db::files_with_property(&conn, key, value, paging)
+    }
+
+    /// Every distinct frontmatter property key in the vault, key-sorted,
+    /// each with the count of files that carry it (m_spec §M-5). Powers
+    /// `slate properties` (no `--key`) and the app's future property
+    /// browser. `file_count` counts distinct files, so a key repeated on
+    /// one file (a dotted key that recurs) is counted once.
+    pub fn list_property_keys(&self) -> Result<Vec<crate::PropertyKeySummary>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::properties_db::list_property_keys(&conn)
+    }
+
+    /// Paged list of files carrying property `key` with **any** value
+    /// (m_spec §M-5) — the key-only companion to `files_with_property`.
+    /// Path-ordered and cursor-paged identically, so the CLI can drain
+    /// to exhaustion by feeding `next_cursor` back until it is `None`.
+    pub fn files_with_property_key(
+        &self,
+        key: &str,
+        paging: Paging,
+    ) -> Result<Page<FileSummary>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::properties_db::files_with_property_key(&conn, key, paging)
     }
 
     /// Every task parsed from `path`, in document order. Returns an

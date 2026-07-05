@@ -5,7 +5,12 @@
 //! wrapper over `slate_core::VaultSession` (or the M-1/M-2 detectors for
 //! `sync-check`) — no business logic lives in the CLI layer.
 
+pub mod links;
+pub mod list;
 pub mod open;
+pub mod properties;
+pub mod read;
 pub mod render_template;
+pub mod search;
 pub mod sync_check;
 pub mod tasks;

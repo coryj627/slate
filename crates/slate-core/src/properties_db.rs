@@ -339,6 +339,139 @@ pub(crate) fn files_with_property(
     })
 }
 
+/// One distinct property key across the vault, plus the number of files
+/// that carry it. Returned by [`list_property_keys`] (m_spec §M-5). The
+/// app's future property browser wants the same summary, so the type
+/// lives in core rather than in the CLI layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyKeySummary {
+    pub key: String,
+    pub file_count: u64,
+}
+
+/// Every distinct property key in the vault, key-sorted, each with the
+/// count of files that carry it (m_spec §M-5).
+///
+/// `COUNT(DISTINCT file_id)` — a file with the same key on more than one
+/// `properties` row (e.g. a dotted key that repeats) is counted once, so
+/// `file_count` reads as "how many notes have this property", not "how
+/// many rows". Ordering is `key`-ascending under the default collation
+/// (byte-wise), matching the `files_with_property` paging contract's
+/// insistence on a deterministic, collation-independent order.
+///
+/// Keys are drawn from the `properties` table only. List / tag_list
+/// values live additionally in `properties_list_values`, but that side
+/// table is keyed by the *same* `(file_id, key)` — the parent
+/// `properties` row is always present — so the `properties` table alone
+/// is the complete key universe. No separate UNION needed.
+pub(crate) fn list_property_keys(conn: &Connection) -> Result<Vec<PropertyKeySummary>, VaultError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT key, COUNT(DISTINCT file_id) AS file_count
+         FROM properties
+         GROUP BY key
+         ORDER BY key ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(PropertyKeySummary {
+                key: row.get::<_, String>(0)?,
+                file_count: row.get::<_, i64>(1)? as u64,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Paged list of files that carry property `key` with **any** value
+/// (m_spec §M-5) — the key-only companion to [`files_with_property`]'s
+/// key+value match.
+///
+/// Path-ordered under `COLLATE BINARY`, cursor-paged the same way
+/// `files_with_property` is, so the CLI's drain loop (feed `next_cursor`
+/// back until `None`) sees every matching file exactly once. A file with
+/// the key on multiple `properties` rows is deduped by `DISTINCT` on the
+/// `files` columns — the JOIN would otherwise yield one row per property
+/// row.
+pub(crate) fn files_with_property_key(
+    conn: &Connection,
+    key: &str,
+    paging: Paging,
+) -> Result<Page<FileSummary>, VaultError> {
+    let limit = paging.limit.clamp(1, 1000);
+    let after_path = paging.cursor.clone();
+
+    // `idx_properties_file` / the `key` column narrow the JOIN; the
+    // outer `COUNT(*) FROM matches` window shares the materialized set
+    // with the row fetch (same shape as `files_with_property`). The
+    // CTE's `SELECT DISTINCT` collapses a file that carries `key` on
+    // more than one `properties` row to a single match row.
+    // `COLLATE BINARY` on both the cursor comparison and the ORDER BY
+    // pins the paging order byte-wise, independent of any future
+    // `files.path` collation change (#93 item 6 rationale).
+    let sql = "
+        WITH matches AS (
+            SELECT DISTINCT files.id, files.path, files.name, files.mtime_ms,
+                   files.size_bytes, files.is_markdown
+            FROM files
+            JOIN properties p ON p.file_id = files.id
+            WHERE p.key = ?1
+        )
+        SELECT path, name, mtime_ms, size_bytes, is_markdown,
+               (SELECT COUNT(*) FROM matches) AS total_filtered
+        FROM matches
+        WHERE (?2 IS NULL OR path COLLATE BINARY > ?2 COLLATE BINARY)
+        ORDER BY path COLLATE BINARY ASC
+        LIMIT ?3
+    ";
+    let mut stmt = conn.prepare_cached(sql)?;
+
+    let mut total_filtered: u64 = 0;
+    let rows: Vec<FileSummary> = stmt
+        .query_map(params![key, after_path, limit as i64 + 1], |row| {
+            let summary = FileSummary {
+                path: row.get::<_, String>(0)?,
+                name: row.get::<_, String>(1)?,
+                mtime_ms: row.get::<_, i64>(2)?,
+                size_bytes: row.get::<_, i64>(3)? as u64,
+                is_markdown: row.get::<_, i64>(4)? != 0,
+            };
+            let count: i64 = row.get(5)?;
+            total_filtered = count as u64;
+            Ok(summary)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Same cursor-past-the-end edge case `files_with_property` handles:
+    // when the row fetch is empty but a cursor was supplied, the
+    // `COUNT(*)` subquery never fired (no outer rows), so re-run just
+    // the count so `total_filtered` stays truthful across pages.
+    if rows.is_empty() && after_path.is_some() {
+        total_filtered = conn.query_row(
+            "SELECT COUNT(*) FROM (
+                 SELECT DISTINCT files.id
+                 FROM files
+                 JOIN properties p ON p.file_id = files.id
+                 WHERE p.key = ?1
+             )",
+            params![key],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+    }
+
+    let has_more = rows.len() > limit as usize;
+    let items: Vec<FileSummary> = rows.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_more {
+        items.last().map(|f| f.path.clone())
+    } else {
+        None
+    };
+    Ok(Page {
+        items,
+        next_cursor,
+        total_filtered,
+    })
+}
+
 // --- JSON serialization ---
 
 /// Encode a `PropertyValue` into `(kind, value_text)` for storage.

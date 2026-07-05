@@ -115,6 +115,63 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
         format: OutputFormat,
     },
+    /// Full-text search the vault; prints ranked hits with snippets.
+    Search {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// The FTS5 query.
+        query: String,
+        /// Maximum number of hits to return (client-side truncation).
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
+    /// Print one note's contents verbatim.
+    Read {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Vault-relative path of the note to read.
+        note_path: String,
+        /// Output format. `tsv` is unsupported (a note body is not a
+        /// table) and exits 2.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
+    /// List every indexed file in the vault.
+    List {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Restrict to Markdown notes.
+        #[arg(long)]
+        markdown_only: bool,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
+    /// Show one note's backlinks and outgoing links.
+    Links {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Vault-relative path of the note to inspect.
+        note_path: String,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
+    /// List frontmatter property keys, or the files carrying one key.
+    Properties {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// When given, list the files carrying this property key instead
+        /// of the vault-wide key summary.
+        #[arg(long)]
+        key: Option<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
 }
 
 impl Command {
@@ -125,6 +182,11 @@ impl Command {
             Command::SyncCheck { .. } => "sync-check",
             Command::Tasks { .. } => "tasks",
             Command::RenderTemplate { .. } => "render-template",
+            Command::Search { .. } => "search",
+            Command::Read { .. } => "read",
+            Command::List { .. } => "list",
+            Command::Links { .. } => "links",
+            Command::Properties { .. } => "properties",
         }
     }
 }
@@ -172,8 +234,9 @@ fn main() -> ExitCode {
             // interrupt is the user's own action, not a fault.
             ExitCode::from(EXIT_CANCELLED)
         }
-        // A post-parse usage error (e.g. `render-template --format tsv`)
-        // exits 2, matching clap's own usage exit code.
+        // A post-parse usage error (e.g. `read --format tsv` or
+        // `render-template --format tsv`) exits 2, matching clap's own
+        // usage exit code.
         Err(e @ CliError::Usage { .. }) => fail(EXIT_USAGE, &e),
         Err(e) => fail(EXIT_RUNTIME, &e),
     }
@@ -223,6 +286,55 @@ fn dispatch(
                 strict,
                 format,
             )?;
+            Ok((vault, format, output))
+        }
+        Command::Search {
+            vault_path,
+            query,
+            limit,
+            format,
+        } => {
+            let (vault, output) = commands::search::run(&vault_path, &query, limit, cancel)?;
+            Ok((vault, format, output))
+        }
+        Command::Read {
+            vault_path,
+            note_path,
+            format,
+        } => {
+            // A note body is a document, not a table: reject tsv up
+            // front (exit 2) before doing any vault work — the same
+            // `Usage` path as `render-template --format tsv`.
+            if format == OutputFormat::Tsv {
+                return Err(CliError::Usage {
+                    message: "tsv not supported for read".to_string(),
+                });
+            }
+            let (vault, output) = commands::read::run(&vault_path, &note_path, cancel)?;
+            Ok((vault, format, output))
+        }
+        Command::List {
+            vault_path,
+            markdown_only,
+            format,
+        } => {
+            let (vault, output) = commands::list::run(&vault_path, markdown_only, cancel)?;
+            Ok((vault, format, output))
+        }
+        Command::Links {
+            vault_path,
+            note_path,
+            format,
+        } => {
+            let (vault, output) = commands::links::run(&vault_path, &note_path, cancel)?;
+            Ok((vault, format, output))
+        }
+        Command::Properties {
+            vault_path,
+            key,
+            format,
+        } => {
+            let (vault, output) = commands::properties::run(&vault_path, key.as_deref(), cancel)?;
             Ok((vault, format, output))
         }
     }
