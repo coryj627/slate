@@ -215,6 +215,49 @@ fn render_template_rejects_path_outside_vault() {
     }
 }
 
+#[test]
+fn render_template_with_metadata_returns_coherent_body_and_prompts() {
+    // The metadata and the rendered body must come from the SAME read of
+    // the source (M-6 / Codex adversarial-review): a caller deciding on
+    // unfilled prompts can't be handed a body and a prompt set from two
+    // different snapshots. Here two prompts are declared; one is filled.
+    let (_tmp, session) = make_templates_vault(|root| {
+        let dir = root.join("Templates");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("Meeting.md"),
+            b"Topic: {{prompt:Topic}}\nOwner: {{prompt:Owner}}\n",
+        )
+        .unwrap();
+    });
+    let ctx =
+        crate::TemplateContext::new(0, "Meeting", "MyVault").with_prompt("topic", "Q1 review");
+    let (metadata, rendered) = session
+        .render_template_with_metadata("Templates/Meeting.md", ctx)
+        .unwrap();
+
+    // Metadata enumerates BOTH prompts in declaration order, from the
+    // same bytes that were rendered.
+    let labels: Vec<&str> = metadata.prompts.iter().map(|p| p.label.as_str()).collect();
+    assert_eq!(labels, vec!["Topic", "Owner"]);
+
+    // The body substitutes the filled prompt and leaves the unfilled one
+    // literal — coherent with the metadata above.
+    assert_eq!(rendered.body, "Topic: Q1 review\nOwner: {{prompt:Owner}}\n");
+}
+
+#[test]
+fn render_template_with_metadata_rejects_path_outside_vault() {
+    // Same scope discipline as `render_template` (both share the single
+    // scoped read): a `..` escape is refused, not silently read.
+    let (_tmp, session) = make_vault(|_| {});
+    let ctx = crate::TemplateContext::new(0, "t", "v");
+    match session.render_template_with_metadata("../escape.md", ctx) {
+        Err(VaultError::InvalidPath { .. }) => {}
+        other => panic!("expected InvalidPath, got {other:?}"),
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn list_templates_drops_symlinks_pointing_outside_the_vault() {

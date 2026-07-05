@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use slate_core::{TemplateContext, extract_template_metadata};
+use slate_core::TemplateContext;
 
 use crate::output::{CommandOutput, OutputFormat};
 use crate::session::{CliError, OpenedVault, map_vault_error, open_vault};
@@ -62,13 +62,18 @@ fn now_epoch_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// The vault root's basename, for `{{vault}}`. Falls back to the raw
-/// display string when the path has no final component (e.g. `/`).
-fn vault_basename(raw_path: &Path) -> String {
-    raw_path
+/// The vault root's basename, for `{{vault}}`, derived from the
+/// **canonical** absolute vault path that `open_vault` produced — not
+/// the raw CLI argument. This keeps `{{vault}}` consistent with the json
+/// envelope's `vault` field and makes `slate render-template . …` (run
+/// from inside the vault) render the vault's real directory name rather
+/// than `"."` (Codex adversarial-review, M-6). Falls back to the whole
+/// path string when there's no final component (e.g. `/`).
+fn vault_basename(abs_path: &str) -> String {
+    Path::new(abs_path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| raw_path.display().to_string())
+        .unwrap_or_else(|| abs_path.to_string())
 }
 
 /// The template's file stem, the default `{{title}}` when `--title` is
@@ -115,30 +120,29 @@ pub fn run(
     let context = TemplateContext {
         now_ms: now_epoch_ms(),
         title,
-        vault_name: vault_basename(raw_path),
+        // Root basename from the canonical path (not the raw argument),
+        // so `{{vault}}` matches the json envelope and `.` resolves to
+        // the real directory name.
+        vault_name: vault_basename(&abs_path),
         prompt_values: prompt_values.clone(),
     };
 
-    // Render via the session FIRST so the missing-template / bad-path
-    // case surfaces the session's exact error text (m_spec §M-6:
-    // "exactly the session's `render_template` semantics; missing
-    // template → exit 1 with the session's error text"), before we touch
-    // the source for the prompt scan.
-    let rendered = session
-        .render_template(template_path, context)
+    // Render AND scan for prompts from a SINGLE read of the template
+    // source (m_spec §M-6: scan before rendering; --strict must fail
+    // before any stdout when the rendered body would leave markers
+    // unfilled). `render_template_with_metadata` returns the metadata and
+    // the body from the same bytes, so the strict/warning decision can
+    // never diverge from the rendered output on a concurrently-edited
+    // vault (Codex adversarial-review). Path resolution + error text are
+    // exactly `render_template`'s (both share the same scoped read) —
+    // missing template → exit 1 with the session's error text.
+    let (metadata, rendered) = session
+        .render_template_with_metadata(template_path, context)
         .map_err(map_vault_error)?;
-
-    // Re-read the (now known-resolvable) source to scan for
-    // `{{prompt:Label}}` markers. One extra read is fine — the CLI
-    // renders a single template, not a picker sweep — and doing it after
-    // the render keeps `render_template` as the sole authority on path
-    // resolution and error text. Any failure here would be a genuine
-    // race (the template vanished between the two reads); surface it.
-    let source = session.read_text(template_path).map_err(map_vault_error)?;
 
     // Collect the labels of every prompt whose slug key wasn't supplied.
     // Declaration order is preserved by `extract_template_metadata`.
-    let unfilled: Vec<String> = extract_template_metadata(&source)
+    let unfilled: Vec<String> = metadata
         .prompts
         .into_iter()
         .filter(|p| !prompt_values.contains_key(&p.key))
@@ -218,7 +222,7 @@ mod tests {
 
     #[test]
     fn vault_basename_is_final_component() {
-        assert_eq!(vault_basename(Path::new("/home/me/MyVault")), "MyVault");
-        assert_eq!(vault_basename(Path::new("MyVault")), "MyVault");
+        assert_eq!(vault_basename("/home/me/MyVault"), "MyVault");
+        assert_eq!(vault_basename("MyVault"), "MyVault");
     }
 }

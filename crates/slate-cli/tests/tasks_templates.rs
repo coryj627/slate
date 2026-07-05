@@ -531,3 +531,32 @@ fn render_template_missing_template_exits_one() {
         .code(1)
         .stderr(predicate::str::starts_with("slate: "));
 }
+
+/// `{{vault}}` must render the vault's real directory name even when the
+/// vault is passed as `.` from inside it — the context's `vault_name`
+/// comes from the canonical opened path, not the raw argument (Codex
+/// adversarial-review, M-6 finding 2).
+#[test]
+fn render_template_vault_variable_uses_root_name_not_the_dot_argument() {
+    // Nest the actual vault under a `TempDir` with a fixed, distinctive
+    // (non-dot-prefixed) directory name, so the `.` argument resolves to
+    // a name we control and the "not the literal '.'" check is
+    // unambiguous (a bare `TempDir` name can itself start with `.tmp`).
+    let parent = TempDir::new().unwrap();
+    let root = parent.path().join("MyNotesVault");
+    let templates = root.join("Templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("V.md"), "vault={{vault}}\n").unwrap();
+
+    slate()
+        // Run from *inside* the vault and pass `.` as the vault path.
+        .current_dir(&root)
+        .arg("render-template")
+        .arg(".")
+        .arg("Templates/V.md")
+        .assert()
+        .success()
+        // {{vault}} → the real directory basename, never the literal ".".
+        .stdout(predicate::str::contains("vault=MyNotesVault"))
+        .stdout(predicate::str::contains("vault=.").not());
+}

@@ -2206,15 +2206,45 @@ impl VaultSession {
         template_path: &str,
         context: crate::TemplateContext,
     ) -> Result<crate::RenderedTemplate, VaultError> {
-        // Use the atomic verify-and-read instead of `read_text` so a
-        // symlink can't be swapped between the scope check and the
-        // open (#132, Codoki PR #153 follow-up). The provider's
-        // `resolve` step inside this call rejects `..` / absolute
-        // paths textually before the canonicalize, matching what
-        // `read_text` did. Errors surface as-is: the picker drops
-        // bad entries silently, but explicit render attempts get a
-        // real error so the host can show "refused for safety" or
-        // "template not found" cleanly.
+        let source = self.read_template_source(template_path)?;
+        Ok(crate::render_template_source(&source, &context))
+    }
+
+    /// Render `template_path` **and** report its prompt metadata from a
+    /// **single** read of the source.
+    ///
+    /// Identical resolution / cap / error semantics to [`render_template`]
+    /// (both go through [`Self::read_template_source`]), but returns the
+    /// [`TemplateMetadata`](crate::TemplateMetadata) extracted from the
+    /// *same bytes* that were rendered, so a caller deciding on unfilled
+    /// prompts (e.g. the `slate render-template --strict` CLI path) can
+    /// never observe a body and a prompt set from two different snapshots
+    /// of a concurrently-edited / sync-managed template (Codex
+    /// adversarial-review, M-6). The returned `body` and metadata are
+    /// coherent by construction.
+    pub fn render_template_with_metadata(
+        &self,
+        template_path: &str,
+        context: crate::TemplateContext,
+    ) -> Result<(crate::TemplateMetadata, crate::RenderedTemplate), VaultError> {
+        let source = self.read_template_source(template_path)?;
+        let metadata = crate::extract_template_metadata(&source);
+        let rendered = crate::render_template_source(&source, &context);
+        Ok((metadata, rendered))
+    }
+
+    /// Read a template's UTF-8 source under the vault, once, with the
+    /// scope + size-cap discipline both template entry points share.
+    ///
+    /// Uses the atomic verify-and-read (`read_in_vault_with_cap`) instead
+    /// of `read_text` so a symlink can't be swapped between the scope
+    /// check and the open (#132, Codoki PR #153 follow-up), and so a
+    /// template symlinking OUT of the vault is refused with `InvalidPath`
+    /// rather than silently read. The provider's `resolve` step rejects
+    /// `..` / absolute paths textually before the canonicalize. Errors
+    /// surface as-is so an explicit render attempt gets a real
+    /// "refused for safety" / "template not found" message.
+    fn read_template_source(&self, template_path: &str) -> Result<String, VaultError> {
         let limit = self.config.large_file_refuse_bytes;
         let bytes = self.provider.read_in_vault_with_cap(template_path, limit)?;
         if (bytes.len() as u64) > limit {
@@ -2223,10 +2253,9 @@ impl VaultSession {
                 size: bytes.len() as u64,
             });
         }
-        let source = String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
+        String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
             path: template_path.to_string(),
-        })?;
-        Ok(crate::render_template_source(&source, &context))
+        })
     }
 
     // --- Milestone K content pipelines (#217 / #218 / #219) -------
