@@ -202,11 +202,12 @@ fn render_human(hits: &[Hit]) -> String {
 fn render_tsv(hits: &[Hit]) -> String {
     let mut rows = vec![tsv_row(["path", "snippet", "score"])];
     for h in hits {
-        rows.push(tsv_row([
-            h.path.as_str(),
-            h.snippet.as_str(),
-            &h.score.to_string(),
-        ]));
+        // Pre-format the score into a binding of its own (Codoki PR
+        // #646 Medium): borrowing `&h.score.to_string()` inside the
+        // array literal leans on temporary-lifetime extension — legal
+        // today, but a refactor that hoists the array breaks it.
+        let score = h.score.to_string();
+        rows.push(tsv_row([h.path.as_str(), h.snippet.as_str(), &score]));
     }
     rows.join("\n")
 }
