@@ -776,9 +776,6 @@ struct FileTreeSidebar: View {
                 }
                 return
             }
-            NSLog("CANVAS-TRACE sidebar onChange path=%@ selectedFilePath=%@ willOpen=%@",
-                  path, appState.selectedFilePath ?? "nil",
-                  String(appState.selectedFilePath != path))
             if appState.selectedFilePath != path {
                 appState.openFile(path, target: .currentTab)
             }
