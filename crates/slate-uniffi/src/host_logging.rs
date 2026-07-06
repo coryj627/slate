@@ -19,19 +19,50 @@
 //! leak note titles at the default level, and the deferral is safe.
 
 use log::{Level, LevelFilter, Metadata, Record};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// The sink's own ceiling, set by [`init`], independent of the mutable
+/// process-global `log::max_level`.
+///
+/// **Why a sink-local cap and not just the global filter (#507).** The
+/// global `log::max_level` is writable by *any* code in the process at any
+/// time. If we relied on it alone, something calling
+/// `log::set_max_level(Debug)` *after* a release `init(false)` would
+/// re-open the gate and let slate-core's path-bearing `debug!` records
+/// reach stderr — defeating the release privacy guarantee. So the sink
+/// enforces its *own* ceiling too: `enabled` admits a record only when its
+/// level is within **both** the global max and this cap. A release install
+/// pins this at `Warn` and nothing can widen it back.
+///
+/// Stored as a `usize` (the `LevelFilter` discriminant, `Off = 0` …
+/// `Trace = 5`) so it lives in an `AtomicUsize`. Starts at `Off` — before
+/// `init` runs the sink admits nothing.
+static SINK_CAP: AtomicUsize = AtomicUsize::new(LevelFilter::Off as usize);
+
+/// Read the sink-local cap back into a `LevelFilter`.
+fn sink_cap() -> LevelFilter {
+    match SINK_CAP.load(Ordering::Relaxed) {
+        x if x == LevelFilter::Error as usize => LevelFilter::Error,
+        x if x == LevelFilter::Warn as usize => LevelFilter::Warn,
+        x if x == LevelFilter::Info as usize => LevelFilter::Info,
+        x if x == LevelFilter::Debug as usize => LevelFilter::Debug,
+        x if x == LevelFilter::Trace as usize => LevelFilter::Trace,
+        _ => LevelFilter::Off,
+    }
+}
 
 /// The single shared sink instance. `log::set_logger` needs a
-/// `&'static dyn Log`, so the sink is a zero-sized unit with its
-/// verbosity carried out-of-band by the max-level filter (below), not
-/// on the struct — keeping it `'static`-friendly without interior state.
+/// `&'static dyn Log`, so the sink is a zero-sized unit; its ceiling lives
+/// in [`SINK_CAP`], keeping the value `'static`-friendly.
 struct StderrSink;
 
 impl log::Log for StderrSink {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        // Honour the global max level `init` set. `log`'s macros already
-        // check this before constructing a record, but a `Log` impl is
-        // expected to gate too (e.g. for `log::logger().log(..)` callers).
-        metadata.level() <= log::max_level()
+        // Admit only within BOTH the global max AND the sink's own ceiling.
+        // The sink-local cap is the load-bearing privacy floor (#507): even
+        // if the global level is later widened, a release install stays
+        // capped at Warn, so path-bearing debug records never reach stderr.
+        metadata.level() <= log::max_level() && metadata.level() <= sink_cap()
     }
 
     fn log(&self, record: &Record<'_>) {
@@ -62,37 +93,49 @@ static SINK: StderrSink = StderrSink;
 
 /// Install the stderr sink at `warn` level (or `debug` when `verbose`).
 ///
-/// `log::set_logger` only succeeds once per process, so a second call — or
-/// a lost race with a concurrent installer — returns `Err`, which we
-/// swallow. The interesting case is what happens to the process-global
-/// `max_level` when we *lose* that race:
+/// The privacy guarantee (#507) — slate-core's path-bearing `debug!`
+/// records never reach a shipped-release log — is enforced on two
+/// independent levels, because the process-global `log::max_level` is
+/// mutable by any code at any time and can't be trusted alone:
 ///
-/// * **`verbose == false` (the release privacy floor).** We call
-///   `set_max_level(Warn)` **unconditionally** — even when `set_logger`
-///   fails. The privacy guarantee (#507) is that slate-core's path-bearing
-///   `debug!` records never reach shipped logs; that must not depend on
-///   *us* owning the global logger. If some other logger were installed
-///   first at `Debug`, and we only capped the level on a successful
-///   `set_logger`, those path/cache lines would flow to that foreign
-///   logger despite the host asking for release-style logging. Forcing the
-///   cap down closes that bypass. (Lowering the max level only *suppresses*
-///   records; it can't route ours to a foreign sink.)
-/// * **`verbose == true` (developer opt-in).** We raise to `Debug` only if
-///   *we* won `set_logger`. If another logger already owns the sink, we
-///   deliberately do **not** unmute `Debug` for it — surfacing slate-core's
-///   path-bearing records into an unknown foreign sink is exactly what the
-///   privacy rule guards against, and a lost race here is not the trusted
-///   opt-in the caller intended.
+/// 1. **Sink-local cap ([`SINK_CAP`]).** Set here to `Warn` for a release
+///    (`verbose == false`) install and `Debug` for a developer install.
+///    The sink's `enabled` honours it, so even if something later widens
+///    `log::max_level` back to `Debug`, *our* sink stays capped and the
+///    path-bearing records are still dropped. This is the load-bearing
+///    guarantee.
+/// 2. **Global-level floor.** For `verbose == false` we also lower
+///    `log::set_max_level(Warn)` **unconditionally** — even when
+///    `set_logger` fails — so a *foreign* logger installed first at `Debug`
+///    doesn't keep slate-core's path lines flowing at install time either.
+///    (Lowering the global level only *suppresses* records; it can't route
+///    ours to a foreign sink.)
+///
+/// `log::set_logger` only succeeds once per process; a second call — or a
+/// lost race — returns `Err`, which we swallow. For `verbose == true` we
+/// raise the *global* level to `Debug` only if we won `set_logger`: if
+/// another logger owns the sink, deliberately not unmuting `Debug` for it
+/// avoids surfacing slate-core's path records into an unknown foreign sink.
+/// The sink-local cap is set to `Debug` regardless — it only affects our
+/// own sink, which is the trusted destination.
 pub(crate) fn init(verbose: bool) {
+    let cap = if verbose {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Warn
+    };
+    // Set the sink's own ceiling first (it gates our sink independent of the
+    // mutable global level).
+    SINK_CAP.store(cap as usize, Ordering::Relaxed);
+
     let won = log::set_logger(&SINK).is_ok();
     if verbose {
-        // Only widen to Debug when our sink is the one that will receive the
-        // path-bearing records.
+        // Widen the *global* gate to Debug only when our sink owns it.
         if won {
             log::set_max_level(LevelFilter::Debug);
         }
     } else {
-        // Privacy floor: cap at Warn regardless of who owns the logger.
+        // Global privacy floor: cap at Warn regardless of who owns the logger.
         log::set_max_level(LevelFilter::Warn);
     }
 }
@@ -109,15 +152,15 @@ mod tests {
     /// parallel test can't observe another's transient level change.
     static LEVEL_LOCK: Mutex<()> = Mutex::new(());
 
-    /// The sink's level gate honours the configured max level: a `warn`
-    /// record passes at the default (`Warn`) level; a `debug` record does
-    /// not. Uses `enabled` directly (a public `Log` method) so the test
-    /// doesn't depend on process-global install state, which
-    /// `set_logger`'s once-per-process contract makes un-resettable.
+    /// The sink's gate is the intersection of the global max level and the
+    /// sink-local cap: a `warn` record passes when both allow it; a `debug`
+    /// record needs *both* raised to `Debug`. Uses `enabled` directly (a
+    /// public `Log` method).
     #[test]
     fn sink_gates_debug_below_warn() {
         let _guard = LEVEL_LOCK.lock().unwrap();
         log::set_max_level(LevelFilter::Warn);
+        SINK_CAP.store(LevelFilter::Warn as usize, Ordering::Relaxed);
         let warn_md = Metadata::builder().level(Level::Warn).build();
         let debug_md = Metadata::builder().level(Level::Debug).build();
         assert!(SINK.enabled(&warn_md), "warn should pass at Warn level");
@@ -126,10 +169,21 @@ mod tests {
             "debug should be gated out at Warn level"
         );
 
+        // Raising BOTH gates admits debug.
         log::set_max_level(LevelFilter::Debug);
+        SINK_CAP.store(LevelFilter::Debug as usize, Ordering::Relaxed);
         assert!(
             SINK.enabled(&debug_md),
-            "debug should pass once max level is raised to Debug"
+            "debug should pass once both the global max and sink cap are Debug"
+        );
+
+        // Raising only the global level does NOT admit debug — the sink cap
+        // still gates it. This is the release privacy guarantee.
+        SINK_CAP.store(LevelFilter::Warn as usize, Ordering::Relaxed);
+        assert!(
+            !SINK.enabled(&debug_md),
+            "debug must stay gated when the sink cap is Warn even if the global \
+             max is Debug"
         );
     }
 
@@ -184,6 +238,45 @@ mod tests {
             "init(false) must force the max level down to Warn even when it \
              loses the set_logger race, so path-bearing debug records stay \
              suppressed"
+        );
+    }
+
+    /// Sink-cap regression (adversarial review): after a release
+    /// `init(false)`, the sink must keep suppressing `Debug` records even if
+    /// the *global* `log::max_level` is later widened back to `Debug` by
+    /// unrelated code. The sink-local cap is the load-bearing floor; the
+    /// global level alone can't be trusted because anyone can raise it.
+    #[test]
+    fn sink_cap_survives_a_later_global_level_widening() {
+        let _guard = LEVEL_LOCK.lock().unwrap();
+
+        // Release install pins the sink cap at Warn.
+        init(false);
+
+        // Simulate unrelated code re-opening the global gate to Debug after
+        // the release sink is installed.
+        log::set_max_level(LevelFilter::Debug);
+        assert_eq!(log::max_level(), LevelFilter::Debug, "precondition");
+
+        // The sink must still drop Debug (its own cap is Warn), so
+        // slate-core's path-bearing debug records never reach stderr.
+        let debug_md = Metadata::builder().level(Level::Debug).build();
+        let warn_md = Metadata::builder().level(Level::Warn).build();
+        assert!(
+            !SINK.enabled(&debug_md),
+            "sink must suppress Debug after a release install even when the \
+             global max was widened back to Debug"
+        );
+        assert!(
+            SINK.enabled(&warn_md),
+            "warn records must still pass a release install"
+        );
+
+        // A developer install (verbose) legitimately raises the sink cap.
+        init(true);
+        assert!(
+            SINK.enabled(&debug_md),
+            "a verbose install must admit Debug through the sink cap"
         );
     }
 }
