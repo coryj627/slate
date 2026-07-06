@@ -40,19 +40,15 @@ import Foundation
 ///   callback still lands within a fixed bound of the FIRST event in a
 ///   burst even under unbroken churn.
 ///
-/// Setup-race note (#638 adversarial): a marker that appears in the
-/// microsecond gap between the host's post-scan probe and the watch
-/// fds opening emits no event (the entry already exists when the fd
-/// opens). The host mitigates by DISPATCHING `start()` before running
-/// that probe (`startSyncMarkerWatcher`), and the async arm
-/// (`open` + source creation) almost always beats the slower detached
-/// FFI probe — so the watch is live first. The residual is benign:
-/// any later change in a watched dir re-fires the event (the common
-/// case — a sync tool writes into the dir it just made), so only a
-/// marker that lands in that gap AND is never touched again waits for
-/// the next manual refresh. A synchronous arm was tried and rejected:
-/// `queue.sync` on the `@MainActor` owner stalls the main thread under
-/// a parallel workload.
+/// Setup-race close (#638 adversarial): a marker appearing between the
+/// host's post-scan probe and the watch fds opening would emit no event
+/// (the entry already exists when the fd opens). `start()` is `async`
+/// and returns only AFTER the fds are installed, so the host awaits it
+/// before running the probe (`startSyncMarkerWatcher`): arm-then-probe
+/// leaves no window — a marker landing after the arm emits an event,
+/// anything already present is seen by the probe. Readiness is awaited
+/// via a continuation, NOT a `queue.sync` (which on the `@MainActor`
+/// owner stalls the main thread under a parallel workload).
 ///
 /// Threading: `start()`/`stop()` are main-thread affine (the AppState
 /// owner is `@MainActor`); events arrive on a private queue and
@@ -121,31 +117,37 @@ final class SyncMarkerWatcher {
         debounceTimer?.cancel()
     }
 
-    /// Arm the directory watches. Idempotent; safe to call once after
-    /// vault open. Missing subdirectories (no `.obsidian` yet) are
-    /// skipped now and picked up by the parent watch's re-arm when they
-    /// appear.
+    /// Arm the directory watches and SUSPEND until the fds are open,
+    /// then return. Idempotent; safe to call once after vault open.
+    /// Missing subdirectories (no `.obsidian` yet) are skipped now and
+    /// picked up by the parent watch's re-arm when they appear.
     ///
-    /// Arming is dispatched ASYNCHRONOUSLY onto the private queue and
-    /// this returns immediately — it deliberately does NOT block the
-    /// caller's thread. The caller is `@MainActor`; a synchronous
-    /// `queue.sync` here would pin the main thread on every vault open,
-    /// and under a parallel test run (hundreds of watchers) that
-    /// starves the dispatch pool and stalls unrelated main-actor work.
-    /// The host still gets setup-race coverage by DISPATCHING the arm
-    /// before it runs the post-scan probe (see `startSyncMarkerWatcher`):
-    /// arming is `open(O_EVTONLY)` + source creation (microseconds) and
-    /// the probe is a slower detached FFI round-trip, so in practice the
-    /// watch is live before the probe reads. The residual sub-window is
-    /// benign: a marker that lands in it and is followed by ANY later
-    /// change in a watched dir (a sync tool writing into the dir it just
-    /// created — the overwhelmingly common case) is caught by the event;
-    /// only a marker that appears in that microsecond gap AND is never
-    /// touched again waits for the next manual refresh.
-    func start() {
-        queue.async { [weak self] in
-            guard let self, !self.cancelled else { return }
-            self.armMissingWatches()
+    /// Awaiting readiness (rather than firing-and-forgetting) is what
+    /// makes the host's arm-before-probe ordering DETERMINISTIC: once
+    /// `await start()` returns, every watched dir that exists has a live
+    /// fd, so a marker created after this point is guaranteed to emit an
+    /// event and anything already present is caught by the probe the
+    /// host runs next — no setup-race window (#638 adversarial re-review).
+    ///
+    /// It suspends via a continuation resumed on the private queue; it
+    /// does NOT `queue.sync`-block the calling thread. That distinction
+    /// matters: a synchronous `queue.sync` on the `@MainActor` owner
+    /// pinned the main thread and, under a parallel test run (hundreds
+    /// of watchers), starved the dispatch pool and stalled unrelated
+    /// main-actor work. `await` yields the thread instead.
+    ///
+    /// If `stop()` (or a not-yet-started cancel) races in first, the
+    /// continuation is still resumed — the awaiter never hangs.
+    func start() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async { [weak self] in
+                guard let self, !self.cancelled else {
+                    continuation.resume()
+                    return
+                }
+                self.armMissingWatches()
+                continuation.resume()
+            }
         }
     }
 

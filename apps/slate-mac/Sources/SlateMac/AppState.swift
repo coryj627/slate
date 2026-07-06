@@ -2737,15 +2737,14 @@ final class AppState: ObservableObject {
                 // new vault's funnel runs its own load.
                 guard !Task.isCancelled else { return }
                 // #638: arm the live marker watch BEFORE the initial
-                // probe. `start()` is synchronous, so once it returns
-                // the fds are open; running the probe after it means a
-                // marker that appears during/after arming emits an
-                // event (debounced refresh) while anything already
-                // present is caught by the probe itself — the
-                // arm-before-probe ordering closes the setup-race
-                // window with no extra async refresh (adversarial
-                // review). A vault switch cancels this task.
-                self?.startSyncMarkerWatcher()
+                // probe and AWAIT readiness — `start()` returns only
+                // once the fds are open. Arm-then-probe means a marker
+                // that appears after arming emits an event (debounced
+                // refresh) while anything already present is caught by
+                // the probe itself, with no setup-race window
+                // (adversarial re-review). A vault switch cancels this
+                // task; the awaited arm suspends without blocking main.
+                await self?.startSyncMarkerWatcher()
                 guard !Task.isCancelled else { return }
                 await self?.loadSyncDiagnostics()
             }
@@ -3296,10 +3295,25 @@ final class AppState: ObservableObject {
     /// production-scale quiet periods (`internal` for @testable).
     var syncMarkerWatcherDebounce: TimeInterval = 2.5
 
+    /// Monotonic sequence for in-flight sync-diagnostics loads (#638
+    /// adversarial re-review). The `currentSession === session` guard
+    /// stops a stale load from publishing under a DIFFERENT vault, but
+    /// within one session the initial post-scan load and a
+    /// watcher-triggered refresh can overlap — and their detached
+    /// probes can resume out of order. Each load captures the sequence
+    /// value it bumped this to; only the load whose captured value is
+    /// still the latest may publish, so an older clean probe can't
+    /// clobber a newer marker-positive report. Reset on vault
+    /// switch/close is unnecessary (monotonic + the session guard).
+    private var syncDiagnosticsLoadSeq: Int = 0
+
     /// Arm the marker watcher for the current vault (#638). Called
-    /// after the initial diagnostics load in the post-scan funnel;
-    /// idempotent per vault (re-arming stops the previous watcher).
-    func startSyncMarkerWatcher() {
+    /// BEFORE the initial diagnostics probe in the post-scan funnel and
+    /// awaited, so the watch is provably live before the probe reads —
+    /// arm-then-probe closes the setup-race window (adversarial
+    /// re-review). Idempotent per vault (re-arming stops the previous
+    /// watcher).
+    func startSyncMarkerWatcher() async {
         syncMarkerWatcher?.stop()
         syncMarkerWatcher = nil
         guard let vaultURL = currentVaultURL else { return }
@@ -3321,15 +3335,13 @@ final class AppState: ObservableObject {
                 self?.refreshSyncDiagnostics()
             }
         }
-        // Dispatch the arm BEFORE the caller runs the initial post-scan
-        // probe (this method is called first in the continuation): the
-        // async arm — `open` + source creation, microseconds — almost
-        // always beats the slower detached FFI probe, so the watch is
-        // live before the probe reads and the setup-race window is
-        // effectively closed (#638 adversarial). See SyncMarkerWatcher's
-        // setup-race note for the benign residual.
+        // Await arming: `start()` returns only once the fds are open, so
+        // by the time the caller runs the initial probe the watch is
+        // provably live (arm-then-probe, no setup-race window — #638
+        // adversarial re-review). The await suspends without blocking
+        // the main thread (no `queue.sync`).
         syncMarkerWatcher = watcher
-        watcher.start()
+        await watcher.start()
     }
 
     /// Tear down the marker watcher (vault close/switch).
@@ -3353,6 +3365,13 @@ final class AppState: ObservableObject {
     /// land in `syncDiagnosticsError` for the panel's error state.
     func loadSyncDiagnostics() async {
         guard let session = currentSession else { return }
+        // Claim the latest slot for this session (#638 adversarial
+        // re-review). Bumped synchronously on the actor before the
+        // detached probe; only the load still holding the top value may
+        // publish, so an older overlapping same-vault load can't
+        // clobber a newer one after resuming out of order.
+        syncDiagnosticsLoadSeq += 1
+        let seq = syncDiagnosticsLoadSeq
         let result: Result<(SyncDetectionReport, LiveSyncConfigStatus), VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
@@ -3377,8 +3396,12 @@ final class AppState: ObservableObject {
         // would otherwise publish A's report AND fire A's assertive
         // announcement under B's gate (poisoning B's announce-once).
         // The session-identity recheck is the #328 red-team P1 pattern
-        // every other post-await publish in this file uses.
-        guard !Task.isCancelled, currentSession === session else { return }
+        // every other post-await publish in this file uses. The seq
+        // recheck adds same-session ordering: a newer load has since
+        // bumped the counter, so this stale resume must not publish.
+        guard !Task.isCancelled, currentSession === session,
+            seq == syncDiagnosticsLoadSeq
+        else { return }
         switch result {
         case .success(let (report, config)):
             syncReport = report

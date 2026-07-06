@@ -39,29 +39,28 @@ final class SyncMarkerWatcherTests: XCTestCase {
 
     // MARK: - Watcher unit behavior
 
-    func testRootMarkerCreationFiresDebouncedCallback() throws {
+    func testRootMarkerCreationFiresDebouncedCallback() async throws {
         let vault = try makeVaultDir("root-marker")
         let fired = expectation(description: "onChange fired")
         fired.assertForOverFulfill = false
         let watcher = SyncMarkerWatcher(root: vault, debounceInterval: 0.2) {
             fired.fulfill()
         }
-        watcher.start()
-        // Give the watch a beat to arm before mutating.
-        Thread.sleep(forTimeInterval: 0.2)
+        // `await start()` returns only once the fds are open — no
+        // arming sleep needed. A marker written now must fire.
+        await watcher.start()
         try Data().write(to: vault.appendingPathComponent(".stignore"))
-        wait(for: [fired], timeout: 10)
+        await fulfillment(of: [fired], timeout: 10)
         watcher.stop()
     }
 
-    func testEventBurstCoalescesIntoOneCallback() throws {
+    func testEventBurstCoalescesIntoOneCallback() async throws {
         let vault = try makeVaultDir("burst")
         let counter = CallbackCounter()
         let watcher = SyncMarkerWatcher(root: vault, debounceInterval: 0.5) {
             counter.increment()
         }
-        watcher.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        await watcher.start()
         // A burst of entry-list churn well inside one debounce window
         // (the note-save temp+rename pattern).
         for i in 0..<8 {
@@ -70,12 +69,12 @@ final class SyncMarkerWatcherTests: XCTestCase {
         // One debounce window + slack: exactly one callback.
         let settled = expectation(description: "debounce settled")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settled.fulfill() }
-        wait(for: [settled], timeout: 10)
+        await fulfillment(of: [settled], timeout: 10)
         XCTAssertEqual(counter.count, 1, "burst must coalesce into one callback")
         watcher.stop()
     }
 
-    func testPluginsDirCreatedMidSessionIsPickedUpByRearm() throws {
+    func testPluginsDirCreatedMidSessionIsPickedUpByRearm() async throws {
         // The chain: root fires on `.obsidian` creation → re-arm picks
         // up `.obsidian` → fires on `plugins` creation → re-arm picks
         // up `plugins` → fires on the LiveSync dir landing inside it.
@@ -85,52 +84,49 @@ final class SyncMarkerWatcherTests: XCTestCase {
         let watcher = SyncMarkerWatcher(root: vault, debounceInterval: 0.2) {
             counter.increment()
         }
-        watcher.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        await watcher.start()
 
         let fm = FileManager.default
         try fm.createDirectory(
             at: vault.appendingPathComponent(".obsidian"),
             withIntermediateDirectories: false)
-        try waitUntil("root hop fired") { counter.count >= 1 }
+        try await waitUntilAsync("root hop fired") { counter.count >= 1 }
 
         try fm.createDirectory(
             at: vault.appendingPathComponent(".obsidian/plugins"),
             withIntermediateDirectories: false)
-        try waitUntil(".obsidian hop fired") { counter.count >= 2 }
+        try await waitUntilAsync(".obsidian hop fired") { counter.count >= 2 }
 
         try fm.createDirectory(
             at: vault.appendingPathComponent(".obsidian/plugins/obsidian-livesync"),
             withIntermediateDirectories: false)
-        try waitUntil("plugins hop fired") { counter.count >= 3 }
+        try await waitUntilAsync("plugins hop fired") { counter.count >= 3 }
 
         watcher.stop()
     }
 
-    func testStopSuppressesFurtherCallbacks() throws {
+    func testStopSuppressesFurtherCallbacks() async throws {
         let vault = try makeVaultDir("stopped")
         let counter = CallbackCounter()
         let watcher = SyncMarkerWatcher(root: vault, debounceInterval: 0.2) {
             counter.increment()
         }
-        watcher.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        await watcher.start()
         watcher.stop()
         try Data().write(to: vault.appendingPathComponent(".stignore"))
         let settled = expectation(description: "quiet after stop")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { settled.fulfill() }
-        wait(for: [settled], timeout: 10)
+        await fulfillment(of: [settled], timeout: 10)
         XCTAssertEqual(counter.count, 0, "stop() must suppress callbacks")
     }
 
-    func testWatcherDoesNotRetainItselfAfterStop() throws {
+    func testWatcherDoesNotRetainItselfAfterStop() async throws {
         let vault = try makeVaultDir("dealloc")
         var watcher: SyncMarkerWatcher? = SyncMarkerWatcher(
             root: vault, debounceInterval: 0.2
         ) {}
         weak var weakRef = watcher
-        watcher?.start()
-        Thread.sleep(forTimeInterval: 0.2)
+        await watcher?.start()
         watcher?.stop()
         watcher = nil
         XCTAssertNil(weakRef, "sources/timer must not retain the watcher")
@@ -142,7 +138,7 @@ final class SyncMarkerWatcherTests: XCTestCase {
     /// used to reset the trailing timer forever — the callback never
     /// fired. The max-latency ceiling forces a callback within a fixed
     /// bound of the FIRST event even while churn keeps coming.
-    func testMaxLatencyCeilingFiresUnderContinuousChurn() throws {
+    func testMaxLatencyCeilingFiresUnderContinuousChurn() async throws {
         let vault = try makeVaultDir("starve")
         let fired = expectation(description: "ceiling forced a callback")
         fired.assertForOverFulfill = false
@@ -154,14 +150,13 @@ final class SyncMarkerWatcherTests: XCTestCase {
         ) {
             fired.fulfill()
         }
-        watcher.start()
-        Thread.sleep(forTimeInterval: 0.2)  // let the root watch arm
+        await watcher.start()
 
         // Drive churn on a background queue so the main thread is free
         // to service the wait; keep it up past the ceiling.
         let churn = DispatchQueue(label: "test.churn")
-        var stop = false
         let stopLock = NSLock()
+        nonisolated(unsafe) var stop = false
         func shouldStop() -> Bool { stopLock.lock(); defer { stopLock.unlock() }; return stop }
         churn.async {
             var i = 0
@@ -173,7 +168,7 @@ final class SyncMarkerWatcherTests: XCTestCase {
             }
         }
         // Ceiling is 0.6s from the first event; 5s is a generous BOUND.
-        wait(for: [fired], timeout: 5)
+        await fulfillment(of: [fired], timeout: 5)
         stopLock.lock(); stop = true; stopLock.unlock()
         watcher.stop()
     }
@@ -269,6 +264,52 @@ final class SyncMarkerWatcherTests: XCTestCase {
         XCTAssertNil(state.syncReport, "no publish after close")
     }
 
+    /// Same-session ordering (#638 adversarial re-review): an OLDER
+    /// clean probe parked mid-load must not clobber a NEWER
+    /// marker-positive report that publishes while it's suspended. The
+    /// `currentSession === session` guard alone wouldn't catch this —
+    /// both loads run under the SAME session — so the load-sequence
+    /// token is what protects it.
+    func testStaleSameSessionLoadDoesNotClobberNewerReport() async throws {
+        let vault = try makeVaultDir("seq-order")
+        try Data("# hi".utf8).write(to: vault.appendingPathComponent("note.md"))
+        let state = makeAppState(announcer: RecordingAnnouncer())
+        // Stop the post-scan watcher so only the loads we drive here
+        // touch the report — keeps the sequence deterministic.
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.stopSyncMarkerWatcher()
+        XCTAssertEqual(state.syncReport?.providers.isEmpty, true, "clean at open")
+
+        // Park an OLDER load in the race window (post-probe, pre-guard).
+        // It observed the CLEAN vault (no marker planted yet).
+        let entered = expectation(description: "old clean load parked")
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        state.syncDiagnosticsPublishGate = {
+            entered.fulfill()
+            for await _ in gate {}
+        }
+        let oldLoad = Task { await state.loadSyncDiagnostics() }
+        await fulfillment(of: [entered], timeout: 10)
+        state.syncDiagnosticsPublishGate = nil  // newer load runs ungated
+
+        // A marker lands, and a NEWER load publishes the risky report.
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".git"), withIntermediateDirectories: false)
+        await state.loadSyncDiagnostics()
+        XCTAssertEqual(
+            state.syncReport?.providers.map(\.kind), [.git], "newer load published Git")
+
+        // Release the parked old load: it must bail at the sequence
+        // guard and leave the newer report intact.
+        release.finish()
+        await oldLoad.value
+        XCTAssertEqual(
+            state.syncReport?.providers.map(\.kind), [.git],
+            "stale same-session load must not overwrite the newer report")
+        state.closeVault()
+    }
+
     // MARK: - Helpers
 
     /// Thread-safe counter for callbacks that arrive on the main queue
@@ -288,23 +329,7 @@ final class SyncMarkerWatcherTests: XCTestCase {
         }
     }
 
-    /// Spin the main run loop until `condition` (sync variant for the
-    /// pure-watcher tests, where callbacks land via the main queue).
-    private func waitUntil(
-        _ what: String, timeout: TimeInterval = 10,
-        condition: () -> Bool
-    ) throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            if Date() > deadline {
-                XCTFail("timed out waiting for \(what)")
-                return
-            }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-    }
-
-    /// Async-context variant: yields to the main actor so published
+    /// Spin until `condition`, yielding to the main actor so published
     /// AppState mutations (which hop through Tasks) can land.
     private func waitUntilAsync(
         _ what: String, timeout: TimeInterval = 15,
