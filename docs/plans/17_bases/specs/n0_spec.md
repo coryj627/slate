@@ -1,0 +1,190 @@
+# N0 executable spec — Format layer: expression language, `.base` parser, serializer, scanner discovery
+
+Issues: N0-1 ([#690](https://github.com/coryj627/slate/issues/690)) · N0-2 ([#691](https://github.com/coryj627/slate/issues/691)) · N0-3 ([#692](https://github.com/coryj627/slate/issues/692)) · N0-4 ([#693](https://github.com/coryj627/slate/issues/693)). Milestone: [GH 14](https://github.com/coryj627/slate/milestone/14). One PR per issue.
+Program: [00_program.md](../00_program.md) (locked decisions 2–6; DoD §N-A/§N-B/§N-D/§N-E). Syntax facts: [01_research_brief.md](../01_research_brief.md) — **normative for every Obsidian-syntax fact in this spec**; when in doubt, the brief's help-corpus citations win.
+Backend norms: fmt/clippy pre-push, censuses for correctness invariants, host-independent slate-core (no macOS deps, no I/O in parsers).
+
+**Execution order: N0-1 → N0-2 → { N0-3 ∥ N0-4 }.**
+
+Baseline facts (verified 2026-07-06, this worktree):
+
+- Tolerant-parser contract to copy (contract, not code): `crates/slate-core/src/canvas/mod.rs` — entry-level problems ⇒ warning + skip, never hard-fail; only an unusable root degrades the load.
+- Frontmatter/YAML precedent: `crates/slate-core/src/frontmatter.rs` — `extract_frontmatter`, `frontmatter_range`, yaml-rust2, warning-not-panic discipline. The `.base` parser is a **new sibling module**, not a frontmatter extension — but reuses the same YAML dependency and warning idioms.
+- Properties value model: `crates/slate-core/src/properties_db.rs` — `value_kind` strings, `value_text_norm` normalization (:63, :86), `properties_list_values` per-element rows (:58, :121). `PropertyValue` variants per migration 005/007.
+- Tag matching semantics already shipped: `SearchScope::Tag` nested-child matching (search_db.rs:60) — `hasTag("a")` matches `#a/b`. Reuse the same normalization; never write a second tag matcher.
+- Wikilink parsing: `links.rs` scanner — reuse for Link literals/values; never a second wikilink parser (XD0-2 precedent).
+- Specialized-block discovery: `specialized_blocks` table (kind-discriminated, payload JSON, migration 001 family) — the fence-discovery target for N0-4.
+- Migrations: `crates/slate-core/migrations/` — next free slot **021**; migration files carry the documentation-header convention (see 008_tasks.sql).
+- Census/bench conventions: `census_*` test fns, `SLATE_CENSUS_FULL=1` via `census_scale()`; criterion benches in `crates/slate-core/benches/`; baselines in `BENCHMARKS.md`.
+- Workspace YAML: yaml-rust2 does **not** preserve comments through emit — this is why decision 3 mandates the preservation model below (raw-text retention + targeted splicing), not naive parse→emit.
+
+---
+
+## N0-1 · Expression language: lexer, parser, AST (#690) — PR 1
+
+New module `crates/slate-core/src/bases/expr.rs`: `pub fn parse_expr(source: &str) -> Result<Expr, ExprParseError>`.
+
+### Types (pinned)
+
+```rust
+pub enum Expr {
+    Lit(Lit),                                    // string, number, bool, list, object, regex
+    Prop(PropertyRef),                           // note.x / file.x / formula.x / this / this.file.x / bare→note
+    Index { base: Box<Expr>, index: Box<Expr> }, // p[0], p["sub"]
+    Field { base: Box<Expr>, name: String },     // date.year, file.name, obj.subprop
+    Unary { op: UnaryOp, rhs: Box<Expr> },       // !x, -x
+    Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> }, // + - * / % == != > < >= <= && ||
+    Call { callee: Callee, args: Vec<Expr> },    // global fn or method (receiver in Callee::Method)
+    ListExpr { base: Box<Expr>, kind: ListExprKind, body: Box<Expr>, init: Option<Box<Expr>> },
+                                                 // filter/map(expr: implicit value,index) / reduce(expr, init: implicit acc)
+    Unsupported { raw: String, reason: String }, // decision 6: parses, round-trips, fails loud at eval
+}
+
+pub enum Callee { Global(GlobalFn), Method { receiver: Box<Expr>, name: MethodName } }
+
+pub enum PropertyRef {
+    Note(String), File(FileField), Formula(String),
+    This, ThisField(Box<PropertyRef>),           // this / this.file.name …
+    TaskField(TaskField),                        // task.* — only legal under source: tasks (N1-4); parse always
+}
+```
+
+`GlobalFn` and `MethodName` are **closed enums enumerating exactly the brief §3 inventory** (including `random`, `html`, `image`, `icon` — parse-known; their v1 *evaluation* status is N1-1's table). A call to a name outside the inventory parses as `Expr::Unsupported` with the verbatim source text — not an error.
+
+### Normative rules
+
+1. **One grammar for filters and formulas** (brief §2). Operator precedence: JS parity — `! -(unary)` > `* / %` > `+ -` > comparisons > `&&` > `||`; parentheses group.
+2. Literals per brief §2: `"…"`/`'…'` strings with escapes; numbers (int/float); bare `true`/`false`; `[…]` lists; `{"k": v}` objects; `/…/flags` regex (flags: `g` recognized, others preserved-unsupported). Duration strings are **plain strings** at parse time; duration semantics live in the evaluator (`date + "1M"` is `Binary(Add, date, Lit(Str))` — brief §2).
+3. Property references: bare identifier ⇒ `Note` (brief §4); `note.x`/`note["x"]`, `file.<field>` for the closed brief-§4 field set (unknown `file.` field ⇒ `Unsupported`), `formula.x`, `this` (+ chained fields), `task.<field>` (closed set: `text`, `status`, `completed`, `due`, `scheduled`, `priority`, `file` — N1-4 owns semantics).
+4. Method-style calls type-check **by name only** at parse time (receiver types are dynamic; the evaluator owns type errors — decision 6 routes those to fail-loud).
+5. `filter`/`map`/`reduce` bodies are bare expressions with implicit `value`/`index`/`acc` identifiers (brief §3 List). Inside a list-expr body, those identifiers resolve to the implicit bindings *before* falling back to `Note(...)`.
+6. Determinism: `parse_expr` is a pure function; equal input ⇒ equal AST (derive `PartialEq`; no interning that leaks order).
+7. Every AST node retains its **verbatim source span** so N0-3 can re-emit untouched expressions byte-identically.
+
+### Tests (PR 1)
+
+- Unit per rule; golden AST snapshots for every example expression in the brief (§1 example file's formulas/filters, §2 idioms, §3 signatures, §7 field-report idioms).
+- Property (proptest): parse never panics on arbitrary strings; parse determinism; parse→emit(verbatim span)→parse fixpoint.
+- Exhaustive inventory test: every brief-§3 function name parses to its enum arm; a name one edit-distance off parses to `Unsupported`.
+
+- [ ] Types + `parse_expr` per rules 1–7
+- [ ] Golden + property + inventory tests
+- [ ] fmt/clippy clean; host-independent; no I/O
+
+## N0-2 · `.base` parser → `SlateQuery` (#691) — PR 2
+
+New module `crates/slate-core/src/bases/mod.rs`: `pub fn parse_base(source: &str) -> (BaseFile, Vec<BaseWarning>)`.
+
+### Types (pinned; 05 §8.2 refined)
+
+```rust
+pub struct BaseFile {
+    pub raw: String,                       // verbatim source — the round-trip substrate (decision 3)
+    pub filters: Option<FilterNode>,       // base-wide
+    pub formulas: Vec<(String, Expr)>,     // declaration order preserved
+    pub properties: Vec<(String, PropertyConfig)>, // displayName + preserved unknown sub-keys
+    pub summaries: Vec<(String, Expr)>,    // custom summary formulas (values keyword ⇒ implicit binding)
+    pub views: Vec<ViewDef>,
+    pub preserved: PreservedYaml,          // unknown top-level keys, key order, comments — opaque
+}
+
+pub enum FilterNode {
+    Stmt(Expr),                            // single statement string
+    And(Vec<FilterNode>), Or(Vec<FilterNode>),
+    Not(Vec<FilterNode>),                  // semantics NOT(OR(list)) — brief §2
+}
+
+pub struct ViewDef {
+    pub view_type: ViewType,               // Table | List | Cards | Map | Other(String)
+    pub name: String,
+    pub limit: Option<u64>,
+    pub filters: Option<FilterNode>,       // ANDed with base-wide (brief §1)
+    pub group_by: Option<GroupBy>,         // { property: PropertyRef, direction: Asc|Desc }
+    pub order: Vec<String>,                // property ids, verbatim
+    pub summaries: Vec<(String, SummaryRef)>, // Builtin(name) | Custom(name)
+    pub source: ViewSource,                // Files | Tasks (Slate extension key `source: tasks`, N1-4)
+    pub slate_state: Option<serde_json::Value>, // Slate-authored view state under the `slate` sub-key (decision 3)
+    pub preserved: PreservedYaml,          // Obsidian's undocumented per-view state (brief §6.1) — opaque, verbatim
+}
+```
+
+`SlateQuery` (the executable form, 05 §8.2 shape) is **derived** per view: `pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery` — base filters ∧ view filters, formulas, group/sort/columns/summaries/limit resolved. The builder (N4) constructs `SlateQuery` directly; `save_as_base_file` (N2-1) goes through `BaseFile`.
+
+### Normative rules
+
+1. **Load gate:** root must be a YAML mapping. Anything else ⇒ degraded `BaseFile` (raw retained, everything else empty) + `BaseWarning::ParseFailed` — the file still opens (banner) and still round-trips (raw). Empty file ⇒ empty base, no warning (Obsidian's "New base" starts minimal).
+2. Top-level keys `filters`/`formulas`/`properties`/`summaries`/`views` parse per brief §1; **any other top-level key** ⇒ `preserved`, verbatim, warning-free.
+3. Filter grammar per brief §2: a mapping with exactly one of `and`/`or`/`not` (list values, heterogeneous nesting); a string is a statement parsed via N0-1. A filter mapping with zero or multiple combinator keys, or a non-string non-mapping list entry ⇒ that node becomes `Stmt(Unsupported)` + warning (tolerant; fail-loud at eval).
+4. Views: `type` unknown ⇒ `ViewType::Other(name)` (decision 4 fallback); missing `name` ⇒ synthesized `"View N"` + warning (embeds address by name); duplicate names ⇒ warning, first wins for `#View` addressing. `groupBy.direction` accepts `ASC`/`DESC` case-insensitively, default `ASC` (brief §6.3). Unknown per-view keys ⇒ `preserved`. The `slate` sub-key parses as Slate state; Slate never writes any other novel key into a view (decision 3).
+5. Formula/summary expression strings parse via N0-1; a formula that fails expression-parse becomes `Unsupported` + warning (round-trips verbatim; referencing views fail loud at eval). Circular formula references are **detected at parse** (graph over `formula.x` refs) ⇒ each cycle member becomes `Unsupported { reason: "circular reference" }` (brief §1: Obsidian forbids cycles).
+6. `source:` view key (Slate extension): absent or `files` ⇒ `Files`; `tasks` ⇒ `Tasks`; anything else ⇒ `Files` + warning. Namespaced so Obsidian ignores it structurally (it's just an unknown key there).
+7. Determinism: pure function, no I/O, equal input ⇒ equal output.
+
+### Tests (PR 2)
+
+- Fixture: the brief-§1 verbatim example + hand-authored fixtures covering every rule (unknown keys at all levels, plugin view type, `not` semantics, duplicate view names, circular formulas, `source: tasks`, `slate` sub-key).
+- Unit per rule; property: never panics on arbitrary YAML/text; determinism.
+- Cross-check: `view_query` output for the brief example matches a hand-written expected `SlateQuery` (golden).
+
+- [ ] Types + `parse_base` + `view_query` per rules 1–7
+- [ ] Fixtures + golden + property tests
+- [ ] fmt/clippy; host-independent; no I/O
+
+## N0-3 · `.base` serializer + round-trip corpus (#692) — PR 3
+
+Same module: `pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Result<String, SerializeError>`.
+
+### Normative rules
+
+1. **Untouched ⇒ byte-equal:** `serialize_base(parse_base(s).0, &[])` returns `s` exactly (the `raw` field is authoritative when no edits apply). This is the 05 §8.1 hard requirement and it is trivially true by construction — test it anyway, forever (§N-A).
+2. **Edits are targeted splices**, not re-emission: `BaseEdit` is a closed enum (`SetViewKey`, `AddView`, `RemoveView`, `SetFormula`, `RemoveFormula`, `SetTopLevelFilters`, `SetViewFilters`, `SetDisplayName`, `SetSlateState`, …) and each edit rewrites only the minimal YAML span it owns, preserving surrounding bytes, key order, quoting style, comments, and final-newline state. Line-oriented splicing over the retained `raw` + node spans; **never** parse→mutate→emit the whole document through yaml-rust2 (baseline fact: it drops comments).
+3. New content Slate writes (added views, builder-authored files) uses a **pinned canonical style**: two-space indent, keys in the brief-§1 example order (`type`, `name`, `limit`, `groupBy`, `filters`, `order`, `summaries`, then `source`/`slate`), double-quoted strings only where YAML requires, LF endings, trailing newline. New files created by the builder are entirely canonical-style.
+4. Filter nodes edited structurally re-emit in the mapping form (brief §1 example shape); a `Stmt` whose `Expr` is untouched re-emits its verbatim span (N0-1 rule 7).
+5. `Unsupported` nodes and `preserved` YAML re-emit byte-verbatim always — an edit that would have to rewrite inside preserved content is a `SerializeError::WouldClobber` (callers surface it; never silent data loss).
+6. Determinism: equal `(base, edits)` ⇒ equal output.
+
+### Tests (PR 3)
+
+- **Golden corpus** `tests/fixtures/bases/`: the brief-§1 example verbatim; ≥ 6 hand-authored Obsidian-style files exercising comments, key-order variance, single/double quoting, plugin view types, undocumented view-state keys (row height, column widths — realistic names), a base with only a filter string, a base with every documented key. Corpus rule (XD precedent): format-faithful now; genuine Obsidian-app-written captures are added as they become available and **must never be normalized**.
+- Byte-equal round-trip over the whole corpus in CI (§N-A).
+- Per-edit minimal-diff tests: apply each `BaseEdit` kind to each fixture; assert untouched lines byte-identical (diff-shape golden).
+- Adversarial census `census_bases_roundtrip` (§N-A): random YAML mutations of corpus files — parse → serialize untouched ⇒ byte-equal; parse → random valid edit → serialize ⇒ minimal diff or explicit `WouldClobber`; never panic, never drop content.
+
+- [ ] `serialize_base` per rules 1–6; `BaseEdit` closed enum
+- [ ] Golden corpus + byte-equal CI + minimal-diff tests + census
+- [ ] fmt/clippy; host-independent
+
+## N0-4 · Scanner discovery: `bases_files` index + fence discovery (#693) — PR 4
+
+### Schema (migration 021, per 05 §8.3 with the shipped-schema idioms)
+
+```sql
+CREATE TABLE bases_files (
+  file_id           INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,          -- filename stem, the palette/embed display name
+  parsed_query_json TEXT NOT NULL,          -- BaseFile summary: view names/types/sources (NOT raw yaml — that's the filesystem's copy, 05 §9.2)
+  warning_count     INTEGER NOT NULL,
+  parser_version    INTEGER NOT NULL,
+  indexed_at_ms     INTEGER NOT NULL
+);
+CREATE INDEX idx_bases_files_name ON bases_files(name);
+```
+
+Deviation from the 05 §8.3 sketch, recorded: no `raw_yaml` column — §9.2 (SQLite is index, not source of truth) wins over the sketch; the parser re-reads the file on open. `path TEXT PRIMARY KEY` becomes `file_id` FK per the shipped `files`-table idiom (every other index table joins on `file_id`).
+
+### Normative rules
+
+1. Scanner: files with extension `base` parse via N0-2 during scan; row upserted with view summary + warning count; parse failure still rows (degraded flag in JSON) so the UI can list-and-explain, never hide. `.base` files are **not** markdown (no FTS body row, no links/tags/properties extraction from them).
+2. Fence discovery: during markdown scan, ` ```base ` and ` ```slate-query ` fenced blocks index into `specialized_blocks` with a new kind discriminant (next free; payload JSON = `{ fence_kind, source_text, line, byte_offset }`). Content is **not** parsed at scan time (embeds parse on render — parse-on-open, XD decision-4 precedent); discovery exists so reading view/editor know where grids go without rescanning bodies, and so N4-5's E2E can enumerate embeds.
+3. Incremental ≡ full: editing/creating/deleting a `.base` file or a fence updates exactly the affected rows; the existing incremental-scan census extends to both new dimensions.
+4. Vault generation: any `bases_files` or source-file change bumps the generation the N1-2 cache keys on (one counter, session-owned — pinned here so cache invalidation has a single authority).
+
+### Tests (PR 4)
+
+Unit per rule; incremental-≡-full census extension at 10k-file scale; scan-bench diff proving decision-16's "no first-open regression" (§N-E).
+
+- [ ] Migration 021 + scanner + fence discovery per rules 1–4
+- [ ] Census extension + scan-bench diff
+- [ ] fmt/clippy clean
+
+**Wave-1 exit:** round-trip census clean (§N-A), corpus in CI, scanner benches inside budget, no save-path deltas.
