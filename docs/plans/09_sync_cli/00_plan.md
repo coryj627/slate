@@ -1,6 +1,6 @@
 # 09 — Milestone M plan: Sync detection + diagnostics + CLI v1
 
-**Status:** 📝 Planned (2026-07-03). Not started. GitHub [milestone 13](https://github.com/coryj627/slate/milestone/13).
+**Status:** ✅ Shipped (2026-07-06). GitHub [milestone 13](https://github.com/coryj627/slate/milestone/13) closed — M-1…M-6 delivered (sync detector, LiveSync config reader, diagnostics leaf, CLI scaffold + query/write verbs). This plan text is retained as the executed contract; the `slate` CLI later gained a `write` verb (#675), extending the "read-only shell" framing in the title.
 **Implements:** `05_locked_architecture_decisions.md` §7.2 phase 1 (sync **detection only** — no sync writer), §7.4 sync-detection types, and the §10 Tier-2 decision ("CLI tool `slate` ships in V1"; the local HTTP API ships separately in V1.x and is **not** in this milestone).
 **Executable spec:** [m_spec.md](m_spec.md) — the per-issue implementation contract.
 
