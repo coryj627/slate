@@ -19,7 +19,15 @@
 //! leak note titles at the default level, and the deferral is safe.
 
 use log::{Level, LevelFilter, Metadata, Record};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+/// Serialises the whole of [`init`]. `init` is called once at startup (not
+/// on any hot path), so a plain mutex is free here and makes the release-pin
+/// logic a single atomic critical section — closing the check-then-act race
+/// where a concurrent `init(true)` could store `Debug` *after* an
+/// interleaved `init(false)` had pinned `Warn` (#507).
+static INIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// The sink's own ceiling, set by [`init`], independent of the mutable
 /// process-global `log::max_level`.
@@ -145,6 +153,14 @@ static SINK: StderrSink = StderrSink;
 /// unmuting `Debug` avoids surfacing slate-core's path records into an
 /// unknown foreign sink.
 pub(crate) fn init(verbose: bool) {
+    // Whole-function critical section: the release-pin check and the cap
+    // stores must be one atomic step, or a concurrent verbose call could
+    // store `Debug` after an interleaved release call pinned `Warn`.
+    // `PoisonError` (a panic in another `init`) is impossible here — the
+    // body has no `?`/panic path — but recover the guard defensively so a
+    // spurious poison can't wedge startup.
+    let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     if verbose {
         // Developer opt-in. Honour it only if a release floor hasn't already
         // been pinned this process — otherwise the release cap wins and we
@@ -348,5 +364,54 @@ mod tests {
             "a verbose install with no prior release pin must admit Debug"
         );
         assert_eq!(sink_cap(), LevelFilter::Debug);
+    }
+
+    /// Concurrency regression (adversarial review): racing `init(false)` and
+    /// `init(true)` must never leave the sink cap at `Debug`. The old
+    /// check-then-act (`RELEASE_PINNED.load` then `SINK_CAP.store(Debug)`)
+    /// could interleave so a verbose call stored `Debug` after a release call
+    /// had pinned `Warn`; the `INIT_LOCK` critical section closes that.
+    ///
+    /// Once any release init has pinned the floor, the cap must settle at
+    /// `Warn` regardless of scheduling — verbose calls that land after the pin
+    /// are no-ops, and one that landed before is overwritten by the release
+    /// call's `Warn`.
+    #[test]
+    fn concurrent_release_and_verbose_init_never_leaves_debug_cap() {
+        use std::sync::Arc;
+        use std::sync::Barrier;
+        use std::thread;
+
+        let _guard = LEVEL_LOCK.lock().unwrap();
+
+        // Repeat to shake out interleavings.
+        for _ in 0..200 {
+            reset_release_pin_for_test();
+
+            let barrier = Arc::new(Barrier::new(8));
+            let mut handles = Vec::new();
+            for i in 0..8 {
+                let b = Arc::clone(&barrier);
+                handles.push(thread::spawn(move || {
+                    b.wait(); // maximise the chance of a real interleave
+                    // Mix of release and verbose inits.
+                    init(i % 2 == 0);
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // At least one release init ran, so the monotonic floor must hold.
+            assert!(
+                RELEASE_PINNED.load(Ordering::Relaxed),
+                "a release init ran, so the floor must be pinned"
+            );
+            assert_eq!(
+                sink_cap(),
+                LevelFilter::Warn,
+                "racing init(false)/init(true) must never leave the cap at Debug"
+            );
+        }
     }
 }
