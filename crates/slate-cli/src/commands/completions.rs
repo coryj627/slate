@@ -58,9 +58,12 @@ use crate::Cli;
 /// downstream pipe; (2) we still call the fallible [`Generator::try_generate`]
 /// rather than the panicking `generate`, so even a future writer swap
 /// stays on the `Result` path. The single real pipe write is our own
-/// `write_all` below, whose `io::Error` is catchable. Buffering also
-/// makes stdout atomic: a broken pipe yields *no* partial script rather
-/// than a truncated one (codex adversarial finding, round 1).
+/// `write_all` below, whose `io::Error` is catchable. Buffering into
+/// one write also *minimizes* partial output — though it cannot
+/// guarantee none: a pipe can still break mid-write beyond `PIPE_BUF`,
+/// leaving a truncated script (Codoki PR #648). The contract here is
+/// no-panic + clean exit 1, not write atomicity. (Codex adversarial
+/// finding, round 1; wording tightened per Codoki.)
 pub fn run(shell: Shell, out: &mut impl io::Write) -> io::Result<()> {
     // Build clap's `Command` from the derive grammar. `bin_name` is the
     // binary the completions install against — the `[[bin]]` name
