@@ -356,6 +356,93 @@ fn missing_note_without_create_exits_1() {
 }
 
 #[test]
+fn empty_expect_hash_on_missing_without_create_exits_1_no_file() {
+    // Codex adversarial round 2 (MEDIUM): core hashes a missing file to
+    // "", so an empty --expect-hash would pass the CAS and mint the
+    // file. The missing-note gate must win over --expect-hash: in
+    // automation an empty/failed hash-lookup variable plus a typo'd
+    // path must surface as "no such note", never create a note.
+    let vault = seed_empty_vault();
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("typo.md")
+        .arg("--expect-hash")
+        .arg("")
+        .write_stdin("accidental content")
+        .assert()
+        .code(1)
+        .stderr(predicates_str_contains("no such note: typo.md"));
+
+    assert!(
+        !vault.path().join("typo.md").exists(),
+        "an expect-hash must never create a file without --create"
+    );
+}
+
+#[test]
+fn stale_expect_hash_on_missing_without_create_is_no_such_note() {
+    // Precedence pin: on a missing note without --create the answer is
+    // "no such note" (the path is wrong), not "write conflict" (the
+    // hash is wrong) — regardless of what --expect-hash says.
+    let vault = seed_empty_vault();
+    let stale = "0".repeat(64);
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("gone.md")
+        .arg("--expect-hash")
+        .arg(&stale)
+        .write_stdin("body")
+        .assert()
+        .code(1)
+        .stderr(predicates_str_contains("no such note: gone.md"));
+    assert!(!vault.path().join("gone.md").exists());
+}
+
+#[test]
+fn create_with_explicit_empty_expect_hash_succeeds_on_missing() {
+    // With --create the user's empty --expect-hash is the explicit
+    // "no file exists" assertion — honored verbatim.
+    let vault = seed_empty_vault();
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("new.md")
+        .arg("--create")
+        .arg("--expect-hash")
+        .arg("")
+        .write_stdin("fresh\n")
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(vault.path().join("new.md")).unwrap(),
+        "fresh\n"
+    );
+}
+
+#[test]
+fn create_with_wrong_expect_hash_on_missing_conflicts() {
+    // --create with a non-empty --expect-hash asserts a pre-state that
+    // doesn't hold for a missing file (its hash is "") → conflict, no
+    // file minted.
+    let vault = seed_empty_vault();
+    let wrong = "1".repeat(64);
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("new.md")
+        .arg("--create")
+        .arg("--expect-hash")
+        .arg(&wrong)
+        .write_stdin("body")
+        .assert()
+        .code(1)
+        .stderr(predicates_str_contains("write conflict"));
+    assert!(!vault.path().join("new.md").exists());
+}
+
+#[test]
 fn create_on_existing_note_is_plain_conditional_write() {
     // --create is idempotent-friendly: on an existing note it's just a
     // conditional write (uses the note's indexed hash).

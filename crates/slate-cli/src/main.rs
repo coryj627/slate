@@ -155,7 +155,9 @@ enum Command {
         /// Require the note's current content hash to equal this blake3
         /// hash before writing (compare-and-swap). Without it, `write`
         /// uses the note's current indexed hash for an existing note, so
-        /// a concurrent app edit still conflict-detects.
+        /// a concurrent app edit still conflict-detects. A missing note
+        /// still requires --create — an expect-hash never creates a file
+        /// by itself.
         #[arg(long)]
         expect_hash: Option<String>,
         /// Create the note if it does not exist (with an empty-expected

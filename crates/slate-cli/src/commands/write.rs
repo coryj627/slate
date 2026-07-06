@@ -111,29 +111,30 @@ pub fn run_with_contents(
 
     // Decide the compare-and-swap anchor (`expected_content_hash`):
     //
-    // - `--expect-hash H` given  → use H verbatim (the user asserts the
-    //   pre-state; honored for both existing and, with --create, missing
-    //   files). This is the cross-invocation CAS.
-    // - existing note, no hash   → the note's current indexed hash, so
+    // - missing note, no --create → exit 1 "no such note", UNCONDITIONALLY
+    //   — even when --expect-hash was given. Core hashes a missing file
+    //   to `""`, so honoring an empty --expect-hash here would mint the
+    //   file; in automation an empty/failed hash-lookup variable plus a
+    //   typo'd path must surface as "no such note", never a new note
+    //   (codex adversarial round 2). Same stable copy `read`/`links` use.
+    // - missing note, --create   → the user's --expect-hash verbatim if
+    //   given, else `Some("")`: an empty expected-hash is a CAS against
+    //   "no file exists". If another process creates the file first, the
+    //   disk hash is non-empty and the write is refused — a safe, atomic
+    //   create rather than a blind overwrite.
+    // - existing note            → --expect-hash verbatim if given (the
+    //   cross-invocation CAS), else the note's current indexed hash, so
     //   an app edit between our observation and the save conflict-checks.
-    // - missing note, --create   → `Some("")`: an empty expected-hash is
-    //   a CAS against "no file exists" (save_text hashes a missing file
-    //   to the empty string). If another process creates the file first,
-    //   the disk hash is non-empty and the write is refused — a safe,
-    //   atomic create rather than a blind overwrite.
-    // - missing note, no --create → exit 1 "no such note".
-    let expected: Option<String> = match (expect_hash, &existing, create) {
-        (Some(h), _, _) => Some(h.to_string()),
-        (None, Some(meta), _) => Some(meta.content_hash.clone()),
-        (None, None, true) => Some(String::new()),
-        (None, None, false) => {
-            // Missing note without --create: exit 1 with the same
-            // "no such note" copy `read`/`links` use, so a script sees
-            // one stable message whether it read or wrote.
+    let expected: Option<String> = match (&existing, create, expect_hash) {
+        (None, false, _) => {
             return Err(CliError::NoSuchNote {
                 path: note_path.to_string(),
             });
         }
+        (None, true, Some(h)) => Some(h.to_string()),
+        (None, true, None) => Some(String::new()),
+        (Some(_), _, Some(h)) => Some(h.to_string()),
+        (Some(meta), _, None) => Some(meta.content_hash.clone()),
     };
 
     let report = session

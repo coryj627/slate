@@ -157,7 +157,26 @@ pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
 
 fn apply_pragmas(conn: &Connection, cache_size_pages: u32) -> Result<(), DbError> {
     // WAL mode lets us read concurrently with one writer.
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    //
+    // Concurrent FIRST open (#641): converting a fresh delete-mode
+    // database to WAL takes an exclusive lock, and SQLite deliberately
+    // does NOT consult the busy handler for lock upgrades it considers
+    // deadlock-prone — so a second opener racing the conversion gets an
+    // *immediate* SQLITE_BUSY instead of waiting out rusqlite's 5s
+    // busy_timeout. The conversion is a one-time persistent property
+    // flip (every later open sees WAL already set and no-ops), so a
+    // brief bounded retry resolves the race; the steady state never
+    // loops.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => break,
+            Err(e) if is_busy_or_locked(&e) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
     // NORMAL trades a small durability window for a large write-perf gain;
     // safe because the index is regenerable.
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -171,13 +190,39 @@ fn apply_pragmas(conn: &Connection, cache_size_pages: u32) -> Result<(), DbError
     Ok(())
 }
 
+/// True when `e` is a `SQLITE_BUSY`/`SQLITE_LOCKED` failure — the
+/// "another connection holds the lock" family the WAL-conversion retry
+/// in [`apply_pragmas`] waits out.
+fn is_busy_or_locked(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(f, _) if matches!(
+            f.code,
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+        )
+    )
+}
+
 /// Apply all pending migrations and return the final schema version.
 ///
 /// Idempotent: if the database is already current, returns the current
 /// version without doing any work.
+///
+/// Safe under **concurrent first open** (#641): the whole
+/// read-version-then-apply sequence runs inside one IMMEDIATE
+/// transaction, so SQLite's one-writer lock (file-based, hence
+/// cross-process) serializes two processes opening a fresh vault at
+/// the same time. Both used to read `user_version == 0` and both
+/// applied migration 1 — the loser failed with "table files already
+/// exists". Now the loser blocks on the lock (rusqlite's built-in 5s
+/// busy_timeout), then re-reads the winner's version inside its own
+/// critical section and no-ops. All-or-nothing as a bonus: a failed
+/// migration rolls the whole run back instead of leaving a prefix
+/// applied.
 pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
-    ensure_version_table(conn)?;
-    let current = current_version(conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    ensure_version_table(&tx)?;
+    let current = current_version(&tx)?;
     let runner_max = MIGRATIONS.len() as u32;
 
     if current > runner_max {
@@ -190,11 +235,13 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
     for (i, migration) in MIGRATIONS.iter().enumerate() {
         let target_version = (i + 1) as u32;
         if target_version > current {
-            apply_migration(conn, target_version, migration)?;
+            apply_migration(&tx, target_version, migration)?;
         }
     }
 
-    current_version(conn)
+    let final_version = current_version(&tx)?;
+    tx.commit()?;
+    Ok(final_version)
 }
 
 /// Returns the highest applied migration version, or 0 if none have been
@@ -225,23 +272,21 @@ fn ensure_version_table(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
-fn apply_migration(
-    conn: &mut Connection,
-    version: u32,
-    migration: &Migration,
-) -> Result<(), DbError> {
-    let tx = conn.transaction()?;
-    tx.execute_batch(migration.sql)
+/// Apply one migration on the caller's already-open transaction. The
+/// caller (`migrate`) owns commit/rollback — all pending migrations
+/// land or none do, inside the cross-process IMMEDIATE critical
+/// section.
+fn apply_migration(conn: &Connection, version: u32, migration: &Migration) -> Result<(), DbError> {
+    conn.execute_batch(migration.sql)
         .map_err(|e| DbError::MigrationFailed {
             version,
             description: migration.description,
             message: e.to_string(),
         })?;
-    tx.execute(
+    conn.execute(
         "INSERT INTO schema_version (version, applied_at_ms, description) VALUES (?1, ?2, ?3)",
         rusqlite::params![version, now_ms(), migration.description],
     )?;
-    tx.commit()?;
     Ok(())
 }
 
@@ -304,6 +349,44 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, MIGRATIONS.len() as u32);
+    }
+
+    #[test]
+    fn census_migrate_safe_under_concurrent_first_open() {
+        // #641 (flushed out by the CLI's cross-process race test): two
+        // processes opening a FRESH vault concurrently must both come
+        // out at the latest schema version. Pre-fix, both read
+        // user_version 0 outside any lock and both applied migration 1;
+        // the loser died with `table files already exists`. The
+        // IMMEDIATE transaction in `migrate` serializes the whole
+        // read-then-apply sequence on SQLite's file-based one-writer
+        // lock — the same lock two separate processes contend on, which
+        // two connections here exercise identically.
+        for round in 0..10 {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("cache.sqlite");
+            let barrier = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..2)
+                    .map(|_| {
+                        let path = path.clone();
+                        let barrier = &barrier;
+                        scope.spawn(move || {
+                            barrier.wait();
+                            let mut conn = open_database(&path, 512)
+                                .unwrap_or_else(|e| panic!("open_database failed: {e:?}"));
+                            migrate(&mut conn)
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    let version = handle.join().expect("opener thread").unwrap_or_else(|e| {
+                        panic!("round {round}: concurrent first open must succeed, got {e:?}")
+                    });
+                    assert_eq!(version, MIGRATIONS.len() as u32, "round {round}");
+                }
+            });
+        }
     }
 
     #[test]
