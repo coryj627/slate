@@ -14,6 +14,22 @@ import SwiftUI
 struct SlateMacApp: App {
     @StateObject private var appState = AppState()
 
+    init() {
+        // Install the slate-core diagnostics sink once at startup (#507).
+        // slate-core routes its non-fatal warnings through the Rust `log`
+        // facade, which is a no-op until a host installs a sink; this is the
+        // host's opt-in. `verbose` is DEBUG-only: release builds see
+        // warn-level records (which carry no vault paths / note names),
+        // while a debug build additionally gets the debug lines that do
+        // carry paths, for local troubleshooting. Idempotent on the Rust
+        // side, so a second `init()` (e.g. under SwiftUI previews) is safe.
+        #if DEBUG
+        initHostLogging(verbose: true)
+        #else
+        initHostLogging(verbose: false)
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup("Slate") {
             RootView()

@@ -1088,7 +1088,15 @@ impl VaultSession {
         };
 
         if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
-            eprintln!("warning: oplog append failed for file_id={file_id} at {path:?}: {e}");
+            // Non-fatal: a missing op-log entry only degrades undo to a
+            // per-file conflict report, never corruption. Route through the
+            // facade (#507). warn carries only the file id and the error
+            // *kind* — never the full error Display, which for a torn/short
+            // existing log embeds the cache path (`oplog {path:?}: …`). The
+            // path-bearing detail rides the debug line instead, so it stays
+            // out of shipped host logs (see lib.rs privacy rule).
+            log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
+            log::debug!("oplog append failure for path {path:?}: {e}");
             return; // leave the cache untouched so the next save re-snapshots
         }
         state.insert(
@@ -3682,10 +3690,6 @@ fn list_dir_children_impl(
     })
 }
 
-fn fputs_warn(message: &str) {
-    eprintln!("Slate: {message}");
-}
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4592,7 +4596,14 @@ impl VaultSession {
             payload_bytes: contents.as_bytes().to_vec(),
         };
         if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
-            fputs_warn(&format!("oplog anchor for {path:?} failed: {e}"));
+            // Non-fatal: a missing anchor only degrades a structural-move's
+            // undo to a per-file conflict report, never corruption. Route
+            // through the facade (#507). warn carries only the file id and
+            // the error *kind* — never the full Display, which for a
+            // torn/short existing log embeds the cache path. The path-bearing
+            // detail rides the debug line (see the lib.rs privacy rule).
+            log::warn!("oplog anchor failed for file_id={file_id}: {}", e.kind());
+            log::debug!("oplog anchor failure for path {path:?}: {e}");
             return;
         }
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
@@ -5508,7 +5519,23 @@ impl VaultSession {
             content_hash_after: report.new_content_hash.clone(),
             payload_bytes: payload.to_string().into_bytes(),
         };
-        let _ = crate::oplog::append_entry(&self.config.cache_dir, state.file_id, &entry);
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, state.file_id, &entry) {
+            // Non-fatal, same discipline as the save/anchor append sites
+            // (#507): the committed canvas write already succeeded; only the
+            // semantic journal entry (undo/audit metadata) is missing. Route
+            // through the facade instead of swallowing so a host can see the
+            // observability gap — warn carries the file id + error *kind*
+            // only, the path rides the debug line (see lib.rs privacy rule).
+            log::warn!(
+                "canvas oplog journal append failed for file_id={}: {}",
+                state.file_id,
+                e.kind()
+            );
+            log::debug!(
+                "canvas oplog journal append failure for path {:?}: {e}",
+                state.path
+            );
+        }
 
         Ok(CanvasApplyResult {
             new_content_hash: report.new_content_hash,
@@ -5690,6 +5717,9 @@ mod tests {
 
     #[path = "save.rs"]
     mod save;
+
+    #[path = "oplog_logging.rs"]
+    mod oplog_logging;
 
     #[path = "composed.rs"]
     mod composed;

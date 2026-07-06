@@ -209,6 +209,42 @@ pub fn read_headings(path: String) -> Result<Vec<Heading>, VaultError> {
 }
 
 // =====================================================================
+// Host logging sink (#507)
+// =====================================================================
+
+mod host_logging;
+
+/// Install a minimal stderr sink for slate-core's `log` facade diagnostics.
+///
+/// slate-core routes its non-fatal, degradation-only diagnostics through the
+/// [`log`] facade (`log::warn!` / `log::debug!`), which is a **no-op unless a
+/// host installs a `log::Log` sink** (#507). This is that sink for the desktop
+/// host: it writes each record to `stderr`, at `warn` level by default, or
+/// `debug` level when `verbose` is `true`.
+///
+/// The privacy split is deliberate. slate-core keeps vault-relative paths and
+/// note names off `warn`-level messages and emits them only on `debug` lines,
+/// so a default (`verbose: false`) install never surfaces a note title in host
+/// stderr / macOS unified logging. A developer who opts into `verbose: true`
+/// (e.g. a debug build) gets the paths back.
+///
+/// **Idempotent.** `log::set_logger` can only succeed once per process; a
+/// second call — or a race with another installer — is swallowed, and the
+/// `verbose` argument of the first successful call wins. Safe to call
+/// unconditionally at app startup.
+///
+/// An `os_log` bridge (routing through the macOS unified logging system with
+/// its own subsystem/category and privacy qualifiers instead of raw stderr) is
+/// explicitly deferred; see #507. Raw stderr is enough for the current
+/// bring-up and keeps the sink dependency-free.
+///
+/// Exposed as `initHostLogging(verbose:)` in Swift.
+#[uniffi::export]
+pub fn init_host_logging(verbose: bool) {
+    host_logging::init(verbose);
+}
+
+// =====================================================================
 // VaultSession FFI surface (Milestone A subset)
 // =====================================================================
 

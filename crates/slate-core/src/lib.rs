@@ -8,6 +8,30 @@
 //! mid-bootstrap, building Milestone A: SQLite-backed metadata index (`db`
 //! module) and the vault filesystem abstraction (`vault` module) plus the
 //! pre-existing heading extraction used by the FFI smoke tests.
+//!
+//! # Diagnostics & the logging facade (#507)
+//!
+//! Non-fatal, degradation-only diagnostics in this crate route through the
+//! [`log`] facade — `log::warn!` / `log::debug!` — never bare `eprintln!`.
+//! (A `clippy.toml` `disallowed-macros` entry enforces this: `eprintln!` /
+//! `println!` in slate-core is a lint error.) Every call is a **no-op unless
+//! a host installs a `log::Log` sink**; that is deliberate. The Mac app
+//! installs a stderr sink via `slate_uniffi::init_host_logging`; the `slate`
+//! CLI installs none (its stdout/stderr split is a data contract — see that
+//! crate's `main.rs`).
+//!
+//! **Privacy rule — the reason the facade exists.** A library must never
+//! decide, on the host's behalf, that a vault-relative path or note name is
+//! safe to emit: a `warn!` of `"…failed for notes/Salary negotiation.md"`
+//! can leak note titles into host-app stderr or macOS unified logging. So:
+//!
+//! * **`warn!` messages carry only non-identifying facts** — file ids,
+//!   counts, error *kinds*. Never a vault path, note name, or their
+//!   `Debug` form.
+//! * **When the path genuinely aids debugging, emit it on a *separate*
+//!   `debug!` line.** Hosts don't enable debug in release builds, so the
+//!   path stays out of shipped logs while remaining available to a
+//!   developer who opts in (`init_host_logging(verbose: true)`).
 
 pub mod blocks;
 pub mod blocks_db;

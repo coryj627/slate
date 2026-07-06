@@ -494,8 +494,14 @@ fn fsync_dir(_dir: &Path) -> io::Result<()> {
 /// or unsupported version) is fatal because we don't know how to
 /// interpret the file at all. Per-entry corruption (short read,
 /// checksum mismatch, unparseable body) stops the walk at that point
-/// and returns the prefix that read cleanly; a warning is printed to
-/// stderr.
+/// and returns the prefix that read cleanly; the truncation is reported
+/// through the [`log`] facade (#507) — a `warn!` carrying the
+/// `file_id` and corruption kind, with the on-disk cache path on a
+/// separate `debug!` line so it stays out of shipped host logs (see the
+/// crate-root privacy rule). The path is a cache-side
+/// `<cache_dir>/oplog/<file_id>.oplog`, not a vault path, but it can
+/// still carry the host's home directory / username, so it gets the same
+/// debug-only treatment.
 pub fn read_oplog(cache_dir: &Path, file_id: i64) -> io::Result<Vec<OpLogEntry>> {
     let path = oplog_path(cache_dir, file_id);
     let mut file = match fs::File::open(&path) {
@@ -537,16 +543,17 @@ pub fn read_oplog(cache_dir: &Path, file_id: i64) -> io::Result<Vec<OpLogEntry>>
         match read_fully(&mut file, &mut len_buf)? {
             ReadOutcome::Eof => break,
             ReadOutcome::Partial => {
-                eprintln!("oplog {path:?}: trailing torn body-length, skipping");
+                warn_torn_oplog(file_id, &path, "trailing torn body-length");
                 break;
             }
             ReadOutcome::Full => {}
         }
         let body_len = u32::from_le_bytes(len_buf) as usize;
         if body_len > MAX_PLAUSIBLE_BODY_LEN {
-            eprintln!(
-                "oplog {path:?}: implausible body_len={body_len} (max {MAX_PLAUSIBLE_BODY_LEN}), \
-                 skipping rest"
+            warn_torn_oplog(
+                file_id,
+                &path,
+                &format!("implausible body_len={body_len} (max {MAX_PLAUSIBLE_BODY_LEN})"),
             );
             break;
         }
@@ -555,7 +562,7 @@ pub fn read_oplog(cache_dir: &Path, file_id: i64) -> io::Result<Vec<OpLogEntry>>
         match read_fully(&mut file, &mut body)? {
             ReadOutcome::Full => {}
             _ => {
-                eprintln!("oplog {path:?}: trailing torn body, skipping");
+                warn_torn_oplog(file_id, &path, "trailing torn body");
                 break;
             }
         }
@@ -564,25 +571,37 @@ pub fn read_oplog(cache_dir: &Path, file_id: i64) -> io::Result<Vec<OpLogEntry>>
         match read_fully(&mut file, &mut sum_buf)? {
             ReadOutcome::Full => {}
             _ => {
-                eprintln!("oplog {path:?}: trailing missing checksum, skipping");
+                warn_torn_oplog(file_id, &path, "trailing missing checksum");
                 break;
             }
         }
         let recorded = u32::from_le_bytes(sum_buf);
         if body_checksum(&body) != recorded {
-            eprintln!("oplog {path:?}: checksum mismatch on trailing entry, skipping");
+            warn_torn_oplog(file_id, &path, "checksum mismatch on trailing entry");
             break;
         }
 
         match parse_body(&body) {
             Ok(entry) => entries.push(entry),
             Err(e) => {
-                eprintln!("oplog {path:?}: malformed entry body ({e}), skipping rest");
+                warn_torn_oplog(file_id, &path, &format!("malformed entry body ({e})"));
                 break;
             }
         }
     }
     Ok(entries)
+}
+
+/// Report a recoverable op-log truncation through the [`log`] facade
+/// (#507). `kind` is a non-identifying corruption description; it
+/// rides a `warn!` with the `file_id`. The on-disk cache `path` goes on a
+/// separate `debug!` line so it never reaches shipped host logs — hosts
+/// don't enable debug in release (see the crate-root privacy rule). This
+/// is a walk-stopping degradation, never data loss: the well-formed
+/// prefix is still returned.
+fn warn_torn_oplog(file_id: i64, path: &Path, kind: &str) {
+    log::warn!("oplog for file_id={file_id}: {kind}, skipping rest");
+    log::debug!("oplog truncation for file_id={file_id} was at path {path:?}");
 }
 
 fn serialize_body(entry: &OpLogEntry) -> Vec<u8> {

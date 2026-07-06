@@ -220,6 +220,19 @@ impl Command {
 }
 
 fn main() -> ExitCode {
+    // No slate-core logging sink is installed here — deliberately (#507).
+    //
+    // slate-core routes its non-fatal diagnostics through the `log` facade,
+    // which is a no-op unless a host installs a `log::Log` sink. The `slate`
+    // CLI installs none. Its stdout/stderr split is a *data contract*
+    // (§M-4): stdout carries command output only; stderr carries this CLI's
+    // own `slate: `-prefixed diagnostics and progress. Letting slate-core's
+    // warns route to stderr uncontrolled would interleave library chatter
+    // with that channel — a note title from a `debug!` path, or a bare
+    // oplog-degradation `warn!`, landing in a machine-parsed pipeline. If a
+    // future subcommand needs library diagnostics it should install a scoped
+    // sink for that run, not flip one on globally here.
+    //
     // clap handles `--help`/`--version`/usage errors itself, exiting 2
     // on a usage error (the contract's exit code) before we get here.
     let cli = Cli::parse();
