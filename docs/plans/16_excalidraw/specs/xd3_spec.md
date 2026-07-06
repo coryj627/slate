@@ -1,0 +1,14 @@
+# XD3 executable spec — Close-out: docs, AT checklist, E2E corpus
+
+Issue: XD3-1 ([#688](https://github.com/coryj627/slate/issues/688)). Milestone: [GH 34](https://github.com/coryj627/slate/milestone/34). One PR. Gate: Wave 3 merged.
+Program: [00_program.md](../00_program.md).
+
+## XD3-1 · Docs + AT smoke checklist + E2E (#688)
+
+1. **Help page** `docs/help/excalidraw.md` (canvas `docs/help/canvas.md` template): what renders where (embed vs. tab), both file forms and how detection works (frontmatter key, not filename), the read-only stance and the Open-as-Markdown / Open-Externally escape hatches, clean-geometry rendering with the sketchy-parity divergence **documented as deliberate** (canvas decision-10 documentation stance), degraded-load behavior, the three projections and Where-am-I, scale tiering (>1,500 visible elements ⇒ outline/table), **no automatic external-change reload — Refresh is the path** (xd2-1 rule 4), and that the plugin's dark-theme key doesn't alter rendering (xd0-1 rule 7). This PR also **extends the help-table drift test** (#526, SlateCommandsTests.swift ~:1024) to map every `CommandSection.excalidraw` command to `docs/help/excalidraw.md` — the section registered in XD2-1/XD2-5; the drift entry lands here, with the file. States plainly that Excalidraw's own canvas is screen-reader-opaque and Slate's viewer is the accessible projection of the same file (research brief §4 citations).
+2. **AT smoke checklist** `docs/plans/16_excalidraw/at_smoke_checklist.md` (canvas `at_smoke_checklist.md` template): VoiceOver (embed reading in a note; tab: all three modes, Where-am-I, follow-connection), Full Keyboard Access, Voice Control (command names dictate cleanly), Switch Control, braille (inspectability: AX values carry full detail), Dynamic Type, Increase Contrast, Reduce Motion (zoom animations honor it). Human pass is the milestone's residual — GH milestone stays open until it completes (canvas precedent).
+3. **E2E fixture vault** `apps/slate-mac/Tests/…` + core corpus additions: a vault with raw + wrapper drawings (all fence forms), drawings with images (vault-file + data-URI + missing), wikilinks in drawings, a note embedding all of them, a degraded file. E2E: embed renders in the note (description populated), tab opens in each mode, backlinks from drawings listed, Open-as-Markdown coexists, read-only census over the whole vault (§XD-E), a11y-check 100/100 both appearances on every new surface.
+4. **BENCHMARKS.md**: wave-close numbers recorded against decision-12 budgets; the E2E additionally records the embed's Swift-side rasterization time (decision 12 gates core resolve→SVG only — the E2E number is the honest end-to-end record). Regressions block the PR.
+
+- [ ] Help page · checklist committed · E2E green · benchmarks recorded
+- [ ] PR description: §XD-A–§XD-E status table (the wave-gate summary the canvas close-out used)
