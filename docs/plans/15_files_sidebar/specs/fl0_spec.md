@@ -11,7 +11,7 @@ Baseline facts (verified 2026-07-05, this worktree):
 - Derived-data pipeline: the slow path and the save path each call, inside one transaction, `headings_db::replace_headings_for_file`, `links_db::replace_links_for_file` (session.rs:968–972 scan; :3233–3236 save), `properties_db::replace_properties_for_file`, `tasks_db::replace_tasks_for_file` (tasks_db.rs:41–73), `tags_db::replace_tags_for_file` (tags_db.rs:50–71). **These two call sites are the complete set of derived-data hook points; FL0 adds one more `replace_*` call at each, nothing else.**
 - `tasks` table already exists (migrations/008_tasks.sql): per-task rows `(file_id, ordinal, text, status_char, completed, due_ms, scheduled_ms, priority, recurrence, line, byte_offset)`, PK `(file_id, ordinal)`, extraction in tasks.rs (`extract_tasks`, :81; frontmatter/fence-aware; `[`+`]` byte prefilter :89). **Per-file task counts are therefore an aggregate query, not new derived state.**
 - `properties` table already exists (migrations/005_properties.sql): `(file_id, ordinal, key, value_kind ∈ {text,number,boolean,date,datetime,wikilink,list,tag_list}, value_text)`; frontmatter parsed by frontmatter.rs (`extract_frontmatter` :465, yaml-rust2). **Frontmatter `title`/`created` lookups are joins, not new extraction.**
-- Latest migration at spec time: `019_file_tags.sql`. FL0-1 takes the next free number (020 at spec time — verify at implementation).
+- Latest migration at spec time: `020_canvas.sql` (verified in `db.rs::MIGRATIONS`). FL0-1 takes `021` — verify it is still the next free number at implementation. Migrations are an append-only `const MIGRATIONS: &[Migration]` array in `crates/slate-core/src/db.rs:57` (each `include_str!`s its `.sql`); the runner (`db::migrate`, db.rs:178) applies pending steps in a per-migration transaction and refuses a DB whose `schema_version` exceeds the build's max. Adding a migration = new `.sql` file + new `Migration{}` entry appended to the array.
 - FFI records: `FileSummary { path, name, mtime_ms, size_bytes, is_markdown }` (slate-uniffi/src/lib.rs:1159–1166); `DirNodeSummary { id, path, name, child_dir_count, child_file_count }` (:1376–1383); `DirListing { dirs, files: FileSummaryPage }` (:1482–1486). Session methods: `list_files(filter, paging)` (:273–280), `list_dir_children(parent_path, paging)` (:336–343). Swift bindings regenerate via `scripts/build-mac-app.sh:61–75` / `make regenerate-bindings`.
 - **CLI coupling:** `FileSummary` shapes the `slate.cli.v1` JSON for M-5 `read`/`list`/`search` (PR #646). The contract treats *additive* fields as non-breaking; FL0-2 must verify this against the contract doc (docs/plans/09_sync_cli/) and add fields only, never rename/retype.
 - Census convention: `census_*` test fns, `SLATE_CENSUS_FULL=1` scaling via `census_scale()`; bench harness `crates/slate-core/benches/scan_bench.rs` (criterion, 1k/10k/50k synthetic vaults via `benches/common`); baselines in `BENCHMARKS.md` (v1 gates: first-open < 15 s @10k, < 60 s @50k).
@@ -20,7 +20,7 @@ Baseline facts (verified 2026-07-05, this worktree):
 
 ## FL0-1 · `file_meta` derived table + scanner hook (#650) — PR 1
 
-### Schema (new migration, next free number)
+### Schema (new migration `021`, next free number — verify at implementation)
 
 ```sql
 CREATE TABLE file_meta (
@@ -32,7 +32,7 @@ CREATE TABLE file_meta (
 );
 ```
 
-Backfill in the migration is **not** required: rows appear as files pass through the slow path, and `list_*` queries LEFT JOIN (absent row ⇒ NULL fields, Swift renders fallbacks). A one-time full-vault backfill would re-read every file — instead FL0-1 bumps the scanner's schema-cookie so the next open takes the slow path per file exactly once (same mechanism previous derived-table migrations used — locate the cookie beside the migration list at implementation; if no such cookie exists, add `meta_version` to the scan fast-path triple comparison and document it in the PR).
+Existing vaults are backfilled by the **established derived-table pattern** (migrations 012/014/015/018, all tested in `db.rs`): the migration SQL ends with `UPDATE files SET mtime_ms = 0;`, which forces every file onto the scanner's slow path on the next open (the fast path skips a file only when its cached `(mtime_ms, size_bytes, ctime_ms)` triple matches — zeroing `mtime_ms` guarantees a miss). That one slow-path pass populates `file_meta` for every file exactly once. No explicit row backfill is needed in the migration, and `list_*` queries LEFT JOIN so an absent row ⇒ NULL fields ⇒ Swift fallbacks even before the reindex completes. Trade-off to note in the PR: a one-time full reindex on first open after upgrade (same cost every prior derived-table migration paid; acceptable per the regenerable-index doctrine, db.rs:12–15).
 
 ### Rust: new module `crates/slate-core/src/file_meta_db.rs`
 
