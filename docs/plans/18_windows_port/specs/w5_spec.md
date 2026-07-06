@@ -8,7 +8,7 @@ Program: [00_program.md](../00_program.md) (decisions 5, 12; DoD §W-C/§W-D). D
 ## W5-1 · Command palette + the chord table — PR 1
 
 1. Palette over the core registry + W0.5-1 ranking/recents; match-range bolding from core data; section grouping; invocation via `CommandAction` round-trip; filter-count announcements via canonical events.
-2. **The chord table**: one declarative mac-chord → Windows-chord mapping (⌘→Ctrl, ⌥→Alt, documented exceptions where Windows conventions win, e.g. F2 rename); it feeds menu accelerators, palette display, spoken hotkeys (W7-3), and help docs (decision 20). No ad-hoc per-view bindings (§W-G-adjacent review gate).
+2. **The chord table, finalized**: the declarative mac-chord → Windows-chord mapping seeded in W1-1 (⌘→Ctrl, ⌥→Alt, documented exceptions where Windows conventions win, e.g. F2 rename) is completed here and becomes load-bearing: it feeds menu accelerators, palette display, spoken hotkeys (W7-3), and help docs (decision 20). No ad-hoc per-view bindings (§W-G-adjacent review gate).
 3. Windows twins of the three command-drift tests: registration-forward (every registry command reachable), menu-scrape-reverse (every menu item backed by a registry command), help-table (docs match registry + chord table).
 
 - [ ] Palette parity over core ranking; chord table + three drift tests green

@@ -12,6 +12,8 @@ Baseline facts (verified 2026-07-06, this worktree):
 - Objects with Arc lifetime: `VaultSession` (lib.rs:282), `CancelToken` (lib.rs:984), `DocumentBuffer` (lib.rs:2811).
 - **Two** foreign-callback traits (`#[uniffi::export(with_foreign)]`): `ScanProgressListener` (lib.rs:1824) and `CommandAction` (lib.rs:3607). Both must marshal in the spike — `CommandAction` is how command invocation re-enters the host, so it is on the hot path of W5, not an edge case.
 - Host logging facade: `crates/slate-uniffi/src/host_logging.rs` (#674) — non-fatal diagnostics route through it; the C# host must install a sink like the mac host does.
+- **`slate-core` has never been compiled for Windows** and contains real unix-only paths: `sync_detect.rs` uses `std::os::unix::ffi::OsStrExt` outside test code (:197, :226, :257, :764) plus `#[cfg(unix)]` symlink-handling test scaffolding. Expect `#[cfg(windows)]` work in W0-1 before anything links.
+- License-header gate covers `.rs`/`.swift` only (`.github/workflows/license-headers.yml` paths; `scripts/apply-license-header.py` scopes `git ls-files '*.rs' '*.swift'`) — `.cs` files are currently invisible to it.
 - Bindings are generated + git-ignored; `make regenerate-bindings` currently delegates to `./scripts/build-mac-app.sh --bindings-only` (Makefile:60) — mac-only today; W0-3 generalizes it.
 - CI is per-area path-filtered workflows (`.github/workflows/`: `rust.yml`, `swift-tests.yml`, `a11y-check.yml`, `audit.yml`, `license-headers.yml`).
 - Swift-only logic pockets for W0.5 (the 07 §3 drift rows, plus one shipped after that review):
@@ -27,6 +29,7 @@ Baseline facts (verified 2026-07-06, this worktree):
 
 ### Normative rules
 
+0. **First act:** `cargo check`/`cargo test` for `x86_64-pc-windows-msvc` on the workspace. It will not pass clean (see baseline: `sync_detect.rs` unix paths); the resulting `#[cfg]` gating PRs are core-side prerequisites of this issue and keep the mac test suite green.
 1. The spike binds a **fixed probe surface**, not the whole API: `VaultSession` open/close (handle lifetime), a scan with `ScanProgressListener` (foreign callback, called from a Rust thread), `CancelToken` cancellation mid-scan, one `CommandAction` registration + invocation round-trip (host re-entry), one `VaultError`-returning call (error mapping), one `DocumentBuffer` create → `apply_edit` → read-back (the keystroke hot path).
 2. Both candidates are evaluated against the same probe on the same runner: (a) **`uniffi-bindgen-cs`** (NordSecurity) in proc-macro mode — verify version compatibility with the workspace's uniffi-rs version first; incompatibility that requires pinning/downgrading uniffi is itself a finding; (b) **`csbindgen`** plus the hand-written C-ABI shim the probe requires — the shim LOC and its unsafe surface are the finding.
 3. Scored dimensions (recorded in the PR, becomes gap_analysis evidence): correctness under the §W-E stress patterns (GC pressure, callback concurrency, cancel latency), generated-code ergonomics (exceptions vs result codes, IDisposable story), maintenance posture (upstream activity, uniffi version coupling), and "one FFI definition feeds all generators" (ADR 13 preference).
@@ -45,7 +48,8 @@ Baseline facts (verified 2026-07-06, this worktree):
 2. AvalonEdit currency check (07 §4.2): record maintained fork/version + .NET compatibility in this PR's description; a negative finding here is a program-level alarm, not something to route around silently.
 3. `windows.yml` path-filtered workflow (`apps/slate-windows/**` + `crates/**`): build core (x64 + ARM64 cross-compile check), generate bindings, build app, run tests. Runner selection recorded (GitHub-hosted default; Namespace only if Windows profiles exist by then).
 4. `.github/CODEOWNERS` gains the `/apps/slate-windows/` line (owner until a platform maintainer exists).
-5. `make regenerate-bindings` grows a platform dimension (e.g. `make regenerate-bindings PLATFORM=windows`) or a sibling target; `CONTRIBUTING.md` updated. Contributors changing the FFI must regenerate **both** platforms' bindings-check in CI (a drift check that the generated C# compiles, mirroring the Swift bindings check).
+5. `make regenerate-bindings` grows a platform dimension (e.g. `make regenerate-bindings PLATFORM=windows`) or a sibling target; `CONTRIBUTING.md` updated with the Windows local-dev path — including the **no-make story** (the Makefile and `scripts/*.sh` assume a unix shell; document the PowerShell/`dotnet` equivalents a Windows-only contributor actually runs). Contributors changing the FFI must regenerate **both** platforms' bindings-check in CI (a drift check that the generated C# compiles, mirroring the Swift bindings check).
+6. SPDX convention extended to C#: `license-headers.yml` paths + `apply-license-header.py` scope gain `*.cs` (or the exclusion is recorded here as a decision) — otherwise the repo's header discipline silently stops at the new language boundary.
 
 - [ ] Scaffold + hello-core app + xUnit harness
 - [ ] `windows.yml` green incl. ARM64 build; CODEOWNERS; CONTRIBUTING + Makefile updated

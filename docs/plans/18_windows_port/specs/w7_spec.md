@@ -1,6 +1,6 @@
 # W7 executable spec — The UIA accessibility program (cross-cutting)
 
-Issues: W7-1 ([#747](https://github.com/coryj627/slate/issues/747)) · W7-2 ([#748](https://github.com/coryj627/slate/issues/748)) · W7-3 ([#749](https://github.com/coryj627/slate/issues/749)) · W7-4 ([#750](https://github.com/coryj627/slate/issues/750)). Milestone: [GH 22](https://github.com/coryj627/slate/milestone/22). One PR per issue; W7-4 is a rolling gate that closes per-wave.
+Issues: W7-1 ([#747](https://github.com/coryj627/slate/issues/747)) · W7-2 ([#748](https://github.com/coryj627/slate/issues/748)) · W7-3 ([#749](https://github.com/coryj627/slate/issues/749)) · W7-4 ([#750](https://github.com/coryj627/slate/issues/750)). Milestone: [GH 22](https://github.com/coryj627/slate/milestone/22). One PR per issue, except W7-4: it is a rolling gate that lands one PR per wave-close against the same issue (the W6 stacked-series convention — the issue stays the unit of acceptance).
 Program: [00_program.md](../00_program.md) (decisions 6, 11; DoD §W-C/§W-D). This wave is **the load-bearing parity** — everything else is furniture if JAWS/NVDA can't drive it.
 
 *Interleaving rule (program wave table): W7-1 lands with Wave 2 (editor), W7-2/W7-3 with Wave 5, and W7-4 rows close per wave — this spec exists so the UIA work has one owner-view, not so it happens last.*

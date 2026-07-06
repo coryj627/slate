@@ -14,6 +14,7 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
 3. Windows path adapters in `VaultProvider` land here (program decision 9): long paths, reserved names, case-insensitivity probes — **core-side PRs** if gaps found, with censuses.
 4. Scan progress: `ScanProgressListener` → progress UI + UIA `RaiseNotificationEvent` progress etiquette (throttled, final summary announced).
 5. Per-monitor-v2 DPI; window state persisted (size/position/monitor, degraded gracefully on monitor loss).
+6. **Seeds the chord table** (program decision 12): the declarative mac→Windows chord file is created here with the shell/vault chords; every later spec's named chord (Ctrl+T, Ctrl+F, …) is a normative entry added by the issue that ships it; W5-1 finalizes the table and wires the drift tests.
 
 - [ ] Shell + vault open/close/welcome/recents + scan progress, keyboard-complete
 - [ ] Path adapter gaps filed/fixed core-side with censuses

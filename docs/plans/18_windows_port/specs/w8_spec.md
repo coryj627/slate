@@ -7,7 +7,7 @@ Program: [00_program.md](../00_program.md) (decisions 10, 11, 15, 16, 20; DoD §
 
 ## W8-1 · Settings & prefs — PR 1
 
-1. Settings UI parity over the same prefs data (`PrefsJsonStore` JSON shape is the cross-platform contract — schema pinned; a synced vault's prefs read identically), incl. math/code prefs, editor-intelligence bucket (V/X toggles if shipped), canvas verbosity, appearance.
+1. Settings UI parity over the same prefs data (`PrefsJsonStore` JSON shape is the cross-platform contract — source of truth: `apps/slate-mac/Sources/SlateMac/PrefsJsonStore.swift` + its tests; this PR lands a written schema doc beside this spec so the contract stops living only in Swift), incl. math/code prefs, editor-intelligence bucket (V/X toggles if shipped), canvas verbosity, appearance. A synced vault's prefs read identically on both platforms.
 2. Windows-only settings section (theme/high-contrast behavior, file associations) — additive keys, mac-ignorable.
 
 ## W8-2 · Theming & contrast — PR 2
@@ -22,7 +22,7 @@ Program: [00_program.md](../00_program.md) (decisions 10, 11, 15, 16, 20; DoD §
 
 ## W8-4 · Differential parity harness (§W-A) — PR 4
 
-1. Two-job CI pipeline: mac + windows jobs run the same fixture corpus + a seeded randomized vault through every read-side FFI surface, emit canonical serializations; a diff job compares. Normalization list (path separators etc.) lives here and is exhaustive — anything not on it must match byte-for-byte.
+1. Two-job CI pipeline: mac + windows jobs run the same fixture corpus (`crates/slate-core/tests/fixtures/**`) plus a **seeded** randomized vault (the existing generators: `crates/slate-core/benches/common/mod.rs` — `generate_vault`/`generate_tasks_vault`, given a fixed seed) through every read-side FFI surface, emit canonical serializations; a diff job compares. Normalization list (path separators etc.) lives here and is exhaustive — anything not on it must match byte-for-byte.
 2. Runs on every PR touching `crates/**` or either app's consumption layer (path filters); failure is release-blocking from the moment it lands.
 
 ## W8-5 · Performance gates (§W-B) — PR 5

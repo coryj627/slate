@@ -17,6 +17,19 @@ W is sequenced **after** the majority of the standing queue (N Bases, O local hi
 2. **The parity matrix is generated, not written** (W0-4): at port start, an inventory pass over the shipped mac app — command registry dump, leaf/panel/tab inventory, Settings surface, help docs, `slate.cli.v1` surface — produces `parity_matrix.md`, the row-level checklist every W issue burns down. §W-F gates close-out on it.
 3. **Feature-conditional rows:** specs reference milestone-shipped capabilities (e.g. "Bases grid", "graph view") conditionally — if a milestone is descoped or unshipped at port start, its rows drop out of the matrix with a one-line note, and nothing else in the program moves.
 
+## Working this program independently
+
+The specs repeatedly say "the mac behavior is the behavioral spec." A contributor without a Mac extracts that behavior from, in priority order:
+
+1. **The mac test suites** — `apps/slate-mac/Tests/SlateMacTests/` encode the interaction contracts executably (focus routing, palette filtering, canvas navigation, save flows…). When a W spec names a mac behavior, the matching `*Tests.swift` file is the precise form of it.
+2. **The program docs of shipped milestones** — T's `../09_canvas/specs/t0_interaction_contract.md`, the U/FL/N/… specs: these were written to be the normative behavior, and the mac app was reviewed against them.
+3. **The help docs** (`docs/help/`) and per-surface AT checklists.
+4. **Running the mac app** (`scripts/build-and-launch.sh`) when hardware is available — useful for feel, never required for correctness.
+
+**When the spec and these sources are still silent or contradictory:** ask on the issue; the owner decides; if the decision diverges from an upstream doc, add a row to [`specs/gap_analysis.md`](specs/gap_analysis.md) in the same PR. Never resolve an ambiguity by silently matching "whatever the mac app happens to do" — mac bugs are not parity targets.
+
+**Owner-provided prerequisites** (a contributor cannot self-serve these; flag early, don't discover them at the deadline): the MSIX **code-signing identity** (W8-3); a **JAWS license** for the §W-C human passes (NVDA is free); **ARM64 Windows hardware or VM** for W8-3/W8-5 verification; owner availability at unpark for the W0-4 snapshot and any §W-F matrix waivers.
+
 ## Entry criteria (the unpark gate)
 
 W remains parked until **all** of:
