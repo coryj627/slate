@@ -230,6 +230,77 @@ fn app_side_save_conflicts_after_cli_writes_cross_process() {
     );
 }
 
+#[test]
+fn concurrent_cli_writers_exactly_one_wins_cross_process() {
+    // The genuinely-two-processes race (codex adversarial round 1): two
+    // `slate write` children launched simultaneously against the same
+    // vault, both anchored to the same --expect-hash. save_text's
+    // IMMEDIATE-transaction critical section (cross-process, via the
+    // shared cache.sqlite one-writer lock) must let exactly one win per
+    // round; the loser re-hashes after the winner's rename and exits 1
+    // with the write-conflict message. Without the critical section both
+    // children could pass the check in the check-to-rename window and
+    // the later rename would silently win (both exiting 0).
+    use std::io::Write as _;
+    use std::process::{Command as StdCommand, Stdio};
+
+    let original = "shared base\n";
+    let vault = seed_vault_with_note("note.md", original);
+    let h = content_hash(original.as_bytes());
+    let bin = assert_cmd::cargo::cargo_bin("slate");
+
+    for round in 0..5 {
+        // Reset the note so both children's --expect-hash anchor holds
+        // at spawn time (an external reset; the children re-scan).
+        fs::write(vault.path().join("note.md"), original).unwrap();
+
+        let children: Vec<_> = (0..2)
+            .map(|i| {
+                let mut child = StdCommand::new(&bin)
+                    .arg("write")
+                    .arg(vault.path())
+                    .arg("note.md")
+                    .arg("--expect-hash")
+                    .arg(&h)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("spawn slate write");
+                child
+                    .stdin
+                    .take()
+                    .expect("piped stdin")
+                    .write_all(format!("writer {i}, round {round}\n").as_bytes())
+                    .expect("feed stdin");
+                child
+            })
+            .collect();
+
+        let outcomes: Vec<_> = children
+            .into_iter()
+            .map(|c| c.wait_with_output().expect("child exits"))
+            .collect();
+
+        let wins = outcomes.iter().filter(|o| o.status.success()).count();
+        assert_eq!(
+            wins,
+            1,
+            "round {round}: exactly one CLI writer must win; stderr: {:?}",
+            outcomes
+                .iter()
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+                .collect::<Vec<_>>()
+        );
+        let loser = outcomes.iter().find(|o| !o.status.success()).unwrap();
+        assert_eq!(loser.status.code(), Some(1), "round {round}: loser exits 1");
+        assert!(
+            String::from_utf8_lossy(&loser.stderr).contains("write conflict"),
+            "round {round}: loser's stderr names the conflict"
+        );
+    }
+}
+
 // --- 3. --create / missing note --------------------------------------
 
 #[test]

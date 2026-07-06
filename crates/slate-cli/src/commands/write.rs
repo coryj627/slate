@@ -21,15 +21,19 @@
 //! - **CLI-side.** For an existing note, `write` observes the note's
 //!   current indexed content hash (via `get_file_metadata`, the same
 //!   observation the app uses) and passes it as `expected_content_hash`.
-//!   `save_text` then re-reads the file *on disk* under the connection
-//!   lock and hashes it fresh; if that disk hash doesn't match what we
-//!   observed, it returns `WriteConflict` and leaves the file untouched.
-//!   So even though our observation is a plain index read (a classic
-//!   TOCTOU shape), the race is **benign**: `save_text`'s own inside-the-
-//!   lock re-read is the authority. If the app wrote the file between our
-//!   observation and our save, the on-disk hash differs from the index
-//!   hash we captured, and the CLI write is refused — never a silent
-//!   clobber. `--expect-hash` lets a script pin the anchor explicitly,
+//!   `save_text` then re-reads the file *on disk* and hashes it fresh
+//!   inside a cross-process critical section: an IMMEDIATE transaction
+//!   on the shared `.slate/cache.sqlite`, whose one-writer lock is
+//!   file-based and therefore excludes the app's process too, held from
+//!   before the rehash through the atomic rename + index commit. If the
+//!   disk hash doesn't match what we observed, `save_text` returns
+//!   `WriteConflict` and leaves the file untouched. So even though our
+//!   observation is a plain index read (a classic TOCTOU shape), the
+//!   race is **benign**: the authoritative rehash and the write are one
+//!   atomic unit — a racing writer either lands wholly before it (we
+//!   see its hash and refuse) or blocks on the lock until we're done
+//!   (it sees ours and refuses). Never a silent clobber in either
+//!   order. `--expect-hash` lets a script pin the anchor explicitly,
 //!   turning `write` into an idempotent compare-and-swap across separate
 //!   invocations.
 //!

@@ -833,12 +833,22 @@ impl VaultSession {
     ///
     /// `expected_content_hash`:
     /// - `None` → save unconditionally. Used by callers that don't
-    ///   track the on-disk hash (CLI, scripted writers).
+    ///   track the on-disk hash (scripted writers).
     /// - `Some(h)` → before writing, stat + hash the file currently
     ///   on disk. If it doesn't match `h`, return
     ///   `VaultError::WriteConflict` and leave the file untouched.
     ///   This is the path the Mac editor uses to detect external
-    ///   changes between read and save.
+    ///   changes between read and save, and the `slate write` CLI verb
+    ///   rides the same discipline (#641).
+    ///
+    /// The compare-and-swap is atomic **across processes**, not just
+    /// within a session: the rehash-through-rename window runs inside an
+    /// IMMEDIATE transaction on the shared `.slate/cache.sqlite`, whose
+    /// one-writer lock is file-based. Two processes racing the same
+    /// expected hash serialize on that lock; exactly one wins and the
+    /// other observes the winner's bytes and gets `WriteConflict`
+    /// (see `save_text_locked` and the concurrency tests in
+    /// `session/tests/save.rs`).
     ///
     /// On success the index reflects the new state in one atomic
     /// transaction (`files` row + `headings` + `links` + `properties`
@@ -887,6 +897,25 @@ impl VaultSession {
         contents: &str,
         expected_content_hash: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
+        // Cross-process critical section (#641 adversarial review).
+        //
+        // The expected-hash compare-and-swap below re-reads and re-hashes
+        // the file on disk; it is only sound if no OTHER writer can slip
+        // a rename in between that rehash and our own atomic write. The
+        // session's connection mutex serializes writers within one
+        // process, but the Slate app and the `slate` CLI are separate
+        // processes sharing this vault. The shared `.slate/cache.sqlite`
+        // is the cross-process rendezvous: opening the index transaction
+        // IMMEDIATE acquires SQLite's one-writer lock (file-based, so it
+        // excludes other processes too) BEFORE the rehash and holds it
+        // through the rename + index commit. Two racing writers therefore
+        // serialize here — the loser blocks (rusqlite's built-in 5s
+        // busy_timeout), then re-hashes and sees the winner's bytes →
+        // `WriteConflict`, never a silent clobber. A post-timeout
+        // SQLITE_BUSY surfaces as `Db` (the CLI maps it to its "cache is
+        // busy" copy).
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
         // `old_contents` is `Some(text)` only on the Some(expected_hash)
         // path with UTF-8-decodable disk content — the diff-on-save base
         // (#378). The conflict-check read already happens, so capturing
@@ -912,7 +941,7 @@ impl VaultSession {
                 // No conflict check: the cached index hash is good enough
                 // for the entry's `hash_before`, and we don't re-read disk
                 // just to diff — the None path logs a `WholeFileReplace`.
-                let cached = conn
+                let cached = tx
                     .query_row(
                         "SELECT content_hash FROM files WHERE path = ?1",
                         rusqlite::params![path],
@@ -927,6 +956,10 @@ impl VaultSession {
         // subsequent SQLite failure leaves the file on disk in a
         // consistent state. Worst case: the file is newer than the
         // index, and the next scan picks it up via mtime/size/ctime.
+        // (The write happens INSIDE the IMMEDIATE transaction so the
+        // check-to-rename window above stays exclusive; a failed commit
+        // still leaves a fully-written file, never a partial one —
+        // `atomic_write` is temp-file + rename.)
         self.provider.write_file(path, contents.as_bytes())?;
 
         let new_stat = self.provider.stat(path)?;
@@ -941,7 +974,6 @@ impl VaultSession {
         // in the migration-006 triggers).
         let body_text: &str = if is_markdown { contents } else { "" };
 
-        let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO files
                 (path, name, extension, size_bytes, mtime_ms, ctime_ms,

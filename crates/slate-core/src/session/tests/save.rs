@@ -309,6 +309,107 @@ fn from_filesystem_with_actor_stamps_the_actor_into_the_oplog() {
     assert_eq!(default_session.config.user_actor_id, "local");
 }
 
+/// Race two independent sessions (separate SQLite connections — the
+/// same file-based one-writer lock two separate *processes* contend on)
+/// through `save_text` and return the pair of outcomes.
+fn race_two_writers(
+    root: &std::path::Path,
+    expected: &str,
+    contents: [&str; 2],
+) -> Vec<Result<SaveReport, VaultError>> {
+    let s1 = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    s1.scan_initial(&CancelToken::new()).unwrap();
+    let s2 = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    s2.scan_initial(&CancelToken::new()).unwrap();
+
+    let barrier = std::sync::Barrier::new(2);
+    let sessions = [&s1, &s2];
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = sessions
+            .iter()
+            .zip(contents)
+            .map(|(session, body)| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    session.save_text("note.md", body, Some(expected))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("writer thread"))
+            .collect()
+    })
+}
+
+/// Assert the race invariant: exactly one writer won, the loser got
+/// `WriteConflict`, and the winner's bytes are what's on disk.
+fn assert_exactly_one_winner(
+    round: usize,
+    root: &std::path::Path,
+    results: &[Result<SaveReport, VaultError>],
+    bodies: [&str; 2],
+) {
+    let winners = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(
+        winners, 1,
+        "round {round}: exactly one writer must win, got {results:?}"
+    );
+    let loser = results.iter().find(|r| r.is_err()).unwrap();
+    assert!(
+        matches!(loser, Err(VaultError::WriteConflict { .. })),
+        "round {round}: the loser must be WriteConflict, got {loser:?}"
+    );
+    let on_disk = std::fs::read_to_string(root.join("note.md")).unwrap();
+    assert!(
+        bodies.contains(&on_disk.as_str()),
+        "round {round}: disk carries the winner's bytes, got {on_disk:?}"
+    );
+}
+
+#[test]
+fn census_concurrent_saves_same_expected_hash_exactly_one_wins() {
+    // #641 adversarial review (codex round 1, HIGH): the expected-hash
+    // compare-and-swap must be atomic ACROSS processes, not just within
+    // one session's connection mutex. Two writers both observe hash H
+    // and race `save_text(expected = H)`; without the IMMEDIATE-
+    // transaction critical section both could pass the disk rehash in
+    // the check-to-rename window and the later rename would silently
+    // win. With it, the rehash runs under SQLite's file-based one-writer
+    // lock, so exactly one writer wins every round and the loser gets
+    // `WriteConflict`. Two sessions on separate connections exercise the
+    // very same lock two separate processes contend on.
+    for round in 0..20 {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+        let original = format!("original {round}");
+        provider.write_file("note.md", original.as_bytes()).unwrap();
+        let h = crate::vault::content_hash(original.as_bytes());
+
+        let bodies = ["writer one wrote this", "writer two wrote this"];
+        let results = race_two_writers(tmp.path(), &h, bodies);
+        assert_exactly_one_winner(round, tmp.path(), &results, bodies);
+    }
+}
+
+#[test]
+fn census_concurrent_creates_empty_expected_exactly_one_wins() {
+    // The create-race twin: both writers CAS against "no file exists"
+    // (expected = ""; a missing file hashes to the empty string). The
+    // same critical section guarantees exactly one creator wins; the
+    // loser sees the winner's fresh bytes and gets `WriteConflict`
+    // instead of clobbering them. This is what makes the CLI's
+    // `--create` safe against a create/create race with the app.
+    for round in 0..20 {
+        let tmp = tempfile::tempdir().unwrap();
+        // No initial file: both sessions index an empty vault.
+        let bodies = ["creator one content", "creator two content"];
+        let results = race_two_writers(tmp.path(), "", bodies);
+        assert_exactly_one_winner(round, tmp.path(), &results, bodies);
+    }
+}
+
 #[test]
 fn save_logs_fine_grained_edit_batch_and_reconstructs() {
     // A note big enough that a one-line edit's diff is smaller than the
