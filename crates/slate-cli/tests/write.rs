@@ -468,6 +468,48 @@ fn create_with_wrong_expect_hash_on_missing_conflicts() {
 }
 
 #[test]
+fn out_of_band_deletion_reports_no_such_note_and_create_recreates() {
+    // Codex adversarial round 4 (MEDIUM): a note indexed by an earlier
+    // run and then deleted OUTSIDE Slate must behave as missing — the
+    // scan prunes the stale row, so `write` says "no such note" (not a
+    // misleading conflict) and `--create` recreates it with the
+    // empty-expected anchor (not the stale hash).
+    let vault = seed_vault_with_note("note.md", "original\n");
+
+    // First run indexes the note (persistent .slate cache).
+    slate().arg("open").arg(vault.path()).assert().success();
+
+    // Out-of-band deletion.
+    fs::remove_file(vault.path().join("note.md")).unwrap();
+
+    // Without --create: the truth is "the note is gone", not "it
+    // changed since it was read".
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("note.md")
+        .write_stdin("resurrect?")
+        .assert()
+        .code(1)
+        .stderr(predicates_str_contains("no such note: note.md"));
+    assert!(!vault.path().join("note.md").exists());
+
+    // With --create: recreated through the documented path.
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("note.md")
+        .arg("--create")
+        .write_stdin("reborn\n")
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(vault.path().join("note.md")).unwrap(),
+        "reborn\n"
+    );
+}
+
+#[test]
 fn create_refuses_hidden_internal_paths() {
     // Codex adversarial round 3 (HIGH): dot-prefixed components are
     // Slate's internal/tool namespaces (.slate, .obsidian) — never

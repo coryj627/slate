@@ -2763,6 +2763,19 @@ fn scan_vault(
     // tracked here.
     let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Every file the walk visits (indexed OR errored — an unreadable
+    // file still exists on disk), so files deleted out-of-band since
+    // the last scan can be pruned from the index (#641: a stale row
+    // otherwise makes `write`/`read` treat a deleted note as existing —
+    // `write` reports a misleading conflict and `--create` can't
+    // recreate it).
+    let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // A failed directory listing hides its whole subtree from the walk;
+    // pruning on a partial view would evict live rows wholesale. Track
+    // completeness and skip the file prune on any listing error (the
+    // rows heal on the next clean scan).
+    let mut walk_complete = true;
+
     let mut stack: Vec<String> = vec![String::new()];
     while let Some(dir) = stack.pop() {
         if cancel.is_cancelled() {
@@ -2773,6 +2786,7 @@ fn scan_vault(
             Ok(e) => e,
             Err(e) => {
                 report.errors.push(format!("list_dir {dir:?}: {e}"));
+                walk_complete = false;
                 continue;
             }
         };
@@ -2809,6 +2823,7 @@ fn scan_vault(
                 }
                 EntryKind::File => {
                     report.files_seen += 1;
+                    seen_files.insert(path.clone());
                     if let Err(e) = index_file(
                         &tx,
                         provider,
@@ -2851,6 +2866,20 @@ fn scan_vault(
     // transaction so it commits atomically with the upserts above.
     if let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
         report.errors.push(format!("prune stale dirs: {e}"));
+    }
+
+    // Prune `files` rows for files no longer on disk (#641, codex
+    // adversarial round 4): without this, a note deleted out-of-band
+    // stays "indexed" forever and existence checks lie — `slate write`
+    // reports a misleading conflict instead of "no such note", and
+    // `--create` anchors to the stale hash and can't recreate the note.
+    // Deletion follows the shipped `delete_file` discipline exactly:
+    // one `DELETE FROM files` per row — child tables cascade
+    // (`ON DELETE CASCADE`), FTS is maintained by the migration-006
+    // DELETE trigger. Skipped when any directory listing failed
+    // (`walk_complete`): a partial walk must not evict live rows.
+    if walk_complete && let Err(e) = prune_unseen_files(&tx, &seen_files) {
+        report.errors.push(format!("prune stale files: {e}"));
     }
 
     // Re-resolve links that were Unresolved purely because their
@@ -2974,6 +3003,35 @@ fn upsert_dir(
 /// that was removed or renamed on disk since the previous scan. We load
 /// the current paths and delete the set difference by id in one pass, so
 /// the work is O(rows) with no per-row query round-trip.
+/// Delete `files` rows whose paths the walk did not see this pass —
+/// files removed from disk out-of-band since the last scan. Same shape
+/// as [`prune_unseen_dirs`]; the per-row `DELETE FROM files` matches
+/// `delete_file`'s discipline (child tables cascade, FTS trigger
+/// fires). Only called after a complete walk (#641).
+fn prune_unseen_files(
+    tx: &rusqlite::Transaction,
+    seen_files: &std::collections::HashSet<String>,
+) -> Result<(), VaultError> {
+    let stale: Vec<i64> = {
+        let mut stmt = tx.prepare("SELECT id, path FROM files")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut stale = Vec::new();
+        for row in rows {
+            let (id, path) = row?;
+            if !seen_files.contains(&path) {
+                stale.push(id);
+            }
+        }
+        stale
+    };
+    for id in stale {
+        tx.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
+    }
+    Ok(())
+}
+
 fn prune_unseen_dirs(
     tx: &rusqlite::Transaction,
     seen_dirs: &std::collections::HashSet<String>,

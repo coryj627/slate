@@ -314,6 +314,132 @@ fn rescan_unchanged_files_skips_rehashing() {
 }
 
 #[test]
+fn rescan_prunes_files_deleted_out_of_band() {
+    // #641 (codex adversarial round 4): a note deleted outside Slate
+    // must fall out of the index on the next scan — otherwise existence
+    // checks lie: `slate write` reports a misleading conflict instead
+    // of "no such note", and `--create` anchors to the stale hash and
+    // can't recreate the note.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("keep.md", b"# Keep\n\nsurvivor").unwrap();
+        p.write_file("sub/gone.md", b"# Gone\n\ndoomedtoken")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        session.get_file_metadata("sub/gone.md").unwrap().is_some(),
+        "indexed before deletion"
+    );
+    assert_eq!(fts_match_count(&session, "doomedtoken"), 1);
+
+    // Out-of-band deletion (not through the session).
+    std::fs::remove_file(tmp.path().join("sub/gone.md")).unwrap();
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        session.get_file_metadata("sub/gone.md").unwrap().is_none(),
+        "stale row pruned on rescan"
+    );
+    assert!(
+        session.get_file_metadata("keep.md").unwrap().is_some(),
+        "surviving file untouched"
+    );
+    // The FTS row cascaded away with the files row (migration-006
+    // DELETE trigger) — no ghost search hits.
+    assert_eq!(fts_match_count(&session, "doomedtoken"), 0);
+    let page = session
+        .list_files(FileFilter::All, Paging::first(100))
+        .unwrap();
+    assert_eq!(page.total_filtered, 1);
+}
+
+/// Wraps `FsVaultProvider` but fails `list_dir` for one specific
+/// directory — simulates a transient walk error (permissions, IO).
+struct FailingListDirProvider {
+    inner: FsVaultProvider,
+    fail_dir: String,
+}
+
+impl crate::VaultProvider for FailingListDirProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        if relative == self.fail_dir {
+            return Err(VaultError::Io(std::io::Error::other(
+                "simulated transient listing failure",
+            )));
+        }
+        self.inner.list_dir(relative)
+    }
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.inner.read_file(relative)
+    }
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(relative, contents)
+    }
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
+#[test]
+fn incomplete_walk_never_prunes_file_rows() {
+    // The conservative half of the prune: a failed directory listing
+    // hides its whole subtree, and pruning on that partial view would
+    // evict live rows wholesale. With `sub/` unlistable, its indexed
+    // file must survive the rescan.
+    let tmp = tempfile::tempdir().unwrap();
+    let clean = FsVaultProvider::new(tmp.path().to_path_buf());
+    clean.write_file("root.md", b"# Root").unwrap();
+    clean.write_file("sub/nested.md", b"# Nested").unwrap();
+
+    // First index with a healthy provider.
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        session
+            .get_file_metadata("sub/nested.md")
+            .unwrap()
+            .is_some()
+    );
+    drop(session);
+
+    // Rescan through a provider whose `sub` listing fails.
+    let failing = Arc::new(FailingListDirProvider {
+        inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+        fail_dir: "sub".to_string(),
+    });
+    let config = SessionConfig::new(tmp.path().join(".slate"));
+    let session = VaultSession::open(failing, config).unwrap();
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        report.errors.iter().any(|e| e.contains("list_dir")),
+        "the failed listing is reported: {:?}",
+        report.errors
+    );
+    assert!(
+        session
+            .get_file_metadata("sub/nested.md")
+            .unwrap()
+            .is_some(),
+        "rows under the unlistable directory survive"
+    );
+}
+
+#[test]
 fn scan_can_be_cancelled() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("note.md", b"").unwrap();
