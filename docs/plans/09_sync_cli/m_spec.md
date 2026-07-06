@@ -325,10 +325,18 @@ States (LeafSection/LeafEmptyState discipline):
   CLI layer** — every command is a thin wrapper over `VaultSession` calls; anything smarter moves
   into slate-core first (locked principle from the GH milestone).
 
-### Global contract (applies to every command; encoded once in `output.rs`/`main.rs`)
+### Global contract (applies to every *vault-reading* command; encoded once in `output.rs`/`main.rs`)
 
 - Usage: `slate <command> <vault-path> [args…] [--format json|tsv|human]`. `<vault-path>` is always
-  the first positional (GH milestone contract).
+  the first positional (GH milestone contract) — **for the vault-reading commands**. See the
+  meta-command exception below.
+- **Meta-command exception**: a command that reads no vault takes no `<vault-path>` (it would have
+  nothing to read), the same way `--help`/`--version` take none. `completions <shell>` (#639, the
+  clap_complete follow-up filed below) is the one such command in v1: it generates a shell-completion
+  script from clap's own grammar. It emits the raw script to stdout (no json envelope, no `--format`),
+  keeps stderr empty, and exits 0; an unknown/missing `<shell>` is a clap usage error (exit 2), and a
+  broken stdout pipe follows the standard exit-1 `slate: ` discipline (never a panic). Everything else
+  in this contract — the exit codes, the stdout=data/stderr=diagnostics split — still applies.
 - `--format` default `human`.
   - **json**: single object to stdout:
     `{"schema":"slate.cli.v1","command":"<cmd>","vault":"<abs path>","data":{…}}`. `data` shapes are
@@ -542,4 +550,6 @@ timezone-shifted). tsv columns: `path line status due text`. Human:
 - Live re-detection on sync-marker changes (watcher-driven) — file with M-3 (`enhancement`).
 - Localized recommendation copy — all user-facing copy in this milestone is English-only like the
   rest of the app; file the l10n umbrella note if one doesn't exist.
-- CLI shell completions (`clap_complete`) — file with M-4 (`enhancement`).
+- CLI shell completions (`clap_complete`) — filed as #639 (`enhancement`); **shipped** as the
+  `slate completions <shell>` meta-command (see the meta-command exception in the §M-4 global
+  contract above).

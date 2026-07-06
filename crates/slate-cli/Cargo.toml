@@ -20,6 +20,10 @@ path = "src/main.rs"
 # loop (m_spec §M-4 crate layout).
 slate-core = { path = "../slate-core" }
 clap = { workspace = true }
+# `completions` (#639) hands clap's own `Command` to `clap_complete`'s
+# `generate` to emit a shell script; the shell menu is clap_complete's
+# `Shell` ValueEnum, so an unknown shell is a clap parse error (exit 2).
+clap_complete = { workspace = true }
 ctrlc = { workspace = true }
 serde_json = { workspace = true }
 # `tasks` derives each task's `due` (`YYYY-MM-DD`) from the stored
