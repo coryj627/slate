@@ -1088,7 +1088,13 @@ impl VaultSession {
         };
 
         if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
-            eprintln!("warning: oplog append failed for file_id={file_id} at {path:?}: {e}");
+            // Non-fatal: a missing op-log entry only degrades undo to a
+            // per-file conflict report, never corruption. Route through the
+            // facade (#507). warn = file id + error kind only; the
+            // vault-relative path rides a separate debug line so it stays
+            // out of shipped host logs (see lib.rs privacy rule).
+            log::warn!("oplog append failed for file_id={file_id}: {e}");
+            log::debug!("oplog append failure was for path {path:?}");
             return; // leave the cache untouched so the next save re-snapshots
         }
         state.insert(
@@ -3682,10 +3688,6 @@ fn list_dir_children_impl(
     })
 }
 
-fn fputs_warn(message: &str) {
-    eprintln!("Slate: {message}");
-}
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4592,7 +4594,13 @@ impl VaultSession {
             payload_bytes: contents.as_bytes().to_vec(),
         };
         if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
-            fputs_warn(&format!("oplog anchor for {path:?} failed: {e}"));
+            // Non-fatal: a missing anchor only degrades a structural-move's
+            // undo to a per-file conflict report, never corruption. Route
+            // through the facade (#507). warn = file id + error kind only;
+            // the vault-relative path rides a separate debug line (see the
+            // lib.rs privacy rule).
+            log::warn!("oplog anchor failed for file_id={file_id}: {e}");
+            log::debug!("oplog anchor failure was for path {path:?}");
             return;
         }
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
@@ -5690,6 +5698,9 @@ mod tests {
 
     #[path = "save.rs"]
     mod save;
+
+    #[path = "oplog_logging.rs"]
+    mod oplog_logging;
 
     #[path = "composed.rs"]
     mod composed;

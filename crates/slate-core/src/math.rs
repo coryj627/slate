@@ -358,7 +358,11 @@ fn mathcat_worker_loop(rx: std::sync::mpsc::Receiver<RenderRequest>) {
             MATHCAT_INITIALIZED.with(|c| c.set(true));
         }
         Err(err) => {
-            eprintln!("slate-mathcat: set_rules_dir failed at worker init: {err:?}");
+            // Non-fatal: each render falls back when `apply_prefs` errors.
+            // No vault path or note name here, so a plain facade warn (#507)
+            // is fine — the error is about the bundled rule files, not user
+            // content.
+            log::warn!("slate-mathcat: set_rules_dir failed at worker init: {err:?}");
             // The worker keeps running so callers don't hang
             // waiting for replies; each render will hit the
             // fallback path when `apply_prefs` returns an error.

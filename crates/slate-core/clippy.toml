@@ -1,0 +1,25 @@
+# Clippy configuration scoped to `slate-core` (#507).
+#
+# Clippy resolves `clippy.toml` per crate — relative to each crate's
+# `Cargo.toml`, walking up — even under `cargo clippy --workspace` from the
+# repo root. Placing this file here (not at the workspace root) scopes the
+# macro ban to slate-core only, leaving the `slate` CLI free to `eprintln!`
+# on its own stderr contract (§M-4) and the Mac app / uniffi host sink free
+# to write to stderr from the host layer.
+#
+# Why the ban: slate-core is a *library*. Bare `eprintln!` / `println!` of a
+# vault-relative path or note name would leak note titles into the host
+# app's stderr / macOS unified logging, with no way for the host to opt out.
+# Non-fatal diagnostics must route through the `log` facade instead
+# (`log::warn!` / `log::debug!`), which is a no-op unless a host installs a
+# sink. See the "Diagnostics & the logging facade" note in `lib.rs` for the
+# privacy rule (warn-level carries file ids / counts / error kinds; the path,
+# when it helps, rides a separate debug line).
+#
+# `#[allow(clippy::disallowed_macros)]` is available as an escape hatch for
+# any genuinely-print-to-stdout code path, but slate-core currently needs
+# none — including its tests, which assert on returned values, not stdout.
+disallowed-macros = [
+    { path = "std::eprintln", reason = "slate-core routes non-fatal diagnostics through the `log` facade (log::warn!/debug!), never bare stderr — a library eprintln! of a vault path leaks note titles into host logs. See #507 and the logging-facade note in lib.rs." },
+    { path = "std::println", reason = "slate-core is a library; it returns data to hosts rather than printing to stdout. Use the `log` facade for diagnostics. See #507." },
+]

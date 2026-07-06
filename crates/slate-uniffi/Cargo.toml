@@ -21,6 +21,10 @@ slate-core = { path = "../slate-core" }
 uniffi = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
+# Host logging sink (#507). This crate implements the minimal `log::Log`
+# stderr sink that `init_host_logging` installs so slate-core's facade
+# warns/debugs become visible in the Mac host; no-op until installed.
+log = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

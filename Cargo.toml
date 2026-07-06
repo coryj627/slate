@@ -86,6 +86,17 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # transitively (via `idna`); pinning it as a direct dep is cheap.
 unicode-normalization = "0.1"
 
+# --- Diagnostics facade (#507) ----------------------------------------
+# `log` is the crate-wide logging facade slate-core routes its non-fatal
+# diagnostics through. It is a *facade*: every `log::warn!` / `log::debug!`
+# is a no-op unless a host installs a `log::Log` sink (the Mac app does so
+# via `slate_uniffi::init_host_logging`; the CLI deliberately does not —
+# see that crate's main.rs). Default features are fine — they only gate the
+# compile-time `max_level_*` filters, none of which we set. Adopting the
+# facade replaces bare `eprintln!` of vault-relative paths in library code,
+# which could leak note titles into host stderr / macOS unified logging.
+log = "0.4"
+
 # --- Milestone M `slate` CLI (M-4, #535) ------------------------------
 # clap parses `slate <command> <vault-path> [--format …]`; the derive
 # feature drives the per-command arg structs. ctrlc installs the
