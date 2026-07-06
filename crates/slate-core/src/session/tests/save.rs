@@ -285,6 +285,31 @@ fn oplog_entry_carries_hashes_and_actor_id() {
 }
 
 #[test]
+fn from_filesystem_with_actor_stamps_the_actor_into_the_oplog() {
+    // The CLI opens sessions with `user_actor_id = "cli"` so a second
+    // writer's op-log entries are attributable (#641). Prove the entry
+    // point honors the override end-to-end: a save through such a session
+    // labels its op-log entry `"cli"`, not the host default `"local"`.
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider.write_file("note.md", b"before").unwrap();
+
+    let session =
+        VaultSession::from_filesystem_with_actor(tmp.path().to_path_buf(), "cli").unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("note.md", "after", None).unwrap();
+
+    let entries = session.read_oplog("note.md").unwrap();
+    let newest = entries.last().expect("one op-log entry");
+    assert_eq!(newest.user_actor_id, "cli");
+
+    // And the historic entry point still defaults to "local" (host
+    // behavior must not have drifted).
+    let default_session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    assert_eq!(default_session.config.user_actor_id, "local");
+}
+
+#[test]
 fn save_logs_fine_grained_edit_batch_and_reconstructs() {
     // A note big enough that a one-line edit's diff is smaller than the
     // whole file → the second (Some-path) save logs an `EditBatch`, and

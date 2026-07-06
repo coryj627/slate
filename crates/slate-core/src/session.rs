@@ -626,6 +626,31 @@ impl VaultSession {
     /// would otherwise `create_dir_all` its way into existence under
     /// `open`, silently materializing a fresh empty vault on disk.
     pub fn from_filesystem(root: PathBuf) -> Result<Self, VaultError> {
+        // The desktop/host default is the single-user `"local"` actor
+        // (`SessionConfig::new`). The op-log attribution plumbing lives
+        // in `from_filesystem_with_actor`; this preserves the historic
+        // signature every host + the uniffi wrapper already call.
+        Self::from_filesystem_with_actor(root, "local")
+    }
+
+    /// Same as [`from_filesystem`](Self::from_filesystem) but stamps a
+    /// caller-chosen `user_actor_id` into every op-log entry this
+    /// session appends.
+    ///
+    /// A vault can be held open by more than one process at once — the
+    /// Slate app and the `slate` CLI, say. Both go through `save_text`'s
+    /// `expected_content_hash` compare-and-swap, so neither can silently
+    /// clobber the other's writes; the op-log's `user_actor_id` is the
+    /// *honest label* of which writer produced an entry. The desktop app
+    /// keeps `"local"`; the CLI passes `"cli"` (see
+    /// `crates/slate-cli/src/session.rs`), so a second writer's entries
+    /// are attributable in the history without inventing any new write
+    /// plumbing. Everything else (templates auto-detect, citations prefs,
+    /// provider construction) is identical to `from_filesystem`.
+    pub fn from_filesystem_with_actor(
+        root: PathBuf,
+        user_actor_id: &str,
+    ) -> Result<Self, VaultError> {
         if !root.is_dir() {
             return Err(VaultError::InvalidPath {
                 path: root.display().to_string(),
@@ -634,6 +659,7 @@ impl VaultSession {
         }
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
+        config.user_actor_id = user_actor_id.to_string();
         // Obsidian-convention auto-detect. Callers wanting a different
         // layout can mutate `templates_dir` and call `open` directly.
         if root.join("Templates").is_dir() {

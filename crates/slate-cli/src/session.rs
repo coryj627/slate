@@ -19,6 +19,17 @@
 //! connection open. The CLI's only obligation is mapping a
 //! *post-timeout* `SQLITE_BUSY`/locked error to a friendly message
 //! ([`is_busy_error`]).
+//!
+//! **Op-log actor label.** Every CLI session opens with
+//! `user_actor_id = "cli"` (via [`VaultSession::from_filesystem_with_actor`]),
+//! not the host default `"local"`. This is the honest label for the
+//! second writer in a shared-vault scenario: when the `slate write`
+//! verb (#641) appends a `WholeFileReplace`/`EditBatch` op-log entry, it
+//! is attributable to the CLI, so a later `slate` or app history read
+//! can tell which process authored a given save. Applies to *all* CLI
+//! sessions (read verbs never write vault content, but the label is a
+//! session property, so it costs nothing and keeps the attribution
+//! uniform).
 
 use std::path::{Path, PathBuf};
 
@@ -48,13 +59,30 @@ pub struct OpenedVault {
 pub enum CliError {
     /// The vault path is not an existing directory (exit 1).
     NotAVaultDirectory { path: String },
-    /// A `read`/`links` note-path isn't in the index (exit 1). The
-    /// existence check runs before the query so a typo can't be
-    /// mistaken for "isolated note" / "empty file" (m_spec §M-5).
+    /// A `read`/`links` note-path isn't in the index, or a `write`
+    /// without `--create` targets a missing note (exit 1). The existence
+    /// check runs before the query so a typo can't be mistaken for
+    /// "isolated note" / "empty file" (m_spec §M-5), and a scripted
+    /// writer gets the same stable "no such note" copy a reader does.
     NoSuchNote { path: String },
     /// The `.slate` cache is locked by another process after the
     /// built-in 5s busy_timeout elapsed (exit 1, friendly retry copy).
     CacheBusy,
+    /// A `write` verb's `save_text` returned `WriteConflict`: the note
+    /// changed on disk since the CLI observed its hash (exit 1). Carries
+    /// the vault-relative note path for the scriptable message. This is
+    /// the cross-process "the app wins" guard — the CLI never clobbers an
+    /// in-flight app edit, and the app's own conflict-check protects the
+    /// other direction.
+    WriteConflict { path: String },
+    /// A `write` verb refused: stdin exceeded the session's large-file
+    /// refuse threshold (exit 1). Carries the byte count seen so far and
+    /// the limit for an informative message; no bytes are written.
+    StdinTooLarge { limit: u64 },
+    /// A `write` verb refused: stdin was not valid UTF-8 (exit 1). Note
+    /// bodies are text; `save_text` takes `&str`, so a binary/garbled
+    /// payload is rejected up front and the file is left untouched.
+    StdinNotUtf8,
     /// The operation was cancelled by Ctrl-C (exit 130).
     Cancelled,
     /// A command-level usage error surfaced *after* clap parsing (exit
@@ -87,6 +115,21 @@ impl std::fmt::Display for CliError {
             CliError::CacheBusy => write!(
                 f,
                 "vault cache is busy (is Slate open?) — retry in a moment"
+            ),
+            CliError::WriteConflict { path } => write!(
+                f,
+                "write conflict: {path} changed since it was read — re-read and \
+                 retry (the app's in-flight edits win)"
+            ),
+            CliError::StdinTooLarge { limit } => write!(
+                f,
+                "note content on stdin exceeds the {limit}-byte refuse threshold; \
+                 nothing was written"
+            ),
+            CliError::StdinNotUtf8 => write!(
+                f,
+                "note content on stdin is not valid UTF-8; a note body must be text, \
+                 nothing was written"
             ),
             CliError::Cancelled => write!(f, "cancelled"),
             CliError::Usage { message } => write!(f, "{message}"),
@@ -162,7 +205,12 @@ pub fn open_vault(raw_path: &Path) -> Result<OpenedVault, CliError> {
     // `cache` = "cold" iff `.slate/cache.sqlite` did not exist).
     let cache_was_warm = raw_path.join(".slate").join("cache.sqlite").exists();
 
-    let session = VaultSession::from_filesystem(raw_path.to_path_buf()).map_err(map_vault_error)?;
+    // All CLI sessions attribute op-log entries to the `"cli"` actor, so
+    // a write racing the app's `"local"` writer is honestly labeled in
+    // the history (m_spec / #641). Read verbs never write, but the label
+    // is a harmless, uniform session property.
+    let session = VaultSession::from_filesystem_with_actor(raw_path.to_path_buf(), "cli")
+        .map_err(map_vault_error)?;
 
     Ok(OpenedVault {
         session,
