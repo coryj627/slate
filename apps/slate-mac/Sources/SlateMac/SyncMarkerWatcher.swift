@@ -186,14 +186,17 @@ final class SyncMarkerWatcher {
                 eventMask: [.write, .delete, .rename],
                 queue: queue
             )
-            // `unowned source`: the handler closure is retained BY the
-            // source, so a strong capture is a retain cycle that keeps
-            // replaced/cancelled sources alive until libdispatch drops
-            // their handlers (Codoki PR #649 Medium). unowned is safe
-            // here — the event handler can only run while its source
-            // is alive.
-            source.setEventHandler { [weak self, unowned source] in
-                self?.handleEvent(subdir: subdir, source: source)
+            // Capture only `subdir` (a String) + weak self — NOT the
+            // source. A strong `source` capture is a retain cycle (the
+            // source retains its handler), and both `unowned`/`weak`
+            // source workarounds trade that for a dealloc-race question
+            // on a queued handler (Codoki PR #649, both directions).
+            // Sidestep it: the handler re-looks-up its source from
+            // `sources[subdir]` on the queue, so a handler that fires
+            // after its source was removed simply finds nothing and
+            // returns. No cycle, no dangling reference.
+            source.setEventHandler { [weak self] in
+                self?.handleEvent(subdir: subdir)
             }
             source.setCancelHandler {
                 close(fd)
@@ -203,14 +206,17 @@ final class SyncMarkerWatcher {
         }
     }
 
-    /// Called on `queue` for every raw event.
-    private func handleEvent(subdir: String, source: DispatchSourceFileSystemObject) {
-        guard !cancelled else { return }
+    /// Called on `queue` for every raw event. Re-looks-up the source
+    /// by `subdir` rather than capturing it (see the arm site): a
+    /// handler that fires after its source was removed finds nothing
+    /// and returns — no dangling reference, no retain cycle.
+    private func handleEvent(subdir: String) {
+        guard !cancelled, let source = sources[subdir] else { return }
         // If the watched dir itself was deleted/renamed, drop the
         // source; the parent watch re-arms a fresh one if it returns.
         if source.data.contains(.delete) || source.data.contains(.rename) {
             source.cancel()
-            sources = sources.filter { $0.value !== source }
+            sources[subdir] = nil
         }
         // A child dir may have just appeared (.obsidian created, then
         // plugins) — chase the chain before debouncing so the next
