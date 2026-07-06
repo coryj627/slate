@@ -19,3 +19,4 @@ pub mod render_template;
 pub mod search;
 pub mod sync_check;
 pub mod tasks;
+pub mod write;

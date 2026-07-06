@@ -129,6 +129,47 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
         format: OutputFormat,
     },
+    /// Write a note from stdin, with cross-process conflict detection.
+    ///
+    /// Content is read from stdin to EOF and written verbatim (no added
+    /// trailing newline). By default the note must already exist; pass
+    /// --create to make a new one.
+    ///
+    /// Concurrent writers ("the app wins"): a vault can be open in the
+    /// Slate app and this CLI at once. `write` observes the note's
+    /// current content hash and passes it as a compare-and-swap
+    /// precondition to the save. If the app changed the note since that
+    /// observation, the write is refused (exit 1) instead of clobbering
+    /// the app's edit. A running app won't see this CLI write in an
+    /// already-open buffer until it reloads; the app's own save then
+    /// conflict-detects the same way. So CLI writes never silently
+    /// overwrite app edits, and app edits never silently overwrite CLI
+    /// writes. Use --expect-hash <blake3> to pin the precondition
+    /// explicitly (a scriptable compare-and-swap across invocations).
+    #[command(long_about)]
+    Write {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Vault-relative path of the note to write.
+        note_path: String,
+        /// Require the note's current content hash to equal this blake3
+        /// hash before writing (compare-and-swap). Without it, `write`
+        /// uses the note's current indexed hash for an existing note, so
+        /// a concurrent app edit still conflict-detects. A missing note
+        /// still requires --create — an expect-hash never creates a file
+        /// by itself.
+        #[arg(long)]
+        expect_hash: Option<String>,
+        /// Create the note if it does not exist (with an empty-expected
+        /// compare-and-swap, so a race to create it is refused rather
+        /// than clobbered). On an existing note this flag is a no-op —
+        /// the write is the same conditional write either way.
+        #[arg(long)]
+        create: bool,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
     /// Print one note's contents verbatim.
     Read {
         /// Path to the vault directory.
@@ -207,6 +248,7 @@ impl Command {
             Command::Tasks { .. } => "tasks",
             Command::RenderTemplate { .. } => "render-template",
             Command::Search { .. } => "search",
+            Command::Write { .. } => "write",
             Command::Read { .. } => "read",
             Command::List { .. } => "list",
             Command::Links { .. } => "links",
@@ -351,6 +393,22 @@ fn dispatch(
             format,
         } => {
             let (vault, output) = commands::search::run(&vault_path, &query, limit, cancel)?;
+            Ok((vault, format, output))
+        }
+        Command::Write {
+            vault_path,
+            note_path,
+            expect_hash,
+            create,
+            format,
+        } => {
+            let (vault, output) = commands::write::run(
+                &vault_path,
+                &note_path,
+                expect_hash.as_deref(),
+                create,
+                cancel,
+            )?;
             Ok((vault, format, output))
         }
         Command::Read {

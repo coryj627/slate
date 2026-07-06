@@ -626,6 +626,31 @@ impl VaultSession {
     /// would otherwise `create_dir_all` its way into existence under
     /// `open`, silently materializing a fresh empty vault on disk.
     pub fn from_filesystem(root: PathBuf) -> Result<Self, VaultError> {
+        // The desktop/host default is the single-user `"local"` actor
+        // (`SessionConfig::new`). The op-log attribution plumbing lives
+        // in `from_filesystem_with_actor`; this preserves the historic
+        // signature every host + the uniffi wrapper already call.
+        Self::from_filesystem_with_actor(root, "local")
+    }
+
+    /// Same as [`from_filesystem`](Self::from_filesystem) but stamps a
+    /// caller-chosen `user_actor_id` into every op-log entry this
+    /// session appends.
+    ///
+    /// A vault can be held open by more than one process at once — the
+    /// Slate app and the `slate` CLI, say. Both go through `save_text`'s
+    /// `expected_content_hash` compare-and-swap, so neither can silently
+    /// clobber the other's writes; the op-log's `user_actor_id` is the
+    /// *honest label* of which writer produced an entry. The desktop app
+    /// keeps `"local"`; the CLI passes `"cli"` (see
+    /// `crates/slate-cli/src/session.rs`), so a second writer's entries
+    /// are attributable in the history without inventing any new write
+    /// plumbing. Everything else (templates auto-detect, citations prefs,
+    /// provider construction) is identical to `from_filesystem`.
+    pub fn from_filesystem_with_actor(
+        root: PathBuf,
+        user_actor_id: &str,
+    ) -> Result<Self, VaultError> {
         if !root.is_dir() {
             return Err(VaultError::InvalidPath {
                 path: root.display().to_string(),
@@ -634,6 +659,7 @@ impl VaultSession {
         }
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
+        config.user_actor_id = user_actor_id.to_string();
         // Obsidian-convention auto-detect. Callers wanting a different
         // layout can mutate `templates_dir` and call `open` directly.
         if root.join("Templates").is_dir() {
@@ -807,12 +833,22 @@ impl VaultSession {
     ///
     /// `expected_content_hash`:
     /// - `None` → save unconditionally. Used by callers that don't
-    ///   track the on-disk hash (CLI, scripted writers).
+    ///   track the on-disk hash (scripted writers).
     /// - `Some(h)` → before writing, stat + hash the file currently
     ///   on disk. If it doesn't match `h`, return
     ///   `VaultError::WriteConflict` and leave the file untouched.
     ///   This is the path the Mac editor uses to detect external
-    ///   changes between read and save.
+    ///   changes between read and save, and the `slate write` CLI verb
+    ///   rides the same discipline (#641).
+    ///
+    /// The compare-and-swap is atomic **across processes**, not just
+    /// within a session: the rehash-through-rename window runs inside an
+    /// IMMEDIATE transaction on the shared `.slate/cache.sqlite`, whose
+    /// one-writer lock is file-based. Two processes racing the same
+    /// expected hash serialize on that lock; exactly one wins and the
+    /// other observes the winner's bytes and gets `WriteConflict`
+    /// (see `save_text_locked` and the concurrency tests in
+    /// `session/tests/save.rs`).
     ///
     /// On success the index reflects the new state in one atomic
     /// transaction (`files` row + `headings` + `links` + `properties`
@@ -861,6 +897,25 @@ impl VaultSession {
         contents: &str,
         expected_content_hash: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
+        // Cross-process critical section (#641 adversarial review).
+        //
+        // The expected-hash compare-and-swap below re-reads and re-hashes
+        // the file on disk; it is only sound if no OTHER writer can slip
+        // a rename in between that rehash and our own atomic write. The
+        // session's connection mutex serializes writers within one
+        // process, but the Slate app and the `slate` CLI are separate
+        // processes sharing this vault. The shared `.slate/cache.sqlite`
+        // is the cross-process rendezvous: opening the index transaction
+        // IMMEDIATE acquires SQLite's one-writer lock (file-based, so it
+        // excludes other processes too) BEFORE the rehash and holds it
+        // through the rename + index commit. Two racing writers therefore
+        // serialize here — the loser blocks (rusqlite's built-in 5s
+        // busy_timeout), then re-hashes and sees the winner's bytes →
+        // `WriteConflict`, never a silent clobber. A post-timeout
+        // SQLITE_BUSY surfaces as `Db` (the CLI maps it to its "cache is
+        // busy" copy).
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
         // `old_contents` is `Some(text)` only on the Some(expected_hash)
         // path with UTF-8-decodable disk content — the diff-on-save base
         // (#378). The conflict-check read already happens, so capturing
@@ -886,7 +941,7 @@ impl VaultSession {
                 // No conflict check: the cached index hash is good enough
                 // for the entry's `hash_before`, and we don't re-read disk
                 // just to diff — the None path logs a `WholeFileReplace`.
-                let cached = conn
+                let cached = tx
                     .query_row(
                         "SELECT content_hash FROM files WHERE path = ?1",
                         rusqlite::params![path],
@@ -901,6 +956,10 @@ impl VaultSession {
         // subsequent SQLite failure leaves the file on disk in a
         // consistent state. Worst case: the file is newer than the
         // index, and the next scan picks it up via mtime/size/ctime.
+        // (The write happens INSIDE the IMMEDIATE transaction so the
+        // check-to-rename window above stays exclusive; a failed commit
+        // still leaves a fully-written file, never a partial one —
+        // `atomic_write` is temp-file + rename.)
         self.provider.write_file(path, contents.as_bytes())?;
 
         let new_stat = self.provider.stat(path)?;
@@ -915,7 +974,6 @@ impl VaultSession {
         // in the migration-006 triggers).
         let body_text: &str = if is_markdown { contents } else { "" };
 
-        let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO files
                 (path, name, extension, size_bytes, mtime_ms, ctime_ms,
@@ -2713,6 +2771,19 @@ fn scan_vault(
     // tracked here.
     let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Every file the walk visits (indexed OR errored — an unreadable
+    // file still exists on disk), so files deleted out-of-band since
+    // the last scan can be pruned from the index (#641: a stale row
+    // otherwise makes `write`/`read` treat a deleted note as existing —
+    // `write` reports a misleading conflict and `--create` can't
+    // recreate it).
+    let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // A failed directory listing hides its whole subtree from the walk;
+    // pruning on a partial view would evict live rows wholesale. Track
+    // completeness and skip the file prune on any listing error (the
+    // rows heal on the next clean scan).
+    let mut walk_complete = true;
+
     let mut stack: Vec<String> = vec![String::new()];
     while let Some(dir) = stack.pop() {
         if cancel.is_cancelled() {
@@ -2723,6 +2794,7 @@ fn scan_vault(
             Ok(e) => e,
             Err(e) => {
                 report.errors.push(format!("list_dir {dir:?}: {e}"));
+                walk_complete = false;
                 continue;
             }
         };
@@ -2759,6 +2831,7 @@ fn scan_vault(
                 }
                 EntryKind::File => {
                     report.files_seen += 1;
+                    seen_files.insert(path.clone());
                     if let Err(e) = index_file(
                         &tx,
                         provider,
@@ -2770,6 +2843,21 @@ fn scan_vault(
                         &vault_index,
                         large_file_refuse_bytes,
                     ) {
+                        // NotFound here means the file vanished between
+                        // the directory listing and the stat/read — a
+                        // concurrent deleter (#641 codex round 5).
+                        // Un-see it so the post-walk prune drops any
+                        // stale row THIS scan; the disk truth is
+                        // "gone". Every other per-file error
+                        // (permissions, oversize, invalid UTF-8) keeps
+                        // the row: the file still exists.
+                        if matches!(
+                            &e,
+                            VaultError::Io(io_err)
+                                if io_err.kind() == std::io::ErrorKind::NotFound
+                        ) {
+                            seen_files.remove(&path);
+                        }
                         report.errors.push(format!("{path}: {e}"));
                     }
                     indexed_count += 1;
@@ -2801,6 +2889,20 @@ fn scan_vault(
     // transaction so it commits atomically with the upserts above.
     if let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
         report.errors.push(format!("prune stale dirs: {e}"));
+    }
+
+    // Prune `files` rows for files no longer on disk (#641, codex
+    // adversarial round 4): without this, a note deleted out-of-band
+    // stays "indexed" forever and existence checks lie — `slate write`
+    // reports a misleading conflict instead of "no such note", and
+    // `--create` anchors to the stale hash and can't recreate the note.
+    // Deletion follows the shipped `delete_file` discipline exactly:
+    // one `DELETE FROM files` per row — child tables cascade
+    // (`ON DELETE CASCADE`), FTS is maintained by the migration-006
+    // DELETE trigger. Skipped when any directory listing failed
+    // (`walk_complete`): a partial walk must not evict live rows.
+    if walk_complete && let Err(e) = prune_unseen_files(&tx, &seen_files) {
+        report.errors.push(format!("prune stale files: {e}"));
     }
 
     // Re-resolve links that were Unresolved purely because their
@@ -2924,6 +3026,35 @@ fn upsert_dir(
 /// that was removed or renamed on disk since the previous scan. We load
 /// the current paths and delete the set difference by id in one pass, so
 /// the work is O(rows) with no per-row query round-trip.
+/// Delete `files` rows whose paths the walk did not see this pass —
+/// files removed from disk out-of-band since the last scan. Same shape
+/// as [`prune_unseen_dirs`]; the per-row `DELETE FROM files` matches
+/// `delete_file`'s discipline (child tables cascade, FTS trigger
+/// fires). Only called after a complete walk (#641).
+fn prune_unseen_files(
+    tx: &rusqlite::Transaction,
+    seen_files: &std::collections::HashSet<String>,
+) -> Result<(), VaultError> {
+    let stale: Vec<i64> = {
+        let mut stmt = tx.prepare("SELECT id, path FROM files")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut stale = Vec::new();
+        for row in rows {
+            let (id, path) = row?;
+            if !seen_files.contains(&path) {
+                stale.push(id);
+            }
+        }
+        stale
+    };
+    for id in stale {
+        tx.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
+    }
+    Ok(())
+}
+
 fn prune_unseen_dirs(
     tx: &rusqlite::Transaction,
     seen_dirs: &std::collections::HashSet<String>,
@@ -3700,11 +3831,12 @@ fn now_ms() -> i64 {
 // --- Internal: save_text helpers ---
 
 /// Reject `save_text` paths that can't refer to a real vault file —
-/// empties, lone `.`, absolutes, `..`. The provider's
-/// `resolve_for_mutation` enforces the same rules at write time, but
-/// rejecting up-front means a `save_text("", b"x", Some(hash))` call
-/// fails as `InvalidPath` rather than tripping a read-side IO error
-/// during the conflict check.
+/// empties, lone `.`, absolutes, `..`, and dot-prefixed components.
+/// The provider's `resolve_for_mutation` enforces the traversal rules
+/// at write time too, but rejecting up-front means a
+/// `save_text("", b"x", Some(hash))` call fails as `InvalidPath`
+/// rather than tripping a read-side IO error during the conflict
+/// check.
 fn validate_save_path(path: &str) -> Result<(), VaultError> {
     use std::path::{Component, Path};
     let p = Path::new(path);
@@ -3717,7 +3849,30 @@ fn validate_save_path(path: &str) -> Result<(), VaultError> {
     let mut has_normal = false;
     for component in p.components() {
         match component {
-            Component::Normal(_) => has_normal = true,
+            Component::Normal(name) => {
+                has_normal = true;
+                // Dot-prefixed components are invisible to the scanner
+                // (it skips them wholesale — most importantly `.slate`
+                // and `.obsidian`, the internal/tool state namespaces).
+                // A content save landing there would write a file Slate
+                // can never index, and worse: files like
+                // `.slate/prefs.json` are re-read as internal state on
+                // the next open, so `slate write --create` must not be
+                // able to plant one (#641, codex adversarial round 3).
+                // Same rule structural mutations already enforce via
+                // `validate_leaf_component` ("dot-prefixed names are
+                // reserved"). No internal caller saves hidden paths
+                // through this funnel — the app writes prefs via its
+                // own PrefsJsonStore, not save_text.
+                if name.to_string_lossy().starts_with('.') {
+                    return Err(VaultError::InvalidPath {
+                        path: path.to_string(),
+                        reason: "dot-prefixed path components are reserved for Slate/tool \
+                                 state and are never indexed"
+                            .into(),
+                    });
+                }
+            }
             Component::CurDir => {}
             Component::ParentDir => {
                 return Err(VaultError::InvalidPath {
