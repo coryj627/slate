@@ -1,0 +1,298 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import Foundation
+
+/// Live re-detection of sync markers (#638) — the bounded watch that
+/// keeps the sync diagnostics leaf honest after vault open.
+///
+/// Milestone M ran detection once per vault open plus manual refresh;
+/// if a sync system starts managing the vault mid-session (`git init`,
+/// LiveSync install, Dropbox pointed at the folder), the leaf was
+/// stale until reopen. This watcher closes that gap WITHOUT building
+/// general vault-watching infrastructure (`FsVaultProvider::watch` is
+/// still a stub by design): it holds `DispatchSource` directory
+/// watches on exactly the places the detector's in-vault probes look —
+/// the vault root, `.obsidian`, and `.obsidian/plugins` — and fires a
+/// debounced callback the host wires to `refreshSyncDiagnostics()`.
+///
+/// Bounds and non-goals, deliberately:
+/// - Directory-entry events only (a marker appearing/disappearing in
+///   one of the three watched dirs). Ancestor/location signals (an
+///   ancestor `.dropbox.cache`, iCloud eviction xattrs) don't emit
+///   events here — those describe where the vault LIVES, which doesn't
+///   change mid-session; the per-open probe covers them.
+/// - Note saves at the vault root also churn the root's entry list
+///   (atomic temp-file + rename), so events over-fire. That's fine:
+///   the debounce collapses bursts and the probes behind the refresh
+///   are bounded exact-path checks (< 1 ms) — correctness never
+///   depends on event filtering.
+/// - The `.obsidian`/`plugins` watches re-arm after every event, so a
+///   plugins tree created mid-session gets picked up by the parent
+///   watch firing first (root → `.obsidian` → `plugins` chain).
+///
+/// One robustness bound the naive "reset the timer on every event"
+/// debounce is missing, closed here:
+/// - **Max-latency ceiling (#638 adversarial).** A pure trailing
+///   debounce can be starved forever: continuous sub-interval root
+///   churn (a busy sync tool, or a Cmd+S habit) reschedules the timer
+///   every time and it never fires. `maxLatency` caps the wait so a
+///   callback still lands within a fixed bound of the FIRST event in a
+///   burst even under unbroken churn.
+///
+/// Setup-race close (#638 adversarial): a marker appearing between the
+/// host's post-scan probe and the watch fds opening would emit no event
+/// (the entry already exists when the fd opens). `start()` is `async`
+/// and returns only AFTER the fds are installed, so the host awaits it
+/// before running the probe (`startSyncMarkerWatcher`): arm-then-probe
+/// leaves no window — a marker landing after the arm emits an event,
+/// anything already present is seen by the probe. Readiness is awaited
+/// via a continuation, NOT a `queue.sync` (which on the `@MainActor`
+/// owner stalls the main thread under a parallel workload).
+///
+/// Threading: `start()`/`stop()` are main-thread affine (the AppState
+/// owner is `@MainActor`); events arrive on a private queue and
+/// `onChange` is delivered on the MAIN queue. `stop()` (or deinit)
+/// cancels everything; a cancelled watcher never calls back.
+final class SyncMarkerWatcher {
+    /// The vault-relative directories the detector's in-vault probes
+    /// read (m_spec §M-1 table): root markers (.git, .stfolder,
+    /// .stignore, .dropbox, .dropbox.cache, .tmp.drive*, the OneDrive
+    /// GUID, *.icloud placeholders), and the LiveSync plugin dir.
+    /// "" is the vault root itself.
+    static let watchedSubdirectories = ["", ".obsidian", ".obsidian/plugins"]
+
+    private let root: URL
+    private let debounceInterval: TimeInterval
+    /// Upper bound on how long a callback can be deferred by a
+    /// continuous event burst — the anti-starvation ceiling. Defaults
+    /// to 4× the debounce so a normal quiet-period settle is unchanged
+    /// but unbroken churn still surfaces within a fixed window.
+    private let maxLatency: TimeInterval
+    private let onChange: () -> Void
+    /// Serial queue owning all mutable watcher state after `start()`.
+    private let queue = DispatchQueue(label: "slate.sync-marker-watcher")
+    /// Keyed by vault-relative subdirectory ("" = root).
+    /// One armed watch: the source plus the monotonic generation stamped
+    /// when it was armed. The generation is the identity token — see the
+    /// arm site for why it beats an `ObjectIdentifier`.
+    private struct ArmedWatch {
+        let source: DispatchSourceFileSystemObject
+        let generation: UInt64
+    }
+    private var sources: [String: ArmedWatch] = [:]
+    /// Monotonic, session-lifetime. Stamped onto each armed source so a
+    /// stale handler can prove it belongs to the source currently at its
+    /// key. Never reused (unlike a pointer address), so it's immune to
+    /// the ABA a freed-then-realloc'd source would create.
+    private var nextGeneration: UInt64 = 0
+    private var debounceTimer: DispatchSourceTimer?
+    /// Deadline for the current burst's max-latency ceiling. Set on the
+    /// FIRST event after a callback (or after a quiet period), cleared
+    /// when the callback fires. `nil` = no burst in flight.
+    private var burstCeiling: DispatchTime?
+    private var cancelled = false
+
+    /// - Parameters:
+    ///   - root: the vault root (the same `fs_root` the detector probes).
+    ///   - debounceInterval: quiet period before `onChange` fires;
+    ///     injectable so tests don't wait production-scale seconds.
+    ///   - maxLatency: ceiling on how long continuous churn may defer a
+    ///     callback; defaults to `4 × debounceInterval`. Clamped to at
+    ///     least `debounceInterval` (a smaller ceiling would be
+    ///     meaningless — it can never fire before the trailing timer).
+    ///   - onChange: delivered on the MAIN queue, never after `stop()`.
+    init(
+        root: URL,
+        debounceInterval: TimeInterval = 2.5,
+        maxLatency: TimeInterval? = nil,
+        onChange: @escaping () -> Void
+    ) {
+        self.root = root
+        self.debounceInterval = debounceInterval
+        self.maxLatency = max(debounceInterval, maxLatency ?? debounceInterval * 4)
+        self.onChange = onChange
+    }
+
+    deinit {
+        // At deinit the refcount is 0, so no event handler (all capture
+        // `[weak self]`) is holding this instance — nothing else can be
+        // touching the queue-confined state. Cancel the sources/timer
+        // DIRECTLY rather than via `stop()`'s `queue.sync`: if the last
+        // release happened to land on `queue` itself, a `queue.sync`
+        // here would deadlock (sync onto the current queue). Each
+        // source's cancel handler still runs on `queue` and closes its
+        // fd — no fd leak.
+        for armed in sources.values {
+            armed.source.cancel()
+        }
+        debounceTimer?.cancel()
+    }
+
+    /// Arm the directory watches and SUSPEND until the fds are open,
+    /// then return. Idempotent; safe to call once after vault open.
+    /// Missing subdirectories (no `.obsidian` yet) are skipped now and
+    /// picked up by the parent watch's re-arm when they appear.
+    ///
+    /// Awaiting readiness (rather than firing-and-forgetting) is what
+    /// makes the host's arm-before-probe ordering DETERMINISTIC: once
+    /// `await start()` returns, every watched dir that exists has a live
+    /// fd, so a marker created after this point is guaranteed to emit an
+    /// event and anything already present is caught by the probe the
+    /// host runs next — no setup-race window (#638 adversarial re-review).
+    ///
+    /// It suspends via a continuation resumed on the private queue; it
+    /// does NOT `queue.sync`-block the calling thread. That distinction
+    /// matters: a synchronous `queue.sync` on the `@MainActor` owner
+    /// pinned the main thread and, under a parallel test run (hundreds
+    /// of watchers), starved the dispatch pool and stalled unrelated
+    /// main-actor work. `await` yields the thread instead.
+    ///
+    /// If `stop()` (or a not-yet-started cancel) races in first, the
+    /// continuation is still resumed — the awaiter never hangs.
+    func start() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async { [weak self] in
+                guard let self, !self.cancelled else {
+                    continuation.resume()
+                    return
+                }
+                self.armMissingWatches()
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Cancel all watches and the pending debounce. After this returns
+    /// (or deinit runs), `onChange` will not be called again: the
+    /// main-queue hop re-checks `cancelled` under the queue.
+    func stop() {
+        queue.sync {
+            cancelled = true
+            for armed in sources.values {
+                armed.source.cancel()
+            }
+            sources.removeAll()
+            debounceTimer?.cancel()
+            debounceTimer = nil
+            burstCeiling = nil
+        }
+    }
+
+    // MARK: - Queue-confined internals
+
+    /// Open an event-only fd + DispatchSource for each watched subdir
+    /// that exists and isn't already watched. Called on `queue`.
+    private func armMissingWatches() {
+        for subdir in Self.watchedSubdirectories where sources[subdir] == nil {
+            let url =
+                subdir.isEmpty ? root : root.appendingPathComponent(subdir)
+            let fd = open(url.path, O_EVTONLY)
+            guard fd >= 0 else { continue }  // absent dir: parent re-arms us later
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                // .write = the directory's entry list changed (create/
+                // delete/rename inside it) — exactly the marker signal.
+                // .delete/.rename catch the watched dir itself going away
+                // so we drop the stale source and let the parent re-arm.
+                eventMask: [.write, .delete, .rename],
+                queue: queue
+            )
+            // Capture `subdir` + a value-type generation token, never the
+            // source object itself. This threads the needle Codoki PR
+            // #649 kept snagging on:
+            //  - strong `source` → retain cycle (source retains handler);
+            //  - `unowned`/`weak source` → dangling deref on a queued
+            //    handler whose source was freed;
+            //  - lookup-by-`subdir` alone → IDENTITY loss: a stale
+            //    handler for an old source could cancel/read the NEWLY
+            //    armed source now sitting at that key (the High);
+            //  - an `ObjectIdentifier` token fixes identity but is a
+            //    pointer address — a freed-then-realloc'd source could
+            //    alias it (ABA). A monotonic generation never reuses a
+            //    value, so it's ABA-proof too.
+            // The token is a plain `UInt64` — the closure holds no
+            // reference to the source. handleEvent derefs only the
+            // strongly-held `sources[subdir]` entry and acts iff its
+            // stamped generation matches — so a stale invocation whose
+            // source was replaced (or removed) matches nothing and
+            // returns. Identity-safe, cycle-free, deref-safe, ABA-proof.
+            let generation = nextGeneration
+            nextGeneration += 1
+            source.setEventHandler { [weak self] in
+                self?.handleEvent(subdir: subdir, generation: generation)
+            }
+            source.setCancelHandler {
+                close(fd)
+            }
+            sources[subdir] = ArmedWatch(source: source, generation: generation)
+            source.resume()
+        }
+    }
+
+    /// Called on `queue` for every raw event. Derefs only the
+    /// strongly-held `sources[subdir]` entry, and acts iff its stamped
+    /// `generation` matches the firing source's — so a stale invocation
+    /// whose source was replaced (delete + re-arm) or removed touches
+    /// nothing. Identity-safe (never cancels a newly-armed source),
+    /// deref-safe (no weak/unowned source), cycle-free + ABA-proof (see
+    /// the arm site).
+    private func handleEvent(subdir: String, generation: UInt64) {
+        guard !cancelled,
+            let armed = sources[subdir],
+            armed.generation == generation
+        else { return }
+        let source = armed.source
+        // If the watched dir itself was deleted/renamed, drop the
+        // source; the parent watch re-arms a fresh one if it returns.
+        if source.data.contains(.delete) || source.data.contains(.rename) {
+            source.cancel()
+            sources[subdir] = nil
+        }
+        // A child dir may have just appeared (.obsidian created, then
+        // plugins) — chase the chain before debouncing so the next
+        // event in the new dir is already covered.
+        armMissingWatches()
+        scheduleDebouncedCallback()
+    }
+
+    /// Coalesce event bursts (note saves churn the root's entry list)
+    /// into one callback after `debounceInterval` of quiet — but never
+    /// defer past the burst's max-latency ceiling, so unbroken churn
+    /// can't starve the callback forever. On `queue`.
+    private func scheduleDebouncedCallback() {
+        let now = DispatchTime.now()
+        // First event of a fresh burst: anchor the ceiling. Subsequent
+        // events keep the SAME ceiling (it's measured from the first
+        // event), so continuous churn still fires within `maxLatency`.
+        let ceiling = burstCeiling ?? (now + maxLatency)
+        burstCeiling = ceiling
+        // Trailing quiet-period deadline, clamped to the ceiling.
+        let trailing = now + debounceInterval
+        let deadline = min(trailing, ceiling)
+
+        debounceTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: deadline)
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.cancelled else { return }
+            self.debounceTimer = nil
+            // Burst delivered: the next event starts a new ceiling.
+            self.burstCeiling = nil
+            let callback = self.onChange
+            DispatchQueue.main.async { [weak self] in
+                // Re-check on the main hop: stop() may have landed
+                // between the timer firing and this block running.
+                guard let self, !self.isCancelled else { return }
+                callback()
+            }
+        }
+        debounceTimer = timer
+        timer.resume()
+    }
+
+    /// Queue-synchronized read for the main-hop cancellation re-check.
+    private var isCancelled: Bool {
+        queue.sync { cancelled }
+    }
+}
