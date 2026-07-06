@@ -143,6 +143,40 @@ final class SyncMarkerWatcherTests: XCTestCase {
         watcher.stop()
     }
 
+    /// The `.rename` sibling of the delete case (Codoki PR #649
+    /// advisory): renaming a watched subdir away fires `.rename` on its
+    /// source (dropping it); recreating the name re-arms a fresh watch
+    /// that must stay live. Exercises the `.rename` branch the delete
+    /// test doesn't reach.
+    func testRenameThenRecreateKeepsSubdirWatchLive() async throws {
+        let vault = try makeVaultDir("rename")
+        let fm = FileManager.default
+        let obsidian = vault.appendingPathComponent(".obsidian")
+        try fm.createDirectory(at: obsidian, withIntermediateDirectories: false)
+
+        let counter = CallbackCounter()
+        let watcher = SyncMarkerWatcher(root: vault, debounceInterval: 0.2) {
+            counter.increment()
+        }
+        await watcher.start()
+
+        // Rename `.obsidian` away → its source fires .rename and drops
+        // itself; then recreate the name → root re-arms a fresh watch.
+        try fm.moveItem(at: obsidian, to: vault.appendingPathComponent(".obsidian-moved"))
+        try await waitUntilAsync("rename observed") { counter.count >= 1 }
+        try fm.createDirectory(at: obsidian, withIntermediateDirectories: false)
+        try await waitUntilAsync("recreate re-armed") { counter.count >= 2 }
+
+        let baseline = counter.count
+        try fm.createDirectory(
+            at: obsidian.appendingPathComponent("plugins"),
+            withIntermediateDirectories: false)
+        try await waitUntilAsync("re-armed watch is live after rename") {
+            counter.count > baseline
+        }
+        watcher.stop()
+    }
+
     func testStopSuppressesFurtherCallbacks() async throws {
         let vault = try makeVaultDir("stopped")
         let counter = CallbackCounter()

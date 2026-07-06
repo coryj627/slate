@@ -73,7 +73,19 @@ final class SyncMarkerWatcher {
     /// Serial queue owning all mutable watcher state after `start()`.
     private let queue = DispatchQueue(label: "slate.sync-marker-watcher")
     /// Keyed by vault-relative subdirectory ("" = root).
-    private var sources: [String: DispatchSourceFileSystemObject] = [:]
+    /// One armed watch: the source plus the monotonic generation stamped
+    /// when it was armed. The generation is the identity token — see the
+    /// arm site for why it beats an `ObjectIdentifier`.
+    private struct ArmedWatch {
+        let source: DispatchSourceFileSystemObject
+        let generation: UInt64
+    }
+    private var sources: [String: ArmedWatch] = [:]
+    /// Monotonic, session-lifetime. Stamped onto each armed source so a
+    /// stale handler can prove it belongs to the source currently at its
+    /// key. Never reused (unlike a pointer address), so it's immune to
+    /// the ABA a freed-then-realloc'd source would create.
+    private var nextGeneration: UInt64 = 0
     private var debounceTimer: DispatchSourceTimer?
     /// Deadline for the current burst's max-latency ceiling. Set on the
     /// FIRST event after a callback (or after a quiet period), cleared
@@ -111,8 +123,8 @@ final class SyncMarkerWatcher {
         // here would deadlock (sync onto the current queue). Each
         // source's cancel handler still runs on `queue` and closes its
         // fd — no fd leak.
-        for source in sources.values {
-            source.cancel()
+        for armed in sources.values {
+            armed.source.cancel()
         }
         debounceTimer?.cancel()
     }
@@ -157,8 +169,8 @@ final class SyncMarkerWatcher {
     func stop() {
         queue.sync {
             cancelled = true
-            for source in sources.values {
-                source.cancel()
+            for armed in sources.values {
+                armed.source.cancel()
             }
             sources.removeAll()
             debounceTimer?.cancel()
@@ -186,7 +198,7 @@ final class SyncMarkerWatcher {
                 eventMask: [.write, .delete, .rename],
                 queue: queue
             )
-            // Capture `subdir` + a value-type IDENTITY token, never the
+            // Capture `subdir` + a value-type generation token, never the
             // source object itself. This threads the needle Codoki PR
             // #649 kept snagging on:
             //  - strong `source` → retain cycle (source retains handler);
@@ -194,37 +206,43 @@ final class SyncMarkerWatcher {
             //    handler whose source was freed;
             //  - lookup-by-`subdir` alone → IDENTITY loss: a stale
             //    handler for an old source could cancel/read the NEWLY
-            //    armed source now sitting at that key (the High).
-            // ObjectIdentifier is a struct (no ownership), so the closure
-            // holds no reference to the source. handleEvent derefs only
-            // the strongly-held `sources[subdir]` entry and acts iff its
-            // identity matches the token — so a stale invocation whose
+            //    armed source now sitting at that key (the High);
+            //  - an `ObjectIdentifier` token fixes identity but is a
+            //    pointer address — a freed-then-realloc'd source could
+            //    alias it (ABA). A monotonic generation never reuses a
+            //    value, so it's ABA-proof too.
+            // The token is a plain `UInt64` — the closure holds no
+            // reference to the source. handleEvent derefs only the
+            // strongly-held `sources[subdir]` entry and acts iff its
+            // stamped generation matches — so a stale invocation whose
             // source was replaced (or removed) matches nothing and
-            // returns. Identity-safe, cycle-free, deref-safe.
-            let sourceID = ObjectIdentifier(source as AnyObject)
+            // returns. Identity-safe, cycle-free, deref-safe, ABA-proof.
+            let generation = nextGeneration
+            nextGeneration += 1
             source.setEventHandler { [weak self] in
-                self?.handleEvent(subdir: subdir, sourceID: sourceID)
+                self?.handleEvent(subdir: subdir, generation: generation)
             }
             source.setCancelHandler {
                 close(fd)
             }
-            sources[subdir] = source
+            sources[subdir] = ArmedWatch(source: source, generation: generation)
             source.resume()
         }
     }
 
     /// Called on `queue` for every raw event. Derefs only the
-    /// strongly-held `sources[subdir]` entry, and acts iff its identity
-    /// matches the firing source's `sourceID` — so a stale invocation
+    /// strongly-held `sources[subdir]` entry, and acts iff its stamped
+    /// `generation` matches the firing source's — so a stale invocation
     /// whose source was replaced (delete + re-arm) or removed touches
     /// nothing. Identity-safe (never cancels a newly-armed source),
-    /// deref-safe (no weak/unowned source), cycle-free (see the arm
-    /// site).
-    private func handleEvent(subdir: String, sourceID: ObjectIdentifier) {
+    /// deref-safe (no weak/unowned source), cycle-free + ABA-proof (see
+    /// the arm site).
+    private func handleEvent(subdir: String, generation: UInt64) {
         guard !cancelled,
-            let source = sources[subdir],
-            ObjectIdentifier(source as AnyObject) == sourceID
+            let armed = sources[subdir],
+            armed.generation == generation
         else { return }
+        let source = armed.source
         // If the watched dir itself was deleted/renamed, drop the
         // source; the parent watch re-arms a fresh one if it returns.
         if source.data.contains(.delete) || source.data.contains(.rename) {
