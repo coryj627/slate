@@ -395,6 +395,122 @@ impl crate::VaultProvider for FailingListDirProvider {
     }
 }
 
+/// Wraps `FsVaultProvider` but fails `stat`/`read_file` for one chosen
+/// path with a chosen `io::ErrorKind` — simulates a file vanishing (or
+/// becoming unreadable) between the directory listing and the per-file
+/// stat (#641 codex round 5).
+struct FlakyStatProvider {
+    inner: FsVaultProvider,
+    fail_path: String,
+    kind: std::io::ErrorKind,
+}
+
+impl crate::VaultProvider for FlakyStatProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        if relative == self.fail_path {
+            return Err(VaultError::Io(std::io::Error::new(self.kind, "simulated")));
+        }
+        self.inner.read_file(relative)
+    }
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(relative, contents)
+    }
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        if relative == self.fail_path {
+            return Err(VaultError::Io(std::io::Error::new(self.kind, "simulated")));
+        }
+        self.inner.stat(relative)
+    }
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
+#[test]
+fn file_vanishing_between_list_and_stat_is_pruned_same_scan() {
+    // #641 codex round 5: a file deleted between `list_dir` returning
+    // it and `index_file` stat'ing it must not survive as a stale row —
+    // the NotFound un-sees it so the same scan's prune drops the row.
+    let tmp = tempfile::tempdir().unwrap();
+    let clean = FsVaultProvider::new(tmp.path().to_path_buf());
+    clean.write_file("keep.md", b"# Keep").unwrap();
+    clean.write_file("ghost.md", b"# Ghost").unwrap();
+
+    // First index normally.
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(session.get_file_metadata("ghost.md").unwrap().is_some());
+    drop(session);
+
+    // Rescan through a provider where ghost.md is still LISTED (it's
+    // on disk, so list_dir returns it) but stat reports NotFound — the
+    // list-then-vanish window made deterministic.
+    let flaky = Arc::new(FlakyStatProvider {
+        inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+        fail_path: "ghost.md".to_string(),
+        kind: std::io::ErrorKind::NotFound,
+    });
+    let session = VaultSession::open(flaky, SessionConfig::new(tmp.path().join(".slate"))).unwrap();
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        report.errors.iter().any(|e| e.contains("ghost.md")),
+        "the vanish is reported: {:?}",
+        report.errors
+    );
+    assert!(
+        session.get_file_metadata("ghost.md").unwrap().is_none(),
+        "vanished file's row pruned in the SAME scan"
+    );
+    assert!(session.get_file_metadata("keep.md").unwrap().is_some());
+}
+
+#[test]
+fn file_erroring_for_other_reasons_keeps_its_row() {
+    // The counterweight: a per-file error that is NOT NotFound
+    // (permissions, transient IO) means the file still exists — its
+    // row must survive the prune.
+    let tmp = tempfile::tempdir().unwrap();
+    let clean = FsVaultProvider::new(tmp.path().to_path_buf());
+    clean.write_file("locked.md", b"# Locked").unwrap();
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(session.get_file_metadata("locked.md").unwrap().is_some());
+    drop(session);
+
+    let flaky = Arc::new(FlakyStatProvider {
+        inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+        fail_path: "locked.md".to_string(),
+        kind: std::io::ErrorKind::PermissionDenied,
+    });
+    let session = VaultSession::open(flaky, SessionConfig::new(tmp.path().join(".slate"))).unwrap();
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        report.errors.iter().any(|e| e.contains("locked.md")),
+        "the error is reported: {:?}",
+        report.errors
+    );
+    assert!(
+        session.get_file_metadata("locked.md").unwrap().is_some(),
+        "an existing-but-unreadable file keeps its row"
+    );
+}
+
 #[test]
 fn incomplete_walk_never_prunes_file_rows() {
     // The conservative half of the prune: a failed directory listing

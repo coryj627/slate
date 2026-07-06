@@ -2835,6 +2835,21 @@ fn scan_vault(
                         &vault_index,
                         large_file_refuse_bytes,
                     ) {
+                        // NotFound here means the file vanished between
+                        // the directory listing and the stat/read — a
+                        // concurrent deleter (#641 codex round 5).
+                        // Un-see it so the post-walk prune drops any
+                        // stale row THIS scan; the disk truth is
+                        // "gone". Every other per-file error
+                        // (permissions, oversize, invalid UTF-8) keeps
+                        // the row: the file still exists.
+                        if matches!(
+                            &e,
+                            VaultError::Io(io_err)
+                                if io_err.kind() == std::io::ErrorKind::NotFound
+                        ) {
+                            seen_files.remove(&path);
+                        }
                         report.errors.push(format!("{path}: {e}"));
                     }
                     indexed_count += 1;
