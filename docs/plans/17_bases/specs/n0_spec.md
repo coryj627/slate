@@ -13,7 +13,8 @@ Baseline facts (verified 2026-07-06, this worktree):
 - Properties value model: `crates/slate-core/src/properties_db.rs` — `value_kind` strings, `value_text_norm` normalization (:63, :86), `properties_list_values` per-element rows (:58, :121). `PropertyValue` variants per migration 005/007.
 - Tag matching semantics already shipped: `SearchScope::Tag` nested-child matching (search_db.rs:60) — `hasTag("a")` matches `#a/b`. Reuse the same normalization; never write a second tag matcher.
 - Wikilink parsing: `links.rs` scanner — reuse for Link literals/values; never a second wikilink parser (XD0-2 precedent).
-- Specialized-block discovery: `specialized_blocks` table (kind-discriminated, payload JSON, migration 001 family) — the fence-discovery target for N0-4.
+- Fence discovery has **no existing table to extend**: the 05 §4.5 sketch's `specialized_blocks` was never implemented (verified — migrations 001–020 contain no such table; migration 011's `blocks` indexes `^block-id` anchors only, and reading-pipeline block kinds are derived at render time, reading.rs module docs). N0-4 therefore creates its own `bases_blocks` table.
+- Fixture convention: crate-relative under `crates/slate-core/tests/fixtures/` (existing precedent: `tests/fixtures/canvas/`). All `tests/fixtures/...` paths in this program mean that root.
 - Migrations: `crates/slate-core/migrations/` — next free slot **021**; migration files carry the documentation-header convention (see 008_tasks.sql).
 - Census/bench conventions: `census_*` test fns, `SLATE_CENSUS_FULL=1` via `census_scale()`; criterion benches in `crates/slate-core/benches/`; baselines in `BENCHMARKS.md`.
 - Workspace YAML: yaml-rust2 does **not** preserve comments through emit — this is why decision 3 mandates the preservation model below (raw-text retention + targeted splicing), not naive parse→emit.
@@ -27,11 +28,15 @@ New module `crates/slate-core/src/bases/expr.rs`: `pub fn parse_expr(source: &st
 ### Types (pinned)
 
 ```rust
-pub enum Expr {
+pub struct Span { pub start: u32, pub end: u32 }     // byte offsets into the source string
+
+pub struct Expr { pub kind: ExprKind, pub span: Span } // every node carries its verbatim span (rule 7)
+
+pub enum ExprKind {
     Lit(Lit),                                    // string, number, bool, list, object, regex
-    Prop(PropertyRef),                           // note.x / file.x / formula.x / this / this.file.x / bare→note
+    Prop(PropertyRef),                           // note.x / file.x / formula.x / this… / task.x / bare→note
     Index { base: Box<Expr>, index: Box<Expr> }, // p[0], p["sub"]
-    Field { base: Box<Expr>, name: String },     // date.year, file.name, obj.subprop
+    Field { base: Box<Expr>, name: String },     // dynamic member access on a COMPUTED value: date(x).year, obj.subprop, this.someProp chains
     Unary { op: UnaryOp, rhs: Box<Expr> },       // !x, -x
     Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> }, // + - * / % == != > < >= <= && ||
     Call { callee: Callee, args: Vec<Expr> },    // global fn or method (receiver in Callee::Method)
@@ -44,18 +49,22 @@ pub enum Callee { Global(GlobalFn), Method { receiver: Box<Expr>, name: MethodNa
 
 pub enum PropertyRef {
     Note(String), File(FileField), Formula(String),
-    This, ThisField(Box<PropertyRef>),           // this / this.file.name …
+    This,                                        // bare `this`
+    ThisNote(String),                            // this.<frontmatter prop>
+    ThisFile(FileField),                         // this.file.<field>
     TaskField(TaskField),                        // task.* — only legal under source: tasks (N1-4); parse always
 }
 ```
+
+**`Prop` vs `Field` boundary (pinned):** the parser produces `Prop` whenever a dotted path starts from a *namespace head* (`note`, `file`, `formula`, `this`, `task`, or a bare identifier ⇒ `Note`) and stays within the closed field sets — so `file.name` is `Prop(File(Name))`, never `Field`. `Field` is only for member access on a **computed** value (`date(x).year`, `link(p).asFile().folder`, object subprops). `FileField` is a closed enum of the brief-§4 table **plus the two Slate degree extensions `InDegree`/`OutDegree`** (decision 5); an unknown `file.<name>` ⇒ `Unsupported`. All AST types derive `Serialize`/`Deserialize` now (N2-2's versioned `query_json` envelope depends on it — pin the shape early, not at Wave 3).
 
 `GlobalFn` and `MethodName` are **closed enums enumerating exactly the brief §3 inventory** (including `random`, `html`, `image`, `icon` — parse-known; their v1 *evaluation* status is N1-1's table). A call to a name outside the inventory parses as `Expr::Unsupported` with the verbatim source text — not an error.
 
 ### Normative rules
 
 1. **One grammar for filters and formulas** (brief §2). Operator precedence: JS parity — `! -(unary)` > `* / %` > `+ -` > comparisons > `&&` > `||`; parentheses group.
-2. Literals per brief §2: `"…"`/`'…'` strings with escapes; numbers (int/float); bare `true`/`false`; `[…]` lists; `{"k": v}` objects; `/…/flags` regex (flags: `g` recognized, others preserved-unsupported). Duration strings are **plain strings** at parse time; duration semantics live in the evaluator (`date + "1M"` is `Binary(Add, date, Lit(Str))` — brief §2).
-3. Property references: bare identifier ⇒ `Note` (brief §4); `note.x`/`note["x"]`, `file.<field>` for the closed brief-§4 field set (unknown `file.` field ⇒ `Unsupported`), `formula.x`, `this` (+ chained fields), `task.<field>` (closed set: `text`, `status`, `completed`, `due`, `scheduled`, `priority`, `file` — N1-4 owns semantics).
+2. Literals per brief §2: `"…"`/`'…'` strings — **escape set pinned** (the Obsidian docs are silent; recorded stance): `\"`, `\'`, `\\`, `\n`, `\t` interpret; any other `\x` preserves the backslash+char verbatim with a parse warning (round-trip-safe either way). Numbers (int/float); bare `true`/`false`; `[…]` lists; `{"k": v}` objects; `/…/flags` regex (flags: `g` recognized, others preserved-unsupported). **Regex-vs-division disambiguation (pinned, JS lexer rule):** `/` starts a regex literal only in *expression-start* position (start of input, or after an operator, `(`, `[`, `,`, or a combinator keyword); after a value it is always the division operator — so `a / b / c` is division twice and `matches(/b/, x)` is a regex. Duration strings are **plain strings** at parse time; duration semantics live in the evaluator (`date + "1M"` is `Binary(Add, date, Lit(Str))` — brief §2).
+3. Property references: bare identifier ⇒ `Note` (brief §4); `note.x`/`note["x"]`, `file.<field>` for the closed field set (brief §4 table + `inDegree`/`outDegree`; unknown `file.` field ⇒ `Unsupported`), `formula.x`, `this` / `this.<prop>` ⇒ `ThisNote` / `this.file.<field>` ⇒ `ThisFile`, `task.<field>` (closed set: `text`, `status`, `completed`, `due`, `scheduled`, `priority`, `file` — N1-4 owns semantics).
 4. Method-style calls type-check **by name only** at parse time (receiver types are dynamic; the evaluator owns type errors — decision 6 routes those to fail-loud).
 5. `filter`/`map`/`reduce` bodies are bare expressions with implicit `value`/`index`/`acc` identifiers (brief §3 List). Inside a list-expr body, those identifiers resolve to the implicit bindings *before* falling back to `Note(...)`.
 6. Determinism: `parse_expr` is a pure function; equal input ⇒ equal AST (derive `PartialEq`; no interning that leaks order).
@@ -108,7 +117,26 @@ pub struct ViewDef {
 }
 ```
 
-`SlateQuery` (the executable form, 05 §8.2 shape) is **derived** per view: `pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery` — base filters ∧ view filters, formulas, group/sort/columns/summaries/limit resolved. The builder (N4) constructs `SlateQuery` directly; `save_as_base_file` (N2-1) goes through `BaseFile`.
+`PreservedYaml` (pinned): `Vec<PreservedRegion>` where `PreservedRegion { span: Span, text: String }` — byte spans into `raw` plus the verbatim text. **The parser records a span for every structural node** (each top-level key, each view entry, each formula/property/summary entry, each filter node) via yaml-rust2 markers — N0-3's splicing depends on these spans existing, so they are part of this PR's contract, not N0-3's discovery.
+
+**`SlateQuery` (pinned here — this supersedes the 05 §8.2 sketch, recorded as gap G7):** the executable form N1's engine, N0-5's DQL converter, N2's FFI/envelope, and N4's builder all consume.
+
+```rust
+pub struct SlateQuery {
+    pub source: QuerySource,                   // All | Folder(String) | Tag(String) | Recent{days} | Linked{from_path, depth} — 05 §8.2 kept; Custom parses to Unsupported (gap G4)
+    pub row_source: RowSource,                 // Files | Tasks (from ViewDef.source, decision 8)
+    pub filters: Option<FilterNode>,           // recursive; NOT the sketch's flat Vec<FilterCondition> (gap G7)
+    pub formulas: Vec<(String, Expr)>,         // declaration order (determinism §N-B; not the sketch's HashMap)
+    pub group_by: Option<GroupBy>,             // GroupBy { property: PropertyRef, ascending: bool }
+    pub sort: Vec<SortKey>,                    // SortKey { expr: Expr, ascending: bool }
+    pub columns: Vec<ColumnSelection>,         // ColumnSelection { id: String, display_name: Option<String> }
+    pub summaries: Vec<(String, SummaryRef)>,
+    pub limit: Option<u64>,
+    pub view: ViewSpec,                        // Table | List { … } — Cards/Map/Other(ViewType) carry a table_fallback flag (decision 4)
+}
+```
+
+Derived per view: `pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery` — base filters ∧ view filters; `ViewDef.view_type` maps to `ViewSpec` (`Table`/`List` directly; `Cards`/`Map`/`Other` ⇒ `ViewSpec::Table` with `fallback_from: Some(name)`). The builder (N4) constructs `SlateQuery` directly; `save_as_base_file` (N2-1) goes through `BaseFile`. All types serde-derived; the persisted form is N2-2's versioned envelope `{"v":1, "query": …}`.
 
 ### Normative rules
 
@@ -126,7 +154,8 @@ pub struct ViewDef {
 - Unit per rule; property: never panics on arbitrary YAML/text; determinism.
 - Cross-check: `view_query` output for the brief example matches a hand-written expected `SlateQuery` (golden).
 
-- [ ] Types + `parse_base` + `view_query` per rules 1–7
+- [ ] Types + `parse_base` + `view_query` per rules 1–7; **`SlateQuery` pinned as above (serde-derived)** — downstream waves consume it as-is
+- [ ] Structural node spans recorded (N0-3's splice substrate)
 - [ ] Fixtures + golden + property tests
 - [ ] fmt/clippy; host-independent; no I/O
 
@@ -137,7 +166,7 @@ Same module: `pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Resu
 ### Normative rules
 
 1. **Untouched ⇒ byte-equal:** `serialize_base(parse_base(s).0, &[])` returns `s` exactly (the `raw` field is authoritative when no edits apply). This is the 05 §8.1 hard requirement and it is trivially true by construction — test it anyway, forever (§N-A).
-2. **Edits are targeted splices**, not re-emission: `BaseEdit` is a closed enum (`SetViewKey`, `AddView`, `RemoveView`, `SetFormula`, `RemoveFormula`, `SetTopLevelFilters`, `SetViewFilters`, `SetDisplayName`, `SetSlateState`, …) and each edit rewrites only the minimal YAML span it owns, preserving surrounding bytes, key order, quoting style, comments, and final-newline state. Line-oriented splicing over the retained `raw` + node spans; **never** parse→mutate→emit the whole document through yaml-rust2 (baseline fact: it drops comments).
+2. **Edits are targeted splices**, not re-emission: `BaseEdit` is a closed enum — the **complete v1 set** (additions are spec amendments, not judgment calls): `SetViewKey { view, key, value }` (type/name/limit/groupBy/order), `AddView`, `RemoveView`, `RenameView`, `SetViewFilters`, `SetTopLevelFilters`, `SetFormula`, `RemoveFormula`, `SetDisplayName`, `SetSummaryAssignment`, `SetSlateState`. Each edit rewrites only the minimal YAML span it owns (the structural node spans recorded by N0-2), preserving surrounding bytes, key order, quoting style, comments, and final-newline state. Line-oriented splicing over the retained `raw` + node spans; **never** parse→mutate→emit the whole document through yaml-rust2 (baseline fact: it drops comments).
 3. New content Slate writes (added views, builder-authored files) uses a **pinned canonical style**: two-space indent, keys in the brief-§1 example order (`type`, `name`, `limit`, `groupBy`, `filters`, `order`, `summaries`, then `source`/`slate`), double-quoted strings only where YAML requires, LF endings, trailing newline. New files created by the builder are entirely canonical-style.
 4. Filter nodes edited structurally re-emit in the mapping form (brief §1 example shape); a `Stmt` whose `Expr` is untouched re-emits its verbatim span (N0-1 rule 7).
 5. `Unsupported` nodes and `preserved` YAML re-emit byte-verbatim always — an edit that would have to rewrite inside preserved content is a `SerializeError::WouldClobber` (callers surface it; never silent data loss).
@@ -168,23 +197,34 @@ CREATE TABLE bases_files (
   indexed_at_ms     INTEGER NOT NULL
 );
 CREATE INDEX idx_bases_files_name ON bases_files(name);
+
+-- Fence discovery. NEW table (the 05 §4.5 sketch's specialized_blocks was
+-- never implemented; reading-pipeline block kinds derive at render time).
+CREATE TABLE bases_blocks (
+  file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  fence_kind  INTEGER NOT NULL,             -- 0=base, 1=slate-query, 2=dataview
+  source_text TEXT NOT NULL,                -- fence body, verbatim
+  line        INTEGER NOT NULL,
+  byte_offset INTEGER NOT NULL
+);
+CREATE INDEX idx_bases_blocks_file ON bases_blocks(file_id);
 ```
 
-Deviation from the 05 §8.3 sketch, recorded: no `raw_yaml` column — §9.2 (SQLite is index, not source of truth) wins over the sketch; the parser re-reads the file on open. `path TEXT PRIMARY KEY` becomes `file_id` FK per the shipped `files`-table idiom (every other index table joins on `file_id`).
+Deviations from the 05 sketches, recorded: no `raw_yaml` column — §9.2 (SQLite is index, not source of truth) wins; the parser re-reads the file on open. `path TEXT PRIMARY KEY` becomes `file_id` FK per the shipped `files`-table idiom. `bases_blocks` replaces the never-implemented `specialized_blocks` (gap G1).
 
 ### Normative rules
 
 1. Scanner: files with extension `base` parse via N0-2 during scan; row upserted with view summary + warning count; parse failure still rows (degraded flag in JSON) so the UI can list-and-explain, never hide. `.base` files are **not** markdown (no FTS body row, no links/tags/properties extraction from them).
-2. Fence discovery: during markdown scan, ` ```base `, ` ```slate-query `, and ` ```dataview ` fenced blocks index into `specialized_blocks` with a new kind discriminant (next free; payload JSON = `{ fence_kind, source_text, line, byte_offset }`). ` ```dataviewjs ` fences are **not** discovered — they stay ordinary code blocks forever (05 §8.1; program decision 2). Content is **not** parsed at scan time (embeds parse on render — parse-on-open, XD decision-4 precedent); discovery exists so reading view/editor know where grids go without rescanning bodies, and so N4-5's E2E can enumerate embeds.
-3. Incremental ≡ full: editing/creating/deleting a `.base` file or a fence updates exactly the affected rows; the existing incremental-scan census extends to both new dimensions.
+2. Fence discovery: during markdown scan, ` ```base `, ` ```slate-query `, and ` ```dataview ` fenced blocks index into the new `bases_blocks` table above. ` ```dataviewjs ` fences are **not** discovered — they stay ordinary code blocks forever (05 §8.1; program decision 2). Content is **not** parsed at scan time (embeds parse on render — parse-on-open, XD decision-4 precedent); discovery exists so reading view/editor know where grids go without rescanning bodies, and so N4-5's E2E can enumerate embeds.
+3. Incremental ≡ full: editing/creating/deleting a `.base` file or a fence updates exactly the affected rows. **New census `census_bases_scan_incremental`** (verified: no general incremental-scan census exists to extend): random sequences of create/edit/rename/delete over `.base` files and fenced notes ⇒ `bases_files` + `bases_blocks` rows identical to a from-scratch full rescan.
 4. Vault generation: any `bases_files` or source-file change bumps the generation the N1-2 cache keys on (one counter, session-owned — pinned here so cache invalidation has a single authority).
 
 ### Tests (PR 4)
 
-Unit per rule; incremental-≡-full census extension at 10k-file scale; scan-bench diff proving decision-16's "no first-open regression" (§N-E).
+Unit per rule; `census_bases_scan_incremental` at 10k-file scale; scan-bench diff proving decision-16's "no first-open regression" (§N-E).
 
-- [ ] Migration 021 + scanner + fence discovery per rules 1–4
-- [ ] Census extension + scan-bench diff
+- [ ] Migration 021 (both tables) + scanner + fence discovery per rules 1–4
+- [ ] `census_bases_scan_incremental` + scan-bench diff
 - [ ] fmt/clippy clean
 
 ## N0-5 · Dataview DQL parser → `SlateQuery` (#713) — PR 5
@@ -195,10 +235,10 @@ In N scope by owner decision 2026-07-06 (program decision 2, amended — reverse
 
 1. **Total function:** every input yields a renderable-or-fail-loud `SlateQuery` — parse problems become `Expr::Unsupported` nodes (decision 6 discipline), never a hard error. `DqlWarning` names each conversion loss with its source span.
 2. **Query types** (brief §8.1): `TABLE` ⇒ `ViewSpec::Table` with column exprs as formulas + `order` (an `AS "alias"` becomes the column `displayName`; `WITHOUT ID` omits the synthesized file-link primary column, otherwise one is prepended); `LIST` ⇒ `ViewSpec::List` (the optional single expr = secondary property; `WITHOUT ID` drops the primary link); `TASK` ⇒ `ViewSource::Tasks` + `ViewSpec::List` (N1-4 — task fields map per rule 6); `CALENDAR` ⇒ `Unsupported` (no calendar view in v1; fail-loud names it).
-3. **FROM sources** (brief §8.2): `#tag` ⇒ `file.hasTag("tag")` (subtag semantics already match Slate's shipped tag matching — search_db.rs:60); `"folder"` ⇒ `file.inFolder("folder")` (recursive matches); `"path/to/file"` ⇒ path-equality filter (folder-wins tie rule honored: emit the folder form unless the source ends in `.md`); `[[note]]` ⇒ `file.hasLink("note")`; `outgoing([[note]])` ⇒ `QuerySource::Linked { from_path, depth: 1 }` (05 §8.2); `[[]]`/`[[#]]` ⇒ the same forms over `this`. Combinators `and`/`or` (case-insensitive) + parentheses ⇒ `FilterNode` nesting; **both** negation spellings `-`/`!` ⇒ `Not` (brief §8.2's dual documentation).
-4. **Data commands** (brief §8.2): repeated `WHERE` ⇒ ANDed filters; `SORT` (all four direction spellings) ⇒ sort keys; `GROUP BY expr [AS name]` ⇒ `group_by` when `expr` is a plain property reference **and no later command or output expression references `rows` or `key`** — otherwise the whole query is `Unsupported { reason: "rows aggregation" }` (DQL's grouped-rows model ≠ Slate's display grouping; silent approximation is forbidden); `FLATTEN` ⇒ `Unsupported` (v1); `LIMIT` ⇒ `limit`. **Pipeline-order guard:** DQL executes commands in written order; `SlateQuery` has a fixed filter→sort→group→limit pipeline. If the written order is pipeline-compatible (all WHERE before any SORT, LIMIT last-or-absent-before-order-sensitive commands), map it; otherwise `Unsupported { reason: "order-dependent commands" }` — decision-6 over convenience.
+3. **FROM sources** (brief §8.2): `#tag` ⇒ `file.hasTag("tag")` (subtag semantics already match Slate's shipped tag matching — search_db.rs:60); `"folder"` ⇒ `file.inFolder("folder")` (recursive matches); `"path/to/file"` ⇒ path-equality filter (folder-wins tie rule honored: emit the folder form unless the source ends in `.md`); `[[note]]` ⇒ `file.hasLink("note")`; `outgoing([[note]])` ⇒ `QuerySource::Linked { from_path, depth: 1 }` internally, **serializing to the filter form `link("note").linksTo(file.file)`** on save-as-`.base` (brief §3's documented `linksTo`; this is also the builder's Linked-source serialization — N4-1 rule 1, gap G6); `[[]]`/`[[#]]` ⇒ the same forms over `this`. Combinators `and`/`or` (case-insensitive) + parentheses ⇒ `FilterNode` nesting; **both** negation spellings `-`/`!` ⇒ `Not` (brief §8.2's dual documentation).
+4. **Data commands** (brief §8.2): repeated `WHERE` ⇒ ANDed filters; `SORT` (all four direction spellings) ⇒ sort keys; `GROUP BY` ⇒ **always `Unsupported { reason: "rows aggregation" }`** — DQL grouping yields *one row per key* with a `rows` array, Slate `group_by` keeps every row in labeled sections; even the "simple" case silently changes row membership, so none of it maps (decision 6; the user re-groups in the grid or builder); `FLATTEN` ⇒ `Unsupported` (v1); `LIMIT` ⇒ `limit`. **Pipeline-order guard (precise predicate):** the written command sequence, ignoring `FROM`, must match `WHERE* SORT? LIMIT?` (each present at most once except `WHERE`, in exactly that relative order — repeated `WHERE`s are order-free among themselves). Anything else — `LIMIT` before `SORT`, repeated `SORT`, any `GROUP BY`/`FLATTEN` — is order-dependent in DQL's written-order execution model and ⇒ `Unsupported { reason: "order-dependent commands" }` (decision-6 over convenience).
 5. **Expressions** (brief §8.3): `=` ⇒ `==`; `!=`, comparisons verbatim; infix `AND`/`OR` ⇒ `&&`/`||`; prefix `!` verbatim; string `a * n` ⇒ `repeat(n)`; date shorthands `date(today|now|…)` ⇒ `today()`/`now()`/date arithmetic equivalents (sow/eow/som/eom/soy/eoy compile to arithmetic over `today()`); `dur(…)` unit aliases normalize onto the Bases duration-string tokens; lambdas `(x) => e` ⇒ the implicit-`value` list-expr form where the target is `map`/`filter` (single-arg lambda over the element ⇒ body rewritten with `value`); multi-arg lambdas and `minby`/`maxby`/predicate-form `all`/`any`/`none` ⇒ `Unsupported`. **Null-comparison delta pinned:** DQL's `null <= date(today)` is documented-true; the Bases evaluator type-errors it (fail-loud). Converted queries that relied on that quirk fail loud rather than silently changing membership — recorded in the help migration page (N4-5) with the documented DQL-side guard (`typeof`) as the fix.
-6. **Implicit fields** (brief §8.4), three-column mapping table pinned in the module (DQL → target → status): `file.name/path/folder/ext/size/ctime/mtime/tags/aliases` ⇒ same-named Bases fields; `file.cday/mday` ⇒ `file.ctime.date()` / `file.mtime.date()`; `file.link` ⇒ `link(file.path)`; `file.inlinks` ⇒ `file.backlinks`; `file.outlinks` ⇒ `file.links`; `file.etags/lists/frontmatter/day/starred` ⇒ `Unsupported`. Task fields: `text` ⇒ `task.text`; `status` ⇒ `task.status`; `completed` ⇒ `task.completed`; `checked` ⇒ `task.status != " "`; `due` ⇒ `task.due`; `scheduled` ⇒ `task.scheduled`; `created/completion/start/fullyCompleted/children/section/…` ⇒ `Unsupported` (the tasks table has no such columns — deliberate, gap analysis). `this.` ⇒ `this` (decision 20 contexts apply).
+6. **Implicit fields** (brief §8.4), three-column mapping table pinned in the module (DQL → target → status): `file.name/path/folder/ext/size/ctime/mtime/tags/aliases` ⇒ same-named Bases fields; `file.cday/mday` ⇒ `file.ctime.date()` / `file.mtime.date()`; `file.link` ⇒ `link(file.path)`; `file.inlinks` ⇒ `file.backlinks`; `file.outlinks` ⇒ `file.links`; `file.etags/lists/frontmatter/day/starred` ⇒ `Unsupported`. Task fields: `text` ⇒ `task.text`; `status` ⇒ `task.status`; `completed` ⇒ `task.status == "x"` (**exact lowercase**, Dataview parity — brief §8.4: DQL `completed` is `"x"` only, while Slate's own `task.completed` derives from `{'x','X'}` per migration 008; mapping to `task.completed` would silently flip `- [X]` rows — gap O12); `checked` ⇒ `task.status != " "`; `due` ⇒ `task.due`; `scheduled` ⇒ `task.scheduled`; `created/completion/start/fullyCompleted/children/section/…` ⇒ `Unsupported` (the tasks table has no such columns — deliberate, gap analysis). `this.` ⇒ `this` (decision 20 contexts apply).
 7. **Functions** (brief §8.5), same three-column table: direct maps (`contains`, `lower`, `replace` literal-all, `join`, `length` ⇒ `.length`, `sort/reverse/unique/flat/slice/filter/map`, `sum/average/min/max` where list-shaped, `startswith/endswith`, `round/trunc(⇒floor toward zero)/floor/ceil`, `regextest/regexmatch` ⇒ regex `.matches` forms, `regexreplace`, `split`, `substring` ⇒ `slice`, `striptime` ⇒ `.date()`, `choice` ⇒ `if`, `default` ⇒ `if(x.isEmpty(), v, x)`, `typeof` ⇒ `isType` rewrites in boolean position, `number/string/date/dur/link/object/list/embed⇒link`); everything else (`upper`, `truncate`, `padleft/right`, `containsword/econtains/icontains`, `dateformat/durationformat/currencyformat/localtime`, `hash`, `meta`, `minby/maxby`, `product`, `reduce`, `extract`, `firstvalue`, `nonnull`, `display`, `elink`) ⇒ `Unsupported`. Additions to the evaluated set are individually-tracked issues (decision 5's stance), and the table is the traceable backlog.
 8. Inline `= expr` queries: out of scope (reserved N-E1 remainder; brief §8.6). Only ` ```dataview ` **block** queries convert.
 9. Determinism: pure function; equal input ⇒ equal output.

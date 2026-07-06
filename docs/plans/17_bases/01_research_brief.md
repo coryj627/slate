@@ -109,11 +109,15 @@ Typed methods:
 
 ## §4 Property namespaces and `this`
 
-Three namespaces: **`note.*`** (frontmatter; **bare identifiers default to `note`**; bracket form `note["price"]`), **`file.*`** (all file types), **`formula.*`**. Enumerated `file.*` table (`Bases syntax.md`): `backlinks` (List — flagged "performance heavy", does **not** auto-refresh), `ctime`, `embeds`, `ext`, `file` (file object), `folder`, `links`, `mtime`, `name`, `path`, `properties` (Object — does not auto-refresh), `size`, `tags`.
+Three namespaces: **`note.*`** (frontmatter; **bare identifiers default to `note`**; bracket form `note["price"]`), **`file.*`** (all file types), **`formula.*`**. Enumerated `file.*` table (`Bases syntax.md`): `backlinks` (List — flagged "performance heavy", does **not** auto-refresh), `ctime`, `embeds`, `ext`, `file` (file object), `folder`, `links`, `mtime`, `name`, `path`, `properties` (Object — does not auto-refresh), `size`, `tags`. (Slate adds two extension fields Obsidian lacks: `file.inDegree` / `file.outDegree` — degree counts from the links index, honoring the milestone-14 "ship the basics" commitment; interop caveat as with all extensions.)
 
 **`this`** is context-dependent: (1) base open in the main content area → the base file itself; (2) base **embedded** in another file → the **embedding** file; (3) base in a **sidebar** → the **active file** in the main content area (the "better backlinks" pattern: `file.hasLink(this.file)`).
 
 **Embedding:** `![[File.base]]` renders the first view; `![[File.base#View]]` selects a view by name; a ` ```base ` code block holds full Bases YAML inline in a note (`Create a base.md`). Views/toolbar: view menu, results (limit/copy/**export CSV**), sort, filter, properties, **search**, new-file. View types with min versions: Table (1.9), Cards (1.9), List (1.10), Map (1.10 + official Maps plugin); community plugins can add layouts.
+
+**List view settings** (`List view.md`): **Markers** — bullets/numbers/none; **Indent properties** — when on, selected properties render as indented sub-items under the primary item (the property at the **top** of the Properties menu; reorder by drag or `Alt+Up/Down`); **Separators** — when indenting is off, a separator character joins properties on one line, **default comma**.
+
+**Formula editor** (`Formulas.md`): autocompletes function and property names and shows a **green checkmark on valid syntax** (error feedback otherwise) — the validation-affordance parity target for Slate's builder formula editor.
 
 **Summaries:** per-view, per-column; shown at column foot, and per group when grouped. Built-ins by input type — Number: Average, Min, Max, Sum, Range, Median, Stddev; Date: Earliest, Latest, Range; Checkbox: Checked, Unchecked; Any: Empty, Filled, Unique.
 
