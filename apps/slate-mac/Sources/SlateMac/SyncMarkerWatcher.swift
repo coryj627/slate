@@ -186,7 +186,13 @@ final class SyncMarkerWatcher {
                 eventMask: [.write, .delete, .rename],
                 queue: queue
             )
-            source.setEventHandler { [weak self] in
+            // `unowned source`: the handler closure is retained BY the
+            // source, so a strong capture is a retain cycle that keeps
+            // replaced/cancelled sources alive until libdispatch drops
+            // their handlers (Codoki PR #649 Medium). unowned is safe
+            // here — the event handler can only run while its source
+            // is alive.
+            source.setEventHandler { [weak self, unowned source] in
                 self?.handleEvent(subdir: subdir, source: source)
             }
             source.setCancelHandler {
