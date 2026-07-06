@@ -101,7 +101,45 @@ final class SyncMarkerWatcherTests: XCTestCase {
             at: vault.appendingPathComponent(".obsidian/plugins/obsidian-livesync"),
             withIntermediateDirectories: false)
         try await waitUntilAsync("plugins hop fired") { counter.count >= 3 }
+        watcher.stop()
+    }
 
+    /// Identity safety (Codoki PR #649 High): a watched subdir deleted
+    /// and immediately recreated must end with a LIVE watch on the new
+    /// dir — proving the re-armed source wasn't cancelled by a stale
+    /// handler invocation from the old (deleted) source. Before the
+    /// ObjectIdentifier guard, a lookup-by-subdir handler could cancel
+    /// whatever source now sat at the key, killing live detection.
+    func testDeleteThenRecreateKeepsSubdirWatchLive() async throws {
+        let vault = try makeVaultDir("recreate")
+        let fm = FileManager.default
+        let obsidian = vault.appendingPathComponent(".obsidian")
+        try fm.createDirectory(at: obsidian, withIntermediateDirectories: false)
+
+        let counter = CallbackCounter()
+        let watcher = SyncMarkerWatcher(root: vault, debounceInterval: 0.2) {
+            counter.increment()
+        }
+        await watcher.start()
+
+        // Delete + recreate `.obsidian` — the old source fires .delete
+        // (removes itself), the root watch re-arms a fresh source for
+        // the recreated dir.
+        try fm.removeItem(at: obsidian)
+        try await waitUntilAsync("delete observed") { counter.count >= 1 }
+        try fm.createDirectory(at: obsidian, withIntermediateDirectories: false)
+        try await waitUntilAsync("recreate re-armed") { counter.count >= 2 }
+
+        let baseline = counter.count
+        // A marker inside the RECREATED dir must still fire — only true
+        // if the re-armed source is live (not cancelled by a stale
+        // old-source handler).
+        try fm.createDirectory(
+            at: obsidian.appendingPathComponent("plugins"),
+            withIntermediateDirectories: false)
+        try await waitUntilAsync("recreated dir's watch is live") {
+            counter.count > baseline
+        }
         watcher.stop()
     }
 

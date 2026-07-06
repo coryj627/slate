@@ -186,17 +186,24 @@ final class SyncMarkerWatcher {
                 eventMask: [.write, .delete, .rename],
                 queue: queue
             )
-            // Capture only `subdir` (a String) + weak self — NOT the
-            // source. A strong `source` capture is a retain cycle (the
-            // source retains its handler), and both `unowned`/`weak`
-            // source workarounds trade that for a dealloc-race question
-            // on a queued handler (Codoki PR #649, both directions).
-            // Sidestep it: the handler re-looks-up its source from
-            // `sources[subdir]` on the queue, so a handler that fires
-            // after its source was removed simply finds nothing and
-            // returns. No cycle, no dangling reference.
+            // Capture `subdir` + a value-type IDENTITY token, never the
+            // source object itself. This threads the needle Codoki PR
+            // #649 kept snagging on:
+            //  - strong `source` → retain cycle (source retains handler);
+            //  - `unowned`/`weak source` → dangling deref on a queued
+            //    handler whose source was freed;
+            //  - lookup-by-`subdir` alone → IDENTITY loss: a stale
+            //    handler for an old source could cancel/read the NEWLY
+            //    armed source now sitting at that key (the High).
+            // ObjectIdentifier is a struct (no ownership), so the closure
+            // holds no reference to the source. handleEvent derefs only
+            // the strongly-held `sources[subdir]` entry and acts iff its
+            // identity matches the token — so a stale invocation whose
+            // source was replaced (or removed) matches nothing and
+            // returns. Identity-safe, cycle-free, deref-safe.
+            let sourceID = ObjectIdentifier(source as AnyObject)
             source.setEventHandler { [weak self] in
-                self?.handleEvent(subdir: subdir)
+                self?.handleEvent(subdir: subdir, sourceID: sourceID)
             }
             source.setCancelHandler {
                 close(fd)
@@ -206,12 +213,18 @@ final class SyncMarkerWatcher {
         }
     }
 
-    /// Called on `queue` for every raw event. Re-looks-up the source
-    /// by `subdir` rather than capturing it (see the arm site): a
-    /// handler that fires after its source was removed finds nothing
-    /// and returns — no dangling reference, no retain cycle.
-    private func handleEvent(subdir: String) {
-        guard !cancelled, let source = sources[subdir] else { return }
+    /// Called on `queue` for every raw event. Derefs only the
+    /// strongly-held `sources[subdir]` entry, and acts iff its identity
+    /// matches the firing source's `sourceID` — so a stale invocation
+    /// whose source was replaced (delete + re-arm) or removed touches
+    /// nothing. Identity-safe (never cancels a newly-armed source),
+    /// deref-safe (no weak/unowned source), cycle-free (see the arm
+    /// site).
+    private func handleEvent(subdir: String, sourceID: ObjectIdentifier) {
+        guard !cancelled,
+            let source = sources[subdir],
+            ObjectIdentifier(source as AnyObject) == sourceID
+        else { return }
         // If the watched dir itself was deleted/renamed, drop the
         // source; the parent watch re-arms a fresh one if it returns.
         if source.data.contains(.delete) || source.data.contains(.rename) {
