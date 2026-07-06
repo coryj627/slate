@@ -52,6 +52,8 @@ impl Session {
         -> Result<BasesResultSet, VaultError>;                                     // N1 engine; cache per N1-2 rule 5
     pub fn base_apply_edit(&self, handle: u64, edit: BaseEdit) -> Result<(), VaultError>; // N0-3 splice + atomic save
     pub fn save_query_as_base(&self, query_json: &str, path: &str) -> Result<(), VaultError>; // canonical style (N0-3 rule 3)
+    pub fn open_dql(&self, source: &str, this_path: Option<String>) -> Result<u64, VaultError>; // N0-5 parse_dql → same handle family (05 §8.11's parse_dql, handle-shaped); ```dataview fences + migration paste-in
+    pub fn dql_as_base(&self, source: &str) -> Result<String, VaultError>;                     // one-shot converter: DQL → canonical .base text (the "convert this Dataview query" migration command; conversion losses ⇒ Err naming them, decision 6)
     pub fn base_export(&self, handle: u64, view: u32, format: ExportFormat)        // Csv | Markdown (decision 13)
         -> Result<String, VaultError>;
 }
@@ -70,7 +72,7 @@ impl Session {
 1. `census_bases_roundtrip` (from N0-3) runs against the session-level open→save path too (provider I/O included) — §N-A end-to-end.
 2. `census_bases_determinism` (§N-B): corpus queries × permuted-insertion fixture vaults ⇒ identical `BasesResultSet` (serialize + compare).
 3. `census_bases_cache_fresh` (§N-C) at session level (edits via session write APIs, not raw conn).
-4. `census_bases_fail_loud` (§N-D): corpus × mutation set — every `Unsupported` construct either inert (unreferenced) or `view_error` naming it; membership never silently differs from the un-mutated baseline except via that error.
+4. `census_bases_fail_loud` (§N-D): corpus × mutation set — every `Unsupported` construct either inert (unreferenced) or `view_error` naming it; membership never silently differs from the un-mutated baseline except via that error. The DQL golden corpus (N0-5) runs through `open_dql` here too: every converted query executes without panic, and every expected-`Unsupported` fixture surfaces its named error.
 5. `census_bases_read_only` (§N-F): every corpus query leaves vault bytes hash-identical.
 
 ### Benches

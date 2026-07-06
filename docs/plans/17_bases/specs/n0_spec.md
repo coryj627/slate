@@ -1,10 +1,10 @@
 # N0 executable spec — Format layer: expression language, `.base` parser, serializer, scanner discovery
 
-Issues: N0-1 ([#690](https://github.com/coryj627/slate/issues/690)) · N0-2 ([#691](https://github.com/coryj627/slate/issues/691)) · N0-3 ([#692](https://github.com/coryj627/slate/issues/692)) · N0-4 ([#693](https://github.com/coryj627/slate/issues/693)). Milestone: [GH 14](https://github.com/coryj627/slate/milestone/14). One PR per issue.
-Program: [00_program.md](../00_program.md) (locked decisions 2–6; DoD §N-A/§N-B/§N-D/§N-E). Syntax facts: [01_research_brief.md](../01_research_brief.md) — **normative for every Obsidian-syntax fact in this spec**; when in doubt, the brief's help-corpus citations win.
+Issues: N0-1 ([#690](https://github.com/coryj627/slate/issues/690)) · N0-2 ([#691](https://github.com/coryj627/slate/issues/691)) · N0-3 ([#692](https://github.com/coryj627/slate/issues/692)) · N0-4 ([#693](https://github.com/coryj627/slate/issues/693)) · N0-5 ([#713](https://github.com/coryj627/slate/issues/713)). Milestone: [GH 14](https://github.com/coryj627/slate/milestone/14). One PR per issue.
+Program: [00_program.md](../00_program.md) (locked decisions 2–6; DoD §N-A/§N-B/§N-D/§N-E). Syntax facts: [01_research_brief.md](../01_research_brief.md) — **normative for every Obsidian-syntax fact in this spec** (§1–§7 Bases, §8 DQL); when in doubt, the brief's primary-source citations win.
 Backend norms: fmt/clippy pre-push, censuses for correctness invariants, host-independent slate-core (no macOS deps, no I/O in parsers).
 
-**Execution order: N0-1 → N0-2 → { N0-3 ∥ N0-4 }.**
+**Execution order: N0-1 → N0-2 → { N0-3 ∥ N0-4 ∥ N0-5 }.** (N0-5 needs N0-1's `Expr` and N0-2's `SlateQuery`/`ViewSource` types; independent of N0-3/N0-4 otherwise.)
 
 Baseline facts (verified 2026-07-06, this worktree):
 
@@ -175,7 +175,7 @@ Deviation from the 05 §8.3 sketch, recorded: no `raw_yaml` column — §9.2 (SQ
 ### Normative rules
 
 1. Scanner: files with extension `base` parse via N0-2 during scan; row upserted with view summary + warning count; parse failure still rows (degraded flag in JSON) so the UI can list-and-explain, never hide. `.base` files are **not** markdown (no FTS body row, no links/tags/properties extraction from them).
-2. Fence discovery: during markdown scan, ` ```base ` and ` ```slate-query ` fenced blocks index into `specialized_blocks` with a new kind discriminant (next free; payload JSON = `{ fence_kind, source_text, line, byte_offset }`). Content is **not** parsed at scan time (embeds parse on render — parse-on-open, XD decision-4 precedent); discovery exists so reading view/editor know where grids go without rescanning bodies, and so N4-5's E2E can enumerate embeds.
+2. Fence discovery: during markdown scan, ` ```base `, ` ```slate-query `, and ` ```dataview ` fenced blocks index into `specialized_blocks` with a new kind discriminant (next free; payload JSON = `{ fence_kind, source_text, line, byte_offset }`). ` ```dataviewjs ` fences are **not** discovered — they stay ordinary code blocks forever (05 §8.1; program decision 2). Content is **not** parsed at scan time (embeds parse on render — parse-on-open, XD decision-4 precedent); discovery exists so reading view/editor know where grids go without rescanning bodies, and so N4-5's E2E can enumerate embeds.
 3. Incremental ≡ full: editing/creating/deleting a `.base` file or a fence updates exactly the affected rows; the existing incremental-scan census extends to both new dimensions.
 4. Vault generation: any `bases_files` or source-file change bumps the generation the N1-2 cache keys on (one counter, session-owned — pinned here so cache invalidation has a single authority).
 
@@ -187,4 +187,30 @@ Unit per rule; incremental-≡-full census extension at 10k-file scale; scan-ben
 - [ ] Census extension + scan-bench diff
 - [ ] fmt/clippy clean
 
-**Wave-1 exit:** round-trip census clean (§N-A), corpus in CI, scanner benches inside budget, no save-path deltas.
+## N0-5 · Dataview DQL parser → `SlateQuery` (#713) — PR 5
+
+In N scope by owner decision 2026-07-06 (program decision 2, amended — reverses the draft deferral). **Parsed, not authored** (05 §8.1): Slate reads and converts DQL; it never writes it. New module `crates/slate-core/src/bases/dql.rs`: `pub fn parse_dql(source: &str) -> (SlateQuery, Vec<DqlWarning>)`. Grammar facts: brief §8, normative.
+
+### Normative rules
+
+1. **Total function:** every input yields a renderable-or-fail-loud `SlateQuery` — parse problems become `Expr::Unsupported` nodes (decision 6 discipline), never a hard error. `DqlWarning` names each conversion loss with its source span.
+2. **Query types** (brief §8.1): `TABLE` ⇒ `ViewSpec::Table` with column exprs as formulas + `order` (an `AS "alias"` becomes the column `displayName`; `WITHOUT ID` omits the synthesized file-link primary column, otherwise one is prepended); `LIST` ⇒ `ViewSpec::List` (the optional single expr = secondary property; `WITHOUT ID` drops the primary link); `TASK` ⇒ `ViewSource::Tasks` + `ViewSpec::List` (N1-4 — task fields map per rule 6); `CALENDAR` ⇒ `Unsupported` (no calendar view in v1; fail-loud names it).
+3. **FROM sources** (brief §8.2): `#tag` ⇒ `file.hasTag("tag")` (subtag semantics already match Slate's shipped tag matching — search_db.rs:60); `"folder"` ⇒ `file.inFolder("folder")` (recursive matches); `"path/to/file"` ⇒ path-equality filter (folder-wins tie rule honored: emit the folder form unless the source ends in `.md`); `[[note]]` ⇒ `file.hasLink("note")`; `outgoing([[note]])` ⇒ `QuerySource::Linked { from_path, depth: 1 }` (05 §8.2); `[[]]`/`[[#]]` ⇒ the same forms over `this`. Combinators `and`/`or` (case-insensitive) + parentheses ⇒ `FilterNode` nesting; **both** negation spellings `-`/`!` ⇒ `Not` (brief §8.2's dual documentation).
+4. **Data commands** (brief §8.2): repeated `WHERE` ⇒ ANDed filters; `SORT` (all four direction spellings) ⇒ sort keys; `GROUP BY expr [AS name]` ⇒ `group_by` when `expr` is a plain property reference **and no later command or output expression references `rows` or `key`** — otherwise the whole query is `Unsupported { reason: "rows aggregation" }` (DQL's grouped-rows model ≠ Slate's display grouping; silent approximation is forbidden); `FLATTEN` ⇒ `Unsupported` (v1); `LIMIT` ⇒ `limit`. **Pipeline-order guard:** DQL executes commands in written order; `SlateQuery` has a fixed filter→sort→group→limit pipeline. If the written order is pipeline-compatible (all WHERE before any SORT, LIMIT last-or-absent-before-order-sensitive commands), map it; otherwise `Unsupported { reason: "order-dependent commands" }` — decision-6 over convenience.
+5. **Expressions** (brief §8.3): `=` ⇒ `==`; `!=`, comparisons verbatim; infix `AND`/`OR` ⇒ `&&`/`||`; prefix `!` verbatim; string `a * n` ⇒ `repeat(n)`; date shorthands `date(today|now|…)` ⇒ `today()`/`now()`/date arithmetic equivalents (sow/eow/som/eom/soy/eoy compile to arithmetic over `today()`); `dur(…)` unit aliases normalize onto the Bases duration-string tokens; lambdas `(x) => e` ⇒ the implicit-`value` list-expr form where the target is `map`/`filter` (single-arg lambda over the element ⇒ body rewritten with `value`); multi-arg lambdas and `minby`/`maxby`/predicate-form `all`/`any`/`none` ⇒ `Unsupported`. **Null-comparison delta pinned:** DQL's `null <= date(today)` is documented-true; the Bases evaluator type-errors it (fail-loud). Converted queries that relied on that quirk fail loud rather than silently changing membership — recorded in the help migration page (N4-5) with the documented DQL-side guard (`typeof`) as the fix.
+6. **Implicit fields** (brief §8.4), three-column mapping table pinned in the module (DQL → target → status): `file.name/path/folder/ext/size/ctime/mtime/tags/aliases` ⇒ same-named Bases fields; `file.cday/mday` ⇒ `file.ctime.date()` / `file.mtime.date()`; `file.link` ⇒ `link(file.path)`; `file.inlinks` ⇒ `file.backlinks`; `file.outlinks` ⇒ `file.links`; `file.etags/lists/frontmatter/day/starred` ⇒ `Unsupported`. Task fields: `text` ⇒ `task.text`; `status` ⇒ `task.status`; `completed` ⇒ `task.completed`; `checked` ⇒ `task.status != " "`; `due` ⇒ `task.due`; `scheduled` ⇒ `task.scheduled`; `created/completion/start/fullyCompleted/children/section/…` ⇒ `Unsupported` (the tasks table has no such columns — deliberate, gap analysis). `this.` ⇒ `this` (decision 20 contexts apply).
+7. **Functions** (brief §8.5), same three-column table: direct maps (`contains`, `lower`, `replace` literal-all, `join`, `length` ⇒ `.length`, `sort/reverse/unique/flat/slice/filter/map`, `sum/average/min/max` where list-shaped, `startswith/endswith`, `round/trunc(⇒floor toward zero)/floor/ceil`, `regextest/regexmatch` ⇒ regex `.matches` forms, `regexreplace`, `split`, `substring` ⇒ `slice`, `striptime` ⇒ `.date()`, `choice` ⇒ `if`, `default` ⇒ `if(x.isEmpty(), v, x)`, `typeof` ⇒ `isType` rewrites in boolean position, `number/string/date/dur/link/object/list/embed⇒link`); everything else (`upper`, `truncate`, `padleft/right`, `containsword/econtains/icontains`, `dateformat/durationformat/currencyformat/localtime`, `hash`, `meta`, `minby/maxby`, `product`, `reduce`, `extract`, `firstvalue`, `nonnull`, `display`, `elink`) ⇒ `Unsupported`. Additions to the evaluated set are individually-tracked issues (decision 5's stance), and the table is the traceable backlog.
+8. Inline `= expr` queries: out of scope (reserved N-E1 remainder; brief §8.6). Only ` ```dataview ` **block** queries convert.
+9. Determinism: pure function; equal input ⇒ equal output.
+
+### Tests (PR 5)
+
+- Golden corpus `tests/fixtures/dql/`: every brief-§8 documented example verbatim + the field-report migration idioms (Felker's status/schedule tables, reading-duration math) as DQL, each with an expected-`SlateQuery` golden or expected-`Unsupported` reason.
+- Unit per rule incl. the pipeline-order guard both ways, both negation spellings, `WITHOUT ID` variants, TASK ⇒ tasks-source mapping.
+- Property: never panics on arbitrary text; determinism; converted queries execute under the N1 engine without panicking (integration once N1 lands — wired into the N2-1 census run).
+
+- [ ] `parse_dql` per rules 1–9; mapping tables in module docs
+- [ ] Golden corpus + unit + property tests
+- [ ] fmt/clippy; host-independent; no I/O
+
+**Wave-1 exit:** round-trip census clean (§N-A), corpus in CI (Bases + DQL), scanner benches inside budget, no save-path deltas.

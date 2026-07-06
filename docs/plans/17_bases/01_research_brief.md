@@ -1,6 +1,6 @@
 # Milestone N research brief — Obsidian Bases: format, semantics, and demand evidence
 
-Primary-source verification for the Bases v1 program. Sources: the official help corpus (`obsidianmd/obsidian-help` @ master, `en/Bases/`, 10 files, fetched 2026-07-06), two forum feature-request threads (fetched 2026-07-06 via the Discourse JSON API), and six third-party field reports (2025-08 → 2026-06). **This brief is normative for every Obsidian-syntax fact in the N specs**; where the help docs are silent (§6), the spec says so explicitly rather than guessing.
+Primary-source verification for the Bases v1 program. Sources: the official help corpus (`obsidianmd/obsidian-help` @ master, `en/Bases/`, 10 files, fetched 2026-07-06), two forum feature-request threads (fetched 2026-07-06 via the Discourse JSON API), six third-party field reports (2025-08 → 2026-06), and the official Dataview documentation (`blacksmithgu/obsidian-dataview` @ master `docs/docs/`, fetched 2026-07-06 — §8). **This brief is normative for every Obsidian-syntax fact in the N specs**; where the help docs are silent (§6), the spec says so explicitly rather than guessing.
 
 ---
 
@@ -147,3 +147,39 @@ Six write-ups reviewed (Felker/Medium; Dubois/dsebastien.net 20k-note dashboards
 - **CLI querying** (`obsidian base:query … format=json`) is called "the bridge between pretty dashboard and automation building block" → N2-3 `slate query`.
 - **Editing in place** (change `status`, every view updates) is the headline Dataview-killer → N3-4 routes through the existing property write path.
 - Formula idioms observed in the wild that the v1 function set must cover: `if(...)` chains, `date(x) - date(y)` day math, `.relative()`, `file.ctime`, string `contains/lower/replace`, `link(file, "…" + file.name)`, time-recency bucketing via comparison chains, numeric `round/toFixed`. All are in the §3 v1 set.
+
+## §8 Dataview DQL (migration input — in N scope per owner decision 2026-07-06)
+
+Source: `blacksmithgu/obsidian-dataview` @ master, `docs/docs/` (queries/structure, query-types, data-commands, dql-js-inline; reference/expressions, literals, sources, functions; annotation/metadata-pages, metadata-tasks), fetched 2026-07-06. DQL only — DataviewJS and `$=` inline JS are permanently out (05 §8.1).
+
+### §8.1 Query structure
+
+` ```dataview ` fenced block: **exactly one query type** (the only mandatory element), then **zero-or-one `FROM`** (must come immediately after the type, never repeats), then **zero-to-many other data commands, repeatable, executed in written order** (order is observable: `LIMIT 5` then `SORT …` sorts the already-limited rows).
+
+| Type | Header | Semantics |
+|---|---|---|
+| `TABLE [WITHOUT ID]` | comma-separated column exprs, optional `AS "Header"` (quotes required when the alias has spaces) | rows are pages; first column = file link + count unless `WITHOUT ID` |
+| `LIST [WITHOUT ID]` | at most **one** extra expr | bullet list of file links (`link: value`); `WITHOUT ID` prints only the expr |
+| `TASK` | no fields | **rows are tasks**, task fields usable unprefixed; the only file-mutating type (checkbox toggling) |
+| `CALENDAR expr` | required date expr | month calendar; SORT/GROUP BY accepted but no-ops |
+
+### §8.2 Data commands
+
+- **FROM sources:** `#tag` (**includes subtags** — matches Slate's shipped nested-tag semantics), `"folder"` (recursive; no trailing slash), `"path/to/file"` (folder wins ties; disambiguate with `.md`), `[[note]]` (pages linking **to** note), `outgoing([[note]])` (pages linked **from** note), `[[]]`/`[[#]]` (current file). Combinators `and`/`or` (case-insensitive in the wild) + parentheses; negation documented in **both** spellings `-#tag` and `!#tag`. **No CSV source exists in documented DQL** (`dv.io.csv` is JS-only).
+- `WHERE expr` (repeatable ⇒ AND), `SORT e1 [ASC|ASCENDING|DESC|DESCENDING], e2 …` (ties cascade), `GROUP BY expr [AS name]` (one row per key with exactly two props: the key + the **`rows` array**; swizzling `rows.field` → per-group arrays; grouped-LIST key readable as `key`), `FLATTEN expr [AS name]` (one row per array element; also the let-binding idiom `FLATTEN (…) AS x`), `LIMIT n`.
+
+### §8.3 Expressions
+
+Literals: numbers, `true`/`false`, `"strings"`, `[[links]]`, `[1,2,3]`, `{a: 1}`, `null` (implied), **date shorthands** `date(today|now|tomorrow|yesterday|sow|eow|som|eom|soy|eoy)` and `date(2021-11-11)`, **durations** `dur(1 s 2 m 3 h)` with rich unit aliases (`s/sec/…`, `m/min/…`, `h`, `d`, `w`, `mo/month`, `yr/year`), **lambdas** `(x) => expr` (map/filter/all/any/none/minby/maxby). Operators: arithmetic `+ - * / %`; comparison `> < = != <= >=` — **equality is single `=`**; string `+` concat and `a * n` repeat; boolean infix `AND`/`OR` + prefix `!`. **Null gotcha documented**: `null <= date(today)` is *true*; guards are truthiness or `typeof(x) = "date"`. Field access: bare name (sanitized: lowercase, spaces→`-`), `a.b`, `a[expr]` (0-indexed), `row["where"]` for keyword-named fields, **link indexing** `[[Page]].field`, and `this.` = the page containing the query.
+
+### §8.4 Implicit fields
+
+Pages (all under `file.`): `name, folder, path, ext, link, size, ctime, cday, mtime, mday, tags` (subtags broken down per level), `etags` (explicit only), `inlinks, outlinks, aliases, tasks, lists, frontmatter, day` (from `yyyy-mm-dd` filenames), `starred`. Tasks (top-level in TASK queries; inherit all page fields): `status` (raw char), `checked` (non-space), `completed` (`x` on this task), `fullyCompleted` (incl. subtasks), `text, visual, line, lineCount, path, section, tags, outlinks, link, children, task, annotated, parent, blockId`, plus shorthand-derived dates `due` 🗓, `completion` ✅, `created` ➕, `start` 🛫, `scheduled` ⏳. **No `priority` field** — Tasks-plugin priority/recurrence shorthands are explicitly unsupported by Dataview (Slate's index *does* store priority; the delta runs the other way).
+
+### §8.5 Function inventory (complete)
+
+Constructors: `object, list/array, date(any), date(text, luxonFmt), dur, number, string, link(path,[display]), embed, elink, typeof`. Numeric: `round(n,[digits]), trunc, floor, ceil, min, max, sum, product, reduce(array, "+|-|*|/|&||"), average, minby, maxby` (empty-array aggregates ⇒ null). Containers: `contains, icontains, econtains, containsword, extract, sort, reverse, length, nonnull, firstvalue, all, any, none, join(array,[delim=", "]), filter, unique, map, flat(array,[depth=1]), slice`. Strings: `regextest, regexmatch` (whole-string), `regexreplace, replace` (literal, all), `lower, upper, split` (regex delimiter; capture groups spliced), `startswith, endswith, padleft, padright, substring, truncate`. Utility: `default/ldefault, display, choice(bool,l,r), hash(seed,[text],[variant]), striptime, dateformat` (Luxon; returns a *string*), `durationformat, currencyformat, localtime, meta(link)` (`.display/.embed/.path/.subpath/.type`). Most functions vectorize over lists element-wise. Functions are legal everywhere **except FROM**.
+
+### §8.6 Inline queries
+
+Inline code spans with a settings-configurable prefix (default `=`): `` `= this.file.name` `` — one value, no query types or data commands. Out of N's v1 scope (reserved N-E1 remainder); block queries are the migration surface.

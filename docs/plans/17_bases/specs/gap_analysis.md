@@ -8,9 +8,9 @@ Cross-references: [00_program.md](../00_program.md) decisions · [01_research_br
 |---|---|---|---|
 | G1 | §8.3 `bases_files` has `path TEXT PRIMARY KEY` + `raw_yaml` column | `file_id` FK, **no raw_yaml** (n0 §N0-4) | §9.2 (SQLite = index, not source of truth) wins over the sketch; every shipped index table joins on `file_id`. |
 | G2 | §8.4 names the rich type `QueryResultSet` | `BasesResultSet` (n2 §N2-1) | Milestone E shipped `QueryResultSet` as the FTS shape (search_db.rs:100); the milestone-14 "reuse, no retrofitting" instruction is honored by **not** touching it — the rich tabular type gets the `Bases` prefix. |
-| G3 | §8.1 lists Dataview DQL as parsed | Deferred to V1.x (decision 2, N-E1) | Not in the milestone-14 user-facing capability list; the AST is the shared target so nothing narrows. |
+| G3 | §8.1 lists Dataview DQL as parsed | **In N scope** (owner decision 2026-07-06, reversing this program's own draft deferral): block-query parser N0-5 #713, read-only ` ```dataview ` rendering, convert-to-`.base` command | Owner: "necessary to support this work correctly." The v1 boundary moved to the DQL *remainder* (N-E1): inline `= expr`, FLATTEN, `rows`-aggregation GROUP BY, unmapped functions — see O11. |
 | G4 | §8.2 `QuerySource::Custom(String)` | Parses to `Unsupported` | V2+ plugin surface per the sketch's own comment. |
-| G5 | §8.11 `parse_dql` | Absent until N-E1 | Follows G3. |
+| G5 | §8.11 `parse_dql` | Ships in N2-1 as handle-shaped `open_dql` + one-shot `dql_as_base` | Follows G3; the handle form matches the shipped canvas/bases FFI idiom rather than the sketch's bare-function signature. |
 | G6 | §8.6 free-order builder prose | Source compiles into filters on `.base` save (n4 §N4-1 rule 1) | Obsidian's format has no source clause; round-trip requires it. Builder recognizes its canonical shape on re-open (§N-G tested). |
 
 ## Deltas from Obsidian behavior (each is a documented stance, not an accident)
@@ -27,6 +27,8 @@ Cross-references: [00_program.md](../00_program.md) decisions · [01_research_br
 | O8 | Tasks not queryable (team-stated cache limit) | `source: tasks` + `file.tasks.*` | The differentiator (brief §5.2, decision 8). |
 | O9 | Bases search shipped 1.12 filename-first | Quick filter across displayed columns, transient | Brief §5.1; decision 12. |
 | O10 | No full-text in Bases ("Bases ≠ search" moderation stance) | `file.matches()` extension | 05 §8.8 locked it; decision 9. |
+| O11 | Dataview DQL semantics that don't map | CALENDAR, FLATTEN, `rows`-swizzling GROUP BY, order-dependent command pipelines, multi-arg lambdas, ~20 unmapped functions, and DQL's `null <= date` truthiness all convert to **named fail-loud errors**, never approximations | N0-5 rules 4–7; brief §8. The mapping tables are the traceable backlog for future function additions. |
+| O12 | Dataview task fields `created`/`completion`/`start`/`fullyCompleted` | `Unsupported` (tasks table has due/scheduled/priority/recurrence only) | Deliberate v1 index shape (migration 008); extending task columns is its own schema decision, not an N0-5 side effect. Conversely Slate indexes `priority`, which Dataview explicitly does not support. |
 
 ## Known risks the specs already fence
 
@@ -34,6 +36,10 @@ Cross-references: [00_program.md](../00_program.md) decisions · [01_research_br
 - **Grid component growth** (cell mode, groups, summary row, editing) lands inside the shared `AccessibleDataGrid` — n3 §N3-1 requires existing callers' regression suites stay green untouched; if the additions destabilize v2, fork-to-v3 is the escape hatch (owner decision at that point).
 - **Builder scope creep** is the milestone's schedule risk; n4's one-level-grouping + advanced-chips boundary is the fence. Anything beyond it is the raw editor's job in v1.
 - **`this` in cached results**: cache keys include `this` identity (n1 §N1-2 rule 5) — the follow-active sidebar (n4 §N4-4) is why; a missed key would serve one note's results to another.
+
+## Owner amendments after initial draft
+
+- **2026-07-06 — DQL in scope** (PR #712 review): the draft deferred the DQL parser to V1.x; the owner pulled it into N ("necessary to support this work correctly"). Program decision 2 amended; issue #713 (N0-5) added; N0-4/N2-1/N3-5/N4-5 extended (`dataview` fence discovery, `open_dql`/`dql_as_base` FFI, read-only fence rendering + convert action, migration help page). DataviewJS remains never-supported.
 
 ## Feature-request traceability (the owner's two pinned threads)
 

@@ -101,7 +101,7 @@ XCTest: per-kind editor commit/cancel/clear round-trips against a fixture vault 
 
 ### Normative rules
 
-1. Four forms, one renderer (decision 14): `![[x.base]]` (first view), `![[x.base#View]]` (view by name; unknown ⇒ labeled error chip listing views), ` ```base ` (inline YAML via `open_base_inline`), ` ```slate-query ` (YAML body: `query: <saved name or id>`, optional `view: <name>`; unknown ⇒ labeled error chip listing saved queries). Discovery from the N0-4 index; render on scroll-into-view (parse-on-open economy).
+1. Five forms, one renderer (decision 14 + amended decision 2): `![[x.base]]` (first view), `![[x.base#View]]` (view by name; unknown ⇒ labeled error chip listing views), ` ```base ` (inline YAML via `open_base_inline`), ` ```slate-query ` (YAML body: `query: <saved name or id>`, optional `view: <name>`; unknown ⇒ labeled error chip listing saved queries), and ` ```dataview ` (block DQL via `open_dql` — read-only render; conversion losses surface the decision-6 banner naming the construct; a "Convert to .base…" action on the banner/context menu runs `dql_as_base`). ` ```dataviewjs ` stays an ordinary code block — no renderer, no banner. Discovery from the N0-4 index; render on scroll-into-view (parse-on-open economy).
 2. Context: `this_path` = the **embedding note** (decision 20; brief §4). Same grid component as N3-1 — full keyboard/AX inside the embed; the embed region is a labeled AX group "Embedded base: <name>, view <view>" with an "Open in tab" action (funnel).
 3. Reading view: fully interactive grid except editing (rule 4). Editor: the fence/embed source stays editable text; the rendered grid appears as a **non-editable inline group** below/adjacent per the K math-block editor convention (milestone-14 commitment: "renders as a non-editable inline group; the source fence remains editable").
 4. In-embed cell editing is **enabled in reading view, disabled in the editor** (edit the fence there instead — one writer per surface; recorded stance). Quick filter available in both (transient).
@@ -110,7 +110,7 @@ XCTest: per-kind editor commit/cancel/clear round-trips against a fixture vault 
 
 ### Tests (PR 5)
 
-XCTest: all four forms render + announce; `#View` selection; unknown-target chips; `this` resolution golden (`file.hasLink(this)` fixture — the better-backlinks pattern); editor/reading mode split; cache-sharing (execution-count probe); reading-view edit round-trip.
+XCTest: all five forms render + announce; `#View` selection; unknown-target chips; `this` resolution golden (`file.hasLink(this)` fixture — the better-backlinks pattern); editor/reading mode split; cache-sharing (execution-count probe); reading-view edit round-trip; DQL fence render + Unsupported banner + convert-to-`.base` action; `dataviewjs` fence stays a plain code block.
 
 - [ ] Rules 1–6
 - [ ] XCTests; a11y-check; APCA
