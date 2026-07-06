@@ -2736,12 +2736,18 @@ final class AppState: ObservableObject {
                 // errored; a vault switch cancels this task and the
                 // new vault's funnel runs its own load.
                 guard !Task.isCancelled else { return }
-                await self?.loadSyncDiagnostics()
-                // #638: arm live marker re-detection AFTER the initial
-                // load so the watch and the first publish can't
-                // interleave. Same cancellation rule as above.
-                guard !Task.isCancelled else { return }
+                // #638: arm the live marker watch BEFORE the initial
+                // probe. `start()` is synchronous, so once it returns
+                // the fds are open; running the probe after it means a
+                // marker that appears during/after arming emits an
+                // event (debounced refresh) while anything already
+                // present is caught by the probe itself — the
+                // arm-before-probe ordering closes the setup-race
+                // window with no extra async refresh (adversarial
+                // review). A vault switch cancels this task.
                 self?.startSyncMarkerWatcher()
+                guard !Task.isCancelled else { return }
+                await self?.loadSyncDiagnostics()
             }
             // Milestone L #281: read `.slate/prefs.json` so the
             // Settings panel + style picker reflect the persisted
@@ -3301,14 +3307,27 @@ final class AppState: ObservableObject {
             root: vaultURL,
             debounceInterval: syncMarkerWatcherDebounce
         ) { [weak self] in
-            // Delivered on the main queue; hop onto the actor and run
-            // the exact funnel the Refresh command uses — the
-            // session-identity guard in loadSyncDiagnostics makes a
+            // The watcher guarantees delivery on the MAIN queue, which
+            // is the MainActor's executor — so assume isolation and run
+            // the exact funnel the Refresh command uses directly. (Do
+            // NOT wrap in an unstructured `Task { @MainActor … }`: that
+            // spawns a stray task per callback whose task-local
+            // allocations can outlive the caller's scope and corrupt
+            // the concurrency allocator under rapid open/close churn.
+            // `refreshSyncDiagnostics()` already owns its own Task.)
+            // The session-identity guard in loadSyncDiagnostics makes a
             // late event after a vault switch harmless.
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.refreshSyncDiagnostics()
             }
         }
+        // Dispatch the arm BEFORE the caller runs the initial post-scan
+        // probe (this method is called first in the continuation): the
+        // async arm — `open` + source creation, microseconds — almost
+        // always beats the slower detached FFI probe, so the watch is
+        // live before the probe reads and the setup-race window is
+        // effectively closed (#638 adversarial). See SyncMarkerWatcher's
+        // setup-race note for the benign residual.
         syncMarkerWatcher = watcher
         watcher.start()
     }

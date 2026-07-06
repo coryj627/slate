@@ -136,6 +136,48 @@ final class SyncMarkerWatcherTests: XCTestCase {
         XCTAssertNil(weakRef, "sources/timer must not retain the watcher")
     }
 
+    // MARK: - Anti-starvation ceiling (#638 adversarial)
+
+    /// Continuous sub-interval churn (a busy sync tool, a Cmd+S habit)
+    /// used to reset the trailing timer forever — the callback never
+    /// fired. The max-latency ceiling forces a callback within a fixed
+    /// bound of the FIRST event even while churn keeps coming.
+    func testMaxLatencyCeilingFiresUnderContinuousChurn() throws {
+        let vault = try makeVaultDir("starve")
+        let fired = expectation(description: "ceiling forced a callback")
+        fired.assertForOverFulfill = false
+        // Debounce 0.3s, ceiling 0.6s. We churn every ~0.1s (well under
+        // the debounce) for ~1s straight; a pure trailing debounce
+        // would never settle, so any fulfillment proves the ceiling.
+        let watcher = SyncMarkerWatcher(
+            root: vault, debounceInterval: 0.3, maxLatency: 0.6
+        ) {
+            fired.fulfill()
+        }
+        watcher.start()
+        Thread.sleep(forTimeInterval: 0.2)  // let the root watch arm
+
+        // Drive churn on a background queue so the main thread is free
+        // to service the wait; keep it up past the ceiling.
+        let churn = DispatchQueue(label: "test.churn")
+        var stop = false
+        let stopLock = NSLock()
+        func shouldStop() -> Bool { stopLock.lock(); defer { stopLock.unlock() }; return stop }
+        churn.async {
+            var i = 0
+            while !shouldStop() {
+                try? Data("x".utf8).write(
+                    to: vault.appendingPathComponent("churn-\(i).md"))
+                i += 1
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        // Ceiling is 0.6s from the first event; 5s is a generous BOUND.
+        wait(for: [fired], timeout: 5)
+        stopLock.lock(); stop = true; stopLock.unlock()
+        watcher.stop()
+    }
+
     // MARK: - AppState wiring (#638 end-to-end)
 
     private final class RecordingAnnouncer: AnnouncementPosting {
