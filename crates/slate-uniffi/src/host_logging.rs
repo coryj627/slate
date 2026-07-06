@@ -19,7 +19,7 @@
 //! leak note titles at the default level, and the deferral is safe.
 
 use log::{Level, LevelFilter, Metadata, Record};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// The sink's own ceiling, set by [`init`], independent of the mutable
 /// process-global `log::max_level`.
@@ -38,6 +38,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `Trace = 5`) so it lives in an `AtomicUsize`. Starts at `Off` — before
 /// `init` runs the sink admits nothing.
 static SINK_CAP: AtomicUsize = AtomicUsize::new(LevelFilter::Off as usize);
+
+/// Set once a release (`verbose == false`) install has pinned the cap at
+/// `Warn`. Makes the release floor **monotonic**: after it, a later
+/// `init_host_logging(verbose: true)` (the fn is exported to the host)
+/// cannot widen the cap back to `Debug` in this process. Without this, the
+/// "nothing can widen the cap back" guarantee would be a lie — a second
+/// verbose call would re-open the path-bearing debug records (#507).
+static RELEASE_PINNED: AtomicBool = AtomicBool::new(false);
+
+/// Test-only reset of the monotonic release pin, so tests can exercise the
+/// "no release install yet" path deterministically regardless of order.
+/// Never compiled into shipped code — the production guarantee (a release
+/// pin can't be undone) holds because nothing outside `#[cfg(test)]` clears
+/// it.
+#[cfg(test)]
+fn reset_release_pin_for_test() {
+    RELEASE_PINNED.store(false, Ordering::Relaxed);
+    SINK_CAP.store(LevelFilter::Off as usize, Ordering::Relaxed);
+}
 
 /// Read the sink-local cap back into a `LevelFilter`.
 fn sink_cap() -> LevelFilter {
@@ -111,30 +130,41 @@ static SINK: StderrSink = StderrSink;
 ///    (Lowering the global level only *suppresses* records; it can't route
 ///    ours to a foreign sink.)
 ///
+/// The release cap is **monotonic**: once a `verbose == false` call pins it
+/// at `Warn` (setting [`RELEASE_PINNED`]), a later `verbose == true` call —
+/// the fn is exported to the host, so a second call is reachable — will
+/// **not** widen the sink cap back to `Debug`. This makes "nothing can
+/// widen the cap back" literally true within a process. (Widening is only
+/// honoured when no release install has happened yet, i.e. a debug build
+/// that only ever calls `init(true)`.)
+///
 /// `log::set_logger` only succeeds once per process; a second call — or a
 /// lost race — returns `Err`, which we swallow. For `verbose == true` we
-/// raise the *global* level to `Debug` only if we won `set_logger`: if
-/// another logger owns the sink, deliberately not unmuting `Debug` for it
-/// avoids surfacing slate-core's path records into an unknown foreign sink.
-/// The sink-local cap is set to `Debug` regardless — it only affects our
-/// own sink, which is the trusted destination.
+/// raise the *global* level to `Debug` only if we won `set_logger` **and**
+/// the release floor isn't pinned: if another logger owns the sink, not
+/// unmuting `Debug` avoids surfacing slate-core's path records into an
+/// unknown foreign sink.
 pub(crate) fn init(verbose: bool) {
-    let cap = if verbose {
-        LevelFilter::Debug
-    } else {
-        LevelFilter::Warn
-    };
-    // Set the sink's own ceiling first (it gates our sink independent of the
-    // mutable global level).
-    SINK_CAP.store(cap as usize, Ordering::Relaxed);
-
-    let won = log::set_logger(&SINK).is_ok();
     if verbose {
-        // Widen the *global* gate to Debug only when our sink owns it.
-        if won {
-            log::set_max_level(LevelFilter::Debug);
+        // Developer opt-in. Honour it only if a release floor hasn't already
+        // been pinned this process — otherwise the release cap wins and we
+        // leave everything at Warn.
+        if !RELEASE_PINNED.load(Ordering::Relaxed) {
+            SINK_CAP.store(LevelFilter::Debug as usize, Ordering::Relaxed);
+            // Widen the *global* gate to Debug only when our sink owns it.
+            if log::set_logger(&SINK).is_ok() {
+                log::set_max_level(LevelFilter::Debug);
+            }
         }
+        // If the release floor is pinned we intentionally do nothing: the
+        // Warn cap + Warn global floor already set by the release init stand.
     } else {
+        // Release install. Pin the privacy floor monotonically.
+        RELEASE_PINNED.store(true, Ordering::Relaxed);
+        SINK_CAP.store(LevelFilter::Warn as usize, Ordering::Relaxed);
+        // Register our sink if no one has (return value unused — the cap and
+        // the global floor below are what enforce privacy).
+        let _ = log::set_logger(&SINK);
         // Global privacy floor: cap at Warn regardless of who owns the logger.
         log::set_max_level(LevelFilter::Warn);
     }
@@ -249,6 +279,7 @@ mod tests {
     #[test]
     fn sink_cap_survives_a_later_global_level_widening() {
         let _guard = LEVEL_LOCK.lock().unwrap();
+        reset_release_pin_for_test();
 
         // Release install pins the sink cap at Warn.
         init(false);
@@ -271,12 +302,51 @@ mod tests {
             SINK.enabled(&warn_md),
             "warn records must still pass a release install"
         );
+    }
 
-        // A developer install (verbose) legitimately raises the sink cap.
+    /// Monotonic-floor regression (adversarial review): a release
+    /// `init(false)` must permanently pin the cap — a later
+    /// `init(true)` (the fn is exported to the host, so a second verbose
+    /// call is reachable) must NOT re-open `Debug`, even if the global level
+    /// is also widened. This is the "nothing can widen the cap back"
+    /// guarantee made literal.
+    #[test]
+    fn release_pin_blocks_a_later_verbose_init_from_reopening_debug() {
+        let _guard = LEVEL_LOCK.lock().unwrap();
+        reset_release_pin_for_test();
+
+        init(false); // pin the release floor
+        log::set_max_level(LevelFilter::Debug); // unrelated widening
+        init(true); // attempt to re-open Debug — must be ignored
+
+        let debug_md = Metadata::builder().level(Level::Debug).build();
+        assert!(
+            !SINK.enabled(&debug_md),
+            "a verbose init AFTER a release init must not re-admit Debug — the \
+             release cap is monotonic"
+        );
+        assert_eq!(
+            sink_cap(),
+            LevelFilter::Warn,
+            "the sink cap must stay pinned at Warn after a release install"
+        );
+    }
+
+    /// The verbose path still works when it runs *first* (a debug build that
+    /// only ever calls `init(true)`): the cap widens to `Debug`.
+    #[test]
+    fn verbose_init_widens_when_no_release_floor_is_pinned() {
+        let _guard = LEVEL_LOCK.lock().unwrap();
+        reset_release_pin_for_test();
+
         init(true);
+        log::set_max_level(LevelFilter::Debug);
+
+        let debug_md = Metadata::builder().level(Level::Debug).build();
         assert!(
             SINK.enabled(&debug_md),
-            "a verbose install must admit Debug through the sink cap"
+            "a verbose install with no prior release pin must admit Debug"
         );
+        assert_eq!(sink_cap(), LevelFilter::Debug);
     }
 }
