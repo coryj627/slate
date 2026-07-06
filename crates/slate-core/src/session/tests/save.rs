@@ -140,6 +140,30 @@ fn save_text_rejects_absolute_path() {
 }
 
 #[test]
+fn save_text_rejects_dot_prefixed_components() {
+    // #641 codex adversarial round 3: dot-prefixed components are the
+    // internal/tool namespaces (.slate, .obsidian) the scanner never
+    // indexes — a content save must not be able to plant e.g. a
+    // malformed `.slate/prefs.json` that the next open re-reads as
+    // internal state. Same rule structural mutations enforce via
+    // validate_leaf_component.
+    let (_tmp, session) = make_vault(|_| {});
+    for path in [
+        ".slate/prefs.json",
+        ".slate/tmp/foo.md",
+        ".obsidian/workspace.json",
+        ".hidden.md",
+        "notes/.hidden.md",
+        ".git/config",
+    ] {
+        match session.save_text(path, "x", Some("")) {
+            Err(VaultError::InvalidPath { .. }) => {}
+            other => panic!("expected InvalidPath for {path:?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn save_text_refuses_oversize_contents() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = SessionConfig::new(tmp.path().join(".slate"));

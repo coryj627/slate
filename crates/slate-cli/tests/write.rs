@@ -254,8 +254,12 @@ fn concurrent_cli_writers_exactly_one_wins_cross_process() {
         // at spawn time (an external reset; the children re-scan).
         fs::write(vault.path().join("note.md"), original).unwrap();
 
-        let children: Vec<_> = (0..2)
-            .map(|i| {
+        let bodies: Vec<String> = (0..2)
+            .map(|i| format!("writer {i}, round {round}\n"))
+            .collect();
+        let children: Vec<_> = bodies
+            .iter()
+            .map(|body| {
                 let mut child = StdCommand::new(&bin)
                     .arg("write")
                     .arg(vault.path())
@@ -271,7 +275,7 @@ fn concurrent_cli_writers_exactly_one_wins_cross_process() {
                     .stdin
                     .take()
                     .expect("piped stdin")
-                    .write_all(format!("writer {i}, round {round}\n").as_bytes())
+                    .write_all(body.as_bytes())
                     .expect("feed stdin");
                 child
             })
@@ -282,6 +286,9 @@ fn concurrent_cli_writers_exactly_one_wins_cross_process() {
             .map(|c| c.wait_with_output().expect("child exits"))
             .collect();
 
+        // THE invariant: never two winners. (Zero winners can't happen:
+        // whoever takes the write lock first sees the untouched anchor
+        // hash and must succeed.)
         let wins = outcomes.iter().filter(|o| o.status.success()).count();
         assert_eq!(
             wins,
@@ -292,11 +299,29 @@ fn concurrent_cli_writers_exactly_one_wins_cross_process() {
                 .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
                 .collect::<Vec<_>>()
         );
-        let loser = outcomes.iter().find(|o| !o.status.success()).unwrap();
+
+        // The winner's bytes — and only the winner's — are on disk: the
+        // loser never clobbered anything.
+        let winner_idx = outcomes.iter().position(|o| o.status.success()).unwrap();
+        assert_eq!(
+            fs::read_to_string(vault.path().join("note.md")).unwrap(),
+            bodies[winner_idx],
+            "round {round}: disk carries exactly the winner's bytes"
+        );
+
+        // The loser refused with exit 1. On the common path it reaches
+        // the CAS and reports the write conflict; under heavy machine
+        // load (this binary runs in parallel with the 5k-file SIGINT
+        // fixture) its lock wait can instead exhaust the 5s
+        // busy_timeout and surface as the cache-busy retry message.
+        // Both are refusals — the no-clobber property above is the
+        // proof that matters; the message just has two honest shapes.
+        let loser = &outcomes[1 - winner_idx];
         assert_eq!(loser.status.code(), Some(1), "round {round}: loser exits 1");
+        let loser_stderr = String::from_utf8_lossy(&loser.stderr);
         assert!(
-            String::from_utf8_lossy(&loser.stderr).contains("write conflict"),
-            "round {round}: loser's stderr names the conflict"
+            loser_stderr.contains("write conflict") || loser_stderr.contains("cache is busy"),
+            "round {round}: loser's stderr names the refusal, got {loser_stderr:?}"
         );
     }
 }
@@ -440,6 +465,36 @@ fn create_with_wrong_expect_hash_on_missing_conflicts() {
         .code(1)
         .stderr(predicates_str_contains("write conflict"));
     assert!(!vault.path().join("new.md").exists());
+}
+
+#[test]
+fn create_refuses_hidden_internal_paths() {
+    // Codex adversarial round 3 (HIGH): dot-prefixed components are
+    // Slate's internal/tool namespaces (.slate, .obsidian) — never
+    // indexed, and files like .slate/prefs.json are re-read as internal
+    // state on the next open. `slate write --create` must not be able
+    // to plant one.
+    let vault = seed_empty_vault();
+    for path in [
+        ".slate/prefs.json",
+        ".slate/tmp/evil.md",
+        ".obsidian/workspace.json",
+        "notes/.hidden.md",
+    ] {
+        slate()
+            .arg("write")
+            .arg(vault.path())
+            .arg(path)
+            .arg("--create")
+            .write_stdin("{ }")
+            .assert()
+            .code(1)
+            .stderr(predicates_str_contains("dot-prefixed"));
+        assert!(
+            !vault.path().join(path).exists(),
+            "{path} must not be created"
+        );
+    }
 }
 
 #[test]

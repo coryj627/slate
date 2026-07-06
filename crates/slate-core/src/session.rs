@@ -3754,11 +3754,12 @@ fn now_ms() -> i64 {
 // --- Internal: save_text helpers ---
 
 /// Reject `save_text` paths that can't refer to a real vault file —
-/// empties, lone `.`, absolutes, `..`. The provider's
-/// `resolve_for_mutation` enforces the same rules at write time, but
-/// rejecting up-front means a `save_text("", b"x", Some(hash))` call
-/// fails as `InvalidPath` rather than tripping a read-side IO error
-/// during the conflict check.
+/// empties, lone `.`, absolutes, `..`, and dot-prefixed components.
+/// The provider's `resolve_for_mutation` enforces the traversal rules
+/// at write time too, but rejecting up-front means a
+/// `save_text("", b"x", Some(hash))` call fails as `InvalidPath`
+/// rather than tripping a read-side IO error during the conflict
+/// check.
 fn validate_save_path(path: &str) -> Result<(), VaultError> {
     use std::path::{Component, Path};
     let p = Path::new(path);
@@ -3771,7 +3772,30 @@ fn validate_save_path(path: &str) -> Result<(), VaultError> {
     let mut has_normal = false;
     for component in p.components() {
         match component {
-            Component::Normal(_) => has_normal = true,
+            Component::Normal(name) => {
+                has_normal = true;
+                // Dot-prefixed components are invisible to the scanner
+                // (it skips them wholesale — most importantly `.slate`
+                // and `.obsidian`, the internal/tool state namespaces).
+                // A content save landing there would write a file Slate
+                // can never index, and worse: files like
+                // `.slate/prefs.json` are re-read as internal state on
+                // the next open, so `slate write --create` must not be
+                // able to plant one (#641, codex adversarial round 3).
+                // Same rule structural mutations already enforce via
+                // `validate_leaf_component` ("dot-prefixed names are
+                // reserved"). No internal caller saves hidden paths
+                // through this funnel — the app writes prefs via its
+                // own PrefsJsonStore, not save_text.
+                if name.to_string_lossy().starts_with('.') {
+                    return Err(VaultError::InvalidPath {
+                        path: path.to_string(),
+                        reason: "dot-prefixed path components are reserved for Slate/tool \
+                                 state and are never indexed"
+                            .into(),
+                    });
+                }
+            }
             Component::CurDir => {}
             Component::ParentDir => {
                 return Err(VaultError::InvalidPath {
