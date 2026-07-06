@@ -30,7 +30,7 @@
 use std::io;
 
 use clap::CommandFactory;
-use clap_complete::{Shell, generate};
+use clap_complete::{Generator, Shell};
 
 use crate::Cli;
 
@@ -41,21 +41,97 @@ use crate::Cli;
 /// and opens no session — it is pure code generation over clap's grammar.
 ///
 /// `out` is injected (rather than hard-coding `io::stdout()`) so the
-/// integration tests could capture the script directly; in `main` it is
-/// always the process stdout. Write failures (e.g. a broken pipe from
-/// `slate completions zsh | head`) propagate to the caller, which maps
-/// them to exit 1 — the same broken-pipe discipline as [`crate::output`].
+/// integration tests can capture the script — and drive a failing writer
+/// — directly; in `main` it is always the process stdout. Write failures
+/// (e.g. a broken pipe from `slate completions zsh | head`) propagate to
+/// the caller as an `io::Error`, which `main` maps to exit 1 with the
+/// `slate: ` prefix — the same broken-pipe discipline as [`crate::output`].
+///
+/// **Why we buffer, and why `try_generate` and not `generate`:**
+/// `clap_complete`'s free `generate()` (and the `Shell::generate` trait
+/// method it calls) `.expect(...)`s on a writer error — so a broken pipe
+/// mid-write *panics* the process (exit 101, a Rust backtrace on stderr),
+/// which would violate the exit-code contract (a broken pipe must be
+/// exit 1 with a `slate: ` message, not a panic). Two guards, belt and
+/// braces: (1) we render into an in-memory `Vec<u8>`, which can never
+/// fail a write, so generation itself is panic-proof regardless of the
+/// downstream pipe; (2) we still call the fallible [`Generator::try_generate`]
+/// rather than the panicking `generate`, so even a future writer swap
+/// stays on the `Result` path. The single real pipe write is our own
+/// `write_all` below, whose `io::Error` is catchable. Buffering also
+/// makes stdout atomic: a broken pipe yields *no* partial script rather
+/// than a truncated one (codex adversarial finding, round 1).
 pub fn run(shell: Shell, out: &mut impl io::Write) -> io::Result<()> {
     // Build clap's `Command` from the derive grammar. `bin_name` is the
     // binary the completions install against — the `[[bin]]` name
     // `slate`, not the crate name `slate-cli` — so the generated
     // function/word list keys off the command the user actually types.
+    // `try_generate` doesn't set the bin name for us (the free
+    // `generate` does), so set it explicitly before rendering.
     let mut cmd = Cli::command();
     let bin_name = cmd.get_name().to_string();
-    // `generate` writes the whole script in one shot; it can only fail on
-    // the underlying writer, which we surface rather than swallow.
-    generate(shell, &mut cmd, bin_name, out);
-    // `generate` flushes nothing itself; force a flush so a broken pipe
-    // surfaces here (as an `io::Error`) instead of silently at drop.
+    cmd.set_bin_name(bin_name);
+    // `try_generate` requires a built `Command`; the free `generate`
+    // calls `build()` internally, so replicate that here.
+    cmd.build();
+
+    // Render into memory — infallible, and keeps the eventual stdout
+    // write atomic. `try_generate` on a `Vec<u8>` cannot error, but we
+    // propagate defensively rather than unwrap.
+    let mut script: Vec<u8> = Vec::new();
+    shell.try_generate(&cmd, &mut script)?;
+
+    // The one real (possibly-piped) write. A broken pipe here is a
+    // normal `io::Error`, not a panic, so `main` maps it to exit 1.
+    out.write_all(&script)?;
     out.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A writer that returns a `BrokenPipe` error on the first `write`,
+    /// standing in for a downstream reader that closed the pipe (the
+    /// `slate completions zsh | head` / `| true` case). Proves `run`
+    /// returns that error rather than panicking — the regression guard
+    /// for the codex round-1 finding that `clap_complete::generate`
+    /// `.expect(...)`s on writer errors and would panic (exit 101).
+    struct BrokenPipeWriter;
+
+    impl io::Write for BrokenPipeWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
+        }
+    }
+
+    #[test]
+    fn run_propagates_a_writer_error_instead_of_panicking() {
+        // Any shell exercises the same write path; bash is representative.
+        let err = run(Shell::Bash, &mut BrokenPipeWriter)
+            .expect_err("a failing writer must surface as Err, not a panic");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::BrokenPipe,
+            "the underlying writer error is propagated verbatim",
+        );
+    }
+
+    #[test]
+    fn run_writes_a_usable_script_to_a_good_writer() {
+        // Sanity companion to the failing-writer case: the buffered
+        // render + write produces a non-empty script naming the binary
+        // and a real sub-command, with no error.
+        let mut buf: Vec<u8> = Vec::new();
+        run(Shell::Zsh, &mut buf).expect("generation to an in-memory buffer succeeds");
+        let script = String::from_utf8(buf).expect("utf8 script");
+        assert!(script.contains("slate"), "names the `slate` binary");
+        assert!(
+            script.contains("sync-check"),
+            "enumerates a real sub-command",
+        );
+    }
 }

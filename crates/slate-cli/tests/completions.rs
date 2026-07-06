@@ -90,3 +90,52 @@ fn missing_shell_arg_is_a_usage_error() {
         .code(2)
         .stdout(predicate::str::is_empty());
 }
+
+/// A closed stdout pipe must NOT panic the process. `clap_complete`'s
+/// `generate` `.expect(...)`s on writer errors, so the naive
+/// implementation exited 101 with a Rust backtrace on stderr when the
+/// reader closed early (`slate completions zsh | head`); `run` now
+/// buffers + writes fallibly, mapping a broken pipe to the exit-1
+/// `slate: ` path. This process-level guard complements the in-crate
+/// unit test on `run` with a failing writer.
+///
+/// Unix-only: it relies on spawning the child with its stdout wired to a
+/// pipe we drop immediately, and on POSIX broken-pipe (`EPIPE`)
+/// semantics. The unit test in `commands::completions` covers the
+/// writer-error path portably.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_does_not_panic() {
+    use std::process::{Command as StdCommand, Stdio};
+
+    let bin = assert_cmd::cargo::cargo_bin("slate");
+
+    // Spawn with a piped stdout, then drop our read end at once so the
+    // child's writes hit a broken pipe. `elvish` is picked because its
+    // script is among the larger ones, maximizing the chance the write
+    // is still in flight when the reader vanishes.
+    let mut child = StdCommand::new(&bin)
+        .args(["completions", "elvish"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn slate completions");
+
+    // Drop the read handle immediately: subsequent child writes → EPIPE.
+    drop(child.stdout.take());
+
+    let output = child.wait_with_output().expect("wait on child");
+
+    // The exact exit code depends on the write/close race (0 if the
+    // whole buffered script landed before we closed; 1 if the write hit
+    // the broken pipe). Either is acceptable — the contract is only that
+    // it must NOT be the panic code 101, and stderr must never carry a
+    // Rust panic/backtrace.
+    let code = output.status.code();
+    assert_ne!(code, Some(101), "must not panic on a broken stdout pipe");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "stderr must not carry a Rust panic; got: {stderr}",
+    );
+}
