@@ -1090,11 +1090,13 @@ impl VaultSession {
         if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
             // Non-fatal: a missing op-log entry only degrades undo to a
             // per-file conflict report, never corruption. Route through the
-            // facade (#507). warn = file id + error kind only; the
-            // vault-relative path rides a separate debug line so it stays
+            // facade (#507). warn carries only the file id and the error
+            // *kind* — never the full error Display, which for a torn/short
+            // existing log embeds the cache path (`oplog {path:?}: …`). The
+            // path-bearing detail rides the debug line instead, so it stays
             // out of shipped host logs (see lib.rs privacy rule).
-            log::warn!("oplog append failed for file_id={file_id}: {e}");
-            log::debug!("oplog append failure was for path {path:?}");
+            log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
+            log::debug!("oplog append failure for path {path:?}: {e}");
             return; // leave the cache untouched so the next save re-snapshots
         }
         state.insert(
@@ -4596,11 +4598,12 @@ impl VaultSession {
         if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
             // Non-fatal: a missing anchor only degrades a structural-move's
             // undo to a per-file conflict report, never corruption. Route
-            // through the facade (#507). warn = file id + error kind only;
-            // the vault-relative path rides a separate debug line (see the
-            // lib.rs privacy rule).
-            log::warn!("oplog anchor failed for file_id={file_id}: {e}");
-            log::debug!("oplog anchor failure was for path {path:?}");
+            // through the facade (#507). warn carries only the file id and
+            // the error *kind* — never the full Display, which for a
+            // torn/short existing log embeds the cache path. The path-bearing
+            // detail rides the debug line (see the lib.rs privacy rule).
+            log::warn!("oplog anchor failed for file_id={file_id}: {}", e.kind());
+            log::debug!("oplog anchor failure for path {path:?}: {e}");
             return;
         }
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
