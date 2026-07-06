@@ -5519,7 +5519,23 @@ impl VaultSession {
             content_hash_after: report.new_content_hash.clone(),
             payload_bytes: payload.to_string().into_bytes(),
         };
-        let _ = crate::oplog::append_entry(&self.config.cache_dir, state.file_id, &entry);
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, state.file_id, &entry) {
+            // Non-fatal, same discipline as the save/anchor append sites
+            // (#507): the committed canvas write already succeeded; only the
+            // semantic journal entry (undo/audit metadata) is missing. Route
+            // through the facade instead of swallowing so a host can see the
+            // observability gap — warn carries the file id + error *kind*
+            // only, the path rides the debug line (see lib.rs privacy rule).
+            log::warn!(
+                "canvas oplog journal append failed for file_id={}: {}",
+                state.file_id,
+                e.kind()
+            );
+            log::debug!(
+                "canvas oplog journal append failure for path {:?}: {e}",
+                state.path
+            );
+        }
 
         Ok(CanvasApplyResult {
             new_content_hash: report.new_content_hash,

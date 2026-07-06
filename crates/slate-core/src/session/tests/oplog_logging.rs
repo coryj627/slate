@@ -362,3 +362,94 @@ fn oplog_append_torn_header_warn_carries_no_cache_path() {
         warn.message
     );
 }
+
+/// Regression for the adversarial-review finding: `canvas_apply`'s semantic
+/// journal append used to swallow its error with `let _ = …`, giving the host
+/// no diagnostic when the cache op-log was unwritable/torn. It now routes a
+/// facade warn like the save/anchor sites. This test forces the failure and
+/// asserts (a) the canvas write still succeeds, (b) a canvas-journal warn
+/// fires, and (c) no warn carries a cache path.
+///
+/// (The torn op-log also trips the save-path append inside `canvas_apply`, so
+/// more than one warn is expected; we assert the canvas-journal warn is among
+/// them and that *every* warn is path-clean.)
+#[test]
+fn canvas_apply_journal_failure_warns_without_cache_path() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let _guard = TEST_LOCK.lock().unwrap();
+    let buf = capture_buffer();
+    log::set_max_level(log::LevelFilter::Warn);
+
+    const SAMPLE: &str = include_str!("../../../tests/fixtures/canvas/sample.canvas");
+
+    let (_tmp, session, cache_dir) = session_over_temp_vault();
+    // Write the canvas fixture, scan, and open it.
+    session
+        .save_text("board.canvas", SAMPLE, None)
+        .expect("seed canvas file");
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+
+    // file_id of the canvas file, so we can corrupt its op-log.
+    let file_id: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            rusqlite::params!["board.canvas"],
+            |row| row.get(0),
+        )
+        .expect("canvas file row should exist")
+    };
+    let oplog_file = crate::oplog::oplog_path(&cache_dir, file_id);
+    // The save above may or may not have created the op-log yet; force a
+    // short/torn file so the next append hits the path-bearing error.
+    std::fs::create_dir_all(oplog_file.parent().unwrap()).unwrap();
+    std::fs::write(&oplog_file, b"XYZW").unwrap();
+
+    clear_this_thread(buf);
+
+    // Apply a canvas action. The committed canvas write succeeds; the op-log
+    // appends (save-path and the semantic journal) both hit the torn header.
+    let action = CanvasAction {
+        name: "create card".into(),
+        ops: vec![CanvasOp::CreateNode {
+            id: "regress-1".into(),
+            content: CanvasNodeContent::Text {
+                text: "regression".into(),
+            },
+            x: 0.0,
+            y: 900.0,
+            width: 200.0,
+            height: 120.0,
+            color: None,
+        }],
+    };
+    session
+        .canvas_apply(info.handle, action)
+        .expect("canvas write must succeed even when the oplog journal degrades");
+
+    let records = drain_this_thread(buf);
+    let warns: Vec<&Captured> = records
+        .iter()
+        .filter(|r| r.level == log::Level::Warn)
+        .collect();
+
+    // The canvas-journal warn is now present (it was previously swallowed).
+    assert!(
+        warns
+            .iter()
+            .any(|r| r.message.contains("canvas oplog journal append failed")),
+        "expected a canvas-journal append-failure warn; warns: {:?}",
+        warns.iter().map(|r| &r.message).collect::<Vec<_>>()
+    );
+    // And every warn is path-clean (no cache path, no ".oplog" suffix).
+    let cache_str = cache_dir.to_string_lossy();
+    for w in &warns {
+        assert!(
+            !w.message.contains(cache_str.as_ref()) && !w.message.contains(".oplog"),
+            "a warn leaked the cache path: {:?}",
+            w.message
+        );
+    }
+}
