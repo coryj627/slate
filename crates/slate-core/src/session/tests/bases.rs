@@ -827,6 +827,13 @@ status: done
         serde_json::from_str(&envelope_saved.query_json).unwrap();
     assert_eq!(envelope_round_trip["v"], 1);
     assert!(envelope_saved.warning.is_none());
+    let rename_collision = session
+        .rename_saved_query(&envelope_id, "Reading")
+        .unwrap_err();
+    assert!(
+        rename_collision.to_string().contains("saved query name"),
+        "{rename_collision}"
+    );
 
     let handle = session.open_saved_query(&id).unwrap();
     let result = session
@@ -1077,6 +1084,35 @@ fn future_saved_query_envelopes_load_as_inert_entries() {
     assert!(
         export_err.to_string().contains("unsupported"),
         "{export_err}"
+    );
+}
+
+#[test]
+fn malformed_dashboard_sections_fail_loud_in_list_and_get() {
+    let (_tmp, session) = make_vault(|_| {});
+    let now = now_ms();
+    session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .execute(
+            "INSERT INTO dashboards
+             (id, name, sections_json, created_at_ms, modified_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params!["bad-dashboard", "Bad dashboard", "{not json", now, now],
+        )
+        .unwrap();
+
+    let list_err = session.list_dashboards().unwrap_err();
+    assert!(
+        list_err.to_string().contains("invalid dashboard sections"),
+        "{list_err}"
+    );
+
+    let get_err = session.get_dashboard("bad-dashboard").unwrap_err();
+    assert!(
+        get_err.to_string().contains("invalid dashboard sections"),
+        "{get_err}"
     );
 }
 

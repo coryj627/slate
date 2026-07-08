@@ -5529,7 +5529,7 @@ impl VaultSession {
         let now = now_ms();
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
-        ensure_name_available(&tx, "saved_queries", "saved query", name, None)?;
+        ensure_name_available(&tx, NameTable::SavedQueries, name, None)?;
         let id = sqlite_uuid(&tx)?;
         tx.execute(
             "INSERT INTO saved_queries
@@ -5570,7 +5570,7 @@ impl VaultSession {
         let now = now_ms();
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
-        ensure_name_available(&tx, "saved_queries", "saved query", name, Some(id))?;
+        ensure_name_available(&tx, NameTable::SavedQueries, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE saved_queries SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
             rusqlite::params![name, now, id],
@@ -5607,7 +5607,7 @@ impl VaultSession {
         let now = now_ms();
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
-        ensure_name_available(&tx, "dashboards", "dashboard", name, None)?;
+        ensure_name_available(&tx, NameTable::Dashboards, name, None)?;
         let id = sqlite_uuid(&tx)?;
         tx.execute(
             "INSERT INTO dashboards
@@ -5626,20 +5626,20 @@ impl VaultSession {
              FROM dashboards
              ORDER BY name COLLATE NOCASE, name",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let mut rows = stmt.query([])?;
+        let mut dashboards = Vec::new();
+        while let Some(row) = rows.next()? {
             let sections_json: String = row.get(2)?;
-            let section_count = parse_dashboard_sections(&sections_json)
-                .map(|sections| sections.len() as u32)
-                .unwrap_or(0);
-            Ok(DashboardSummary {
+            let section_count = parse_dashboard_sections(&sections_json)?.len() as u32;
+            dashboards.push(DashboardSummary {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 section_count,
                 created_at_ms: row.get(3)?,
                 modified_at_ms: row.get(4)?,
-            })
-        })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            });
+        }
+        Ok(dashboards)
     }
 
     pub fn get_dashboard(&self, id: &str) -> Result<Dashboard, VaultError> {
@@ -5652,7 +5652,7 @@ impl VaultSession {
         let now = now_ms();
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
-        ensure_name_available(&tx, "dashboards", "dashboard", name, Some(id))?;
+        ensure_name_available(&tx, NameTable::Dashboards, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE dashboards SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
             rusqlite::params![name, now, id],
@@ -5930,24 +5930,47 @@ fn ensure_changed(changed: usize, kind: &str, id: &str) -> Result<(), VaultError
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum NameTable {
+    SavedQueries,
+    Dashboards,
+}
+
+impl NameTable {
+    fn sql_name(self) -> &'static str {
+        match self {
+            NameTable::SavedQueries => "saved_queries",
+            NameTable::Dashboards => "dashboards",
+        }
+    }
+
+    fn kind(self) -> &'static str {
+        match self {
+            NameTable::SavedQueries => "saved query",
+            NameTable::Dashboards => "dashboard",
+        }
+    }
+}
+
 fn ensure_name_available(
     conn: &Connection,
-    table: &str,
-    kind: &str,
+    table: NameTable,
     name: &str,
     except_id: Option<&str>,
 ) -> Result<(), VaultError> {
+    let table_name = table.sql_name();
+    let kind = table.kind();
     let exists: Option<i64> = match except_id {
         Some(id) => conn
             .query_row(
-                &format!("SELECT 1 FROM {table} WHERE name = ?1 AND id <> ?2 LIMIT 1"),
+                &format!("SELECT 1 FROM {table_name} WHERE name = ?1 AND id <> ?2 LIMIT 1"),
                 rusqlite::params![name, id],
                 |row| row.get(0),
             )
             .optional()?,
         None => conn
             .query_row(
-                &format!("SELECT 1 FROM {table} WHERE name = ?1 LIMIT 1"),
+                &format!("SELECT 1 FROM {table_name} WHERE name = ?1 LIMIT 1"),
                 [name],
                 |row| row.get(0),
             )
@@ -6123,13 +6146,13 @@ fn load_dashboard(conn: &Connection, id: &str) -> Result<Dashboard, VaultError> 
         })?;
     let sections = parse_dashboard_sections(&sections_json)?;
     let mut resolved = Vec::with_capacity(sections.len());
+    let mut saved_name_stmt =
+        conn.prepare_cached("SELECT name FROM saved_queries WHERE id = ?1")?;
     for section in sections {
-        let saved_query_name = conn
-            .query_row(
-                "SELECT name FROM saved_queries WHERE id = ?1",
-                [section.saved_query_id.as_str()],
-                |row| row.get::<_, String>(0),
-            )
+        let saved_query_name = saved_name_stmt
+            .query_row([section.saved_query_id.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
             .optional()?;
         resolved.push(DashboardSectionStatus {
             missing: saved_query_name.is_none(),
