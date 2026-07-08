@@ -7,18 +7,21 @@
 //! have their own follow-up issues, so this module fails those unsupported
 //! surfaces loudly instead of approximating them.
 
-use std::{cell::RefCell, collections::BTreeMap};
+use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, ops::Range};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use super::{
-    ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery,
+    ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SummaryRef,
     eval::{
         DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext, Value,
         VaultLookup, WarningSink, eval,
     },
-    expr::{BinaryOp, Callee, Expr, ExprKind, FileField, GlobalFn, Lit, MethodName, PropertyRef},
+    expr::{
+        BinaryOp, Callee, Expr, ExprKind, FileField, GlobalFn, Lit, MethodName, PropertyRef,
+        TaskField,
+    },
 };
 use crate::{CancelToken, VaultError, db::DbError};
 
@@ -26,12 +29,15 @@ use crate::{CancelToken, VaultError, db::DbError};
 pub struct BasesResultSet {
     pub columns: Vec<ResultColumn>,
     pub rows: Vec<BasesRow>,
+    pub groups: Vec<ResultGroup>,
+    pub summaries: Vec<BasesSummaryCell>,
     pub total_count: usize,
     pub shown_count: usize,
     pub warnings: Vec<String>,
     pub error: Option<ViewError>,
     pub executed_at_ms: i64,
     pub cache_hit: bool,
+    pub audio_summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,12 +50,28 @@ pub struct ResultColumn {
 pub struct BasesRow {
     pub path: String,
     pub cells: Vec<CellValue>,
+    pub audio_description: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CellValue {
     Value(Value),
     Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResultGroup {
+    pub key: Value,
+    pub label: String,
+    pub rows: Range<usize>,
+    pub summaries: Vec<BasesSummaryCell>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesSummaryCell {
+    pub column_id: String,
+    pub summary: String,
+    pub value: CellValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +119,22 @@ struct CacheKey {
 #[derive(Debug, Clone)]
 struct Candidate {
     row: RowContext,
+}
+
+#[derive(Debug, Clone)]
+struct MaterializedRow {
+    path: String,
+    cells: Vec<CellValue>,
+    summary_values: BTreeMap<String, CellValue>,
+    sort_values: Vec<Value>,
+    group_key: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct GroupSlice {
+    key: Value,
+    label: String,
+    full_range: Range<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -216,7 +254,7 @@ pub fn execute(
                     }
                 }
             }
-            rows.push(row_to_result(
+            match materialize_row(
                 query,
                 &candidate.row,
                 &formulas,
@@ -224,24 +262,74 @@ pub fn execute(
                 ctx,
                 &vault,
                 &warnings,
-            ));
+            ) {
+                Ok(row) => rows.push(row),
+                Err(error) => {
+                    return Ok(error_result(query, ctx, error, &candidate.row.file_path));
+                }
+            }
         }
         offset += page_size;
     }
 
+    sort_rows(query, &mut rows);
+    let group_slices = group_rows(query, &mut rows);
     let total_count = rows.len();
-    if let Some(limit) = query.limit {
-        rows.truncate(limit as usize);
-    }
+    let mut result_warnings = warnings.messages();
+    let summaries = match compute_summaries(
+        query,
+        &rows,
+        0..rows.len(),
+        ctx,
+        &vault,
+        &warnings,
+        &mut result_warnings,
+    ) {
+        Ok(summaries) => summaries,
+        Err(error) => return Ok(error_result(query, ctx, error, "")),
+    };
+    let group_summaries = match group_slices
+        .iter()
+        .map(|group| {
+            compute_summaries(
+                query,
+                &rows,
+                group.full_range.clone(),
+                ctx,
+                &vault,
+                &warnings,
+                &mut result_warnings,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(summaries) => summaries,
+        Err(error) => return Ok(error_result(query, ctx, error, "")),
+    };
+    let shown_count = query
+        .limit
+        .map(|limit| (limit as usize).min(total_count))
+        .unwrap_or(total_count);
+    let audio_summary = audio_summary(query, total_count, shown_count, &group_slices);
+    let groups = visible_groups(group_slices, group_summaries, shown_count);
+    let columns = result_columns(query);
+    let rows = rows
+        .iter()
+        .take(shown_count)
+        .map(|row| row_to_result(row, &columns))
+        .collect::<Vec<_>>();
     let mut result = BasesResultSet {
-        columns: result_columns(query),
-        shown_count: rows.len(),
+        columns,
+        shown_count,
         total_count,
         rows,
-        warnings: warnings.messages(),
+        groups,
+        summaries,
+        warnings: result_warnings,
         error: None,
         executed_at_ms: ctx.now_ms,
         cache_hit: false,
+        audio_summary,
     };
     if let (Some(cache), Some(key)) = (ctx.cache, cache_key) {
         cache.entries.borrow_mut().insert(key, result.clone());
@@ -819,7 +907,7 @@ fn eval_filter(node: &FilterNode, ctx: &EvalCtx<'_>) -> Result<bool, EvalError> 
     }
 }
 
-fn row_to_result(
+fn materialize_row(
     query: &SlateQuery,
     row: &RowContext,
     formulas: &FormulaEval,
@@ -827,15 +915,762 @@ fn row_to_result(
     ctx: &EngineCtx<'_>,
     vault: &dyn VaultLookup,
     warnings: &WarningSink,
-) -> BasesRow {
+) -> Result<MaterializedRow, String> {
+    let eval_ctx = eval_ctx(row, this, &formulas.values, ctx, vault, warnings);
+    let mut sort_values = Vec::with_capacity(query.sort.len());
+    for sort in &query.sort {
+        if let Some((name, error)) = first_formula_error_expr(&sort.expr, &formulas.errors) {
+            return Err(format!("sort formula.{name}: {error}"));
+        }
+        sort_values.push(eval(&sort.expr, &eval_ctx).map_err(|error| format!("sort: {error}"))?);
+    }
+    let group_key = if let Some(group_by) = &query.group_by {
+        let expr = property_expr(&group_by.property);
+        if let Some((name, error)) = first_formula_error_expr(&expr, &formulas.errors) {
+            return Err(format!("groupBy formula.{name}: {error}"));
+        }
+        Some(eval(&expr, &eval_ctx).map_err(|error| format!("groupBy: {error}"))?)
+    } else {
+        None
+    };
     let cells = query
         .columns
         .iter()
         .map(|column| eval_column(column, row, formulas, this, ctx, vault, warnings))
-        .collect();
-    BasesRow {
+        .collect::<Vec<_>>();
+    let mut summary_values = BTreeMap::new();
+    for (index, column) in query.columns.iter().enumerate() {
+        summary_values.insert(column.id.clone(), cells[index].clone());
+    }
+    for (column_id, _) in &query.summaries {
+        if !summary_values.contains_key(column_id) {
+            let column = ColumnSelection {
+                id: column_id.clone(),
+                display_name: None,
+            };
+            summary_values.insert(
+                column_id.clone(),
+                eval_column(&column, row, formulas, this, ctx, vault, warnings),
+            );
+        }
+    }
+    Ok(MaterializedRow {
         path: row.file_path.clone(),
         cells,
+        summary_values,
+        sort_values,
+        group_key,
+    })
+}
+
+fn row_to_result(row: &MaterializedRow, columns: &[ResultColumn]) -> BasesRow {
+    let audio_description = row_audio_description(row, columns);
+    BasesRow {
+        path: row.path.clone(),
+        cells: row.cells.clone(),
+        audio_description,
+    }
+}
+
+fn property_expr(property: &PropertyRef) -> Expr {
+    Expr {
+        span: super::expr::Span { start: 0, end: 0 },
+        kind: ExprKind::Prop(property.clone()),
+    }
+}
+
+fn sort_rows(query: &SlateQuery, rows: &mut [MaterializedRow]) {
+    rows.sort_by(|lhs, rhs| compare_rows(query, lhs, rhs));
+}
+
+fn compare_rows(query: &SlateQuery, lhs: &MaterializedRow, rhs: &MaterializedRow) -> Ordering {
+    for (index, sort) in query.sort.iter().enumerate() {
+        let ordering = compare_sort_key(
+            &lhs.sort_values[index],
+            &rhs.sort_values[index],
+            sort.ascending,
+        );
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    lhs.path.cmp(&rhs.path)
+}
+
+fn compare_sort_key(lhs: &Value, rhs: &Value, ascending: bool) -> Ordering {
+    match (matches!(lhs, Value::Null), matches!(rhs, Value::Null)) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => {
+            let ordering = compare_non_null_values(lhs, rhs);
+            if ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        }
+    }
+}
+
+fn compare_non_null_values(lhs: &Value, rhs: &Value) -> Ordering {
+    let lhs_rank = value_type_rank(lhs);
+    let rhs_rank = value_type_rank(rhs);
+    if lhs_rank != rhs_rank {
+        return lhs_rank.cmp(&rhs_rank);
+    }
+    match (lhs, rhs) {
+        (Value::Bool(lhs), Value::Bool(rhs)) => lhs.cmp(rhs),
+        (Value::Number(lhs), Value::Number(rhs)) => lhs.partial_cmp(rhs).unwrap_or(Ordering::Equal),
+        (Value::Date(lhs), Value::Date(rhs)) => lhs.epoch_ms.cmp(&rhs.epoch_ms),
+        (Value::Text(lhs), Value::Text(rhs)) => lhs.to_lowercase().cmp(&rhs.to_lowercase()),
+        _ => value_key(lhs).cmp(&value_key(rhs)),
+    }
+}
+
+fn value_type_rank(value: &Value) -> u8 {
+    match value {
+        Value::Null => 9,
+        Value::Bool(_) => 0,
+        Value::Number(_) => 1,
+        Value::Date(_) => 2,
+        Value::Duration(_) => 3,
+        Value::Text(_) => 4,
+        Value::Link(_) => 5,
+        Value::File(_) => 6,
+        Value::Regex(_, _) => 7,
+        Value::List(_) => 8,
+        Value::Object(_) => 9,
+    }
+}
+
+fn group_rows(query: &SlateQuery, rows: &mut Vec<MaterializedRow>) -> Vec<GroupSlice> {
+    let Some(group_by) = &query.group_by else {
+        return Vec::new();
+    };
+    let mut buckets: Vec<(Value, Vec<MaterializedRow>)> = Vec::new();
+    for row in rows.drain(..) {
+        let key = row.group_key.clone().unwrap_or(Value::Null);
+        if let Some((_, group_rows)) = buckets.iter_mut().find(|(got, _)| *got == key) {
+            group_rows.push(row);
+        } else {
+            buckets.push((key, vec![row]));
+        }
+    }
+    buckets.sort_by(|(lhs, _), (rhs, _)| compare_sort_key(lhs, rhs, group_by.ascending));
+    let mut groups = Vec::with_capacity(buckets.len());
+    let mut start = 0usize;
+    let property = property_ref_label(&group_by.property);
+    for (key, mut bucket_rows) in buckets {
+        let end = start + bucket_rows.len();
+        groups.push(GroupSlice {
+            label: group_label(&property, &key),
+            key,
+            full_range: start..end,
+        });
+        rows.append(&mut bucket_rows);
+        start = end;
+    }
+    groups
+}
+
+fn visible_groups(
+    groups: Vec<GroupSlice>,
+    summaries: Vec<Vec<BasesSummaryCell>>,
+    shown_count: usize,
+) -> Vec<ResultGroup> {
+    groups
+        .into_iter()
+        .zip(summaries)
+        .filter_map(|(group, summaries)| {
+            let start = group.full_range.start.min(shown_count);
+            let end = group.full_range.end.min(shown_count);
+            (start < end).then_some(ResultGroup {
+                key: group.key,
+                label: group.label,
+                rows: start..end,
+                summaries,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+enum SummaryKind {
+    Count,
+    Filled,
+    Empty,
+    Unique,
+    Min,
+    Max,
+    Sum,
+    Average,
+    Earliest,
+    Latest,
+    Checked,
+    Unchecked,
+    Custom(String),
+}
+
+#[derive(Clone, Copy)]
+struct SummaryEvalDeps<'a, 'ctx> {
+    ctx: &'a EngineCtx<'ctx>,
+    vault: &'a dyn VaultLookup,
+    warnings: &'a WarningSink,
+}
+
+fn compute_summaries(
+    query: &SlateQuery,
+    rows: &[MaterializedRow],
+    range: Range<usize>,
+    ctx: &EngineCtx<'_>,
+    vault: &dyn VaultLookup,
+    warnings: &WarningSink,
+    result_warnings: &mut Vec<String>,
+) -> Result<Vec<BasesSummaryCell>, String> {
+    query
+        .summaries
+        .iter()
+        .map(|(column_id, summary)| {
+            let (summary_name, kind) = summary_kind(summary)?;
+            compute_summary(
+                query,
+                rows,
+                range.clone(),
+                column_id,
+                &summary_name,
+                kind,
+                ctx,
+                vault,
+                warnings,
+                result_warnings,
+            )
+        })
+        .collect()
+}
+
+fn summary_kind(summary: &SummaryRef) -> Result<(String, SummaryKind), String> {
+    match summary {
+        SummaryRef::Builtin(name) => {
+            let normalized = name.to_ascii_lowercase();
+            let kind = match normalized.as_str() {
+                "count" => SummaryKind::Count,
+                "filled" => SummaryKind::Filled,
+                "empty" => SummaryKind::Empty,
+                "unique" => SummaryKind::Unique,
+                "min" => SummaryKind::Min,
+                "max" => SummaryKind::Max,
+                "sum" => SummaryKind::Sum,
+                "average" => SummaryKind::Average,
+                "earliest" => SummaryKind::Earliest,
+                "latest" => SummaryKind::Latest,
+                "checked" => SummaryKind::Checked,
+                "unchecked" => SummaryKind::Unchecked,
+                "median" | "stddev" | "range" => {
+                    return Err(format!("summary.{name}: unsupported in Bases v1"));
+                }
+                _ => return Err(format!("summary.{name}: unknown summary")),
+            };
+            Ok((normalized, kind))
+        }
+        SummaryRef::Custom(name) => Ok((name.clone(), SummaryKind::Custom(name.clone()))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_summary(
+    query: &SlateQuery,
+    rows: &[MaterializedRow],
+    range: Range<usize>,
+    column_id: &str,
+    summary_name: &str,
+    kind: SummaryKind,
+    ctx: &EngineCtx<'_>,
+    vault: &dyn VaultLookup,
+    warnings: &WarningSink,
+    result_warnings: &mut Vec<String>,
+) -> Result<BasesSummaryCell, String> {
+    let value = match kind {
+        SummaryKind::Count => CellValue::Value(Value::Number(range.len() as f64)),
+        SummaryKind::Filled => CellValue::Value(Value::Number(
+            range
+                .clone()
+                .filter(|index| {
+                    summary_cell_value(&rows[*index], column_id)
+                        .is_some_and(|value| !is_empty_summary_value(value))
+                })
+                .count() as f64,
+        )),
+        SummaryKind::Empty => CellValue::Value(Value::Number(
+            range
+                .clone()
+                .filter(|index| {
+                    summary_cell_value(&rows[*index], column_id).is_none_or(is_empty_summary_value)
+                })
+                .count() as f64,
+        )),
+        SummaryKind::Unique => {
+            let mut seen = BTreeMap::new();
+            for index in range.clone() {
+                if let Some(value) = summary_cell_value(&rows[index], column_id)
+                    && !is_empty_summary_value(value)
+                {
+                    seen.insert(value_key(value), ());
+                }
+            }
+            CellValue::Value(Value::Number(seen.len() as f64))
+        }
+        SummaryKind::Min => numeric_summary(
+            rows,
+            range,
+            column_id,
+            summary_name,
+            result_warnings,
+            |values| values.iter().copied().fold(f64::INFINITY, f64::min),
+        ),
+        SummaryKind::Max => numeric_summary(
+            rows,
+            range,
+            column_id,
+            summary_name,
+            result_warnings,
+            |values| values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        ),
+        SummaryKind::Sum => numeric_summary(
+            rows,
+            range,
+            column_id,
+            summary_name,
+            result_warnings,
+            |values| values.iter().sum(),
+        ),
+        SummaryKind::Average => numeric_summary(
+            rows,
+            range,
+            column_id,
+            summary_name,
+            result_warnings,
+            |values| values.iter().sum::<f64>() / values.len() as f64,
+        ),
+        SummaryKind::Earliest => {
+            date_summary(rows, range, column_id, summary_name, result_warnings, true)
+        }
+        SummaryKind::Latest => {
+            date_summary(rows, range, column_id, summary_name, result_warnings, false)
+        }
+        SummaryKind::Checked => {
+            boolean_summary(rows, range, column_id, summary_name, result_warnings, true)
+        }
+        SummaryKind::Unchecked => {
+            boolean_summary(rows, range, column_id, summary_name, result_warnings, false)
+        }
+        SummaryKind::Custom(name) => custom_summary(
+            query,
+            rows,
+            range,
+            column_id,
+            &name,
+            SummaryEvalDeps {
+                ctx,
+                vault,
+                warnings,
+            },
+        )?,
+    };
+    Ok(BasesSummaryCell {
+        column_id: column_id.to_string(),
+        summary: summary_name.to_string(),
+        value,
+    })
+}
+
+fn summary_cell_value<'a>(row: &'a MaterializedRow, column_id: &str) -> Option<&'a Value> {
+    match row.summary_values.get(column_id) {
+        Some(CellValue::Value(value)) => Some(value),
+        Some(CellValue::Error(_)) | None => None,
+    }
+}
+
+fn is_empty_summary_value(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Text(value) => value.is_empty(),
+        Value::List(values) => values.is_empty(),
+        Value::Object(values) => values.is_empty(),
+        _ => false,
+    }
+}
+
+fn numeric_summary(
+    rows: &[MaterializedRow],
+    range: Range<usize>,
+    column_id: &str,
+    summary_name: &str,
+    warnings: &mut Vec<String>,
+    aggregate: impl FnOnce(&[f64]) -> f64,
+) -> CellValue {
+    let mut values = Vec::new();
+    for index in range {
+        match summary_cell_value(&rows[index], column_id) {
+            Some(Value::Number(value)) => values.push(*value),
+            Some(value) if !is_empty_summary_value(value) => {
+                return inapplicable_summary(column_id, summary_name, warnings);
+            }
+            _ => {}
+        }
+    }
+    if values.is_empty() {
+        return inapplicable_summary(column_id, summary_name, warnings);
+    }
+    CellValue::Value(Value::Number(aggregate(&values)))
+}
+
+fn date_summary(
+    rows: &[MaterializedRow],
+    range: Range<usize>,
+    column_id: &str,
+    summary_name: &str,
+    warnings: &mut Vec<String>,
+    earliest: bool,
+) -> CellValue {
+    let mut values = Vec::new();
+    for index in range {
+        match summary_cell_value(&rows[index], column_id) {
+            Some(Value::Date(value)) => values.push(*value),
+            Some(value) if !is_empty_summary_value(value) => {
+                return inapplicable_summary(column_id, summary_name, warnings);
+            }
+            _ => {}
+        }
+    }
+    let value = if earliest {
+        values.into_iter().min_by_key(|date| date.epoch_ms)
+    } else {
+        values.into_iter().max_by_key(|date| date.epoch_ms)
+    };
+    let Some(value) = value else {
+        return inapplicable_summary(column_id, summary_name, warnings);
+    };
+    CellValue::Value(Value::Date(value))
+}
+
+fn boolean_summary(
+    rows: &[MaterializedRow],
+    range: Range<usize>,
+    column_id: &str,
+    summary_name: &str,
+    warnings: &mut Vec<String>,
+    target: bool,
+) -> CellValue {
+    let mut count = 0usize;
+    for index in range {
+        match summary_cell_value(&rows[index], column_id) {
+            Some(Value::Bool(value)) if *value == target => count += 1,
+            Some(Value::Bool(_)) => {}
+            Some(value) if !is_empty_summary_value(value) => {
+                return inapplicable_summary(column_id, summary_name, warnings);
+            }
+            _ => {}
+        }
+    }
+    CellValue::Value(Value::Number(count as f64))
+}
+
+fn inapplicable_summary(
+    column_id: &str,
+    summary_name: &str,
+    warnings: &mut Vec<String>,
+) -> CellValue {
+    warnings.push(format!(
+        "summary {summary_name} is not applicable to {column_id}"
+    ));
+    CellValue::Value(Value::Text("—".to_string()))
+}
+
+fn custom_summary(
+    query: &SlateQuery,
+    rows: &[MaterializedRow],
+    range: Range<usize>,
+    column_id: &str,
+    name: &str,
+    deps: SummaryEvalDeps<'_, '_>,
+) -> Result<CellValue, String> {
+    let Some((_, expr)) = query
+        .custom_summaries
+        .iter()
+        .find(|(summary_name, _)| summary_name == name)
+    else {
+        return Err(format!("summary.{name}: missing custom summary formula"));
+    };
+    let values = range
+        .map(|index| {
+            summary_cell_value(&rows[index], column_id)
+                .cloned()
+                .unwrap_or(Value::Null)
+        })
+        .collect::<Vec<_>>();
+    let mut file_fields = FileFields::for_path("summary");
+    file_fields
+        .properties
+        .insert("values".to_string(), Value::List(values.clone()));
+    let row = RowContext {
+        file_path: "summary".to_string(),
+        file_fields,
+        properties: vec![("values".to_string(), Value::List(values))],
+        task: None,
+    };
+    let formulas = ResolvedFormulas::new();
+    let eval_ctx = EvalCtx {
+        file: &row,
+        this: None,
+        formulas: &formulas,
+        now_ms: deps.ctx.now_ms,
+        vault: deps.vault,
+        warnings: deps.warnings,
+    };
+    eval(expr, &eval_ctx)
+        .map(CellValue::Value)
+        .map_err(|error| format!("summary.{name}: {error}"))
+}
+
+fn value_key(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => format!("bool:{value}"),
+        Value::Number(value) => format!("number:{value:?}"),
+        Value::Date(value) => format!("date:{}:{}", value.epoch_ms, value.has_time),
+        Value::Duration(value) => format!("duration:{value}"),
+        Value::Text(value) => format!("text:{value}"),
+        Value::Link(value) => format!("link:{}:{:?}", value.target, value.resolved_path),
+        Value::File(value) => format!("file:{}", value.path),
+        Value::Regex(pattern, flags) => format!("regex:{pattern}/{flags}"),
+        Value::List(values) => format!(
+            "list:[{}]",
+            values.iter().map(value_key).collect::<Vec<_>>().join(",")
+        ),
+        Value::Object(values) => format!(
+            "object:{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!("{key}:{}", value_key(value)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    }
+}
+
+fn row_audio_description(row: &MaterializedRow, columns: &[ResultColumn]) -> String {
+    let Some((first, rest)) = row.cells.split_first() else {
+        return row.path.clone();
+    };
+    let mut out = cell_audio_value(first).unwrap_or_else(|| row.path.clone());
+    for (index, cell) in rest.iter().enumerate() {
+        if let Some(value) = cell_audio_value(cell) {
+            let label = columns
+                .get(index + 1)
+                .map(column_label)
+                .unwrap_or_else(|| format!("Column {}", index + 2));
+            out.push_str(". ");
+            out.push_str(&label);
+            out.push_str(": ");
+            out.push_str(&value);
+        }
+    }
+    if out.is_empty() {
+        row.path.clone()
+    } else {
+        out
+    }
+}
+
+fn cell_audio_value(cell: &CellValue) -> Option<String> {
+    match cell {
+        CellValue::Value(value) if is_empty_summary_value(value) => None,
+        CellValue::Value(value) => Some(value_display(value)),
+        CellValue::Error(error) => Some(format!("Error: {error}")),
+    }
+}
+
+fn audio_summary(
+    query: &SlateQuery,
+    total_count: usize,
+    shown_count: usize,
+    groups: &[GroupSlice],
+) -> String {
+    if total_count == 0 {
+        return "No results.".to_string();
+    }
+    let noun = match query.row_source {
+        RowSource::Tasks if total_count == 1 => "task",
+        RowSource::Tasks => "tasks",
+        RowSource::Files if total_count == 1 => "note",
+        RowSource::Files => "notes",
+    };
+    let mut out = format!("{total_count} {noun}");
+    if let Some(group_by) = &query.group_by {
+        let property = property_ref_label(&group_by.property);
+        let parts = groups
+            .iter()
+            .map(|group| format!("{} {}", group.label, group.full_range.len()))
+            .collect::<Vec<_>>();
+        out.push_str(", grouped by ");
+        out.push_str(&property);
+        if !parts.is_empty() {
+            out.push_str(": ");
+            out.push_str(&parts.join(", "));
+        }
+    }
+    if query
+        .limit
+        .is_some_and(|limit| shown_count < total_count && limit as usize == shown_count)
+    {
+        out.push_str(&format!(", limited to {shown_count}"));
+    }
+    out.push('.');
+    if !query.sort.is_empty() {
+        out.push(' ');
+        out.push_str("Sorted by ");
+        out.push_str(&sort_description(query));
+        out.push('.');
+    }
+    out
+}
+
+fn sort_description(query: &SlateQuery) -> String {
+    query
+        .sort
+        .iter()
+        .map(|sort| {
+            let direction = if sort.ascending {
+                "ascending"
+            } else {
+                "descending"
+            };
+            format!("{} {direction}", expr_label(&sort.expr))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn column_label(column: &ResultColumn) -> String {
+    column
+        .display_name
+        .clone()
+        .unwrap_or_else(|| column.id.clone())
+}
+
+fn group_label(property: &str, value: &Value) -> String {
+    if matches!(value, Value::Null) {
+        format!("No {property}")
+    } else {
+        value_display(value)
+    }
+}
+
+fn expr_label(expr: &Expr) -> String {
+    match &expr.kind {
+        ExprKind::Prop(property) => property_ref_label(property),
+        _ => "expression".to_string(),
+    }
+}
+
+fn property_ref_label(property: &PropertyRef) -> String {
+    match property {
+        PropertyRef::Note(name) => name.clone(),
+        PropertyRef::Formula(name) => format!("formula.{name}"),
+        PropertyRef::File(field) => format!("file.{}", file_field_label(*field)),
+        PropertyRef::This => "this".to_string(),
+        PropertyRef::ThisNote(name) => format!("this.{name}"),
+        PropertyRef::ThisFile(field) => format!("this.file.{}", file_field_label(*field)),
+        PropertyRef::TaskField(field) => format!("task.{}", task_field_label(*field)),
+        PropertyRef::ImplicitValue => "value".to_string(),
+        PropertyRef::ImplicitIndex => "index".to_string(),
+        PropertyRef::ImplicitAcc => "acc".to_string(),
+    }
+}
+
+fn file_field_label(field: FileField) -> &'static str {
+    match field {
+        FileField::Name => "name",
+        FileField::Basename => "basename",
+        FileField::Path => "path",
+        FileField::Folder => "folder",
+        FileField::Ext => "ext",
+        FileField::Size => "size",
+        FileField::Properties => "properties",
+        FileField::Tags => "tags",
+        FileField::Aliases => "aliases",
+        FileField::Links => "links",
+        FileField::Backlinks => "backlinks",
+        FileField::Embeds => "embeds",
+        FileField::File => "file",
+        FileField::Ctime => "ctime",
+        FileField::Mtime => "mtime",
+        FileField::InDegree => "inDegree",
+        FileField::OutDegree => "outDegree",
+    }
+}
+
+fn task_field_label(field: TaskField) -> &'static str {
+    match field {
+        TaskField::Text => "text",
+        TaskField::Status => "status",
+        TaskField::Completed => "completed",
+        TaskField::Due => "due",
+        TaskField::Scheduled => "scheduled",
+        TaskField::Priority => "priority",
+        TaskField::File => "file",
+    }
+}
+
+fn value_display(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => {
+            if value.fract() == 0.0 {
+                format!("{value:.0}")
+            } else {
+                value.to_string()
+            }
+        }
+        Value::Date(value) => Utc
+            .timestamp_millis_opt(value.epoch_ms)
+            .single()
+            .map(|datetime| {
+                if value.has_time {
+                    datetime.format("%Y-%m-%d %H:%M").to_string()
+                } else {
+                    datetime.format("%Y-%m-%d").to_string()
+                }
+            })
+            .unwrap_or_else(|| value.epoch_ms.to_string()),
+        Value::Duration(value) => value.to_string(),
+        Value::Text(value) => value.clone(),
+        Value::Link(value) => value.display.clone().unwrap_or_else(|| {
+            value
+                .resolved_path
+                .clone()
+                .unwrap_or_else(|| value.target.clone())
+        }),
+        Value::File(value) => value.path.clone(),
+        Value::Regex(pattern, flags) => {
+            if flags.is_empty() {
+                format!("/{pattern}/")
+            } else {
+                format!("/{pattern}/{flags}")
+            }
+        }
+        Value::List(values) => values
+            .iter()
+            .map(value_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| format!("{key}: {}", value_display(value)))
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 
@@ -965,6 +1800,8 @@ fn error_result(
     BasesResultSet {
         columns: result_columns(query),
         rows: Vec::new(),
+        groups: Vec::new(),
+        summaries: Vec::new(),
         total_count: 0,
         shown_count: 0,
         warnings: Vec::new(),
@@ -974,6 +1811,7 @@ fn error_result(
         }),
         executed_at_ms: ctx.now_ms,
         cache_hit: false,
+        audio_summary: "No results.".to_string(),
     }
 }
 

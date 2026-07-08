@@ -229,6 +229,7 @@ fn empty_query() -> SlateQuery {
         row_source: RowSource::Files,
         filters: None,
         formulas: Vec::new(),
+        custom_summaries: Vec::new(),
         group_by: None,
         sort: Vec::new(),
         columns: Vec::new(),

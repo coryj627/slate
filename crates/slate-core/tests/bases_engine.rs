@@ -5,10 +5,11 @@ use rusqlite::{Connection, params};
 use slate_core::{
     CancelToken, VaultError,
     bases::{
-        ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, ViewSpec,
-        engine::{BasesQueryCache, CellValue, EngineCtx, execute},
+        ColumnSelection, FilterNode, GroupBy, QuerySource, RowSource, SlateQuery, SortKey,
+        SummaryRef, ViewSpec,
+        engine::{BasesQueryCache, BasesSummaryCell, CellValue, EngineCtx, execute},
         eval::Value,
-        expr::{Expr, parse_expr},
+        expr::{Expr, PropertyRef, parse_expr},
     },
     db::migrate,
 };
@@ -107,6 +108,24 @@ fn insert_number_property(conn: &Connection, file_id: i64, ordinal: i64, key: &s
     .expect("insert number property");
 }
 
+fn insert_bool_property(conn: &Connection, file_id: i64, ordinal: i64, key: &str, value: bool) {
+    conn.execute(
+        "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text, value_text_norm)
+         VALUES (?1, ?2, ?3, 'boolean', ?4, ?4)",
+        params![file_id, ordinal, key, value.to_string()],
+    )
+    .expect("insert bool property");
+}
+
+fn insert_date_property(conn: &Connection, file_id: i64, ordinal: i64, key: &str, value: &str) {
+    conn.execute(
+        "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text, value_text_norm)
+         VALUES (?1, ?2, ?3, 'date', ?4, ?5)",
+        params![file_id, ordinal, key, format!("{value:?}"), value],
+    )
+    .expect("insert date property");
+}
+
 fn insert_list_property(conn: &Connection, file_id: i64, ordinal: i64, key: &str, values: &[&str]) {
     let value_text = format!(
         "[{}]",
@@ -145,6 +164,7 @@ fn query() -> SlateQuery {
         row_source: RowSource::Files,
         filters: None,
         formulas: Vec::new(),
+        custom_summaries: Vec::new(),
         group_by: None,
         sort: Vec::new(),
         columns: Vec::new(),
@@ -169,6 +189,24 @@ fn expr(source: &str) -> Expr {
 
 fn stmt(source: &str) -> FilterNode {
     FilterNode::Stmt(expr(source))
+}
+
+fn summary_number(summary: &BasesSummaryCell) -> f64 {
+    match &summary.value {
+        CellValue::Value(Value::Number(value)) => *value,
+        other => panic!("expected numeric summary, got {other:?}"),
+    }
+}
+
+fn summary_cell<'a>(
+    summaries: &'a [BasesSummaryCell],
+    column_id: &str,
+    summary: &str,
+) -> &'a BasesSummaryCell {
+    summaries
+        .iter()
+        .find(|cell| cell.column_id == column_id && cell.summary == summary)
+        .unwrap_or_else(|| panic!("missing {column_id}/{summary} summary in {summaries:?}"))
 }
 
 #[test]
@@ -230,6 +268,412 @@ fn pushdown_and_interpreter_return_same_rows() {
             CellValue::Value(Value::Number(5.5)),
         ]
     );
+}
+
+#[test]
+fn sort_limit_summaries_and_audio_use_post_filter_pre_limit_rows() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.sort = vec![SortKey {
+        expr: expr("rating"),
+        ascending: false,
+    }];
+    query.limit = Some(2);
+    query.columns = vec![column("file.name"), column("rating")];
+    query.summaries = vec![(
+        "rating".to_string(),
+        SummaryRef::Builtin("average".to_string()),
+    )];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute sorted query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(result.total_count, 3);
+    assert_eq!(result.shown_count, 2);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Gamma.md", "Projects/Alpha.md"]
+    );
+    assert_eq!(
+        result.audio_summary,
+        "3 notes, limited to 2. Sorted by rating descending."
+    );
+    assert_eq!(result.rows[0].audio_description, "Gamma.md. rating: 5");
+    assert!((summary_number(&result.summaries[0]) - (11.5 / 3.0)).abs() < f64::EPSILON);
+}
+
+#[test]
+fn multi_key_sort_uses_later_keys_and_path_tiebreak() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.sort = vec![
+        SortKey {
+            expr: expr("status"),
+            ascending: true,
+        },
+        SortKey {
+            expr: expr("rating"),
+            ascending: false,
+        },
+    ];
+    query.columns = vec![column("status"), column("rating")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute multi-key sort query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Gamma.md", "Projects/Alpha.md", "Projects/Beta.md"]
+    );
+}
+
+#[test]
+fn text_sort_uses_unicode_lowercase_normalization() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_text_property(&conn, 1, 5, "category", "Zebra");
+    insert_text_property(&conn, 2, 3, "category", "apple");
+    insert_text_property(&conn, 3, 3, "category", "middle");
+    let mut query = query();
+    query.sort = vec![SortKey {
+        expr: expr("category"),
+        ascending: true,
+    }];
+    query.columns = vec![column("category")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute normalized text sort query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Projects/Beta.md", "Notes/Gamma.md", "Projects/Alpha.md"]
+    );
+}
+
+#[test]
+fn group_by_orders_groups_keeps_sorted_rows_and_computes_group_summaries() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.group_by = Some(GroupBy {
+        property: PropertyRef::Note("status".to_string()),
+        ascending: true,
+    });
+    query.sort = vec![SortKey {
+        expr: expr("rating"),
+        ascending: false,
+    }];
+    query.columns = vec![column("status"), column("file.name"), column("rating")];
+    query.summaries = vec![
+        ("rating".to_string(), SummaryRef::Builtin("sum".to_string())),
+        (
+            "status".to_string(),
+            SummaryRef::Builtin("count".to_string()),
+        ),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute grouped query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Gamma.md", "Projects/Alpha.md", "Projects/Beta.md"]
+    );
+    assert_eq!(result.groups.len(), 2);
+    assert_eq!(result.groups[0].label, "active");
+    assert_eq!(result.groups[0].rows, 0..2);
+    assert_eq!(result.groups[1].label, "done");
+    assert_eq!(result.groups[1].rows, 2..3);
+    assert_eq!(
+        result.audio_summary,
+        "3 notes, grouped by status: active 2, done 1. Sorted by rating descending."
+    );
+    assert!((summary_number(&result.summaries[0]) - 11.5).abs() < f64::EPSILON);
+    assert!((summary_number(&result.groups[0].summaries[0]) - 9.5).abs() < f64::EPSILON);
+    assert!((summary_number(&result.groups[1].summaries[0]) - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn grouped_audio_reports_pre_limit_group_counts() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.group_by = Some(GroupBy {
+        property: PropertyRef::Note("status".to_string()),
+        ascending: true,
+    });
+    query.sort = vec![SortKey {
+        expr: expr("rating"),
+        ascending: false,
+    }];
+    query.limit = Some(1);
+    query.columns = vec![column("status"), column("file.name")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute limited grouped query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(result.shown_count, 1);
+    assert_eq!(result.groups.len(), 1);
+    assert_eq!(result.groups[0].label, "active");
+    assert_eq!(result.groups[0].rows, 0..1);
+    assert_eq!(
+        result.audio_summary,
+        "3 notes, grouped by status: active 2, done 1, limited to 1. Sorted by rating descending."
+    );
+}
+
+#[test]
+fn group_by_places_null_group_last() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.group_by = Some(GroupBy {
+        property: PropertyRef::Note("code".to_string()),
+        ascending: true,
+    });
+    query.sort = vec![SortKey {
+        expr: expr("file.name"),
+        ascending: true,
+    }];
+    query.columns = vec![column("file.name"), column("code")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute null group query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .groups
+            .iter()
+            .map(|group| group.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["01", "No code"]
+    );
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Projects/Alpha.md", "Projects/Beta.md", "Notes/Gamma.md"]
+    );
+}
+
+#[test]
+fn summaries_cover_defaults_dates_and_checked_aliases() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_bool_property(&conn, 1, 5, "done_flag", true);
+    insert_bool_property(&conn, 2, 3, "done_flag", false);
+    insert_date_property(&conn, 1, 6, "due", "2026-03-01");
+    insert_date_property(&conn, 2, 4, "due", "2026-02-01");
+    let mut query = query();
+    query.columns = vec![
+        column("status"),
+        column("code"),
+        column("rating"),
+        column("due"),
+        column("done_flag"),
+    ];
+    query.summaries = vec![
+        (
+            "status".to_string(),
+            SummaryRef::Builtin("count".to_string()),
+        ),
+        (
+            "status".to_string(),
+            SummaryRef::Builtin("filled".to_string()),
+        ),
+        ("code".to_string(), SummaryRef::Builtin("empty".to_string())),
+        (
+            "status".to_string(),
+            SummaryRef::Builtin("unique".to_string()),
+        ),
+        ("rating".to_string(), SummaryRef::Builtin("min".to_string())),
+        ("rating".to_string(), SummaryRef::Builtin("max".to_string())),
+        ("rating".to_string(), SummaryRef::Builtin("sum".to_string())),
+        (
+            "rating".to_string(),
+            SummaryRef::Builtin("Average".to_string()),
+        ),
+        (
+            "due".to_string(),
+            SummaryRef::Builtin("earliest".to_string()),
+        ),
+        ("due".to_string(), SummaryRef::Builtin("latest".to_string())),
+        (
+            "done_flag".to_string(),
+            SummaryRef::Builtin("checked".to_string()),
+        ),
+        (
+            "done_flag".to_string(),
+            SummaryRef::Builtin("unchecked".to_string()),
+        ),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute summary query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "status", "count")),
+        3.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "status", "filled")),
+        3.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "code", "empty")),
+        2.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "status", "unique")),
+        2.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "rating", "min")),
+        2.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "rating", "max")),
+        5.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "rating", "sum")),
+        11.5
+    );
+    assert!(
+        (summary_number(summary_cell(&result.summaries, "rating", "average")) - (11.5 / 3.0)).abs()
+            < f64::EPSILON
+    );
+    assert!(matches!(
+        &summary_cell(&result.summaries, "due", "earliest").value,
+        CellValue::Value(Value::Date(value)) if value.epoch_ms == 1_769_904_000_000 && !value.has_time
+    ));
+    assert!(matches!(
+        &summary_cell(&result.summaries, "due", "latest").value,
+        CellValue::Value(Value::Date(value)) if value.epoch_ms == 1_772_323_200_000 && !value.has_time
+    ));
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "done_flag", "checked")),
+        1.0
+    );
+    assert_eq!(
+        summary_number(summary_cell(&result.summaries, "done_flag", "unchecked")),
+        1.0
+    );
+}
+
+#[test]
+fn inapplicable_and_unsupported_summaries_surface_correctly() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.columns = vec![column("status")];
+    query.summaries = vec![("status".to_string(), SummaryRef::Builtin("sum".to_string()))];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute inapplicable summary query");
+
+    assert_eq!(result.error, None);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not applicable"))
+    );
+    assert!(matches!(
+        &result.summaries[0].value,
+        CellValue::Value(Value::Text(value)) if value == "—"
+    ));
+
+    query.summaries = vec![(
+        "status".to_string(),
+        SummaryRef::Builtin("checked".to_string()),
+    )];
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute inapplicable checked summary query");
+
+    assert_eq!(result.error, None);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not applicable"))
+    );
+    assert!(matches!(
+        &result.summaries[0].value,
+        CellValue::Value(Value::Text(value)) if value == "—"
+    ));
+
+    query.summaries = vec![(
+        "status".to_string(),
+        SummaryRef::Builtin("median".to_string()),
+    )];
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute unsupported summary query");
+    let error = result.error.expect("unsupported summary fails loud");
+    assert!(error.construct.contains("summary.median"), "{error:?}");
+}
+
+#[test]
+fn custom_summary_formulas_use_values_binding() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.columns = vec![column("rating")];
+    query.custom_summaries = vec![("filledCount".to_string(), expr("values.length"))];
+    query.summaries = vec![(
+        "rating".to_string(),
+        SummaryRef::Custom("filledCount".to_string()),
+    )];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute custom summary query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(summary_number(&result.summaries[0]), 3.0);
+}
+
+#[test]
+fn custom_summary_unsupported_methods_fail_loud() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.columns = vec![column("rating")];
+    query.custom_summaries = vec![("bad".to_string(), expr("values.mean()"))];
+    query.summaries = vec![("rating".to_string(), SummaryRef::Custom("bad".to_string()))];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute custom summary query");
+
+    let error = result.error.expect("unsupported custom summary fails loud");
+    assert!(error.construct.contains("summary.bad"), "{error:?}");
+    assert!(error.construct.contains("mean"), "{error:?}");
 }
 
 #[test]
