@@ -8,7 +8,12 @@
 //! this module still fails unsupported search surfaces loudly instead of
 //! approximating them.
 
-use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, ops::Range};
+use std::{
+    cell::{Cell, RefCell},
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
@@ -24,7 +29,11 @@ use super::{
         TaskField, UnaryOp,
     },
 };
-use crate::{CancelToken, VaultError, db::DbError};
+use crate::{
+    CancelToken, VaultError,
+    db::DbError,
+    search_db::{SearchScope, full_text_search},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasesResultSet {
@@ -122,6 +131,30 @@ struct Candidate {
     row: RowContext,
 }
 
+struct CandidateLoadDeps<'a> {
+    fts: &'a FtsMatchCache,
+    warnings: &'a WarningSink,
+    cancel: &'a CancelToken,
+}
+
+#[derive(Debug)]
+enum CandidateLoadError {
+    Vault(VaultError),
+    View(String),
+}
+
+impl From<VaultError> for CandidateLoadError {
+    fn from(error: VaultError) -> Self {
+        Self::Vault(error)
+    }
+}
+
+impl From<DbError> for CandidateLoadError {
+    fn from(error: DbError) -> Self {
+        Self::Vault(error.into())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MaterializedRow {
     path: String,
@@ -165,6 +198,81 @@ struct IndexedTaskRow {
 struct TaskCounts {
     total: u64,
     completed: u64,
+}
+
+#[derive(Debug, Default)]
+struct FtsMatchCache {
+    paths: RefCell<BTreeMap<String, BTreeSet<String>>>,
+    sql_queries: RefCell<BTreeSet<String>>,
+    temp_table_ready: Cell<bool>,
+}
+
+impl FtsMatchCache {
+    fn paths(
+        &self,
+        conn: &Connection,
+        query: &str,
+        cancel: &CancelToken,
+    ) -> Result<BTreeSet<String>, VaultError> {
+        let query = query.trim().to_string();
+        if let Some(paths) = self.paths.borrow().get(&query).cloned() {
+            return Ok(paths);
+        }
+        let result = full_text_search(conn, &query, &SearchScope::Vault, cancel)?;
+        let paths = result
+            .rows
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect::<BTreeSet<_>>();
+        self.paths.borrow_mut().insert(query, paths.clone());
+        Ok(paths)
+    }
+
+    fn ensure_sql_membership(
+        &self,
+        conn: &Connection,
+        query: &str,
+        cancel: &CancelToken,
+    ) -> Result<(), VaultError> {
+        let query = query.trim().to_string();
+        if self.sql_queries.borrow().contains(&query) {
+            return Ok(());
+        }
+        let paths = self.paths(conn, &query, cancel)?;
+        self.ensure_temp_table(conn)?;
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT OR IGNORE INTO temp.slate_bases_fts_matches (query, path)
+                 VALUES (?1, ?2)",
+            )?;
+            for path in &paths {
+                if cancel.is_cancelled() {
+                    return Err(VaultError::Cancelled);
+                }
+                insert.execute(params![&query, path])?;
+            }
+        }
+        tx.commit()?;
+        self.sql_queries.borrow_mut().insert(query);
+        Ok(())
+    }
+
+    fn ensure_temp_table(&self, conn: &Connection) -> Result<(), VaultError> {
+        if self.temp_table_ready.get() {
+            return Ok(());
+        }
+        conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS slate_bases_fts_matches (
+                query TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (query, path)
+             ) WITHOUT ROWID;
+             DELETE FROM temp.slate_bases_fts_matches;",
+        )?;
+        self.temp_table_ready.set(true);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -211,7 +319,17 @@ pub fn execute(
     }
 
     let warnings = WarningSink::default();
-    let vault = SqlVaultLookup { conn };
+    let fts = FtsMatchCache::default();
+    let load_deps = CandidateLoadDeps {
+        fts: &fts,
+        warnings: &warnings,
+        cancel,
+    };
+    let vault = SqlVaultLookup {
+        conn,
+        fts: &fts,
+        cancel,
+    };
     let this = ctx
         .this_path
         .as_deref()
@@ -225,7 +343,13 @@ pub fn execute(
         if cancel.is_cancelled() {
             return Err(VaultError::Cancelled);
         }
-        let batch = load_candidates(query, conn, ctx, page_size, offset)?;
+        let batch = match load_candidates(query, conn, ctx, page_size, offset, &load_deps) {
+            Ok(batch) => batch,
+            Err(CandidateLoadError::Vault(error)) => return Err(error),
+            Err(CandidateLoadError::View(error)) => {
+                return Ok(error_result(query, ctx, error, ""));
+            }
+        };
         if batch.is_empty() {
             break;
         }
@@ -244,7 +368,7 @@ pub fn execute(
                         &candidate.row.file_path,
                     ));
                 }
-                let eval_ctx = eval_ctx(
+                let mut eval_ctx = eval_ctx(
                     &candidate.row,
                     this.as_ref(),
                     &formulas.values,
@@ -252,9 +376,11 @@ pub fn execute(
                     &vault,
                     &warnings,
                 );
-                match eval_filter(filters, &eval_ctx) {
+                eval_ctx.filter_position = true;
+                match eval_filter_after_pushdown(filters, &eval_ctx, ctx.pushdown) {
                     Ok(true) => {}
                     Ok(false) => continue,
+                    Err(EvalError::Cancelled) => return Err(VaultError::Cancelled),
                     Err(error) => {
                         return Ok(error_result(
                             query,
@@ -355,10 +481,11 @@ fn load_candidates(
     ctx: &EngineCtx<'_>,
     limit: usize,
     offset: usize,
-) -> Result<Vec<Candidate>, VaultError> {
+    deps: &CandidateLoadDeps<'_>,
+) -> Result<Vec<Candidate>, CandidateLoadError> {
     match query.row_source {
-        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset),
-        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset),
+        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset, deps),
+        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset, deps),
     }
 }
 
@@ -368,7 +495,8 @@ fn load_file_candidates(
     ctx: &EngineCtx<'_>,
     limit: usize,
     offset: usize,
-) -> Result<Vec<Candidate>, VaultError> {
+    deps: &CandidateLoadDeps<'_>,
+) -> Result<Vec<Candidate>, CandidateLoadError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
     if ctx.pushdown
@@ -378,6 +506,11 @@ fn load_file_candidates(
             if let Some(predicate) = pushdown_predicate(conjunct) {
                 plan.clauses.push(predicate.clause);
                 plan.params.extend(predicate.params);
+            } else if let Some(predicate) =
+                fts_pushdown_predicate(conjunct, conn, deps.fts, deps.warnings, deps.cancel)?
+            {
+                plan.clauses.push(predicate.sql.clause);
+                plan.params.extend(predicate.sql.params);
             }
         }
     }
@@ -423,7 +556,9 @@ fn load_file_candidates(
     rows.into_iter()
         .map(|file| {
             let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-            assemble_row(conn, &file, task_counts, None).map(|row| Candidate { row })
+            assemble_row(conn, &file, task_counts, None)
+                .map(|row| Candidate { row })
+                .map_err(CandidateLoadError::from)
         })
         .collect()
 }
@@ -434,7 +569,8 @@ fn load_task_candidates(
     ctx: &EngineCtx<'_>,
     limit: usize,
     offset: usize,
-) -> Result<Vec<Candidate>, VaultError> {
+    deps: &CandidateLoadDeps<'_>,
+) -> Result<Vec<Candidate>, CandidateLoadError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
     if ctx.pushdown
@@ -446,6 +582,11 @@ fn load_task_candidates(
             {
                 plan.clauses.push(predicate.clause);
                 plan.params.extend(predicate.params);
+            } else if let Some(predicate) =
+                fts_pushdown_predicate(conjunct, conn, deps.fts, deps.warnings, deps.cancel)?
+            {
+                plan.clauses.push(predicate.sql.clause);
+                plan.params.extend(predicate.sql.params);
             }
         }
     }
@@ -497,7 +638,9 @@ fn load_task_candidates(
     rows.into_iter()
         .map(|(file, task)| {
             let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-            assemble_row(conn, &file, task_counts, Some(task)).map(|row| Candidate { row })
+            assemble_row(conn, &file, task_counts, Some(task))
+                .map(|row| Candidate { row })
+                .map_err(CandidateLoadError::from)
         })
         .collect()
 }
@@ -534,6 +677,11 @@ struct SqlPredicate {
     params: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct FtsSqlPredicate {
+    sql: SqlPredicate,
+}
+
 fn pushdown_predicate(node: &FilterNode) -> Option<SqlPredicate> {
     let FilterNode::Stmt(expr) = node else {
         return None;
@@ -545,6 +693,80 @@ fn pushdown_predicate(node: &FilterNode) -> Option<SqlPredicate> {
             args,
         } => pushdown_method(receiver, *name, args),
         _ => None,
+    }
+}
+
+fn fts_pushdown_predicate(
+    node: &FilterNode,
+    conn: &Connection,
+    fts: &FtsMatchCache,
+    warnings: &WarningSink,
+    cancel: &CancelToken,
+) -> Result<Option<FtsSqlPredicate>, CandidateLoadError> {
+    let FilterNode::Stmt(expr) = node else {
+        return Ok(None);
+    };
+    let Some(query) = file_matches_query(expr) else {
+        return Ok(None);
+    };
+    let query = query.trim();
+    if query.is_empty() {
+        warnings.warn("file.matches empty query matched no files");
+        return Ok(Some(FtsSqlPredicate {
+            sql: false_predicate(),
+        }));
+    }
+    match fts.ensure_sql_membership(conn, query, cancel) {
+        Ok(()) => {}
+        Err(VaultError::Cancelled) => return Err(CandidateLoadError::Vault(VaultError::Cancelled)),
+        Err(VaultError::InvalidQuery { message }) => {
+            return Err(CandidateLoadError::View(format!(
+                "file.matches: invalid search query: {message}"
+            )));
+        }
+        Err(error) => return Err(CandidateLoadError::Vault(error)),
+    }
+    Ok(Some(FtsSqlPredicate {
+        sql: file_matches_sql_predicate(query),
+    }))
+}
+
+fn file_matches_query(expr: &Expr) -> Option<String> {
+    let ExprKind::Call {
+        callee: Callee::Method { receiver, name },
+        args,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    if *name != MethodName::Matches || args.len() != 1 {
+        return None;
+    }
+    if !matches!(
+        receiver.kind,
+        ExprKind::Prop(PropertyRef::File(FileField::File))
+    ) {
+        return None;
+    }
+    literal_text(args.first()?)
+}
+
+fn false_predicate() -> SqlPredicate {
+    SqlPredicate {
+        clause: "0 = 1".to_string(),
+        params: Vec::new(),
+    }
+}
+
+fn file_matches_sql_predicate(query: &str) -> SqlPredicate {
+    SqlPredicate {
+        clause: "path IN (
+            SELECT path
+            FROM temp.slate_bases_fts_matches
+            WHERE query = ?
+        )"
+        .to_string(),
+        params: vec![query.to_string()],
     }
 }
 
@@ -1247,6 +1469,31 @@ fn eval_filter(node: &FilterNode, ctx: &EvalCtx<'_>) -> Result<bool, EvalError> 
     }
 }
 
+fn eval_filter_after_pushdown(
+    node: &FilterNode,
+    ctx: &EvalCtx<'_>,
+    pushdown: bool,
+) -> Result<bool, EvalError> {
+    if !pushdown {
+        return eval_filter(node, ctx);
+    }
+    match node {
+        FilterNode::Stmt(expr) if file_matches_query(expr).is_some() => Ok(true),
+        FilterNode::And(nodes) => {
+            for node in nodes {
+                if matches!(node, FilterNode::Stmt(expr) if file_matches_query(expr).is_some()) {
+                    continue;
+                }
+                if !eval_filter(node, ctx)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => eval_filter(node, ctx),
+    }
+}
+
 fn materialize_row(
     query: &SlateQuery,
     row: &RowContext,
@@ -1771,6 +2018,7 @@ fn custom_summary(
         now_ms: deps.ctx.now_ms,
         vault: deps.vault,
         warnings: deps.warnings,
+        filter_position: false,
     };
     eval(expr, &eval_ctx)
         .map(CellValue::Value)
@@ -2122,6 +2370,7 @@ fn eval_ctx<'a>(
         now_ms: ctx.now_ms,
         vault,
         warnings,
+        filter_position: false,
     }
 }
 
@@ -2240,6 +2489,8 @@ fn expr_mentions_global(expr: &Expr, needle: GlobalFn) -> bool {
 
 struct SqlVaultLookup<'a> {
     conn: &'a Connection,
+    fts: &'a FtsMatchCache,
+    cancel: &'a CancelToken,
 }
 
 impl VaultLookup for SqlVaultLookup<'_> {
@@ -2253,6 +2504,17 @@ impl VaultLookup for SqlVaultLookup<'_> {
             .optional()
             .ok()
             .flatten()
+    }
+
+    fn file_matches(&self, path: &str, query: &str) -> Result<bool, EvalError> {
+        match self.fts.paths(self.conn, query, self.cancel) {
+            Ok(paths) => Ok(paths.contains(path)),
+            Err(VaultError::Cancelled) => Err(EvalError::Cancelled),
+            Err(error) => Err(EvalError::InvalidArgument {
+                function: "file.matches".to_string(),
+                message: error.to_string(),
+            }),
+        }
     }
 
     fn row_for_path(&self, path: &str) -> Option<RowContext> {

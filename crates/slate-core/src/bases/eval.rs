@@ -143,6 +143,12 @@ pub trait VaultLookup {
         None
     }
 
+    fn file_matches(&self, _path: &str, _query: &str) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "file.matches".to_string(),
+        })
+    }
+
     fn row_for_path(&self, _path: &str) -> Option<RowContext> {
         None
     }
@@ -163,6 +169,7 @@ pub struct EvalCtx<'a> {
     pub now_ms: i64,
     pub vault: &'a dyn VaultLookup,
     pub warnings: &'a WarningSink,
+    pub filter_position: bool,
 }
 
 #[derive(Debug, Default)]
@@ -198,6 +205,8 @@ pub enum EvalError {
     UnsupportedFormatToken { token: String },
     #[error("{function} is only valid in filter position")]
     FilterOnly { function: String },
+    #[error("operation cancelled")]
+    Cancelled,
 }
 
 #[derive(Default)]
@@ -898,6 +907,20 @@ fn eval_method(
         }
         MethodName::Matches => {
             expect_arity("matches", args.len(), 1, 1)?;
+            if let Value::File(file) = receiver {
+                if !ctx.filter_position {
+                    return Err(EvalError::FilterOnly {
+                        function: "file.matches".to_string(),
+                    });
+                }
+                let query = expect_text("file.matches", &args[0])?;
+                if query.trim().is_empty() {
+                    ctx.warnings
+                        .warn("file.matches empty query matched no files");
+                    return Ok(Value::Bool(false));
+                }
+                return ctx.vault.file_matches(&file.path, &query).map(Value::Bool);
+            }
             let Value::Regex(pattern, flags) = receiver else {
                 return Ok(Value::Null);
             };

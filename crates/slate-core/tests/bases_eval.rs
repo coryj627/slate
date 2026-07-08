@@ -342,6 +342,7 @@ fn ctx<'a>(
         now_ms: 1_783_523_045_000,
         vault,
         warnings,
+        filter_position: false,
     }
 }
 
