@@ -1568,6 +1568,51 @@ fn file_matches_pushdown_materializes_membership_for_paged_query() {
 }
 
 #[test]
+fn file_matches_temp_membership_clears_between_executions() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "alpha token");
+    update_body_text(&conn, 2, "beta token");
+    update_body_text(&conn, 3, "alpha token");
+
+    let mut first_query = query();
+    first_query.filters = Some(stmt(r#"file.matches("alpha")"#));
+    first_query.columns = vec![column("file.path")];
+
+    let mut second_query = query();
+    second_query.filters = Some(stmt(r#"file.matches("beta")"#));
+    second_query.columns = vec![column("file.path")];
+
+    let ctx = EngineCtx {
+        pushdown: true,
+        ..EngineCtx::default()
+    };
+    let first =
+        execute(&first_query, &conn, &ctx, &CancelToken::new()).expect("execute first FTS query");
+    let second =
+        execute(&second_query, &conn, &ctx, &CancelToken::new()).expect("execute second FTS query");
+
+    assert_eq!(first.error, None);
+    assert_eq!(first.total_count, 2);
+    assert_eq!(second.error, None);
+    assert_eq!(second.total_count, 1);
+    assert_eq!(second.rows[0].path, "Projects/Beta.md");
+
+    let temp_queries = conn
+        .prepare(
+            "SELECT DISTINCT query
+             FROM temp.slate_bases_fts_matches
+             ORDER BY query",
+        )
+        .expect("prepare temp query inspection")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query temp membership")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect temp membership");
+    assert_eq!(temp_queries, vec!["beta".to_string()]);
+}
+
+#[test]
 fn file_matches_multiple_and_clauses_intersect() {
     let conn = migrated_conn();
     seed_index(&conn);
