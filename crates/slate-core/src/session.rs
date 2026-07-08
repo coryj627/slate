@@ -5798,10 +5798,7 @@ impl VaultSession {
         quick_filter: Option<String>,
     ) -> Result<String, VaultError> {
         let result = self.base_execute(handle, view, None, quick_filter, &CancelToken::new())?;
-        Ok(match format {
-            ExportFormat::Csv => bases_export_csv(&result),
-            ExportFormat::Markdown => bases_export_markdown(&result),
-        })
+        Ok(export_bases_result(&result, format))
     }
 
     pub fn base_apply_edit(
@@ -7109,6 +7106,13 @@ fn value_kind(value: &crate::bases::eval::Value) -> &'static str {
         crate::bases::eval::Value::Link(_) => "link",
         crate::bases::eval::Value::File(_) => "file",
         crate::bases::eval::Value::Regex(_, _) => "regex",
+    }
+}
+
+pub fn export_bases_result(result: &BasesResultSet, format: ExportFormat) -> String {
+    match format {
+        ExportFormat::Csv => bases_export_csv(result),
+        ExportFormat::Markdown => bases_export_markdown(result),
     }
 }
 

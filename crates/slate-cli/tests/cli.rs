@@ -20,6 +20,8 @@ use std::path::Path;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
+use slate_core::bases;
+use slate_core::{CancelToken, SavedQuerySourceSyntax, VaultSession};
 use tempfile::TempDir;
 
 /// The binary under test.
@@ -594,6 +596,332 @@ fn search_fts_syntax_error_exits_one_with_message() {
         .code(1)
         .stderr(predicate::str::contains("invalid search query"))
         .stderr(predicate::str::starts_with("slate: "));
+}
+
+// =====================================================================
+// Milestone N2-3: `query` runs .base views and saved queries (#701)
+// =====================================================================
+
+fn seed_bases_cli_vault() -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path();
+    fs::create_dir_all(root.join("Queries")).unwrap();
+    fs::create_dir_all(root.join("Notes")).unwrap();
+    fs::write(
+        root.join("Queries/Reading.base"),
+        r#"views:
+  - type: table
+    name: Reading
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+      - status
+  - type: table
+    name: Done
+    filters:
+      and:
+        - "file.inFolder(\"Notes\")"
+        - "status == \"done\""
+    order:
+      - file.name
+      - status
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("Notes/Alpha.md"),
+        "---\nstatus: active\n---\n# Alpha\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("Notes/Beta.md"),
+        "---\nstatus: done\n---\n# Beta\n",
+    )
+    .unwrap();
+    dir
+}
+
+fn seed_saved_done_query(vault: &Path) {
+    let session = VaultSession::from_filesystem(vault.to_path_buf()).expect("open vault");
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let source = fs::read_to_string(vault.join("Queries/Reading.base")).unwrap();
+    let (base, warnings) = bases::parse_base(&source);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let query_json = serde_json::to_string(&bases::view_query(&base, 1)).unwrap();
+    session
+        .save_query(
+            "Done notes",
+            Some("CLI fixture"),
+            &query_json,
+            SavedQuerySourceSyntax::Builder,
+        )
+        .unwrap();
+}
+
+#[test]
+fn query_base_defaults_to_json_first_view_rows_by_label() {
+    let vault = seed_bases_cli_vault();
+    let out = slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--base")
+        .arg("Queries/Reading.base")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = assert_envelope(&out, "query");
+    let rows = data.as_array().expect("query data is a row array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["path"], "Notes/Alpha.md");
+    assert_eq!(rows[0]["file.name"], "Alpha.md");
+    assert_eq!(rows[0]["status"], "active");
+    assert_eq!(rows[1]["path"], "Notes/Beta.md");
+    assert_eq!(rows[1]["file.name"], "Beta.md");
+    assert_eq!(rows[1]["status"], "done");
+}
+
+#[test]
+fn query_base_csv_and_markdown_reuse_export_renderers() {
+    let vault = seed_bases_cli_vault();
+    slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--base")
+        .arg("Queries/Reading.base")
+        .arg("--view")
+        .arg("Done")
+        .arg("--format")
+        .arg("csv")
+        .assert()
+        .success()
+        .stdout("file.name,status\r\nBeta.md,done\r\n");
+
+    slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--base")
+        .arg("Queries/Reading.base")
+        .arg("--view")
+        .arg("Done")
+        .arg("--format")
+        .arg("markdown")
+        .assert()
+        .success()
+        .stdout("| file.name | status |\n| --- | --- |\n| Beta.md | done |\n");
+}
+
+#[test]
+fn query_saved_runs_query_by_name() {
+    let vault = seed_bases_cli_vault();
+    seed_saved_done_query(vault.path());
+
+    let out = slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--saved")
+        .arg("Done notes")
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = assert_envelope(&out, "query");
+    let rows = data.as_array().expect("query data is a row array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["path"], "Notes/Beta.md");
+    assert_eq!(rows[0]["file.name"], "Beta.md");
+    assert_eq!(rows[0]["status"], "done");
+}
+
+#[test]
+fn query_limit_and_this_context_shape_json_rows() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path();
+    fs::create_dir_all(root.join("Queries")).unwrap();
+    fs::create_dir_all(root.join("Notes")).unwrap();
+    fs::write(root.join("Notes/Alpha.md"), "# Alpha\n").unwrap();
+    fs::write(root.join("Notes/Beta.md"), "# Beta\n").unwrap();
+    fs::write(
+        root.join("Queries/This.base"),
+        r#"formulas:
+  current: "this.file.name"
+views:
+  - type: table
+    name: This
+    order:
+      - file.name
+      - formula.current
+"#,
+    )
+    .unwrap();
+
+    let out = slate()
+        .arg("query")
+        .arg(root)
+        .arg("--base")
+        .arg("Queries/This.base")
+        .arg("--this")
+        .arg("Notes/Alpha.md")
+        .arg("--limit")
+        .arg("1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = assert_envelope(&out, "query");
+    let rows = data.as_array().expect("query data is a row array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["path"], "Notes/Alpha.md");
+    assert_eq!(rows[0]["formula.current"], "Alpha.md");
+}
+
+#[test]
+fn query_unknown_saved_name_exits_two_with_available_saved_queries() {
+    let vault = seed_bases_cli_vault();
+    seed_saved_done_query(vault.path());
+
+    let output = slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--saved")
+        .arg("Missing saved query")
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "saved-query selection errors stay machine-readable on stdout"
+    );
+    let data = assert_envelope(&output.stdout, "query");
+    assert_eq!(data["error"]["kind"], "unknown_saved_query");
+    assert_eq!(
+        data["available_saved_queries"],
+        serde_json::json!(["Done notes"])
+    );
+}
+
+#[test]
+fn query_requires_base_or_saved_before_opening_vault() {
+    let vault = seed_bases_cli_vault();
+    slate()
+        .arg("query")
+        .arg(vault.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("--base"));
+
+    assert!(
+        !vault.path().join(".slate/cache.sqlite").exists(),
+        "usage errors must not open or scan the vault"
+    );
+}
+
+#[test]
+fn query_view_is_base_only_before_opening_vault() {
+    let vault = seed_bases_cli_vault();
+    slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--saved")
+        .arg("Done notes")
+        .arg("--view")
+        .arg("Done")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("--view"));
+
+    assert!(
+        !vault.path().join(".slate/cache.sqlite").exists(),
+        "usage errors must not open or scan the vault"
+    );
+}
+
+#[test]
+fn query_unknown_view_exits_two_with_available_views_envelope() {
+    let vault = seed_bases_cli_vault();
+    let output = slate()
+        .arg("query")
+        .arg(vault.path())
+        .arg("--base")
+        .arg("Queries/Reading.base")
+        .arg("--view")
+        .arg("Missing")
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "json query errors stay machine-readable on stdout"
+    );
+    let data = assert_envelope(&output.stdout, "query");
+    assert_eq!(data["error"]["kind"], "unknown_view");
+    assert!(
+        data["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Missing")
+    );
+    assert_eq!(
+        data["available_views"],
+        serde_json::json!(["Reading", "Done"])
+    );
+}
+
+#[test]
+fn query_view_error_exits_two_with_error_envelope() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path();
+    fs::create_dir_all(root.join("Queries")).unwrap();
+    fs::write(root.join("note.md"), "# Note\n").unwrap();
+    fs::write(
+        root.join("Queries/Broken.base"),
+        r#"views:
+  - type: table
+    name: Broken
+    filters: "unknownFn(1)"
+    order:
+      - file.name
+"#,
+    )
+    .unwrap();
+
+    let output = slate()
+        .arg("query")
+        .arg(root)
+        .arg("--base")
+        .arg("Queries/Broken.base")
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "view errors stay machine-readable on stdout"
+    );
+    let data = assert_envelope(&output.stdout, "query");
+    assert_eq!(data["error"]["kind"], "view_error");
+    assert!(
+        data["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown function"),
+        "{data:#?}"
+    );
 }
 
 // --- `read` -----------------------------------------------------------

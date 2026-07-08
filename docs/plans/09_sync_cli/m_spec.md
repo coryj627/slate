@@ -339,9 +339,10 @@ States (LeafSection/LeafEmptyState discipline):
   in this contract — the exit codes, the stdout=data/stderr=diagnostics split — still applies.
 - `--format` default `human`.
   - **json**: single object to stdout:
-    `{"schema":"slate.cli.v1","command":"<cmd>","vault":"<abs path>","data":{…}}`. `data` shapes are
+    `{"schema":"slate.cli.v1","command":"<cmd>","vault":"<abs path>","data":…}`. `data` shapes are
     per-command (below) and are a **stability contract** — additive evolution only; breaking changes
-    bump `slate.cli.v2`. Pretty-printed (`to_string_pretty`); trailing newline.
+    bump `slate.cli.v2`. Most commands use object-shaped `data`; `slate query` uses a row array.
+    Pretty-printed (`to_string_pretty`); trailing newline.
   - **tsv**: header row then data rows, `\t`-separated, `\n` row terminator. Any literal tab or
     newline inside a value is replaced by a single space (documented lossy flattening — tsv is the
     cut/awk format; use json for fidelity).
@@ -432,6 +433,28 @@ markers are replaced by nothing in tsv/human plain output and by `"match_ranges"
 `[{start,end}]` byte ranges into that plain snippet derived from the marker positions. Human:
 `path: snippet` per line (grep convention), markers stripped. `InvalidQuery` (FTS5 syntax) → exit 1
 with the query error message verbatim.
+
+### `slate query <vault-path> (--base <path> [--view <name>] | --saved <name>) [--format json|csv|markdown] [--limit N] [--this <note-path>]`
+
+Additive N2-3 Bases verb. This is the one vault-reading command whose `--format` menu intentionally
+differs from the M verbs: default `json`, plus raw `csv` / `markdown` exports. `--base` opens a
+vault-relative `.base` file; `--saved` resolves a saved query by name. `--view` selects a named
+view and defaults to the first view. `--this` supplies the vault-relative note context for
+`this.*` formulas. `--limit` truncates displayed rows client-side after execution.
+
+Success:
+- json uses the standard `slate.cli.v1` envelope with `command: "query"` and `data` as an array of
+  row objects: each row has reserved `"path"` plus one key per displayed column label, with displayed
+  string values. Duplicate column labels are disambiguated with ` (2)`, ` (3)`, etc.; a displayed
+  column named `path` becomes `path (2)`.
+- csv / markdown emit the exact Bases export renderer output for the displayed result, with no
+  envelope and no extra line terminator.
+
+Query-surface failures are machine-readable json envelopes on stdout and exit 2, with stderr empty:
+unknown `.base` view → `data.error.kind = "unknown_view"` and `data.available_views`; unknown saved
+query name → `data.error.kind = "unknown_saved_query"` and `data.available_saved_queries`;
+fail-loud view execution → `data.error.kind = "view_error"`. I/O/session failures still use the
+global stderr exit-1 path.
 
 ### `slate read <vault-path> <note-path>` and `slate list <vault-path> [--markdown-only]`
 
