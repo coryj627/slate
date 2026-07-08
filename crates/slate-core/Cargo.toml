@@ -19,6 +19,7 @@ yaml-rust2 = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
+regex = { workspace = true }
 ropey = { workspace = true }
 similar = { workspace = true }
 unicode-normalization = { workspace = true }

@@ -86,6 +86,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # of the same name land adjacent and in a stable order. Already resolved
 # transitively (via `idna`); pinning it as a direct dep is cheap.
 unicode-normalization = "0.1"
+regex = "1.12.4"
 
 # --- Diagnostics facade (#507) ----------------------------------------
 # `log` is the crate-wide logging facade slate-core routes its non-fatal
