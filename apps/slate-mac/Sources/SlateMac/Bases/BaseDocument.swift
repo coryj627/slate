@@ -105,7 +105,7 @@ final class BaseDocument: ObservableObject {
         !quickFilterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func load(session: VaultSession) {
+    func load(session: VaultSession, thisPath: String? = nil) {
         if let stale = handle {
             session.closeBase(handle: stale)
             handle = nil
@@ -125,7 +125,7 @@ final class BaseDocument: ObservableObject {
             activeViewIndex = views.isEmpty ? 0 : min(activeViewIndex, views.count - 1)
             sortState = nil
             focusedColumnIndex = 0
-            executeActiveView(session: session)
+            executeActiveView(session: session, thisPath: thisPath)
         } catch {
             handle = nil
             views = []
@@ -134,8 +134,8 @@ final class BaseDocument: ObservableObject {
         }
     }
 
-    func refresh(session: VaultSession) {
-        load(session: session)
+    func refresh(session: VaultSession, thisPath: String? = nil) {
+        load(session: session, thisPath: thisPath)
     }
 
     func selectView(index: Int, session: VaultSession) {
@@ -158,7 +158,7 @@ final class BaseDocument: ObservableObject {
         selectView(index: max(activeViewIndex - 1, 0), session: session)
     }
 
-    func executeActiveView(session: VaultSession) {
+    func executeActiveView(session: VaultSession, thisPath: String? = nil) {
         guard let handle, views.indices.contains(activeViewIndex) else {
             result = nil
             state = .degraded("No executable base views were found.")
@@ -168,7 +168,7 @@ final class BaseDocument: ObservableObject {
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
-                thisPath: nil,
+                thisPath: thisPath,
                 quickFilter: quickFilterArgument,
                 cancel: CancelToken())
             result = executed

@@ -342,9 +342,19 @@ final class AppState: ObservableObject {
     var baseDocuments: [String: BaseDocument] = [:]
 
     /// Right-pane Queries leaf snapshot (#709): saved queries, `.base`
-    /// files, and app-level saved-query pins.
+    /// files, dashboards, and app-level saved-query pins.
     @Published var baseQueries = BaseQueriesState()
     var savedQueryCommandIDs: Set<String> = []
+
+    /// Dashboard tab documents (#710), keyed by dashboard id.
+    var dashboardDocuments: [String: DashboardDocument] = [:]
+
+    /// Right-pane docked Bases surface (#710): target plus the currently
+    /// followed active note context.
+    @Published var basesDock = BasesDockState()
+    var basesDockDocument: BaseDocument?
+    var basesDockDashboardDocument: DashboardDocument?
+    var basesDockRefreshTask: Task<Void, Never>?
 
     /// Open embedded Bases keyed by source + host note (#706). Reusing the
     /// handle keeps duplicate embeds on one native cache while each rendered
@@ -428,6 +438,10 @@ final class AppState: ObservableObject {
             activateSavedQueryTab(id, savedQueryID: savedQueryID, name: name)
             return
         }
+        if case .dashboard(let dashboardID, let name) = tab.item {
+            activateDashboardTab(id, dashboardID: dashboardID, name: name)
+            return
+        }
         if case .canvas(let path) = tab.item {
             activateCanvasTab(id, path: path)
             return
@@ -471,6 +485,7 @@ final class AppState: ObservableObject {
             selectedFilePath = path
         }
         fireCollectionLoads(path: path)
+        scheduleBasesDockFollowActiveRefresh()
     }
 
     // MARK: - Tab lifecycle (U1-2, #454)
@@ -507,6 +522,14 @@ final class AppState: ObservableObject {
             return
         }
         if case .base = workspace.model.tab(target)?.item {
+            performCloseTab(target)
+            return
+        }
+        if case .savedQuery = workspace.model.tab(target)?.item {
+            performCloseTab(target)
+            return
+        }
+        if case .dashboard = workspace.model.tab(target)?.item {
             performCloseTab(target)
             return
         }
@@ -572,6 +595,7 @@ final class AppState: ObservableObject {
         let outcome = workspace.close(id)
         releaseCanvasDocumentIfUnreferenced(closedItem)
         releaseBaseDocumentIfUnreferenced(closedItem)
+        releaseDashboardDocumentIfUnreferenced(closedItem)
         if closingActive {
             if let successor = outcome.focusedTab {
                 activateTab(successor)
@@ -2332,6 +2356,7 @@ final class AppState: ObservableObject {
         workspace.mirrorSingleSelection(path)
         releaseCanvasDocumentIfUnreferenced(replacedItem)
         releaseBaseDocumentIfUnreferenced(replacedItem)
+        releaseDashboardDocumentIfUnreferenced(replacedItem)
         guard let path else {
             // Full clear when nothing is selected. Safe here because
             // there's no destination note to attribute stale content
@@ -2383,6 +2408,7 @@ final class AppState: ObservableObject {
         clearTransitionSensitiveCollections()
         restoreParkedOrLoadFromDisk(path: path)
         fireCollectionLoads(path: path)
+        scheduleBasesDockFollowActiveRefresh()
     }
 
     /// Cancel every note-scoped in-flight task (loads + after-save
@@ -2779,6 +2805,7 @@ final class AppState: ObservableObject {
             releaseAllCanvasDocuments()
             releaseAllBaseDocuments()
             releaseAllBaseEmbedDocuments()
+            releaseAllDashboardDocuments()
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -3146,6 +3173,7 @@ final class AppState: ObservableObject {
         releaseAllCanvasDocuments()
         releaseAllBaseDocuments()
         releaseAllBaseEmbedDocuments()
+        releaseAllDashboardDocuments()
         currentSession = nil
         currentVaultURL = nil
         files = []
@@ -5783,6 +5811,8 @@ final class AppState: ObservableObject {
             case .base:
                 invalidateBaseDocument(path: tabPath)
             case .savedQuery:
+                continue
+            case .dashboard:
                 continue
             }
         }

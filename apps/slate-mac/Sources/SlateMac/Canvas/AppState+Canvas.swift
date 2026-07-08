@@ -32,6 +32,7 @@ extension AppState {
                 workspace.replaceActiveItem(.canvas(path: path))
                 releaseCanvasDocumentIfUnreferenced(replacedItem)
                 releaseBaseDocumentIfUnreferenced(replacedItem)
+                releaseDashboardDocumentIfUnreferenced(replacedItem)
                 if let id = workspace.model.activeGroup.activeTabID {
                     activateTab(id)
                 }

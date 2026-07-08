@@ -54,7 +54,7 @@ final class RightPaneViewTests: XCTestCase {
     /// (no wrap — a segmented picker's arrow-within behavior). As of U4-2 all
     /// leaves are registered, in the rail/registry order
     /// [outline, backlinks, outgoingLinks, embeds, math, code, diagrams, tasks,
-    /// citations, bibliography, queries, syncDiagnostics].
+    /// citations, bibliography, queries, basesDock, syncDiagnostics].
     func testRailMoveSteppingAndClamping() {
         // Down from the top advances; down from the bottom is a no-op (clamp).
         XCTAssertEqual(Leaf.railMove(from: .outline, .down), .backlinks)
@@ -63,11 +63,13 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.railMove(from: .citations, .down), .bibliography)
         // N4-3 (#709): queries sits between file-centric panels and sync.
         XCTAssertEqual(Leaf.railMove(from: .bibliography, .down), .queries)
-        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .syncDiagnostics)
+        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .basesDock)
+        XCTAssertEqual(Leaf.railMove(from: .basesDock, .down), .syncDiagnostics)
         XCTAssertNil(Leaf.railMove(from: .syncDiagnostics, .down), "clamped at the end")
 
         // Up mirrors it.
-        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .queries)
+        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .basesDock)
+        XCTAssertEqual(Leaf.railMove(from: .basesDock, .up), .queries)
         XCTAssertEqual(Leaf.railMove(from: .queries, .up), .bibliography)
         XCTAssertEqual(Leaf.railMove(from: .bibliography, .up), .citations)
         XCTAssertEqual(Leaf.railMove(from: .outgoingLinks, .up), .backlinks)
@@ -113,14 +115,14 @@ final class RightPaneViewTests: XCTestCase {
             Leaf.registered,
             [
                 .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-                .tasks, .citations, .bibliography, .queries, .syncDiagnostics,
+                .tasks, .citations, .bibliography, .queries, .basesDock, .syncDiagnostics,
             ])
         // Every case is now registered — no leaf presents a selectable-but-
         // blank rail icon.
         for leaf in Leaf.allCases {
             XCTAssertTrue(leaf.isRegistered, "\(leaf) must be registered as of U4-2")
         }
-        XCTAssertEqual(Leaf.allCases.count, 12, "the full leaf vocabulary is declared")
+        XCTAssertEqual(Leaf.allCases.count, 13, "the full leaf vocabulary is declared")
         // The registry is exactly the case set (no duplicates, none missing).
         XCTAssertEqual(Set(Leaf.registered), Set(Leaf.allCases))
         XCTAssertEqual(Leaf.registered.count, Leaf.allCases.count)
@@ -148,6 +150,8 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.bibliography.symbol, .bibliography)
         XCTAssertEqual(Leaf.queries.symbol, .base)
         XCTAssertEqual(Leaf.queries.title, "Queries")
+        XCTAssertEqual(Leaf.basesDock.symbol, .base)
+        XCTAssertEqual(Leaf.basesDock.title, "Base dock")
         XCTAssertEqual(Leaf.syncDiagnostics.symbol, .syncDiagnostics)
         XCTAssertEqual(Leaf.syncDiagnostics.title, "Sync")
     }
@@ -159,12 +163,28 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.queries.symbol, .base)
         XCTAssertTrue(Leaf.queries.isRegistered)
         XCTAssertEqual(Leaf.railMove(from: .bibliography, .down), .queries)
-        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .syncDiagnostics)
-        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .queries)
+        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .basesDock)
+        XCTAssertEqual(Leaf.railMove(from: .basesDock, .down), .syncDiagnostics)
+        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .basesDock)
 
         let source = try Self.sourceFile("Sources/SlateMac/Workspace/RightPaneView.swift")
         XCTAssertTrue(source.contains("case .queries"))
         XCTAssertTrue(source.contains("BaseQueriesPanel()"))
+    }
+
+    /// N4-4 (#710): the docked Bases leaf is distinct from the Queries list
+    /// leaf. It hosts follow-active `.base`, saved-query, and dashboard grids.
+    func testBasesDockLeafIsRegisteredAndMounted() throws {
+        XCTAssertEqual(Leaf.basesDock.title, "Base dock")
+        XCTAssertEqual(Leaf.basesDock.symbol, .base)
+        XCTAssertTrue(Leaf.basesDock.isRegistered)
+        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .basesDock)
+        XCTAssertEqual(Leaf.railMove(from: .basesDock, .down), .syncDiagnostics)
+        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .basesDock)
+
+        let source = try Self.sourceFile("Sources/SlateMac/Workspace/RightPaneView.swift")
+        XCTAssertTrue(source.contains("case .basesDock"))
+        XCTAssertTrue(source.contains("BasesDockPanel()"))
     }
 
     // MARK: - Persistence
@@ -186,6 +206,7 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf(persisted: "citations"), .citations)
         XCTAssertEqual(Leaf(persisted: "bibliography"), .bibliography)
         XCTAssertEqual(Leaf(persisted: "queries"), .queries)
+        XCTAssertEqual(Leaf(persisted: "basesDock"), .basesDock)
         // M-3 (#534): the new leaf round-trips; older builds decode the
         // token to `.outline` by the same unknown-token fallback above.
         XCTAssertEqual(Leaf(persisted: "syncDiagnostics"), .syncDiagnostics)

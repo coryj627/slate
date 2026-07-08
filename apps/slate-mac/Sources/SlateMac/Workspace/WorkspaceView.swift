@@ -81,6 +81,8 @@ private struct TabGroupView: View {
         // positions because the document is shared per path.
         if let tab = group.activeTab, let source = BaseDocumentSource(item: tab.item) {
             BaseContainerView(document: appState.baseDocument(for: source), tabID: tab.id)
+        } else if case .dashboard(let id, let name) = group.activeTab?.item {
+            DashboardContainerView(document: appState.dashboardDocument(id: id, name: name))
         } else if case .canvas(let path) = group.activeTab?.item {
             CanvasContainerView(
                 document: appState.canvasDocument(for: path),
