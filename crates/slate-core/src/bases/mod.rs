@@ -19,6 +19,7 @@ use yaml_rust2::Yaml;
 use self::expr::{Callee, Expr, ExprKind, Lit, PropertyRef, Span, parse_expr};
 
 pub mod dql;
+pub mod engine;
 pub mod eval;
 pub mod expr;
 

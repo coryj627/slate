@@ -1565,7 +1565,7 @@ fn invalid_arg(function: impl Into<String>, message: impl ToString) -> EvalError
 }
 
 impl Value {
-    fn is_truthy(&self) -> bool {
+    pub fn is_truthy(&self) -> bool {
         match self {
             Value::Null => false,
             Value::Bool(value) => *value,
