@@ -336,9 +336,15 @@ final class AppState: ObservableObject {
     var canvasDocuments: [String: CanvasDocument] = [:]
 
     /// Open base documents keyed by vault-relative path (Milestone N,
-    /// #702) — one per path, shared by every pane/tab showing that base.
+    /// #702) or saved-query source — one per source, shared by every
+    /// pane/tab showing that base.
     /// Not @Published: views observe each document directly.
     var baseDocuments: [String: BaseDocument] = [:]
+
+    /// Right-pane Queries leaf snapshot (#709): saved queries, `.base`
+    /// files, and app-level saved-query pins.
+    @Published var baseQueries = BaseQueriesState()
+    var savedQueryCommandIDs: Set<String> = []
 
     /// Open embedded Bases keyed by source + host note (#706). Reusing the
     /// handle keeps duplicate embeds on one native cache while each rendered
@@ -416,6 +422,10 @@ final class AppState: ObservableObject {
         clearBaseQuickFilterIfLeavingActiveTab(for: id)
         if case .base(let path) = tab.item {
             activateBaseTab(id, path: path)
+            return
+        }
+        if case .savedQuery(let savedQueryID, let name) = tab.item {
+            activateSavedQueryTab(id, savedQueryID: savedQueryID, name: name)
             return
         }
         if case .canvas(let path) = tab.item {
@@ -1876,6 +1886,8 @@ final class AppState: ObservableObject {
         // assignment after init), so loading here doesn't recurse.
         self.mathPrefs = preferencesStore.loadMathPrefs()
         self.codePrefs = preferencesStore.loadCodePrefs()
+        self.baseQueries = BaseQueriesState(
+            pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
         self.recentVaults = self.recentsStore.load()
 
         // Watch `selectedFilePath` and (re)trigger note loading on
@@ -2806,9 +2818,12 @@ final class AppState: ObservableObject {
             // load lazily; a missing file surfaces the existing per-tab
             // load-error state rather than being dropped.
             restoreWorkspaceLayout()
+            refreshBaseQueries()
             scanTask?.cancel()
             scanTask = Task { [weak self] in
                 await self?.loadFiles()
+                guard !Task.isCancelled else { return }
+                self?.refreshBaseQueries()
                 // M-3 (#534): sync diagnostics, once per vault open —
                 // the post-scan continuation. The probes don't touch
                 // the index, so this runs even when the scan itself
@@ -3058,6 +3073,7 @@ final class AppState: ObservableObject {
         // with the `requestCommandPalette()` open-guard.
         isCommandPaletteOpen = false
         activeBaseQueryBuilder = nil
+        resetBaseQueriesForClosedVault()
         // Quick switcher (#495): same stuck-bool reset as the palette,
         // enforced by CloseVaultSheetParityTests. Also drop the in-memory
         // file-recents — it's per-vault, so the next vault reloads its own.
@@ -5766,6 +5782,8 @@ final class AppState: ObservableObject {
                 invalidateCanvasDocument(path: tabPath)
             case .base:
                 invalidateBaseDocument(path: tabPath)
+            case .savedQuery:
+                continue
             }
         }
         if activeWasDeleted {

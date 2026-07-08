@@ -5,15 +5,15 @@ import SwiftUI
 
 /// A right-pane leaf: one selectable panel in the trailing utility rail
 /// (Milestone U4-1, #470; all ten U-program leaves live as of U4-2, #471;
-/// M-3 #534 adds the eleventh, `.syncDiagnostics`).
+/// M-3 #534 adds `.syncDiagnostics`; N4-3 #709 adds `.queries`).
 ///
 /// The full vocabulary is the rail's iteration + persistence order. All
-/// eleven leaves are `registered`: the three former detail-column tabs
+/// registered leaves are the three former detail-column tabs
 /// (`.outline`, `.citations`, `.bibliography`) that U4-1 seeded, the
 /// seven panels U4-2 ported out of the retired left-sidebar stack
 /// (`.backlinks`, `.outgoingLinks`, `.embeds`, `.math`, `.code`, `.diagrams`,
-/// `.tasks`), plus M-3's vault-level `.syncDiagnostics`. The rail renders
-/// every registered leaf, so it shows eleven icons and the pane replaces
+/// `.tasks`), N4-3's `.queries`, plus M-3's vault-level `.syncDiagnostics`.
+/// The rail renders every registered leaf, so it shows all icons and replaces
 /// both the old segmented picker AND the sidebar stack.
 ///
 /// `rawValue` is the persistence token stored in `workspace.json`; an unknown
@@ -29,8 +29,9 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     case tasks
     case citations
     case bibliography
-    /// Vault-level sync diagnostics (Milestone M-3, #534) — the eleventh
-    /// leaf, vault-scoped like `.bibliography`.
+    case queries
+    /// Vault-level sync diagnostics (Milestone M-3, #534) — vault-scoped like
+    /// `.bibliography`.
     case syncDiagnostics
 
     var id: String { rawValue }
@@ -49,6 +50,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .tasks: return "Tasks"
         case .citations: return "Citations"
         case .bibliography: return "Bibliography"
+        case .queries: return "Queries"
         case .syncDiagnostics: return "Sync"
         }
     }
@@ -71,6 +73,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .tasks: return .tasksLeaf
         case .citations: return .citationSummary
         case .bibliography: return .bibliography
+        case .queries: return .base
         case .syncDiagnostics: return .syncDiagnostics
         }
     }
@@ -85,7 +88,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     /// a selectable-but-blank icon.
     static let registered: [Leaf] = [
         .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-        .tasks, .citations, .bibliography, .syncDiagnostics,
+        .tasks, .citations, .bibliography, .queries, .syncDiagnostics,
     ]
 
     var isRegistered: Bool { Self.registered.contains(self) }
@@ -253,8 +256,8 @@ struct RightPaneView: View {
             .accessibilityFocused($leafAXFocused)
     }
 
-    /// Maps a leaf to its panel view. All eleven leaves are registered (U4-2
-    /// + M-3), so the switch is exhaustive over `Leaf` — no default arm. The
+    /// Maps a leaf to its panel view. All leaves are registered, so the switch
+    /// is exhaustive over `Leaf` — no default arm. The
     /// seven panels
     /// ported here from the retired sidebar stack are unchanged in binding and
     /// AX; only their outer self-hiding `EmptyView` gates became labeled leaf
@@ -284,6 +287,8 @@ struct RightPaneView: View {
             CitationsPanel()
         case .bibliography:
             BibliographyPanel()
+        case .queries:
+            BaseQueriesPanel()
         case .syncDiagnostics:
             SyncDiagnosticsPanel()
         }

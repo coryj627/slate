@@ -36,25 +36,39 @@ final class RightPaneViewTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    private static func sourceFile(_ relativePath: String) throws -> String {
+        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while cursor.path != "/" {
+            let candidate = cursor.appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor.deleteLastPathComponent()
+        }
+        throw CocoaError(.fileNoSuchFile)
+    }
+
     // MARK: - Rail keyboard navigation (pure function)
 
     /// ↑/↓ step through the registered leaves in order, clamped at the ends
     /// (no wrap — a segmented picker's arrow-within behavior). As of U4-2 all
-    /// ten leaves are registered, in the rail/registry order
+    /// leaves are registered, in the rail/registry order
     /// [outline, backlinks, outgoingLinks, embeds, math, code, diagrams, tasks,
-    /// citations, bibliography, syncDiagnostics].
+    /// citations, bibliography, queries, syncDiagnostics].
     func testRailMoveSteppingAndClamping() {
         // Down from the top advances; down from the bottom is a no-op (clamp).
         XCTAssertEqual(Leaf.railMove(from: .outline, .down), .backlinks)
         XCTAssertEqual(Leaf.railMove(from: .backlinks, .down), .outgoingLinks)
         XCTAssertEqual(Leaf.railMove(from: .tasks, .down), .citations)
         XCTAssertEqual(Leaf.railMove(from: .citations, .down), .bibliography)
-        // M-3 (#534): syncDiagnostics is the new rail tail.
-        XCTAssertEqual(Leaf.railMove(from: .bibliography, .down), .syncDiagnostics)
+        // N4-3 (#709): queries sits between file-centric panels and sync.
+        XCTAssertEqual(Leaf.railMove(from: .bibliography, .down), .queries)
+        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .syncDiagnostics)
         XCTAssertNil(Leaf.railMove(from: .syncDiagnostics, .down), "clamped at the end")
 
         // Up mirrors it.
-        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .bibliography)
+        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .queries)
+        XCTAssertEqual(Leaf.railMove(from: .queries, .up), .bibliography)
         XCTAssertEqual(Leaf.railMove(from: .bibliography, .up), .citations)
         XCTAssertEqual(Leaf.railMove(from: .outgoingLinks, .up), .backlinks)
         XCTAssertEqual(Leaf.railMove(from: .backlinks, .up), .outline)
@@ -71,7 +85,7 @@ final class RightPaneViewTests: XCTestCase {
 
     /// An origin that isn't in the supplied order yields no move (defensive:
     /// the function stays total even for an origin outside the given order).
-    /// All ten `Leaf` cases are registered now, so this is exercised via an
+    /// All `Leaf` cases are registered now, so this is exercised via an
     /// explicit restricted order rather than a real unregistered leaf.
     func testRailMoveFromOriginOutsideOrderIsNoMove() {
         let order: [Leaf] = [.outline, .citations, .bibliography]
@@ -91,22 +105,22 @@ final class RightPaneViewTests: XCTestCase {
 
     // MARK: - Leaf registry & metadata
 
-    /// U4-2 registers all ten leaves in the rail/registry order (outline first
+    /// U4-2/#709 register all leaves in the rail/registry order (outline first
     /// — most used, matches the old default tab): the three detail tabs U4-1
     /// seeded plus the seven ported out of the retired sidebar stack.
-    func testAllElevenLeavesRegisteredInRailOrder() {
+    func testAllTwelveLeavesRegisteredInRailOrder() {
         XCTAssertEqual(
             Leaf.registered,
             [
                 .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-                .tasks, .citations, .bibliography, .syncDiagnostics,
+                .tasks, .citations, .bibliography, .queries, .syncDiagnostics,
             ])
         // Every case is now registered — no leaf presents a selectable-but-
         // blank rail icon.
         for leaf in Leaf.allCases {
             XCTAssertTrue(leaf.isRegistered, "\(leaf) must be registered as of U4-2")
         }
-        XCTAssertEqual(Leaf.allCases.count, 11, "the full leaf vocabulary is declared")
+        XCTAssertEqual(Leaf.allCases.count, 12, "the full leaf vocabulary is declared")
         // The registry is exactly the case set (no duplicates, none missing).
         XCTAssertEqual(Set(Leaf.registered), Set(Leaf.allCases))
         XCTAssertEqual(Leaf.registered.count, Leaf.allCases.count)
@@ -132,14 +146,31 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.tasks.symbol, .tasksLeaf)
         XCTAssertEqual(Leaf.citations.symbol, .citationSummary)
         XCTAssertEqual(Leaf.bibliography.symbol, .bibliography)
+        XCTAssertEqual(Leaf.queries.symbol, .base)
+        XCTAssertEqual(Leaf.queries.title, "Queries")
         XCTAssertEqual(Leaf.syncDiagnostics.symbol, .syncDiagnostics)
         XCTAssertEqual(Leaf.syncDiagnostics.title, "Sync")
+    }
+
+    /// N4-3 (#709): saved queries get a first-class right-pane leaf, after the
+    /// file-centric leaves and before vault-level sync diagnostics.
+    func testQueriesLeafIsRegisteredAndMounted() throws {
+        XCTAssertEqual(Leaf.queries.title, "Queries")
+        XCTAssertEqual(Leaf.queries.symbol, .base)
+        XCTAssertTrue(Leaf.queries.isRegistered)
+        XCTAssertEqual(Leaf.railMove(from: .bibliography, .down), .queries)
+        XCTAssertEqual(Leaf.railMove(from: .queries, .down), .syncDiagnostics)
+        XCTAssertEqual(Leaf.railMove(from: .syncDiagnostics, .up), .queries)
+
+        let source = try Self.sourceFile("Sources/SlateMac/Workspace/RightPaneView.swift")
+        XCTAssertTrue(source.contains("case .queries"))
+        XCTAssertTrue(source.contains("BaseQueriesPanel()"))
     }
 
     // MARK: - Persistence
 
     /// Unknown / absent tokens fall back to `.outline`; every known token
-    /// round-trips now that all ten leaves are registered (U4-2).
+    /// round-trips now that all leaves are registered.
     func testLeafPersistedInitFallback() {
         XCTAssertEqual(Leaf(persisted: nil), .outline)
         XCTAssertEqual(Leaf(persisted: "not-a-leaf"), .outline)
@@ -154,6 +185,7 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf(persisted: "tasks"), .tasks)
         XCTAssertEqual(Leaf(persisted: "citations"), .citations)
         XCTAssertEqual(Leaf(persisted: "bibliography"), .bibliography)
+        XCTAssertEqual(Leaf(persisted: "queries"), .queries)
         // M-3 (#534): the new leaf round-trips; older builds decode the
         // token to `.outline` by the same unknown-token fallback above.
         XCTAssertEqual(Leaf(persisted: "syncDiagnostics"), .syncDiagnostics)

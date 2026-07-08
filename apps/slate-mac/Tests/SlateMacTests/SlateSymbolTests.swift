@@ -24,7 +24,8 @@ final class SlateSymbolTests: XCTestCase {
     /// runner even for a v7-only name). Adding a new fallback forces a
     /// conscious entry here.
     private static let knownMacOS15SafeSymbols: Set<String> = [
-        "square.and.arrow.down", "magnifyingglass", "doc.badge.plus", "checklist",
+        "square.and.arrow.down", "magnifyingglass", "arrow.clockwise", "doc.badge.plus",
+        "checklist",
         // curlybraces: SF Symbols 2 (macOS 11) — U3-4 show-source toggle.
         "curlybraces",
         "quote.bubble.fill", "books.vertical", "function",
@@ -50,7 +51,7 @@ final class SlateSymbolTests: XCTestCase {
         "rectangle.3.group",
         // Milestone N (#702): base tab glyph. tablecells predates the
         // macOS 15 floor and matches the table-first base renderer.
-        "tablecells",
+        "tablecells", "pin",
         // Milestone M (M-3, #534): sync-diagnostics leaf fallback + the two
         // risk-badge glyphs. arrow.triangle.2.circlepath is SF Symbols 1
         // (macOS 11); exclamationmark.circle / info.circle are SF Symbols 1.
@@ -120,6 +121,7 @@ final class SlateSymbolTests: XCTestCase {
         let expected: [SlateSymbol: String] = [
             .save: "square.and.arrow.down",
             .search: "magnifyingglass",
+            .refresh: "arrow.clockwise",
             .newFromTemplate: "doc.badge.plus",
             .tasksReview: "checklist",
             .citationSummary: "quote.bubble.fill",
@@ -134,6 +136,7 @@ final class SlateSymbolTests: XCTestCase {
             .bulkRename: "rectangle.2.swap",
             .taskComplete: "checkmark.square",
             .taskIncomplete: "square",
+            .pin: "pin",
         ]
         for (symbol, name) in expected {
             XCTAssertEqual(

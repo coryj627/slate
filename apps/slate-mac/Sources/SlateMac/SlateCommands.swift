@@ -132,6 +132,15 @@ enum SlateCommandID {
     static let basesBuilderAddGroup = "slate.bases.builder.addGroup"
     static let basesBuilderEditCondition = "slate.bases.builder.editCondition"
     static let basesBuilderRemoveCondition = "slate.bases.builder.removeCondition"
+    private static let basesRunSavedQueryPrefix = "slate.bases.savedQuery.run."
+
+    static func basesRunSavedQuery(id: String) -> String {
+        "\(basesRunSavedQueryPrefix)\(id)"
+    }
+
+    static func isBasesRunSavedQuery(_ id: String) -> Bool {
+        id.hasPrefix(basesRunSavedQueryPrefix)
+    }
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a

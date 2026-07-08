@@ -3695,6 +3695,11 @@ impl CommandRegistry {
         )
     }
 
+    /// Remove a registered command. Returns `true` when an entry existed.
+    pub fn unregister(&self, id: String) -> bool {
+        self.inner.unregister(&id)
+    }
+
     /// Return every registered command's metadata, sorted by
     /// `(section, id)` for deterministic palette rendering.
     pub fn list(&self) -> Vec<Command> {

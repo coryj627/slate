@@ -120,6 +120,25 @@ final class CommandRegistryTests: XCTestCase {
         XCTAssertNil(reg.findById(id: "missing"))
     }
 
+    func testUnregisterRemovesCommandAcrossFFIBoundary() {
+        let reg = CommandRegistry()
+        let action = CountingAction()
+        reg.register(command: fixtureCommand(id: "alpha"), action: action)
+
+        XCTAssertTrue(reg.unregister(id: "alpha"))
+        XCTAssertFalse(reg.unregister(id: "alpha"), "second removal is a miss")
+        XCTAssertNil(reg.findById(id: "alpha"))
+        XCTAssertTrue(reg.list().isEmpty)
+        XCTAssertThrowsError(try reg.invokeById(id: "alpha")) { error in
+            guard case CommandError.UnknownId(let id) = error else {
+                XCTFail("expected UnknownId, got \(error)")
+                return
+            }
+            XCTAssertEqual(id, "alpha")
+        }
+        XCTAssertEqual(action.invocationCount, 0, "removed action is never invoked")
+    }
+
     // MARK: - invokeById
 
     func testInvokeByIdDispatchesToSwiftAction() throws {

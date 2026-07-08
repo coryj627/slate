@@ -44,16 +44,30 @@ enum EditorItem: Hashable, Codable {
     case markdown(path: String)
     case canvas(path: String)
     case base(path: String)
+    case savedQuery(id: String, name: String)
 
     /// The vault-relative file path behind this tab, regardless of kind.
     var path: String {
         switch self {
         case .markdown(let path), .canvas(let path), .base(let path):
             return path
+        case .savedQuery(let id, _):
+            return "saved-query:\(id)"
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case kind, path }
+    var title: String {
+        switch self {
+        case .savedQuery(_, let name):
+            return name
+        case .markdown(let path), .canvas(let path), .base(let path):
+            let name = (path as NSString).lastPathComponent
+            let withoutExtension = (name as NSString).deletingPathExtension
+            return withoutExtension.isEmpty ? name : withoutExtension
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, path, id, name }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -65,6 +79,11 @@ enum EditorItem: Hashable, Codable {
             self = .canvas(path: try c.decode(String.self, forKey: .path))
         case "base":
             self = .base(path: try c.decode(String.self, forKey: .path))
+        case "savedQuery":
+            self = .savedQuery(
+                id: try c.decodeIfPresent(String.self, forKey: .id)
+                    ?? c.decode(String.self, forKey: .path),
+                name: try c.decodeIfPresent(String.self, forKey: .name) ?? "Saved query")
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind, in: c,
@@ -84,6 +103,11 @@ enum EditorItem: Hashable, Codable {
         case .base(let path):
             try c.encode("base", forKey: .kind)
             try c.encode(path, forKey: .path)
+        case .savedQuery(let id, let name):
+            try c.encode("savedQuery", forKey: .kind)
+            try c.encode(id, forKey: .path)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
         }
     }
 }
@@ -287,6 +311,22 @@ struct WorkspaceModel: Hashable {
         root = Self.mapAllGroups(root) { group in
             for idx in group.tabs.indices where group.tabs[idx].item == from {
                 group.tabs[idx].item = to
+                changed.append(group.tabs[idx].id)
+            }
+        }
+        return changed
+    }
+
+    @discardableResult
+    mutating func retargetSavedQuery(id: String, name: String) -> [TabID] {
+        var changed: [TabID] = []
+        root = Self.mapAllGroups(root) { group in
+            for idx in group.tabs.indices {
+                guard case .savedQuery(let currentID, let currentName) = group.tabs[idx].item,
+                    currentID == id,
+                    currentName != name
+                else { continue }
+                group.tabs[idx].item = .savedQuery(id: id, name: name)
                 changed.append(group.tabs[idx].id)
             }
         }

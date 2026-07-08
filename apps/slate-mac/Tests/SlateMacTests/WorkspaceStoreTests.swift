@@ -212,6 +212,27 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertTrue(rebuilt.validate().isEmpty)
     }
 
+    /// N4-3 (#709): saved queries are ephemeral base tabs. They persist by
+    /// stable saved-query id and display name, not by a vault-relative path.
+    func testSavedQueryTabRoundTripsThroughWorkspaceStore() throws {
+        var model = WorkspaceModel()
+        _ = model.openTab(.savedQuery(id: "sq-active", name: "Active projects"))
+        _ = model.openTab(.markdown(path: "notes/a.md"))
+
+        let snapshot = WorkspaceStore.snapshot(of: model)
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WorkspaceStore.Snapshot.self, from: data)
+
+        let rebuilt = try XCTUnwrap(WorkspaceStore.model(from: decoded))
+        XCTAssertEqual(
+            rebuilt.allTabs.map(\.item),
+            [
+                .savedQuery(id: "sq-active", name: "Active projects"),
+                .markdown(path: "notes/a.md"),
+            ])
+        XCTAssertTrue(rebuilt.validate().isEmpty)
+    }
+
     // MARK: End-to-end restore
 
     func testVaultReopenRestoresLayoutAndMissingFileShowsErrorTab() async throws {

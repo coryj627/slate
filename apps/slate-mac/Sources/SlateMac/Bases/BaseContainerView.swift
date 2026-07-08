@@ -337,7 +337,7 @@ struct BaseContainerView: View {
 
     private func updateActiveBaseSelection() {
         appState.updateActiveBaseSelection(
-            path: document.path,
+            path: document.selectionKey,
             rowID: selectedRow,
             columnIndex: selectedCell?.columnIndex,
             result: document.result)
