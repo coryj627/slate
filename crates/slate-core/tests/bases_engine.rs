@@ -84,6 +84,14 @@ fn insert_file(
     .expect("insert file");
 }
 
+fn update_body_text(conn: &Connection, file_id: i64, body: &str) {
+    conn.execute(
+        "UPDATE files SET body_text = ?1 WHERE id = ?2",
+        params![body, file_id],
+    )
+    .expect("update body text");
+}
+
 fn insert_text_property(conn: &Connection, file_id: i64, ordinal: i64, key: &str, value: &str) {
     conn.execute(
         "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text, value_text_norm)
@@ -1450,4 +1458,389 @@ fn task_pushdown_inequality_matches_interpreter_for_nulls_and_typed_literals() {
             "{filter}"
         );
     }
+}
+
+#[test]
+fn file_matches_composes_with_structured_filters() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "The roadmap lives in Alpha.");
+    update_body_text(&conn, 2, "Archived roadmap notes.");
+    update_body_text(&conn, 3, "Gamma has no matching term.");
+
+    let mut query = query();
+    query.filters = Some(FilterNode::And(vec![
+        stmt(r#"file.inFolder("Projects")"#),
+        stmt(r#"file.matches("roadmap")"#),
+        stmt(r#"status == "active""#),
+    ]));
+    query.columns = vec![column("file.path")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute FTS pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute interpreted FTS query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(pushdown.total_count, 1);
+    assert_eq!(pushdown.rows[0].path, "Projects/Alpha.md");
+}
+
+#[test]
+fn file_matches_pushdown_materializes_membership_for_paged_query() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap alpha");
+    update_body_text(&conn, 2, "roadmap beta");
+    update_body_text(&conn, 3, "roadmap gamma");
+
+    let mut query = query();
+    query.filters = Some(stmt(r#"file.matches("roadmap")"#));
+    query.columns = vec![column("file.path")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            page_size: 1,
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute paged FTS pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            page_size: 1,
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute paged interpreted FTS query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(pushdown.total_count, 3);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT path
+             FROM temp.slate_bases_fts_matches
+             WHERE query = 'roadmap'
+             ORDER BY path",
+        )
+        .expect("prepare FTS membership inspection");
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query FTS membership")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect FTS membership");
+    assert_eq!(
+        paths,
+        vec![
+            "Notes/Gamma.md".to_string(),
+            "Projects/Alpha.md".to_string(),
+            "Projects/Beta.md".to_string()
+        ]
+    );
+}
+
+#[test]
+fn file_matches_temp_membership_clears_between_executions() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "alpha token");
+    update_body_text(&conn, 2, "beta token");
+    update_body_text(&conn, 3, "alpha token");
+
+    let mut first_query = query();
+    first_query.filters = Some(stmt(r#"file.matches("alpha")"#));
+    first_query.columns = vec![column("file.path")];
+
+    let mut second_query = query();
+    second_query.filters = Some(stmt(r#"file.matches("beta")"#));
+    second_query.columns = vec![column("file.path")];
+
+    let ctx = EngineCtx {
+        pushdown: true,
+        ..EngineCtx::default()
+    };
+    let first =
+        execute(&first_query, &conn, &ctx, &CancelToken::new()).expect("execute first FTS query");
+    let second =
+        execute(&second_query, &conn, &ctx, &CancelToken::new()).expect("execute second FTS query");
+
+    assert_eq!(first.error, None);
+    assert_eq!(first.total_count, 2);
+    assert_eq!(second.error, None);
+    assert_eq!(second.total_count, 1);
+    assert_eq!(second.rows[0].path, "Projects/Beta.md");
+
+    let temp_queries = conn
+        .prepare(
+            "SELECT DISTINCT query
+             FROM temp.slate_bases_fts_matches
+             ORDER BY query",
+        )
+        .expect("prepare temp query inspection")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query temp membership")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect temp membership");
+    assert_eq!(temp_queries, vec!["beta".to_string()]);
+}
+
+#[test]
+fn file_matches_multiple_and_clauses_intersect() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "alpha beta");
+    update_body_text(&conn, 2, "alpha only");
+    update_body_text(&conn, 3, "beta only");
+
+    let mut query = query();
+    query.filters = Some(FilterNode::And(vec![
+        stmt(r#"file.matches("alpha")"#),
+        stmt(r#"file.matches("beta")"#),
+    ]));
+    query.columns = vec![column("file.path")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute multi-FTS pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute multi-FTS interpreted query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(pushdown.total_count, 1);
+    assert_eq!(pushdown.rows[0].path, "Projects/Alpha.md");
+}
+
+#[test]
+fn file_matches_nested_or_composes_with_top_level_pushdown() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap alpha");
+    update_body_text(&conn, 2, "roadmap beta");
+    update_body_text(&conn, 3, "alpha outside the plan");
+
+    let mut query = query();
+    query.filters = Some(FilterNode::And(vec![
+        stmt(r#"file.matches("roadmap")"#),
+        FilterNode::Or(vec![
+            stmt(r#"file.matches("alpha")"#),
+            stmt(r#"status == "done""#),
+        ]),
+    ]));
+    query.columns = vec![column("file.path")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute mixed FTS pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute mixed FTS interpreted query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(
+        pushdown
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Projects/Alpha.md", "Projects/Beta.md"]
+    );
+}
+
+#[test]
+fn file_matches_evaluates_against_owner_file_in_task_views() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "Alpha mentions roadmap.");
+    update_body_text(&conn, 2, "Beta does not.");
+    update_body_text(&conn, 3, "Gamma does not.");
+    insert_task(&conn, 1, 0, "Alpha task", " ", false, None, None, Some(1));
+    insert_task(&conn, 2, 0, "Beta task", " ", false, None, None, Some(9));
+    insert_task(&conn, 3, 0, "Gamma task", " ", false, None, None, Some(1));
+
+    let mut query = query();
+    query.row_source = RowSource::Tasks;
+    query.filters = Some(FilterNode::Or(vec![
+        stmt(r#"file.matches("roadmap")"#),
+        stmt("task.priority == 9"),
+    ]));
+    query.columns = vec![column("task.text")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute task FTS query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute interpreted task FTS query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(
+        pushdown
+            .rows
+            .iter()
+            .map(|row| match &row.cells[0] {
+                CellValue::Value(Value::Text(text)) => text.as_str(),
+                other => panic!("expected task text, got {other:?}"),
+            })
+            .collect::<Vec<_>>(),
+        vec!["Alpha task", "Beta task"]
+    );
+}
+
+#[test]
+fn file_matches_empty_query_warns_and_matches_nothing() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap");
+
+    let mut query = query();
+    query.filters = Some(stmt(r#"file.matches("   ")"#));
+    query.columns = vec![column("file.path")];
+
+    let result = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute empty FTS query");
+
+    assert_eq!(result.error, None);
+    assert!(result.rows.is_empty());
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("file.matches empty query")),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn file_matches_invalid_query_fails_view_with_search_error() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap");
+
+    let mut query = query();
+    query.filters = Some(stmt(r#"file.matches("unbalanced\"")"#));
+    query.columns = vec![column("file.path")];
+
+    let result = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute invalid FTS query");
+
+    let error = result.error.expect("invalid FTS query should fail view");
+    assert!(
+        error.construct.contains("file.matches")
+            && error.construct.contains("invalid search query")
+            && error.construct.contains("unbalanced"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn file_matches_outside_filter_position_fails_loud() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap");
+
+    let mut query = query();
+    query.columns = vec![column(r#"file.matches("roadmap")"#)];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute file.matches column query");
+
+    assert_eq!(result.error, None);
+    assert!(matches!(
+        &result.rows[0].cells[0],
+        CellValue::Error(error) if error.contains("file.matches") && error.contains("filter position")
+    ));
 }
