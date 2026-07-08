@@ -5248,6 +5248,10 @@ pub struct BaseViewSummary {
     pub view_type: String,
     pub source: String,
     pub status: BaseViewStatus,
+    /// JSON-encoded `slate.*` view state from the `.base` file. `None` means
+    /// the view has no Slate state; callers should not treat an empty string as
+    /// an equivalent sentinel.
+    pub slate_state_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5847,6 +5851,10 @@ fn base_view_summary(view: &crate::bases::ViewDef) -> BaseViewSummary {
         name: view.name.clone(),
         view_type: view_type_name(&view.view_type).to_string(),
         source: row_source_name(&view.source).to_string(),
+        slate_state_json: view
+            .slate_state
+            .as_ref()
+            .and_then(|state| serde_json::to_string(state).ok()),
         status: match view.view_type {
             crate::bases::ViewType::Table | crate::bases::ViewType::List => {
                 BaseViewStatus::Executable
@@ -5867,6 +5875,7 @@ fn query_view_summary(query: &crate::bases::SlateQuery) -> BaseViewSummary {
         },
         source: row_source_name(&query.row_source).to_string(),
         status: BaseViewStatus::Executable,
+        slate_state_json: None,
     }
 }
 

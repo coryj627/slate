@@ -113,6 +113,8 @@ enum SlateCommandID {
     static let basesPreviousView = "slate.bases.previousView"
     static let basesSortByColumn = "slate.bases.sortByColumn"
     static let basesSaveSortToView = "slate.bases.saveSortToView"
+    static let basesViewAsTable = "slate.bases.viewAsTable"
+    static let basesViewAsList = "slate.bases.viewAsList"
     static let basesResultsPopover = "slate.bases.resultsPopover"
     static let basesRefresh = "slate.bases.refresh"
 
@@ -240,6 +242,8 @@ enum SlateCommandID {
         basesPreviousView,
         basesSortByColumn,
         basesSaveSortToView,
+        basesViewAsTable,
+        basesViewAsList,
         basesResultsPopover,
         basesRefresh,
         newTab,
@@ -842,6 +846,20 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .bases,
         hint: "Persist the current base table sort to the active view."
     ) { [weak appState] in appState?.basesSaveSortToView() }
+
+    register(
+        SlateCommandID.basesViewAsTable,
+        label: "Bases: View as Table",
+        section: .bases,
+        hint: "Temporarily render the active base with table cell navigation."
+    ) { [weak appState] in appState?.basesViewAsTable() }
+
+    register(
+        SlateCommandID.basesViewAsList,
+        label: "Bases: View as List",
+        section: .bases,
+        hint: "Temporarily render the active base with row navigation."
+    ) { [weak appState] in appState?.basesViewAsList() }
 
     register(
         SlateCommandID.basesResultsPopover,

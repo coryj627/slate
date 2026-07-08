@@ -340,6 +340,10 @@ final class AppState: ObservableObject {
     /// Not @Published: views observe each document directly.
     var baseDocuments: [String: BaseDocument] = [:]
 
+    /// Per-tab Bases renderer override (#703). This is transient UI
+    /// preference, deliberately outside `.base` persistence.
+    @Published var baseRendererOverrides: [TabID: BaseRendererMode] = [:]
+
     /// The one canvas announcement funnel (#518, DoD §H). Every canvas
     /// surface phrases through it; verbosity persists via
     /// `PreferencesStore` (`setCanvasVerbosity`).

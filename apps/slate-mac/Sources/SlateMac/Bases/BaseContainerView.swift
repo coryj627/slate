@@ -8,6 +8,7 @@ import SwiftUI
 struct BaseContainerView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var document: BaseDocument
+    let tabID: TabID
 
     @State private var selectedRow: String?
     @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
@@ -97,10 +98,23 @@ struct BaseContainerView: View {
             placeholder(message)
         case .ready, .degraded:
             if let result = document.result, !result.columns.isEmpty {
-                resultGrid(result)
+                resultRenderer(result)
             } else {
                 placeholder("No base results.")
             }
+        }
+    }
+
+    @ViewBuilder
+    private func resultRenderer(_ result: BasesResultSet) -> some View {
+        switch BaseRendererMode.resolved(
+            view: activeView,
+            override: appState.baseRendererOverride(for: tabID))
+        {
+        case .table:
+            resultGrid(result)
+        case .list:
+            resultList(result)
         }
     }
 
@@ -128,6 +142,21 @@ struct BaseContainerView: View {
             rowActions: [
                 .init("Open") { row in
                     appState.openFile(row.row.filePath, target: .currentTab)
+                }
+            ])
+    }
+
+    private func resultList(_ result: BasesResultSet) -> some View {
+        let projection = BaseListProjection(
+            result: result,
+            options: BaseListOptions(slateStateJson: activeView?.slateStateJson))
+        return BaseListView(
+            projection: projection,
+            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            onActivate: { appState.openFile($0.filePath, target: .currentTab) },
+            rowActions: [
+                .init("Open") { row in
+                    appState.openFile(row.filePath, target: .currentTab)
                 }
             ])
     }
@@ -171,6 +200,11 @@ struct BaseContainerView: View {
                 guard let session = appState.currentSession else { return }
                 document.selectView(index: index, session: session)
             })
+    }
+
+    private var activeView: BaseViewSummary? {
+        guard document.views.indices.contains(document.activeViewIndex) else { return nil }
+        return document.views[document.activeViewIndex]
     }
 
     private var resultCountText: String {
