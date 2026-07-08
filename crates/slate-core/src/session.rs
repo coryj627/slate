@@ -23,7 +23,7 @@
 //! for tests or sandbox layouts.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -563,7 +563,16 @@ pub struct VaultSession {
     /// Monotonic handle source — never reused within a session, so a
     /// stale handle after `close_canvas` fails loudly instead of
     /// aliasing a newer document.
-    next_canvas_handle: std::sync::atomic::AtomicU64,
+    next_canvas_handle: AtomicU64,
+    /// Open Bases documents and ephemeral queries, keyed by opaque handle.
+    /// The handle shape mirrors canvases: row identities are scoped to the
+    /// opened base/query, and stale handles fail loudly.
+    bases: Mutex<std::collections::HashMap<u64, OpenBaseState>>,
+    /// Monotonic Bases handle source, never reused within a session.
+    next_base_handle: AtomicU64,
+    /// Coarse session-local generation for Bases query caches. Bumped after
+    /// index-changing writes so cache lookups stay O(1) at large vault sizes.
+    bases_generation: AtomicU64,
 }
 
 /// Per-open-canvas state: the tolerant parse (the write surface
@@ -578,7 +587,30 @@ struct OpenCanvasState {
     degraded: bool,
 }
 
+enum OpenBaseSource {
+    Base(crate::bases::BaseFile),
+    Query(crate::bases::SlateQuery),
+}
+
+struct OpenBaseState {
+    path: Option<String>,
+    source: OpenBaseSource,
+    warnings: Vec<String>,
+    default_this_path: Option<String>,
+    cache: crate::bases::engine::BasesQueryCache,
+}
+
 impl VaultSession {
+    fn bump_bases_generation(&self) {
+        self.bases_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn bases_generation(&self) -> u64 {
+        self.bases_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Open or create a vault session against the given provider.
     ///
     /// Creates `config.cache_dir` if missing, opens/creates the SQLite
@@ -615,7 +647,10 @@ impl VaultSession {
             csl_styles: Mutex::new(std::collections::HashMap::new()),
             render_cache: crate::citations::render::RenderCache::default(),
             canvases: Mutex::new(std::collections::HashMap::new()),
-            next_canvas_handle: std::sync::atomic::AtomicU64::new(1),
+            next_canvas_handle: AtomicU64::new(1),
+            bases: Mutex::new(std::collections::HashMap::new()),
+            next_base_handle: AtomicU64::new(1),
+            bases_generation: AtomicU64::new(1),
         })
     }
 
@@ -732,14 +767,16 @@ impl VaultSession {
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        scan_vault(
+        let report = scan_vault(
             self.provider.as_ref(),
             &mut conn,
             self.config.parser_version,
             self.config.large_file_refuse_bytes,
             cancel,
             listener.as_deref(),
-        )
+        )?;
+        self.bump_bases_generation();
+        Ok(report)
     }
 
     /// Fetch full per-file metadata, including parsed headings.
@@ -1052,6 +1089,7 @@ impl VaultSession {
             )?;
         }
         tx.commit()?;
+        self.bump_bases_generation();
 
         // Op-log append: best-effort (#378). A logging-disk hiccup must
         // not throw away the user's just-saved text, so all of the
@@ -4285,6 +4323,7 @@ impl VaultSession {
                 },
             )
         })?;
+        self.bump_bases_generation();
         Ok(())
     }
 
@@ -4314,6 +4353,7 @@ impl VaultSession {
                 },
             )
         })?;
+        self.bump_bases_generation();
         Ok(())
     }
 
@@ -4663,6 +4703,7 @@ impl VaultSession {
             tx.commit()?;
             id
         };
+        self.bump_bases_generation();
         Ok(crate::structural::StructuralReport {
             op_id,
             moved,
@@ -5179,6 +5220,1434 @@ fn journal_append(
         rusqlite::params![now_ms(), kind.as_str(), payload.to_json()],
     )?;
     Ok(tx.last_insert_rowid())
+}
+
+// ---------------------------------------------------------------------------
+// Bases API (Milestone N, #699). Handle-based, matching the canvas family.
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseFileSummary {
+    pub path: String,
+    pub name: String,
+    pub view_count: u32,
+    pub warning_count: u32,
+    pub degraded: bool,
+    pub indexed_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseViewSummary {
+    pub name: String,
+    pub view_type: String,
+    pub source: String,
+    pub status: BaseViewStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseViewStatus {
+    Executable,
+    Fallback,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnRole {
+    Primary,
+    Identifier,
+    Metadata,
+    Metric,
+    Action,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportFormat {
+    Csv,
+    Markdown,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesColumn {
+    pub id: String,
+    pub label: String,
+    pub value_kind: String,
+    pub role: ColumnRole,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesValue {
+    pub raw_kind: String,
+    pub display: String,
+    pub text: Option<String>,
+    pub number: Option<f64>,
+    pub bool_value: Option<bool>,
+    pub date_epoch_ms: Option<i64>,
+    pub date_has_time: bool,
+    pub link_target: Option<String>,
+    pub link_display: Option<String>,
+    pub list: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesRow {
+    pub file_path: String,
+    pub task_ordinal: Option<u64>,
+    pub values: Vec<BasesValue>,
+    pub audio_description: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesGroup {
+    pub label: String,
+    pub row_start: u64,
+    pub row_count: u64,
+    pub summaries: Vec<BasesSummaryCell>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesSummaryCell {
+    pub column_id: String,
+    pub summary: String,
+    pub value: BasesValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasesResultSet {
+    pub columns: Vec<BasesColumn>,
+    pub rows: Vec<BasesRow>,
+    pub groups: Vec<BasesGroup>,
+    pub summaries: Vec<BasesSummaryCell>,
+    pub total_count: u64,
+    pub shown_count: u64,
+    pub executed_at_ms: i64,
+    pub warnings: Vec<String>,
+    pub view_error: Option<String>,
+    pub audio_summary: String,
+}
+
+fn bad_base_handle(handle: u64) -> VaultError {
+    VaultError::InvalidArgument {
+        message: format!("unknown base handle {handle} (closed or never opened)"),
+    }
+}
+
+impl VaultSession {
+    pub fn bases_list(&self) -> Result<Vec<BaseFileSummary>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT f.path, bf.name, bf.warning_count, bf.indexed_at_ms, bf.parsed_query_json
+             FROM bases_files bf
+             JOIN files f ON f.id = bf.file_id
+             ORDER BY f.path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let parsed: String = row.get(4)?;
+            let json = serde_json::from_str::<serde_json::Value>(&parsed).unwrap_or_default();
+            let view_count = json
+                .get("views")
+                .and_then(serde_json::Value::as_array)
+                .map(|views| views.len() as u32)
+                .unwrap_or(0);
+            Ok(BaseFileSummary {
+                path: row.get(0)?,
+                name: row.get(1)?,
+                warning_count: row.get::<_, i64>(2)? as u32,
+                indexed_at_ms: row.get(3)?,
+                view_count,
+                degraded: json
+                    .get("degraded")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn open_base(&self, path: &str) -> Result<u64, VaultError> {
+        let source = self.read_text(path)?;
+        let (base, warnings) = crate::bases::parse_base(&source);
+        let handle = self
+            .next_base_handle
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.bases.lock().expect("base registry mutex").insert(
+            handle,
+            OpenBaseState {
+                path: Some(path.to_string()),
+                source: OpenBaseSource::Base(base),
+                warnings: warnings.into_iter().map(|w| w.message).collect(),
+                default_this_path: Some(path.to_string()),
+                cache: crate::bases::engine::BasesQueryCache::default(),
+            },
+        );
+        Ok(handle)
+    }
+
+    pub fn open_base_inline(
+        &self,
+        source: &str,
+        this_path: Option<String>,
+    ) -> Result<u64, VaultError> {
+        let (base, warnings) = crate::bases::parse_base(source);
+        let handle = self
+            .next_base_handle
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.bases.lock().expect("base registry mutex").insert(
+            handle,
+            OpenBaseState {
+                path: None,
+                source: OpenBaseSource::Base(base),
+                warnings: warnings.into_iter().map(|w| w.message).collect(),
+                default_this_path: this_path,
+                cache: crate::bases::engine::BasesQueryCache::default(),
+            },
+        );
+        Ok(handle)
+    }
+
+    pub fn open_query(
+        &self,
+        query_json: &str,
+        this_path: Option<String>,
+    ) -> Result<u64, VaultError> {
+        let query =
+            serde_json::from_str::<crate::bases::SlateQuery>(query_json).map_err(|err| {
+                VaultError::InvalidArgument {
+                    message: format!("invalid SlateQuery JSON: {err}"),
+                }
+            })?;
+        let handle = self
+            .next_base_handle
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.bases.lock().expect("base registry mutex").insert(
+            handle,
+            OpenBaseState {
+                path: None,
+                source: OpenBaseSource::Query(query),
+                warnings: Vec::new(),
+                default_this_path: this_path,
+                cache: crate::bases::engine::BasesQueryCache::default(),
+            },
+        );
+        Ok(handle)
+    }
+
+    pub fn open_saved_query(&self, id: &str) -> Result<u64, VaultError> {
+        Err(VaultError::InvalidArgument {
+            message: format!(
+                "saved query {id:?} cannot be opened until #700 saved_queries storage lands"
+            ),
+        })
+    }
+
+    pub fn open_dql(&self, source: &str, this_path: Option<String>) -> Result<u64, VaultError> {
+        let (query, warnings) = crate::bases::dql::parse_dql(source);
+        let handle = self
+            .next_base_handle
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.bases.lock().expect("base registry mutex").insert(
+            handle,
+            OpenBaseState {
+                path: None,
+                source: OpenBaseSource::Query(query),
+                warnings: warnings.into_iter().map(|w| w.message).collect(),
+                default_this_path: this_path,
+                cache: crate::bases::engine::BasesQueryCache::default(),
+            },
+        );
+        Ok(handle)
+    }
+
+    pub fn save_query_as_base(&self, query_json: &str, path: &str) -> Result<(), VaultError> {
+        let query = parse_query_json(query_json)?;
+        let text = query_as_base_text(&query)?;
+        self.save_text(path, &text, None)?;
+        Ok(())
+    }
+
+    pub fn dql_as_base(&self, source: &str) -> Result<String, VaultError> {
+        let (query, warnings) = crate::bases::dql::parse_dql(source);
+        if !warnings.is_empty() {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "DQL conversion is lossy: {}",
+                    warnings
+                        .iter()
+                        .map(|warning| warning.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            });
+        }
+        query_as_base_text(&query)
+    }
+
+    pub fn close_base(&self, handle: u64) {
+        self.bases
+            .lock()
+            .expect("base registry mutex")
+            .remove(&handle);
+    }
+
+    pub fn base_views(&self, handle: u64) -> Result<Vec<BaseViewSummary>, VaultError> {
+        let bases = self.bases.lock().expect("base registry mutex");
+        let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
+        match &state.source {
+            OpenBaseSource::Base(base) => Ok(base.views.iter().map(base_view_summary).collect()),
+            OpenBaseSource::Query(query) => Ok(vec![query_view_summary(query)]),
+        }
+    }
+
+    pub fn base_execute(
+        &self,
+        handle: u64,
+        view: u32,
+        this_path: Option<String>,
+        quick_filter: Option<String>,
+        cancel: &CancelToken,
+    ) -> Result<BasesResultSet, VaultError> {
+        let bases = self.bases.lock().expect("base registry mutex");
+        let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
+        let query = match &state.source {
+            OpenBaseSource::Base(base) => {
+                if base.views.get(view as usize).is_none() {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!("base view {view} is out of range"),
+                    });
+                }
+                crate::bases::view_query(base, view as usize)
+            }
+            OpenBaseSource::Query(query) => {
+                if view != 0 {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!("query handle has one view; got {view}"),
+                    });
+                }
+                query.clone()
+            }
+        };
+        let default_this_path = state.default_this_path.clone();
+        let warnings = state.warnings.clone();
+        let quick_filter = quick_filter
+            .as_deref()
+            .map(str::trim)
+            .filter(|filter| !filter.is_empty());
+        let use_cache = quick_filter.is_none();
+        let cache = use_cache.then_some(&state.cache);
+        let conn = self.conn.lock().expect("session connection mutex");
+        let ctx = crate::bases::engine::EngineCtx {
+            now_ms: now_ms(),
+            generation: self.bases_generation(),
+            this_path: this_path.or(default_this_path),
+            cache,
+            quick_filter,
+            ..crate::bases::engine::EngineCtx::default()
+        };
+        let engine_result = crate::bases::engine::execute(&query, &conn, &ctx, cancel)?;
+        Ok(bases_result_from_engine(engine_result, warnings))
+    }
+
+    pub fn base_export(
+        &self,
+        handle: u64,
+        view: u32,
+        format: ExportFormat,
+        quick_filter: Option<String>,
+    ) -> Result<String, VaultError> {
+        let result = self.base_execute(handle, view, None, quick_filter, &CancelToken::new())?;
+        Ok(match format {
+            ExportFormat::Csv => bases_export_csv(&result),
+            ExportFormat::Markdown => bases_export_markdown(&result),
+        })
+    }
+
+    pub fn base_apply_edit(
+        &self,
+        handle: u64,
+        edit: crate::bases::BaseEdit,
+    ) -> Result<(), VaultError> {
+        let mut bases = self.bases.lock().expect("base registry mutex");
+        let state = bases
+            .get_mut(&handle)
+            .ok_or_else(|| bad_base_handle(handle))?;
+        let path = state
+            .path
+            .clone()
+            .ok_or_else(|| VaultError::InvalidArgument {
+                message: "ephemeral query handles cannot be edited as .base files".to_string(),
+            })?;
+        let OpenBaseSource::Base(base) = &state.source else {
+            return Err(VaultError::InvalidArgument {
+                message: "ephemeral query handles cannot be edited as .base files".to_string(),
+            });
+        };
+        let new_text = crate::bases::serialize_base(base, &[edit]).map_err(|err| {
+            VaultError::InvalidArgument {
+                message: format!("base edit rejected: {err}"),
+            }
+        })?;
+        self.save_text(&path, &new_text, None)?;
+        let (base, warnings) = crate::bases::parse_base(&new_text);
+        state.source = OpenBaseSource::Base(base);
+        state.warnings = warnings.into_iter().map(|w| w.message).collect();
+        state.cache = crate::bases::engine::BasesQueryCache::default();
+        Ok(())
+    }
+}
+
+fn base_view_summary(view: &crate::bases::ViewDef) -> BaseViewSummary {
+    BaseViewSummary {
+        name: view.name.clone(),
+        view_type: view_type_name(&view.view_type).to_string(),
+        source: row_source_name(&view.source).to_string(),
+        status: match view.view_type {
+            crate::bases::ViewType::Table | crate::bases::ViewType::List => {
+                BaseViewStatus::Executable
+            }
+            crate::bases::ViewType::Cards
+            | crate::bases::ViewType::Map
+            | crate::bases::ViewType::Other(_) => BaseViewStatus::Fallback,
+        },
+    }
+}
+
+fn query_view_summary(query: &crate::bases::SlateQuery) -> BaseViewSummary {
+    BaseViewSummary {
+        name: "Query".to_string(),
+        view_type: match query.view {
+            crate::bases::ViewSpec::Table { .. } => "table".to_string(),
+            crate::bases::ViewSpec::List { .. } => "list".to_string(),
+        },
+        source: row_source_name(&query.row_source).to_string(),
+        status: BaseViewStatus::Executable,
+    }
+}
+
+fn view_type_name(view_type: &crate::bases::ViewType) -> &str {
+    match view_type {
+        crate::bases::ViewType::Table => "table",
+        crate::bases::ViewType::List => "list",
+        crate::bases::ViewType::Cards => "cards",
+        crate::bases::ViewType::Map => "map",
+        crate::bases::ViewType::Other(other) => other.as_str(),
+    }
+}
+
+fn row_source_name(source: &crate::bases::RowSource) -> &'static str {
+    match source {
+        crate::bases::RowSource::Files => "files",
+        crate::bases::RowSource::Tasks => "tasks",
+    }
+}
+
+fn parse_query_json(query_json: &str) -> Result<crate::bases::SlateQuery, VaultError> {
+    serde_json::from_str::<crate::bases::SlateQuery>(query_json).map_err(|err| {
+        VaultError::InvalidArgument {
+            message: format!("invalid SlateQuery JSON: {err}"),
+        }
+    })
+}
+
+#[derive(Debug, Clone)]
+enum FilterYaml {
+    Stmt(String),
+    And(Vec<FilterYaml>),
+    Or(Vec<FilterYaml>),
+    Not(Vec<FilterYaml>),
+}
+
+fn query_as_base_text(query: &crate::bases::SlateQuery) -> Result<String, VaultError> {
+    validate_query_as_base(query)?;
+    let mut out = String::new();
+    if let Some(filter) = query_filter_yaml(query)? {
+        push_filter_yaml(&mut out, "filters", &filter, 0);
+    }
+    if !query.formulas.is_empty() {
+        out.push_str("formulas:\n");
+        for (name, expr) in &query.formulas {
+            out.push_str(&format!(
+                "  {}: {}\n",
+                yaml_key(name),
+                yaml_scalar(&expr_to_source(expr)?)
+            ));
+        }
+    }
+    let display_names = query
+        .columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .display_name
+                .as_ref()
+                .map(|name| (column.id.as_str(), name.as_str()))
+        })
+        .collect::<Vec<_>>();
+    if !display_names.is_empty() {
+        out.push_str("properties:\n");
+        for (id, name) in display_names {
+            out.push_str(&format!("  {}:\n", yaml_key(id)));
+            out.push_str(&format!("    displayName: {}\n", yaml_scalar(name)));
+        }
+    }
+    if !query.custom_summaries.is_empty() {
+        out.push_str("summaries:\n");
+        for (name, expr) in &query.custom_summaries {
+            out.push_str(&format!(
+                "  {}: {}\n",
+                yaml_key(name),
+                yaml_scalar(&expr_to_source(expr)?)
+            ));
+        }
+    }
+    out.push_str("views:\n");
+    out.push_str("  - type: ");
+    out.push_str(match query.view {
+        crate::bases::ViewSpec::Table { .. } => "table",
+        crate::bases::ViewSpec::List { .. } => "list",
+    });
+    out.push('\n');
+    out.push_str("    name: Query\n");
+    if let Some(limit) = query.limit {
+        out.push_str(&format!("    limit: {limit}\n"));
+    }
+    if let Some(group_by) = &query.group_by {
+        out.push_str("    groupBy:\n");
+        out.push_str(&format!(
+            "      property: {}\n",
+            yaml_scalar(&property_ref_to_source(&group_by.property)?)
+        ));
+        out.push_str(&format!(
+            "      direction: {}\n",
+            if group_by.ascending { "ASC" } else { "DESC" }
+        ));
+    }
+    if !query.columns.is_empty() {
+        out.push_str("    order:\n");
+        for column in &query.columns {
+            out.push_str(&format!("      - {}\n", yaml_scalar(&column.id)));
+        }
+    }
+    if !query.summaries.is_empty() {
+        out.push_str("    summaries:\n");
+        for (column, summary) in &query.summaries {
+            let summary_name = match summary {
+                crate::bases::SummaryRef::Builtin(name) => name,
+                crate::bases::SummaryRef::Custom(name) => name,
+            };
+            out.push_str(&format!(
+                "      {}: {}\n",
+                yaml_key(column),
+                yaml_scalar(summary_name)
+            ));
+        }
+    }
+    if query.row_source == crate::bases::RowSource::Tasks {
+        out.push_str("    source: tasks\n");
+    }
+    if !query.sort.is_empty() {
+        out.push_str("    slate:\n");
+        out.push_str("      sort:\n");
+        for sort in &query.sort {
+            out.push_str(&format!(
+                "        - expr: {}\n",
+                yaml_scalar(&expr_to_source(&sort.expr)?)
+            ));
+            out.push_str(&format!(
+                "          direction: {}\n",
+                if sort.ascending { "asc" } else { "desc" }
+            ));
+        }
+    }
+    Ok(out)
+}
+
+fn validate_query_as_base(query: &crate::bases::SlateQuery) -> Result<(), VaultError> {
+    match &query.view {
+        crate::bases::ViewSpec::Table {
+            fallback_from: Some(view),
+        }
+        | crate::bases::ViewSpec::List {
+            fallback_from: Some(view),
+        } => {
+            return Err(VaultError::InvalidArgument {
+                message: format!("cannot save fallback {view:?} view as canonical .base text"),
+            });
+        }
+        crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        }
+        | crate::bases::ViewSpec::List {
+            fallback_from: None,
+        } => {}
+    }
+
+    if let crate::bases::QuerySource::Unsupported(reason) = &query.source {
+        return Err(VaultError::InvalidArgument {
+            message: format!("cannot save unsupported source as a .base file: {reason}"),
+        });
+    }
+    if let crate::bases::QuerySource::Linked { depth, .. } = &query.source
+        && *depth != 1
+    {
+        return Err(VaultError::InvalidArgument {
+            message: format!("cannot save linked source depth {depth} as a .base file"),
+        });
+    }
+
+    if let Some(filter) = &query.filters {
+        validate_filter_as_base(filter, "filter")?;
+    }
+    for (name, expr) in &query.formulas {
+        validate_expr_as_base(expr, &format!("formula {name:?}"))?;
+    }
+    for (name, expr) in &query.custom_summaries {
+        validate_expr_as_base(expr, &format!("summary {name:?}"))?;
+    }
+    for sort in &query.sort {
+        validate_expr_as_base(&sort.expr, "sort expression")?;
+    }
+    for column in &query.columns {
+        validate_column_as_base(&column.id)?;
+    }
+    for (_, summary) in &query.summaries {
+        validate_summary_as_base(summary, &query.custom_summaries)?;
+    }
+    Ok(())
+}
+
+fn validate_filter_as_base(
+    filter: &crate::bases::FilterNode,
+    context: &str,
+) -> Result<(), VaultError> {
+    match filter {
+        crate::bases::FilterNode::Stmt(expr) => validate_expr_as_base(expr, context),
+        crate::bases::FilterNode::And(nodes)
+        | crate::bases::FilterNode::Or(nodes)
+        | crate::bases::FilterNode::Not(nodes) => {
+            for node in nodes {
+                validate_filter_as_base(node, context)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_column_as_base(id: &str) -> Result<(), VaultError> {
+    if id.starts_with("formula.") {
+        return Ok(());
+    }
+    if let Ok(expr) = crate::bases::expr::parse_expr(id) {
+        validate_expr_as_base(&expr, &format!("column {id:?}"))?;
+    }
+    Ok(())
+}
+
+fn validate_summary_as_base(
+    summary: &crate::bases::SummaryRef,
+    custom_summaries: &[(String, crate::bases::expr::Expr)],
+) -> Result<(), VaultError> {
+    match summary {
+        crate::bases::SummaryRef::Builtin(name) => {
+            let normalized = name.to_ascii_lowercase();
+            if matches!(
+                normalized.as_str(),
+                "count"
+                    | "filled"
+                    | "empty"
+                    | "unique"
+                    | "min"
+                    | "max"
+                    | "sum"
+                    | "average"
+                    | "earliest"
+                    | "latest"
+                    | "checked"
+                    | "unchecked"
+            ) {
+                Ok(())
+            } else {
+                Err(VaultError::InvalidArgument {
+                    message: format!("cannot save unsupported summary {name:?} as a .base file"),
+                })
+            }
+        }
+        crate::bases::SummaryRef::Custom(name) => {
+            if custom_summaries
+                .iter()
+                .any(|(summary_name, _)| summary_name == name)
+            {
+                Ok(())
+            } else {
+                Err(VaultError::InvalidArgument {
+                    message: format!("cannot save unknown custom summary {name:?}"),
+                })
+            }
+        }
+    }
+}
+
+fn validate_expr_as_base(expr: &crate::bases::expr::Expr, context: &str) -> Result<(), VaultError> {
+    use crate::bases::expr::{Callee, ExprKind, GlobalFn, Lit};
+
+    match &expr.kind {
+        ExprKind::Lit(lit) => match lit {
+            Lit::List(values) => {
+                for value in values {
+                    validate_expr_as_base(value, context)?;
+                }
+                Ok(())
+            }
+            Lit::Object(values) => {
+                for (_, value) in values {
+                    validate_expr_as_base(value, context)?;
+                }
+                Ok(())
+            }
+            Lit::String(_) | Lit::Number(_) | Lit::Bool(_) | Lit::Regex { .. } => Ok(()),
+        },
+        ExprKind::Prop(_) => Ok(()),
+        ExprKind::Index { base, index } => {
+            validate_expr_as_base(base, context)?;
+            validate_expr_as_base(index, context)
+        }
+        ExprKind::Field { base, .. } | ExprKind::Unary { rhs: base, .. } => {
+            validate_expr_as_base(base, context)
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            validate_expr_as_base(lhs, context)?;
+            validate_expr_as_base(rhs, context)
+        }
+        ExprKind::Call { callee, args } => {
+            match callee {
+                Callee::Global(GlobalFn::Random) => {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "cannot save {context}: random() is excluded from Bases v1"
+                        ),
+                    });
+                }
+                Callee::Global(_) => {}
+                Callee::Method { receiver, .. } => validate_expr_as_base(receiver, context)?,
+            }
+            for arg in args {
+                validate_expr_as_base(arg, context)?;
+            }
+            Ok(())
+        }
+        ExprKind::ListExpr {
+            base, body, init, ..
+        } => {
+            validate_expr_as_base(base, context)?;
+            validate_expr_as_base(body, context)?;
+            if let Some(init) = init {
+                validate_expr_as_base(init, context)?;
+            }
+            Ok(())
+        }
+        ExprKind::Unsupported { reason, .. } => Err(VaultError::InvalidArgument {
+            message: format!("cannot save {context}: unsupported expression: {reason}"),
+        }),
+    }
+}
+
+fn query_filter_yaml(query: &crate::bases::SlateQuery) -> Result<Option<FilterYaml>, VaultError> {
+    let source = query_source_filter(&query.source)?;
+    let filter = query.filters.as_ref().map(filter_to_yaml).transpose()?;
+    Ok(match (source, filter) {
+        (Some(source), Some(filter)) => Some(FilterYaml::And(vec![source, filter])),
+        (Some(source), None) => Some(source),
+        (None, Some(filter)) => Some(filter),
+        (None, None) => None,
+    })
+}
+
+fn query_source_filter(
+    source: &crate::bases::QuerySource,
+) -> Result<Option<FilterYaml>, VaultError> {
+    use crate::bases::QuerySource;
+    Ok(match source {
+        QuerySource::All => None,
+        QuerySource::Folder(folder) => Some(FilterYaml::Stmt(format!(
+            "file.inFolder({})",
+            expr_string_literal(folder)
+        ))),
+        QuerySource::Tag(tag) => Some(FilterYaml::Stmt(format!(
+            "file.hasTag({})",
+            expr_string_literal(tag)
+        ))),
+        QuerySource::Recent { days } => Some(FilterYaml::Stmt(format!(
+            "file.mtime > now() - duration({})",
+            expr_string_literal(&format!("{days}d"))
+        ))),
+        QuerySource::Linked { from_path, depth } if *depth == 1 => Some(FilterYaml::Stmt(format!(
+            "link({}).linksTo(file.file)",
+            expr_string_literal(from_path)
+        ))),
+        QuerySource::Linked { depth, .. } => {
+            return Err(VaultError::InvalidArgument {
+                message: format!("cannot save linked source depth {depth} as a .base file"),
+            });
+        }
+        QuerySource::Unsupported(reason) => {
+            return Err(VaultError::InvalidArgument {
+                message: format!("cannot save unsupported source as a .base file: {reason}"),
+            });
+        }
+    })
+}
+
+fn filter_to_yaml(filter: &crate::bases::FilterNode) -> Result<FilterYaml, VaultError> {
+    use crate::bases::FilterNode;
+    Ok(match filter {
+        FilterNode::Stmt(expr) => FilterYaml::Stmt(expr_to_source(expr)?),
+        FilterNode::And(nodes) => FilterYaml::And(
+            nodes
+                .iter()
+                .map(filter_to_yaml)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        FilterNode::Or(nodes) => FilterYaml::Or(
+            nodes
+                .iter()
+                .map(filter_to_yaml)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        FilterNode::Not(nodes) => FilterYaml::Not(
+            nodes
+                .iter()
+                .map(filter_to_yaml)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    })
+}
+
+fn push_filter_yaml(out: &mut String, key: &str, filter: &FilterYaml, indent: usize) {
+    let pad = " ".repeat(indent);
+    match filter {
+        FilterYaml::Stmt(expr) => {
+            out.push_str(&format!("{pad}{key}: {}\n", yaml_scalar(expr)));
+        }
+        FilterYaml::And(nodes) => push_filter_list_yaml(out, key, "and", nodes, indent),
+        FilterYaml::Or(nodes) => push_filter_list_yaml(out, key, "or", nodes, indent),
+        FilterYaml::Not(nodes) => push_filter_list_yaml(out, key, "not", nodes, indent),
+    }
+}
+
+fn push_filter_list_yaml(
+    out: &mut String,
+    key: &str,
+    kind: &str,
+    nodes: &[FilterYaml],
+    indent: usize,
+) {
+    let pad = " ".repeat(indent);
+    out.push_str(&format!("{pad}{key}:\n"));
+    out.push_str(&format!("{pad}  {kind}:\n"));
+    for node in nodes {
+        push_filter_list_item_yaml(out, node, indent + 4);
+    }
+}
+
+fn push_filter_list_item_yaml(out: &mut String, node: &FilterYaml, indent: usize) {
+    let pad = " ".repeat(indent);
+    match node {
+        FilterYaml::Stmt(expr) => {
+            out.push_str(&format!("{pad}- {}\n", yaml_scalar(expr)));
+        }
+        FilterYaml::And(children) => push_nested_filter_list_yaml(out, "and", children, indent),
+        FilterYaml::Or(children) => push_nested_filter_list_yaml(out, "or", children, indent),
+        FilterYaml::Not(children) => push_nested_filter_list_yaml(out, "not", children, indent),
+    }
+}
+
+fn push_nested_filter_list_yaml(out: &mut String, kind: &str, nodes: &[FilterYaml], indent: usize) {
+    let pad = " ".repeat(indent);
+    out.push_str(&format!("{pad}- {kind}:\n"));
+    for node in nodes {
+        push_filter_list_item_yaml(out, node, indent + 4);
+    }
+}
+
+fn expr_to_source(expr: &crate::bases::expr::Expr) -> Result<String, VaultError> {
+    use crate::bases::expr::{Callee, ExprKind, UnaryOp};
+    Ok(match &expr.kind {
+        ExprKind::Lit(lit) => lit_to_source(lit)?,
+        ExprKind::Prop(property) => property_ref_to_source(property)?,
+        ExprKind::Index { base, index } => {
+            format!("{}[{}]", expr_to_source(base)?, expr_to_source(index)?)
+        }
+        ExprKind::Field { base, name } => format!("{}.{}", expr_to_source(base)?, name),
+        ExprKind::Unary { op, rhs } => match op {
+            UnaryOp::Not => format!("!{}", expr_to_source(rhs)?),
+            UnaryOp::Neg => format!("-{}", expr_to_source(rhs)?),
+        },
+        ExprKind::Binary { op, lhs, rhs } => format!(
+            "({} {} {})",
+            expr_to_source(lhs)?,
+            binary_op_source(*op),
+            expr_to_source(rhs)?
+        ),
+        ExprKind::Call { callee, args } => {
+            let args = args
+                .iter()
+                .map(expr_to_source)
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            match callee {
+                Callee::Global(global) => format!("{}({args})", global_fn_source(*global)),
+                Callee::Method { receiver, name } => {
+                    format!(
+                        "{}.{}({args})",
+                        expr_to_source(receiver)?,
+                        method_source(*name)
+                    )
+                }
+            }
+        }
+        ExprKind::ListExpr {
+            base,
+            kind,
+            body,
+            init,
+        } => {
+            let method = match kind {
+                crate::bases::expr::ListExprKind::Filter => "filter",
+                crate::bases::expr::ListExprKind::Map => "map",
+                crate::bases::expr::ListExprKind::Reduce => "reduce",
+            };
+            let mut args = vec![expr_to_source(body)?];
+            if let Some(init) = init {
+                args.push(expr_to_source(init)?);
+            }
+            format!("{}.{}({})", expr_to_source(base)?, method, args.join(", "))
+        }
+        ExprKind::Unsupported { reason, .. } => {
+            return Err(VaultError::InvalidArgument {
+                message: format!("cannot save unsupported expression as a .base file: {reason}"),
+            });
+        }
+    })
+}
+
+fn lit_to_source(lit: &crate::bases::expr::Lit) -> Result<String, VaultError> {
+    use crate::bases::expr::Lit;
+    Ok(match lit {
+        Lit::String(value) => expr_string_literal(value),
+        Lit::Number(value) => value.to_string(),
+        Lit::Bool(value) => value.to_string(),
+        Lit::List(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(expr_to_source)
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ")
+        ),
+        Lit::Object(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| Ok(format!(
+                    "{}: {}",
+                    expr_string_literal(key),
+                    expr_to_source(value)?
+                )))
+                .collect::<Result<Vec<_>, VaultError>>()?
+                .join(", ")
+        ),
+        Lit::Regex { pattern, flags } => format!("/{pattern}/{flags}"),
+    })
+}
+
+fn property_ref_to_source(
+    property: &crate::bases::expr::PropertyRef,
+) -> Result<String, VaultError> {
+    use crate::bases::expr::PropertyRef;
+    Ok(match property {
+        PropertyRef::Note(name) => note_property_source(name),
+        PropertyRef::File(field) => format!("file.{}", file_field_source(*field)),
+        PropertyRef::Formula(name) => format!("formula.{name}"),
+        PropertyRef::This => "this".to_string(),
+        PropertyRef::ThisNote(name) => format!("this.{}", note_property_source(name)),
+        PropertyRef::ThisFile(field) => format!("this.file.{}", file_field_source(*field)),
+        PropertyRef::TaskField(field) => format!("task.{}", task_field_source(*field)),
+        PropertyRef::ImplicitValue => "value".to_string(),
+        PropertyRef::ImplicitIndex => "index".to_string(),
+        PropertyRef::ImplicitAcc => "acc".to_string(),
+    })
+}
+
+fn note_property_source(name: &str) -> String {
+    if name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !name.is_empty()
+    {
+        name.to_string()
+    } else {
+        format!("note[{}]", expr_string_literal(name))
+    }
+}
+
+fn binary_op_source(op: crate::bases::expr::BinaryOp) -> &'static str {
+    use crate::bases::expr::BinaryOp;
+    match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Mod => "%",
+        BinaryOp::Eq => "==",
+        BinaryOp::Ne => "!=",
+        BinaryOp::Gt => ">",
+        BinaryOp::Lt => "<",
+        BinaryOp::Gte => ">=",
+        BinaryOp::Lte => "<=",
+        BinaryOp::And => "&&",
+        BinaryOp::Or => "||",
+    }
+}
+
+fn global_fn_source(function: crate::bases::expr::GlobalFn) -> &'static str {
+    use crate::bases::expr::GlobalFn;
+    match function {
+        GlobalFn::Date => "date",
+        GlobalFn::Duration => "duration",
+        GlobalFn::EscapeHtml => "escapeHTML",
+        GlobalFn::File => "file",
+        GlobalFn::Html => "html",
+        GlobalFn::Icon => "icon",
+        GlobalFn::If => "if",
+        GlobalFn::Image => "image",
+        GlobalFn::Link => "link",
+        GlobalFn::List => "list",
+        GlobalFn::Max => "max",
+        GlobalFn::Min => "min",
+        GlobalFn::Now => "now",
+        GlobalFn::Number => "number",
+        GlobalFn::Object => "object",
+        GlobalFn::Random => "random",
+        GlobalFn::String => "string",
+        GlobalFn::Sum => "sum",
+        GlobalFn::Average => "average",
+        GlobalFn::Today => "today",
+    }
+}
+
+fn method_source(method: crate::bases::expr::MethodName) -> &'static str {
+    use crate::bases::expr::MethodName;
+    match method {
+        MethodName::IsTruthy => "isTruthy",
+        MethodName::IsType => "isType",
+        MethodName::ToString => "toString",
+        MethodName::Date => "date",
+        MethodName::Format => "format",
+        MethodName::Time => "time",
+        MethodName::Relative => "relative",
+        MethodName::IsEmpty => "isEmpty",
+        MethodName::Contains => "contains",
+        MethodName::ContainsAll => "containsAll",
+        MethodName::ContainsAny => "containsAny",
+        MethodName::StartsWith => "startsWith",
+        MethodName::EndsWith => "endsWith",
+        MethodName::Lower => "lower",
+        MethodName::Title => "title",
+        MethodName::Trim => "trim",
+        MethodName::Reverse => "reverse",
+        MethodName::Repeat => "repeat",
+        MethodName::Slice => "slice",
+        MethodName::Split => "split",
+        MethodName::Replace => "replace",
+        MethodName::Abs => "abs",
+        MethodName::Ceil => "ceil",
+        MethodName::Floor => "floor",
+        MethodName::Round => "round",
+        MethodName::ToFixed => "toFixed",
+        MethodName::Join => "join",
+        MethodName::Flat => "flat",
+        MethodName::Sort => "sort",
+        MethodName::Unique => "unique",
+        MethodName::AsFile => "asFile",
+        MethodName::LinksTo => "linksTo",
+        MethodName::AsLink => "asLink",
+        MethodName::HasLink => "hasLink",
+        MethodName::HasProperty => "hasProperty",
+        MethodName::HasTag => "hasTag",
+        MethodName::InFolder => "inFolder",
+        MethodName::Keys => "keys",
+        MethodName::Values => "values",
+        MethodName::Matches => "matches",
+    }
+}
+
+fn file_field_source(field: crate::bases::expr::FileField) -> &'static str {
+    use crate::bases::expr::FileField;
+    match field {
+        FileField::Name => "name",
+        FileField::Basename => "basename",
+        FileField::Path => "path",
+        FileField::Folder => "folder",
+        FileField::Ext => "ext",
+        FileField::Size => "size",
+        FileField::Properties => "properties",
+        FileField::Tags => "tags",
+        FileField::Aliases => "aliases",
+        FileField::Links => "links",
+        FileField::Backlinks => "backlinks",
+        FileField::Embeds => "embeds",
+        FileField::File => "file",
+        FileField::Tasks => "tasks",
+        FileField::Ctime => "ctime",
+        FileField::Mtime => "mtime",
+        FileField::InDegree => "inDegree",
+        FileField::OutDegree => "outDegree",
+    }
+}
+
+fn task_field_source(field: crate::bases::expr::TaskField) -> &'static str {
+    use crate::bases::expr::TaskField;
+    match field {
+        TaskField::Text => "text",
+        TaskField::Status => "status",
+        TaskField::Completed => "completed",
+        TaskField::Due => "due",
+        TaskField::Scheduled => "scheduled",
+        TaskField::Priority => "priority",
+        TaskField::File => "file",
+    }
+}
+
+fn yaml_key(value: &str) -> String {
+    if yaml_plain_safe(value) {
+        value.to_string()
+    } else {
+        expr_string_literal(value)
+    }
+}
+
+fn yaml_scalar(value: &str) -> String {
+    if yaml_plain_safe(value) && !matches!(value, "true" | "false" | "null") {
+        value.to_string()
+    } else {
+        expr_string_literal(value)
+    }
+}
+
+fn yaml_plain_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/' | b' '))
+        && !value.starts_with(['-', '?', ':', '!', '@', '&', '*', '#'])
+        && !value.ends_with(' ')
+}
+
+fn expr_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn bases_result_from_engine(
+    result: crate::bases::engine::BasesResultSet,
+    mut open_warnings: Vec<String>,
+) -> BasesResultSet {
+    open_warnings.extend(result.warnings);
+    let columns = result
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| BasesColumn {
+            id: column.id.clone(),
+            label: column
+                .display_name
+                .clone()
+                .unwrap_or_else(|| column.id.clone()),
+            value_kind: column_value_kind(index, &result.rows),
+            role: column_role(index, &column.id),
+        })
+        .collect();
+    BasesResultSet {
+        columns,
+        rows: result.rows.iter().map(bases_row_from_engine).collect(),
+        groups: result.groups.iter().map(group_from_engine).collect(),
+        summaries: result.summaries.iter().map(summary_from_engine).collect(),
+        total_count: result.total_count as u64,
+        shown_count: result.shown_count as u64,
+        executed_at_ms: result.executed_at_ms,
+        warnings: open_warnings,
+        view_error: result.error.map(|e| {
+            if e.row_path.is_empty() {
+                e.construct
+            } else {
+                format!("{} ({})", e.construct, e.row_path)
+            }
+        }),
+        audio_summary: result.audio_summary,
+    }
+}
+
+fn bases_row_from_engine(row: &crate::bases::engine::BasesRow) -> BasesRow {
+    BasesRow {
+        file_path: row.path.clone(),
+        task_ordinal: row.task_ordinal,
+        values: row.cells.iter().map(bases_value_from_cell).collect(),
+        audio_description: row.audio_description.clone(),
+    }
+}
+
+fn group_from_engine(group: &crate::bases::engine::ResultGroup) -> BasesGroup {
+    BasesGroup {
+        label: group.label.clone(),
+        row_start: group.rows.start as u64,
+        row_count: group.rows.len() as u64,
+        summaries: group.summaries.iter().map(summary_from_engine).collect(),
+    }
+}
+
+fn summary_from_engine(summary: &crate::bases::engine::BasesSummaryCell) -> BasesSummaryCell {
+    BasesSummaryCell {
+        column_id: summary.column_id.clone(),
+        summary: summary.summary.clone(),
+        value: bases_value_from_cell(&summary.value),
+    }
+}
+
+fn column_value_kind(index: usize, rows: &[crate::bases::engine::BasesRow]) -> String {
+    rows.iter()
+        .filter_map(|row| row.cells.get(index))
+        .find_map(|cell| match cell {
+            crate::bases::engine::CellValue::Value(value) => Some(value_kind(value).to_string()),
+            crate::bases::engine::CellValue::Error(_) => None,
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn column_role(index: usize, id: &str) -> ColumnRole {
+    if index == 0 {
+        ColumnRole::Primary
+    } else if matches!(id, "file.path" | "file.name" | "file.file" | "task.file") {
+        ColumnRole::Identifier
+    } else if id.starts_with("task.priority") || id.starts_with("formula.") {
+        ColumnRole::Metric
+    } else {
+        ColumnRole::Metadata
+    }
+}
+
+fn bases_value_from_cell(cell: &crate::bases::engine::CellValue) -> BasesValue {
+    match cell {
+        crate::bases::engine::CellValue::Value(value) => bases_value_from_value(value),
+        crate::bases::engine::CellValue::Error(error) => BasesValue {
+            raw_kind: "error".to_string(),
+            display: format!("Error: {error}"),
+            text: None,
+            number: None,
+            bool_value: None,
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: None,
+            link_display: None,
+            list: Vec::new(),
+            error: Some(error.clone()),
+        },
+    }
+}
+
+fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
+    use crate::bases::eval::Value;
+    let display = crate::bases::engine::value_display(value);
+    match value {
+        Value::Null => base_value("null", display),
+        Value::Bool(value) => BasesValue {
+            raw_kind: "bool".to_string(),
+            display,
+            text: None,
+            number: None,
+            bool_value: Some(*value),
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: None,
+            link_display: None,
+            list: Vec::new(),
+            error: None,
+        },
+        Value::Number(value) => BasesValue {
+            raw_kind: "number".to_string(),
+            display,
+            text: None,
+            number: Some(*value),
+            bool_value: None,
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: None,
+            link_display: None,
+            list: Vec::new(),
+            error: None,
+        },
+        Value::Text(text) => BasesValue {
+            raw_kind: "text".to_string(),
+            display,
+            text: Some(text.clone()),
+            number: None,
+            bool_value: None,
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: None,
+            link_display: None,
+            list: Vec::new(),
+            error: None,
+        },
+        Value::Date(value) => BasesValue {
+            raw_kind: "date".to_string(),
+            display,
+            text: None,
+            number: None,
+            bool_value: None,
+            date_epoch_ms: Some(value.epoch_ms),
+            date_has_time: value.has_time,
+            link_target: None,
+            link_display: None,
+            list: Vec::new(),
+            error: None,
+        },
+        Value::Duration(_) => base_value("duration", display),
+        Value::List(values) => BasesValue {
+            raw_kind: "list".to_string(),
+            display,
+            text: None,
+            number: None,
+            bool_value: None,
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: None,
+            link_display: None,
+            list: values
+                .iter()
+                .map(crate::bases::engine::value_display)
+                .collect(),
+            error: None,
+        },
+        Value::Object(_) => base_value("object", display),
+        Value::Link(link) => BasesValue {
+            raw_kind: "link".to_string(),
+            display,
+            text: None,
+            number: None,
+            bool_value: None,
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: Some(link.target.clone()),
+            link_display: link.display.clone(),
+            list: Vec::new(),
+            error: None,
+        },
+        Value::File(file) => BasesValue {
+            raw_kind: "file".to_string(),
+            display,
+            text: Some(file.path.clone()),
+            number: None,
+            bool_value: None,
+            date_epoch_ms: None,
+            date_has_time: false,
+            link_target: Some(file.path.clone()),
+            link_display: None,
+            list: Vec::new(),
+            error: None,
+        },
+        Value::Regex(_, _) => base_value("regex", display),
+    }
+}
+
+fn base_value(raw_kind: &str, display: String) -> BasesValue {
+    BasesValue {
+        raw_kind: raw_kind.to_string(),
+        display,
+        text: None,
+        number: None,
+        bool_value: None,
+        date_epoch_ms: None,
+        date_has_time: false,
+        link_target: None,
+        link_display: None,
+        list: Vec::new(),
+        error: None,
+    }
+}
+
+fn value_kind(value: &crate::bases::eval::Value) -> &'static str {
+    match value {
+        crate::bases::eval::Value::Null => "null",
+        crate::bases::eval::Value::Bool(_) => "bool",
+        crate::bases::eval::Value::Number(_) => "number",
+        crate::bases::eval::Value::Text(_) => "text",
+        crate::bases::eval::Value::Date(_) => "date",
+        crate::bases::eval::Value::Duration(_) => "duration",
+        crate::bases::eval::Value::List(_) => "list",
+        crate::bases::eval::Value::Object(_) => "object",
+        crate::bases::eval::Value::Link(_) => "link",
+        crate::bases::eval::Value::File(_) => "file",
+        crate::bases::eval::Value::Regex(_, _) => "regex",
+    }
+}
+
+fn bases_export_csv(result: &BasesResultSet) -> String {
+    let mut out = String::new();
+    out.push_str(
+        &result
+            .columns
+            .iter()
+            .map(|column| csv_field(&column.label))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    out.push_str("\r\n");
+    for row in &result.rows {
+        out.push_str(
+            &row.values
+                .iter()
+                .map(|value| csv_field(&value.display))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        out.push_str("\r\n");
+    }
+    out
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\r', '\n']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn bases_export_markdown(result: &BasesResultSet) -> String {
+    let header = result
+        .columns
+        .iter()
+        .map(|column| markdown_cell(&column.label))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let separator = result
+        .columns
+        .iter()
+        .map(|_| "---")
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let mut out = format!("| {header} |\n| {separator} |\n");
+    for row in &result.rows {
+        let cells = row
+            .values
+            .iter()
+            .map(|value| markdown_cell(&value.display))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        out.push_str(&format!("| {cells} |\n"));
+    }
+    out
+}
+
+fn markdown_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', "<br>")
 }
 
 // ---------------------------------------------------------------------------
@@ -6029,4 +7498,7 @@ mod tests {
 
     #[path = "canvas.rs"]
     mod canvas;
+
+    #[path = "bases.rs"]
+    mod bases;
 }

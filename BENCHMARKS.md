@@ -378,3 +378,27 @@ recorded values show the headroom):
 | First windowed rebuild | **3.9 ms** | 13 of 2,000 cards materialized (AX windowing, viewport + 1-viewport margin). |
 | Per-pan window hop | **2.8 ms** | Ten viewport jumps averaged — window churn, edge rebuild, AX re-frame. |
 | Per-step navigator traversal | **0.18 ms** | Reading-order selection moves incl. announcement assembly. |
+
+## Milestone N Wave 4 — 2026-07-08 (Bases session API, #699)
+
+New bench file `crates/slate-core/benches/bases_bench.rs` drives the public
+`VaultSession` Bases API against deterministic 1k / 10k / 50k Markdown vaults
+with frontmatter properties. The measured path includes handle lookup,
+SQLite-backed query execution, result mirroring for UniFFI/UI callers, quick
+filter projection, cache-hit replay, parse/serialize, and CSV export
+formatting. Criterion release run, same Apple Silicon laptop class as the
+other 2026-07 rows. The release-gate query filters to one indexed folder and
+limits the grid to 100 displayed rows; the full-export diagnostic row below is
+the intentionally unbounded "dump everything" stress path.
+
+| Bench (criterion, release) | 1k files | 10k files | 50k files | Meaning |
+|---|---:|---:|---:|---|
+| `bases_session/indexed_query_gate_uncached` | **1.32 ms** | **3.16 ms** | **15.40 ms** | Fresh handle, indexed folder filter, result mirror, 100-row grid limit. Gate target: <50 ms @10k / <200 ms @50k. |
+| `bases_session/cache_hit_reexecute` | **37.31 µs** | **36.10 µs** | **37.20 µs** | Same handle/query/generation after priming the session cache. Gate target: <2 ms. |
+| `bases_session/quick_filter_display_values` | **1.33 ms** | **3.23 ms** | **15.58 ms** | Same gate query with accent-insensitive displayed-value quick filter before sort/group/summary/limit. |
+| `bases_session/export_csv_gate` | **1.34 ms** | **3.22 ms** | **15.40 ms** | Gate query through `base_export`, formatting exactly the displayed rows as CSV. |
+
+| Bench (criterion, release) | 2026-07 median | Meaning |
+|---|---:|---|
+| `bases_format/parse_serialize_roundtrip` | **28.95 µs** | Parse the gate `.base` file and serialize it byte-equally. Gate target: <5 ms per file. |
+| `bases_session/export_csv_full_diagnostic/50k` | **739.49 ms** | Deliberately unbounded full-vault CSV export diagnostic; not the interactive grid gate. |
