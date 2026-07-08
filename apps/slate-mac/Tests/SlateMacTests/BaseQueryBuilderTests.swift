@@ -510,7 +510,9 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(source.contains("Save as saved query"))
         XCTAssertTrue(source.contains("AccessibleDataGrid("))
         XCTAssertTrue(source.contains("Builder preview table"))
-        XCTAssertTrue(source.contains("advancedExpressionValidations"))
+        XCTAssertTrue(source.contains("advancedExpressionValidation(rawExpression:"))
+        XCTAssertTrue(source.contains("Expression invalid"))
+        XCTAssertFalse(source.contains("advancedExpressionValidations"))
     }
 
     func testAppStateOwnsBuilderPreviewAndSaveOrchestration() throws {

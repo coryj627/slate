@@ -17,7 +17,6 @@ struct BaseQueryBuilderSheet: View {
     @State private var formulaName = ""
     @State private var formulaExpression = ""
     @State private var formulaValidation: BaseExpressionValidation?
-    @State private var advancedExpressionValidations: [Int: BaseExpressionValidation] = [:]
     @State private var previewSelectedRow: String?
     @State private var previewSelectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
     @State private var previewSortState: DataGridSortState?
@@ -600,7 +599,7 @@ struct BaseQueryBuilderSheet: View {
             rawExpression: rawExpression,
             filterJSON: nil
         ).accessibilityLabel(index: index)
-        let validation = advancedExpressionValidations[index]
+        let validation = advancedExpressionValidation(rawExpression: rawExpression)
         return HStack(spacing: 8) {
             Text("Advanced")
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
@@ -828,11 +827,6 @@ struct BaseQueryBuilderSheet: View {
             },
             set: { value in
                 let validation = appState.currentSession?.validateBaseExpression(source: value)
-                if let validation {
-                    advancedExpressionValidations[index] = validation
-                } else {
-                    advancedExpressionValidations.removeValue(forKey: index)
-                }
                 model.updateAdvancedExpression(index: index, rawExpression: value, validation: validation)
             })
     }
@@ -899,6 +893,14 @@ struct BaseQueryBuilderSheet: View {
             return
         }
         formulaValidation = appState.currentSession?.validateBaseExpression(source: value)
+    }
+
+    private func advancedExpressionValidation(
+        rawExpression: String
+    ) -> BaseExpressionValidation? {
+        let trimmed = rawExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return appState.currentSession?.validateBaseExpression(source: rawExpression)
     }
 
     private func expressionValidationMessage(
