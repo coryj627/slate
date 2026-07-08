@@ -1,0 +1,10 @@
+properties:
+  "reading status":
+    displayName: "Reading Status"
+    "column width": 160
+views:
+  - type: table
+    name: "Quoted"
+    "row height": 32
+    order:
+      - note["reading status"]
