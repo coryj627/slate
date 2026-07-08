@@ -1048,6 +1048,12 @@ extension SlateCommandsTests {
             SlateCommandID.basesCopyMarkdown,
             SlateCommandID.basesResultsPopover,
             SlateCommandID.basesRefresh,
+            SlateCommandID.basesNewQuery,
+            SlateCommandID.basesEditViewFilters,
+            SlateCommandID.basesBuilderAddCondition,
+            SlateCommandID.basesBuilderAddGroup,
+            SlateCommandID.basesBuilderEditCondition,
+            SlateCommandID.basesBuilderRemoveCondition,
         ]
 
         for id in expected {

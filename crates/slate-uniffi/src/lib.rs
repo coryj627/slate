@@ -315,6 +315,10 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.list_tags()?)
+    }
+
     /// List one level of the file tree: `parent_path`'s child directories
     /// (each with immediate child-dir / child-file counts) then a page of
     /// its child files. `parent_path = ""` lists the root. Directories
@@ -4243,6 +4247,10 @@ impl VaultSession {
             .into_iter()
             .map(Into::into)
             .collect())
+    }
+
+    pub fn base_view_query_json(&self, handle: u64, view: u32) -> Result<String, VaultError> {
+        Ok(self.inner.base_view_query_json(handle, view)?)
     }
 
     pub fn base_execute(

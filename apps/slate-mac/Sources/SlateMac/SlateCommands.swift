@@ -126,6 +126,12 @@ enum SlateCommandID {
     static let basesCopyMarkdown = "slate.bases.copyMarkdown"
     static let basesResultsPopover = "slate.bases.resultsPopover"
     static let basesRefresh = "slate.bases.refresh"
+    static let basesNewQuery = "slate.bases.newQuery"
+    static let basesEditViewFilters = "slate.bases.editViewFilters"
+    static let basesBuilderAddCondition = "slate.bases.builder.addCondition"
+    static let basesBuilderAddGroup = "slate.bases.builder.addGroup"
+    static let basesBuilderEditCondition = "slate.bases.builder.editCondition"
+    static let basesBuilderRemoveCondition = "slate.bases.builder.removeCondition"
 
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
@@ -264,6 +270,12 @@ enum SlateCommandID {
         basesCopyMarkdown,
         basesResultsPopover,
         basesRefresh,
+        basesNewQuery,
+        basesEditViewFilters,
+        basesBuilderAddCondition,
+        basesBuilderAddGroup,
+        basesBuilderEditCondition,
+        basesBuilderRemoveCondition,
         newTab,
         closeTab,
         nextTab,
@@ -955,6 +967,48 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .bases,
         hint: "Reload the active base and re-run its current view."
     ) { [weak appState] in appState?.basesRefresh() }
+
+    register(
+        SlateCommandID.basesNewQuery,
+        label: "Bases: New Query",
+        section: .bases,
+        hint: "Open the structured Bases query builder."
+    ) { [weak appState] in appState?.basesNewQuery() }
+
+    register(
+        SlateCommandID.basesEditViewFilters,
+        label: "Bases: Edit View Filters",
+        section: .bases,
+        hint: "Open the active base view in the structured query builder."
+    ) { [weak appState] in appState?.basesEditViewFilters() }
+
+    register(
+        SlateCommandID.basesBuilderAddCondition,
+        label: "Bases: Add Condition",
+        section: .bases,
+        hint: "Add a condition row to the open query builder."
+    ) { [weak appState] in appState?.basesBuilderAddCondition() }
+
+    register(
+        SlateCommandID.basesBuilderAddGroup,
+        label: "Bases: Add Group",
+        section: .bases,
+        hint: "Add a one-level condition group to the open query builder."
+    ) { [weak appState] in appState?.basesBuilderAddGroup() }
+
+    register(
+        SlateCommandID.basesBuilderEditCondition,
+        label: "Bases: Edit Condition",
+        section: .bases,
+        hint: "Edit the selected condition row in the open query builder."
+    ) { [weak appState] in appState?.basesBuilderEditCondition() }
+
+    register(
+        SlateCommandID.basesBuilderRemoveCondition,
+        label: "Bases: Remove Condition",
+        section: .bases,
+        hint: "Remove the selected condition row from the open query builder."
+    ) { [weak appState] in appState?.basesBuilderRemoveCondition() }
 
     // ----- File management (U2-5, #463) -----
 

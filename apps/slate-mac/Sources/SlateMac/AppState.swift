@@ -1191,6 +1191,11 @@ final class AppState: ObservableObject {
     /// trigger the sheet on the next vault open).
     @Published var isCommandPaletteOpen: Bool = false
 
+    /// Active Bases query-builder draft (Milestone N4-1, #707).
+    /// Non-nil presents `BaseQueryBuilderSheet`; the draft is in-memory
+    /// only until N4-2 adds preview/save.
+    @Published var activeBaseQueryBuilder: BaseQueryBuilderModel?
+
     /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
     /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file
     /// closes it. Reset in `closeVault()` for the same stuck-bool reason
@@ -3046,6 +3051,7 @@ final class AppState: ObservableObject {
         // auto-present the empty palette). #313 belt-and-suspenders
         // with the `requestCommandPalette()` open-guard.
         isCommandPaletteOpen = false
+        activeBaseQueryBuilder = nil
         // Quick switcher (#495): same stuck-bool reset as the palette,
         // enforced by CloseVaultSheetParityTests. Also drop the in-memory
         // file-recents — it's per-vault, so the next vault reloads its own.

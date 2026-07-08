@@ -85,6 +85,13 @@ struct BaseContainerView: View {
                 .accessibilityValue(
                     document.quickFilterActive ? document.quickFilterText : "No quick filter")
             Button {
+                appState.basesEditViewFilters()
+            } label: {
+                SlateSymbol.rename.image(label: "Edit filters")
+            }
+            .buttonStyle(.interactiveRow())
+            .help("Edit filters")
+            Button {
                 appState.basesRefresh()
             } label: {
                 SlateSymbol.syncDiagnostics.image(label: "Refresh")

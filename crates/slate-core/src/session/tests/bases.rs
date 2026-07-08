@@ -302,6 +302,94 @@ views:
 }
 
 #[test]
+fn base_view_query_json_returns_the_view_ast_for_builder_loading() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Reading.base",
+            br#"filters: "file.inFolder(\"Projects\")"
+views:
+  - type: table
+    name: Reading
+    filters:
+      and:
+        - "status == \"active\""
+        - "priority >= 2"
+    order:
+      - file.name
+      - status
+"#,
+        )
+        .unwrap();
+        p.write_file(
+            "Projects/Alpha.md",
+            br#"---
+status: active
+priority: 3
+---
+# Alpha
+"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Reading.base").unwrap();
+    let json = session.base_view_query_json(handle, 0).unwrap();
+    let query: crate::bases::SlateQuery = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(query.source, crate::bases::QuerySource::All);
+    assert_eq!(query.row_source, crate::bases::RowSource::Files);
+    assert_eq!(
+        query
+            .columns
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["file.name", "status"]
+    );
+    let Some(crate::bases::FilterNode::And(nodes)) = query.filters else {
+        panic!("expected base-wide and view filters to compose into top-level AND");
+    };
+    assert_eq!(
+        nodes.len(),
+        2,
+        "builder loading must see both base-wide and active-view filters"
+    );
+
+    let bad_view = session.base_view_query_json(handle, 1).unwrap_err();
+    assert!(
+        bad_view.to_string().contains("base view 1 is out of range"),
+        "{bad_view}"
+    );
+}
+
+#[test]
+fn list_tags_returns_distinct_indexed_tags_for_builder_inventory() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Projects/Alpha.md",
+            br#"---
+tags: [Project, Shared]
+---
+# Alpha
+#Inline
+"#,
+        )
+        .unwrap();
+        p.write_file("Projects/Beta.md", b"# Beta\n#shared #area/sub\n")
+            .unwrap();
+        p.write_file("Scratch.md", b"```\n#ignored\n```\n%% #ignored-too %%\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(
+        session.list_tags().unwrap(),
+        vec!["area/sub", "inline", "project", "shared"]
+    );
+}
+
+#[test]
 fn base_apply_edit_saves_base_file_and_refreshes_open_handle() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(

@@ -1251,6 +1251,15 @@ impl VaultSession {
         list_files_impl(&conn, filter, paging)
     }
 
+    /// Return the distinct normalized tag inventory from the tag index.
+    pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare("SELECT DISTINCT tag_norm FROM file_tags ORDER BY tag_norm")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(VaultError::from)
+    }
+
     /// List one level of the file tree: the child directories of
     /// `parent_path`, then a page of its child files (#459, U2-1).
     ///
@@ -5750,6 +5759,32 @@ impl VaultSession {
             OpenBaseSource::Base(base) => Ok(base.views.iter().map(base_view_summary).collect()),
             OpenBaseSource::Query(query) => Ok(vec![query_view_summary(query)]),
         }
+    }
+
+    pub fn base_view_query_json(&self, handle: u64, view: u32) -> Result<String, VaultError> {
+        let bases = self.bases.lock().expect("base registry mutex");
+        let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
+        let query = match &state.source {
+            OpenBaseSource::Base(base) => {
+                if base.views.get(view as usize).is_none() {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!("base view {view} is out of range"),
+                    });
+                }
+                crate::bases::view_query(base, view as usize)
+            }
+            OpenBaseSource::Query(query) => {
+                if view != 0 {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!("query handle has one view; got {view}"),
+                    });
+                }
+                query.clone()
+            }
+        };
+        serde_json::to_string(&query).map_err(|err| VaultError::InvalidArgument {
+            message: format!("could not encode SlateQuery JSON: {err}"),
+        })
     }
 
     pub fn base_execute(
