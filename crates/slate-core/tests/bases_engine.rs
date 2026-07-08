@@ -1568,6 +1568,101 @@ fn file_matches_pushdown_materializes_membership_for_paged_query() {
 }
 
 #[test]
+fn file_matches_multiple_and_clauses_intersect() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "alpha beta");
+    update_body_text(&conn, 2, "alpha only");
+    update_body_text(&conn, 3, "beta only");
+
+    let mut query = query();
+    query.filters = Some(FilterNode::And(vec![
+        stmt(r#"file.matches("alpha")"#),
+        stmt(r#"file.matches("beta")"#),
+    ]));
+    query.columns = vec![column("file.path")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute multi-FTS pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute multi-FTS interpreted query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(pushdown.total_count, 1);
+    assert_eq!(pushdown.rows[0].path, "Projects/Alpha.md");
+}
+
+#[test]
+fn file_matches_nested_or_composes_with_top_level_pushdown() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap alpha");
+    update_body_text(&conn, 2, "roadmap beta");
+    update_body_text(&conn, 3, "alpha outside the plan");
+
+    let mut query = query();
+    query.filters = Some(FilterNode::And(vec![
+        stmt(r#"file.matches("roadmap")"#),
+        FilterNode::Or(vec![
+            stmt(r#"file.matches("alpha")"#),
+            stmt(r#"status == "done""#),
+        ]),
+    ]));
+    query.columns = vec![column("file.path")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute mixed FTS pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute mixed FTS interpreted query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(
+        pushdown
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Projects/Alpha.md", "Projects/Beta.md"]
+    );
+}
+
+#[test]
 fn file_matches_evaluates_against_owner_file_in_task_views() {
     let conn = migrated_conn();
     seed_index(&conn);

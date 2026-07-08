@@ -262,6 +262,9 @@ impl FtsMatchCache {
         if self.temp_table_ready.get() {
             return Ok(());
         }
+        // Connection-scoped temp storage is just the SQL-visible form of this
+        // execute run's FTS memo. Clear once on first use so rows never persist
+        // across query executions as a semantic cache.
         conn.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS slate_bases_fts_matches (
                 query TEXT NOT NULL,
