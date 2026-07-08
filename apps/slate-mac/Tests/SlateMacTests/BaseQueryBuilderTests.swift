@@ -572,6 +572,61 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewCancelToken"), appStateSource)
     }
 
+    func testBuilderPreviewPublishRequiresCurrentModelAndCancelToken() throws {
+        let state = AppState(
+            recentsStore: RecentVaultsStore(fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        let result = BasesResultSet(
+            columns: [],
+            rows: [],
+            groups: [],
+            summaries: [],
+            totalCount: 1,
+            shownCount: 1,
+            executedAtMs: 0,
+            warnings: [],
+            viewError: nil,
+            audioSummary: "Preview returned 1 row.")
+
+        let currentModel = BaseQueryBuilderModel()
+        let currentToken = CancelToken()
+        currentModel.previewState = .loading
+        state.activeBaseQueryBuilder = currentModel
+        state.baseQueryBuilderPreviewCancelToken = currentToken
+
+        state.basesBuilderPublishPreview(result: result, for: currentModel, cancelToken: currentToken)
+        XCTAssertEqual(currentModel.previewState, .ready(result))
+
+        let staleTokenModel = BaseQueryBuilderModel()
+        let supersedingToken = CancelToken()
+        staleTokenModel.previewState = .loading
+        state.activeBaseQueryBuilder = staleTokenModel
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+
+        state.basesBuilderPublishPreview(
+            result: result, for: staleTokenModel, cancelToken: CancelToken())
+        XCTAssertEqual(staleTokenModel.previewState, .loading)
+
+        let replacedModel = BaseQueryBuilderModel()
+        let replacement = BaseQueryBuilderModel()
+        replacedModel.previewState = .loading
+        state.activeBaseQueryBuilder = replacement
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+
+        state.basesBuilderPublishPreview(
+            result: result, for: replacedModel, cancelToken: supersedingToken)
+        XCTAssertEqual(replacedModel.previewState, .loading)
+
+        supersedingToken.cancel()
+        replacement.previewState = .loading
+        state.activeBaseQueryBuilder = replacement
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+
+        state.basesBuilderPublishPreviewFailure(
+            message: "cancelled", for: replacement, cancelToken: supersedingToken)
+        XCTAssertEqual(replacement.previewState, .loading)
+    }
+
     func testOrFolderFilterDoesNotBecomeSourcePickerScope() throws {
         let (_, session) = try makeSession()
         try session.saveText(

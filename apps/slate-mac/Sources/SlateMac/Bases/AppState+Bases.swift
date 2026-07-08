@@ -237,11 +237,11 @@ extension AppState {
                     cancelToken.cancel()
                     return
                 }
-                await MainActor.run {
-                    model?.previewState = .ready(result)
-                    if let announcement = model?.previewState.accessibilityAnnouncement {
-                        postAccessibilityAnnouncement(announcement, priority: .medium)
-                    }
+                await MainActor.run { [weak self] in
+                    self?.basesBuilderPublishPreview(
+                        result: result,
+                        for: model,
+                        cancelToken: cancelToken)
                 }
             } catch is CancellationError {
                 cancelToken.cancel()
@@ -250,14 +250,53 @@ extension AppState {
                 if Task.isCancelled || cancelToken.isCancelled() {
                     return
                 }
-                await MainActor.run {
-                    model?.previewState = .failed(error.localizedDescription)
-                    postAccessibilityAnnouncement(
-                        "Base preview failed: \(error.localizedDescription)",
-                        priority: .medium)
+                await MainActor.run { [weak self] in
+                    self?.basesBuilderPublishPreviewFailure(
+                        message: error.localizedDescription,
+                        for: model,
+                        cancelToken: cancelToken)
                 }
             }
         }
+    }
+
+    func basesBuilderPublishPreview(
+        result: BasesResultSet,
+        for model: BaseQueryBuilderModel?,
+        cancelToken: CancelToken
+    ) {
+        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        else { return }
+        model.previewState = .ready(result)
+        postAccessibilityAnnouncement(
+            model.previewState.accessibilityAnnouncement,
+            priority: .medium)
+    }
+
+    func basesBuilderPublishPreviewFailure(
+        message: String,
+        for model: BaseQueryBuilderModel?,
+        cancelToken: CancelToken
+    ) {
+        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        else { return }
+        model.previewState = .failed(message)
+        postAccessibilityAnnouncement(
+            "Base preview failed: \(message)",
+            priority: .medium)
+    }
+
+    private func currentBaseQueryBuilderPreviewModel(
+        _ model: BaseQueryBuilderModel?,
+        cancelToken: CancelToken
+    ) -> BaseQueryBuilderModel? {
+        guard let model,
+            activeBaseQueryBuilder === model,
+            let currentToken = baseQueryBuilderPreviewCancelToken,
+            currentToken === cancelToken,
+            !cancelToken.isCancelled()
+        else { return nil }
+        return model
     }
 
     func basesBuilderSaveToView() {
