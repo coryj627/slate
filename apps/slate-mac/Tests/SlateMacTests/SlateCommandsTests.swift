@@ -1084,4 +1084,22 @@ extension SlateCommandsTests {
             )
         }
     }
+
+    func testBasesHelpDocCoversEveryStaticBasesCommand() throws {
+        let docURL = Self.projectRoot
+            .appendingPathComponent("docs")
+            .appendingPathComponent("help")
+            .appendingPathComponent("bases.md")
+        let doc = try String(contentsOf: docURL, encoding: .utf8)
+        let appState = AppState()
+        let basesCommands = appState.commandRegistry.list()
+            .filter { $0.section == .bases && !SlateCommandID.isBasesRunSavedQuery($0.id) }
+        XCTAssertFalse(basesCommands.isEmpty, "registry lists static Bases commands")
+        for command in basesCommands {
+            XCTAssertTrue(
+                doc.contains(command.label),
+                "docs/help/bases.md is missing the Bases command \(command.label) (\(command.id))"
+            )
+        }
+    }
 }
