@@ -73,6 +73,7 @@ yaml-rust2 = "0.11"
 # IndexMap crate-wide; nothing in the tree relies on the old
 # alphabetical iteration order.
 serde_json = { version = "1", features = ["preserve_order"] }
+serde = { version = "1", features = ["derive"] }
 # chrono powers `{{date}}` / `{{time}}` / `{{date:FMT}}` / `{{time:FMT}}`
 # substitution in the templates engine. `default-features = false`
 # drops the system-clock plumbing (`Utc::now`, `Local`) — templates

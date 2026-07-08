@@ -33,6 +33,7 @@
 //!   path stays out of shipped logs while remaining available to a
 //!   developer who opts in (`init_host_logging(verbose: true)`).
 
+pub mod bases;
 pub mod blocks;
 pub mod blocks_db;
 pub mod canvas;
