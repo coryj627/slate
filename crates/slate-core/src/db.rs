@@ -135,6 +135,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "canvas: derived node/edge index for .canvas files (Milestone T, #361)",
         sql: include_str!("../migrations/020_canvas.sql"),
     },
+    Migration {
+        description: "bases: .base file and query fence indexes (Milestone N, #693)",
+        sql: include_str!("../migrations/021_bases.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -334,6 +338,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(indexes, 2);
+    }
+
+    #[test]
+    fn migration_021_creates_bases_indexes() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+
+        for table in ["bases_files", "bases_blocks"] {
+            let exists: u32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{table} table should exist");
+        }
+
+        for index in ["idx_bases_files_name", "idx_bases_blocks_file"] {
+            let exists: u32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{index} should exist");
+        }
     }
 
     #[test]

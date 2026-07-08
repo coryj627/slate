@@ -9,7 +9,9 @@
 //! scale is enabled with `SLATE_CENSUS_FULL=1` and is executed (release
 //! mode) before every push of this surface, recorded in the PR.
 
+use super::common::fts_match_count;
 use crate::VaultError;
+use rusqlite::OptionalExtension;
 
 fn census_scale() -> (u64, usize) {
     if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
@@ -165,6 +167,80 @@ fn rename_file_preserves_id_and_moves_bytes() {
         before_id, after_id,
         "files.id survives the rename (op-log identity)"
     );
+}
+
+#[test]
+fn rename_file_reclassifies_bases_indexes_when_extension_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("note.md"),
+        "# Note\n\nsecretreclassifytoken\n\n```base\nviews:\n  - type: table\n```\n",
+    )
+    .unwrap();
+    let session = crate::VaultSession::from_filesystem(dir.path().to_path_buf()).expect("open");
+    session
+        .scan_initial(&crate::CancelToken::new())
+        .expect("scan");
+
+    let snapshot = |path: &str| -> (i64, String, Option<String>, i64) {
+        let conn = session.conn.lock().unwrap();
+        let file: (i64, i64, String) = conn
+            .query_row(
+                "SELECT id, is_markdown, body_text FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let base_name = conn
+            .query_row(
+                "SELECT name FROM bases_files WHERE file_id = ?1",
+                rusqlite::params![file.0],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap();
+        let block_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bases_blocks WHERE file_id = ?1",
+                rusqlite::params![file.0],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        (file.1, file.2, base_name, block_count)
+    };
+
+    let initial = snapshot("note.md");
+    assert_eq!(initial.0, 1);
+    assert!(initial.1.contains("# Note"));
+    assert_eq!(initial.2, None);
+    assert_eq!(initial.3, 1);
+    assert_eq!(fts_match_count(&session, "secretreclassifytoken"), 1);
+
+    session
+        .rename_file("note.md", "note.base")
+        .expect("md to base");
+    let as_base = snapshot("note.base");
+    assert_eq!(as_base.0, 0);
+    assert_eq!(as_base.1, "");
+    assert_eq!(as_base.2.as_deref(), Some("note"));
+    assert_eq!(as_base.3, 0);
+    assert_eq!(fts_match_count(&session, "secretreclassifytoken"), 0);
+
+    session
+        .rename_file("note.base", "renamed.base")
+        .expect("base rename");
+    let renamed_base = snapshot("renamed.base");
+    assert_eq!(renamed_base.2.as_deref(), Some("renamed"));
+
+    session
+        .rename_file("renamed.base", "renamed.md")
+        .expect("base to md");
+    let as_markdown = snapshot("renamed.md");
+    assert_eq!(as_markdown.0, 1);
+    assert!(as_markdown.1.contains("# Note"));
+    assert_eq!(as_markdown.2, None);
+    assert_eq!(as_markdown.3, 1);
+    assert_eq!(fts_match_count(&session, "secretreclassifytoken"), 1);
 }
 
 #[test]

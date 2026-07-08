@@ -99,6 +99,61 @@ fn save_text_creates_files_row_for_brand_new_path() {
 }
 
 #[test]
+fn save_text_indexes_brand_new_base_file() {
+    let (_tmp, session) = make_vault(|_| {});
+
+    session
+        .save_text(
+            "queries/Reading.base",
+            "views:\n  - type: table\n    name: Reading\n",
+            None,
+        )
+        .unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let row: (String, i64, String) = conn
+        .query_row(
+            "SELECT bf.name, bf.warning_count, bf.parsed_query_json
+             FROM bases_files bf
+             JOIN files f ON f.id = bf.file_id
+             WHERE f.path = 'queries/Reading.base'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, "Reading");
+    assert_eq!(row.1, 0);
+    assert!(row.2.contains("\"name\":\"Reading\""));
+}
+
+#[test]
+fn save_text_indexes_query_fences() {
+    let (_tmp, session) = make_vault(|_| {});
+
+    session
+        .save_text(
+            "note.md",
+            "```slate-query\nTABLE file.name\n```\n```dataviewjs\nignored\n```\n",
+            None,
+        )
+        .unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, String) = conn
+        .query_row(
+            "SELECT bb.fence_kind, bb.source_text
+             FROM bases_blocks bb
+             JOIN files f ON f.id = bb.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, 1);
+    assert_eq!(row.1, "TABLE file.name\n");
+}
+
+#[test]
 fn save_text_rejects_empty_path_even_with_expected_hash() {
     // The conflict-check path stats the file first, which would
     // otherwise return an IO error on the vault root. Validation
