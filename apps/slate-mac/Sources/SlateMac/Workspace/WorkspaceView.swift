@@ -79,8 +79,8 @@ private struct TabGroupView: View {
         // Milestone T/N: route on the active tab's kind. Canvas/base
         // panes render their containers in BOTH focused and parked
         // positions because the document is shared per path.
-        if case .base(let path) = group.activeTab?.item {
-            BaseContainerView(document: appState.baseDocument(for: path))
+        if let tab = group.activeTab, case .base(let path) = tab.item {
+            BaseContainerView(document: appState.baseDocument(for: path), tabID: tab.id)
         } else if case .canvas(let path) = group.activeTab?.item {
             CanvasContainerView(
                 document: appState.canvasDocument(for: path),

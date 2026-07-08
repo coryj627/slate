@@ -3761,6 +3761,10 @@ pub struct BaseViewSummary {
     pub view_type: String,
     pub source: String,
     pub status: BaseViewStatus,
+    /// JSON-encoded `slate.*` view state from the `.base` file. `None` means
+    /// the view has no Slate state; callers should not treat an empty string as
+    /// an equivalent sentinel.
+    pub slate_state_json: Option<String>,
 }
 
 impl From<core::BaseViewSummary> for BaseViewSummary {
@@ -3770,6 +3774,7 @@ impl From<core::BaseViewSummary> for BaseViewSummary {
             view_type: v.view_type,
             source: v.source,
             status: v.status.into(),
+            slate_state_json: v.slate_state_json,
         }
     }
 }

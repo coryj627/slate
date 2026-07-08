@@ -28,6 +28,7 @@ extension AppState {
                 releaseCanvasDocumentIfUnreferenced(replacedItem)
                 releaseBaseDocumentIfUnreferenced(replacedItem)
                 if let id = workspace.model.activeGroup.activeTabID {
+                    clearBaseRendererOverride(for: id)
                     activateTab(id)
                 }
             } else {
@@ -83,6 +84,28 @@ extension AppState {
     var activeBaseDocument: BaseDocument? {
         guard let tab = workspace.activeTab, case .base(let path) = tab.item else { return nil }
         return baseDocument(for: path)
+    }
+
+    func baseRendererOverride(for tabID: TabID) -> BaseRendererMode? {
+        baseRendererOverrides[tabID]
+    }
+
+    func basesViewAsTable() {
+        setActiveBaseRendererOverride(.table)
+    }
+
+    func basesViewAsList() {
+        setActiveBaseRendererOverride(.list)
+    }
+
+    private func setActiveBaseRendererOverride(_ mode: BaseRendererMode) {
+        guard let tab = workspace.activeTab, case .base = tab.item else { return }
+        baseRendererOverrides[tab.id] = mode
+        postAccessibilityAnnouncement("Base view as \(mode.rawValue).", priority: .medium)
+    }
+
+    private func clearBaseRendererOverride(for tabID: TabID) {
+        baseRendererOverrides[tabID] = nil
     }
 
     func basesOpenViewSwitcher() {

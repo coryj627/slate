@@ -1035,6 +1035,8 @@ extension SlateCommandsTests {
             SlateCommandID.basesPreviousView,
             SlateCommandID.basesSortByColumn,
             SlateCommandID.basesSaveSortToView,
+            SlateCommandID.basesViewAsTable,
+            SlateCommandID.basesViewAsList,
             SlateCommandID.basesResultsPopover,
             SlateCommandID.basesRefresh,
         ]
