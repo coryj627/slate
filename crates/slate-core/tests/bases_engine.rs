@@ -158,6 +158,40 @@ fn insert_tag(conn: &Connection, file_id: i64, tag: &str) {
     .expect("insert tag");
 }
 
+#[allow(clippy::too_many_arguments)]
+fn insert_task(
+    conn: &Connection,
+    file_id: i64,
+    ordinal: i64,
+    text: &str,
+    status_char: &str,
+    completed: bool,
+    due_ms: Option<i64>,
+    scheduled_ms: Option<i64>,
+    priority: Option<i64>,
+) {
+    conn.execute(
+        "INSERT INTO tasks (
+            file_id, ordinal, text, status_char, completed, due_ms, scheduled_ms,
+            priority, recurrence, line, byte_offset
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10)",
+        params![
+            file_id,
+            ordinal,
+            text,
+            status_char,
+            completed,
+            due_ms,
+            scheduled_ms,
+            priority,
+            10 + ordinal,
+            100 + ordinal
+        ],
+    )
+    .expect("insert task");
+}
+
 fn query() -> SlateQuery {
     SlateQuery {
         source: QuerySource::All,
@@ -1048,4 +1082,372 @@ fn folder_source_is_case_sensitive_and_handles_root_folder() {
             .collect::<Vec<_>>(),
         vec!["Root.md"]
     );
+}
+
+#[test]
+fn file_task_aggregates_are_available_to_file_rows() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(
+        &conn,
+        1,
+        0,
+        "Ship N1",
+        " ",
+        false,
+        Some(1_800_000_000_000),
+        None,
+        Some(2),
+    );
+    insert_task(&conn, 1, 1, "Write notes", "x", true, None, None, None);
+    insert_task(&conn, 2, 0, "Archive", " ", false, None, None, None);
+
+    let mut query = query();
+    query.filters = Some(stmt("file.tasks.completed > 0"));
+    query.columns = vec![
+        column("file.name"),
+        column("file.tasks.total"),
+        column("file.tasks.completed"),
+    ];
+    query.summaries = vec![(
+        "file.tasks.total".to_string(),
+        SummaryRef::Builtin("sum".to_string()),
+    )];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute task aggregate query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].path, "Projects/Alpha.md");
+    assert_eq!(
+        result.rows[0].cells,
+        vec![
+            CellValue::Value(Value::Text("Alpha.md".to_string())),
+            CellValue::Value(Value::Number(2.0)),
+            CellValue::Value(Value::Number(1.0)),
+        ]
+    );
+    assert_eq!(summary_number(&result.summaries[0]), 2.0);
+}
+
+#[test]
+fn tasks_source_materializes_task_fields_and_owner_file_values() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(
+        &conn,
+        1,
+        0,
+        "Do high value thing",
+        "/",
+        false,
+        Some(1_800_000_000_000),
+        Some(1_799_913_600_000),
+        Some(5),
+    );
+    insert_task(&conn, 1, 1, "Already done", "x", true, None, None, Some(1));
+    insert_task(
+        &conn,
+        2,
+        0,
+        "Archived work",
+        " ",
+        false,
+        None,
+        None,
+        Some(9),
+    );
+    insert_task(&conn, 3, 0, "Follow up", " ", false, None, None, Some(3));
+
+    let mut query = query();
+    query.row_source = RowSource::Tasks;
+    query.filters = Some(FilterNode::And(vec![
+        stmt(r#"task.file.hasTag("project")"#),
+        stmt("!task.completed"),
+    ]));
+    query.sort = vec![SortKey {
+        expr: expr("task.priority"),
+        ascending: false,
+    }];
+    query.columns = vec![
+        column("task.text"),
+        column("task.status"),
+        column("task.completed"),
+        column("task.due"),
+        column("task.scheduled"),
+        column("task.priority"),
+        column("task.file.name"),
+        column("status"),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute tasks source query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(result.total_count, 2);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| (row.path.as_str(), row.audio_description.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "Projects/Alpha.md",
+                "Do high value thing. task.status: /. task.completed: false. task.due: 2027-01-15. task.scheduled: 2027-01-14. task.priority: 5. task.file.name: Alpha.md. status: active"
+            ),
+            (
+                "Notes/Gamma.md",
+                "Follow up. task.status:  . task.completed: false. task.priority: 3. task.file.name: Gamma.md. status: active"
+            ),
+        ]
+    );
+    assert_eq!(
+        result.rows[0].cells,
+        vec![
+            CellValue::Value(Value::Text("Do high value thing".to_string())),
+            CellValue::Value(Value::Text("/".to_string())),
+            CellValue::Value(Value::Bool(false)),
+            CellValue::Value(Value::Date(slate_core::bases::eval::DateValue {
+                epoch_ms: 1_800_000_000_000,
+                has_time: false,
+            })),
+            CellValue::Value(Value::Date(slate_core::bases::eval::DateValue {
+                epoch_ms: 1_799_913_600_000,
+                has_time: false,
+            })),
+            CellValue::Value(Value::Number(5.0)),
+            CellValue::Value(Value::Text("Alpha.md".to_string())),
+            CellValue::Value(Value::Text("active".to_string())),
+        ]
+    );
+    assert_eq!(
+        result.audio_summary,
+        "2 tasks. Sorted by task.priority descending."
+    );
+}
+
+#[test]
+fn tasks_source_defaults_to_file_path_then_task_ordinal() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(&conn, 2, 0, "Beta zero", " ", false, None, None, None);
+    insert_task(&conn, 1, 1, "Alpha one", " ", false, None, None, None);
+    insert_task(&conn, 1, 0, "Alpha zero", " ", false, None, None, None);
+    insert_task(&conn, 3, 0, "Gamma zero", " ", false, None, None, None);
+
+    let mut query = query();
+    query.row_source = RowSource::Tasks;
+    query.columns = vec![column("task.text")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute unsorted tasks query");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| (row.path.as_str(), &row.cells[0]))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "Notes/Gamma.md",
+                &CellValue::Value(Value::Text("Gamma zero".to_string()))
+            ),
+            (
+                "Projects/Alpha.md",
+                &CellValue::Value(Value::Text("Alpha zero".to_string()))
+            ),
+            (
+                "Projects/Alpha.md",
+                &CellValue::Value(Value::Text("Alpha one".to_string()))
+            ),
+            (
+                "Projects/Beta.md",
+                &CellValue::Value(Value::Text("Beta zero".to_string()))
+            ),
+        ]
+    );
+}
+
+#[test]
+fn task_field_pushdown_matches_interpreter() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(
+        &conn,
+        1,
+        0,
+        "Qualifies",
+        " ",
+        false,
+        Some(1_800_000_000_000),
+        Some(1_799_913_600_000),
+        Some(5),
+    );
+    insert_task(
+        &conn,
+        1,
+        1,
+        "Too early",
+        " ",
+        false,
+        Some(1_799_827_200_000),
+        Some(1_799_913_600_000),
+        Some(5),
+    );
+    insert_task(
+        &conn,
+        2,
+        0,
+        "Too low priority",
+        " ",
+        false,
+        Some(1_800_000_000_000),
+        Some(1_799_913_600_000),
+        Some(1),
+    );
+    insert_task(
+        &conn,
+        3,
+        0,
+        "Completed",
+        "x",
+        true,
+        Some(1_800_000_000_000),
+        Some(1_799_913_600_000),
+        Some(5),
+    );
+
+    let mut query = query();
+    query.row_source = RowSource::Tasks;
+    query.filters = Some(FilterNode::And(vec![
+        stmt("task.completed == false"),
+        stmt("task.priority >= 3"),
+        stmt(r#"task.due >= date("2027-01-15")"#),
+        stmt(r#"task.scheduled < date("2027-01-15")"#),
+    ]));
+    query.columns = vec![column("task.text")];
+
+    let cancel = CancelToken::new();
+    let pushdown = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute task pushdown query");
+    let interpreted = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &cancel,
+    )
+    .expect("execute interpreted task query");
+
+    assert_eq!(pushdown.error, None);
+    assert_eq!(pushdown.rows, interpreted.rows);
+    assert_eq!(pushdown.rows.len(), 1);
+    assert_eq!(
+        pushdown.rows[0].cells,
+        vec![CellValue::Value(Value::Text("Qualifies".to_string()))]
+    );
+}
+
+#[test]
+fn task_pushdown_inequality_matches_interpreter_for_nulls_and_typed_literals() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(&conn, 1, 0, "Null fields", " ", false, None, None, None);
+    insert_task(
+        &conn,
+        1,
+        1,
+        "Exact values",
+        " ",
+        false,
+        Some(1_799_971_200_000),
+        Some(1_799_884_800_000),
+        Some(3),
+    );
+    insert_task(
+        &conn,
+        3,
+        0,
+        "Different values",
+        "x",
+        true,
+        Some(1_800_057_600_000),
+        Some(1_799_971_200_000),
+        Some(4),
+    );
+
+    for (filter, expected) in [
+        (
+            "task.priority != 3",
+            vec!["Different values", "Null fields"],
+        ),
+        (
+            r#"task.due != date("2027-01-15")"#,
+            vec!["Different values", "Null fields"],
+        ),
+        (
+            r#"task.scheduled != date("2027-01-14")"#,
+            vec!["Different values", "Null fields"],
+        ),
+        (
+            r#"task.completed != "false""#,
+            vec!["Different values", "Null fields", "Exact values"],
+        ),
+    ] {
+        let mut query = query();
+        query.row_source = RowSource::Tasks;
+        query.filters = Some(stmt(filter));
+        query.columns = vec![column("task.text")];
+        let cancel = CancelToken::new();
+
+        let pushdown = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                pushdown: true,
+                ..EngineCtx::default()
+            },
+            &cancel,
+        )
+        .expect(filter);
+        let interpreted = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                pushdown: false,
+                ..EngineCtx::default()
+            },
+            &cancel,
+        )
+        .expect(filter);
+
+        assert_eq!(pushdown.error, None, "{filter}");
+        assert_eq!(pushdown.rows, interpreted.rows, "{filter}");
+        assert_eq!(
+            pushdown
+                .rows
+                .iter()
+                .map(|row| match &row.cells[0] {
+                    CellValue::Value(Value::Text(text)) => text.as_str(),
+                    other => panic!("expected task text cell for {filter}, got {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            expected,
+            "{filter}"
+        );
+    }
 }

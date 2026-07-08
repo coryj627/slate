@@ -416,6 +416,14 @@ fn missing_duplicate_view_names_and_tasks_source_warn() {
             fallback_from: None
         }
     ));
+    assert_eq!(
+        query
+            .columns
+            .iter()
+            .map(|column| column.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task.text", "task.status", "task.due", "task.file"]
+    );
 }
 
 #[test]

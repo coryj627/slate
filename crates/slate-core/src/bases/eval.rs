@@ -1112,6 +1112,12 @@ fn file_field_value(row: &RowContext, field: FileField, ctx: &EvalCtx<'_>) -> Va
         FileField::File => Value::File(FileHandleValue {
             path: row.file_path.clone(),
         }),
+        FileField::Tasks => row
+            .file_fields
+            .properties
+            .get("tasks")
+            .cloned()
+            .unwrap_or(Value::Null),
         FileField::Ctime => row
             .file_fields
             .ctime
@@ -1400,6 +1406,7 @@ fn file_field_by_name(name: &str) -> Option<FileField> {
         "backlinks" => FileField::Backlinks,
         "embeds" => FileField::Embeds,
         "file" => FileField::File,
+        "tasks" => FileField::Tasks,
         "ctime" => FileField::Ctime,
         "mtime" => FileField::Mtime,
         "inDegree" => FileField::InDegree,

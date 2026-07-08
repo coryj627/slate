@@ -406,8 +406,18 @@ pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery {
                 .map(|name| (id.as_str(), name))
         })
         .collect();
-    let columns = view
-        .order
+    let default_task_order = [
+        "task.text".to_string(),
+        "task.status".to_string(),
+        "task.due".to_string(),
+        "task.file".to_string(),
+    ];
+    let order = if view.order.is_empty() && view.source == RowSource::Tasks {
+        default_task_order.as_slice()
+    } else {
+        view.order.as_slice()
+    };
+    let columns = order
         .iter()
         .map(|id| ColumnSelection {
             id: id.clone(),
