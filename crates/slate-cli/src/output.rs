@@ -10,8 +10,9 @@
 //!
 //! - **json**: a single pretty-printed object
 //!   `{"schema":"slate.cli.v1","command":"<cmd>","vault":"<abs path>",
-//!   "data":{…}}` with a trailing newline. The `data` shapes are the
-//!   `slate.cli.v1` **stability contract** (additive evolution only).
+//!   "data":…}` with a trailing newline. The per-command `data` shapes
+//!   are the `slate.cli.v1` **stability contract** (additive evolution
+//!   only).
 //! - **tsv**: a header row then data rows, tab-separated, `\n`-
 //!   terminated. Any literal tab or newline inside a value is flattened
 //!   to a single space (documented lossy flattening — TSV is the
@@ -48,7 +49,8 @@ pub enum OutputFormat {
 /// their layout is command-specific; only the json envelope is uniform
 /// enough to assemble here.
 pub struct CommandOutput {
-    /// The `data` object for the json envelope — the stability contract.
+    /// The `data` value for the json envelope — the per-command stability
+    /// contract. Most commands use an object; `query` uses a row array.
     pub data: serde_json::Value,
     /// The human-format body. By default [`emit`] appends a single
     /// trailing newline (the global human contract); when

@@ -33,6 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
+use commands::query::QueryFormat;
 use commands::render_template::parse_prompt_kv;
 use commands::tasks::TaskFilterChoice;
 use output::{CommandOutput, OutputFormat, emit};
@@ -128,6 +129,29 @@ enum Command {
         /// Output format.
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
         format: OutputFormat,
+    },
+    /// Run a Bases .base view or saved query and print rows.
+    Query {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Vault-relative path to a .base file.
+        #[arg(long, required_unless_present = "saved", conflicts_with = "saved")]
+        base: Option<String>,
+        /// Name of a saved query.
+        #[arg(long, required_unless_present = "base", conflicts_with = "base")]
+        saved: Option<String>,
+        /// View name for .base files. Defaults to the first view.
+        #[arg(long, requires = "base", conflicts_with = "saved")]
+        view: Option<String>,
+        /// Maximum number of rows to print after execution.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Vault-relative note path used for `this`.
+        #[arg(long = "this")]
+        this_path: Option<String>,
+        /// Output format. Defaults to json for automation parity.
+        #[arg(long, value_enum, default_value_t = QueryFormat::default())]
+        format: QueryFormat,
     },
     /// Write a note from stdin, with cross-process conflict detection.
     ///
@@ -248,6 +272,7 @@ impl Command {
             Command::Tasks { .. } => "tasks",
             Command::RenderTemplate { .. } => "render-template",
             Command::Search { .. } => "search",
+            Command::Query { .. } => "query",
             Command::Write { .. } => "write",
             Command::Read { .. } => "read",
             Command::List { .. } => "list",
@@ -323,8 +348,8 @@ fn main() -> ExitCode {
     let result = dispatch(cli.command, &cancel);
 
     match result {
-        Ok((vault, format, output)) => match emit(format, command_name, &vault, &output) {
-            Ok(()) => ExitCode::SUCCESS,
+        Ok((vault, format, output, code)) => match emit(format, command_name, &vault, &output) {
+            Ok(()) => ExitCode::from(code),
             Err(e) => fail(EXIT_RUNTIME, &CliError::Io(e)),
         },
         Err(CliError::Cancelled) => {
@@ -341,19 +366,19 @@ fn main() -> ExitCode {
 }
 
 /// Parse-then-run a single command. Returns the vault path (for the
-/// envelope), the selected format, and the rendered output.
+/// envelope), the selected format, the rendered output, and the exit code.
 fn dispatch(
     command: Command,
     cancel: &CancelToken,
-) -> Result<(String, OutputFormat, CommandOutput), CliError> {
+) -> Result<(String, OutputFormat, CommandOutput, u8), CliError> {
     match command {
         Command::Open { vault_path, format } => {
             let (vault, output) = commands::open::run(&vault_path, cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::SyncCheck { vault_path, format } => {
             let (vault, output) = commands::sync_check::run(&vault_path)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::Tasks {
             vault_path,
@@ -363,7 +388,7 @@ fn dispatch(
         } => {
             let (vault, output) =
                 commands::tasks::run(&vault_path, filter, include_completed, cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::RenderTemplate {
             vault_path,
@@ -384,7 +409,7 @@ fn dispatch(
                 strict,
                 format,
             )?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::Search {
             vault_path,
@@ -393,8 +418,26 @@ fn dispatch(
             format,
         } => {
             let (vault, output) = commands::search::run(&vault_path, &query, limit, cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
+        Command::Query {
+            vault_path,
+            base,
+            saved,
+            view,
+            limit,
+            this_path,
+            format,
+        } => commands::query::run(commands::query::QueryArgs {
+            raw_path: &vault_path,
+            base_path: base.as_deref(),
+            saved_name: saved.as_deref(),
+            view_name: view.as_deref(),
+            format,
+            limit,
+            this_path: this_path.as_deref(),
+            cancel,
+        }),
         Command::Write {
             vault_path,
             note_path,
@@ -409,7 +452,7 @@ fn dispatch(
                 create,
                 cancel,
             )?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::Read {
             vault_path,
@@ -425,7 +468,7 @@ fn dispatch(
                 });
             }
             let (vault, output) = commands::read::run(&vault_path, &note_path, cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::List {
             vault_path,
@@ -433,7 +476,7 @@ fn dispatch(
             format,
         } => {
             let (vault, output) = commands::list::run(&vault_path, markdown_only, cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::Links {
             vault_path,
@@ -441,7 +484,7 @@ fn dispatch(
             format,
         } => {
             let (vault, output) = commands::links::run(&vault_path, &note_path, cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         Command::Properties {
             vault_path,
@@ -449,7 +492,7 @@ fn dispatch(
             format,
         } => {
             let (vault, output) = commands::properties::run(&vault_path, key.as_deref(), cancel)?;
-            Ok((vault, format, output))
+            Ok((vault, format, output, 0))
         }
         // `completions` is intercepted in `main` (it emits a raw script,
         // not a vault envelope) and never reaches `dispatch`. It is only

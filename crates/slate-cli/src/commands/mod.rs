@@ -14,6 +14,7 @@ pub mod links;
 pub mod list;
 pub mod open;
 pub mod properties;
+pub mod query;
 pub mod read;
 pub mod render_template;
 pub mod search;
