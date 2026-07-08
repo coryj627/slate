@@ -83,6 +83,9 @@ extension AppState {
         if selectedFilePath != path {
             selectedFilePath = path
         }
+        if activeBaseSelectionPath != path {
+            clearActiveBaseSelection()
+        }
     }
 
     var activeBaseDocument: BaseDocument? {
@@ -222,17 +225,28 @@ extension AppState {
         return text
     }
 
-    func basesExportText(format: ExportFormat) throws -> String {
+    func basesExportText(format: ExportFormat, includeQuickFilter: Bool = true) throws -> String {
         guard let doc = activeBaseDocument, let session = currentSession else {
             throw BaseActionError.noActiveBase
         }
-        return try doc.export(format: format, session: session)
+        return try doc.export(
+            format: format,
+            session: session,
+            includeQuickFilter: includeQuickFilter)
     }
 
     @discardableResult
-    func basesCopyViewAsMarkdown() -> String? {
+    func basesCopyViewAsMarkdown(includeQuickFilter: Bool? = nil) -> String? {
         do {
-            let markdown = try basesExportText(format: .markdown)
+            guard let doc = activeBaseDocument else {
+                throw BaseActionError.noActiveBase
+            }
+            let shouldIncludeQuickFilter =
+                includeQuickFilter ?? baseExportQuickFilterChoice(doc: doc, verb: "Copy")
+            guard let shouldIncludeQuickFilter else { return nil }
+            let markdown = try basesExportText(
+                format: .markdown,
+                includeQuickFilter: shouldIncludeQuickFilter)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(markdown, forType: .string)
             postBaseActionAnnouncement("Copied base view as Markdown.")
@@ -262,7 +276,7 @@ extension AppState {
     }
 
     func basesOpenSelectedRow() {
-        guard activeBaseDocument != nil, let row = activeBaseSelectedRow else {
+        guard let row = activeBaseSelectedRowForCommand() else {
             postBaseActionAnnouncement("Select a base row first.")
             return
         }
@@ -270,7 +284,7 @@ extension AppState {
     }
 
     func basesCopySelectedLink() {
-        guard activeBaseDocument != nil, let row = activeBaseSelectedRow else {
+        guard let row = activeBaseSelectedRowForCommand() else {
             postBaseActionAnnouncement("Select a base row first.")
             return
         }
@@ -278,7 +292,7 @@ extension AppState {
     }
 
     func basesShowSelectedBacklinks() {
-        guard activeBaseDocument != nil, let row = activeBaseSelectedRow else {
+        guard let row = activeBaseSelectedRowForCommand() else {
             postBaseActionAnnouncement("Select a base row first.")
             return
         }
@@ -286,25 +300,29 @@ extension AppState {
     }
 
     func basesEditSelectedProperty() {
-        guard activeBaseDocument != nil, activeBaseSelectedRow != nil else {
+        guard activeBaseSelectedRowForCommand() != nil else {
             postBaseActionAnnouncement("Select a base row first.")
             return
         }
         baseEditPropertyRequestToken &+= 1
     }
 
-    func updateActiveBaseSelection(rowID: String?, columnIndex: Int?, result: BasesResultSet?) {
+    func updateActiveBaseSelection(
+        path: String,
+        rowID: String?,
+        columnIndex: Int?,
+        result: BasesResultSet?
+    ) {
         guard let result else {
-            activeBaseSelectedRow = nil
-            activeBaseSelectedColumn = nil
+            clearActiveBaseSelection()
             return
         }
         let rows = result.rows.enumerated().map { BaseGridRow(row: $0.element, ordinal: $0.offset) }
         guard let rowID, let selected = rows.first(where: { $0.id == rowID }) else {
-            activeBaseSelectedRow = nil
-            activeBaseSelectedColumn = nil
+            clearActiveBaseSelection()
             return
         }
+        activeBaseSelectionPath = path
         activeBaseSelectedRow = selected.row
         if let columnIndex, result.columns.indices.contains(columnIndex) {
             activeBaseSelectedColumn = result.columns[columnIndex]
@@ -313,6 +331,12 @@ extension AppState {
                 BaseCellEditPolicy.propertyKey(for: $0) != nil
             }
         }
+    }
+
+    func clearActiveBaseSelection() {
+        activeBaseSelectionPath = nil
+        activeBaseSelectedRow = nil
+        activeBaseSelectedColumn = nil
     }
 
     func basesRefresh() {
@@ -447,7 +471,9 @@ extension AppState {
     private func basesExportToSavePanel(format: ExportFormat, fileExtension: String) {
         guard let doc = activeBaseDocument else { return }
         do {
-            let text = try basesExportText(format: format)
+            guard let includeQuickFilter = baseExportQuickFilterChoice(doc: doc, verb: "Export")
+            else { return }
+            let text = try basesExportText(format: format, includeQuickFilter: includeQuickFilter)
             let panel = NSSavePanel()
             let viewName = doc.activeViewName ?? "View"
             panel.nameFieldStringValue = "\(doc.displayName) — \(viewName).\(fileExtension)"
@@ -471,9 +497,40 @@ extension AppState {
         }
     }
 
+    private func baseExportQuickFilterChoice(doc: BaseDocument, verb: String) -> Bool? {
+        guard doc.quickFilterActive, let result = doc.result else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "\(verb) quick-filtered base view?"
+        alert.informativeText =
+            "Quick filter \"\(doc.quickFilterText)\" is active. Choose filtered rows "
+            + "(\(result.shownCount)) or all rows (\(result.totalCount))."
+        alert.addButton(withTitle: "\(verb) Filtered Rows")
+        alert.addButton(withTitle: "\(verb) All Rows")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return true
+        case .alertSecondButtonReturn:
+            return false
+        default:
+            postBaseActionAnnouncement("\(verb) canceled.")
+            return nil
+        }
+    }
+
     func postBaseActionAnnouncement(_ message: String) {
         lastBaseActionAnnouncement = message
         postAccessibilityAnnouncement(message, priority: .medium)
+    }
+
+    private func activeBaseSelectedRowForCommand() -> BasesRow? {
+        guard let doc = activeBaseDocument,
+            activeBaseSelectionPath == doc.path,
+            let row = activeBaseSelectedRow,
+            doc.result?.rows.contains(where: { $0.hasSameBaseIdentity(as: row) }) == true
+        else { return nil }
+        return row
     }
 
     private func taskItem(path: String, ordinal: UInt64) -> TaskItem? {
@@ -495,5 +552,11 @@ extension AppState {
 
     private func baseFilename(_ path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+}
+
+extension BasesRow {
+    func hasSameBaseIdentity(as other: BasesRow) -> Bool {
+        filePath == other.filePath && taskOrdinal == other.taskOrdinal
     }
 }

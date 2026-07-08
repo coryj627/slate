@@ -20,6 +20,13 @@ enum BaseCellEditPolicy {
         return "read-only: computed"
     }
 
+    static func draftText(from value: BasesValue) -> String {
+        if !value.list.isEmpty {
+            return value.list.joined(separator: ", ")
+        }
+        return value.display
+    }
+
     static func propertyValue(
         from draft: String,
         valueKind: String

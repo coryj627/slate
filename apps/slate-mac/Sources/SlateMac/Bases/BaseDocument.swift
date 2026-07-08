@@ -122,7 +122,11 @@ final class BaseDocument: ObservableObject {
         }
     }
 
-    func export(format: ExportFormat, session: VaultSession) throws -> String {
+    func export(
+        format: ExportFormat,
+        session: VaultSession,
+        includeQuickFilter: Bool = true
+    ) throws -> String {
         guard let handle, views.indices.contains(activeViewIndex) else {
             throw BaseDocumentError.noExecutableView
         }
@@ -130,7 +134,7 @@ final class BaseDocument: ObservableObject {
             handle: handle,
             view: UInt32(activeViewIndex),
             format: format,
-            quickFilter: quickFilterArgument)
+            quickFilter: includeQuickFilter ? quickFilterArgument : nil)
     }
 
     @discardableResult

@@ -377,7 +377,10 @@ final class BasesTabRoutingTests: XCTestCase {
             try state.basesExportText(format: .csv),
             "file.name,status\r\nBeta.md,done\r\n")
         XCTAssertEqual(
-            state.basesCopyViewAsMarkdown(),
+            try state.basesExportText(format: .csv, includeQuickFilter: false),
+            "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\nCafe.md,café\r\n")
+        XCTAssertEqual(
+            state.basesCopyViewAsMarkdown(includeQuickFilter: true),
             "| file.name | status |\n| --- | --- |\n| Beta.md | done |\n")
         XCTAssertEqual(state.lastBaseActionAnnouncement, "Copied base view as Markdown.")
     }
@@ -440,17 +443,30 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(state.workspace.activeLeaf, .backlinks)
     }
 
-    func testSelectedBaseRowCommandsRequireActiveBaseSurface() async throws {
+    func testSelectedBaseRowCommandsRequireActiveBaseSurfaceAndDocument() async throws {
         let state = try await makeQuickFilterAppState()
         state.openFile("Queries/Reading.base", target: .currentTab)
         let row = try XCTUnwrap(
             state.activeBaseDocument?.result?.rows.first { $0.filePath == "Notes/Alpha.md" })
+        state.activeBaseSelectionPath = "Queries/Reading.base"
         state.activeBaseSelectedRow = row
         state.openFile("Notes/Beta.md", target: .currentTab)
 
         state.basesCopySelectedLink()
 
         XCTAssertEqual(state.lastBaseActionAnnouncement, "Select a base row first.")
+
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        state.activeBaseSelectionPath = "Queries/Reading.base"
+        state.activeBaseSelectedRow = row
+        state.openFile("Queries/Other.base", target: .newTab)
+
+        state.basesCopySelectedLink()
+
+        XCTAssertEqual(
+            state.lastBaseActionAnnouncement,
+            "Select a base row first.",
+            "Base commands must not act on another Base document's stale selection")
     }
 
     func testBaseEditPolicyAllowsOnlyNoteMetadataColumns() {
@@ -495,23 +511,23 @@ final class BasesTabRoutingTests: XCTestCase {
     func testBaseSelectionRestorerKeepsSurvivingRowElseFallsBackToFirst() {
         XCTAssertEqual(
             BaseSelectionRestorer.restoredSelection(
-                previous: "Notes/Beta.md:1",
-                availableIDs: ["Notes/Alpha.md:0", "Notes/Beta.md:1"]),
-            "Notes/Beta.md:1")
+                previous: "Notes/Beta.md",
+                availableIDs: ["Notes/Alpha.md", "Notes/Beta.md"]),
+            "Notes/Beta.md")
         XCTAssertEqual(
             BaseSelectionRestorer.restoredSelection(
-                previous: "Notes/Beta.md:1",
-                availableIDs: ["Notes/Alpha.md:0"]),
-            "Notes/Alpha.md:0")
+                previous: "Notes/Beta.md",
+                availableIDs: ["Notes/Alpha.md"]),
+            "Notes/Alpha.md")
         XCTAssertEqual(
             BaseSelectionRestorer.restoredSelection(
-                previous: "Notes/Beta.md:1",
-                current: "Notes/Cafe.md:2",
-                availableIDs: ["Notes/Alpha.md:0", "Notes/Cafe.md:2"]),
-            "Notes/Cafe.md:2")
+                previous: "Notes/Beta.md",
+                current: "Notes/Cafe.md",
+                availableIDs: ["Notes/Alpha.md", "Notes/Cafe.md"]),
+            "Notes/Cafe.md")
         XCTAssertNil(
             BaseSelectionRestorer.restoredSelection(
-                previous: "Notes/Beta.md:1",
+                previous: "Notes/Beta.md",
                 availableIDs: []))
     }
 
@@ -637,8 +653,8 @@ final class BasesTabRoutingTests: XCTestCase {
             options: BaseListOptions(slateStateJson: nil))
 
         XCTAssertEqual(projection.items.map(\.id), [
-            "Notes/Alpha.md:0",
-            "Notes/Beta.md:1",
+            "Notes/Alpha.md",
+            "Notes/Beta.md",
         ])
         XCTAssertEqual(projection.items.map(\.filePath), result.rows.map(\.filePath))
         XCTAssertEqual(projection.items.map(\.primaryText), ["Alpha", "Beta"])
@@ -665,7 +681,7 @@ final class BasesTabRoutingTests: XCTestCase {
         ])
         XCTAssertEqual(display.firstItemIndex, 1)
         XCTAssertEqual(display.lastItemIndex, 5)
-        XCTAssertEqual(display.selectionID(at: 2), "Notes/Alpha.md:0")
+        XCTAssertEqual(display.selectionID(at: 2), "Notes/Alpha.md")
         XCTAssertEqual(display.activationItem(at: 2)?.filePath, "Notes/Alpha.md")
         XCTAssertEqual(display.accessibilityLabel(at: 0), "Group: Status: active, 1 row")
         XCTAssertEqual(display.accessibilityLabel(at: 1), "Alpha row audio")

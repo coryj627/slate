@@ -355,6 +355,7 @@ final class AppState: ObservableObject {
 
     /// Currently selected Bases row/column for registry commands whose
     /// invocation originates outside the grid's AppKit row-action callback.
+    @Published var activeBaseSelectionPath: String?
     @Published var activeBaseSelectedRow: BasesRow?
     @Published var activeBaseSelectedColumn: BasesColumn?
     @Published var baseEditPropertyRequestToken = 0

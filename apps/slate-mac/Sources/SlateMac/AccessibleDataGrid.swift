@@ -49,15 +49,18 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         let header: String
         let cell: (Row) -> String
         let sort: ((Row, Row) -> Bool)?
+        let accessibilityHint: ((Row) -> String?)?
 
         init(
             _ header: String,
             cell: @escaping (Row) -> String,
-            sort: ((Row, Row) -> Bool)? = nil
+            sort: ((Row, Row) -> Bool)? = nil,
+            accessibilityHint: ((Row) -> String?)? = nil
         ) {
             self.header = header
             self.cell = cell
             self.sort = sort
+            self.accessibilityHint = accessibilityHint
         }
     }
 
@@ -94,6 +97,18 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         let columnIndex: Int
     }
 
+    struct EditRequest {
+        let rowID: Row.ID
+        let columnIndex: Int
+        let text: String
+    }
+
+    enum EditCommitNavigation: Equatable {
+        case stay
+        case next
+        case previous
+    }
+
     enum CellMove {
         case left
         case right
@@ -116,6 +131,9 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var cellNavigation: Bool
     var onActivate: ((Row) -> Void)?
     var onEditCell: ((Row, Int) -> Void)?
+    var editRequest: Binding<EditRequest?>?
+    var onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)?
+    var onCancelEdit: (() -> Void)?
     var rowActions: [RowAction]
     var focusRequest: Int
     /// Sort (and other grid-owned) announcements route here. Defaults
@@ -134,6 +152,9 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         cellNavigation: Bool = false,
         onActivate: ((Row) -> Void)? = nil,
         onEditCell: ((Row, Int) -> Void)? = nil,
+        editRequest: Binding<EditRequest?>? = nil,
+        onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)? = nil,
+        onCancelEdit: (() -> Void)? = nil,
         rowActions: [RowAction] = [],
         focusRequest: Int = 0,
         announce: @escaping (String) -> Void = {
@@ -151,6 +172,9 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.cellNavigation = cellNavigation
         self.onActivate = onActivate
         self.onEditCell = onEditCell
+        self.editRequest = editRequest
+        self.onCommitEdit = onCommitEdit
+        self.onCancelEdit = onCancelEdit
         self.rowActions = rowActions
         self.focusRequest = focusRequest
         self.announce = announce
@@ -251,7 +275,7 @@ protocol GridKeyHandling: AnyObject {
 
 @MainActor
 final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
-    NSTableViewDataSource, GridKeyHandling
+    NSTableViewDataSource, NSTextFieldDelegate, GridKeyHandling
 {
     private(set) var grid: AccessibleDataGrid<Row>
     weak var table: NSTableView?
@@ -288,6 +312,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         table?.reloadData()
         syncSelectionFromBinding()
+        syncEditRequestToTable()
     }
 
     func focusIfRequested() {
@@ -417,7 +442,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     nonisolated func tableView(
         _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
     ) -> NSView? {
-        MainActor.assumeIsolated {
+        MainActor.assumeIsolated { () -> NSView? in
             guard let tableColumn,
                 let columnIndex = Int(tableColumn.identifier.rawValue.dropFirst("col".count)),
                 grid.columns.indices.contains(columnIndex),
@@ -433,13 +458,21 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             guard case .row(let rowValue) = displayEntries[row] else { return nil }
             let column = grid.columns[columnIndex]
             let text = column.cell(rowValue)
+            let editRequest = grid.editRequest?.wrappedValue
+            let isEditing =
+                editRequest?.rowID == rowValue.id && editRequest?.columnIndex == columnIndex
 
-            let cell = makeCell(tableView: tableView, tableColumn: tableColumn, text: text)
+            let cell = makeCell(
+                tableView: tableView,
+                tableColumn: tableColumn,
+                text: isEditing ? editRequest?.text ?? text : text,
+                editable: isEditing)
             // Dynamic Type: the cell inherits the user's body text size
             // (WCAG 1.4.4); the row height follows via rowSizeStyle.
             cell.textField?.font = NSFont.preferredFont(forTextStyle: .body)
             // "Header: value" — the v1 AX contract, now on the AppKit cell.
             cell.textField?.setAccessibilityLabel("\(column.header): \(text)")
+            cell.textField?.setAccessibilityHelp(column.accessibilityHint?(rowValue))
             // Named row actions surface as AX custom actions on every
             // cell (Switch Control / Voice Control reachable).
             if !grid.rowActions.isEmpty {
@@ -456,7 +489,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     private func makeCell(
-        tableView: NSTableView, tableColumn: NSTableColumn, text: String
+        tableView: NSTableView,
+        tableColumn: NSTableColumn,
+        text: String,
+        editable: Bool = false
     ) -> NSTableCellView {
         let reuseID = tableColumn.identifier
         let cell: NSTableCellView
@@ -467,9 +503,22 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         } else {
             cell = NSTableCellView()
             cell.identifier = reuseID
-            let field = NSTextField(labelWithString: "")
+        }
+        if cell.textField?.isEditable != editable {
+            cell.textField?.removeFromSuperview()
+            let field = NSTextField(string: "")
+            field.isEditable = editable
+            field.isSelectable = editable
+            field.isBordered = editable
+            field.drawsBackground = editable
+            field.backgroundColor = editable ? .textBackgroundColor : .clear
             field.lineBreakMode = .byTruncatingTail
             field.translatesAutoresizingMaskIntoConstraints = false
+            if editable {
+                field.delegate = self
+                field.target = self
+                field.action = #selector(editingFieldDidReturn(_:))
+            }
             cell.addSubview(field)
             cell.textField = field
             NSLayoutConstraint.activate([
@@ -480,6 +529,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         }
         cell.textField?.stringValue = text
         cell.textField?.setAccessibilityCustomActions(nil)
+        cell.textField?.setAccessibilityHelp(nil)
         return cell
     }
 
@@ -506,6 +556,75 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             table.selectRowIndexes([index], byExtendingSelection: false)
             table.scrollRowToVisible(index)
         }
+    }
+
+    private func syncEditRequestToTable() {
+        guard let table,
+            let editRequest = grid.editRequest?.wrappedValue,
+            let displayIndex = displayIndex(forRowID: editRequest.rowID),
+            grid.columns.indices.contains(editRequest.columnIndex)
+        else { return }
+        if table.selectedRow != displayIndex {
+            table.selectRowIndexes([displayIndex], byExtendingSelection: false)
+        }
+        table.scrollRowToVisible(displayIndex)
+        table.scrollColumnToVisible(editRequest.columnIndex)
+        DispatchQueue.main.async { [weak table] in
+            guard let table else { return }
+            let view = table.view(
+                atColumn: editRequest.columnIndex,
+                row: displayIndex,
+                makeIfNecessary: false) as? NSTableCellView
+            guard let field = view?.textField, field.isEditable else { return }
+            table.window?.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        }
+    }
+
+    @discardableResult
+    func commitEditing(
+        text: String,
+        navigation: AccessibleDataGrid<Row>.EditCommitNavigation
+    ) -> Bool {
+        guard let editRequest = grid.editRequest?.wrappedValue,
+            let row = displayRows.first(where: { $0.id == editRequest.rowID }),
+            grid.columns.indices.contains(editRequest.columnIndex)
+        else { return false }
+        grid.onCommitEdit?(row, editRequest.columnIndex, text, navigation)
+        return true
+    }
+
+    @discardableResult
+    func cancelEditing() -> Bool {
+        guard grid.editRequest?.wrappedValue != nil else { return false }
+        grid.editRequest?.wrappedValue = nil
+        grid.onCancelEdit?()
+        return true
+    }
+
+    nonisolated func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        MainActor.assumeIsolated {
+            switch commandSelector {
+            case #selector(NSResponder.insertNewline(_:)):
+                return commitEditing(text: textView.string, navigation: .stay)
+            case #selector(NSResponder.insertTab(_:)):
+                return commitEditing(text: textView.string, navigation: .next)
+            case #selector(NSResponder.insertBacktab(_:)):
+                return commitEditing(text: textView.string, navigation: .previous)
+            case #selector(NSResponder.cancelOperation(_:)):
+                return cancelEditing()
+            default:
+                return false
+            }
+        }
+    }
+
+    @objc private func editingFieldDidReturn(_ sender: NSTextField) {
+        _ = commitEditing(text: sender.stringValue, navigation: .stay)
     }
 
     // MARK: Keyboard extras (Home/End, type-ahead, Return)

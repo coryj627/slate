@@ -229,8 +229,7 @@ struct BaseListItem: Identifiable, Equatable, Hashable {
     let options: BaseListOptions
 
     var id: String {
-        let task = row.taskOrdinal.map { "#\($0)" } ?? ""
-        return "\(row.filePath)\(task):\(ordinal)"
+        BaseGridRow.id(for: row)
     }
 
     var filePath: String { row.filePath }
