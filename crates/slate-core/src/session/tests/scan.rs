@@ -250,6 +250,37 @@ fn bases_index_snapshot(session: &VaultSession) -> Vec<String> {
 }
 
 #[test]
+fn list_openable_documents_includes_base_files() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"# note").unwrap();
+        p.write_file("board.canvas", br#"{"nodes":[],"edges":[]}"#)
+            .unwrap();
+        p.write_file(
+            "Queries/Reading.base",
+            br#"views:
+  - type: table
+    name: Reading
+    order:
+      - file.name
+"#,
+        )
+        .unwrap();
+        p.write_file("data.txt", b"not openable").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session
+        .list_files(FileFilter::OpenableDocuments, Paging::first(100))
+        .unwrap();
+    let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["Queries/Reading.base", "board.canvas", "note.md"],
+        "quick-open's openable set is markdown notes plus canvas and base files"
+    );
+}
+
+#[test]
 fn scan_initial_skips_hidden_directories() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("real.md", b"# real").unwrap();

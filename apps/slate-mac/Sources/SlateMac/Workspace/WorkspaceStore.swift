@@ -12,7 +12,7 @@ import Foundation
 /// fresh default — never a crash, never a half-restore.
 ///
 /// Forward compatibility: tabs whose `item.kind` is unknown (the reserved
-/// "base" / "canvas" / "graph" discriminators from Milestones N/T/P) are
+/// "graph" discriminator from Milestone P, or future kinds) are
 /// DROPPED on decode rather than failing the workspace; an unknown
 /// top-level `version` yields nil (fresh default). Unsaved buffers are
 /// deliberately NOT persisted — the dirty-close and vault-close gates
@@ -114,7 +114,7 @@ struct WorkspaceStore {
         let tab: Tab?
         init(from decoder: Decoder) throws {
             let decoded = try? Tab(from: decoder)
-            let known = ["markdown", "canvas"]
+            let known = ["markdown", "canvas", "base"]
             self.tab = (decoded.map { known.contains($0.item.kind) } == true) ? decoded : nil
         }
         func encode(to encoder: Encoder) throws {
@@ -285,6 +285,8 @@ struct WorkspaceStore {
             return Item(kind: "markdown", path: path)
         case .canvas(let path):
             return Item(kind: "canvas", path: path)
+        case .base(let path):
+            return Item(kind: "base", path: path)
         }
     }
 
@@ -306,10 +308,15 @@ struct WorkspaceStore {
         switch node {
         case .group(let id, let activeTab, let tabs):
             let workspaceTabs = tabs.map { tab -> WorkspaceTab in
-                let item: EditorItem =
-                    tab.item.kind == "canvas"
-                    ? .canvas(path: tab.item.path)
-                    : .markdown(path: tab.item.path)
+                let item: EditorItem
+                switch tab.item.kind {
+                case "canvas":
+                    item = .canvas(path: tab.item.path)
+                case "base":
+                    item = .base(path: tab.item.path)
+                default:
+                    item = .markdown(path: tab.item.path)
+                }
                 return WorkspaceTab(id: TabID(raw: tab.id), item: item)
             }
             // Repair a dangling active pointer (dropped unknown-kind tab).

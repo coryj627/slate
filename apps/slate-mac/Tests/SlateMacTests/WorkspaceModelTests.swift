@@ -659,12 +659,14 @@ final class WorkspaceModelTests: XCTestCase {
     /// Persistence round-trip prerequisite (full store lands in U1-6): the
     /// `EditorItem` Codable schema must reject unknown kinds by throwing —
     /// the store's tab-dropping tolerance builds on that contract. Both
-    /// inhabited kinds round-trip (#369 activated "canvas"); "graph"
-    /// (Milestone P, still future) is the forward-compat probe.
+    /// inhabited kinds round-trip (#369 activated "canvas"; #702
+    /// activated "base"); "graph" (Milestone P, still future) is the
+    /// forward-compat probe.
     func testEditorItemCodableRoundTripAndUnknownKind() throws {
         for item in [
             EditorItem.markdown(path: "notes/α β.md"),
             EditorItem.canvas(path: "boards/α plan.canvas"),
+            EditorItem.base(path: "queries/reading.base"),
         ] {
             let data = try JSONEncoder().encode(item)
             let decoded = try JSONDecoder().decode(EditorItem.self, from: data)
@@ -730,4 +732,3 @@ final class WorkspaceModelTests: XCTestCase {
         a.raw.uuidString < b.raw.uuidString
     }
 }
-

@@ -1026,6 +1026,29 @@ final class SlateCommandsTests: XCTestCase {
 /// in the doc with that exact chord.
 @MainActor
 extension SlateCommandsTests {
+    func testBasesCommandsRegisterInBasesSectionWithoutGlobalChords() {
+        let appState = AppState()
+        let commands = Dictionary(uniqueKeysWithValues: appState.commandRegistry.list().map { ($0.id, $0) })
+        let expected = [
+            SlateCommandID.basesOpenViewSwitcher,
+            SlateCommandID.basesNextView,
+            SlateCommandID.basesPreviousView,
+            SlateCommandID.basesSortByColumn,
+            SlateCommandID.basesSaveSortToView,
+            SlateCommandID.basesResultsPopover,
+            SlateCommandID.basesRefresh,
+        ]
+
+        for id in expected {
+            let command = commands[id]
+            XCTAssertEqual(command?.section, .bases, "\(id) must live in CommandSection.bases")
+            XCTAssertNil(command?.hotkeyHint, "\(id) must not introduce a global chord")
+        }
+    }
+}
+
+@MainActor
+extension SlateCommandsTests {
     func testCanvasHelpDocCarriesEveryCanvasChord() throws {
         let docURL = Self.projectRoot
             .appendingPathComponent("docs")

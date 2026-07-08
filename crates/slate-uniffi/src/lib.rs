@@ -1163,6 +1163,8 @@ pub enum FileFilter {
     /// Markdown notes plus `.canvas` files (Milestone T, #361) — the
     /// openable-document set for quick open / the file tree (#369).
     MarkdownAndCanvas,
+    /// Markdown notes plus `.canvas` and `.base` files (Milestone N, #702).
+    OpenableDocuments,
 }
 
 impl From<FileFilter> for core::FileFilter {
@@ -1171,6 +1173,7 @@ impl From<FileFilter> for core::FileFilter {
             FileFilter::All => core::FileFilter::All,
             FileFilter::MarkdownOnly => core::FileFilter::MarkdownOnly,
             FileFilter::MarkdownAndCanvas => core::FileFilter::MarkdownAndCanvas,
+            FileFilter::OpenableDocuments => core::FileFilter::OpenableDocuments,
         }
     }
 }
@@ -3479,6 +3482,8 @@ pub enum CommandSection {
     Plugins,
     /// Canvas commands (Milestone T, #369).
     Canvas,
+    /// Bases commands (Milestone N, #702).
+    Bases,
 }
 
 impl From<core::CommandSection> for CommandSection {
@@ -3493,6 +3498,7 @@ impl From<core::CommandSection> for CommandSection {
             core::CommandSection::Settings => Self::Settings,
             core::CommandSection::Plugins => Self::Plugins,
             core::CommandSection::Canvas => Self::Canvas,
+            core::CommandSection::Bases => Self::Bases,
         }
     }
 }
@@ -3509,6 +3515,7 @@ impl From<CommandSection> for core::CommandSection {
             CommandSection::Settings => Self::Settings,
             CommandSection::Plugins => Self::Plugins,
             CommandSection::Canvas => Self::Canvas,
+            CommandSection::Bases => Self::Bases,
         }
     }
 }
@@ -5722,6 +5729,8 @@ mod tests {
             CommandSection::Tasks,
             CommandSection::Settings,
             CommandSection::Plugins,
+            CommandSection::Canvas,
+            CommandSection::Bases,
         ] {
             let core: core::CommandSection = sec.into();
             let back: CommandSection = core.into();

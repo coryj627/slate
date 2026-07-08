@@ -146,6 +146,10 @@ pub enum FileFilter {
     /// quick open and the file tree present once Milestone T lands
     /// (#361 backend change, consumed by #369).
     MarkdownAndCanvas,
+    /// Markdown notes plus `.canvas` and `.base` files — the quick-open
+    /// openable set once Milestone N adds Bases tabs (#702). Kept additive so
+    /// existing canvas-only callers do not silently widen.
+    OpenableDocuments,
 }
 
 // --- Summary type ---
@@ -3588,6 +3592,9 @@ fn list_files_impl(
         FileFilter::All => "1=1",
         FileFilter::MarkdownOnly => "is_markdown = 1",
         FileFilter::MarkdownAndCanvas => "(is_markdown = 1 OR extension = 'canvas')",
+        FileFilter::OpenableDocuments => {
+            "(is_markdown = 1 OR extension = 'canvas' OR extension = 'base')"
+        }
     };
 
     let total: i64 = conn.query_row(

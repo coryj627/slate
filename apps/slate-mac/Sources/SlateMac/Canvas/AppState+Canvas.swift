@@ -28,7 +28,10 @@ extension AppState {
             }
             parkOutgoingNoteBuffer()
             if workspace.activeTab != nil {
+                let replacedItem = workspace.activeTab?.item
                 workspace.replaceActiveItem(.canvas(path: path))
+                releaseCanvasDocumentIfUnreferenced(replacedItem)
+                releaseBaseDocumentIfUnreferenced(replacedItem)
                 if let id = workspace.model.activeGroup.activeTabID {
                     activateTab(id)
                 }

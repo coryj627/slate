@@ -335,6 +335,11 @@ final class AppState: ObservableObject {
     /// canvas. Not @Published: views observe each document directly.
     var canvasDocuments: [String: CanvasDocument] = [:]
 
+    /// Open base documents keyed by vault-relative path (Milestone N,
+    /// #702) — one per path, shared by every pane/tab showing that base.
+    /// Not @Published: views observe each document directly.
+    var baseDocuments: [String: BaseDocument] = [:]
+
     /// The one canvas announcement funnel (#518, DoD §H). Every canvas
     /// surface phrases through it; verbosity persists via
     /// `PreferencesStore` (`setCanvasVerbosity`).
@@ -383,6 +388,10 @@ final class AppState: ObservableObject {
     /// correctly (a path-keyed funnel cannot distinguish them).
     func activateTab(_ id: TabID) {
         guard let tab = workspace.model.tab(id) else { return }
+        if case .base(let path) = tab.item {
+            activateBaseTab(id, path: path)
+            return
+        }
         if case .canvas(let path) = tab.item {
             activateCanvasTab(id, path: path)
             return
@@ -454,10 +463,14 @@ final class AppState: ObservableObject {
     /// active tab reads the live fields; parked tabs read their document.
     func requestCloseTab(_ id: TabID? = nil) {
         guard let target = id ?? workspace.model.activeGroup.activeTabID else { return }
-        // Canvas tabs are never dirty (#369 decision: mutations write
-        // through on commit), so the close gate is bypassed by design —
-        // asserted by CanvasTabRoutingTests.
+        // Canvas/base tabs are never dirty in the note-buffer sense:
+        // canvas mutations write through, and the first Bases surface is
+        // read-only (#702), so the close gate is bypassed by design.
         if case .canvas = workspace.model.tab(target)?.item {
+            performCloseTab(target)
+            return
+        }
+        if case .base = workspace.model.tab(target)?.item {
             performCloseTab(target)
             return
         }
@@ -522,6 +535,7 @@ final class AppState: ObservableObject {
         let closedItem = workspace.model.tab(id)?.item
         let outcome = workspace.close(id)
         releaseCanvasDocumentIfUnreferenced(closedItem)
+        releaseBaseDocumentIfUnreferenced(closedItem)
         if closingActive {
             if let successor = outcome.focusedTab {
                 activateTab(successor)
@@ -806,6 +820,12 @@ final class AppState: ObservableObject {
         // funnel — the note loader must never read a canvas as text.
         if path.lowercased().hasSuffix(".canvas") {
             openCanvasFile(path, target: target)
+            return
+        }
+        // Milestone N (#702): .base paths take the Bases arm of the
+        // funnel — the note loader must never read a base as text.
+        if path.lowercased().hasSuffix(".base") {
+            openBaseFile(path, target: target)
             return
         }
         switch target {
@@ -2173,11 +2193,15 @@ final class AppState: ObservableObject {
         // itself and updates `selectedFilePath` as a mirror; the sink must
         // not run the funnel a second time on that assignment.
         if isActivatingTab { return }
-        // Milestone T (#369): a canvas selection reaching the sink (e.g.
-        // a direct selectedFilePath write) reroutes to the canvas arm —
+        // Milestone T/N: non-markdown selections reaching the sink (e.g.
+        // a direct selectedFilePath write) reroute to their document arms —
         // never the note loader.
         if let path, path.lowercased().hasSuffix(".canvas") {
             openCanvasFile(path, target: .currentTab)
+            return
+        }
+        if let path, path.lowercased().hasSuffix(".base") {
+            openBaseFile(path, target: .currentTab)
             return
         }
         // U1-2: a selection naming a path that is already open as ANOTHER
@@ -2246,7 +2270,10 @@ final class AppState: ObservableObject {
         // purpose: a parked navigation rolled back by the alert must never
         // surface in the workspace. Replaces the active tab's item, or
         // closes it on deselect.
+        let replacedItem = workspace.activeTab?.item
         workspace.mirrorSingleSelection(path)
+        releaseCanvasDocumentIfUnreferenced(replacedItem)
+        releaseBaseDocumentIfUnreferenced(replacedItem)
         guard let path else {
             // Full clear when nothing is selected. Safe here because
             // there's no destination note to attribute stale content
@@ -2687,6 +2714,11 @@ final class AppState: ObservableObject {
                     stderr
                 )
             }
+            // Drop document handles while `currentSession` still names the
+            // previous vault. Calling close on the freshly-opened session
+            // would pair old native handles with the wrong registry.
+            releaseAllCanvasDocuments()
+            releaseAllBaseDocuments()
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -2712,8 +2744,7 @@ final class AppState: ObservableObject {
             // U1-2: tabs belong to a vault; a fresh open starts clean (and
             // must reset BEFORE the selection clear so the funnel doesn't
             // park the previous vault's buffer).
-            releaseAllCanvasDocuments()
-        workspace.reset()
+            workspace.reset()
             pendingTabClose = nil
             pendingTabCloseAfterSave = nil
             selectedFilePath = nil
@@ -3041,6 +3072,10 @@ final class AppState: ObservableObject {
         pendingTemplateFlow = .idle
         templateNoteNameError = nil
         availableTemplates = []
+        // Release native document handles before clearing `currentSession`;
+        // the release helpers need the session that created those handles.
+        releaseAllCanvasDocuments()
+        releaseAllBaseDocuments()
         currentSession = nil
         currentVaultURL = nil
         files = []
@@ -3054,7 +3089,6 @@ final class AppState: ObservableObject {
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
         // close only the ACTIVE tab, leaving siblings pointing into a
         // closed vault.
-        releaseAllCanvasDocuments()
         workspace.reset()
         pendingTabClose = nil
         pendingTabCloseAfterSave = nil
@@ -3216,9 +3250,9 @@ final class AppState: ObservableObject {
                     var cursor: String? = nil
                     repeat {
                         let page = try session.listFiles(
-                            // Milestone T (#369): quick open lists the
-                            // openable-document set — notes AND canvases.
-                            filter: .markdownAndCanvas,
+                            // Milestone N (#702): quick open lists the
+                            // openable-document set — notes, canvases, bases.
+                            filter: .openableDocuments,
                             paging: Paging(cursor: cursor, limit: 1_000)
                         )
                         all.append(contentsOf: page.items)
@@ -5629,6 +5663,7 @@ final class AppState: ObservableObject {
             // Folder: retarget each moved file by its own old→new mapping.
             for m in report.moved {
                 let changed = workspace.retarget(old: m.oldPath, new: m.newPath)
+                rekeyBaseDocumentIfRetargeted(changed, oldPath: m.oldPath, newPath: m.newPath)
                 rebindActiveIfRetargeted(changed, to: m.newPath)
             }
             // The report's `moved` only lists FILES; if the active buffer is a
@@ -5636,6 +5671,7 @@ final class AppState: ObservableObject {
             // folders don't have buffers.
         } else {
             let changed = workspace.retarget(old: movedFrom, new: movedTo)
+            rekeyBaseDocumentIfRetargeted(changed, oldPath: movedFrom, newPath: movedTo)
             rebindActiveIfRetargeted(changed, to: movedTo)
         }
     }
@@ -5647,7 +5683,11 @@ final class AppState: ObservableObject {
         guard let activeID = workspace.model.activeGroup.activeTabID,
             changed.contains(activeID)
         else { return }
-        loadedFilePath = newPath
+        if case .markdown = workspace.activeTab?.item {
+            loadedFilePath = newPath
+        } else {
+            loadedFilePath = nil
+        }
         if selectedFilePath != newPath { selectedFilePath = newPath }
     }
 
@@ -5670,6 +5710,8 @@ final class AppState: ObservableObject {
                 _ = workspace.invalidateParkedDocuments(forPath: tabPath)
             case .canvas:
                 invalidateCanvasDocument(path: tabPath)
+            case .base:
+                invalidateBaseDocument(path: tabPath)
             }
         }
         if activeWasDeleted {
