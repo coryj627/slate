@@ -511,6 +511,8 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(source.contains("AccessibleDataGrid("))
         XCTAssertTrue(source.contains("Builder preview table"))
         XCTAssertTrue(source.contains("advancedExpressionValidation(rawExpression:"))
+        XCTAssertTrue(source.contains("validateAdvancedExpressionInput(value)"))
+        XCTAssertTrue(source.contains("validateAdvancedExpressionInput(rawExpression)"))
         XCTAssertTrue(source.contains("Expression invalid"))
         XCTAssertFalse(source.contains("advancedExpressionValidations"))
     }

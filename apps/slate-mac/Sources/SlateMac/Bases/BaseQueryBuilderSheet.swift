@@ -826,7 +826,7 @@ struct BaseQueryBuilderSheet: View {
                 return raw
             },
             set: { value in
-                let validation = appState.currentSession?.validateBaseExpression(source: value)
+                let validation = validateAdvancedExpressionInput(value)
                 model.updateAdvancedExpression(index: index, rawExpression: value, validation: validation)
             })
     }
@@ -898,9 +898,15 @@ struct BaseQueryBuilderSheet: View {
     private func advancedExpressionValidation(
         rawExpression: String
     ) -> BaseExpressionValidation? {
+        validateAdvancedExpressionInput(rawExpression)
+    }
+
+    private func validateAdvancedExpressionInput(
+        _ rawExpression: String
+    ) -> BaseExpressionValidation? {
         let trimmed = rawExpression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return appState.currentSession?.validateBaseExpression(source: rawExpression)
+        return appState.currentSession?.validateBaseExpression(source: trimmed)
     }
 
     private func expressionValidationMessage(
