@@ -123,6 +123,12 @@ fn parses_namespaces_calls_and_this_file_fields() {
         eq_rhs.kind,
         ExprKind::Prop(PropertyRef::File(FileField::Path))
     ));
+
+    let backlinks = parse_expr("file.hasLink(this.file)").expect("this.file file handle parses");
+    let ExprKind::Call { args, .. } = &backlinks.kind else {
+        panic!("expected hasLink call, got {backlinks:#?}");
+    };
+    assert!(matches!(args[0].kind, ExprKind::Prop(PropertyRef::This)));
 }
 
 #[test]

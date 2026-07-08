@@ -271,6 +271,7 @@ fn query_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn args<'a>(raw_path: &'a Path, cancel: &'a CancelToken) -> QueryArgs<'a> {
@@ -284,6 +285,14 @@ mod tests {
             this_path: None,
             cancel,
         }
+    }
+
+    fn write_file(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
     }
 
     #[test]
@@ -317,6 +326,108 @@ mod tests {
         assert!(
             !vault.path().join(".slate/cache.sqlite").exists(),
             "usage validation should run before open_and_scan"
+        );
+    }
+
+    #[test]
+    fn run_base_query_json_and_csv_match_export_goldens() {
+        let vault = TempDir::new().unwrap();
+        write_file(
+            vault.path(),
+            "Queries/Reading.base",
+            "views:\n  - type: table\n    name: Reading\n    filters: \"file.inFolder(\\\"Notes\\\")\"\n    order:\n      - file.name\n      - status\n",
+        );
+        write_file(
+            vault.path(),
+            "Notes/Alpha.md",
+            "---\nstatus: active\n---\n# Alpha\n",
+        );
+        write_file(
+            vault.path(),
+            "Notes/Beta.md",
+            "---\nstatus: done\n---\n# Beta\n",
+        );
+
+        let cancel = CancelToken::new();
+        let mut query_args = args(vault.path(), &cancel);
+        query_args.base_path = Some("Queries/Reading.base");
+
+        let (_abs, format, output, code) = run(query_args).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(
+            output.data,
+            serde_json::json!([
+                {"path": "Notes/Alpha.md", "file.name": "Alpha.md", "status": "active"},
+                {"path": "Notes/Beta.md", "file.name": "Beta.md", "status": "done"}
+            ])
+        );
+
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let handle = session.open_base("Queries/Reading.base").unwrap();
+        let expected_csv = session
+            .base_export(handle, 0, ExportFormat::Csv, None)
+            .unwrap();
+
+        let mut csv_args = args(vault.path(), &cancel);
+        csv_args.base_path = Some("Queries/Reading.base");
+        csv_args.format = QueryFormat::Csv;
+        let (_abs, format, output, code) = run(csv_args).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(format, OutputFormat::Human);
+        assert!(output.human_verbatim);
+        assert_eq!(output.human, expected_csv);
+        assert_eq!(
+            output.human,
+            "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n"
+        );
+    }
+
+    #[test]
+    fn run_saved_query_survives_session_relaunch() {
+        let vault = TempDir::new().unwrap();
+        write_file(
+            vault.path(),
+            "Notes/Alpha.md",
+            "---\nstatus: active\n---\n# Alpha\n",
+        );
+        write_file(
+            vault.path(),
+            "Notes/Beta.md",
+            "---\nstatus: done\n---\n# Beta\n",
+        );
+
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let (base, warnings) = slate_core::bases::parse_base(
+            "views:\n  - type: table\n    name: Reading\n    filters: \"file.inFolder(\\\"Notes\\\")\"\n    order:\n      - file.name\n      - status\n",
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let query_json = serde_json::to_string(&slate_core::bases::view_query(&base, 0)).unwrap();
+        session
+            .save_query(
+                "Saved reading",
+                None,
+                &query_json,
+                slate_core::SavedQuerySourceSyntax::Builder,
+            )
+            .unwrap();
+        drop(session);
+
+        let cancel = CancelToken::new();
+        let mut query_args = args(vault.path(), &cancel);
+        query_args.saved_name = Some("Saved reading");
+        query_args.limit = Some(1);
+
+        let (_abs, format, output, code) = run(query_args).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(
+            output.data,
+            serde_json::json!([
+                {"path": "Notes/Alpha.md", "file.name": "Alpha.md", "status": "active"}
+            ])
         );
     }
 

@@ -887,6 +887,12 @@ impl<'a> Parser<'a> {
         self.advance();
         let (name, first_end) = self.expect_ident("expected field after this.")?;
         if name == "file" {
+            if !self.at(TokenKind::Dot) {
+                return Ok(Expr {
+                    span: start.join(first_end),
+                    kind: ExprKind::Prop(PropertyRef::This),
+                });
+            }
             self.expect(TokenKind::Dot, "expected this.file.<field>")?;
             let (field_name, end) = self.expect_ident("expected file field")?;
             let Some(field) = file_field(&field_name) else {

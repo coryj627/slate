@@ -890,6 +890,161 @@ fn census_bases_read_only() {
 }
 
 #[test]
+fn n4_closeout_fixture_vault_e2e() {
+    let fixture = include_str!("../../../tests/fixtures/bases/comments_key_order.base");
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("Queries/Reading.base", fixture.as_bytes())
+            .unwrap();
+        p.write_file(
+            "Notes/Alpha.md",
+            b"---\ntags: [reading]\nstatus: active\n---\n# Alpha\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Beta.md",
+            b"---\ntags: [reading]\nstatus: waiting\n---\n# Beta\nLinks to [[Notes/Alpha.md]].\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Hidden.md",
+            b"---\ntags: [private]\nstatus: hidden\n---\n# Hidden\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Host.md",
+            b"# Host\n\n```dataview\nTABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n```\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let (parsed, warnings) = crate::bases::parse_base(fixture);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        crate::bases::serialize_base(&parsed, &[]).unwrap(),
+        fixture,
+        "builder/no-op save path must preserve the fixture bytes"
+    );
+
+    let handle = session.open_base("Queries/Reading.base").unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Alpha.md", "Notes/Beta.md"]
+    );
+    assert_eq!(result.view_error, None);
+
+    let before_quick_filter = vault_content_snapshot(tmp.path());
+    let filtered = session
+        .base_execute(
+            handle,
+            0,
+            None,
+            Some("beta".to_string()),
+            &CancelToken::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        filtered
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Beta.md"]
+    );
+    assert_eq!(
+        vault_content_snapshot(tmp.path()),
+        before_quick_filter,
+        "quick filter must not dirty vault-authored files"
+    );
+
+    session
+        .set_property(
+            "Notes/Alpha.md",
+            "status",
+            crate::PropertyValue::Text("done".to_string()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        session.read_text("Notes/Alpha.md").unwrap(),
+        "---\ntags:\n  - reading\nstatus: done\n---\n# Alpha\n"
+    );
+
+    let backlinks_base = r#"views:
+  - type: table
+    name: Better backlinks
+    filters: "file.hasLink(this.file)"
+    order:
+      - file.name
+"#;
+    let outgoing = session.outgoing_links("Notes/Beta.md").unwrap();
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].target_path.as_deref(), Some("Notes/Alpha.md"));
+    let inline = session
+        .open_base_inline(backlinks_base, Some("Notes/Alpha.md".to_string()))
+        .unwrap();
+    let backlinks = session
+        .base_execute(inline, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(backlinks.view_error, None);
+    assert_eq!(backlinks.warnings, Vec::<String>::new());
+    assert_eq!(
+        backlinks
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Beta.md"]
+    );
+
+    let converted = session
+        .dql_as_base("TABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n")
+        .unwrap();
+    assert_eq!(
+        converted,
+        "filters: \"file.file.inFolder(\\\"Notes\\\")\"\nformulas:\n  dql_column_1: file.name\nproperties:\n  formula.dql_column_1:\n    displayName: Name\nviews:\n  - type: table\n    name: Query\n    order:\n      - formula.dql_column_1\n"
+    );
+    let converted_handle = session.open_base_inline(&converted, None).unwrap();
+    let converted_result = session
+        .base_execute(converted_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(converted_result.columns[0].label, "Name");
+
+    let query_json = serde_json::to_string(&crate::bases::view_query(&parsed, 0)).unwrap();
+    let saved_id = session
+        .save_query(
+            "Reading saved",
+            Some("N4 close-out relaunch fixture"),
+            &query_json,
+            SavedQuerySourceSyntax::Builder,
+        )
+        .unwrap();
+    drop(session);
+
+    let reloaded = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    reloaded.scan_initial(&CancelToken::new()).unwrap();
+    let saved = reloaded.open_saved_query(&saved_id).unwrap();
+    let saved_result = reloaded
+        .base_execute(saved, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        saved_result
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Alpha.md", "Notes/Beta.md"]
+    );
+}
+
+#[test]
 fn saved_queries_crud_open_export_and_delete() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(
