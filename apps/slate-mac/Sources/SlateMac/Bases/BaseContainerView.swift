@@ -12,6 +12,9 @@ struct BaseContainerView: View {
 
     @State private var selectedRow: String?
     @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
+    @State private var quickFilterTask: Task<Void, Never>?
+    @State private var resultFocusToken = 0
+    @FocusState private var quickFilterFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,10 +24,28 @@ struct BaseContainerView: View {
             content
         }
         .background(Tokens.ColorRole.surface)
+        .onKeyPress(.escape) {
+            guard quickFilterFocused || document.quickFilterActive else { return .ignored }
+            quickFilterFocused = false
+            clearQuickFilterAndRestoreSelection()
+            return .handled
+        }
         .onAppear {
             if document.handle == nil, let session = appState.currentSession {
                 document.load(session: session)
             }
+        }
+        .onDisappear {
+            quickFilterTask?.cancel()
+            quickFilterTask = nil
+        }
+        .onChange(of: appState.baseQuickFilterFocusToken) { _, _ in
+            guard appState.workspace.model.activeGroup.activeTabID == tabID else { return }
+            quickFilterFocused = true
+        }
+        .onChange(of: document.quickFilterText) { _, _ in
+            guard quickFilterFocused else { return }
+            scheduleQuickFilterExecution(previousSelection: selectedRow)
         }
     }
 
@@ -48,12 +69,13 @@ struct BaseContainerView: View {
             Text(resultCountText)
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
-            TextField("Quick filter", text: .constant(""))
+            TextField("Quick filter", text: $document.quickFilterText)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 160)
-                .disabled(true)
-                .accessibilityLabel("Quick filter")
-                .accessibilityHint("Quick filtering is reserved for a later Bases phase.")
+                .frame(width: 180)
+                .focused($quickFilterFocused)
+                .accessibilityLabel("Quick filter — temporary, does not change the base")
+                .accessibilityValue(
+                    document.quickFilterActive ? document.quickFilterText : "No quick filter")
             Button {
                 appState.basesRefresh()
             } label: {
@@ -143,16 +165,19 @@ struct BaseContainerView: View {
                 .init("Open") { row in
                     appState.openFile(row.row.filePath, target: .currentTab)
                 }
-            ])
+            ],
+            focusRequest: resultFocusToken)
     }
 
     private func resultList(_ result: BasesResultSet) -> some View {
         let projection = BaseListProjection(
             result: result,
-            options: BaseListOptions(slateStateJson: activeView?.slateStateJson))
+            options: BaseListOptions(slateStateJson: activeView?.slateStateJson),
+            isQuickFiltered: document.quickFilterActive)
         return BaseListView(
             projection: projection,
             selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            focusRequest: resultFocusToken,
             onActivate: { appState.openFile($0.filePath, target: .currentTab) },
             rowActions: [
                 .init("Open") { row in
@@ -190,7 +215,45 @@ struct BaseContainerView: View {
     }
 
     private func summaryText(_ result: BasesResultSet) -> String {
-        BaseSummaryFormatter.summaryText(result)
+        BaseSummaryFormatter.summaryText(result, isQuickFiltered: document.quickFilterActive)
+    }
+
+    private func scheduleQuickFilterExecution(previousSelection: String?) {
+        quickFilterTask?.cancel()
+        quickFilterTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 150_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let session = appState.currentSession else { return }
+            let announcement = document.applyQuickFilter(document.quickFilterText, session: session)
+            restoreSelection(previous: previousSelection)
+            postAccessibilityAnnouncement(announcement, priority: .medium)
+        }
+    }
+
+    private func clearQuickFilterAndRestoreSelection() {
+        quickFilterTask?.cancel()
+        quickFilterTask = nil
+        let previousSelection = selectedRow
+        let announcement = document.clearQuickFilter(session: appState.currentSession)
+        restoreSelection(previous: previousSelection)
+        if let announcement {
+            postAccessibilityAnnouncement(announcement, priority: .medium)
+        }
+        resultFocusToken &+= 1
+    }
+
+    private func restoreSelection(previous: String?) {
+        guard let result = document.result else {
+            selectedRow = nil
+            return
+        }
+        selectedRow = BaseSelectionRestorer.restoredSelection(
+            previous: previous,
+            current: selectedRow,
+            availableIDs: rows(from: result).map(\.id))
     }
 
     private var activeViewBinding: Binding<Int> {
@@ -256,12 +319,16 @@ struct BaseGridRow: Identifiable {
 }
 
 enum BaseSummaryFormatter {
-    static func summaryText(_ result: BasesResultSet) -> String {
-        if let text = summaryText(summaries: result.summaries, columns: result.columns) {
-            return text
+    static func summaryText(_ result: BasesResultSet, isQuickFiltered: Bool = false) -> String {
+        let text: String
+        if let summary = summaryText(summaries: result.summaries, columns: result.columns) {
+            text = summary
+        } else if !result.audioSummary.isEmpty {
+            text = result.audioSummary
+        } else {
+            text = "Base table: \(result.shownCount) of \(result.totalCount) rows."
         }
-        if !result.audioSummary.isEmpty { return result.audioSummary }
-        return "Base table: \(result.shownCount) of \(result.totalCount) rows."
+        return isQuickFiltered ? "Summaries: filtered — \(text)" : text
     }
 
     static func summaryText(
@@ -275,5 +342,21 @@ enum BaseSummaryFormatter {
             return "\(label) \(summary.summary): \(value)"
         }
         return cells.joined(separator: ", ")
+    }
+}
+
+enum BaseSelectionRestorer {
+    static func restoredSelection(
+        previous: String?,
+        current: String? = nil,
+        availableIDs: [String]
+    ) -> String? {
+        if let current, current != previous, availableIDs.contains(current) {
+            return current
+        }
+        if let previous, availableIDs.contains(previous) {
+            return previous
+        }
+        return availableIDs.first
     }
 }

@@ -117,6 +117,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var onActivate: ((Row) -> Void)?
     var onEditCell: ((Row, Int) -> Void)?
     var rowActions: [RowAction]
+    var focusRequest: Int
     /// Sort (and other grid-owned) announcements route here. Defaults
     /// to the app-wide announcer; #363 injects the #518 coordinator.
     var announce: (String) -> Void
@@ -134,6 +135,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         onActivate: ((Row) -> Void)? = nil,
         onEditCell: ((Row, Int) -> Void)? = nil,
         rowActions: [RowAction] = [],
+        focusRequest: Int = 0,
         announce: @escaping (String) -> Void = {
             postAccessibilityAnnouncement($0, priority: .medium)
         }
@@ -150,6 +152,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.onActivate = onActivate
         self.onEditCell = onEditCell
         self.rowActions = rowActions
+        self.focusRequest = focusRequest
         self.announce = announce
     }
 
@@ -224,6 +227,7 @@ private struct GridTable<Row: Identifiable>: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.reload(grid: grid)
+        context.coordinator.focusIfRequested()
     }
 }
 
@@ -260,6 +264,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
     private var displayEntries: [DisplayEntry] = []
     private(set) var activeSort: DataGridSortState?
+    private(set) var lastFocusRequest = 0
 
     // Type-ahead state (first-column prefix match, 1s window).
     private var typeAheadBuffer = ""
@@ -283,6 +288,13 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         table?.reloadData()
         syncSelectionFromBinding()
+    }
+
+    func focusIfRequested() {
+        guard grid.focusRequest != lastFocusRequest else { return }
+        lastFocusRequest = grid.focusRequest
+        guard grid.focusRequest != 0, let table else { return }
+        table.window?.makeFirstResponder(table)
     }
 
     // MARK: Sorting

@@ -115,6 +115,8 @@ enum SlateCommandID {
     static let basesSaveSortToView = "slate.bases.saveSortToView"
     static let basesViewAsTable = "slate.bases.viewAsTable"
     static let basesViewAsList = "slate.bases.viewAsList"
+    static let basesQuickFilter = "slate.bases.quickFilter"
+    static let basesWhereAmI = "slate.bases.whereAmI"
     static let basesResultsPopover = "slate.bases.resultsPopover"
     static let basesRefresh = "slate.bases.refresh"
 
@@ -244,6 +246,8 @@ enum SlateCommandID {
         basesSaveSortToView,
         basesViewAsTable,
         basesViewAsList,
+        basesQuickFilter,
+        basesWhereAmI,
         basesResultsPopover,
         basesRefresh,
         newTab,
@@ -860,6 +864,20 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .bases,
         hint: "Temporarily render the active base with row navigation."
     ) { [weak appState] in appState?.basesViewAsList() }
+
+    register(
+        SlateCommandID.basesQuickFilter,
+        label: "Bases: Quick filter",
+        section: .bases,
+        hint: "Focus the active base's temporary quick filter field."
+    ) { [weak appState] in appState?.basesFocusQuickFilter() }
+
+    register(
+        SlateCommandID.basesWhereAmI,
+        label: "Bases: Where Am I?",
+        section: .bases,
+        hint: "Read the active base, view, and temporary quick filter."
+    ) { [weak appState] in _ = appState?.basesWhereAmI() }
 
     register(
         SlateCommandID.basesResultsPopover,

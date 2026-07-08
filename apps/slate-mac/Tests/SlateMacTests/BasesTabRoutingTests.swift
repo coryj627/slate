@@ -158,6 +158,60 @@ final class BasesTabRoutingTests: XCTestCase {
         return state
     }
 
+    private func makeQuickFilterAppState() async throws -> AppState {
+        let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Reading
+                filters: "file.inFolder(\"Notes\")"
+                order:
+                  - file.name
+                  - status
+                summaries:
+                  status: count
+              - type: table
+                name: Done
+                filters:
+                  and:
+                    - "file.inFolder(\"Notes\")"
+                    - "status == \"done\""
+                order:
+                  - file.name
+                  - status
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Reading.base"))
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Other
+                filters: "file.inFolder(\"Notes\")"
+                order:
+                  - file.name
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Other.base"))
+        try Data("---\nstatus: active\n---\n# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("---\nstatus: done\n---\n# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
+        try Data("---\nstatus: café\n---\n# Cafe\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Cafe.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return state
+    }
+
     func testOpenFileRoutesBaseToBasesTabAndLoadsDefaultView() async throws {
         let state = try await makeAppState()
 
@@ -202,6 +256,162 @@ final class BasesTabRoutingTests: XCTestCase {
         state.basesSelectPreviousView()
         XCTAssertEqual(doc.activeViewIndex, 0)
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Alpha.md", "Notes/Beta.md"])
+    }
+
+    func testQuickFilterExecutesThroughFfiAndNeverDirtiesBase() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let session = try XCTUnwrap(state.currentSession)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let baseURL = vaultURL.appendingPathComponent("Queries/Reading.base")
+        let bytesBefore = try Data(contentsOf: baseURL)
+        let mtimeBefore = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: baseURL.path)[.modificationDate]
+                as? Date)
+
+        let announcement = doc.applyQuickFilter("CAFE", session: session)
+
+        XCTAssertEqual(doc.quickFilterText, "CAFE")
+        XCTAssertTrue(doc.quickFilterActive)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Cafe.md"])
+        XCTAssertEqual(doc.result?.audioSummary, "1 note.")
+        XCTAssertEqual(announcement, "1 of 1 results")
+        XCTAssertTrue(doc.whereAmIReadback.contains("quick filter: CAFE"))
+        XCTAssertEqual(
+            BaseSummaryFormatter.summaryText(
+                try XCTUnwrap(doc.result), isQuickFiltered: doc.quickFilterActive),
+            "Summaries: filtered — status count: 1")
+        XCTAssertEqual(try Data(contentsOf: baseURL), bytesBefore)
+        XCTAssertEqual(
+            try XCTUnwrap(
+                FileManager.default.attributesOfItem(atPath: baseURL.path)[.modificationDate]
+                    as? Date),
+            mtimeBefore)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertFalse(state.workspace.anyTabDirty(activeTabDirty: state.hasUnsavedChanges))
+    }
+
+    func testQuickFilterClearsOnViewSwitchAndTabSwitch() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let session = try XCTUnwrap(state.currentSession)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+
+        _ = doc.applyQuickFilter("cafe", session: session)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Cafe.md"])
+
+        state.basesSelectNextView()
+
+        XCTAssertEqual(doc.quickFilterText, "")
+        XCTAssertFalse(doc.quickFilterActive)
+        XCTAssertEqual(doc.activeViewName, "Done")
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+
+        _ = doc.applyQuickFilter("beta", session: session)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+
+        state.openFile("Queries/Other.base", target: .newTab)
+
+        XCTAssertEqual(doc.quickFilterText, "")
+        XCTAssertFalse(doc.quickFilterActive)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+    }
+
+    func testBasesQuickFilterFocusTokenIsBaseScoped() async throws {
+        let state = try await makeQuickFilterAppState()
+
+        state.basesFocusQuickFilter()
+        XCTAssertEqual(state.baseQuickFilterFocusToken, 0)
+
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        state.basesFocusQuickFilter()
+        XCTAssertEqual(state.baseQuickFilterFocusToken, 1)
+
+        state.openFile("Notes/Alpha.md", target: .currentTab)
+        state.basesFocusQuickFilter()
+        XCTAssertEqual(
+            state.baseQuickFilterFocusToken,
+            1,
+            "non-base tabs must not claim the scoped quick-filter focus token")
+    }
+
+    func testFindRoutingOnlyFocusesBaseQuickFilterFromEditorRegion() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+
+        state.requestFindInFocusedSurface()
+        XCTAssertEqual(state.baseQuickFilterFocusToken, 1)
+        XCTAssertFalse(state.isSearchOpen)
+
+        state.workspace.focusLeafRegion()
+        state.requestFindInFocusedSurface()
+        XCTAssertEqual(
+            state.baseQuickFilterFocusToken,
+            1,
+            "right-pane focus must not be stolen by the active Base tab")
+        XCTAssertTrue(state.isSearchOpen, "non-Bases focus falls back to vault search")
+    }
+
+    func testBasesWhereAmIIncludesQuickFilterReadback() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+
+        _ = doc.applyQuickFilter("CAFE", session: session)
+
+        XCTAssertEqual(
+            state.basesWhereAmI(),
+            "Base: Reading, view: Reading, quick filter: CAFE")
+    }
+
+    func testBaseSelectionRestorerKeepsSurvivingRowElseFallsBackToFirst() {
+        XCTAssertEqual(
+            BaseSelectionRestorer.restoredSelection(
+                previous: "Notes/Beta.md:1",
+                availableIDs: ["Notes/Alpha.md:0", "Notes/Beta.md:1"]),
+            "Notes/Beta.md:1")
+        XCTAssertEqual(
+            BaseSelectionRestorer.restoredSelection(
+                previous: "Notes/Beta.md:1",
+                availableIDs: ["Notes/Alpha.md:0"]),
+            "Notes/Alpha.md:0")
+        XCTAssertEqual(
+            BaseSelectionRestorer.restoredSelection(
+                previous: "Notes/Beta.md:1",
+                current: "Notes/Cafe.md:2",
+                availableIDs: ["Notes/Alpha.md:0", "Notes/Cafe.md:2"]),
+            "Notes/Cafe.md:2")
+        XCTAssertNil(
+            BaseSelectionRestorer.restoredSelection(
+                previous: "Notes/Beta.md:1",
+                availableIDs: []))
+    }
+
+    func testBaseQuickFilterEscapeRestoresNativeResultFocus() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let baseContainer = try String(
+            contentsOf: root.appendingPathComponent(
+                "apps/slate-mac/Sources/SlateMac/Bases/BaseContainerView.swift"),
+            encoding: .utf8)
+        let grid = try String(
+            contentsOf: root.appendingPathComponent(
+                "apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift"),
+            encoding: .utf8)
+        let list = try String(
+            contentsOf: root.appendingPathComponent(
+                "apps/slate-mac/Sources/SlateMac/Bases/BaseListRenderer.swift"),
+            encoding: .utf8)
+
+        XCTAssertTrue(baseContainer.contains("resultFocusToken &+="))
+        XCTAssertTrue(baseContainer.contains("focusRequest: resultFocusToken"))
+        XCTAssertTrue(grid.contains("makeFirstResponder(table)"))
+        XCTAssertTrue(list.contains("makeFirstResponder(outline)"))
     }
 
     func testBasesSortCommandAndSaveSortPersistSlateState() async throws {
