@@ -54,6 +54,21 @@ enum BaseQuerySource: Hashable {
     fileprivate var rowSourceJSON: String {
         self == .tasks ? "Tasks" : "Files"
     }
+
+    fileprivate var filterYAML: BaseQueryFilterYAML? {
+        switch self {
+        case .allNotes, .tasks:
+            return nil
+        case .folder(let path):
+            return .stmt("file.inFolder(\(BaseQueryYAML.quoteString(path)))")
+        case .tag(let tag):
+            return .stmt("file.hasTag(\(BaseQueryYAML.quoteString(tag)))")
+        case .recent(let days):
+            return .stmt("file.mtime > now() - duration(\"\(max(days, 1))d\")")
+        case .linked(let path):
+            return .stmt("link(\(BaseQueryYAML.quoteString(path))).linksTo(file.file)")
+        }
+    }
 }
 
 enum BaseQueryCombinator: Hashable {
@@ -102,15 +117,50 @@ enum BaseQueryProperty: Hashable {
     }
 
     fileprivate var expressionJSON: Any {
+        BaseQueryJSON.expr(["Prop": propertyRefJSON])
+    }
+
+    fileprivate var propertyRefJSON: Any {
         switch self {
         case .note(let name):
-            return BaseQueryJSON.expr(["Prop": ["Note": name]])
+            return ["Note": name]
         case .file(let field):
-            return BaseQueryJSON.expr(["Prop": ["File": field.serdeName]])
+            return ["File": field.serdeName]
         case .formula(let name):
-            return BaseQueryJSON.expr(["Prop": ["Formula": name]])
+            return ["Formula": name]
         case .task(let field):
-            return BaseQueryJSON.expr(["Prop": ["TaskField": field.serdeName]])
+            return ["TaskField": field.serdeName]
+        }
+    }
+
+    var sourceExpression: String {
+        switch self {
+        case .note(let name):
+            return name
+        case .file(let field):
+            return "file.\(field.sourceName)"
+        case .formula(let name):
+            return "formula.\(name)"
+        case .task(let field):
+            return "task.\(field.sourceName)"
+        }
+    }
+
+    init?(columnID: String) {
+        if let name = columnID.stripPrefix("formula.") {
+            self = .formula(name)
+        } else if let fieldName = columnID.stripPrefix("file."),
+            let field = BaseQueryFileField(rawValue: fieldName)
+        {
+            self = .file(field)
+        } else if let fieldName = columnID.stripPrefix("task."),
+            let field = BaseQueryTaskField(rawValue: fieldName)
+        {
+            self = .task(field)
+        } else if !columnID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self = .note(columnID)
+        } else {
+            return nil
         }
     }
 }
@@ -222,6 +272,33 @@ enum BaseQueryOperator: Hashable {
             return nil
         }
     }
+
+    fileprivate var sourceBinaryOperator: String? {
+        switch self {
+        case .equals: return "=="
+        case .notEquals: return "!="
+        case .greaterThan: return ">"
+        case .greaterThanOrEqual: return ">="
+        case .lessThan: return "<"
+        case .lessThanOrEqual: return "<="
+        case .contains, .startsWith, .endsWith, .isEmpty, .hasTag, .hasLink, .matches:
+            return nil
+        }
+    }
+
+    fileprivate var sourceMethodName: String? {
+        switch self {
+        case .contains: return "contains"
+        case .startsWith: return "startsWith"
+        case .endsWith: return "endsWith"
+        case .isEmpty: return "isEmpty"
+        case .hasTag: return "hasTag"
+        case .hasLink: return "hasLink"
+        case .matches: return "matches"
+        case .equals, .notEquals, .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual:
+            return nil
+        }
+    }
 }
 
 enum BaseQueryValue: Hashable {
@@ -298,6 +375,17 @@ enum BaseQueryValue: Hashable {
             return BaseQueryJSON.expr(["Lit": ["Number": number]])
         case .bool(let value):
             return BaseQueryJSON.expr(["Lit": ["Bool": value]])
+        }
+    }
+
+    fileprivate var sourceLiteral: String {
+        switch self {
+        case .text(let text):
+            return BaseQueryYAML.quoteString(text)
+        case .number(let number):
+            return Self.numberFormatter.string(from: NSNumber(value: number)) ?? String(number)
+        case .bool(let value):
+            return value ? "true" : "false"
         }
     }
 
@@ -398,6 +486,18 @@ struct BaseQueryCondition: Hashable {
         ])
     }
 
+    fileprivate var expressionSource: String {
+        let encodedValue = value.coerced(preferredKind: preferredValueKind)
+        if let symbol = op.sourceBinaryOperator {
+            return "\(property.sourceExpression) \(symbol) \(encodedValue.sourceLiteral)"
+        }
+        let method = op.sourceMethodName ?? "contains"
+        if op == .isEmpty {
+            return "\(property.sourceExpression).\(method)()"
+        }
+        return "\(property.sourceExpression).\(method)(\(encodedValue.sourceLiteral))"
+    }
+
     private var preferredValueKind: BaseQueryValueKind? {
         guard op != .isEmpty else { return nil }
         switch property {
@@ -459,10 +559,192 @@ struct BaseQueryConditionGroup: Hashable {
     }
 }
 
+enum BaseQueryViewType: String, CaseIterable, Hashable, Identifiable {
+    case table
+    case list
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .table: return "Table"
+        case .list: return "List"
+        }
+    }
+
+    fileprivate var queryViewJSON: Any {
+        switch self {
+        case .table: return ["Table": ["fallback_from": NSNull()]]
+        case .list: return ["List": ["fallback_from": NSNull()]]
+        }
+    }
+}
+
+struct BaseQueryGroupBy: Hashable {
+    var property: BaseQueryProperty
+    var ascending: Bool
+
+    fileprivate var queryJSON: Any {
+        [
+            "property": property.propertyRefJSON,
+            "ascending": ascending,
+        ]
+    }
+
+    fileprivate var yamlFragment: String {
+        [
+            "groupBy:",
+            "  property: \(BaseQueryYAML.scalar(property.sourceExpression))",
+            "  direction: \(ascending ? "ASC" : "DESC")",
+        ].joined(separator: "\n")
+    }
+}
+
+struct BaseQuerySortKey: Hashable {
+    var property: BaseQueryProperty?
+    var expressionJSON: String
+    var expressionLabel: String
+    var ascending: Bool
+
+    init(property: BaseQueryProperty, ascending: Bool) {
+        self.property = property
+        self.expressionJSON = BaseQueryJSON.canonicalJSONString(property.expressionJSON) ?? ""
+        self.expressionLabel = property.sourceExpression
+        self.ascending = ascending
+    }
+
+    fileprivate init(expressionJSON: String, expressionLabel: String, ascending: Bool) {
+        self.property = nil
+        self.expressionJSON = expressionJSON
+        self.expressionLabel = expressionLabel
+        self.ascending = ascending
+    }
+
+    fileprivate var queryJSON: Any {
+        [
+            "expr": BaseQueryJSON.decode(expressionJSON) ?? BaseQueryJSON.unsupportedExpr(expressionLabel),
+            "ascending": ascending,
+        ]
+    }
+
+    fileprivate func referencesFormula(named name: String) -> Bool {
+        if property == .formula(name) || expressionLabel == "formula.\(name)" {
+            return true
+        }
+        guard let expr = BaseQueryJSON.decode(expressionJSON) else { return false }
+        return Self.jsonValue(expr, containsFormulaReference: name)
+    }
+
+    private static func jsonValue(_ value: Any, containsFormulaReference name: String) -> Bool {
+        if let object = value as? [String: Any] {
+            if object["Formula"] as? String == name {
+                return true
+            }
+            return object.values.contains { jsonValue($0, containsFormulaReference: name) }
+        }
+        if let items = value as? [Any] {
+            return items.contains { jsonValue($0, containsFormulaReference: name) }
+        }
+        return false
+    }
+
+    fileprivate var slateYAML: String {
+        [
+            "    - expr: \(BaseQueryYAML.scalar(expressionLabel))",
+            "      direction: \(ascending ? "asc" : "desc")",
+        ].joined(separator: "\n")
+    }
+}
+
+struct BaseQueryColumn: Hashable, Identifiable {
+    var id: String
+    var property: BaseQueryProperty?
+    var displayName: String?
+
+    init(property: BaseQueryProperty, displayName: String?) {
+        self.id = property.sourceExpression
+        self.property = property
+        self.displayName = displayName
+    }
+
+    fileprivate init(id: String, displayName: String?) {
+        self.id = id
+        self.property = BaseQueryProperty(columnID: id)
+        self.displayName = displayName
+    }
+
+    fileprivate var queryJSON: [String: Any] {
+        [
+            "id": id,
+            "display_name": displayName ?? NSNull(),
+        ]
+    }
+}
+
+struct BaseQueryFormula: Hashable, Identifiable {
+    var name: String
+    var expression: String
+    var expressionJSON: String
+
+    var id: String { name }
+
+    init(name: String, expression: String, expressionJSON: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw BaseQueryBuilderError.invalidQueryJSON }
+        guard BaseQueryJSON.decode(expressionJSON) != nil else {
+            throw BaseQueryBuilderError.invalidQueryJSON
+        }
+        self.name = trimmed
+        self.expression = expression
+        self.expressionJSON = expressionJSON
+    }
+
+    fileprivate init(name: String, expressionJSON: String) {
+        self.name = name
+        self.expressionJSON = expressionJSON
+        self.expression = BaseQueryExpressionSource.render(json: expressionJSON) ?? expressionJSON
+    }
+
+    fileprivate var queryJSON: [Any] {
+        [name, BaseQueryJSON.decode(expressionJSON) ?? BaseQueryJSON.unsupportedExpr(expression)]
+    }
+}
+
+enum BaseQueryPreviewState: Equatable {
+    case idle
+    case loading
+    case ready(BasesResultSet)
+    case failed(String)
+
+    var accessibilityAnnouncement: String {
+        switch self {
+        case .idle:
+            return "Preview not loaded."
+        case .loading:
+            return "Preview loading."
+        case .ready(let result):
+            var text = result.audioSummary
+            if let first = result.rows.first?.audioDescription,
+                !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                text += ". First result: \(first)"
+            }
+            return text
+        case .failed(let message):
+            return "Preview failed: \(message)"
+        }
+    }
+}
+
 struct BaseQueryBuilderDraft: Equatable {
     var source: BaseQuerySource = .allNotes
     var combinator: BaseQueryCombinator = .all
     var rows: [BaseQueryBuilderRow] = []
+    var sortKeys: [BaseQuerySortKey] = []
+    var groupBy: BaseQueryGroupBy?
+    var columns: [BaseQueryColumn] = []
+    var formulas: [BaseQueryFormula] = []
+    var viewType: BaseQueryViewType = .table
 
     init() {}
 
@@ -481,6 +763,11 @@ struct BaseQueryBuilderDraft: Equatable {
         }
         combinator = decoded.combinator
         rows = decoded.rows
+        sortKeys = Self.decodeSortKeys(root["sort"])
+        groupBy = Self.decodeGroupBy(root["group_by"])
+        columns = Self.decodeColumns(root["columns"])
+        formulas = Self.decodeFormulas(root["formulas"])
+        viewType = Self.decodeViewType(root["view"])
     }
 
     var conditionsListAccessibilityValue: String {
@@ -492,20 +779,70 @@ struct BaseQueryBuilderDraft: Equatable {
             "source": source.querySourceJSON,
             "row_source": source.rowSourceJSON,
             "filters": filterJSON ?? NSNull(),
-            "formulas": [],
+            "formulas": formulas.map(\.queryJSON),
             "custom_summaries": [],
-            "group_by": NSNull(),
-            "sort": [],
-            "columns": defaultColumns,
+            "group_by": groupBy?.queryJSON ?? NSNull(),
+            "sort": sortKeys.map(\.queryJSON),
+            "columns": encodedColumns,
             "summaries": [],
             "limit": NSNull(),
-            "view": ["Table": ["fallback_from": NSNull()]],
+            "view": viewType.queryViewJSON,
         ]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         guard let json = String(data: data, encoding: .utf8) else {
             throw BaseQueryBuilderError.cannotEncodeQuery
         }
         return json
+    }
+
+    func baseEditsForView(
+        _ view: UInt32,
+        replacing previous: BaseQueryBuilderDraft? = nil
+    ) throws -> [BaseEdit] {
+        var edits: [BaseEdit] = []
+        if let viewFilterYAML {
+            edits.append(.setViewFilters(view: view, yaml: viewFilterYAML))
+        } else if previous?.filterYAML != nil {
+            edits.append(.removeViewKey(view: view, key: "filters"))
+        }
+        edits.append(.setViewKey(view: view, key: "type", value: viewType.rawValue))
+        if source == .tasks {
+            edits.append(.setViewKey(view: view, key: "source", value: "tasks"))
+        } else if previous?.source == .tasks {
+            edits.append(.removeViewKey(view: view, key: "source"))
+        }
+        if let groupBy {
+            edits.append(.setViewKey(view: view, key: "groupBy", value: groupBy.yamlFragment))
+        } else if previous?.groupBy != nil {
+            edits.append(.removeViewKey(view: view, key: "groupBy"))
+        }
+        edits.append(.setViewKey(view: view, key: "order", value: orderYAMLFragment))
+        if let previous {
+            let currentFormulaNames = Set(formulas.map(\.name))
+            for formula in previous.formulas where !currentFormulaNames.contains(formula.name) {
+                edits.append(.removeFormula(name: formula.name))
+            }
+        }
+        let previousFormulaJSON = previous.map { Self.formulaJSONMap(for: $0.formulas) } ?? [:]
+        for formula in formulas
+        where previous == nil || previousFormulaJSON[formula.name] != formula.expressionJSON {
+            edits.append(.setFormula(name: formula.name, expression: formula.expression))
+        }
+        let previousDisplayNames = previous.map { displayNameMap(for: $0.columns) } ?? [:]
+        for column in columns {
+            let displayName = normalizedDisplayName(column.displayName)
+            if previous == nil {
+                if let displayName {
+                    edits.append(.setDisplayName(property: column.id, displayName: displayName))
+                }
+            } else if previousDisplayNames[column.id] != displayName {
+                edits.append(.setDisplayName(property: column.id, displayName: displayName))
+            }
+        }
+        if !sortKeys.isEmpty || previous?.sortKeys.isEmpty == false {
+            edits.append(.setSlateState(view: view, yaml: slateStateYAML))
+        }
+        return edits
     }
 
     private var filterJSON: Any? {
@@ -516,14 +853,98 @@ struct BaseQueryBuilderDraft: Equatable {
         return [combinator.filterNodeName: rows.map(\.filterNodeJSON)]
     }
 
-    private var defaultColumns: [[String: Any]] {
+    private var encodedColumns: [[String: Any]] {
+        let selected = columns.isEmpty ? defaultColumnSelections : columns
+        return selected.map(\.queryJSON)
+    }
+
+    private var defaultColumnSelections: [BaseQueryColumn] {
         if source == .tasks {
             return [
-                ["id": "task.text", "display_name": NSNull()],
-                ["id": "task.file", "display_name": NSNull()],
+                BaseQueryColumn(property: .task(.text), displayName: nil),
+                BaseQueryColumn(property: .task(.file), displayName: nil),
             ]
         }
-        return [["id": "file.name", "display_name": NSNull()]]
+        return [BaseQueryColumn(property: .file(.name), displayName: nil)]
+    }
+
+    private var filterYAML: String? {
+        var filters: [BaseQueryFilterYAML] = []
+        if let sourceFilter = source.filterYAML {
+            filters.append(sourceFilter)
+        }
+        filters.append(contentsOf: rows.compactMap(Self.filterYAML(for:)))
+        guard !filters.isEmpty else { return nil }
+        if filters.count == 1 {
+            return filters[0].yamlValue(indent: 0)
+        }
+        return BaseQueryFilterYAML.all(filters).yamlValue(indent: 0)
+    }
+
+    private var viewFilterYAML: String? {
+        guard let filterYAML else { return nil }
+        let lines = filterYAML.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > 1 else { return "filters: \(filterYAML)" }
+        return (["filters:"] + lines.map { "  \($0)" }).joined(separator: "\n")
+    }
+
+    private var orderYAMLFragment: String {
+        let selected = columns.isEmpty ? defaultColumnSelections : columns
+        var lines = ["order:"]
+        for column in selected {
+            lines.append("  - \(BaseQueryYAML.scalar(column.id))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private var slateStateYAML: String? {
+        guard !sortKeys.isEmpty else { return nil }
+        var lines = ["slate:", "  sort:"]
+        for sort in sortKeys {
+            lines.append(sort.slateYAML)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func normalizedDisplayName(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func displayNameMap(for columns: [BaseQueryColumn]) -> [String: String] {
+        var names: [String: String] = [:]
+        for column in columns {
+            names[column.id] = normalizedDisplayName(column.displayName)
+        }
+        return names
+    }
+
+    private static func formulaJSONMap(for formulas: [BaseQueryFormula]) -> [String: String] {
+        var map: [String: String] = [:]
+        for formula in formulas {
+            map[formula.name] = formula.expressionJSON
+        }
+        return map
+    }
+
+    fileprivate static func filterYAML(for row: BaseQueryBuilderRow) -> BaseQueryFilterYAML? {
+        switch row {
+        case .condition(let condition):
+            return .stmt(condition.expressionSource)
+        case .group(let group):
+            let children = group.rows.compactMap(filterYAML(for:))
+            guard !children.isEmpty else { return nil }
+            switch group.combinator {
+            case .all: return .all(children)
+            case .any: return .any(children)
+            case .none: return .none(children)
+            }
+        case .advanced(let rawExpression, let filterJSON):
+            if let source = BaseQueryExpressionSource.render(json: filterJSON) {
+                return .stmt(source)
+            }
+            return .stmt(rawExpression)
+        }
     }
 
     private static func decodeSource(_ value: Any?) -> BaseQuerySource {
@@ -544,6 +965,69 @@ struct BaseQueryBuilderDraft: Equatable {
             return .linked(fromPath: fromPath)
         }
         return .allNotes
+    }
+
+    private static func decodeSortKeys(_ value: Any?) -> [BaseQuerySortKey] {
+        guard let items = value as? [Any] else { return [] }
+        return items.compactMap { item in
+            guard let object = item as? [String: Any],
+                let expr = object["expr"] as? [String: Any],
+                let ascending = object["ascending"] as? Bool,
+                let expressionJSON = BaseQueryJSON.canonicalJSONString(expr)
+            else { return nil }
+            if let property = decodeProperty(expr) {
+                return BaseQuerySortKey(property: property, ascending: ascending)
+            }
+            return BaseQuerySortKey(
+                expressionJSON: expressionJSON,
+                expressionLabel: BaseQueryExpressionSource.render(json: expressionJSON) ?? "advanced sort",
+                ascending: ascending)
+        }
+    }
+
+    private static func decodeGroupBy(_ value: Any?) -> BaseQueryGroupBy? {
+        guard !(value is NSNull),
+            let object = value as? [String: Any],
+            let propertyJSON = object["property"] as? [String: Any],
+            let property = decodePropertyRef(propertyJSON),
+            let ascending = object["ascending"] as? Bool
+        else { return nil }
+        return BaseQueryGroupBy(property: property, ascending: ascending)
+    }
+
+    private static func decodeColumns(_ value: Any?) -> [BaseQueryColumn] {
+        guard let items = value as? [Any] else { return [] }
+        return items.compactMap { item in
+            guard let object = item as? [String: Any],
+                let id = object["id"] as? String
+            else { return nil }
+            let displayName: String?
+            if object["display_name"] is NSNull {
+                displayName = nil
+            } else {
+                displayName = object["display_name"] as? String
+            }
+            return BaseQueryColumn(id: id, displayName: displayName)
+        }
+    }
+
+    private static func decodeFormulas(_ value: Any?) -> [BaseQueryFormula] {
+        guard let items = value as? [Any] else { return [] }
+        return items.compactMap { item in
+            guard let pair = item as? [Any],
+                pair.count == 2,
+                let name = pair[0] as? String,
+                let expr = pair[1] as? [String: Any],
+                let expressionJSON = BaseQueryJSON.canonicalJSONString(expr)
+            else { return nil }
+            return BaseQueryFormula(name: name, expressionJSON: expressionJSON)
+        }
+    }
+
+    private static func decodeViewType(_ value: Any?) -> BaseQueryViewType {
+        guard let object = value as? [String: Any] else { return .table }
+        if object["List"] != nil { return .list }
+        return .table
     }
 
     private static func decodeFilterRows(
@@ -786,6 +1270,10 @@ struct BaseQueryBuilderDraft: Equatable {
 
     private static func decodeProperty(_ expr: [String: Any]) -> BaseQueryProperty? {
         guard let prop = kindPayload("Prop", in: expr) else { return nil }
+        return decodePropertyRef(prop)
+    }
+
+    fileprivate static func decodePropertyRef(_ prop: [String: Any]) -> BaseQueryProperty? {
         if let note = prop["Note"] as? String { return .note(note) }
         if let formula = prop["Formula"] as? String { return .formula(formula) }
         if let file = prop["File"] as? String,
@@ -877,9 +1365,12 @@ final class BaseQueryBuilderModel: ObservableObject {
     @Published var draft: BaseQueryBuilderDraft
     @Published var selectedRowIndex: Int?
     @Published var editingRowIndex: Int?
+    @Published var previewState: BaseQueryPreviewState = .idle
+    private let initialDraft: BaseQueryBuilderDraft
 
     init(draft: BaseQueryBuilderDraft = BaseQueryBuilderDraft()) {
         self.draft = draft
+        self.initialDraft = draft
     }
 
     var source: BaseQuerySource {
@@ -897,8 +1388,49 @@ final class BaseQueryBuilderModel: ObservableObject {
         set { draft.rows = newValue }
     }
 
+    var sortKeys: [BaseQuerySortKey] {
+        get { draft.sortKeys }
+        set { draft.sortKeys = newValue }
+    }
+
+    var groupBy: BaseQueryGroupBy? {
+        get { draft.groupBy }
+        set { draft.groupBy = newValue }
+    }
+
+    var columns: [BaseQueryColumn] {
+        get { draft.columns }
+        set { draft.columns = newValue }
+    }
+
+    var formulas: [BaseQueryFormula] {
+        get { draft.formulas }
+        set { draft.formulas = newValue }
+    }
+
+    var viewType: BaseQueryViewType {
+        get { draft.viewType }
+        set { draft.viewType = newValue }
+    }
+
     var conditionsListAccessibilityValue: String {
         draft.conditionsListAccessibilityValue
+    }
+
+    func baseEditsForView(_ view: UInt32) throws -> [BaseEdit] {
+        try draft.baseEditsForView(view, replacing: initialDraft)
+    }
+
+    func removeFormula(named name: String) {
+        let columnID = "formula.\(name)"
+        draft.formulas.removeAll { $0.name == name }
+        draft.columns.removeAll { $0.id == columnID }
+        draft.sortKeys.removeAll { sortKey in
+            sortKey.referencesFormula(named: name)
+        }
+        if draft.groupBy?.property == .formula(name) {
+            draft.groupBy = nil
+        }
     }
 
     func perform(_ command: BaseQueryBuilderCommand) {
@@ -951,7 +1483,36 @@ final class BaseQueryBuilderModel: ObservableObject {
                 draft.rows[groupIndex] = .group(group)
                 selectedRowIndex = groupIndex
             }
+        case .editAsExpression(let index):
+            guard draft.rows.indices.contains(index) else { return }
+            let row = draft.rows[index]
+            let raw = BaseQueryBuilderDraft.filterYAML(for: row)?.expressionText
+                ?? row.accessibilityLabel(index: index)
+            draft.rows[index] = .advanced(
+                rawExpression: raw,
+                filterJSON: BaseQueryJSON.canonicalJSONString(row.filterNodeJSON))
+            selectedRowIndex = index
+            editingRowIndex = index
         }
+    }
+
+    func updateAdvancedExpression(
+        index: Int,
+        rawExpression: String,
+        validation: BaseExpressionValidation?
+    ) {
+        guard draft.rows.indices.contains(index),
+            case .advanced = draft.rows[index]
+        else { return }
+        let filterJSON: String?
+        if let exprJSON = validation?.exprJson,
+            let expr = BaseQueryJSON.decode(exprJSON)
+        {
+            filterJSON = BaseQueryJSON.canonicalJSONString(["Stmt": expr])
+        } else {
+            filterJSON = nil
+        }
+        draft.rows[index] = .advanced(rawExpression: rawExpression, filterJSON: filterJSON)
     }
 }
 
@@ -963,6 +1524,7 @@ enum BaseQueryBuilderCommand: Equatable {
     case setGroupCombinator(index: Int, combinator: BaseQueryCombinator)
     case addConditionToGroup(index: Int)
     case removeConditionFromGroup(groupIndex: Int, conditionIndex: Int)
+    case editAsExpression(index: Int)
 }
 
 private enum BaseQueryJSON {
@@ -978,6 +1540,207 @@ private enum BaseQueryJSON {
             let data = json.data(using: .utf8)
         else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    static func canonicalJSONString(_ value: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+            let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func unsupportedExpr(_ raw: String) -> [String: Any] {
+        expr([
+            "Unsupported": [
+                "raw": raw,
+                "reason": "advanced builder expression",
+            ]
+        ])
+    }
+}
+
+private enum BaseQueryFilterYAML: Equatable {
+    case stmt(String)
+    case all([BaseQueryFilterYAML])
+    case any([BaseQueryFilterYAML])
+    case none([BaseQueryFilterYAML])
+
+    var expressionText: String? {
+        if case .stmt(let expression) = self {
+            return expression
+        }
+        return nil
+    }
+
+    func yamlValue(indent: Int) -> String {
+        switch self {
+        case .stmt(let expression):
+            return "\(String(repeating: " ", count: indent))\(BaseQueryYAML.scalar(expression))"
+        case .all(let children):
+            return collectionYAML(key: "and", children: children, indent: indent)
+        case .any(let children):
+            return collectionYAML(key: "or", children: children, indent: indent)
+        case .none(let children):
+            return collectionYAML(key: "not", children: children, indent: indent)
+        }
+    }
+
+    private func collectionYAML(
+        key: String,
+        children: [BaseQueryFilterYAML],
+        indent: Int
+    ) -> String {
+        let spaces = String(repeating: " ", count: indent)
+        var lines = ["\(spaces)\(key):"]
+        for child in children {
+            switch child {
+            case .stmt(let expression):
+                lines.append("\(spaces)  - \(BaseQueryYAML.scalar(expression))")
+            case .all, .any, .none:
+                lines.append("\(spaces)  -")
+                lines.append(child.yamlValue(indent: indent + 4))
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+private enum BaseQueryYAML {
+    static func scalar(_ value: String) -> String {
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+        let lower = value.lowercased()
+        if !value.isEmpty,
+            value.unicodeScalars.allSatisfy({ allowed.contains($0) }),
+            !["true", "false", "null", "~"].contains(lower)
+        {
+            return value
+        }
+        return quoteString(value)
+    }
+
+    static func quoteString(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+}
+
+private enum BaseQueryExpressionSource {
+    static func render(json: String?) -> String? {
+        guard let object = BaseQueryJSON.decode(json) as? [String: Any] else { return nil }
+        return render(expr: object)
+    }
+
+    private static func render(expr: [String: Any]) -> String? {
+        guard let kind = expr["kind"] as? [String: Any],
+            let name = kind.keys.first,
+            let payload = kind[name]
+        else { return nil }
+        switch name {
+        case "Lit":
+            return renderLiteral(payload)
+        case "Prop":
+            guard let property = payload as? [String: Any],
+                let decoded = BaseQueryBuilderDraft.decodePropertyRef(property)
+            else { return nil }
+            return decoded.sourceExpression
+        case "Binary":
+            guard let object = payload as? [String: Any],
+                let op = object["op"] as? String,
+                let lhs = object["lhs"] as? [String: Any],
+                let rhs = object["rhs"] as? [String: Any],
+                let lhsText = render(expr: lhs),
+                let rhsText = render(expr: rhs)
+            else { return nil }
+            return "\(lhsText) \(sourceBinaryOperator(op)) \(rhsText)"
+        case "Call":
+            return renderCall(payload)
+        case "Field":
+            guard let object = payload as? [String: Any],
+                let base = object["base"] as? [String: Any],
+                let name = object["name"] as? String,
+                let baseText = render(expr: base)
+            else { return nil }
+            return "\(baseText).\(name)"
+        case "Unsupported":
+            guard let object = payload as? [String: Any] else { return nil }
+            return object["raw"] as? String
+        default:
+            return nil
+        }
+    }
+
+    private static func renderLiteral(_ payload: Any) -> String? {
+        guard let object = payload as? [String: Any],
+            let name = object.keys.first,
+            let value = object[name]
+        else { return nil }
+        switch name {
+        case "String":
+            return BaseQueryYAML.quoteString(value as? String ?? "")
+        case "Number":
+            if let number = value as? NSNumber { return number.stringValue }
+            return nil
+        case "Bool":
+            return (value as? Bool) == true ? "true" : "false"
+        default:
+            return nil
+        }
+    }
+
+    private static func renderCall(_ payload: Any) -> String? {
+        guard let object = payload as? [String: Any],
+            let callee = object["callee"] as? [String: Any],
+            let args = object["args"] as? [Any]
+        else { return nil }
+        let renderedArgs = args.compactMap { ($0 as? [String: Any]).flatMap(render(expr:)) }
+        if let global = callee["Global"] as? String {
+            return "\(sourceFunctionName(global))(\(renderedArgs.joined(separator: ", ")))"
+        }
+        if let method = callee["Method"] as? [String: Any],
+            let receiver = method["receiver"] as? [String: Any],
+            let receiverText = render(expr: receiver),
+            let name = method["name"] as? String
+        {
+            return "\(receiverText).\(sourceFunctionName(name))(\(renderedArgs.joined(separator: ", ")))"
+        }
+        return nil
+    }
+
+    private static func sourceBinaryOperator(_ name: String) -> String {
+        switch name {
+        case "Eq": return "=="
+        case "Ne": return "!="
+        case "Gt": return ">"
+        case "Gte": return ">="
+        case "Lt": return "<"
+        case "Lte": return "<="
+        case "Add": return "+"
+        case "Sub": return "-"
+        case "Mul": return "*"
+        case "Div": return "/"
+        case "Mod": return "%"
+        case "And": return "&&"
+        case "Or": return "||"
+        default: return name
+        }
+    }
+
+    private static func sourceFunctionName(_ name: String) -> String {
+        guard let first = name.first else { return name }
+        return first.lowercased() + name.dropFirst()
+    }
+}
+
+private extension String {
+    func stripPrefix(_ prefix: String) -> String? {
+        guard hasPrefix(prefix) else { return nil }
+        return String(dropFirst(prefix.count))
     }
 }
 

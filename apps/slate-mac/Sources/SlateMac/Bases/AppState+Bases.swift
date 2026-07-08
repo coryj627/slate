@@ -170,7 +170,7 @@ extension AppState {
         }
         guard let handle = doc.handle else { return }
         do {
-            let queryJSON = try session.baseViewQueryJson(
+            let queryJSON = try session.baseViewEditQueryJson(
                 handle: handle,
                 view: UInt32(doc.activeViewIndex))
             activeBaseQueryBuilder = try BaseQueryBuilderModel(
@@ -185,15 +185,188 @@ extension AppState {
     }
 
     func basesCloseQueryBuilder() {
+        baseQueryBuilderPreviewTask?.cancel()
+        baseQueryBuilderPreviewTask = nil
+        baseQueryBuilderPreviewCancelToken?.cancel()
+        baseQueryBuilderPreviewCancelToken = nil
         activeBaseQueryBuilder = nil
+    }
+
+    func basesBuilderSchedulePreview(delayNanoseconds: UInt64 = 300_000_000) {
+        baseQueryBuilderPreviewTask?.cancel()
+        baseQueryBuilderPreviewCancelToken?.cancel()
+        baseQueryBuilderPreviewCancelToken = nil
+        guard let model = activeBaseQueryBuilder, let session = currentSession else { return }
+        let queryJSON: String
+        do {
+            queryJSON = try model.draft.queryJSON()
+            model.previewState = .loading
+        } catch {
+            model.previewState = .failed(error.localizedDescription)
+            return
+        }
+        let cancelToken = CancelToken()
+        baseQueryBuilderPreviewCancelToken = cancelToken
+        baseQueryBuilderPreviewTask = Task { [weak self, weak model, session, queryJSON, cancelToken] in
+            defer {
+                Task { @MainActor [weak self] in
+                    if let current = self?.baseQueryBuilderPreviewCancelToken,
+                        current === cancelToken
+                    {
+                        self?.baseQueryBuilderPreviewCancelToken = nil
+                    }
+                }
+            }
+            do {
+                if delayNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                }
+                if Task.isCancelled {
+                    cancelToken.cancel()
+                    return
+                }
+                let handle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
+                defer { session.closeBase(handle: handle) }
+                let result = try session.baseExecute(
+                    handle: handle,
+                    view: 0,
+                    thisPath: nil,
+                    quickFilter: nil,
+                    cancel: cancelToken)
+                if Task.isCancelled {
+                    cancelToken.cancel()
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    self?.basesBuilderPublishPreview(
+                        result: result,
+                        for: model,
+                        cancelToken: cancelToken)
+                }
+            } catch is CancellationError {
+                cancelToken.cancel()
+                return
+            } catch {
+                if Task.isCancelled || cancelToken.isCancelled() {
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    self?.basesBuilderPublishPreviewFailure(
+                        message: error.localizedDescription,
+                        for: model,
+                        cancelToken: cancelToken)
+                }
+            }
+        }
+    }
+
+    func basesBuilderPublishPreview(
+        result: BasesResultSet,
+        for model: BaseQueryBuilderModel?,
+        cancelToken: CancelToken
+    ) {
+        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        else { return }
+        model.previewState = .ready(result)
+        postAccessibilityAnnouncement(
+            model.previewState.accessibilityAnnouncement,
+            priority: .medium)
+    }
+
+    func basesBuilderPublishPreviewFailure(
+        message: String,
+        for model: BaseQueryBuilderModel?,
+        cancelToken: CancelToken
+    ) {
+        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        else { return }
+        model.previewState = .failed(message)
+        postAccessibilityAnnouncement(
+            "Base preview failed: \(message)",
+            priority: .medium)
+    }
+
+    private func currentBaseQueryBuilderPreviewModel(
+        _ model: BaseQueryBuilderModel?,
+        cancelToken: CancelToken
+    ) -> BaseQueryBuilderModel? {
+        guard let model,
+            activeBaseQueryBuilder === model,
+            let currentToken = baseQueryBuilderPreviewCancelToken,
+            currentToken === cancelToken,
+            !cancelToken.isCancelled()
+        else { return nil }
+        return model
+    }
+
+    func basesBuilderSaveToView() {
+        guard let model = activeBaseQueryBuilder,
+            let doc = activeBaseDocument,
+            let session = currentSession
+        else { return }
+        if doc.handle == nil {
+            doc.load(session: session)
+        }
+        guard let handle = doc.handle else { return }
+        do {
+            for edit in try model.baseEditsForView(UInt32(doc.activeViewIndex)) {
+                try session.baseApplyEdit(handle: handle, edit: edit)
+            }
+            doc.refresh(session: session)
+            postAccessibilityAnnouncement("Saved builder changes to view.", priority: .medium)
+        } catch {
+            postAccessibilityAnnouncement(
+                "Base view could not be saved: \(error.localizedDescription)",
+                priority: .medium)
+        }
+    }
+
+    func basesBuilderSaveAsBase(path: String) {
+        guard let model = activeBaseQueryBuilder, let session = currentSession else { return }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            postAccessibilityAnnouncement("Enter a .base path before saving.", priority: .medium)
+            return
+        }
+        do {
+            try session.saveQueryAsBase(queryJson: model.draft.queryJSON(), path: trimmed)
+            postAccessibilityAnnouncement("Saved query as \(trimmed).", priority: .medium)
+        } catch {
+            postAccessibilityAnnouncement(
+                "Base file could not be saved: \(error.localizedDescription)",
+                priority: .medium)
+        }
+    }
+
+    func basesBuilderSaveAsSavedQuery(name: String, description: String?) {
+        guard let model = activeBaseQueryBuilder, let session = currentSession else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            postAccessibilityAnnouncement("Enter a saved query name before saving.", priority: .medium)
+            return
+        }
+        do {
+            _ = try session.saveQuery(
+                name: trimmed,
+                description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                queryJson: model.draft.queryJSON(),
+                sourceSyntax: .builder)
+            postAccessibilityAnnouncement("Saved query \(trimmed).", priority: .medium)
+        } catch {
+            postAccessibilityAnnouncement(
+                "Saved query could not be created: \(error.localizedDescription)",
+                priority: .medium)
+        }
     }
 
     func basesBuilderAddCondition() {
         activeBaseQueryBuilder?.perform(.addCondition)
+        basesBuilderSchedulePreview()
     }
 
     func basesBuilderAddGroup() {
         activeBaseQueryBuilder?.perform(.addGroup)
+        basesBuilderSchedulePreview()
     }
 
     func basesBuilderEditCondition() {

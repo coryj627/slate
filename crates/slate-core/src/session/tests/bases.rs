@@ -364,6 +364,59 @@ priority: 3
 }
 
 #[test]
+fn base_view_edit_query_json_returns_only_active_view_filters() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Reading.base",
+            br#"filters: "file.inFolder(\"Projects\")"
+views:
+  - type: table
+    name: Reading
+    filters:
+      and:
+        - "status == \"active\""
+        - "priority >= 2"
+    order:
+      - file.name
+      - status
+"#,
+        )
+        .unwrap();
+        p.write_file(
+            "Projects/Alpha.md",
+            br#"---
+status: active
+priority: 3
+---
+# Alpha
+"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Reading.base").unwrap();
+    let json = session.base_view_edit_query_json(handle, 0).unwrap();
+    let query: crate::bases::SlateQuery = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(query.source, crate::bases::QuerySource::All);
+    let Some(crate::bases::FilterNode::And(nodes)) = query.filters else {
+        panic!("expected view filters to remain an editable top-level AND");
+    };
+    assert_eq!(
+        nodes.len(),
+        2,
+        "edit loading must exclude the base-wide filter so save-to-view does not duplicate it"
+    );
+
+    let bad_view = session.base_view_edit_query_json(handle, 1).unwrap_err();
+    assert!(
+        bad_view.to_string().contains("base view 1 is out of range"),
+        "{bad_view}"
+    );
+}
+
+#[test]
 fn list_tags_returns_distinct_indexed_tags_for_builder_inventory() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(

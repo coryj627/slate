@@ -207,6 +207,10 @@ pub enum BaseEdit {
         view: usize,
         name: String,
     },
+    RemoveViewKey {
+        view: usize,
+        key: String,
+    },
     SetViewFilters {
         view: usize,
         yaml: String,
@@ -396,6 +400,19 @@ pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery {
         (None, Some(view_filter)) => Some(view_filter),
         (None, None) => None,
     };
+    view_query_with_filters(base, view, filters)
+}
+
+pub fn view_edit_query(base: &BaseFile, view: usize) -> SlateQuery {
+    let view = &base.views[view];
+    view_query_with_filters(base, view, view.filters.clone())
+}
+
+fn view_query_with_filters(
+    base: &BaseFile,
+    view: &ViewDef,
+    filters: Option<FilterNode>,
+) -> SlateQuery {
     let display_names: HashMap<&str, &str> = base
         .properties
         .iter()
@@ -536,6 +553,15 @@ fn collect_edit_splices(
             &format!("name: {}", quote_yaml_string(name)),
             splices,
         ),
+        BaseEdit::RemoveViewKey { view, key } => {
+            ensure_view_key_is_editable(base, *view, key)?;
+            ensure_remove_view_key_is_closed(key)?;
+            let view_spans = view_spans_for(base, *view)?;
+            if let Some(region) = named_region(&view_spans.keys, key) {
+                push_splice(splices, region.region.span, String::new());
+            }
+            Ok(())
+        }
         BaseEdit::SetViewFilters { view, yaml } => replace_or_insert_view_key(
             base,
             *view,
@@ -644,8 +670,25 @@ fn replace_or_remove_display_name(
     display_name: Option<&str>,
     splices: &mut Vec<Splice>,
 ) -> Result<(), SerializeError> {
-    let property_region = named_region(&base.spans.properties, property)
-        .ok_or_else(|| missing_span(format!("property {property:?}")))?;
+    let Some(property_region) = named_region(&base.spans.properties, property) else {
+        if let Some(name) = display_name {
+            let entry = format!(
+                "  {}:\n    displayName: {}\n",
+                yaml_key(property),
+                quote_yaml_string(name)
+            );
+            if let Some(properties) = named_region(&base.spans.top_level, "properties") {
+                push_insertion_splice(splices, &base.raw, properties.region.span.end, entry);
+            } else {
+                let section = format!("properties:\n{entry}");
+                let offset = named_region(&base.spans.top_level, "views")
+                    .map(|region| region.region.span.start)
+                    .unwrap_or(base.raw.len() as u32);
+                push_insertion_splice(splices, &base.raw, offset, section);
+            }
+        }
+        return Ok(());
+    };
     let child_regions = regions_in_span(&base.raw, property_region.region.span, 4);
 
     match (display_name, child_regions.get("displayName")) {
@@ -801,13 +844,29 @@ fn ensure_view_key_is_editable(
 }
 
 fn ensure_set_view_key_is_closed(key: &str) -> Result<(), SerializeError> {
-    if matches!(key, "type" | "name" | "limit" | "groupBy" | "order") {
+    if matches!(
+        key,
+        "type" | "name" | "limit" | "groupBy" | "order" | "source"
+    ) {
         Ok(())
     } else {
         Err(SerializeError::InvalidEdit {
             message: format!(
                 "SetViewKey only supports type/name/limit/groupBy/order; use the dedicated edit for {key:?}"
             ),
+        })
+    }
+}
+
+fn ensure_remove_view_key_is_closed(key: &str) -> Result<(), SerializeError> {
+    if matches!(
+        key,
+        "filters" | "groupBy" | "limit" | "order" | "slate" | "source"
+    ) {
+        Ok(())
+    } else {
+        Err(SerializeError::InvalidEdit {
+            message: format!("RemoveViewKey cannot remove required or unknown view key {key:?}"),
         })
     }
 }

@@ -44,6 +44,8 @@ enum SlateSymbol: CaseIterable {
     case moreActions
     case clearSearch
     case addProperty
+    case moveUp
+    case moveDown
     case bulkRename
     case taskComplete
     case taskIncomplete
@@ -152,6 +154,8 @@ enum SlateSymbol: CaseIterable {
         case .moreActions: return "More actions"
         case .clearSearch: return "Clear search"
         case .addProperty: return "Add property"
+        case .moveUp: return "Move up"
+        case .moveDown: return "Move down"
         case .bulkRename: return "Rename property across vault"
         case .taskComplete: return "Completed"
         case .taskIncomplete: return "Not completed"
@@ -218,6 +222,8 @@ enum SlateSymbol: CaseIterable {
         case .moreActions: return ("ellipsis", "ellipsis")
         case .clearSearch: return ("xmark.circle.fill", "xmark.circle.fill")
         case .addProperty: return ("plus.circle", "plus.circle")
+        case .moveUp: return ("arrow.up", "arrow.up")
+        case .moveDown: return ("arrow.down", "arrow.down")
         case .bulkRename: return ("rectangle.2.swap", "rectangle.2.swap")
         case .taskComplete: return ("checkmark.square", "checkmark.square")
         case .taskIncomplete: return ("square", "square")

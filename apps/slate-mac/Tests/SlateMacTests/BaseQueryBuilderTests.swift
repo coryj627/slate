@@ -224,6 +224,43 @@ final class BaseQueryBuilderTests: XCTestCase {
             "Condition 1: status equals active")
     }
 
+    func testEditingViewFiltersLoadsOnlyTheActiveViewFilterBlock() throws {
+        let (vault, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/Scoped.base",
+            contents:
+                #"""
+                filters: "file.inFolder(\"Projects\")"
+                views:
+                  - type: table
+                    name: Scoped
+                    filters: "status == \"active\""
+                    order:
+                      - file.name
+                      - status
+                """#,
+            expectedContentHash: nil)
+
+        let handle = try session.openBase(path: "Queries/Scoped.base")
+        let draft = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewEditQueryJson(handle: handle, view: 0))
+
+        XCTAssertEqual(draft.source, .allNotes)
+        XCTAssertEqual(draft.rows.count, 1)
+        XCTAssertEqual(
+            draft.rows[0].accessibilityLabel(index: 0),
+            "Condition 1: status equals active")
+
+        for edit in try draft.baseEditsForView(0, replacing: draft) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Scoped.base"),
+            encoding: .utf8)
+        XCTAssertEqual(saved.components(separatedBy: "file.inFolder").count - 1, 1, saved)
+        XCTAssertFalse(saved.contains(#"    filters: "file.inFolder"#), saved)
+    }
+
     func testSavedRecentAndLinkedSourcesReopenAsPickerSources() throws {
         let (_, session) = try makeSession()
         var recent = BaseQueryBuilderDraft()
@@ -496,6 +533,100 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(source.contains(".file(.outDegree)"), source)
     }
 
+    func testSheetExposesCompletionSectionsAndSaveActions() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/BaseQueryBuilderSheet.swift")
+
+        XCTAssertTrue(source.contains("Sort"))
+        XCTAssertTrue(source.contains("Group"))
+        XCTAssertTrue(source.contains("Columns"))
+        XCTAssertTrue(source.contains("View type"))
+        XCTAssertTrue(source.contains("Formulas"))
+        XCTAssertTrue(source.contains("Live preview"))
+        XCTAssertTrue(source.contains("Save to view"))
+        XCTAssertTrue(source.contains("Save as .base"))
+        XCTAssertTrue(source.contains("Save as saved query"))
+        XCTAssertTrue(source.contains("AccessibleDataGrid("))
+        XCTAssertTrue(source.contains("Builder preview table"))
+        XCTAssertTrue(source.contains("advancedExpressionValidation(rawExpression:"))
+        XCTAssertTrue(source.contains("validateAdvancedExpressionInput(value)"))
+        XCTAssertTrue(source.contains("validateAdvancedExpressionInput(rawExpression)"))
+        XCTAssertTrue(source.contains("Expression invalid"))
+        XCTAssertFalse(source.contains("advancedExpressionValidations"))
+    }
+
+    func testAppStateOwnsBuilderPreviewAndSaveOrchestration() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/AppState+Bases.swift")
+
+        XCTAssertTrue(source.contains("basesBuilderSchedulePreview"))
+        XCTAssertTrue(source.contains("openQuery"))
+        XCTAssertTrue(source.contains("baseApplyEdit"))
+        XCTAssertTrue(source.contains("saveQueryAsBase"))
+        XCTAssertTrue(source.contains("saveQuery("))
+        XCTAssertTrue(source.contains("baseViewEditQueryJson("), source)
+        XCTAssertTrue(source.contains("baseQueryBuilderPreviewCancelToken?.cancel()"), source)
+        XCTAssertTrue(source.contains("let cancelToken = CancelToken()"), source)
+        XCTAssertTrue(source.contains("cancel: cancelToken"), source)
+        XCTAssertFalse(source.contains("cancel: CancelToken()"), source)
+
+        let appStateSource = try Self.sourceFile("Sources/SlateMac/AppState.swift")
+        XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewCancelToken"), appStateSource)
+    }
+
+    func testBuilderPreviewPublishRequiresCurrentModelAndCancelToken() throws {
+        let state = AppState(
+            recentsStore: RecentVaultsStore(fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        let result = BasesResultSet(
+            columns: [],
+            rows: [],
+            groups: [],
+            summaries: [],
+            totalCount: 1,
+            shownCount: 1,
+            executedAtMs: 0,
+            warnings: [],
+            viewError: nil,
+            audioSummary: "Preview returned 1 row.")
+
+        let currentModel = BaseQueryBuilderModel()
+        let currentToken = CancelToken()
+        currentModel.previewState = .loading
+        state.activeBaseQueryBuilder = currentModel
+        state.baseQueryBuilderPreviewCancelToken = currentToken
+
+        state.basesBuilderPublishPreview(result: result, for: currentModel, cancelToken: currentToken)
+        XCTAssertEqual(currentModel.previewState, .ready(result))
+
+        let staleTokenModel = BaseQueryBuilderModel()
+        let supersedingToken = CancelToken()
+        staleTokenModel.previewState = .loading
+        state.activeBaseQueryBuilder = staleTokenModel
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+
+        state.basesBuilderPublishPreview(
+            result: result, for: staleTokenModel, cancelToken: CancelToken())
+        XCTAssertEqual(staleTokenModel.previewState, .loading)
+
+        let replacedModel = BaseQueryBuilderModel()
+        let replacement = BaseQueryBuilderModel()
+        replacedModel.previewState = .loading
+        state.activeBaseQueryBuilder = replacement
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+
+        state.basesBuilderPublishPreview(
+            result: result, for: replacedModel, cancelToken: supersedingToken)
+        XCTAssertEqual(replacedModel.previewState, .loading)
+
+        supersedingToken.cancel()
+        replacement.previewState = .loading
+        state.activeBaseQueryBuilder = replacement
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+
+        state.basesBuilderPublishPreviewFailure(
+            message: "cancelled", for: replacement, cancelToken: supersedingToken)
+        XCTAssertEqual(replacement.previewState, .loading)
+    }
+
     func testOrFolderFilterDoesNotBecomeSourcePickerScope() throws {
         let (_, session) = try makeSession()
         try session.saveText(
@@ -527,5 +658,392 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertEqual(
             draft.rows[1].accessibilityLabel(index: 1),
             "Condition 2: status equals active")
+    }
+
+    func testCompletionFacetsEncodeAndRoundTripThroughSaveAsBase() throws {
+        let (vault, session) = try makeSession()
+        let scoreValidation = session.validateBaseExpression(source: "number(priority) * 2")
+        XCTAssertTrue(scoreValidation.valid)
+        let scoreExpressionJSON = try XCTUnwrap(scoreValidation.exprJson)
+
+        var draft = BaseQueryBuilderDraft()
+        draft.viewType = .list
+        draft.groupBy = BaseQueryGroupBy(property: .note("status"), ascending: true)
+        draft.sortKeys = [BaseQuerySortKey(property: .note("priority"), ascending: false)]
+        draft.formulas = [
+            try BaseQueryFormula(
+                name: "score",
+                expression: "number(priority) * 2",
+                expressionJSON: scoreExpressionJSON)
+        ]
+        draft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: "Title"),
+            BaseQueryColumn(property: .note("status"), displayName: nil),
+            BaseQueryColumn(property: .formula("score"), displayName: "Score"),
+        ]
+
+        let queryJSON = try draft.queryJSON()
+        try session.saveQueryAsBase(queryJson: queryJSON, path: "Queries/Complete.base")
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Complete.base"),
+            encoding: .utf8)
+
+        XCTAssertTrue(saved.contains("type: list"), saved)
+        XCTAssertTrue(saved.contains("groupBy:"), saved)
+        XCTAssertTrue(saved.contains("property: status"), saved)
+        XCTAssertTrue(saved.contains("direction: ASC"), saved)
+        XCTAssertTrue(saved.contains("formula.score"), saved)
+        XCTAssertTrue(saved.contains("displayName: Score"), saved)
+        XCTAssertTrue(saved.contains("slate:"), saved)
+        XCTAssertTrue(saved.contains("direction: desc"), saved)
+
+        let handle = try session.openBase(path: "Queries/Complete.base")
+        let decoded = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        XCTAssertEqual(decoded.viewType, .list)
+        XCTAssertEqual(decoded.groupBy, BaseQueryGroupBy(property: .note("status"), ascending: true))
+        XCTAssertEqual(decoded.sortKeys, [
+            BaseQuerySortKey(property: .note("priority"), ascending: false)
+        ])
+        XCTAssertEqual(decoded.columns.map(\.id), ["file.name", "status", "formula.score"])
+        XCTAssertEqual(decoded.columns[0].displayName, "Title")
+        XCTAssertEqual(decoded.columns[2].displayName, "Score")
+        XCTAssertEqual(decoded.formulas.map(\.name), ["score"])
+    }
+
+    func testCompletedDraftAppliesToExistingViewAndSavedQuery() throws {
+        let (_, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/Editable.base",
+            contents:
+                #"""
+                views:
+                  - type: table
+                    name: Editable
+                    order:
+                      - file.name
+                """#,
+            expectedContentHash: nil)
+        let scoreValidation = session.validateBaseExpression(source: "number(priority) + 1")
+        let scoreExpressionJSON = try XCTUnwrap(scoreValidation.exprJson)
+
+        var draft = BaseQueryBuilderDraft()
+        draft.viewType = .list
+        draft.groupBy = BaseQueryGroupBy(property: .note("status"), ascending: false)
+        draft.sortKeys = [BaseQuerySortKey(property: .formula("score"), ascending: false)]
+        draft.formulas = [
+            try BaseQueryFormula(
+                name: "score",
+                expression: "number(priority) + 1",
+                expressionJSON: scoreExpressionJSON)
+        ]
+        draft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: nil),
+            BaseQueryColumn(property: .formula("score"), displayName: "Score"),
+        ]
+
+        let handle = try session.openBase(path: "Queries/Editable.base")
+        for edit in try draft.baseEditsForView(0) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+        let reopened = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        XCTAssertEqual(reopened.viewType, .list)
+        XCTAssertEqual(reopened.groupBy, BaseQueryGroupBy(property: .note("status"), ascending: false))
+        XCTAssertEqual(reopened.columns.map(\.id), ["file.name", "formula.score"])
+        XCTAssertEqual(reopened.columns[1].displayName, "Score")
+        XCTAssertEqual(reopened.sortKeys, [
+            BaseQuerySortKey(property: .formula("score"), ascending: false)
+        ])
+
+        let savedID = try session.saveQuery(
+            name: "Complete Query",
+            description: "Built from the accessible query builder.",
+            queryJson: draft.queryJSON(),
+            sourceSyntax: .builder)
+        let saved = try session.getSavedQuery(id: savedID)
+        XCTAssertEqual(saved.name, "Complete Query")
+        XCTAssertEqual(saved.sourceSyntax, .builder)
+        XCTAssertNil(saved.warning)
+    }
+
+    func testCompletedDraftWrapsMultiClauseFiltersWhenSavingToView() throws {
+        let (vault, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/Filters.base",
+            contents:
+                #"""
+                views:
+                  - type: table
+                    name: Filters
+                    order:
+                      - file.name
+                """#,
+            expectedContentHash: nil)
+
+        var draft = BaseQueryBuilderDraft()
+        draft.source = .folder("Projects")
+        draft.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .note("status"),
+                    operator: .equals,
+                    value: .text("active")))
+        ]
+
+        let handle = try session.openBase(path: "Queries/Filters.base")
+        for edit in try draft.baseEditsForView(0) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Filters.base"),
+            encoding: .utf8)
+        XCTAssertFalse(saved.contains("filters: and:"), saved)
+        XCTAssertTrue(saved.contains("    filters:\n      and:"), saved)
+        XCTAssertTrue(saved.contains("file.inFolder"), saved)
+        XCTAssertTrue(saved.contains("status == \\\"active\\\""), saved)
+
+        let reopened = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        XCTAssertEqual(reopened.source, .folder("Projects"))
+        XCTAssertEqual(reopened.rows.count, 1)
+    }
+
+    func testCompletedDraftDoesNotRewriteUnchangedComplexFormula() throws {
+        let (vault, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/ComplexFormula.base",
+            contents:
+                #"""
+                formulas:
+                  neg: "-priority"
+                views:
+                  - type: table
+                    name: Complex
+                    order:
+                      - file.name
+                      - formula.neg
+                """#,
+            expectedContentHash: nil)
+
+        let handle = try session.openBase(path: "Queries/ComplexFormula.base")
+        let previous = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        var draft = previous
+        draft.viewType = .list
+
+        for edit in try draft.baseEditsForView(0, replacing: previous) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/ComplexFormula.base"),
+            encoding: .utf8)
+        XCTAssertTrue(saved.contains("  neg: \"-priority\""), saved)
+        XCTAssertFalse(saved.contains(#""kind":"#), saved)
+        XCTAssertTrue(saved.contains("  - type: list"), saved)
+    }
+
+    @MainActor
+    func testRemovingFormulaPrunesHiddenBuilderReferences() throws {
+        let (_, session) = try makeSession()
+        let validation = session.validateBaseExpression(source: "number(priority)")
+        let formula = try BaseQueryFormula(
+            name: "score",
+            expression: "number(priority)",
+            expressionJSON: XCTUnwrap(validation.exprJson))
+        let model = BaseQueryBuilderModel()
+        model.formulas = [formula]
+        model.columns = [BaseQueryColumn(property: .formula("score"), displayName: nil)]
+        model.sortKeys = [BaseQuerySortKey(property: .formula("score"), ascending: false)]
+        model.groupBy = BaseQueryGroupBy(property: .formula("score"), ascending: true)
+
+        model.removeFormula(named: "score")
+
+        XCTAssertTrue(model.formulas.isEmpty)
+        XCTAssertTrue(model.columns.isEmpty)
+        XCTAssertTrue(model.sortKeys.isEmpty)
+        XCTAssertNil(model.groupBy)
+    }
+
+    @MainActor
+    func testRemovingFormulaPrunesAdvancedSortExpressionReferences() throws {
+        let (_, session) = try makeSession()
+        let formulaValidation = session.validateBaseExpression(source: "number(priority)")
+        let formulaExpressionJSON = try XCTUnwrap(formulaValidation.exprJson)
+        let sortValidation = session.validateBaseExpression(source: "formula.score + 1")
+        let sortExpressionJSON = try XCTUnwrap(sortValidation.exprJson)
+        let draft = try BaseQueryBuilderDraft(
+            queryJSON:
+                """
+                {
+                  "columns": [{"display_name": null, "id": "file.name"}],
+                  "custom_summaries": [],
+                  "filters": null,
+                  "formulas": [["score", \(formulaExpressionJSON)]],
+                  "group_by": null,
+                  "limit": null,
+                  "row_source": "Files",
+                  "sort": [{"ascending": true, "expr": \(sortExpressionJSON)}],
+                  "source": "All",
+                  "summaries": [],
+                  "view": {"Table": {"fallback_from": null}}
+                }
+                """)
+        let model = BaseQueryBuilderModel(draft: draft)
+
+        XCTAssertEqual(model.sortKeys.count, 1)
+        XCTAssertNil(model.sortKeys.first?.property)
+
+        model.removeFormula(named: "score")
+
+        XCTAssertTrue(model.formulas.isEmpty)
+        XCTAssertTrue(model.sortKeys.isEmpty)
+    }
+
+    func testCompletedDraftCanClearExistingViewFacets() throws {
+        let (vault, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/Clearable.base",
+            contents:
+                #"""
+                formulas:
+                  score: "number(priority) + 1"
+                properties:
+                  status:
+                    displayName: Status
+                views:
+                  - type: table
+                    name: Clearable
+                    filters: "status != \"done\""
+                    groupBy:
+                      property: status
+                      direction: DESC
+                    order:
+                      - status
+                      - formula.score
+                    slate:
+                      sort:
+                        - expr: formula.score
+                          direction: desc
+                """#,
+            expectedContentHash: nil)
+
+        let handle = try session.openBase(path: "Queries/Clearable.base")
+        let previous = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        var draft = previous
+        draft.rows = []
+        draft.groupBy = nil
+        draft.sortKeys = []
+        draft.formulas = []
+        draft.columns = [
+            BaseQueryColumn(property: .note("status"), displayName: nil)
+        ]
+
+        for edit in try draft.baseEditsForView(0, replacing: previous) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Clearable.base"),
+            encoding: .utf8)
+        XCTAssertFalse(saved.contains("filters:"), saved)
+        XCTAssertFalse(saved.contains("groupBy:"), saved)
+        XCTAssertFalse(saved.contains("score:"), saved)
+        XCTAssertFalse(saved.contains("displayName:"), saved)
+        XCTAssertFalse(saved.contains("slate:"), saved)
+        XCTAssertTrue(saved.contains("order:\n      - status"), saved)
+
+        let reopened = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        XCTAssertTrue(reopened.rows.isEmpty)
+        XCTAssertNil(reopened.groupBy)
+        XCTAssertTrue(reopened.sortKeys.isEmpty)
+        XCTAssertTrue(reopened.formulas.isEmpty)
+        XCTAssertEqual(reopened.columns.map(\.id), ["status"])
+        XCTAssertNil(reopened.columns.first?.displayName)
+    }
+
+    func testCompletedDraftWritesAndClearsTaskViewSource() throws {
+        let (vault, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/Tasks.base",
+            contents:
+                #"""
+                views:
+                  - type: table
+                    name: Tasks
+                    order:
+                      - file.name
+                """#,
+            expectedContentHash: nil)
+        let handle = try session.openBase(path: "Queries/Tasks.base")
+
+        var tasksDraft = BaseQueryBuilderDraft()
+        tasksDraft.source = .tasks
+        tasksDraft.columns = [
+            BaseQueryColumn(property: .task(.text), displayName: nil)
+        ]
+        for edit in try tasksDraft.baseEditsForView(0) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+        var saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Tasks.base"),
+            encoding: .utf8)
+        XCTAssertTrue(saved.contains("source: tasks"), saved)
+
+        let previous = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        var filesDraft = previous
+        filesDraft.source = .allNotes
+        filesDraft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: nil)
+        ]
+        for edit in try filesDraft.baseEditsForView(0, replacing: previous) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+
+        saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Tasks.base"),
+            encoding: .utf8)
+        XCTAssertFalse(saved.contains("source: tasks"), saved)
+        let reopened = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: handle, view: 0))
+        XCTAssertEqual(reopened.source, .allNotes)
+        XCTAssertEqual(reopened.columns.map(\.id), ["file.name"])
+    }
+
+    func testExpressionValidationAndPreviewAnnouncementUseRustQueryResult() throws {
+        let (_, session) = try makeSession()
+        let valid = session.validateBaseExpression(source: "number(priority) + 1")
+        XCTAssertTrue(valid.valid)
+        XCTAssertNotNil(valid.exprJson)
+        XCTAssertNil(valid.message)
+
+        let invalid = session.validateBaseExpression(source: "number(")
+        XCTAssertFalse(invalid.valid)
+        XCTAssertNil(invalid.exprJson)
+        XCTAssertEqual(invalid.spanStart, 7)
+        XCTAssertGreaterThanOrEqual(invalid.spanEnd, invalid.spanStart)
+        XCTAssertNotNil(invalid.message)
+
+        var draft = BaseQueryBuilderDraft()
+        draft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: nil)
+        ]
+        let handle = try session.openQuery(queryJson: draft.queryJSON(), thisPath: nil)
+        let result = try session.baseExecute(
+            handle: handle,
+            view: 0,
+            thisPath: nil,
+            quickFilter: nil,
+            cancel: CancelToken())
+        let preview = BaseQueryPreviewState.ready(result)
+
+        XCTAssertTrue(preview.accessibilityAnnouncement.contains(result.audioSummary))
+        XCTAssertTrue(preview.accessibilityAnnouncement.contains("First result:"))
+        XCTAssertTrue(preview.accessibilityAnnouncement.contains("Alpha"))
     }
 }
