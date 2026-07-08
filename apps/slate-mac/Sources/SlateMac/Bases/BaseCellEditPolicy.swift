@@ -83,7 +83,7 @@ enum BaseCellEditPolicy {
         case .integer(let value):
             return "\(value)"
         case .float(let value):
-            return value.rounded() == value ? String(format: "%.0f", value) : "\(value)"
+            return String(format: "%g", value)
         case .boolean(let value):
             return value ? "true" : "false"
         case .wikilink(let target):

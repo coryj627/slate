@@ -487,6 +487,9 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(
             BaseCellEditPolicy.propertyValue(from: "Project/Alpha", valueKind: "wikilink"),
             .success(.wikilink(target: "Project/Alpha")))
+        XCTAssertEqual(
+            BaseCellEditPolicy.displayValue(.float(value: 2.2999999999999998)),
+            "2.3")
     }
 
     func testBaseSelectionRestorerKeepsSurvivingRowElseFallsBackToFirst() {

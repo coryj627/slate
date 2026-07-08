@@ -453,15 +453,16 @@ extension AppState {
             panel.nameFieldStringValue = "\(doc.displayName) — \(viewName).\(fileExtension)"
             panel.begin { [weak self] response in
                 guard response == .OK, let url = panel.url else { return }
-                do {
-                    try text.write(to: url, atomically: true, encoding: .utf8)
-                    Task { @MainActor [weak self] in
-                        self?.postBaseActionAnnouncement("Exported base view.")
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let message: String
+                    do {
+                        try text.write(to: url, atomically: true, encoding: .utf8)
+                        message = "Exported base view."
+                    } catch {
+                        message = "Base view could not be exported: \(error.localizedDescription)"
                     }
-                } catch {
-                    Task { @MainActor [weak self] in
-                        self?.postBaseActionAnnouncement(
-                            "Base view could not be exported: \(error.localizedDescription)")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.postBaseActionAnnouncement(message)
                     }
                 }
             }
