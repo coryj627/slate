@@ -91,7 +91,7 @@ struct BaseListProjection: Equatable {
     let sections: [BaseListSection]
     let summary: String
 
-    init(result: BasesResultSet, options: BaseListOptions) {
+    init(result: BasesResultSet, options: BaseListOptions, isQuickFiltered: Bool = false) {
         items = result.rows.enumerated().map { rowIndex, row in
             BaseListItem(
                 row: row,
@@ -107,7 +107,7 @@ struct BaseListProjection: Equatable {
                 summary: BaseSummaryFormatter.summaryText(
                     summaries: $0.summaries, columns: result.columns))
         }
-        summary = BaseSummaryFormatter.summaryText(result)
+        summary = BaseSummaryFormatter.summaryText(result, isQuickFiltered: isQuickFiltered)
     }
 }
 
@@ -268,6 +268,7 @@ struct BaseListItem: Identifiable, Equatable, Hashable {
 struct BaseListView: View {
     let projection: BaseListProjection
     @Binding var selection: String?
+    var focusRequest: Int = 0
     var onActivate: (BaseListItem) -> Void
     var rowActions: [BaseListRowAction] = []
 
@@ -276,6 +277,7 @@ struct BaseListView: View {
             BaseOutlineList(
                 projection: projection,
                 selection: $selection,
+                focusRequest: focusRequest,
                 onActivate: onActivate,
                 rowActions: rowActions)
                 .frame(minHeight: 200)
@@ -308,6 +310,7 @@ struct BaseListRowAction {
 private struct BaseOutlineList: NSViewRepresentable {
     let projection: BaseListProjection
     @Binding var selection: String?
+    var focusRequest: Int
     var onActivate: (BaseListItem) -> Void
     var rowActions: [BaseListRowAction]
 
@@ -343,6 +346,7 @@ private struct BaseOutlineList: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.reload(list: self)
+        context.coordinator.focusIfRequested()
     }
 }
 
@@ -359,6 +363,7 @@ private final class BaseOutlineView: NSOutlineView {
 private final class BaseListCoordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
     private(set) var list: BaseOutlineList
     private var displayModel: BaseListDisplayModel
+    private var lastFocusRequest = 0
     weak var outline: NSOutlineView?
 
     init(list: BaseOutlineList) {
@@ -372,6 +377,13 @@ private final class BaseListCoordinator: NSObject, NSOutlineViewDataSource, NSOu
         displayModel = BaseListDisplayModel(projection: list.projection)
         outline?.reloadData()
         syncSelectionFromBinding()
+    }
+
+    func focusIfRequested() {
+        guard list.focusRequest != lastFocusRequest else { return }
+        lastFocusRequest = list.focusRequest
+        guard list.focusRequest != 0, let outline else { return }
+        outline.window?.makeFirstResponder(outline)
     }
 
     nonisolated func outlineView(

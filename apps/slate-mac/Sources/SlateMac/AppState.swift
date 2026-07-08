@@ -344,6 +344,11 @@ final class AppState: ObservableObject {
     /// preference, deliberately outside `.base` persistence.
     @Published var baseRendererOverrides: [TabID: BaseRendererMode] = [:]
 
+    /// #704: bumped to move keyboard focus into the active Bases quick
+    /// filter field. The filter text itself lives on `BaseDocument` and is
+    /// never persisted to the `.base` file.
+    @Published var baseQuickFilterFocusToken = 0
+
     /// The one canvas announcement funnel (#518, DoD §H). Every canvas
     /// surface phrases through it; verbosity persists via
     /// `PreferencesStore` (`setCanvasVerbosity`).
@@ -392,6 +397,7 @@ final class AppState: ObservableObject {
     /// correctly (a path-keyed funnel cannot distinguish them).
     func activateTab(_ id: TabID) {
         guard let tab = workspace.model.tab(id) else { return }
+        clearBaseQuickFilterIfLeavingActiveTab(for: id)
         if case .base(let path) = tab.item {
             activateBaseTab(id, path: path)
             return
@@ -832,6 +838,7 @@ final class AppState: ObservableObject {
             openBaseFile(path, target: target)
             return
         }
+        clearActiveBaseQuickFilter()
         switch target {
         case .currentTab:
             if selectedFilePath != path {
@@ -2044,6 +2051,18 @@ final class AppState: ObservableObject {
             return
         }
         toggleSearchOverlay()
+    }
+
+    /// Menu-owned Find routing. Editor-region Base/Canvas surfaces get their
+    /// local filter fields; tree/right-pane focus falls back to vault search.
+    func requestFindInFocusedSurface() {
+        if activeBaseDocument != nil, workspace.focusRegion == .editor {
+            basesFocusQuickFilter()
+        } else if activeCanvasDocument != nil, workspace.focusRegion == .editor {
+            canvasFocusFilter()
+        } else {
+            requestSearchOverlay()
+        }
     }
 
     func toggleSearchOverlay() {

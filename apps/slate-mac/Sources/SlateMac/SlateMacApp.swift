@@ -361,13 +361,7 @@ struct SlateMacApp: App {
                 // needs revisiting. Vault-scoped guard pattern as
                 // the palette item above (requestSearchOverlay).
                 Button("Search Vault…") {
-                    // #373 allocation: ⌘F is the in-canvas filter while
-                    // a canvas has focus; the vault overlay otherwise.
-                    if appState.activeCanvasDocument != nil {
-                        appState.canvasFocusFilter()
-                    } else {
-                        appState.requestSearchOverlay()
-                    }
+                    appState.requestFindInFocusedSurface()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
             }

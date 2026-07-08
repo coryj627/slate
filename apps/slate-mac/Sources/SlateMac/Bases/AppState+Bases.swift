@@ -21,6 +21,7 @@ extension AppState {
                 activateTab(existing.id)
                 return
             }
+            clearActiveBaseQuickFilter()
             parkOutgoingNoteBuffer()
             if workspace.activeTab != nil {
                 let replacedItem = workspace.activeTab?.item
@@ -40,10 +41,12 @@ extension AppState {
                 activateTab(existing.id)
                 return
             }
+            clearActiveBaseQuickFilter()
             parkOutgoingNoteBuffer()
             let id = workspace.openTab(.base(path: path))
             activateTab(id)
         case .newSplit(let axis):
+            clearActiveBaseQuickFilter()
             let paneCount = workspace.model.groupsInOrder.count
             splitActivePane(axis: axis)
             if workspace.model.groupsInOrder.count == paneCount {
@@ -98,6 +101,33 @@ extension AppState {
         setActiveBaseRendererOverride(.list)
     }
 
+    func basesFocusQuickFilter() {
+        guard activeBaseDocument != nil else { return }
+        baseQuickFilterFocusToken += 1
+    }
+
+    @discardableResult
+    func basesWhereAmI() -> String? {
+        guard let doc = activeBaseDocument else { return nil }
+        let text = doc.whereAmIReadback
+        postAccessibilityAnnouncement(text, priority: .medium)
+        return text
+    }
+
+    func clearBaseQuickFilterIfLeavingActiveTab(for destination: TabID) {
+        guard let current = workspace.activeTab,
+            current.id != destination
+        else { return }
+        clearActiveBaseQuickFilter()
+    }
+
+    func clearActiveBaseQuickFilter() {
+        guard case .base(let path) = workspace.activeTab?.item,
+            let doc = baseDocuments[path]
+        else { return }
+        _ = doc.clearQuickFilter(session: currentSession)
+    }
+
     private func setActiveBaseRendererOverride(_ mode: BaseRendererMode) {
         guard let tab = workspace.activeTab, case .base = tab.item else { return }
         baseRendererOverrides[tab.id] = mode
@@ -150,8 +180,9 @@ extension AppState {
     }
 
     func basesResultsPopover() {
-        guard let result = activeBaseDocument?.result else { return }
-        postAccessibilityAnnouncement(result.audioSummary, priority: .medium)
+        guard let doc = activeBaseDocument, let result = doc.result else { return }
+        let suffix = doc.quickFilterActive ? " \(doc.whereAmIReadback)." : ""
+        postAccessibilityAnnouncement("\(result.audioSummary)\(suffix)", priority: .medium)
     }
 
     func basesRefresh() {

@@ -21,6 +21,7 @@ final class BaseDocument: ObservableObject {
     @Published private(set) var views: [BaseViewSummary] = []
     @Published private(set) var result: BasesResultSet?
     @Published private(set) var activeViewIndex: Int = 0
+    @Published var quickFilterText = ""
     @Published var sortState: DataGridSortState?
     @Published private(set) var focusedColumnIndex: Int = 0
 
@@ -40,12 +41,17 @@ final class BaseDocument: ObservableObject {
         return (name as NSString).deletingPathExtension
     }
 
+    var quickFilterActive: Bool {
+        !quickFilterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     func load(session: VaultSession) {
         if let stale = handle {
             session.closeBase(handle: stale)
             handle = nil
         }
         state = .loading
+        clearQuickFilterState()
         do {
             let opened = try session.openBase(path: path)
             handle = opened
@@ -71,6 +77,7 @@ final class BaseDocument: ObservableObject {
         guard activeViewIndex != index else { return }
         activeViewIndex = index
         sortState = nil
+        clearQuickFilterState()
         focusedColumnIndex = 0
         executeActiveView(session: session)
     }
@@ -96,7 +103,7 @@ final class BaseDocument: ObservableObject {
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 thisPath: nil,
-                quickFilter: nil,
+                quickFilter: quickFilterArgument,
                 cancel: CancelToken())
             result = executed
             let view = views[activeViewIndex]
@@ -113,6 +120,26 @@ final class BaseDocument: ObservableObject {
             result = nil
             state = .failed(friendlyMessage(for: error))
         }
+    }
+
+    @discardableResult
+    func applyQuickFilter(_ text: String, session: VaultSession) -> String {
+        if quickFilterText != text {
+            quickFilterText = text
+        }
+        executeActiveView(session: session)
+        return quickFilterResultAnnouncement
+    }
+
+    @discardableResult
+    func clearQuickFilter(session: VaultSession?) -> String? {
+        guard quickFilterActive || !quickFilterText.isEmpty else { return nil }
+        clearQuickFilterState()
+        if let session {
+            executeActiveView(session: session)
+            return quickFilterResultAnnouncement
+        }
+        return nil
     }
 
     func focusColumn(_ columnIndex: Int) {
@@ -171,6 +198,32 @@ final class BaseDocument: ObservableObject {
         path = newPath
         if let session {
             load(session: session)
+        }
+    }
+
+    private var quickFilterArgument: String? {
+        quickFilterActive ? quickFilterText : nil
+    }
+
+    var quickFilterResultAnnouncement: String {
+        guard let result else { return "0 of 0 results" }
+        return "\(result.shownCount) of \(result.totalCount) results"
+    }
+
+    var whereAmIReadback: String {
+        var parts = ["Base: \(displayName)"]
+        if let activeViewName {
+            parts.append("view: \(activeViewName)")
+        }
+        if quickFilterActive {
+            parts.append("quick filter: \(quickFilterText)")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func clearQuickFilterState() {
+        if !quickFilterText.isEmpty {
+            quickFilterText = ""
         }
     }
 
