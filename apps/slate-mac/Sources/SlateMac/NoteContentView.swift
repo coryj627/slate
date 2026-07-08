@@ -184,6 +184,14 @@ struct NoteContentView: View {
                 },
                 onOpenEmbedSource: { [appState] target in
                     appState.openEmbedTarget(target)
+                },
+                baseEmbedSession: appState.currentSession,
+                baseEmbedThisPath: appState.selectedFilePath,
+                onOpenBaseEmbedInTab: { [appState] path in
+                    appState.openFile(path, target: .newTab)
+                },
+                baseEmbedHandleProvider: { [appState] request, thisPath in
+                    appState.baseEmbedHandle(for: request, thisPath: thisPath)
                 }
             )
         )
@@ -209,7 +217,7 @@ struct NoteContentView: View {
         // an observation edge on the loaded buffer for re-render
         // tracking; the editor reads the live buffer through its
         // binding.
-        return NoteEditorView(
+        let editor = NoteEditorView(
             text: appState.noteTextBinding(),
             headings: appState.currentNoteHeadings,
             accessibilityLabel: accessibilityLabelForContent,
@@ -255,6 +263,23 @@ struct NoteContentView: View {
             if let preview = appState.pendingEmbedPreview {
                 embedPreviewContent(preview)
             }
+        }
+
+        return VStack(spacing: 0) {
+            editor
+            BaseEmbedPreviewList(
+                text: text,
+                session: appState.currentSession,
+                thisPath: appState.selectedFilePath,
+                onOpenInTab: { [appState] path in
+                    appState.openFile(path, target: .newTab)
+                },
+                onJumpToSource: { [appState] line in
+                    appState.lineScrollRequest.send(line)
+                },
+                handleProvider: { [appState] request, thisPath in
+                    appState.baseEmbedHandle(for: request, thisPath: thisPath)
+                })
         }
     }
 
@@ -380,4 +405,3 @@ struct NoteContentView: View {
     }
 
 }
-
