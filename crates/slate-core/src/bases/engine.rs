@@ -3,9 +3,10 @@
 
 //! SQLite-backed Bases query execution.
 //!
-//! N1-2 owns file-row planning and execution. Task rows and FTS composition
-//! have their own follow-up issues, so this module fails those unsupported
-//! surfaces loudly instead of approximating them.
+//! N1-2 owns file-row planning and execution. N1-4 adds task rows and
+//! file-level task aggregates. FTS composition has its own follow-up issue, so
+//! this module still fails unsupported search surfaces loudly instead of
+//! approximating them.
 
 use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, ops::Range};
 
@@ -15,12 +16,12 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use super::{
     ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SummaryRef,
     eval::{
-        DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext, Value,
-        VaultLookup, WarningSink, eval,
+        DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext,
+        TaskRow, Value, VaultLookup, WarningSink, eval,
     },
     expr::{
         BinaryOp, Callee, Expr, ExprKind, FileField, GlobalFn, Lit, MethodName, PropertyRef,
-        TaskField,
+        TaskField, UnaryOp,
     },
 };
 use crate::{CancelToken, VaultError, db::DbError};
@@ -124,6 +125,7 @@ struct Candidate {
 #[derive(Debug, Clone)]
 struct MaterializedRow {
     path: String,
+    ordinal: Option<u64>,
     cells: Vec<CellValue>,
     summary_values: BTreeMap<String, CellValue>,
     sort_values: Vec<Value>,
@@ -148,6 +150,23 @@ struct IndexedFileRow {
     ctime_ms: i64,
 }
 
+#[derive(Debug, Clone)]
+struct IndexedTaskRow {
+    ordinal: u64,
+    text: String,
+    status: String,
+    completed: bool,
+    due_ms: Option<i64>,
+    scheduled_ms: Option<i64>,
+    priority: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TaskCounts {
+    total: u64,
+    completed: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 struct FormulaEval {
     values: ResolvedFormulas,
@@ -168,14 +187,6 @@ pub fn execute(
 ) -> Result<BasesResultSet, VaultError> {
     if cancel.is_cancelled() {
         return Err(VaultError::Cancelled);
-    }
-    if query.row_source != RowSource::Files {
-        return Ok(error_result(
-            query,
-            ctx,
-            "source: tasks is owned by N1-4",
-            "",
-        ));
     }
     if let QuerySource::Unsupported(reason) = &query.source {
         return Ok(error_result(query, ctx, reason, ""));
@@ -345,6 +356,19 @@ fn load_candidates(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<Candidate>, VaultError> {
+    match query.row_source {
+        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset),
+        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset),
+    }
+}
+
+fn load_file_candidates(
+    query: &SlateQuery,
+    conn: &Connection,
+    ctx: &EngineCtx<'_>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<Candidate>, VaultError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
     if ctx.pushdown
@@ -394,8 +418,87 @@ fn load_candidates(
         .collect::<Result<Vec<_>, _>>()
         .map_err(DbError::from)?;
 
+    let file_ids = rows.iter().map(|file| file.id).collect::<Vec<_>>();
+    let counts = load_task_counts(conn, &file_ids)?;
     rows.into_iter()
-        .map(|file| assemble_row(conn, &file).map(|row| Candidate { row }))
+        .map(|file| {
+            let task_counts = counts.get(&file.id).copied().unwrap_or_default();
+            assemble_row(conn, &file, task_counts, None).map(|row| Candidate { row })
+        })
+        .collect()
+}
+
+fn load_task_candidates(
+    query: &SlateQuery,
+    conn: &Connection,
+    ctx: &EngineCtx<'_>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<Candidate>, VaultError> {
+    let mut plan = SqlPlan::default();
+    source_predicates(&query.source, ctx, &mut plan);
+    if ctx.pushdown
+        && let Some(filters) = &query.filters
+    {
+        for conjunct in top_level_and(filters) {
+            if let Some(predicate) =
+                pushdown_predicate(conjunct).or_else(|| task_pushdown_predicate(conjunct))
+            {
+                plan.clauses.push(predicate.clause);
+                plan.params.extend(predicate.params);
+            }
+        }
+    }
+
+    let mut sql = "SELECT
+            f.id, f.path, f.name, f.extension, f.size_bytes, f.mtime_ms, f.ctime_ms,
+            t.ordinal, t.text, t.status_char, t.completed, t.due_ms, t.scheduled_ms, t.priority
+         FROM tasks t
+         JOIN files f ON f.id = t.file_id"
+        .to_string();
+    if !plan.clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&plan.clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY f.path ASC, t.ordinal ASC LIMIT ? OFFSET ?");
+    plan.params.push(limit.to_string());
+    plan.params.push(offset.to_string());
+
+    let mut stmt = conn.prepare(&sql).map_err(DbError::from)?;
+    let rows = stmt
+        .query_map(params_from_iter(plan.params.iter()), |row| {
+            let file = IndexedFileRow {
+                id: row.get::<_, i64>(0)?,
+                path: row.get::<_, String>(1)?,
+                name: row.get::<_, String>(2)?,
+                ext: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                size: row.get::<_, i64>(4)?.max(0) as u64,
+                mtime_ms: row.get::<_, i64>(5)?,
+                ctime_ms: row.get::<_, i64>(6)?,
+            };
+            let priority = row.get::<_, Option<i64>>(13)?.map(|value| value as f64);
+            let task = IndexedTaskRow {
+                ordinal: row.get::<_, i64>(7)?.max(0) as u64,
+                text: row.get(8)?,
+                status: row.get(9)?,
+                completed: row.get::<_, i64>(10)? != 0,
+                due_ms: row.get(11)?,
+                scheduled_ms: row.get(12)?,
+                priority,
+            };
+            Ok((file, task))
+        })
+        .map_err(DbError::from)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::from)?;
+
+    let file_ids = rows.iter().map(|(file, _)| file.id).collect::<Vec<_>>();
+    let counts = load_task_counts(conn, &file_ids)?;
+    rows.into_iter()
+        .map(|(file, task)| {
+            let task_counts = counts.get(&file.id).copied().unwrap_or_default();
+            assemble_row(conn, &file, task_counts, Some(task)).map(|row| Candidate { row })
+        })
         .collect()
 }
 
@@ -542,6 +645,133 @@ fn pushdown_method(receiver: &Expr, name: MethodName, args: &[Expr]) -> Option<S
     }
 }
 
+fn task_pushdown_predicate(node: &FilterNode) -> Option<SqlPredicate> {
+    let FilterNode::Stmt(expr) = node else {
+        return None;
+    };
+    match &expr.kind {
+        ExprKind::Prop(PropertyRef::TaskField(TaskField::Completed)) => Some(SqlPredicate {
+            clause: "t.completed != 0".to_string(),
+            params: Vec::new(),
+        }),
+        ExprKind::Unary {
+            op: UnaryOp::Not,
+            rhs,
+        } if matches!(
+            rhs.kind,
+            ExprKind::Prop(PropertyRef::TaskField(TaskField::Completed))
+        ) =>
+        {
+            Some(SqlPredicate {
+                clause: "t.completed = 0".to_string(),
+                params: Vec::new(),
+            })
+        }
+        ExprKind::Binary { op, lhs, rhs } => task_pushdown_binary(*op, lhs, rhs),
+        ExprKind::Call {
+            callee: Callee::Method { receiver, name },
+            args,
+        } => task_file_method_pushdown(receiver, *name, args),
+        _ => None,
+    }
+}
+
+fn task_file_method_pushdown(
+    receiver: &Expr,
+    name: MethodName,
+    args: &[Expr],
+) -> Option<SqlPredicate> {
+    match (&receiver.kind, name) {
+        (ExprKind::Prop(PropertyRef::TaskField(TaskField::File)), MethodName::InFolder) => {
+            if args.len() != 1 {
+                return None;
+            }
+            let folder = literal_string(args.first()?)?;
+            let mut plan = SqlPlan::default();
+            push_folder_clause(&mut plan, &folder);
+            Some(SqlPredicate {
+                clause: plan.clauses.pop()?,
+                params: plan.params,
+            })
+        }
+        (ExprKind::Prop(PropertyRef::TaskField(TaskField::File)), MethodName::HasTag) => {
+            let tags = args.iter().map(literal_text).collect::<Option<Vec<_>>>()?;
+            tag_predicate(&tags)
+        }
+        _ => None,
+    }
+}
+
+fn task_pushdown_binary(op: BinaryOp, lhs: &Expr, rhs: &Expr) -> Option<SqlPredicate> {
+    if let ExprKind::Prop(PropertyRef::TaskField(field)) = &lhs.kind {
+        return task_field_pushdown(*field, op, rhs);
+    }
+    if let ExprKind::Prop(PropertyRef::TaskField(field)) = &rhs.kind {
+        return task_field_pushdown(*field, reverse_binary_op(op)?, lhs);
+    }
+    None
+}
+
+fn reverse_binary_op(op: BinaryOp) -> Option<BinaryOp> {
+    Some(match op {
+        BinaryOp::Eq => BinaryOp::Eq,
+        BinaryOp::Ne => BinaryOp::Ne,
+        BinaryOp::Gt => BinaryOp::Lt,
+        BinaryOp::Gte => BinaryOp::Lte,
+        BinaryOp::Lt => BinaryOp::Gt,
+        BinaryOp::Lte => BinaryOp::Gte,
+        _ => return None,
+    })
+}
+
+fn task_field_pushdown(field: TaskField, op: BinaryOp, value: &Expr) -> Option<SqlPredicate> {
+    match field {
+        TaskField::Completed => {
+            task_comparison_clause("t.completed", op, bool_literal(value)?, false)
+        }
+        TaskField::Status => {
+            task_comparison_clause("t.status_char", op, literal_text(value)?, false)
+        }
+        TaskField::Priority => {
+            task_comparison_clause("t.priority", op, numeric_literal_string(value)?, true)
+        }
+        TaskField::Due => {
+            task_comparison_clause("t.due_ms", op, date_literal_ms_string(value)?, true)
+        }
+        TaskField::Scheduled => {
+            task_comparison_clause("t.scheduled_ms", op, date_literal_ms_string(value)?, true)
+        }
+        TaskField::Text | TaskField::File => None,
+    }
+}
+
+fn task_comparison_clause(
+    column: &str,
+    op: BinaryOp,
+    value: String,
+    nullable: bool,
+) -> Option<SqlPredicate> {
+    let sql_op = match op {
+        BinaryOp::Eq => "=",
+        BinaryOp::Ne => "<>",
+        BinaryOp::Gt => ">",
+        BinaryOp::Gte => ">=",
+        BinaryOp::Lt => "<",
+        BinaryOp::Lte => "<=",
+        _ => return None,
+    };
+    if nullable && op == BinaryOp::Ne {
+        return Some(SqlPredicate {
+            clause: format!("({column} {sql_op} ? OR {column} IS NULL)"),
+            params: vec![value],
+        });
+    }
+    Some(SqlPredicate {
+        clause: format!("{column} {sql_op} ?"),
+        params: vec![value],
+    })
+}
+
 fn comparison_clause(column: &str, op: BinaryOp, value: String) -> Option<SqlPredicate> {
     let sql_op = match op {
         BinaryOp::Eq => "=",
@@ -622,6 +852,43 @@ fn numeric_literal_string(expr: &Expr) -> Option<String> {
     value.is_finite().then(|| value.to_string())
 }
 
+fn bool_literal(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Bool(value)) => Some(if *value { "1" } else { "0" }.to_string()),
+        ExprKind::Lit(Lit::Number(value)) => bool_number_literal(*value),
+        ExprKind::Lit(Lit::String(value)) => value
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .and_then(bool_number_literal),
+        _ => None,
+    }
+}
+
+fn bool_number_literal(value: f64) -> Option<String> {
+    if value == 0.0 {
+        Some("0".to_string())
+    } else if value == 1.0 {
+        Some("1".to_string())
+    } else {
+        None
+    }
+}
+
+fn date_literal_ms_string(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Number(_)) => numeric_literal_string(expr),
+        ExprKind::Lit(Lit::String(value)) => parse_date_value(value)
+            .or_else(|| parse_datetime_value(value))
+            .map(|date| date.epoch_ms.to_string()),
+        ExprKind::Call {
+            callee: Callee::Global(GlobalFn::Date),
+            args,
+        } if args.len() == 1 => date_literal_ms_string(&args[0]),
+        _ => None,
+    }
+}
+
 fn tag_predicate(tags: &[String]) -> Option<SqlPredicate> {
     if tags.is_empty() {
         return None;
@@ -646,7 +913,12 @@ fn tag_predicate(tags: &[String]) -> Option<SqlPredicate> {
     })
 }
 
-fn assemble_row(conn: &Connection, file: &IndexedFileRow) -> Result<RowContext, VaultError> {
+fn assemble_row(
+    conn: &Connection,
+    file: &IndexedFileRow,
+    task_counts: TaskCounts,
+    task: Option<IndexedTaskRow>,
+) -> Result<RowContext, VaultError> {
     let mut file_fields = FileFields::for_path(&file.path);
     file_fields.name = file.name.clone();
     file_fields.ext = file.ext.clone();
@@ -668,11 +940,23 @@ fn assemble_row(conn: &Connection, file: &IndexedFileRow) -> Result<RowContext, 
     for (key, value) in &properties {
         file_fields.properties.insert(key.clone(), value.clone());
     }
+    file_fields
+        .properties
+        .insert("tasks".to_string(), task_counts_value(task_counts));
+    let task = task.map(|task| TaskRow {
+        ordinal: task.ordinal,
+        text: task.text,
+        status: task.status,
+        completed: task.completed,
+        due: task_date(task.due_ms),
+        scheduled: task_date(task.scheduled_ms),
+        priority: task.priority,
+    });
     Ok(RowContext {
         file_path: file.path.clone(),
         file_fields,
         properties,
-        task: None,
+        task,
     })
 }
 
@@ -695,7 +979,63 @@ fn assemble_row_for_path(conn: &Connection, path: &str) -> Result<Option<RowCont
         )
         .optional()
         .map_err(DbError::from)?;
-    row.map(|file| assemble_row(conn, &file)).transpose()
+    row.map(|file| {
+        let counts = load_task_counts(conn, &[file.id])?;
+        let task_counts = counts.get(&file.id).copied().unwrap_or_default();
+        assemble_row(conn, &file, task_counts, None)
+    })
+    .transpose()
+}
+
+fn task_counts_value(counts: TaskCounts) -> Value {
+    Value::Object(BTreeMap::from([
+        ("total".to_string(), Value::Number(counts.total as f64)),
+        (
+            "completed".to_string(),
+            Value::Number(counts.completed as f64),
+        ),
+    ]))
+}
+
+fn task_date(epoch_ms: Option<i64>) -> Option<DateValue> {
+    epoch_ms.map(|epoch_ms| DateValue {
+        epoch_ms,
+        has_time: false,
+    })
+}
+
+fn load_task_counts(
+    conn: &Connection,
+    file_ids: &[i64],
+) -> Result<BTreeMap<i64, TaskCounts>, VaultError> {
+    if file_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut ids = file_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT file_id, COUNT(*), COALESCE(SUM(CASE WHEN completed != 0 THEN 1 ELSE 0 END), 0)
+         FROM tasks
+         WHERE file_id IN ({placeholders})
+         GROUP BY file_id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(DbError::from)?;
+    stmt.query_map(params_from_iter(ids.iter()), |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            TaskCounts {
+                total: row.get::<_, i64>(1)?.max(0) as u64,
+                completed: row.get::<_, i64>(2)?.max(0) as u64,
+            },
+        ))
+    })
+    .map_err(DbError::from)?
+    .collect::<Result<BTreeMap<_, _>, _>>()
+    .map_err(|err| DbError::from(err).into())
 }
 
 fn load_properties(conn: &Connection, file_id: i64) -> Result<Vec<(String, Value)>, VaultError> {
@@ -956,6 +1296,7 @@ fn materialize_row(
     }
     Ok(MaterializedRow {
         path: row.file_path.clone(),
+        ordinal: row.task.as_ref().map(|task| task.ordinal),
         cells,
         summary_values,
         sort_values,
@@ -994,7 +1335,10 @@ fn compare_rows(query: &SlateQuery, lhs: &MaterializedRow, rhs: &MaterializedRow
             return ordering;
         }
     }
-    lhs.path.cmp(&rhs.path)
+    match lhs.path.cmp(&rhs.path) {
+        Ordering::Equal => lhs.ordinal.cmp(&rhs.ordinal),
+        ordering => ordering,
+    }
 }
 
 fn compare_sort_key(lhs: &Value, rhs: &Value, ascending: bool) -> Ordering {
@@ -1604,6 +1948,7 @@ fn file_field_label(field: FileField) -> &'static str {
         FileField::Backlinks => "backlinks",
         FileField::Embeds => "embeds",
         FileField::File => "file",
+        FileField::Tasks => "tasks",
         FileField::Ctime => "ctime",
         FileField::Mtime => "mtime",
         FileField::InDegree => "inDegree",
