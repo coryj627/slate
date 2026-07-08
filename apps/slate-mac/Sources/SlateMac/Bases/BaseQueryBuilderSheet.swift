@@ -17,6 +17,10 @@ struct BaseQueryBuilderSheet: View {
     @State private var formulaName = ""
     @State private var formulaExpression = ""
     @State private var formulaValidation: BaseExpressionValidation?
+    @State private var advancedExpressionValidations: [Int: BaseExpressionValidation] = [:]
+    @State private var previewSelectedRow: String?
+    @State private var previewSelectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
+    @State private var previewSortState: DataGridSortState?
     @State private var saveAsBasePath = "Queries/New Query.base"
     @State private var savedQueryName = "New query"
     @State private var savedQueryDescription = ""
@@ -295,11 +299,12 @@ struct BaseQueryBuilderSheet: View {
                 if let formulaValidation {
                     let message = formulaValidation.valid
                         ? "Formula valid"
-                        : (formulaValidation.message ?? "Formula invalid")
+                        : expressionValidationMessage(formulaValidation, fallback: "Formula invalid")
                     if formulaValidation.valid {
                         SlateSymbol.checkmark.label(message)
                     } else {
                         SlateSymbol.warning.label(message)
+                            .accessibilityLabel(message)
                     }
                 }
             }
@@ -319,6 +324,9 @@ struct BaseQueryBuilderSheet: View {
                     TextField("Expression", text: $formulaExpression)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Formula expression")
+                        .onChange(of: formulaExpression) { _, value in
+                            validateFormulaExpression(value)
+                        }
                 }
                 Button("Add formula") { addFormula() }
             }
@@ -329,7 +337,7 @@ struct BaseQueryBuilderSheet: View {
                     Text(formula.expression)
                         .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                     Button {
-                        model.formulas.removeAll { $0.id == formula.id }
+                        model.removeFormula(named: formula.name)
                     } label: {
                         SlateSymbol.trash.image(label: "Remove formula")
                     }
@@ -343,6 +351,7 @@ struct BaseQueryBuilderSheet: View {
         .accessibilityLabel("Formulas")
     }
 
+    @ViewBuilder
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Live preview")
@@ -353,9 +362,75 @@ struct BaseQueryBuilderSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel("Live preview")
                 .accessibilityValue(model.previewState.accessibilityAnnouncement)
+            previewContent
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Live preview region")
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        switch model.previewState {
+        case .ready(let result):
+            if result.columns.isEmpty {
+                Text("No preview rows.")
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            } else {
+                AccessibleDataGrid(
+                    columns: previewColumns(from: result),
+                    rows: previewRows(from: result),
+                    summary: BaseSummaryFormatter.summaryText(result),
+                    accessibilityLabel: "Builder preview table",
+                    groups: previewGroups(from: result),
+                    selection: Binding(
+                        get: { previewSelectedRow },
+                        set: { previewSelectedRow = $0 }),
+                    cellSelection: Binding(
+                        get: { previewSelectedCell },
+                        set: { previewSelectedCell = $0 }),
+                    sortState: Binding(
+                        get: { previewSortState },
+                        set: { previewSortState = $0 }),
+                    cellNavigation: true)
+                    .frame(minHeight: 220)
+            }
+        case .idle, .loading, .failed:
+            EmptyView()
+        }
+    }
+
+    private func previewColumns(
+        from result: BasesResultSet
+    ) -> [AccessibleDataGrid<BaseGridRow>.Column] {
+        result.columns.enumerated().map { columnIndex, column in
+            AccessibleDataGrid<BaseGridRow>.Column(
+                column.label,
+                cell: { row in row.value(at: columnIndex) },
+                sort: { lhs, rhs in
+                    lhs.value(at: columnIndex).localizedCaseInsensitiveCompare(
+                        rhs.value(at: columnIndex)) == .orderedAscending
+                },
+                accessibilityHint: { _ in "Builder preview table is read-only." })
+        }
+    }
+
+    private func previewRows(from result: BasesResultSet) -> [BaseGridRow] {
+        result.rows.enumerated().map { rowIndex, row in
+            BaseGridRow(row: row, ordinal: rowIndex)
+        }
+    }
+
+    private func previewGroups(
+        from result: BasesResultSet
+    ) -> [AccessibleDataGrid<BaseGridRow>.Group] {
+        result.groups.map {
+            .init(
+                label: $0.label,
+                rowStart: Int($0.rowStart),
+                rowCount: Int($0.rowCount),
+                summary: BaseSummaryFormatter.summaryText(
+                    summaries: $0.summaries, columns: result.columns))
+        }
     }
 
     @ViewBuilder
@@ -525,12 +600,20 @@ struct BaseQueryBuilderSheet: View {
             rawExpression: rawExpression,
             filterJSON: nil
         ).accessibilityLabel(index: index)
+        let validation = advancedExpressionValidations[index]
         return HStack(spacing: 8) {
             Text("Advanced")
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
             TextField("Raw filter expression", text: advancedExpressionBinding(index: index))
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel(rowLabel)
+            if let validation, !validation.valid {
+                let message = expressionValidationMessage(
+                    validation, fallback: "Expression invalid")
+                SlateSymbol.warning.label(message)
+                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .accessibilityLabel(message)
+            }
             Spacer()
             rowButtons(index: index)
         }
@@ -539,7 +622,7 @@ struct BaseQueryBuilderSheet: View {
         .contentShape(Rectangle())
         .onTapGesture { model.selectedRowIndex = index }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Advanced condition: \(rawExpression)")
+        .accessibilityLabel(advancedAccessibilityLabel(rawExpression, validation: validation))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: Text("Select Row")) {
             model.selectedRowIndex = index
@@ -745,6 +828,11 @@ struct BaseQueryBuilderSheet: View {
             },
             set: { value in
                 let validation = appState.currentSession?.validateBaseExpression(source: value)
+                if let validation {
+                    advancedExpressionValidations[index] = validation
+                } else {
+                    advancedExpressionValidations.removeValue(forKey: index)
+                }
                 model.updateAdvancedExpression(index: index, rawExpression: value, validation: validation)
             })
     }
@@ -793,6 +881,7 @@ struct BaseQueryBuilderSheet: View {
             }
             formulaName = ""
             formulaExpression = ""
+            formulaValidation = nil
         } catch {
             formulaValidation = BaseExpressionValidation(
                 valid: false,
@@ -801,6 +890,37 @@ struct BaseQueryBuilderSheet: View {
                 spanStart: 0,
                 spanEnd: UInt32(formulaExpression.utf8.count))
         }
+    }
+
+    private func validateFormulaExpression(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            formulaValidation = nil
+            return
+        }
+        formulaValidation = appState.currentSession?.validateBaseExpression(source: value)
+    }
+
+    private func expressionValidationMessage(
+        _ validation: BaseExpressionValidation,
+        fallback: String
+    ) -> String {
+        var message = validation.message ?? fallback
+        if validation.spanEnd > validation.spanStart {
+            message += " at characters \(validation.spanStart)-\(validation.spanEnd)"
+        }
+        return message
+    }
+
+    private func advancedAccessibilityLabel(
+        _ rawExpression: String,
+        validation: BaseExpressionValidation?
+    ) -> String {
+        guard let validation, !validation.valid else {
+            return "Advanced condition: \(rawExpression)"
+        }
+        return "Advanced condition: \(rawExpression). "
+            + expressionValidationMessage(validation, fallback: "Expression invalid")
     }
 
     private var sourceKind: BaseQuerySourceKind {

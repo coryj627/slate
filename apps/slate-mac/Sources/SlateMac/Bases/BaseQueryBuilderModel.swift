@@ -779,8 +779,8 @@ struct BaseQueryBuilderDraft: Equatable {
         replacing previous: BaseQueryBuilderDraft? = nil
     ) throws -> [BaseEdit] {
         var edits: [BaseEdit] = []
-        if let filterYAML {
-            edits.append(.setViewFilters(view: view, yaml: filterYAML))
+        if let viewFilterYAML {
+            edits.append(.setViewFilters(view: view, yaml: viewFilterYAML))
         } else if previous?.filterYAML != nil {
             edits.append(.removeViewKey(view: view, key: "filters"))
         }
@@ -802,7 +802,9 @@ struct BaseQueryBuilderDraft: Equatable {
                 edits.append(.removeFormula(name: formula.name))
             }
         }
-        for formula in formulas {
+        let previousFormulaJSON = previous.map { Self.formulaJSONMap(for: $0.formulas) } ?? [:]
+        for formula in formulas
+        where previous == nil || previousFormulaJSON[formula.name] != formula.expressionJSON {
             edits.append(.setFormula(name: formula.name, expression: formula.expression))
         }
         let previousDisplayNames = previous.map { displayNameMap(for: $0.columns) } ?? [:]
@@ -858,6 +860,13 @@ struct BaseQueryBuilderDraft: Equatable {
         return BaseQueryFilterYAML.all(filters).yamlValue(indent: 0)
     }
 
+    private var viewFilterYAML: String? {
+        guard let filterYAML else { return nil }
+        let lines = filterYAML.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > 1 else { return "filters: \(filterYAML)" }
+        return (["filters:"] + lines.map { "  \($0)" }).joined(separator: "\n")
+    }
+
     private var orderYAMLFragment: String {
         let selected = columns.isEmpty ? defaultColumnSelections : columns
         var lines = ["order:"]
@@ -887,6 +896,14 @@ struct BaseQueryBuilderDraft: Equatable {
             names[column.id] = normalizedDisplayName(column.displayName)
         }
         return names
+    }
+
+    private static func formulaJSONMap(for formulas: [BaseQueryFormula]) -> [String: String] {
+        var map: [String: String] = [:]
+        for formula in formulas {
+            map[formula.name] = formula.expressionJSON
+        }
+        return map
     }
 
     fileprivate static func filterYAML(for row: BaseQueryBuilderRow) -> BaseQueryFilterYAML? {
@@ -1381,6 +1398,18 @@ final class BaseQueryBuilderModel: ObservableObject {
 
     func baseEditsForView(_ view: UInt32) throws -> [BaseEdit] {
         try draft.baseEditsForView(view, replacing: initialDraft)
+    }
+
+    func removeFormula(named name: String) {
+        let columnID = "formula.\(name)"
+        draft.formulas.removeAll { $0.name == name }
+        draft.columns.removeAll { $0.id == columnID }
+        draft.sortKeys.removeAll { sortKey in
+            sortKey.property == .formula(name) || sortKey.expressionLabel == columnID
+        }
+        if draft.groupBy?.property == .formula(name) {
+            draft.groupBy = nil
+        }
     }
 
     func perform(_ command: BaseQueryBuilderCommand) {
