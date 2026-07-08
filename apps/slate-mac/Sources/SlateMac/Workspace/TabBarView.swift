@@ -122,18 +122,19 @@ struct TabBarView: View {
         }
     }
 
-    /// "tab N of M[, edited][, canvas/base/saved query]" — the VoiceOver value for one tab.
+    /// "tab N of M[, edited][, canvas/base/saved query/dashboard]" — the VoiceOver value for one tab.
     /// Static so tests pin the exact strings. The kind rides in the value
     /// (t0 §3 inspectability), not the label, so the speakable name stays
     /// the filename for Voice Control.
     static func accessibilityValue(
         index: Int, count: Int, isDirty: Bool, isCanvas: Bool = false,
-        isBase: Bool = false, isSavedQuery: Bool = false
+        isBase: Bool = false, isSavedQuery: Bool = false, isDashboard: Bool = false
     ) -> String {
         "tab \(index + 1) of \(count)" + (isDirty ? ", edited" : "")
             + (isCanvas ? ", canvas" : "")
             + (isBase ? ", base" : "")
             + (isSavedQuery ? ", saved query" : "")
+            + (isDashboard ? ", dashboard" : "")
     }
 
     private func isDirty(_ tab: WorkspaceTab) -> Bool {
@@ -141,6 +142,7 @@ struct TabBarView: View {
         if case .canvas = tab.item { return false }
         if case .base = tab.item { return false }
         if case .savedQuery = tab.item { return false }
+        if case .dashboard = tab.item { return false }
         if tab.id == group.activeTabID {
             return appState.hasUnsavedChanges
         }
@@ -178,6 +180,11 @@ struct TabBarView: View {
                             .font(Tokens.Typography.caption)
                             .foregroundStyle(Tokens.ColorRole.textSecondary)
                     }
+                    if case .dashboard = tab.item {
+                        SlateSymbol.base.decorative
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    }
                     Text(title(tab))
                         .font(active ? Tokens.Typography.body.weight(.semibold) : Tokens.Typography.body)
                         .foregroundStyle(
@@ -204,7 +211,8 @@ struct TabBarView: View {
                     index: index, count: group.tabs.count, isDirty: dirty,
                     isCanvas: { if case .canvas = tab.item { return true }; return false }(),
                     isBase: { if case .base = tab.item { return true }; return false }(),
-                    isSavedQuery: { if case .savedQuery = tab.item { return true }; return false }())
+                    isSavedQuery: { if case .savedQuery = tab.item { return true }; return false }(),
+                    isDashboard: { if case .dashboard = tab.item { return true }; return false }())
             )
             .accessibilityAddTraits(active ? [.isSelected] : [])
             .accessibilityHint(

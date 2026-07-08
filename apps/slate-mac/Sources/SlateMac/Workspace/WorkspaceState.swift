@@ -135,6 +135,15 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    func activeGroupDashboardTab(id: String) -> WorkspaceTab? {
+        model.activeGroup.tabs.first {
+            if case .dashboard(let dashboardID, _) = $0.item {
+                return dashboardID == id
+            }
+            return false
+        }
+    }
+
     /// True when any tab — parked or (per the caller-supplied flag) active —
     /// has unsaved changes. Vault close gates on this aggregate.
     func anyTabDirty(activeTabDirty: Bool) -> Bool {
@@ -274,6 +283,13 @@ final class WorkspaceState: ObservableObject {
     @discardableResult
     func retargetSavedQuery(id: String, name: String) -> [TabID] {
         let changed = model.retargetSavedQuery(id: id, name: name)
+        assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
+        return changed
+    }
+
+    @discardableResult
+    func retargetDashboard(id: String, name: String) -> [TabID] {
+        let changed = model.retargetDashboard(id: id, name: name)
         assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
         return changed
     }

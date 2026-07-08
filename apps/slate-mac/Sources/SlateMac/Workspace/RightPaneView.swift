@@ -12,7 +12,8 @@ import SwiftUI
 /// (`.outline`, `.citations`, `.bibliography`) that U4-1 seeded, the
 /// seven panels U4-2 ported out of the retired left-sidebar stack
 /// (`.backlinks`, `.outgoingLinks`, `.embeds`, `.math`, `.code`, `.diagrams`,
-/// `.tasks`), N4-3's `.queries`, plus M-3's vault-level `.syncDiagnostics`.
+/// `.tasks`), N4-3's `.queries`, N4-4's `.basesDock`, plus M-3's
+/// vault-level `.syncDiagnostics`.
 /// The rail renders every registered leaf, so it shows all icons and replaces
 /// both the old segmented picker AND the sidebar stack.
 ///
@@ -30,6 +31,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     case citations
     case bibliography
     case queries
+    case basesDock
     /// Vault-level sync diagnostics (Milestone M-3, #534) — vault-scoped like
     /// `.bibliography`.
     case syncDiagnostics
@@ -51,6 +53,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .citations: return "Citations"
         case .bibliography: return "Bibliography"
         case .queries: return "Queries"
+        case .basesDock: return "Base dock"
         case .syncDiagnostics: return "Sync"
         }
     }
@@ -74,6 +77,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .citations: return .citationSummary
         case .bibliography: return .bibliography
         case .queries: return .base
+        case .basesDock: return .base
         case .syncDiagnostics: return .syncDiagnostics
         }
     }
@@ -88,7 +92,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     /// a selectable-but-blank icon.
     static let registered: [Leaf] = [
         .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-        .tasks, .citations, .bibliography, .queries, .syncDiagnostics,
+        .tasks, .citations, .bibliography, .queries, .basesDock, .syncDiagnostics,
     ]
 
     var isRegistered: Bool { Self.registered.contains(self) }
@@ -289,6 +293,8 @@ struct RightPaneView: View {
             BibliographyPanel()
         case .queries:
             BaseQueriesPanel()
+        case .basesDock:
+            BasesDockPanel()
         case .syncDiagnostics:
             SyncDiagnosticsPanel()
         }

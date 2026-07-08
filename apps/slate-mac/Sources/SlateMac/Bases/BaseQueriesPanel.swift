@@ -8,6 +8,7 @@ struct BaseQueriesPanel: View {
     @State private var renameTarget: SavedQuerySummary?
     @State private var renameDraft = ""
     @State private var deleteTarget: SavedQuerySummary?
+    @State private var dashboardDraft: DashboardEditorDraft?
     @AccessibilityFocusState private var actionFocusReturn: ActionFocusTarget?
 
     enum ActionFocusTarget: Hashable {
@@ -34,6 +35,14 @@ struct BaseQueriesPanel: View {
             })
     }
 
+    private var dashboardEditorPresented: Binding<Bool> {
+        Binding(
+            get: { dashboardDraft != nil },
+            set: { shown in
+                if !shown { dashboardDraft = nil }
+            })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -42,6 +51,7 @@ struct BaseQueriesPanel: View {
                 LazyVStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
                     savedQueriesSection
                     baseFilesSection
+                    dashboardsSection
                 }
                 .padding(Tokens.Spacing.md)
             }
@@ -91,6 +101,19 @@ struct BaseQueriesPanel: View {
         } message: {
             Text(deleteTarget?.name ?? "")
         }
+        .sheet(isPresented: dashboardEditorPresented) {
+            DashboardEditorSheet(
+                draft: Binding(
+                    get: {
+                        dashboardDraft
+                            ?? DashboardEditorDraft(savedQueries: appState.baseQueries.savedQueries)
+                    },
+                    set: { dashboardDraft = $0 }),
+                savedQueries: appState.baseQueries.savedQueries,
+                onCancel: { dashboardDraft = nil },
+                onSave: saveDashboard)
+                .environmentObject(appState)
+        }
     }
 
     private var header: some View {
@@ -100,6 +123,12 @@ struct BaseQueriesPanel: View {
                 .foregroundStyle(Tokens.ColorRole.textPrimary)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
+            Button {
+                dashboardDraft = DashboardEditorDraft(savedQueries: appState.baseQueries.savedQueries)
+            } label: {
+                SlateSymbol.addProperty.label("New dashboard")
+            }
+            .help("New dashboard")
             Button {
                 appState.refreshBaseQueries()
             } label: {
@@ -137,6 +166,18 @@ struct BaseQueriesPanel: View {
         } else {
             ForEach(appState.baseQueries.baseFiles, id: \.path) { file in
                 baseFileRow(file)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dashboardsSection: some View {
+        BaseQueriesSectionHeader(title: "Dashboards")
+        if appState.baseQueries.dashboards.isEmpty {
+            emptyRow("No dashboards")
+        } else {
+            ForEach(appState.baseQueries.dashboards, id: \.id) { dashboard in
+                dashboardRow(dashboard)
             }
         }
     }
@@ -194,8 +235,9 @@ struct BaseQueriesPanel: View {
                 Button("Export as .base...") {
                     appState.exportSavedQueryUsingSavePanel(id: summary.id)
                 }
-                Button("Dock to Sidebar") {}
-                    .disabled(true)
+                Button("Dock to Sidebar") {
+                    appState.dockSavedQueryToSidebar(id: summary.id)
+                }
                 Button("Delete...", role: .destructive) {
                     deleteTarget = summary
                 }
@@ -221,28 +263,105 @@ struct BaseQueriesPanel: View {
     }
 
     private func baseFileRow(_ file: BaseFileSummary) -> some View {
-        Button {
-            appState.openBaseFile(file.path)
-        } label: {
-            HStack(spacing: Tokens.Spacing.sm) {
-                SlateSymbol.base.decorative
+        HStack(spacing: Tokens.Spacing.sm) {
+            Button {
+                appState.openBaseFile(file.path)
+            } label: {
+                baseFileLabel(file)
+            }
+            .buttonStyle(.interactiveRow())
+            .accessibilityLabel("\(file.name), base file")
+
+            Menu {
+                Button("Open") { appState.openBaseFile(file.path) }
+                Button("Dock to Sidebar") {
+                    appState.dockBaseFileToSidebar(path: file.path, name: file.name)
+                }
+            } label: {
+                SlateSymbol.moreActions.image(label: "Base file actions")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("Base file actions")
+        }
+    }
+
+    private func baseFileLabel(_ file: BaseFileSummary) -> some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            SlateSymbol.base.decorative
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.name)
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+                Text(file.path)
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private func dashboardRow(_ dashboard: DashboardSummary) -> some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            Button {
+                appState.openDashboard(id: dashboard.id, name: dashboard.name)
+            } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(file.name)
+                    Text(dashboard.name)
                         .font(Tokens.Typography.body)
                         .foregroundStyle(Tokens.ColorRole.textPrimary)
-                    Text(file.path)
+                    Text("\(dashboard.sectionCount) \(dashboard.sectionCount == 1 ? "section" : "sections")")
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.interactiveRow())
+            .accessibilityLabel("\(dashboard.name), dashboard")
+
+            Menu {
+                Button("Open") { appState.openDashboard(id: dashboard.id, name: dashboard.name) }
+                Button("Edit...") {
+                    editDashboard(dashboard)
+                }
+                Button("Dock to Sidebar") {
+                    appState.dockDashboardToSidebar(id: dashboard.id)
+                }
+                Button("Delete...", role: .destructive) {
+                    appState.deleteDashboard(id: dashboard.id)
+                }
+            } label: {
+                SlateSymbol.moreActions.image(label: "Dashboard actions")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("Dashboard actions")
         }
-        .buttonStyle(.interactiveRow())
-        .accessibilityLabel("\(file.name), base file")
+    }
+
+    private func editDashboard(_ summary: DashboardSummary) {
+        guard let dashboard = appState.dashboardForEditing(id: summary.id) else { return }
+        dashboardDraft = DashboardEditorDraft(
+            dashboard: dashboard,
+            savedQueries: appState.baseQueries.savedQueries)
+    }
+
+    private func saveDashboard(_ draft: DashboardEditorDraft) {
+        if let id = draft.dashboardID {
+            appState.updateDashboard(id: id, name: draft.name, sections: draft.dashboardSections)
+        } else {
+            _ = appState.saveDashboard(name: draft.name, sections: draft.dashboardSections)
+        }
+        dashboardDraft = nil
     }
 }
 

@@ -45,6 +45,7 @@ enum EditorItem: Hashable, Codable {
     case canvas(path: String)
     case base(path: String)
     case savedQuery(id: String, name: String)
+    case dashboard(id: String, name: String)
 
     /// The vault-relative file path behind this tab, regardless of kind.
     var path: String {
@@ -53,12 +54,14 @@ enum EditorItem: Hashable, Codable {
             return path
         case .savedQuery(let id, _):
             return "saved-query:\(id)"
+        case .dashboard(let id, _):
+            return "dashboard:\(id)"
         }
     }
 
     var title: String {
         switch self {
-        case .savedQuery(_, let name):
+        case .savedQuery(_, let name), .dashboard(_, let name):
             return name
         case .markdown(let path), .canvas(let path), .base(let path):
             let name = (path as NSString).lastPathComponent
@@ -84,6 +87,11 @@ enum EditorItem: Hashable, Codable {
                 id: try c.decodeIfPresent(String.self, forKey: .id)
                     ?? c.decode(String.self, forKey: .path),
                 name: try c.decodeIfPresent(String.self, forKey: .name) ?? "Saved query")
+        case "dashboard":
+            self = .dashboard(
+                id: try c.decodeIfPresent(String.self, forKey: .id)
+                    ?? c.decode(String.self, forKey: .path),
+                name: try c.decodeIfPresent(String.self, forKey: .name) ?? "Dashboard")
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind, in: c,
@@ -105,6 +113,11 @@ enum EditorItem: Hashable, Codable {
             try c.encode(path, forKey: .path)
         case .savedQuery(let id, let name):
             try c.encode("savedQuery", forKey: .kind)
+            try c.encode(id, forKey: .path)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
+        case .dashboard(let id, let name):
+            try c.encode("dashboard", forKey: .kind)
             try c.encode(id, forKey: .path)
             try c.encode(id, forKey: .id)
             try c.encode(name, forKey: .name)
@@ -327,6 +340,22 @@ struct WorkspaceModel: Hashable {
                     currentName != name
                 else { continue }
                 group.tabs[idx].item = .savedQuery(id: id, name: name)
+                changed.append(group.tabs[idx].id)
+            }
+        }
+        return changed
+    }
+
+    @discardableResult
+    mutating func retargetDashboard(id: String, name: String) -> [TabID] {
+        var changed: [TabID] = []
+        root = Self.mapAllGroups(root) { group in
+            for idx in group.tabs.indices {
+                guard case .dashboard(let currentID, let currentName) = group.tabs[idx].item,
+                    currentID == id,
+                    currentName != name
+                else { continue }
+                group.tabs[idx].item = .dashboard(id: id, name: name)
                 changed.append(group.tabs[idx].id)
             }
         }

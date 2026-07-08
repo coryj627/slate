@@ -61,6 +61,213 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertEqual(reloaded.pinnedSavedQueryIDs, [backlog])
     }
 
+    func testDashboardsRefreshAndOpenAsTabs() async throws {
+        let (state, session) = try await makeState()
+        let queryID = try session.saveQuery(
+            name: "Active projects",
+            description: "Open work",
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Overview",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: "Pinned work",
+                    viewOverride: nil)
+            ])
+
+        state.refreshBaseQueries()
+
+        XCTAssertEqual(state.baseQueries.dashboards.map(\.id), [dashboardID])
+        XCTAssertEqual(state.baseQueries.dashboards.map(\.name), ["Overview"])
+        XCTAssertEqual(state.baseQueriesAccessibilityValue, "Queries, 2 items, 0 pinned")
+
+        state.openDashboard(id: dashboardID, name: "Overview")
+
+        XCTAssertEqual(state.workspace.activeTab?.item, .dashboard(id: dashboardID, name: "Overview"))
+        let document = try XCTUnwrap(state.activeDashboardDocument)
+        XCTAssertEqual(document.dashboard?.name, "Overview")
+        XCTAssertEqual(document.sections.map(\.title), ["Pinned work"])
+        XCTAssertFalse(document.sections[0].isMissing)
+    }
+
+    func testDashboardEditorDraftSavesUpdatesAndReordersSections() async throws {
+        let (state, session) = try await makeState()
+        let activeID = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let backlogID = try session.saveQuery(
+            name: "Backlog",
+            description: nil,
+            queryJson: queryJSON(folder: "Backlog"),
+            sourceSyntax: .builder)
+        state.refreshBaseQueries()
+
+        var draft = DashboardEditorDraft(savedQueries: state.baseQueries.savedQueries)
+        draft.name = "Team overview"
+        draft.addSelectedSavedQuery(from: state.baseQueries.savedQueries)
+        let activeSectionID = draft.sections[0].id
+        draft.selectedSavedQueryID = backlogID
+        draft.addSelectedSavedQuery(from: state.baseQueries.savedQueries)
+        let backlogSectionID = draft.sections[1].id
+        draft.moveSection(from: 1, to: 0)
+        let activeIndexAfterMove = try XCTUnwrap(draft.sectionIndex(id: activeSectionID))
+        draft.sections[activeIndexAfterMove].headingOverride = "Pinned work"
+        draft.sections[activeIndexAfterMove].viewOverride = "Preview"
+        let backlogIndexAfterMove = try XCTUnwrap(draft.sectionIndex(id: backlogSectionID))
+        XCTAssertEqual(draft.sections[backlogIndexAfterMove].headingOverride, "")
+
+        let dashboardID = try XCTUnwrap(
+            state.saveDashboard(name: draft.name, sections: draft.dashboardSections))
+        let saved = try session.getDashboard(id: dashboardID)
+        XCTAssertEqual(saved.name, "Team overview")
+        XCTAssertEqual(saved.sections.map(\.savedQueryId), [backlogID, activeID])
+        XCTAssertEqual(saved.sections[1].headingOverride, "Pinned work")
+        XCTAssertEqual(saved.sections[1].viewOverride, "Preview")
+
+        var editDraft = DashboardEditorDraft(
+            dashboard: saved,
+            savedQueries: state.baseQueries.savedQueries)
+        editDraft.name = "Renamed overview"
+        editDraft.moveSection(from: 0, to: 1)
+        editDraft.sections[0].headingOverride = "Still pinned"
+        state.updateDashboard(
+            id: dashboardID,
+            name: editDraft.name,
+            sections: editDraft.dashboardSections)
+
+        let updated = try session.getDashboard(id: dashboardID)
+        XCTAssertEqual(updated.name, "Renamed overview")
+        XCTAssertEqual(updated.sections.map(\.savedQueryId), [activeID, backlogID])
+        XCTAssertEqual(updated.sections[0].headingOverride, "Still pinned")
+    }
+
+    func testDockedSavedQueryUsesActiveNoteThisPathAndRefreshesOnNoteSwitch() async throws {
+        let (state, session) = try await makeState()
+        let expressionJSON = try XCTUnwrap(
+            session.validateBaseExpression(source: "this.file.name").exprJson)
+        var draft = BaseQueryBuilderDraft()
+        draft.source = .folder("Projects")
+        draft.formulas = [
+            try BaseQueryFormula(
+                name: "activeNote",
+                expression: "this.file.name",
+                expressionJSON: expressionJSON)
+        ]
+        draft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: nil),
+            BaseQueryColumn(property: .formula("activeNote"), displayName: "Active note"),
+        ]
+        let queryID = try session.saveQuery(
+            name: "Context query",
+            description: nil,
+            queryJson: draft.queryJSON(),
+            sourceSyntax: .builder)
+
+        state.refreshBaseQueries()
+        state.selectedFilePath = "Projects/Alpha.md"
+        state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+
+        XCTAssertEqual(state.workspace.activeLeaf, .basesDock)
+        XCTAssertEqual(state.basesDock.target, .savedQuery(id: queryID, name: "Context query"))
+        var dockDocument = try XCTUnwrap(state.basesDockDocument)
+        XCTAssertEqual(try dockedActiveNoteValue(dockDocument), "Alpha.md")
+
+        state.selectedFilePath = "Projects/Beta.md"
+        state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+
+        dockDocument = try XCTUnwrap(state.basesDockDocument)
+        XCTAssertEqual(try dockedActiveNoteValue(dockDocument), "Beta.md")
+
+        try session.saveQueryAsBase(
+            queryJson: queryJSON(folder: "Projects"),
+            path: "Queries/Docked.base")
+        state.openBaseFile("Queries/Docked.base")
+        state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+
+        XCTAssertNil(state.basesDock.thisPath)
+        dockDocument = try XCTUnwrap(state.basesDockDocument)
+        guard case .degraded(let message) = dockDocument.state else {
+            return XCTFail("expected docked saved query to degrade without an active note, got \(dockDocument.state)")
+        }
+        XCTAssertTrue(message.contains("this is unavailable in this evaluation context"), message)
+    }
+
+    func testDeletingDashboardClosesOpenDashboardTabsAndDock() async throws {
+        let (state, session) = try await makeState()
+        let queryID = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Overview",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+
+        state.refreshBaseQueries()
+        state.openDashboard(id: dashboardID, name: "Overview")
+        state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+
+        XCTAssertEqual(state.workspace.activeTab?.item, .dashboard(id: dashboardID, name: "Overview"))
+        XCTAssertEqual(state.basesDock.target, .dashboard(id: dashboardID, name: "Overview"))
+
+        state.deleteDashboard(id: dashboardID)
+
+        XCTAssertFalse(state.workspace.model.allTabs.contains { tab in
+            if case .dashboard(let id, _) = tab.item {
+                return id == dashboardID
+            }
+            return false
+        })
+        XCTAssertNil(state.dashboardDocuments[dashboardID])
+        XCTAssertNil(state.basesDock.target)
+        XCTAssertNil(state.basesDockDashboardDocument)
+    }
+
+    func testDeletingSavedQueryReloadsOpenDashboardsAsMissingSections() async throws {
+        let (state, session) = try await makeState()
+        let queryID = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Overview",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+
+        state.refreshBaseQueries()
+        state.openDashboard(id: dashboardID, name: "Overview")
+        let openDocument = try XCTUnwrap(state.activeDashboardDocument)
+        XCTAssertFalse(openDocument.sections[0].isMissing)
+        state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+
+        state.deleteSavedQuery(id: queryID)
+
+        XCTAssertTrue(openDocument.sections[0].isMissing)
+        XCTAssertEqual(openDocument.sections[0].title, "Missing saved query")
+        let dockedDocument = try XCTUnwrap(state.basesDockDashboardDocument)
+        XCTAssertTrue(dockedDocument.sections[0].isMissing)
+        XCTAssertEqual(dockedDocument.sections[0].title, "Missing saved query")
+    }
+
     func testSavedQueryPaletteCommandsRefreshOnRenameAndDelete() async throws {
         let (state, session) = try await makeState()
         let id = try session.saveQuery(
@@ -184,6 +391,10 @@ final class BaseQueriesPanelTests: XCTestCase {
             to: vault.appendingPathComponent("Projects/Alpha.md"),
             atomically: true,
             encoding: .utf8)
+        try "---\nstatus: active\n---\n# Beta\n".write(
+            to: vault.appendingPathComponent("Projects/Beta.md"),
+            atomically: true,
+            encoding: .utf8)
         let state = AppState(
             recentsStore: RecentVaultsStore(fileURL: tempDir.appendingPathComponent("recents.json")),
             externalOpener: { _ in true },
@@ -197,5 +408,11 @@ final class BaseQueriesPanelTests: XCTestCase {
         var draft = BaseQueryBuilderDraft()
         draft.source = .folder(folder)
         return try draft.queryJSON()
+    }
+
+    private func dockedActiveNoteValue(_ document: BaseDocument) throws -> String {
+        let row = try XCTUnwrap(document.result?.rows.first)
+        XCTAssertGreaterThan(row.values.count, 1)
+        return row.values[1].display
     }
 }

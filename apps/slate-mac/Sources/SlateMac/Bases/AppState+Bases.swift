@@ -7,6 +7,7 @@ import Foundation
 struct BaseQueriesState: Equatable {
     var savedQueries: [SavedQuerySummary] = []
     var baseFiles: [BaseFileSummary] = []
+    var dashboards: [DashboardSummary] = []
     var pinnedSavedQueryIDs: [String] = []
 }
 
@@ -47,6 +48,7 @@ extension AppState {
                 workspace.replaceActiveItem(.base(path: path))
                 releaseCanvasDocumentIfUnreferenced(replacedItem)
                 releaseBaseDocumentIfUnreferenced(replacedItem)
+                releaseDashboardDocumentIfUnreferenced(replacedItem)
                 if let id = workspace.model.activeGroup.activeTabID {
                     clearBaseRendererOverride(for: id)
                     activateTab(id)
@@ -95,6 +97,7 @@ extension AppState {
                 workspace.replaceActiveItem(item)
                 releaseCanvasDocumentIfUnreferenced(replacedItem)
                 releaseBaseDocumentIfUnreferenced(replacedItem)
+                releaseDashboardDocumentIfUnreferenced(replacedItem)
                 if let tabID = workspace.model.activeGroup.activeTabID {
                     clearBaseRendererOverride(for: tabID)
                     activateTab(tabID)
@@ -124,6 +127,50 @@ extension AppState {
         }
     }
 
+    func openDashboard(id: String, name: String, target: OpenTarget = .currentTab) {
+        let item = EditorItem.dashboard(id: id, name: name)
+        switch target {
+        case .currentTab:
+            if let existing = workspace.activeGroupDashboardTab(id: id) {
+                activateTab(existing.id)
+                return
+            }
+            clearActiveBaseQuickFilter()
+            parkOutgoingNoteBuffer()
+            if workspace.activeTab != nil {
+                let replacedItem = workspace.activeTab?.item
+                workspace.replaceActiveItem(item)
+                releaseCanvasDocumentIfUnreferenced(replacedItem)
+                releaseBaseDocumentIfUnreferenced(replacedItem)
+                releaseDashboardDocumentIfUnreferenced(replacedItem)
+                if let tabID = workspace.model.activeGroup.activeTabID {
+                    activateTab(tabID)
+                }
+            } else {
+                let tabID = workspace.openTab(item)
+                activateTab(tabID)
+            }
+        case .newTab:
+            if let existing = workspace.activeGroupDashboardTab(id: id) {
+                activateTab(existing.id)
+                return
+            }
+            clearActiveBaseQuickFilter()
+            parkOutgoingNoteBuffer()
+            let tabID = workspace.openTab(item)
+            activateTab(tabID)
+        case .newSplit(let axis):
+            clearActiveBaseQuickFilter()
+            let paneCount = workspace.model.groupsInOrder.count
+            splitActivePane(axis: axis)
+            if workspace.model.groupsInOrder.count == paneCount {
+                openDashboard(id: id, name: name, target: .newTab)
+                return
+            }
+            openDashboard(id: id, name: name, target: .currentTab)
+        }
+    }
+
     var orderedSavedQuerySummaries: [SavedQuerySummary] {
         let pinOrder = Dictionary(
             uniqueKeysWithValues: baseQueries.pinnedSavedQueryIDs.enumerated().map { ($0.element, $0.offset) })
@@ -143,7 +190,9 @@ extension AppState {
     }
 
     var baseQueriesAccessibilityValue: String {
-        let count = baseQueries.savedQueries.count + baseQueries.baseFiles.count
+        let count =
+            baseQueries.savedQueries.count + baseQueries.baseFiles.count
+            + baseQueries.dashboards.count
         let pinned = baseQueries.pinnedSavedQueryIDs.count
         return "Queries, \(count) items, \(pinned) pinned"
     }
@@ -158,14 +207,17 @@ extension AppState {
             let baseFiles = try session.basesList().sorted {
                 $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
             }
+            let dashboards = try session.listDashboards().sorted(by: dashboardSort)
             let validIDs = Set(saved.map(\.id))
             let pins = baseQueries.pinnedSavedQueryIDs.filter { validIDs.contains($0) }
             baseQueries = BaseQueriesState(
                 savedQueries: saved,
                 baseFiles: baseFiles,
+                dashboards: dashboards,
                 pinnedSavedQueryIDs: pins)
             persistBaseQueryPinsIfNeeded(pins)
             retargetOpenSavedQueries(saved)
+            retargetOpenDashboards(dashboards)
             refreshSavedQueryCommands(saved)
         } catch {
             postBaseActionAnnouncement("Queries could not be refreshed: \(error.localizedDescription)")
@@ -176,6 +228,7 @@ extension AppState {
         refreshSavedQueryCommands([])
         baseQueries = BaseQueriesState(
             pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
+        clearBasesDock()
     }
 
     func toggleSavedQueryPin(id: String) {
@@ -226,6 +279,7 @@ extension AppState {
         do {
             try session.renameSavedQuery(id: id, name: trimmed)
             refreshBaseQueries()
+            reloadDashboardDocumentsAfterSavedQueryChange()
             postBaseActionAnnouncement("Renamed saved query to \(trimmed).")
         } catch {
             postBaseActionAnnouncement("Saved query could not be renamed: \(error.localizedDescription)")
@@ -239,7 +293,11 @@ extension AppState {
             baseQueries.pinnedSavedQueryIDs.removeAll { $0 == id }
             persistBaseQueryPinsIfNeeded(baseQueries.pinnedSavedQueryIDs)
             closeOpenSavedQueryTabs(id: id)
+            if case .savedQuery(let dockedID, _) = basesDock.target, dockedID == id {
+                clearBasesDock()
+            }
             refreshBaseQueries()
+            reloadDashboardDocumentsAfterSavedQueryChange()
             postBaseActionAnnouncement("Deleted saved query.")
         } catch {
             postBaseActionAnnouncement("Saved query could not be deleted: \(error.localizedDescription)")
@@ -284,6 +342,68 @@ extension AppState {
         }
     }
 
+    @discardableResult
+    func saveDashboard(name: String, sections: [DashboardSection]) -> String? {
+        guard let session = currentSession else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            postBaseActionAnnouncement("Enter a dashboard name before saving.")
+            return nil
+        }
+        do {
+            let id = try session.saveDashboard(name: trimmed, sections: sections)
+            refreshBaseQueries()
+            postBaseActionAnnouncement("Saved dashboard \(trimmed).")
+            return id
+        } catch {
+            postBaseActionAnnouncement("Dashboard could not be saved: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func updateDashboard(id: String, name: String, sections: [DashboardSection]) {
+        guard let session = currentSession else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            postBaseActionAnnouncement("Enter a dashboard name before saving.")
+            return
+        }
+        do {
+            try session.renameDashboard(id: id, name: trimmed)
+            try session.updateDashboardSections(id: id, sections: sections)
+            dashboardDocuments[id]?.load(session: session, thisPath: nil)
+            if case .dashboard(let dockedID, _) = basesDock.target, dockedID == id {
+                basesDockDashboardDocument?.load(session: session, thisPath: basesDockActiveNotePath)
+            }
+            refreshBaseQueries()
+            postBaseActionAnnouncement("Updated dashboard \(trimmed).")
+        } catch {
+            postBaseActionAnnouncement("Dashboard could not be updated: \(error.localizedDescription)")
+        }
+    }
+
+    func deleteDashboard(id: String) {
+        guard let session = currentSession else { return }
+        do {
+            try session.deleteDashboard(id: id)
+            closeOpenDashboardTabs(id: id)
+            refreshBaseQueries()
+            postBaseActionAnnouncement("Deleted dashboard.")
+        } catch {
+            postBaseActionAnnouncement("Dashboard could not be deleted: \(error.localizedDescription)")
+        }
+    }
+
+    func dashboardForEditing(id: String) -> Dashboard? {
+        guard let session = currentSession else { return nil }
+        do {
+            return try session.getDashboard(id: id)
+        } catch {
+            postBaseActionAnnouncement("Dashboard could not be edited: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     private func savedQuerySummary(id: String) -> SavedQuerySummary? {
         if let summary = baseQueries.savedQueries.first(where: { $0.id == id }) {
             return summary
@@ -292,7 +412,20 @@ extension AppState {
         return baseQueries.savedQueries.first { $0.id == id }
     }
 
+    private func dashboardSummary(id: String) -> DashboardSummary? {
+        if let summary = baseQueries.dashboards.first(where: { $0.id == id }) {
+            return summary
+        }
+        refreshBaseQueries()
+        return baseQueries.dashboards.first { $0.id == id }
+    }
+
     private func savedQuerySort(_ lhs: SavedQuerySummary, _ rhs: SavedQuerySummary) -> Bool {
+        let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+        return byName == .orderedSame ? lhs.id < rhs.id : byName == .orderedAscending
+    }
+
+    private func dashboardSort(_ lhs: DashboardSummary, _ rhs: DashboardSummary) -> Bool {
         let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
         return byName == .orderedSame ? lhs.id < rhs.id : byName == .orderedAscending
     }
@@ -323,6 +456,16 @@ extension AppState {
         }
     }
 
+    private func retargetOpenDashboards(_ dashboards: [DashboardSummary]) {
+        for summary in dashboards {
+            _ = workspace.retargetDashboard(id: summary.id, name: summary.name)
+            dashboardDocuments[summary.id]?.retargetName(summary.name)
+            if case .dashboard(let id, _) = basesDock.target, id == summary.id {
+                basesDock.target = .dashboard(id: summary.id, name: summary.name)
+            }
+        }
+    }
+
     private func closeOpenSavedQueryTabs(id: String) {
         let matchingTabs = workspace.model.allTabs.filter { tab in
             if case .savedQuery(let queryID, _) = tab.item {
@@ -339,6 +482,28 @@ extension AppState {
                 doc.close(session: session)
             }
             baseDocuments[key] = nil
+        }
+        saveWorkspaceLayout()
+    }
+
+    private func closeOpenDashboardTabs(id: String) {
+        let matchingTabs = workspace.model.allTabs.filter { tab in
+            if case .dashboard(let dashboardID, _) = tab.item {
+                return dashboardID == id
+            }
+            return false
+        }
+        for tab in matchingTabs {
+            performCloseTab(tab.id)
+        }
+        if let doc = dashboardDocuments[id] {
+            if let session = currentSession {
+                doc.close(session: session)
+            }
+            dashboardDocuments[id] = nil
+        }
+        if case .dashboard(let dashboardID, _) = basesDock.target, dashboardID == id {
+            clearBasesDock()
         }
         saveWorkspaceLayout()
     }
@@ -370,6 +535,41 @@ extension AppState {
 
     func activateSavedQueryTab(_ id: TabID, savedQueryID: String, name: String) {
         activateBaseDocumentTab(id, source: .savedQuery(id: savedQueryID, name: name), selectedPath: nil)
+    }
+
+    func dashboardDocument(id: String, name: String) -> DashboardDocument {
+        if let existing = dashboardDocuments[id] { return existing }
+        let doc = DashboardDocument(id: id, name: name)
+        dashboardDocuments[id] = doc
+        return doc
+    }
+
+    func activateDashboardTab(_ id: TabID, dashboardID: String, name: String) {
+        if id == workspace.model.activeGroup.activeTabID,
+            selectedFilePath == nil,
+            dashboardDocuments[dashboardID]?.dashboard != nil
+        {
+            return
+        }
+        workspace.markEditorRegionActive()
+        if let pending = pendingTabCloseAfterSave, pending != id {
+            pendingTabCloseAfterSave = nil
+        }
+        isActivatingTab = true
+        defer { isActivatingTab = false }
+        parkOutgoingNoteBuffer()
+        cancelNoteScopedWork()
+        clearActiveNoteFields()
+        workspace.select(id)
+        clearTransitionSensitiveCollections()
+        let doc = dashboardDocument(id: dashboardID, name: name)
+        if doc.dashboard == nil, let session = currentSession {
+            doc.load(session: session)
+        }
+        if selectedFilePath != nil {
+            selectedFilePath = nil
+        }
+        clearActiveBaseSelection()
     }
 
     private func activateBaseDocumentTab(
@@ -412,6 +612,13 @@ extension AppState {
         return baseDocument(for: source)
     }
 
+    var activeDashboardDocument: DashboardDocument? {
+        guard let tab = workspace.activeTab,
+            case .dashboard(let id, let name) = tab.item
+        else { return nil }
+        return dashboardDocument(id: id, name: name)
+    }
+
     func baseRendererOverride(for tabID: TabID) -> BaseRendererMode? {
         baseRendererOverrides[tabID]
     }
@@ -450,6 +657,155 @@ extension AppState {
             let doc = baseDocuments[source.key]
         else { return }
         _ = doc.clearQuickFilter(session: currentSession)
+    }
+
+    func dockBaseFileToSidebar(path: String, name: String? = nil, refreshDelayNanoseconds: UInt64 = 500_000_000) {
+        basesDock.target = .base(
+            path: path,
+            name: name ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension)
+        workspace.activeLeaf = .basesDock
+        scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
+    }
+
+    func dockSavedQueryToSidebar(id: String, refreshDelayNanoseconds: UInt64 = 500_000_000) {
+        guard let summary = savedQuerySummary(id: id) else {
+            postBaseActionAnnouncement("Saved query is no longer available.")
+            return
+        }
+        basesDock.target = .savedQuery(id: summary.id, name: summary.name)
+        workspace.activeLeaf = .basesDock
+        scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
+    }
+
+    func dockDashboardToSidebar(id: String, refreshDelayNanoseconds: UInt64 = 500_000_000) {
+        guard let summary = dashboardSummary(id: id) else {
+            postBaseActionAnnouncement("Dashboard is no longer available.")
+            return
+        }
+        basesDock.target = .dashboard(id: summary.id, name: summary.name)
+        workspace.activeLeaf = .basesDock
+        scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
+    }
+
+    func scheduleBasesDockFollowActiveRefresh(delayNanoseconds: UInt64 = 500_000_000) {
+        basesDockRefreshTask?.cancel()
+        guard let target = basesDock.target, let session = currentSession else { return }
+        let thisPath = basesDockActiveNotePath
+        basesDock.thisPath = thisPath
+        basesDockRefreshTask = Task { @MainActor [weak self, target, session, thisPath] in
+            do {
+                if delayNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                }
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.basesDock.target == target else { return }
+            self.refreshBasesDockTarget(target, session: session, thisPath: thisPath)
+        }
+    }
+
+    func clearBasesDock() {
+        basesDockRefreshTask?.cancel()
+        basesDockRefreshTask = nil
+        if let session = currentSession {
+            basesDockDocument?.close(session: session)
+            basesDockDashboardDocument?.close(session: session)
+        }
+        basesDock = BasesDockState()
+        basesDockDocument = nil
+        basesDockDashboardDocument = nil
+    }
+
+    private func refreshBasesDockTarget(
+        _ target: BasesDockTarget,
+        session: VaultSession,
+        thisPath: String?
+    ) {
+        let previous = basesDock.lastMembershipSignature
+        switch target {
+        case .base(let path, let name):
+            if let dashboardDoc = basesDockDashboardDocument {
+                dashboardDoc.close(session: session)
+            }
+            basesDockDashboardDocument = nil
+            let doc = basesDockDocument ?? BaseDocument(source: .file(path: path))
+            basesDockDocument = doc
+            if doc.selectionKey != path {
+                doc.close(session: session)
+                doc.retarget(to: .file(path: path), session: nil)
+            }
+            if doc.handle == nil {
+                doc.load(session: session, thisPath: thisPath)
+            } else {
+                doc.executeActiveView(session: session, thisPath: thisPath)
+            }
+            basesDock.lastMembershipSignature = doc.result?.rows.map(baseRowMembership) ?? []
+            basesDock.target = .base(path: path, name: name)
+        case .savedQuery(let id, let name):
+            if let dashboardDoc = basesDockDashboardDocument {
+                dashboardDoc.close(session: session)
+            }
+            basesDockDashboardDocument = nil
+            let source = BaseDocumentSource.savedQuery(id: id, name: name)
+            let doc = basesDockDocument ?? BaseDocument(source: source)
+            basesDockDocument = doc
+            if doc.selectionKey != source.selectionKey {
+                doc.close(session: session)
+                doc.retarget(to: source, session: nil)
+            }
+            if doc.handle == nil {
+                doc.load(session: session, thisPath: thisPath)
+            } else {
+                doc.executeActiveView(session: session, thisPath: thisPath)
+            }
+            basesDock.lastMembershipSignature = doc.result?.rows.map(baseRowMembership) ?? []
+        case .dashboard(let id, let name):
+            if let baseDoc = basesDockDocument {
+                baseDoc.close(session: session)
+            }
+            basesDockDocument = nil
+            if let existing = basesDockDashboardDocument, existing.id != id {
+                existing.close(session: session)
+                basesDockDashboardDocument = nil
+            }
+            let doc = basesDockDashboardDocument ?? DashboardDocument(id: id, name: name)
+            basesDockDashboardDocument = doc
+            if doc.dashboard == nil {
+                doc.load(session: session, thisPath: thisPath)
+            } else {
+                doc.refresh(session: session, thisPath: thisPath)
+            }
+            basesDock.lastMembershipSignature = doc.membershipSignature
+        }
+        if !previous.isEmpty, previous != basesDock.lastMembershipSignature {
+            postBaseActionAnnouncement("Base dock updated for active note.")
+        }
+    }
+
+    private func baseRowMembership(_ row: BasesRow) -> String {
+        row.taskOrdinal.map { "\(row.filePath)#\($0)" } ?? row.filePath
+    }
+
+    private var basesDockActiveNotePath: String? {
+        if case .markdown(let path) = workspace.activeTab?.item {
+            return path
+        }
+        guard let selectedFilePath,
+            selectedFilePath.lowercased().hasSuffix(".md")
+        else { return nil }
+        return selectedFilePath
+    }
+
+    private func reloadDashboardDocumentsAfterSavedQueryChange() {
+        guard let session = currentSession else { return }
+        for doc in dashboardDocuments.values {
+            doc.load(session: session)
+        }
+        if let docked = basesDockDashboardDocument {
+            docked.load(session: session, thisPath: basesDockActiveNotePath)
+            basesDock.lastMembershipSignature = docked.membershipSignature
+        }
     }
 
     private func setActiveBaseRendererOverride(_ mode: BaseRendererMode) {
@@ -964,6 +1320,21 @@ extension AppState {
         baseDocuments[source.key] = nil
     }
 
+    func releaseDashboardDocumentIfUnreferenced(_ item: EditorItem?) {
+        guard case .dashboard(let id, _) = item else { return }
+        let stillOpen = workspace.model.allTabs.contains {
+            if case .dashboard(let dashboardID, _) = $0.item {
+                return dashboardID == id
+            }
+            return false
+        }
+        guard !stillOpen, let doc = dashboardDocuments[id] else { return }
+        if let session = currentSession {
+            doc.close(session: session)
+        }
+        dashboardDocuments[id] = nil
+    }
+
     func rekeyBaseDocumentIfRetargeted(_ changed: [TabID], oldPath: String, newPath: String) {
         let oldKey = BaseDocumentSource.file(path: oldPath).key
         let newSource = BaseDocumentSource.file(path: newPath)
@@ -1002,6 +1373,22 @@ extension AppState {
             }
         }
         baseDocuments = [:]
+    }
+
+    func releaseAllDashboardDocuments() {
+        if let session = currentSession {
+            for doc in dashboardDocuments.values {
+                doc.close(session: session)
+            }
+            basesDockDocument?.close(session: session)
+            basesDockDashboardDocument?.close(session: session)
+        }
+        dashboardDocuments = [:]
+        basesDockDocument = nil
+        basesDockDashboardDocument = nil
+        basesDockRefreshTask?.cancel()
+        basesDockRefreshTask = nil
+        basesDock = BasesDockState()
     }
 
     func releaseAllBaseEmbedDocuments() {

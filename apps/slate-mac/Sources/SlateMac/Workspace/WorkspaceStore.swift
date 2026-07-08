@@ -116,7 +116,7 @@ struct WorkspaceStore {
         let tab: Tab?
         init(from decoder: Decoder) throws {
             let decoded = try? Tab(from: decoder)
-            let known = ["markdown", "canvas", "base", "savedQuery"]
+            let known = ["markdown", "canvas", "base", "savedQuery", "dashboard"]
             self.tab = (decoded.map { known.contains($0.item.kind) } == true) ? decoded : nil
         }
         func encode(to encoder: Encoder) throws {
@@ -291,6 +291,8 @@ struct WorkspaceStore {
             return Item(kind: "base", path: path)
         case .savedQuery(let id, let name):
             return Item(kind: "savedQuery", path: id, id: id, name: name)
+        case .dashboard(let id, let name):
+            return Item(kind: "dashboard", path: id, id: id, name: name)
         }
     }
 
@@ -322,6 +324,10 @@ struct WorkspaceStore {
                     item = .savedQuery(
                         id: tab.item.id ?? tab.item.path,
                         name: tab.item.name ?? "Saved query")
+                case "dashboard":
+                    item = .dashboard(
+                        id: tab.item.id ?? tab.item.path,
+                        name: tab.item.name ?? "Dashboard")
                 default:
                     item = .markdown(path: tab.item.path)
                 }
