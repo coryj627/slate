@@ -990,8 +990,8 @@ status: done
 "#,
     );
     assert!(warnings.is_empty(), "{warnings:?}");
-    let active_only_json = serde_json::to_string(&crate::bases::view_query(&active_only_base, 0))
-        .unwrap();
+    let active_only_json =
+        serde_json::to_string(&crate::bases::view_query(&active_only_base, 0)).unwrap();
     session
         .update_saved_query(
             &id,
