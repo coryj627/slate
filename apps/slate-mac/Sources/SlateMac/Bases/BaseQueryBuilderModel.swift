@@ -627,6 +627,27 @@ struct BaseQuerySortKey: Hashable {
         ]
     }
 
+    fileprivate func referencesFormula(named name: String) -> Bool {
+        if property == .formula(name) || expressionLabel == "formula.\(name)" {
+            return true
+        }
+        guard let expr = BaseQueryJSON.decode(expressionJSON) else { return false }
+        return Self.jsonValue(expr, containsFormulaReference: name)
+    }
+
+    private static func jsonValue(_ value: Any, containsFormulaReference name: String) -> Bool {
+        if let object = value as? [String: Any] {
+            if object["Formula"] as? String == name {
+                return true
+            }
+            return object.values.contains { jsonValue($0, containsFormulaReference: name) }
+        }
+        if let items = value as? [Any] {
+            return items.contains { jsonValue($0, containsFormulaReference: name) }
+        }
+        return false
+    }
+
     fileprivate var slateYAML: String {
         [
             "    - expr: \(BaseQueryYAML.scalar(expressionLabel))",
@@ -1405,7 +1426,7 @@ final class BaseQueryBuilderModel: ObservableObject {
         draft.formulas.removeAll { $0.name == name }
         draft.columns.removeAll { $0.id == columnID }
         draft.sortKeys.removeAll { sortKey in
-            sortKey.property == .formula(name) || sortKey.expressionLabel == columnID
+            sortKey.referencesFormula(named: name)
         }
         if draft.groupBy?.property == .formula(name) {
             draft.groupBy = nil

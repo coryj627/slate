@@ -224,6 +224,43 @@ final class BaseQueryBuilderTests: XCTestCase {
             "Condition 1: status equals active")
     }
 
+    func testEditingViewFiltersLoadsOnlyTheActiveViewFilterBlock() throws {
+        let (vault, session) = try makeSession()
+        try session.saveText(
+            path: "Queries/Scoped.base",
+            contents:
+                #"""
+                filters: "file.inFolder(\"Projects\")"
+                views:
+                  - type: table
+                    name: Scoped
+                    filters: "status == \"active\""
+                    order:
+                      - file.name
+                      - status
+                """#,
+            expectedContentHash: nil)
+
+        let handle = try session.openBase(path: "Queries/Scoped.base")
+        let draft = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewEditQueryJson(handle: handle, view: 0))
+
+        XCTAssertEqual(draft.source, .allNotes)
+        XCTAssertEqual(draft.rows.count, 1)
+        XCTAssertEqual(
+            draft.rows[0].accessibilityLabel(index: 0),
+            "Condition 1: status equals active")
+
+        for edit in try draft.baseEditsForView(0, replacing: draft) {
+            try session.baseApplyEdit(handle: handle, edit: edit)
+        }
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/Scoped.base"),
+            encoding: .utf8)
+        XCTAssertEqual(saved.components(separatedBy: "file.inFolder").count - 1, 1, saved)
+        XCTAssertFalse(saved.contains(#"    filters: "file.inFolder"#), saved)
+    }
+
     func testSavedRecentAndLinkedSourcesReopenAsPickerSources() throws {
         let (_, session) = try makeSession()
         var recent = BaseQueryBuilderDraft()
@@ -525,6 +562,14 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(source.contains("baseApplyEdit"))
         XCTAssertTrue(source.contains("saveQueryAsBase"))
         XCTAssertTrue(source.contains("saveQuery("))
+        XCTAssertTrue(source.contains("baseViewEditQueryJson("), source)
+        XCTAssertTrue(source.contains("baseQueryBuilderPreviewCancelToken?.cancel()"), source)
+        XCTAssertTrue(source.contains("let cancelToken = CancelToken()"), source)
+        XCTAssertTrue(source.contains("cancel: cancelToken"), source)
+        XCTAssertFalse(source.contains("cancel: CancelToken()"), source)
+
+        let appStateSource = try Self.sourceFile("Sources/SlateMac/AppState.swift")
+        XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewCancelToken"), appStateSource)
     }
 
     func testOrFolderFilterDoesNotBecomeSourcePickerScope() throws {
@@ -765,6 +810,41 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(model.columns.isEmpty)
         XCTAssertTrue(model.sortKeys.isEmpty)
         XCTAssertNil(model.groupBy)
+    }
+
+    @MainActor
+    func testRemovingFormulaPrunesAdvancedSortExpressionReferences() throws {
+        let (_, session) = try makeSession()
+        let formulaValidation = session.validateBaseExpression(source: "number(priority)")
+        let formulaExpressionJSON = try XCTUnwrap(formulaValidation.exprJson)
+        let sortValidation = session.validateBaseExpression(source: "formula.score + 1")
+        let sortExpressionJSON = try XCTUnwrap(sortValidation.exprJson)
+        let draft = try BaseQueryBuilderDraft(
+            queryJSON:
+                """
+                {
+                  "columns": [{"display_name": null, "id": "file.name"}],
+                  "custom_summaries": [],
+                  "filters": null,
+                  "formulas": [["score", \(formulaExpressionJSON)]],
+                  "group_by": null,
+                  "limit": null,
+                  "row_source": "Files",
+                  "sort": [{"ascending": true, "expr": \(sortExpressionJSON)}],
+                  "source": "All",
+                  "summaries": [],
+                  "view": {"Table": {"fallback_from": null}}
+                }
+                """)
+        let model = BaseQueryBuilderModel(draft: draft)
+
+        XCTAssertEqual(model.sortKeys.count, 1)
+        XCTAssertNil(model.sortKeys.first?.property)
+
+        model.removeFormula(named: "score")
+
+        XCTAssertTrue(model.formulas.isEmpty)
+        XCTAssertTrue(model.sortKeys.isEmpty)
     }
 
     func testCompletedDraftCanClearExistingViewFacets() throws {

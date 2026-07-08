@@ -1196,6 +1196,7 @@ final class AppState: ObservableObject {
     /// only until N4-2 adds preview/save.
     @Published var activeBaseQueryBuilder: BaseQueryBuilderModel?
     var baseQueryBuilderPreviewTask: Task<Void, Never>?
+    var baseQueryBuilderPreviewCancelToken: CancelToken?
 
     /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
     /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file
@@ -3045,6 +3046,10 @@ final class AppState: ObservableObject {
         embedsLoadTask?.cancel()
         embedsLoadTask = nil
         isLoadingEmbeds = false
+        baseQueryBuilderPreviewTask?.cancel()
+        baseQueryBuilderPreviewTask = nil
+        baseQueryBuilderPreviewCancelToken?.cancel()
+        baseQueryBuilderPreviewCancelToken = nil
         closeSearchOverlay()
         searchQuery = ""
         // Reset transient sheet flags so a vault-close mid-palette

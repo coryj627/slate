@@ -4270,6 +4270,10 @@ impl VaultSession {
         Ok(self.inner.base_view_query_json(handle, view)?)
     }
 
+    pub fn base_view_edit_query_json(&self, handle: u64, view: u32) -> Result<String, VaultError> {
+        Ok(self.inner.base_view_edit_query_json(handle, view)?)
+    }
+
     pub fn validate_base_expression(&self, source: String) -> BaseExpressionValidation {
         match core::bases::expr::parse_expr(&source) {
             Ok(expr) => match serde_json::to_string(&expr) {

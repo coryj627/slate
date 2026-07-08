@@ -170,7 +170,7 @@ extension AppState {
         }
         guard let handle = doc.handle else { return }
         do {
-            let queryJSON = try session.baseViewQueryJson(
+            let queryJSON = try session.baseViewEditQueryJson(
                 handle: handle,
                 view: UInt32(doc.activeViewIndex))
             activeBaseQueryBuilder = try BaseQueryBuilderModel(
@@ -187,11 +187,15 @@ extension AppState {
     func basesCloseQueryBuilder() {
         baseQueryBuilderPreviewTask?.cancel()
         baseQueryBuilderPreviewTask = nil
+        baseQueryBuilderPreviewCancelToken?.cancel()
+        baseQueryBuilderPreviewCancelToken = nil
         activeBaseQueryBuilder = nil
     }
 
     func basesBuilderSchedulePreview(delayNanoseconds: UInt64 = 300_000_000) {
         baseQueryBuilderPreviewTask?.cancel()
+        baseQueryBuilderPreviewCancelToken?.cancel()
+        baseQueryBuilderPreviewCancelToken = nil
         guard let model = activeBaseQueryBuilder, let session = currentSession else { return }
         let queryJSON: String
         do {
@@ -201,12 +205,26 @@ extension AppState {
             model.previewState = .failed(error.localizedDescription)
             return
         }
-        baseQueryBuilderPreviewTask = Task { [weak model] in
+        let cancelToken = CancelToken()
+        baseQueryBuilderPreviewCancelToken = cancelToken
+        baseQueryBuilderPreviewTask = Task { [weak self, weak model, session, queryJSON, cancelToken] in
+            defer {
+                Task { @MainActor [weak self] in
+                    if let current = self?.baseQueryBuilderPreviewCancelToken,
+                        current === cancelToken
+                    {
+                        self?.baseQueryBuilderPreviewCancelToken = nil
+                    }
+                }
+            }
             do {
                 if delayNanoseconds > 0 {
                     try await Task.sleep(nanoseconds: delayNanoseconds)
                 }
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    cancelToken.cancel()
+                    return
+                }
                 let handle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
                 defer { session.closeBase(handle: handle) }
                 let result = try session.baseExecute(
@@ -214,8 +232,11 @@ extension AppState {
                     view: 0,
                     thisPath: nil,
                     quickFilter: nil,
-                    cancel: CancelToken())
-                if Task.isCancelled { return }
+                    cancel: cancelToken)
+                if Task.isCancelled {
+                    cancelToken.cancel()
+                    return
+                }
                 await MainActor.run {
                     model?.previewState = .ready(result)
                     if let announcement = model?.previewState.accessibilityAnnouncement {
@@ -223,8 +244,12 @@ extension AppState {
                     }
                 }
             } catch is CancellationError {
+                cancelToken.cancel()
                 return
             } catch {
+                if Task.isCancelled || cancelToken.isCancelled() {
+                    return
+                }
                 await MainActor.run {
                     model?.previewState = .failed(error.localizedDescription)
                     postAccessibilityAnnouncement(

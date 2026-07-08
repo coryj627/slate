@@ -5762,6 +5762,22 @@ impl VaultSession {
     }
 
     pub fn base_view_query_json(&self, handle: u64, view: u32) -> Result<String, VaultError> {
+        self.base_query_json_for_view(handle, view, crate::bases::view_query)
+    }
+
+    pub fn base_view_edit_query_json(&self, handle: u64, view: u32) -> Result<String, VaultError> {
+        self.base_query_json_for_view(handle, view, crate::bases::view_edit_query)
+    }
+
+    fn base_query_json_for_view<F>(
+        &self,
+        handle: u64,
+        view: u32,
+        query_from_base: F,
+    ) -> Result<String, VaultError>
+    where
+        F: FnOnce(&crate::bases::BaseFile, usize) -> crate::bases::SlateQuery,
+    {
         let bases = self.bases.lock().expect("base registry mutex");
         let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
         let query = match &state.source {
@@ -5771,7 +5787,7 @@ impl VaultSession {
                         message: format!("base view {view} is out of range"),
                     });
                 }
-                crate::bases::view_query(base, view as usize)
+                query_from_base(base, view as usize)
             }
             OpenBaseSource::Query(query) => {
                 if view != 0 {

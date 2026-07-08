@@ -400,6 +400,19 @@ pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery {
         (None, Some(view_filter)) => Some(view_filter),
         (None, None) => None,
     };
+    view_query_with_filters(base, view, filters)
+}
+
+pub fn view_edit_query(base: &BaseFile, view: usize) -> SlateQuery {
+    let view = &base.views[view];
+    view_query_with_filters(base, view, view.filters.clone())
+}
+
+fn view_query_with_filters(
+    base: &BaseFile,
+    view: &ViewDef,
+    filters: Option<FilterNode>,
+) -> SlateQuery {
     let display_names: HashMap<&str, &str> = base
         .properties
         .iter()
