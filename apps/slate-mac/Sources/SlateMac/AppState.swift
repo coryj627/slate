@@ -1195,6 +1195,7 @@ final class AppState: ObservableObject {
     /// Non-nil presents `BaseQueryBuilderSheet`; the draft is in-memory
     /// only until N4-2 adds preview/save.
     @Published var activeBaseQueryBuilder: BaseQueryBuilderModel?
+    var baseQueryBuilderPreviewTask: Task<Void, Never>?
 
     /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
     /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file

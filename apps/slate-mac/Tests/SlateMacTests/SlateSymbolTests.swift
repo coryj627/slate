@@ -30,7 +30,8 @@ final class SlateSymbolTests: XCTestCase {
         "quote.bubble.fill", "books.vertical", "function",
         "chevron.left.forwardslash.chevron.right", "exclamationmark.triangle.fill",
         "arrow.down.right.and.arrow.up.left", "ellipsis", "xmark.circle.fill",
-        "plus.circle", "rectangle.2.swap", "checkmark.square", "square",
+        "plus.circle", "arrow.up", "arrow.down", "rectangle.2.swap",
+        "checkmark.square", "square",
         "plus", "xmark", "rectangle.split.2x1", "book", "pencil",
         "folder", "folder.fill", "chevron.right", "list.bullet.indent",
         // U4-2 leaf roles (#471).

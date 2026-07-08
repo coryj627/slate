@@ -4116,6 +4116,15 @@ impl From<core::Dashboard> for Dashboard {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BaseExpressionValidation {
+    pub valid: bool,
+    pub expr_json: Option<String>,
+    pub message: Option<String>,
+    pub span_start: u32,
+    pub span_end: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum BaseEdit {
     SetViewKey {
@@ -4132,6 +4141,10 @@ pub enum BaseEdit {
     RenameView {
         view: u32,
         name: String,
+    },
+    RemoveViewKey {
+        view: u32,
+        key: String,
     },
     SetViewFilters {
         view: u32,
@@ -4177,6 +4190,10 @@ impl From<BaseEdit> for core::bases::BaseEdit {
             BaseEdit::RenameView { view, name } => core::bases::BaseEdit::RenameView {
                 view: view as usize,
                 name,
+            },
+            BaseEdit::RemoveViewKey { view, key } => core::bases::BaseEdit::RemoveViewKey {
+                view: view as usize,
+                key,
             },
             BaseEdit::SetViewFilters { view, yaml } => core::bases::BaseEdit::SetViewFilters {
                 view: view as usize,
@@ -4251,6 +4268,34 @@ impl VaultSession {
 
     pub fn base_view_query_json(&self, handle: u64, view: u32) -> Result<String, VaultError> {
         Ok(self.inner.base_view_query_json(handle, view)?)
+    }
+
+    pub fn validate_base_expression(&self, source: String) -> BaseExpressionValidation {
+        match core::bases::expr::parse_expr(&source) {
+            Ok(expr) => match serde_json::to_string(&expr) {
+                Ok(expr_json) => BaseExpressionValidation {
+                    valid: true,
+                    expr_json: Some(expr_json),
+                    message: None,
+                    span_start: expr.span.start,
+                    span_end: expr.span.end,
+                },
+                Err(err) => BaseExpressionValidation {
+                    valid: false,
+                    expr_json: None,
+                    message: Some(format!("could not encode expression: {err}")),
+                    span_start: 0,
+                    span_end: source.len() as u32,
+                },
+            },
+            Err(err) => BaseExpressionValidation {
+                valid: false,
+                expr_json: None,
+                message: Some(err.message),
+                span_start: err.span.start,
+                span_end: err.span.end,
+            },
+        }
     }
 
     pub fn base_execute(

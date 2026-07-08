@@ -14,6 +14,12 @@ struct BaseQueryBuilderSheet: View {
     @State private var folderQuery = ""
     @State private var tagQuery = ""
     @State private var noteQuery = ""
+    @State private var formulaName = ""
+    @State private var formulaExpression = ""
+    @State private var formulaValidation: BaseExpressionValidation?
+    @State private var saveAsBasePath = "Queries/New Query.base"
+    @State private var savedQueryName = "New query"
+    @State private var savedQueryDescription = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -23,6 +29,10 @@ struct BaseQueryBuilderSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     sourceSection
                     conditionsSection
+                    sortGroupSection
+                    columnsSection
+                    formulasSection
+                    previewSection
                 }
                 .padding(18)
             }
@@ -41,6 +51,8 @@ struct BaseQueryBuilderSheet: View {
             notePaths = await loadedNotes
             propertyKeys = await loadedProperties
         }
+        .onAppear { appState.basesBuilderSchedulePreview(delayNanoseconds: 0) }
+        .onChange(of: model.draft) { _, _ in appState.basesBuilderSchedulePreview() }
         .onExitCommand { appState.basesCloseQueryBuilder() }
     }
 
@@ -161,6 +173,189 @@ struct BaseQueryBuilderSheet: View {
             .accessibilityLabel("Conditions list")
             .accessibilityValue(model.conditionsListAccessibilityValue)
         }
+    }
+
+    private var sortGroupSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Sort")
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button {
+                    model.sortKeys.append(BaseQuerySortKey(property: firstPropertyChoice, ascending: true))
+                } label: {
+                    SlateSymbol.addProperty.label("Add sort")
+                }
+                .help("Add sort")
+            }
+            ForEach(Array(model.sortKeys.enumerated()), id: \.offset) { index, _ in
+                HStack(spacing: 8) {
+                    Picker("Sort property", selection: sortPropertyBinding(index: index)) {
+                        ForEach(propertyChoices, id: \.self) { property in
+                            Text(property.accessibilityName).tag(property)
+                        }
+                    }
+                    Toggle("Ascending", isOn: sortAscendingBinding(index: index))
+                    Button {
+                        moveSort(index: index, delta: -1)
+                    } label: {
+                        SlateSymbol.moveUp.image(label: "Move sort up")
+                    }
+                    .disabled(index == 0)
+                    Button {
+                        moveSort(index: index, delta: 1)
+                    } label: {
+                        SlateSymbol.moveDown.image(label: "Move sort down")
+                    }
+                    .disabled(index >= model.sortKeys.count - 1)
+                    Button {
+                        model.sortKeys.remove(at: index)
+                    } label: {
+                        SlateSymbol.trash.image(label: "Remove sort")
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Sort \(index + 1)")
+            }
+
+            Divider()
+            Text("Group")
+                .font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: 8) {
+                Picker("Group property", selection: groupPropertyBinding) {
+                    ForEach(propertyChoices, id: \.self) { property in
+                        Text(property.accessibilityName).tag(property)
+                    }
+                }
+                Toggle("Group ascending", isOn: groupAscendingBinding)
+                Button("Clear group") { model.groupBy = nil }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sort and group sections")
+    }
+
+    private var columnsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Columns")
+                .font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Picker("View type", selection: viewTypeBinding) {
+                ForEach(BaseQueryViewType.allCases) { viewType in
+                    Text(viewType.title).tag(viewType)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            ForEach(propertyChoices, id: \.self) { property in
+                HStack(spacing: 8) {
+                    Toggle("Include column", isOn: columnIncludedBinding(property: property))
+                        .accessibilityLabel("Include \(property.accessibilityName)")
+                    Text(property.accessibilityName)
+                        .frame(minWidth: 96, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Display name")
+                            .font(.caption)
+                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        TextField(
+                            "Display name",
+                            text: columnDisplayNameBinding(property: property)
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Display name for \(property.accessibilityName)")
+                    }
+                    .disabled(!isColumnIncluded(property))
+                    Button {
+                        moveColumn(property: property, delta: -1)
+                    } label: {
+                        SlateSymbol.moveUp.image(label: "Move column up")
+                    }
+                    .disabled(!canMoveColumn(property, delta: -1))
+                    Button {
+                        moveColumn(property: property, delta: 1)
+                    } label: {
+                        SlateSymbol.moveDown.image(label: "Move column down")
+                    }
+                    .disabled(!canMoveColumn(property, delta: 1))
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Columns and View type")
+    }
+
+    private var formulasSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Formulas")
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                if let formulaValidation {
+                    let message = formulaValidation.valid
+                        ? "Formula valid"
+                        : (formulaValidation.message ?? "Formula invalid")
+                    if formulaValidation.valid {
+                        SlateSymbol.checkmark.label(message)
+                    } else {
+                        SlateSymbol.warning.label(message)
+                    }
+                }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Formula name")
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    TextField("Formula name", text: $formulaName)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Formula name")
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Expression")
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    TextField("Expression", text: $formulaExpression)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Formula expression")
+                }
+                Button("Add formula") { addFormula() }
+            }
+            ForEach(model.formulas) { formula in
+                HStack {
+                    Text("formula.\(formula.name)")
+                    Spacer()
+                    Text(formula.expression)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    Button {
+                        model.formulas.removeAll { $0.id == formula.id }
+                    } label: {
+                        SlateSymbol.trash.image(label: "Remove formula")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Formula \(formula.name), \(formula.expression)")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Formulas")
+    }
+
+    private var previewSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Live preview")
+                .font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text(model.previewState.accessibilityAnnouncement)
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("Live preview")
+                .accessibilityValue(model.previewState.accessibilityAnnouncement)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Live preview region")
     }
 
     @ViewBuilder
@@ -331,8 +526,11 @@ struct BaseQueryBuilderSheet: View {
             filterJSON: nil
         ).accessibilityLabel(index: index)
         return HStack(spacing: 8) {
-            Text(rowLabel)
+            Text("Advanced")
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            TextField("Raw filter expression", text: advancedExpressionBinding(index: index))
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(rowLabel)
             Spacer()
             rowButtons(index: index)
         }
@@ -357,6 +555,12 @@ struct BaseQueryBuilderSheet: View {
             }
             .help("Edit condition")
             Button {
+                model.perform(.editAsExpression(index: index))
+            } label: {
+                SlateSymbol.showSource.image(label: "Edit as expression")
+            }
+            .help("Edit as expression")
+            Button {
                 model.perform(.removeCondition(index: index))
             } label: {
                 SlateSymbol.trash.image(label: "Remove")
@@ -367,12 +571,41 @@ struct BaseQueryBuilderSheet: View {
     }
 
     private var footer: some View {
-        HStack {
-            Text(model.conditionsListAccessibilityValue)
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-            Spacer()
-            Button("Done") { appState.basesCloseQueryBuilder() }
-                .keyboardShortcut(.defaultAction)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Base path")
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    TextField("Save as .base", text: $saveAsBasePath)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Base file path")
+                }
+                Button("Save as .base") {
+                    appState.basesBuilderSaveAsBase(path: saveAsBasePath)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Saved query name")
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    TextField("Saved query name", text: $savedQueryName)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Saved query name")
+                }
+                Button("Save as saved query") {
+                    appState.basesBuilderSaveAsSavedQuery(
+                        name: savedQueryName,
+                        description: savedQueryDescription)
+                }
+            }
+            HStack {
+                Text(model.conditionsListAccessibilityValue)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                Spacer()
+                Button("Save to view") { appState.basesBuilderSaveToView() }
+                Button("Done") { appState.basesCloseQueryBuilder() }
+                    .keyboardShortcut(.defaultAction)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -417,6 +650,157 @@ struct BaseQueryBuilderSheet: View {
         model.selectedRowIndex == index
             ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.18)
             : Color(nsColor: .separatorColor).opacity(0.12)
+    }
+
+    private var firstPropertyChoice: BaseQueryProperty {
+        propertyChoices.first ?? .file(.name)
+    }
+
+    private var viewTypeBinding: Binding<BaseQueryViewType> {
+        Binding(
+            get: { model.viewType },
+            set: { model.viewType = $0 })
+    }
+
+    private func sortPropertyBinding(index: Int) -> Binding<BaseQueryProperty> {
+        Binding(
+            get: {
+                guard model.sortKeys.indices.contains(index) else { return firstPropertyChoice }
+                return model.sortKeys[index].property ?? firstPropertyChoice
+            },
+            set: { property in
+                guard model.sortKeys.indices.contains(index) else { return }
+                let ascending = model.sortKeys[index].ascending
+                model.sortKeys[index] = BaseQuerySortKey(property: property, ascending: ascending)
+            })
+    }
+
+    private func sortAscendingBinding(index: Int) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard model.sortKeys.indices.contains(index) else { return true }
+                return model.sortKeys[index].ascending
+            },
+            set: { ascending in
+                guard model.sortKeys.indices.contains(index) else { return }
+                model.sortKeys[index].ascending = ascending
+            })
+    }
+
+    private var groupPropertyBinding: Binding<BaseQueryProperty> {
+        Binding(
+            get: { model.groupBy?.property ?? firstPropertyChoice },
+            set: { property in
+                model.groupBy = BaseQueryGroupBy(
+                    property: property,
+                    ascending: model.groupBy?.ascending ?? true)
+            })
+    }
+
+    private var groupAscendingBinding: Binding<Bool> {
+        Binding(
+            get: { model.groupBy?.ascending ?? true },
+            set: { ascending in
+                model.groupBy = BaseQueryGroupBy(
+                    property: model.groupBy?.property ?? firstPropertyChoice,
+                    ascending: ascending)
+            })
+    }
+
+    private func columnIncludedBinding(property: BaseQueryProperty) -> Binding<Bool> {
+        Binding(
+            get: { isColumnIncluded(property) },
+            set: { included in
+                if included {
+                    if !isColumnIncluded(property) {
+                        model.columns.append(BaseQueryColumn(property: property, displayName: nil))
+                    }
+                } else {
+                    model.columns.removeAll { $0.id == property.sourceExpression }
+                }
+            })
+    }
+
+    private func columnDisplayNameBinding(property: BaseQueryProperty) -> Binding<String> {
+        Binding(
+            get: {
+                model.columns.first { $0.id == property.sourceExpression }?.displayName ?? ""
+            },
+            set: { value in
+                if let index = model.columns.firstIndex(where: { $0.id == property.sourceExpression }) {
+                    model.columns[index].displayName = value
+                } else if !value.isEmpty {
+                    model.columns.append(BaseQueryColumn(property: property, displayName: value))
+                }
+            })
+    }
+
+    private func advancedExpressionBinding(index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                guard model.rows.indices.contains(index),
+                    case .advanced(let raw, _) = model.rows[index]
+                else { return "" }
+                return raw
+            },
+            set: { value in
+                let validation = appState.currentSession?.validateBaseExpression(source: value)
+                model.updateAdvancedExpression(index: index, rawExpression: value, validation: validation)
+            })
+    }
+
+    private func isColumnIncluded(_ property: BaseQueryProperty) -> Bool {
+        model.columns.contains { $0.id == property.sourceExpression }
+    }
+
+    private func canMoveColumn(_ property: BaseQueryProperty, delta: Int) -> Bool {
+        guard let index = model.columns.firstIndex(where: { $0.id == property.sourceExpression })
+        else { return false }
+        return model.columns.indices.contains(index + delta)
+    }
+
+    private func moveColumn(property: BaseQueryProperty, delta: Int) {
+        guard let index = model.columns.firstIndex(where: { $0.id == property.sourceExpression })
+        else { return }
+        let destination = index + delta
+        guard model.columns.indices.contains(destination) else { return }
+        model.columns.swapAt(index, destination)
+    }
+
+    private func moveSort(index: Int, delta: Int) {
+        let destination = index + delta
+        guard model.sortKeys.indices.contains(index),
+            model.sortKeys.indices.contains(destination)
+        else { return }
+        model.sortKeys.swapAt(index, destination)
+    }
+
+    private func addFormula() {
+        guard let validation = appState.currentSession?.validateBaseExpression(source: formulaExpression)
+        else { return }
+        formulaValidation = validation
+        guard validation.valid, let exprJSON = validation.exprJson else { return }
+        do {
+            let formula = try BaseQueryFormula(
+                name: formulaName,
+                expression: formulaExpression,
+                expressionJSON: exprJSON)
+            model.formulas.removeAll { $0.name == formula.name }
+            model.formulas.append(formula)
+            if !model.columns.contains(where: { $0.id == "formula.\(formula.name)" }) {
+                model.columns.append(
+                    BaseQueryColumn(property: .formula(formula.name), displayName: nil))
+            }
+            formulaName = ""
+            formulaExpression = ""
+        } catch {
+            formulaValidation = BaseExpressionValidation(
+                valid: false,
+                exprJson: nil,
+                message: error.localizedDescription,
+                spanStart: 0,
+                spanEnd: UInt32(formulaExpression.utf8.count))
+        }
     }
 
     private var sourceKind: BaseQuerySourceKind {
@@ -486,6 +870,7 @@ struct BaseQueryBuilderSheet: View {
         ]
         let noteKeys = propertyKeys.isEmpty ? ["status", "priority"] : propertyKeys
         properties.append(contentsOf: noteKeys.map(BaseQueryProperty.note))
+        properties.append(contentsOf: model.formulas.map { BaseQueryProperty.formula($0.name) })
         if model.source == .tasks {
             properties.append(contentsOf: BaseQueryTaskField.allCases.map(BaseQueryProperty.task))
         }

@@ -132,6 +132,31 @@ fn set_view_filters_rewrites_filter_block_only() {
 }
 
 #[test]
+fn remove_view_key_deletes_existing_view_key_only() {
+    let source = "views:\n  - type: table\n    filters: \"status != \\\"done\\\"\"\n    groupBy:\n      property: status\n      direction: DESC\n    order:\n      - file.name\n";
+    let (base, _) = parse_base(source);
+
+    let edited = serialize_base(
+        &base,
+        &[
+            BaseEdit::RemoveViewKey {
+                view: 0,
+                key: "filters".to_string(),
+            },
+            BaseEdit::RemoveViewKey {
+                view: 0,
+                key: "groupBy".to_string(),
+            },
+        ],
+    )
+    .expect("view key removals serialize");
+
+    assert!(!edited.contains("filters:"));
+    assert!(!edited.contains("groupBy:"));
+    assert!(edited.contains("    order:\n      - file.name\n"));
+}
+
+#[test]
 fn set_view_key_preserves_view_list_marker() {
     let source = include_str!("fixtures/bases/every_documented_key.base");
     let (base, _) = parse_base(source);
@@ -228,6 +253,24 @@ fn set_display_name_rewrites_property_child_only() {
         edited.replace("    displayName: \"State\"\n", "    displayName: Status\n"),
         source
     );
+}
+
+#[test]
+fn set_display_name_inserts_missing_properties_section_before_views() {
+    let source = "views:\n  - type: table\n    order:\n      - file.name\n";
+    let (base, _) = parse_base(source);
+
+    let edited = serialize_base(
+        &base,
+        &[BaseEdit::SetDisplayName {
+            property: "file.name".to_string(),
+            display_name: Some("Title".to_string()),
+        }],
+    )
+    .expect("display name insertion serializes");
+
+    assert!(edited.starts_with("properties:\n  file.name:\n    displayName: \"Title\"\n"));
+    assert!(edited.contains("views:\n  - type: table\n"));
 }
 
 #[test]
