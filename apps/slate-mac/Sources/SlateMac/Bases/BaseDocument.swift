@@ -178,7 +178,9 @@ final class BaseDocument: ObservableObject {
             } else if view.status == .error {
                 state = .degraded("View \(view.name) has errors.")
             } else if let message = executed.viewError, !message.isEmpty {
-                state = .degraded(message)
+                state = .degraded(friendlyViewErrorMessage(message))
+            } else if let message = firstSavedQueryThisContextError(in: executed) {
+                state = .degraded(friendlyViewErrorMessage(message))
             } else {
                 state = .ready
             }
@@ -485,5 +487,27 @@ final class BaseDocument: ObservableObject {
             }
         }
         return "\(displayName) could not be opened: \(error.localizedDescription)"
+    }
+
+    private func friendlyViewErrorMessage(_ message: String) -> String {
+        guard case .savedQuery = source,
+            message.contains("this is unavailable in this evaluation context"),
+            !message.contains("Dock to sidebar to follow the active note.")
+        else { return message }
+        return "\(message) Dock to sidebar to follow the active note."
+    }
+
+    private func firstSavedQueryThisContextError(in result: BasesResultSet) -> String? {
+        guard case .savedQuery = source else { return nil }
+        for row in result.rows {
+            for value in row.values {
+                if let error = value.error,
+                    error.contains("this is unavailable in this evaluation context")
+                {
+                    return error
+                }
+            }
+        }
+        return nil
     }
 }

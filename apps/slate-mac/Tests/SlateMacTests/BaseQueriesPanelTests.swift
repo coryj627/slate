@@ -87,6 +87,91 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertNil(state.commandRegistry.findById(id: commandID))
     }
 
+    func testEditingSavedQueryBuilderUpdatesOriginalSavedQuery() async throws {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: "Open work",
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+
+        state.refreshBaseQueries()
+        state.editSavedQueryInBuilder(id: id)
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        XCTAssertEqual(model.editingSavedQuery?.id, id)
+        XCTAssertEqual(model.editingSavedQuery?.name, "Active projects")
+
+        model.source = .folder("Backlog")
+        state.basesBuilderUpdateSavedQuery()
+
+        let saved = try session.getSavedQuery(id: id)
+        let draft = try BaseQueryBuilderDraft(queryJSON: saved.queryJson)
+        XCTAssertEqual(draft.source, .folder("Backlog"))
+        XCTAssertEqual(saved.description, "Open work")
+        XCTAssertEqual(try session.listSavedQueries().map(\.id), [id])
+        XCTAssertEqual(
+            state.commandRegistry.findById(id: SlateCommandID.basesRunSavedQuery(id: id))?.label,
+            "Run query: Active projects")
+    }
+
+    func testDeletingSavedQueryClosesOpenTabsAndDocument() async throws {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+
+        state.refreshBaseQueries()
+        state.openSavedQuery(id: id, name: "Active projects")
+        XCTAssertTrue(state.workspace.model.allTabs.contains { tab in
+            tab.item == .savedQuery(id: id, name: "Active projects")
+        })
+        XCTAssertNotNil(state.baseDocuments[BaseDocumentSource.savedQuery(id: id, name: "Active projects").key])
+
+        state.deleteSavedQuery(id: id)
+
+        XCTAssertFalse(state.workspace.model.allTabs.contains { tab in
+            if case .savedQuery(let queryID, _) = tab.item {
+                return queryID == id
+            }
+            return false
+        })
+        XCTAssertNil(state.baseDocuments[BaseDocumentSource.savedQuery(id: id, name: "Active projects").key])
+    }
+
+    func testThisQueryInPlainSavedQueryTabSurfacesDockHint() async throws {
+        let (state, session) = try await makeState()
+        let exprJSON = try XCTUnwrap(
+            session.validateBaseExpression(source: "this.file.name").exprJson)
+        var draft = BaseQueryBuilderDraft()
+        draft.source = .folder("Projects")
+        draft.formulas = [
+            try BaseQueryFormula(
+                name: "thisName",
+                expression: "this.file.name",
+                expressionJSON: exprJSON)
+        ]
+        draft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: nil),
+            BaseQueryColumn(property: .formula("thisName"), displayName: nil),
+        ]
+        let id = try session.saveQuery(
+            name: "Context query",
+            description: nil,
+            queryJson: draft.queryJSON(),
+            sourceSyntax: .builder)
+
+        state.refreshBaseQueries()
+        state.openSavedQuery(id: id, name: "Context query")
+        let doc = try XCTUnwrap(state.activeBaseDocument)
+        guard case .degraded(let message) = doc.state else {
+            return XCTFail("expected degraded state, got \(doc.state)")
+        }
+        XCTAssertTrue(message.contains("this is unavailable in this evaluation context"), message)
+        XCTAssertTrue(message.contains("Dock to sidebar to follow the active note."), message)
+    }
+
     private func makeState() async throws -> (AppState, VaultSession) {
         let vault = tempDir.appendingPathComponent("vault")
         try FileManager.default.createDirectory(

@@ -204,7 +204,12 @@ extension AppState {
         do {
             let saved = try session.getSavedQuery(id: id)
             let draft = try BaseQueryBuilderDraft(queryJSON: saved.queryJson)
-            activeBaseQueryBuilder = BaseQueryBuilderModel(draft: draft)
+            activeBaseQueryBuilder = BaseQueryBuilderModel(
+                draft: draft,
+                editingSavedQuery: EditingSavedQuery(
+                    id: saved.id,
+                    name: saved.name,
+                    description: saved.description))
             postBaseActionAnnouncement("Editing \(saved.name) in builder.")
         } catch {
             postBaseActionAnnouncement("Saved query could not be edited: \(error.localizedDescription)")
@@ -233,6 +238,7 @@ extension AppState {
             try session.deleteSavedQuery(id: id)
             baseQueries.pinnedSavedQueryIDs.removeAll { $0 == id }
             persistBaseQueryPinsIfNeeded(baseQueries.pinnedSavedQueryIDs)
+            closeOpenSavedQueryTabs(id: id)
             refreshBaseQueries()
             postBaseActionAnnouncement("Deleted saved query.")
         } catch {
@@ -315,6 +321,26 @@ extension AppState {
             baseDocuments[BaseDocumentSource.savedQuery(id: summary.id, name: summary.name).key]?
                 .retargetSavedQueryName(summary.name)
         }
+    }
+
+    private func closeOpenSavedQueryTabs(id: String) {
+        let matchingTabs = workspace.model.allTabs.filter { tab in
+            if case .savedQuery(let queryID, _) = tab.item {
+                return queryID == id
+            }
+            return false
+        }
+        for tab in matchingTabs {
+            performCloseTab(tab.id)
+        }
+        let key = BaseDocumentSource.savedQuery(id: id, name: "").key
+        if let doc = baseDocuments[key] {
+            if let session = currentSession {
+                doc.close(session: session)
+            }
+            baseDocuments[key] = nil
+        }
+        saveWorkspaceLayout()
     }
 
     private func refreshSavedQueryCommands(_ saved: [SavedQuerySummary]) {
@@ -645,6 +671,35 @@ extension AppState {
                 "Saved query could not be created: \(error.localizedDescription)",
                 priority: .medium)
         }
+    }
+
+    func basesBuilderUpdateSavedQuery() {
+        guard let model = activeBaseQueryBuilder,
+            let editingSavedQuery = model.editingSavedQuery,
+            let session = currentSession
+        else { return }
+        do {
+            try session.updateSavedQuery(
+                id: editingSavedQuery.id,
+                description: editingSavedQuery.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                queryJson: model.draft.queryJSON(),
+                sourceSyntax: .builder)
+            refreshBaseQueries()
+            refreshOpenSavedQueryDocument(id: editingSavedQuery.id, name: editingSavedQuery.name)
+            postAccessibilityAnnouncement(
+                "Updated saved query \(editingSavedQuery.name).",
+                priority: .medium)
+        } catch {
+            postAccessibilityAnnouncement(
+                "Saved query could not be updated: \(error.localizedDescription)",
+                priority: .medium)
+        }
+    }
+
+    private func refreshOpenSavedQueryDocument(id: String, name: String) {
+        guard let session = currentSession else { return }
+        let key = BaseDocumentSource.savedQuery(id: id, name: name).key
+        baseDocuments[key]?.refresh(session: session)
     }
 
     func basesBuilderAddCondition() {

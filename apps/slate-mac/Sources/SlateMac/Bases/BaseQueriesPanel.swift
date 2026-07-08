@@ -169,7 +169,9 @@ struct BaseQueriesPanel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.interactiveRow())
+            .help(savedQueryHelp(summary))
             .accessibilityLabel("\(summary.name), saved query")
+            .accessibilityHint(savedQueryHelp(summary))
 
             Button {
                 appState.toggleSavedQueryPin(id: summary.id)
@@ -209,6 +211,13 @@ struct BaseQueriesPanel: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityValue(isPinned ? "Pinned" : "")
+    }
+
+    private func savedQueryHelp(_ summary: SavedQuerySummary) -> String {
+        guard let description = summary.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !description.isEmpty
+        else { return "Open saved query" }
+        return description
     }
 
     private func baseFileRow(_ file: BaseFileSummary) -> some View {

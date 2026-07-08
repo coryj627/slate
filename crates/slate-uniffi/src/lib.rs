@@ -4365,6 +4365,21 @@ impl VaultSession {
         Ok(self.inner.rename_saved_query(&id, &name)?)
     }
 
+    pub fn update_saved_query(
+        &self,
+        id: String,
+        description: Option<String>,
+        query_json: String,
+        source_syntax: SavedQuerySourceSyntax,
+    ) -> Result<(), VaultError> {
+        Ok(self.inner.update_saved_query(
+            &id,
+            description.as_deref(),
+            &query_json,
+            source_syntax.into(),
+        )?)
+    }
+
     pub fn delete_saved_query(&self, id: String) -> Result<(), VaultError> {
         Ok(self.inner.delete_saved_query(&id)?)
     }

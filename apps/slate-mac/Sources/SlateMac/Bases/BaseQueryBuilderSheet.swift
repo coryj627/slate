@@ -54,7 +54,10 @@ struct BaseQueryBuilderSheet: View {
             notePaths = await loadedNotes
             propertyKeys = await loadedProperties
         }
-        .onAppear { appState.basesBuilderSchedulePreview(delayNanoseconds: 0) }
+        .onAppear {
+            hydrateSavedQueryFields()
+            appState.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        }
         .onChange(of: model.draft) { _, _ in appState.basesBuilderSchedulePreview() }
         .onExitCommand { appState.basesCloseQueryBuilder() }
     }
@@ -666,6 +669,11 @@ struct BaseQueryBuilderSheet: View {
                 Button("Save as .base") {
                     appState.basesBuilderSaveAsBase(path: saveAsBasePath)
                 }
+                if model.editingSavedQuery != nil {
+                    Button("Update saved query") {
+                        appState.basesBuilderUpdateSavedQuery()
+                    }
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Saved query name")
                         .font(.caption)
@@ -691,6 +699,13 @@ struct BaseQueryBuilderSheet: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
+    }
+
+    private func hydrateSavedQueryFields() {
+        guard let editingSavedQuery = model.editingSavedQuery else { return }
+        savedQueryName = editingSavedQuery.name
+        savedQueryDescription = editingSavedQuery.description ?? ""
+        saveAsBasePath = "Queries/\(editingSavedQuery.name).base"
     }
 
     private func selectableList<Row: Hashable>(
