@@ -81,6 +81,10 @@ struct DashboardEditorDraft: Equatable {
         let row = sections.remove(at: source)
         sections.insert(row, at: destination)
     }
+
+    func sectionIndex(id: DashboardEditorSectionDraft.ID) -> Int? {
+        sections.firstIndex { $0.id == id }
+    }
 }
 
 struct DashboardEditorSectionDraft: Identifiable, Equatable {
@@ -221,8 +225,10 @@ struct DashboardEditorSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-                    ForEach(Array(draft.sections.enumerated()), id: \.element.id) { index, _ in
-                        sectionRow($draft.sections[index], index: index)
+                    ForEach($draft.sections) { section in
+                        if let index = draft.sectionIndex(id: section.wrappedValue.id) {
+                            sectionRow(section, index: index)
+                        }
                     }
                 }
             }

@@ -109,11 +109,16 @@ final class BaseQueriesPanelTests: XCTestCase {
         var draft = DashboardEditorDraft(savedQueries: state.baseQueries.savedQueries)
         draft.name = "Team overview"
         draft.addSelectedSavedQuery(from: state.baseQueries.savedQueries)
-        draft.sections[0].headingOverride = "Pinned work"
-        draft.sections[0].viewOverride = "Preview"
+        let activeSectionID = draft.sections[0].id
         draft.selectedSavedQueryID = backlogID
         draft.addSelectedSavedQuery(from: state.baseQueries.savedQueries)
+        let backlogSectionID = draft.sections[1].id
         draft.moveSection(from: 1, to: 0)
+        let activeIndexAfterMove = try XCTUnwrap(draft.sectionIndex(id: activeSectionID))
+        draft.sections[activeIndexAfterMove].headingOverride = "Pinned work"
+        draft.sections[activeIndexAfterMove].viewOverride = "Preview"
+        let backlogIndexAfterMove = try XCTUnwrap(draft.sectionIndex(id: backlogSectionID))
+        XCTAssertEqual(draft.sections[backlogIndexAfterMove].headingOverride, "")
 
         let dashboardID = try XCTUnwrap(
             state.saveDashboard(name: draft.name, sections: draft.dashboardSections))
