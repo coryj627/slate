@@ -5325,6 +5325,70 @@ pub struct BasesResultSet {
     pub audio_summary: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedQuerySourceSyntax {
+    Builder,
+    Base,
+    Dql,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedQuerySummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source_syntax: SavedQuerySourceSyntax,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedQuery {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub query_json: String,
+    pub source_syntax: SavedQuerySourceSyntax,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DashboardSection {
+    pub saved_query_id: String,
+    pub heading_override: Option<String>,
+    pub view_override: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardSectionStatus {
+    pub saved_query_id: String,
+    pub saved_query_name: Option<String>,
+    pub heading_override: Option<String>,
+    pub view_override: Option<String>,
+    pub missing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardSummary {
+    pub id: String,
+    pub name: String,
+    pub section_count: u32,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dashboard {
+    pub id: String,
+    pub name: String,
+    pub sections: Vec<DashboardSectionStatus>,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+}
+
 fn bad_base_handle(handle: u64) -> VaultError {
     VaultError::InvalidArgument {
         message: format!("unknown base handle {handle} (closed or never opened)"),
@@ -5432,11 +5496,191 @@ impl VaultSession {
     }
 
     pub fn open_saved_query(&self, id: &str) -> Result<u64, VaultError> {
-        Err(VaultError::InvalidArgument {
-            message: format!(
-                "saved query {id:?} cannot be opened until #700 saved_queries storage lands"
-            ),
-        })
+        let query = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let saved = load_saved_query(&conn, id)?;
+            parse_saved_query_envelope(&saved.query_json)?
+        };
+        let handle = self
+            .next_base_handle
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.bases.lock().expect("base registry mutex").insert(
+            handle,
+            OpenBaseState {
+                path: None,
+                source: OpenBaseSource::Query(query),
+                warnings: Vec::new(),
+                default_this_path: None,
+                cache: crate::bases::engine::BasesQueryCache::default(),
+            },
+        );
+        Ok(handle)
+    }
+
+    pub fn save_query(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        query_json: &str,
+        source_syntax: SavedQuerySourceSyntax,
+    ) -> Result<String, VaultError> {
+        validate_saved_name("saved query", name)?;
+        let envelope = normalize_saved_query_envelope_for_save(query_json)?;
+        let now = now_ms();
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+        ensure_name_available(&tx, "saved_queries", "saved query", name, None)?;
+        let id = sqlite_uuid(&tx)?;
+        tx.execute(
+            "INSERT INTO saved_queries
+             (id, name, description, query_json, source_syntax, created_at_ms, modified_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                id,
+                name,
+                description,
+                envelope,
+                source_syntax.to_i64(),
+                now,
+                now
+            ],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn list_saved_queries(&self) -> Result<Vec<SavedQuerySummary>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, name, description, query_json, source_syntax, created_at_ms, modified_at_ms
+             FROM saved_queries
+             ORDER BY name COLLATE NOCASE, name",
+        )?;
+        let rows = stmt.query_map([], saved_query_summary_from_row)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn get_saved_query(&self, id: &str) -> Result<SavedQuery, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        load_saved_query(&conn, id)
+    }
+
+    pub fn rename_saved_query(&self, id: &str, name: &str) -> Result<(), VaultError> {
+        validate_saved_name("saved query", name)?;
+        let now = now_ms();
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+        ensure_name_available(&tx, "saved_queries", "saved query", name, Some(id))?;
+        let changed = tx.execute(
+            "UPDATE saved_queries SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
+            rusqlite::params![name, now, id],
+        )?;
+        ensure_changed(changed, "saved query", id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_saved_query(&self, id: &str) -> Result<(), VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let changed = conn.execute("DELETE FROM saved_queries WHERE id = ?1", [id])?;
+        ensure_changed(changed, "saved query", id)
+    }
+
+    pub fn export_saved_query_as_base(&self, id: &str, path: &str) -> Result<(), VaultError> {
+        let query = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let saved = load_saved_query(&conn, id)?;
+            parse_saved_query_envelope(&saved.query_json)?
+        };
+        let text = query_as_base_text(&query)?;
+        self.save_text(path, &text, None)?;
+        Ok(())
+    }
+
+    pub fn save_dashboard(
+        &self,
+        name: &str,
+        sections: Vec<DashboardSection>,
+    ) -> Result<String, VaultError> {
+        validate_saved_name("dashboard", name)?;
+        let sections_json = dashboard_sections_json(&sections)?;
+        let now = now_ms();
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+        ensure_name_available(&tx, "dashboards", "dashboard", name, None)?;
+        let id = sqlite_uuid(&tx)?;
+        tx.execute(
+            "INSERT INTO dashboards
+             (id, name, sections_json, created_at_ms, modified_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, name, sections_json, now, now],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn list_dashboards(&self) -> Result<Vec<DashboardSummary>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, name, sections_json, created_at_ms, modified_at_ms
+             FROM dashboards
+             ORDER BY name COLLATE NOCASE, name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let sections_json: String = row.get(2)?;
+            let section_count = parse_dashboard_sections(&sections_json)
+                .map(|sections| sections.len() as u32)
+                .unwrap_or(0);
+            Ok(DashboardSummary {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                section_count,
+                created_at_ms: row.get(3)?,
+                modified_at_ms: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn get_dashboard(&self, id: &str) -> Result<Dashboard, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        load_dashboard(&conn, id)
+    }
+
+    pub fn rename_dashboard(&self, id: &str, name: &str) -> Result<(), VaultError> {
+        validate_saved_name("dashboard", name)?;
+        let now = now_ms();
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+        ensure_name_available(&tx, "dashboards", "dashboard", name, Some(id))?;
+        let changed = tx.execute(
+            "UPDATE dashboards SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
+            rusqlite::params![name, now, id],
+        )?;
+        ensure_changed(changed, "dashboard", id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn update_dashboard_sections(
+        &self,
+        id: &str,
+        sections: Vec<DashboardSection>,
+    ) -> Result<(), VaultError> {
+        let sections_json = dashboard_sections_json(&sections)?;
+        let now = now_ms();
+        let conn = self.conn.lock().expect("session connection mutex");
+        let changed = conn.execute(
+            "UPDATE dashboards SET sections_json = ?1, modified_at_ms = ?2 WHERE id = ?3",
+            rusqlite::params![sections_json, now, id],
+        )?;
+        ensure_changed(changed, "dashboard", id)
+    }
+
+    pub fn delete_dashboard(&self, id: &str) -> Result<(), VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let changed = conn.execute("DELETE FROM dashboards WHERE id = ?1", [id])?;
+        ensure_changed(changed, "dashboard", id)
     }
 
     pub fn open_dql(&self, source: &str, this_path: Option<String>) -> Result<u64, VaultError> {
@@ -5644,6 +5888,263 @@ fn parse_query_json(query_json: &str) -> Result<crate::bases::SlateQuery, VaultE
         VaultError::InvalidArgument {
             message: format!("invalid SlateQuery JSON: {err}"),
         }
+    })
+}
+
+impl SavedQuerySourceSyntax {
+    fn to_i64(self) -> i64 {
+        match self {
+            SavedQuerySourceSyntax::Builder => 0,
+            SavedQuerySourceSyntax::Base => 1,
+            SavedQuerySourceSyntax::Dql => 2,
+        }
+    }
+
+    fn from_i64(value: i64) -> Result<Self, VaultError> {
+        match value {
+            0 => Ok(SavedQuerySourceSyntax::Builder),
+            1 => Ok(SavedQuerySourceSyntax::Base),
+            2 => Ok(SavedQuerySourceSyntax::Dql),
+            other => Err(VaultError::InvalidArgument {
+                message: format!("unknown saved-query source_syntax {other}"),
+            }),
+        }
+    }
+}
+
+fn validate_saved_name(kind: &str, name: &str) -> Result<(), VaultError> {
+    if name.trim().is_empty() {
+        return Err(VaultError::InvalidArgument {
+            message: format!("{kind} name cannot be empty"),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_changed(changed: usize, kind: &str, id: &str) -> Result<(), VaultError> {
+    if changed == 0 {
+        return Err(VaultError::InvalidArgument {
+            message: format!("unknown {kind} id {id:?}"),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_name_available(
+    conn: &Connection,
+    table: &str,
+    kind: &str,
+    name: &str,
+    except_id: Option<&str>,
+) -> Result<(), VaultError> {
+    let exists: Option<i64> = match except_id {
+        Some(id) => conn
+            .query_row(
+                &format!("SELECT 1 FROM {table} WHERE name = ?1 AND id <> ?2 LIMIT 1"),
+                rusqlite::params![name, id],
+                |row| row.get(0),
+            )
+            .optional()?,
+        None => conn
+            .query_row(
+                &format!("SELECT 1 FROM {table} WHERE name = ?1 LIMIT 1"),
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?,
+    };
+    if exists.is_some() {
+        return Err(VaultError::InvalidArgument {
+            message: format!("{kind} name {name:?} already exists"),
+        });
+    }
+    Ok(())
+}
+
+fn sqlite_uuid(conn: &Connection) -> Result<String, VaultError> {
+    Ok(conn.query_row(
+        "SELECT lower(
+            hex(randomblob(4)) || '-' ||
+            hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-' ||
+            substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
+            hex(randomblob(6))
+        )",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+fn normalize_saved_query_envelope_for_save(query_json: &str) -> Result<String, VaultError> {
+    let value = serde_json::from_str::<serde_json::Value>(query_json).map_err(|err| {
+        VaultError::InvalidArgument {
+            message: format!("invalid SlateQuery JSON: {err}"),
+        }
+    })?;
+    let query = if value.get("v").is_some() {
+        parse_saved_query_envelope(query_json)?
+    } else {
+        serde_json::from_value::<crate::bases::SlateQuery>(value).map_err(|err| {
+            VaultError::InvalidArgument {
+                message: format!("invalid SlateQuery JSON: {err}"),
+            }
+        })?
+    };
+    Ok(serde_json::json!({ "v": 1, "query": query }).to_string())
+}
+
+fn parse_saved_query_envelope(query_json: &str) -> Result<crate::bases::SlateQuery, VaultError> {
+    let value = serde_json::from_str::<serde_json::Value>(query_json).map_err(|err| {
+        VaultError::InvalidArgument {
+            message: format!("invalid saved query envelope: {err}"),
+        }
+    })?;
+    let version = value
+        .get("v")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| VaultError::InvalidArgument {
+            message: "invalid saved query envelope: missing numeric version".to_string(),
+        })?;
+    if version != 1 {
+        return Err(VaultError::InvalidArgument {
+            message: format!("unsupported query_json envelope version {version}"),
+        });
+    }
+    let query = value
+        .get("query")
+        .ok_or_else(|| VaultError::InvalidArgument {
+            message: "invalid saved query envelope: missing query".to_string(),
+        })?
+        .clone();
+    serde_json::from_value::<crate::bases::SlateQuery>(query).map_err(|err| {
+        VaultError::InvalidArgument {
+            message: format!("invalid saved query envelope query: {err}"),
+        }
+    })
+}
+
+fn saved_query_envelope_warning(query_json: &str) -> Option<String> {
+    parse_saved_query_envelope(query_json)
+        .err()
+        .map(|err| match err {
+            VaultError::InvalidArgument { message } => message,
+            other => other.to_string(),
+        })
+}
+
+fn saved_query_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedQuerySummary> {
+    let query_json: String = row.get(3)?;
+    let source_syntax_raw: i64 = row.get(4)?;
+    let source_syntax = SavedQuerySourceSyntax::from_i64(source_syntax_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Integer, Box::new(err))
+    })?;
+    Ok(SavedQuerySummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        warning: saved_query_envelope_warning(&query_json),
+        source_syntax,
+        created_at_ms: row.get(5)?,
+        modified_at_ms: row.get(6)?,
+    })
+}
+
+fn saved_query_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedQuery> {
+    let query_json: String = row.get(3)?;
+    let source_syntax_raw: i64 = row.get(4)?;
+    let source_syntax = SavedQuerySourceSyntax::from_i64(source_syntax_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Integer, Box::new(err))
+    })?;
+    Ok(SavedQuery {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        warning: saved_query_envelope_warning(&query_json),
+        query_json,
+        source_syntax,
+        created_at_ms: row.get(5)?,
+        modified_at_ms: row.get(6)?,
+    })
+}
+
+fn load_saved_query(conn: &Connection, id: &str) -> Result<SavedQuery, VaultError> {
+    conn.query_row(
+        "SELECT id, name, description, query_json, source_syntax, created_at_ms, modified_at_ms
+         FROM saved_queries
+         WHERE id = ?1",
+        [id],
+        saved_query_from_row,
+    )
+    .optional()?
+    .ok_or_else(|| VaultError::InvalidArgument {
+        message: format!("unknown saved query id {id:?}"),
+    })
+}
+
+fn dashboard_sections_json(sections: &[DashboardSection]) -> Result<String, VaultError> {
+    serde_json::to_string(sections).map_err(|err| VaultError::InvalidArgument {
+        message: format!("invalid dashboard sections: {err}"),
+    })
+}
+
+fn parse_dashboard_sections(sections_json: &str) -> Result<Vec<DashboardSection>, VaultError> {
+    serde_json::from_str::<Vec<DashboardSection>>(sections_json).map_err(|err| {
+        VaultError::InvalidArgument {
+            message: format!("invalid dashboard sections: {err}"),
+        }
+    })
+}
+
+fn load_dashboard(conn: &Connection, id: &str) -> Result<Dashboard, VaultError> {
+    let (id, name, sections_json, created_at_ms, modified_at_ms): (
+        String,
+        String,
+        String,
+        i64,
+        i64,
+    ) = conn
+        .query_row(
+            "SELECT id, name, sections_json, created_at_ms, modified_at_ms
+             FROM dashboards
+             WHERE id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| VaultError::InvalidArgument {
+            message: format!("unknown dashboard id {id:?}"),
+        })?;
+    let sections = parse_dashboard_sections(&sections_json)?;
+    let mut resolved = Vec::with_capacity(sections.len());
+    for section in sections {
+        let saved_query_name = conn
+            .query_row(
+                "SELECT name FROM saved_queries WHERE id = ?1",
+                [section.saved_query_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        resolved.push(DashboardSectionStatus {
+            missing: saved_query_name.is_none(),
+            saved_query_name,
+            saved_query_id: section.saved_query_id,
+            heading_override: section.heading_override,
+            view_override: section.view_override,
+        });
+    }
+    Ok(Dashboard {
+        id,
+        name,
+        sections: resolved,
+        created_at_ms,
+        modified_at_ms,
     })
 }
 
