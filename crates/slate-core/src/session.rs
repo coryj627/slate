@@ -967,6 +967,7 @@ impl VaultSession {
 
         let now = now_ms();
         let (name, extension, is_markdown) = classify_path(path);
+        let is_base = extension.as_deref() == Some("base");
 
         // Body text for FTS5: only markdown gets indexed; everything
         // else stores "" so the trigger on `body_text` makes the
@@ -1029,6 +1030,16 @@ impl VaultSession {
             crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(&tx, file_id, contents)?;
             crate::citations_db::replace_citations_for_file(&tx, file_id, contents)?;
+            crate::bases_db::replace_base_blocks_for_file(&tx, file_id, contents)?;
+        } else if is_base {
+            crate::bases_db::replace_base_file_for_file(
+                &tx,
+                file_id,
+                &name,
+                contents,
+                self.config.parser_version,
+                now,
+            )?;
         } else if classify_path(path).1.as_deref() == Some("canvas") {
             // Keep the canvas index coherent even when a `.canvas`
             // file is written through the generic text-save path
@@ -3120,6 +3131,7 @@ fn index_file(
         extension.as_deref(),
         Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
     );
+    let is_base = extension.as_deref() == Some("base");
 
     // Fast path: if the indexed row's (mtime_ms, size_bytes, ctime_ms)
     // already match what we just stat'd, assume content is unchanged
@@ -3244,6 +3256,7 @@ fn index_file(
         )?;
         purge_markdown_derivatives(tx, file_id, path, vault_index)?;
         purge_canvas_rows(tx, file_id)?;
+        crate::bases_db::delete_base_file_for_file(tx, file_id)?;
         report.files_indexed += 1;
         return Ok(());
     }
@@ -3315,6 +3328,21 @@ fn index_file(
         // Reuse the already-decoded `body_text` so we don't pay the
         // utf8_lossy cost twice (once for FTS, once for parsers).
         index_markdown_derivatives(tx, file_id, path, body_text.as_str(), vault_index)?;
+    } else if is_base {
+        let file_id: i64 = tx.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| row.get(0),
+        )?;
+        let source = String::from_utf8_lossy(&content);
+        crate::bases_db::replace_base_file_for_file(
+            tx,
+            file_id,
+            name,
+            source.as_ref(),
+            parser_version,
+            now,
+        )?;
     }
 
     report.files_indexed += 1;
@@ -3375,6 +3403,7 @@ fn index_markdown_derivatives(
     crate::tasks_db::replace_tasks_for_file(tx, file_id, body_text)?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, body_text)?;
     crate::citations_db::replace_citations_for_file(tx, file_id, body_text)?;
+    crate::bases_db::replace_base_blocks_for_file(tx, file_id, body_text)?;
     Ok(())
 }
 
@@ -3438,6 +3467,7 @@ fn purge_markdown_derivatives(
     crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, "")?;
     crate::citations_db::replace_citations_for_file(tx, file_id, "")?;
+    crate::bases_db::replace_base_blocks_for_file(tx, file_id, "")?;
     Ok(())
 }
 
@@ -4042,6 +4072,76 @@ fn read_disk_contents_and_hash(
     Ok((bytes, hash, stat.mtime_ms))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn refresh_text_derived_indexes_after_reclassification(
+    tx: &rusqlite::Transaction,
+    provider: &dyn VaultProvider,
+    file_id: i64,
+    path: &str,
+    name: &str,
+    extension: Option<&str>,
+    is_markdown: bool,
+    parser_version: u32,
+    large_file_refuse_bytes: u64,
+) -> Result<(), VaultError> {
+    let vault_index = crate::InMemoryVaultIndex::new(
+        tx.prepare("SELECT path FROM files")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    let is_base = extension == Some("base");
+    let write_body = |tx: &rusqlite::Transaction, body_text: &str| -> Result<(), VaultError> {
+        tx.execute(
+            "UPDATE files SET body_text = ?1, is_markdown = ?2 WHERE id = ?3",
+            rusqlite::params![body_text, is_markdown as i64, file_id],
+        )?;
+        Ok(())
+    };
+
+    if !is_markdown && !is_base {
+        write_body(tx, "")?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        crate::bases_db::delete_base_file_for_file(tx, file_id)?;
+        return Ok(());
+    }
+
+    let stat = provider.stat(path)?;
+    if stat.size_bytes > large_file_refuse_bytes {
+        write_body(tx, "")?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        crate::bases_db::delete_base_file_for_file(tx, file_id)?;
+        return Ok(());
+    }
+
+    let content = provider.read_file_with_cap(path, large_file_refuse_bytes)?;
+    if content.len() as u64 > large_file_refuse_bytes {
+        write_body(tx, "")?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        crate::bases_db::delete_base_file_for_file(tx, file_id)?;
+        return Ok(());
+    }
+
+    let source = String::from_utf8_lossy(&content);
+    if is_markdown {
+        write_body(tx, source.as_ref())?;
+        index_markdown_derivatives(tx, file_id, path, source.as_ref(), &vault_index)?;
+        crate::bases_db::delete_base_file_for_file(tx, file_id)?;
+    } else {
+        write_body(tx, "")?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        crate::bases_db::replace_base_file_for_file(
+            tx,
+            file_id,
+            name,
+            source.as_ref(),
+            parser_version,
+            now_ms(),
+        )?;
+    }
+
+    Ok(())
+}
+
 /// Pull `(name, extension, is_markdown)` from a vault-relative path
 /// using the same rules as the scanner. Kept in one place so save
 /// and scan can't drift on what counts as a Markdown file.
@@ -4450,15 +4550,45 @@ impl VaultSession {
             return Err(VaultError::DestinationExists { path: existing });
         }
 
+        let (_, old_extension, old_is_markdown) = classify_path(from);
+        let old_is_base = old_extension.as_deref() == Some("base");
+        let provider = Arc::clone(&self.provider);
+        let parser_version = self.config.parser_version;
+        let large_file_refuse_bytes = self.config.large_file_refuse_bytes;
         self.provider.rename(from, to)?;
         let moved = vec![(from.to_string(), to.to_string())];
-        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx| {
+        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, move |tx| {
             let (name, extension, is_markdown) = classify_path(to);
-            tx.execute(
-                "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
-                 WHERE path = ?5",
-                rusqlite::params![to, name, extension, is_markdown as i64, from],
-            )?;
+            let is_base = extension.as_deref() == Some("base");
+            if old_is_base || is_base || old_is_markdown != is_markdown {
+                tx.execute(
+                    "UPDATE files SET path = ?1, name = ?2, extension = ?3
+                     WHERE path = ?4",
+                    rusqlite::params![to, name, extension, from],
+                )?;
+                let file_id: i64 = tx.query_row(
+                    "SELECT id FROM files WHERE path = ?1",
+                    rusqlite::params![to],
+                    |row| row.get(0),
+                )?;
+                refresh_text_derived_indexes_after_reclassification(
+                    tx,
+                    provider.as_ref(),
+                    file_id,
+                    to,
+                    &name,
+                    extension.as_deref(),
+                    is_markdown,
+                    parser_version,
+                    large_file_refuse_bytes,
+                )?;
+            } else {
+                tx.execute(
+                    "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+                     WHERE path = ?5",
+                    rusqlite::params![to, name, extension, is_markdown as i64, from],
+                )?;
+            }
             Ok(())
         })
     }

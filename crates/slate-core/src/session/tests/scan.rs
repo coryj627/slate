@@ -45,6 +45,211 @@ fn scan_initial_indexes_markdown_and_non_markdown() {
 }
 
 #[test]
+fn scan_indexes_base_files_without_markdown_derivatives() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Reading.base",
+            br#"filters: "file.hasTag(\"reading\")"
+views:
+  - type: table
+    name: "Reading"
+"#,
+        )
+        .unwrap();
+        p.write_file("Broken.base", b"- not\n- a mapping\n")
+            .unwrap();
+    });
+
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(report.files_indexed, 2);
+
+    let conn = session.conn.lock().unwrap();
+    let bases: Vec<(String, String, i64, i64, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.path, bf.name, f.is_markdown, bf.warning_count, bf.parsed_query_json
+                 FROM files f
+                 JOIN bases_files bf ON bf.file_id = f.id
+                 ORDER BY f.path",
+            )
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+
+    assert_eq!(bases.len(), 2);
+    assert_eq!(bases[0].0, "Broken.base");
+    assert_eq!(bases[0].1, "Broken");
+    assert_eq!(bases[0].2, 0, ".base files are not markdown");
+    assert!(bases[0].3 > 0, "degraded parse still rows with warnings");
+    assert!(bases[0].4.contains("\"degraded\":true"));
+    assert_eq!(bases[1].0, "Reading.base");
+    assert_eq!(bases[1].1, "Reading");
+    assert!(bases[1].4.contains("\"name\":\"Reading\""));
+    drop(conn);
+    assert_eq!(fts_match_count(&session, "reading"), 0);
+}
+
+#[test]
+fn scan_discovers_base_slate_query_and_dataview_fences_only() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "note.md",
+            b"# Note\n\n```base\nviews:\n  - type: table\n```\n\n```slate-query\nTABLE file.name\n```\n\n```dataview\nTABLE file.name\n```\n\n```dataviewjs\nconsole.log('nope')\n```\n",
+        )
+        .unwrap();
+    });
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let rows: Vec<(i64, String, i64, i64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT fence_kind, source_text, line, byte_offset
+                 FROM bases_blocks
+                 ORDER BY byte_offset",
+            )
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.iter().map(|row| row.0).collect::<Vec<_>>(), [0, 1, 2]);
+    assert!(rows[0].1.starts_with("views:\n"));
+    assert_eq!(rows[0].2, 3);
+    assert_eq!(rows[0].3, 8);
+    assert!(rows[1].1.contains("TABLE file.name"));
+    assert!(rows[2].1.contains("TABLE file.name"));
+}
+
+#[test]
+fn census_bases_scan_incremental() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("one.base", b"views:\n  - type: table\n    name: One\n")
+            .unwrap();
+        p.write_file("gone.base", b"views:\n  - type: list\n    name: Gone\n")
+            .unwrap();
+        p.write_file("embed.md", b"```base\nviews:\n  - type: table\n```\n")
+            .unwrap();
+    });
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let initial = bases_index_snapshot(&session);
+
+    rewrite_until_mtime_advances(
+        &provider,
+        "one.base",
+        b"views:\n  - type: list\n    name: One updated\n",
+        provider.stat("one.base").unwrap().mtime_ms,
+    );
+    provider
+        .write_file(
+            "embed.md",
+            b"```slate-query\nTABLE file.name\n```\n```dataviewjs\nignored\n```\n",
+        )
+        .unwrap();
+    provider
+        .write_file("two.base", b"filters: \"file.name\"\n")
+        .unwrap();
+    std::fs::remove_file(tmp.path().join("gone.base")).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let incremental = bases_index_snapshot(&session);
+
+    drop(session);
+    std::fs::remove_dir_all(tmp.path().join(".slate")).unwrap();
+    let fresh = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    fresh.scan_initial(&CancelToken::new()).unwrap();
+    let full = bases_index_snapshot(&fresh);
+
+    assert_ne!(
+        initial, incremental,
+        "the mutation sequence should change rows"
+    );
+    assert_eq!(incremental, full);
+}
+
+fn bases_index_snapshot(session: &VaultSession) -> Vec<String> {
+    let conn = session.conn.lock().unwrap();
+    let mut rows = Vec::new();
+
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.path, bf.name, bf.warning_count, bf.parser_version, bf.parsed_query_json
+                 FROM bases_files bf
+                 JOIN files f ON f.id = bf.file_id
+                 ORDER BY f.path",
+            )
+            .unwrap();
+        let base_rows = stmt
+            .query_map([], |row| {
+                Ok(format!(
+                    "file\t{}\t{}\t{}\t{}\t{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows.extend(base_rows);
+    }
+
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.path, bb.fence_kind, bb.source_text, bb.line, bb.byte_offset
+                 FROM bases_blocks bb
+                 JOIN files f ON f.id = bb.file_id
+                 ORDER BY f.path, bb.byte_offset",
+            )
+            .unwrap();
+        let block_rows = stmt
+            .query_map([], |row| {
+                Ok(format!(
+                    "block\t{}\t{}\t{}\t{}\t{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows.extend(block_rows);
+    }
+
+    rows
+}
+
+#[test]
 fn scan_initial_skips_hidden_directories() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("real.md", b"# real").unwrap();
