@@ -59,6 +59,7 @@ pub struct ResultColumn {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasesRow {
     pub path: String,
+    pub task_ordinal: Option<u64>,
     pub cells: Vec<CellValue>,
     pub audio_description: String,
 }
@@ -97,6 +98,7 @@ pub struct EngineCtx<'a> {
     pub page_size: usize,
     pub this_path: Option<String>,
     pub cache: Option<&'a BasesQueryCache>,
+    pub quick_filter: Option<&'a str>,
     pub pushdown: bool,
 }
 
@@ -108,6 +110,7 @@ impl Default for EngineCtx<'_> {
             page_size: 512,
             this_path: None,
             cache: None,
+            quick_filter: None,
             pushdown: true,
         }
     }
@@ -412,6 +415,7 @@ pub fn execute(
         offset += page_size;
     }
 
+    apply_quick_filter(&mut rows, ctx.quick_filter);
     sort_rows(query, &mut rows);
     let group_slices = group_rows(query, &mut rows);
     let total_count = rows.len();
@@ -1558,6 +1562,7 @@ fn row_to_result(row: &MaterializedRow, columns: &[ResultColumn]) -> BasesRow {
     let audio_description = row_audio_description(row, columns);
     BasesRow {
         path: row.path.clone(),
+        task_ordinal: row.ordinal,
         cells: row.cells.clone(),
         audio_description,
     }
@@ -1636,6 +1641,38 @@ fn value_type_rank(value: &Value) -> u8 {
         Value::List(_) => 8,
         Value::Object(_) => 9,
     }
+}
+
+fn apply_quick_filter(rows: &mut Vec<MaterializedRow>, quick_filter: Option<&str>) {
+    let Some(needle) = quick_filter
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+    else {
+        return;
+    };
+    let needle = value_text_norm(needle);
+    rows.retain(|row| {
+        row.cells
+            .iter()
+            .any(|cell| cell_text_norm(cell).contains(&needle))
+    });
+}
+
+fn cell_text_norm(cell: &CellValue) -> String {
+    match cell {
+        CellValue::Value(value) => value_text_norm(&value_display(value)),
+        CellValue::Error(error) => value_text_norm(error),
+    }
+}
+
+fn value_text_norm(value: &str) -> String {
+    use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+
+    value
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn group_rows(query: &SlateQuery, rows: &mut Vec<MaterializedRow>) -> Vec<GroupSlice> {
@@ -2219,7 +2256,7 @@ fn task_field_label(field: TaskField) -> &'static str {
     }
 }
 
-fn value_display(value: &Value) -> String {
+pub(crate) fn value_display(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::Bool(value) => value.to_string(),
@@ -2413,6 +2450,12 @@ fn error_result(
 }
 
 fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
+    if ctx
+        .quick_filter
+        .is_some_and(|filter| !filter.trim().is_empty())
+    {
+        return None;
+    }
     if query_mentions_global(query, GlobalFn::Now) {
         return None;
     }

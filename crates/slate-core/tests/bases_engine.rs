@@ -1019,6 +1019,38 @@ fn cache_keys_stable_queries_by_generation_and_today_queries_by_day() {
     assert!(!same_day_first.cache_hit);
     assert!(same_day_second.cache_hit);
     assert!(!next_day.cache_hit);
+
+    let quick_first = execute(
+        &stable_query,
+        &conn,
+        &EngineCtx {
+            now_ms: 7_000,
+            generation: 7,
+            cache: Some(&cache),
+            quick_filter: Some("Alpha"),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("first quick-filtered query");
+    let quick_second = execute(
+        &stable_query,
+        &conn,
+        &EngineCtx {
+            now_ms: 8_000,
+            generation: 7,
+            cache: Some(&cache),
+            quick_filter: Some("Alpha"),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("second quick-filtered query");
+    assert_eq!(quick_first.rows.len(), 1);
+    assert_eq!(quick_second.rows.len(), 1);
+    assert!(!quick_first.cache_hit);
+    assert!(!quick_second.cache_hit);
+    assert_eq!(quick_second.executed_at_ms, 8_000);
 }
 
 #[test]

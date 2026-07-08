@@ -3705,6 +3705,431 @@ impl CommandRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// Bases (Milestone N, #699): 1:1 mirrors of the handle-based session API.
+// No logic here -- every method delegates to core and converts shapes.
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BaseFileSummary {
+    pub path: String,
+    pub name: String,
+    pub view_count: u32,
+    pub warning_count: u32,
+    pub degraded: bool,
+    pub indexed_at_ms: i64,
+}
+
+impl From<core::BaseFileSummary> for BaseFileSummary {
+    fn from(s: core::BaseFileSummary) -> Self {
+        BaseFileSummary {
+            path: s.path,
+            name: s.name,
+            view_count: s.view_count,
+            warning_count: s.warning_count,
+            degraded: s.degraded,
+            indexed_at_ms: s.indexed_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BaseViewStatus {
+    Executable,
+    Fallback,
+    Error,
+}
+
+impl From<core::BaseViewStatus> for BaseViewStatus {
+    fn from(s: core::BaseViewStatus) -> Self {
+        match s {
+            core::BaseViewStatus::Executable => BaseViewStatus::Executable,
+            core::BaseViewStatus::Fallback => BaseViewStatus::Fallback,
+            core::BaseViewStatus::Error => BaseViewStatus::Error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BaseViewSummary {
+    pub name: String,
+    pub view_type: String,
+    pub source: String,
+    pub status: BaseViewStatus,
+}
+
+impl From<core::BaseViewSummary> for BaseViewSummary {
+    fn from(v: core::BaseViewSummary) -> Self {
+        BaseViewSummary {
+            name: v.name,
+            view_type: v.view_type,
+            source: v.source,
+            status: v.status.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ColumnRole {
+    Primary,
+    Identifier,
+    Metadata,
+    Metric,
+    Action,
+}
+
+impl From<core::ColumnRole> for ColumnRole {
+    fn from(r: core::ColumnRole) -> Self {
+        match r {
+            core::ColumnRole::Primary => ColumnRole::Primary,
+            core::ColumnRole::Identifier => ColumnRole::Identifier,
+            core::ColumnRole::Metadata => ColumnRole::Metadata,
+            core::ColumnRole::Metric => ColumnRole::Metric,
+            core::ColumnRole::Action => ColumnRole::Action,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ExportFormat {
+    Csv,
+    Markdown,
+}
+
+impl From<ExportFormat> for core::ExportFormat {
+    fn from(f: ExportFormat) -> Self {
+        match f {
+            ExportFormat::Csv => core::ExportFormat::Csv,
+            ExportFormat::Markdown => core::ExportFormat::Markdown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BasesColumn {
+    pub id: String,
+    pub label: String,
+    pub value_kind: String,
+    pub role: ColumnRole,
+}
+
+impl From<core::BasesColumn> for BasesColumn {
+    fn from(c: core::BasesColumn) -> Self {
+        BasesColumn {
+            id: c.id,
+            label: c.label,
+            value_kind: c.value_kind,
+            role: c.role.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BasesValue {
+    pub raw_kind: String,
+    pub display: String,
+    pub text: Option<String>,
+    pub number: Option<f64>,
+    pub bool_value: Option<bool>,
+    pub date_epoch_ms: Option<i64>,
+    pub date_has_time: bool,
+    pub link_target: Option<String>,
+    pub link_display: Option<String>,
+    pub list: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl From<core::BasesValue> for BasesValue {
+    fn from(v: core::BasesValue) -> Self {
+        BasesValue {
+            raw_kind: v.raw_kind,
+            display: v.display,
+            text: v.text,
+            number: v.number,
+            bool_value: v.bool_value,
+            date_epoch_ms: v.date_epoch_ms,
+            date_has_time: v.date_has_time,
+            link_target: v.link_target,
+            link_display: v.link_display,
+            list: v.list,
+            error: v.error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BasesRow {
+    pub file_path: String,
+    pub task_ordinal: Option<u64>,
+    pub values: Vec<BasesValue>,
+    pub audio_description: String,
+}
+
+impl From<core::BasesRow> for BasesRow {
+    fn from(r: core::BasesRow) -> Self {
+        BasesRow {
+            file_path: r.file_path,
+            task_ordinal: r.task_ordinal,
+            values: r.values.into_iter().map(Into::into).collect(),
+            audio_description: r.audio_description,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BasesSummaryCell {
+    pub column_id: String,
+    pub summary: String,
+    pub value: BasesValue,
+}
+
+impl From<core::BasesSummaryCell> for BasesSummaryCell {
+    fn from(s: core::BasesSummaryCell) -> Self {
+        BasesSummaryCell {
+            column_id: s.column_id,
+            summary: s.summary,
+            value: s.value.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BasesGroup {
+    pub label: String,
+    pub row_start: u64,
+    pub row_count: u64,
+    pub summaries: Vec<BasesSummaryCell>,
+}
+
+impl From<core::BasesGroup> for BasesGroup {
+    fn from(g: core::BasesGroup) -> Self {
+        BasesGroup {
+            label: g.label,
+            row_start: g.row_start,
+            row_count: g.row_count,
+            summaries: g.summaries.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BasesResultSet {
+    pub columns: Vec<BasesColumn>,
+    pub rows: Vec<BasesRow>,
+    pub groups: Vec<BasesGroup>,
+    pub summaries: Vec<BasesSummaryCell>,
+    pub total_count: u64,
+    pub shown_count: u64,
+    pub executed_at_ms: i64,
+    pub warnings: Vec<String>,
+    pub view_error: Option<String>,
+    pub audio_summary: String,
+}
+
+impl From<core::BasesResultSet> for BasesResultSet {
+    fn from(r: core::BasesResultSet) -> Self {
+        BasesResultSet {
+            columns: r.columns.into_iter().map(Into::into).collect(),
+            rows: r.rows.into_iter().map(Into::into).collect(),
+            groups: r.groups.into_iter().map(Into::into).collect(),
+            summaries: r.summaries.into_iter().map(Into::into).collect(),
+            total_count: r.total_count,
+            shown_count: r.shown_count,
+            executed_at_ms: r.executed_at_ms,
+            warnings: r.warnings,
+            view_error: r.view_error,
+            audio_summary: r.audio_summary,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum BaseEdit {
+    SetViewKey {
+        view: u32,
+        key: String,
+        value: String,
+    },
+    AddView {
+        yaml: String,
+    },
+    RemoveView {
+        view: u32,
+    },
+    RenameView {
+        view: u32,
+        name: String,
+    },
+    SetViewFilters {
+        view: u32,
+        yaml: String,
+    },
+    SetTopLevelFilters {
+        yaml: String,
+    },
+    SetFormula {
+        name: String,
+        expression: String,
+    },
+    RemoveFormula {
+        name: String,
+    },
+    SetDisplayName {
+        property: String,
+        display_name: Option<String>,
+    },
+    SetSummaryAssignment {
+        view: u32,
+        property: String,
+        summary: Option<String>,
+    },
+    SetSlateState {
+        view: u32,
+        yaml: Option<String>,
+    },
+}
+
+impl From<BaseEdit> for core::bases::BaseEdit {
+    fn from(e: BaseEdit) -> Self {
+        match e {
+            BaseEdit::SetViewKey { view, key, value } => core::bases::BaseEdit::SetViewKey {
+                view: view as usize,
+                key,
+                value,
+            },
+            BaseEdit::AddView { yaml } => core::bases::BaseEdit::AddView { yaml },
+            BaseEdit::RemoveView { view } => core::bases::BaseEdit::RemoveView {
+                view: view as usize,
+            },
+            BaseEdit::RenameView { view, name } => core::bases::BaseEdit::RenameView {
+                view: view as usize,
+                name,
+            },
+            BaseEdit::SetViewFilters { view, yaml } => core::bases::BaseEdit::SetViewFilters {
+                view: view as usize,
+                yaml,
+            },
+            BaseEdit::SetTopLevelFilters { yaml } => {
+                core::bases::BaseEdit::SetTopLevelFilters { yaml }
+            }
+            BaseEdit::SetFormula { name, expression } => {
+                core::bases::BaseEdit::SetFormula { name, expression }
+            }
+            BaseEdit::RemoveFormula { name } => core::bases::BaseEdit::RemoveFormula { name },
+            BaseEdit::SetDisplayName {
+                property,
+                display_name,
+            } => core::bases::BaseEdit::SetDisplayName {
+                property,
+                display_name,
+            },
+            BaseEdit::SetSummaryAssignment {
+                view,
+                property,
+                summary,
+            } => core::bases::BaseEdit::SetSummaryAssignment {
+                view: view as usize,
+                property,
+                summary,
+            },
+            BaseEdit::SetSlateState { view, yaml } => core::bases::BaseEdit::SetSlateState {
+                view: view as usize,
+                yaml,
+            },
+        }
+    }
+}
+
+#[uniffi::export]
+impl VaultSession {
+    pub fn bases_list(&self) -> Result<Vec<BaseFileSummary>, VaultError> {
+        Ok(self
+            .inner
+            .bases_list()?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn open_base(&self, path: String) -> Result<u64, VaultError> {
+        Ok(self.inner.open_base(&path)?)
+    }
+
+    pub fn open_base_inline(
+        &self,
+        source: String,
+        this_path: Option<String>,
+    ) -> Result<u64, VaultError> {
+        Ok(self.inner.open_base_inline(&source, this_path)?)
+    }
+
+    pub fn close_base(&self, handle: u64) {
+        self.inner.close_base(handle);
+    }
+
+    pub fn base_views(&self, handle: u64) -> Result<Vec<BaseViewSummary>, VaultError> {
+        Ok(self
+            .inner
+            .base_views(handle)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn base_execute(
+        &self,
+        handle: u64,
+        view: u32,
+        this_path: Option<String>,
+        quick_filter: Option<String>,
+        cancel: Arc<CancelToken>,
+    ) -> Result<BasesResultSet, VaultError> {
+        Ok(self
+            .inner
+            .base_execute(handle, view, this_path, quick_filter, &cancel.inner)?
+            .into())
+    }
+
+    pub fn open_query(
+        &self,
+        query_json: String,
+        this_path: Option<String>,
+    ) -> Result<u64, VaultError> {
+        Ok(self.inner.open_query(&query_json, this_path)?)
+    }
+
+    pub fn open_saved_query(&self, id: String) -> Result<u64, VaultError> {
+        Ok(self.inner.open_saved_query(&id)?)
+    }
+
+    pub fn open_dql(&self, source: String, this_path: Option<String>) -> Result<u64, VaultError> {
+        Ok(self.inner.open_dql(&source, this_path)?)
+    }
+
+    pub fn base_apply_edit(&self, handle: u64, edit: BaseEdit) -> Result<(), VaultError> {
+        Ok(self.inner.base_apply_edit(handle, edit.into())?)
+    }
+
+    pub fn save_query_as_base(&self, query_json: String, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.save_query_as_base(&query_json, &path)?)
+    }
+
+    pub fn dql_as_base(&self, source: String) -> Result<String, VaultError> {
+        Ok(self.inner.dql_as_base(&source)?)
+    }
+
+    pub fn base_export(
+        &self,
+        handle: u64,
+        view: u32,
+        format: ExportFormat,
+        quick_filter: Option<String>,
+    ) -> Result<String, VaultError> {
+        Ok(self
+            .inner
+            .base_export(handle, view, format.into(), quick_filter)?)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Canvas (Milestone T, #361): 1:1 mirrors of the handle-based read API.
 // No logic here — every method delegates to core and converts shapes.
 
@@ -4900,6 +5325,89 @@ mod tests {
         };
         assert!(message.len() < MAX_ACTION_ERROR_MSG_LEN + 32);
         assert!(message.ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn bases_api_drives_over_the_ffi_wrapper() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Queries")).unwrap();
+        std::fs::create_dir(tmp.path().join("Notes")).unwrap();
+        std::fs::write(
+            tmp.path().join("Queries/Reading.base"),
+            r#"views:
+  - type: table
+    name: Reading
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+      - status
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("Notes/Alpha.md"),
+            "---\nstatus: active\n---\n# Alpha\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("Notes/Beta.md"),
+            "---\nstatus: done\n---\n# Beta\n",
+        )
+        .unwrap();
+
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let summaries = session.bases_list().unwrap();
+        assert_eq!(summaries[0].path, "Queries/Reading.base");
+
+        let handle = session.open_base("Queries/Reading.base".into()).unwrap();
+        let views = session.base_views(handle).unwrap();
+        assert_eq!(views[0].status, BaseViewStatus::Executable);
+
+        let result = session
+            .base_execute(handle, 0, None, Some("done".into()), CancelToken::new())
+            .unwrap();
+        assert_eq!(result.total_count, 1);
+        assert_eq!(result.rows[0].values[0].display, "Beta.md");
+
+        let csv = session
+            .base_export(handle, 0, ExportFormat::Csv, Some("done".into()))
+            .unwrap();
+        assert_eq!(csv, "file.name,status\r\nBeta.md,done\r\n");
+
+        let saved_query_err = session.open_saved_query("missing".into()).unwrap_err();
+        assert!(
+            saved_query_err
+                .to_string()
+                .contains("saved_queries storage"),
+            "{saved_query_err}"
+        );
+
+        session
+            .base_apply_edit(
+                handle,
+                BaseEdit::RenameView {
+                    view: 0,
+                    name: "Renamed".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(session.base_views(handle).unwrap()[0].name, "Renamed");
+
+        let converted = session
+            .dql_as_base("TABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n".into())
+            .unwrap();
+        let inline = session.open_base_inline(converted, None).unwrap();
+        assert_eq!(
+            session
+                .base_execute(inline, 0, None, None, CancelToken::new())
+                .unwrap()
+                .columns[0]
+                .label,
+            "Name"
+        );
     }
 
     #[test]
