@@ -14,6 +14,7 @@ struct BaseContainerView: View {
     @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
     @State private var quickFilterTask: Task<Void, Never>?
     @State private var resultFocusToken = 0
+    @State private var editRequest: BasePropertyEditRequest?
     @FocusState private var quickFilterFocused: Bool
 
     var body: some View {
@@ -46,6 +47,33 @@ struct BaseContainerView: View {
         .onChange(of: document.quickFilterText) { _, _ in
             guard quickFilterFocused else { return }
             scheduleQuickFilterExecution(previousSelection: selectedRow)
+        }
+        .onChange(of: document.result) { _, _ in
+            updateActiveBaseSelection()
+        }
+        .onChange(of: appState.baseEditPropertyRequestToken) { _, _ in
+            beginSelectedPropertyEdit()
+        }
+        .sheet(item: $editRequest) { request in
+            BasePropertyEditSheet(
+                request: request,
+                onSave: { value in
+                    Task { @MainActor in
+                        await appState.basesSetProperty(
+                            row: request.row,
+                            column: request.column,
+                            value: value)
+                        restoreSelection(previous: selectedRow)
+                    }
+                },
+                onClear: {
+                    Task { @MainActor in
+                        await appState.basesDeleteProperty(
+                            row: request.row,
+                            column: request.column)
+                        restoreSelection(previous: selectedRow)
+                    }
+                })
         }
     }
 
@@ -147,7 +175,12 @@ struct BaseContainerView: View {
             summary: summaryText(result),
             accessibilityLabel: "Base table",
             groups: groups(from: result),
-            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            selection: Binding(
+                get: { selectedRow },
+                set: {
+                    selectedRow = $0
+                    updateActiveBaseSelection()
+                }),
             cellSelection: Binding(
                 get: { selectedCell },
                 set: {
@@ -155,17 +188,17 @@ struct BaseContainerView: View {
                     if let columnIndex = $0?.columnIndex {
                         document.focusColumn(columnIndex)
                     }
+                    updateActiveBaseSelection()
                 }),
             sortState: Binding(
                 get: { document.sortState },
                 set: { document.sortState = $0 }),
             cellNavigation: true,
-            onActivate: { appState.openFile($0.row.filePath, target: .currentTab) },
-            rowActions: [
-                .init("Open") { row in
-                    appState.openFile(row.row.filePath, target: .currentTab)
-                }
-            ],
+            onActivate: { _ = appState.basesOpen(row: $0.row) },
+            onEditCell: { row, columnIndex in
+                beginEdit(row: row.row, columnIndex: columnIndex, result: result)
+            },
+            rowActions: gridRowActions(result: result),
             focusRequest: resultFocusToken)
     }
 
@@ -176,14 +209,48 @@ struct BaseContainerView: View {
             isQuickFiltered: document.quickFilterActive)
         return BaseListView(
             projection: projection,
-            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            selection: Binding(
+                get: { selectedRow },
+                set: {
+                    selectedRow = $0
+                    updateActiveBaseSelection()
+                }),
             focusRequest: resultFocusToken,
-            onActivate: { appState.openFile($0.filePath, target: .currentTab) },
-            rowActions: [
-                .init("Open") { row in
-                    appState.openFile(row.filePath, target: .currentTab)
-                }
-            ])
+            onActivate: { _ = appState.basesOpen(row: $0.row) },
+            rowActions: listRowActions(result: result))
+    }
+
+    private func gridRowActions(
+        result: BasesResultSet
+    ) -> [AccessibleDataGrid<BaseGridRow>.RowAction] {
+        [
+            .init("Open") { row in _ = appState.basesOpen(row: row.row) },
+            .init("Copy link") { row in _ = appState.basesCopyLink(for: row.row) },
+            .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
+            .init("Edit property") { row in
+                let columnIndex = selectedCell?.rowID == row.id
+                    ? selectedCell?.columnIndex
+                    : nil
+                beginEdit(
+                    row: row.row,
+                    columnIndex: columnIndex ?? firstEditableColumnIndex(result: result),
+                    result: result)
+            },
+        ]
+    }
+
+    private func listRowActions(result: BasesResultSet) -> [BaseListRowAction] {
+        [
+            .init("Open") { row in _ = appState.basesOpen(row: row.row) },
+            .init("Copy link") { row in _ = appState.basesCopyLink(for: row.row) },
+            .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
+            .init("Edit property") { row in
+                beginEdit(
+                    row: row.row,
+                    columnIndex: firstEditableColumnIndex(result: result),
+                    result: result)
+            },
+        ]
     }
 
     private func columns(from result: BasesResultSet) -> [AccessibleDataGrid<BaseGridRow>.Column] {
@@ -248,12 +315,55 @@ struct BaseContainerView: View {
     private func restoreSelection(previous: String?) {
         guard let result = document.result else {
             selectedRow = nil
+            updateActiveBaseSelection()
             return
         }
         selectedRow = BaseSelectionRestorer.restoredSelection(
             previous: previous,
             current: selectedRow,
             availableIDs: rows(from: result).map(\.id))
+        updateActiveBaseSelection()
+    }
+
+    private func updateActiveBaseSelection() {
+        appState.updateActiveBaseSelection(
+            rowID: selectedRow,
+            columnIndex: selectedCell?.columnIndex,
+            result: document.result)
+    }
+
+    private func beginSelectedPropertyEdit() {
+        guard let row = appState.activeBaseSelectedRow,
+            let result = document.result
+        else { return }
+        let columnIndex: Int
+        if let column = appState.activeBaseSelectedColumn,
+            let index = result.columns.firstIndex(of: column)
+        {
+            columnIndex = index
+        } else {
+            columnIndex = firstEditableColumnIndex(result: result)
+        }
+        beginEdit(row: row, columnIndex: columnIndex, result: result)
+    }
+
+    private func beginEdit(row: BasesRow, columnIndex: Int, result: BasesResultSet) {
+        guard result.columns.indices.contains(columnIndex),
+            row.values.indices.contains(columnIndex)
+        else { return }
+        let column = result.columns[columnIndex]
+        guard BaseCellEditPolicy.propertyKey(for: column) != nil else {
+            appState.postBaseActionAnnouncement(BaseCellEditPolicy.readOnlyHint(for: column))
+            return
+        }
+        editRequest = BasePropertyEditRequest(
+            row: row,
+            column: column,
+            currentValue: row.values[columnIndex])
+    }
+
+    private func firstEditableColumnIndex(result: BasesResultSet) -> Int {
+        result.columns.firstIndex { BaseCellEditPolicy.propertyKey(for: $0) != nil } ?? 0
     }
 
     private var activeViewBinding: Binding<Int> {

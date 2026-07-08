@@ -117,6 +117,13 @@ enum SlateCommandID {
     static let basesViewAsList = "slate.bases.viewAsList"
     static let basesQuickFilter = "slate.bases.quickFilter"
     static let basesWhereAmI = "slate.bases.whereAmI"
+    static let basesOpenRow = "slate.bases.openRow"
+    static let basesCopyLink = "slate.bases.copyLink"
+    static let basesShowBacklinks = "slate.bases.showBacklinks"
+    static let basesEditProperty = "slate.bases.editProperty"
+    static let basesExportCSV = "slate.bases.exportCsv"
+    static let basesExportMarkdown = "slate.bases.exportMarkdown"
+    static let basesCopyMarkdown = "slate.bases.copyMarkdown"
     static let basesResultsPopover = "slate.bases.resultsPopover"
     static let basesRefresh = "slate.bases.refresh"
 
@@ -248,6 +255,13 @@ enum SlateCommandID {
         basesViewAsList,
         basesQuickFilter,
         basesWhereAmI,
+        basesOpenRow,
+        basesCopyLink,
+        basesShowBacklinks,
+        basesEditProperty,
+        basesExportCSV,
+        basesExportMarkdown,
+        basesCopyMarkdown,
         basesResultsPopover,
         basesRefresh,
         newTab,
@@ -878,6 +892,55 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .bases,
         hint: "Read the active base, view, and temporary quick filter."
     ) { [weak appState] in _ = appState?.basesWhereAmI() }
+
+    register(
+        SlateCommandID.basesOpenRow,
+        label: "Bases: Open Row",
+        section: .bases,
+        hint: "Open the selected base result row."
+    ) { [weak appState] in appState?.basesOpenSelectedRow() }
+
+    register(
+        SlateCommandID.basesCopyLink,
+        label: "Bases: Copy Link",
+        section: .bases,
+        hint: "Copy a wikilink to the selected base result row."
+    ) { [weak appState] in appState?.basesCopySelectedLink() }
+
+    register(
+        SlateCommandID.basesShowBacklinks,
+        label: "Bases: Show Backlinks",
+        section: .bases,
+        hint: "Show backlinks for the selected base result row."
+    ) { [weak appState] in appState?.basesShowSelectedBacklinks() }
+
+    register(
+        SlateCommandID.basesEditProperty,
+        label: "Bases: Edit Property",
+        section: .bases,
+        hint: "Edit the selected editable base property cell."
+    ) { [weak appState] in appState?.basesEditSelectedProperty() }
+
+    register(
+        SlateCommandID.basesExportCSV,
+        label: "Bases: Export View as CSV",
+        section: .bases,
+        hint: "Export the active base view as CSV."
+    ) { [weak appState] in appState?.basesExportCSV() }
+
+    register(
+        SlateCommandID.basesExportMarkdown,
+        label: "Bases: Export View as Markdown Table",
+        section: .bases,
+        hint: "Export the active base view as a Markdown table."
+    ) { [weak appState] in appState?.basesExportMarkdown() }
+
+    register(
+        SlateCommandID.basesCopyMarkdown,
+        label: "Bases: Copy View as Markdown",
+        section: .bases,
+        hint: "Copy the active base view as a Markdown table."
+    ) { [weak appState] in _ = appState?.basesCopyViewAsMarkdown() }
 
     register(
         SlateCommandID.basesResultsPopover,

@@ -365,6 +365,130 @@ final class BasesTabRoutingTests: XCTestCase {
             "Base: Reading, view: Reading, quick filter: CAFE")
     }
 
+    func testBaseExportUsesQuickFilterAndCopyMarkdown() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+
+        _ = doc.applyQuickFilter("done", session: session)
+
+        XCTAssertEqual(
+            try state.basesExportText(format: .csv),
+            "file.name,status\r\nBeta.md,done\r\n")
+        XCTAssertEqual(
+            state.basesCopyViewAsMarkdown(),
+            "| file.name | status |\n| --- | --- |\n| Beta.md | done |\n")
+        XCTAssertEqual(state.lastBaseActionAnnouncement, "Copied base view as Markdown.")
+    }
+
+    func testBasePropertyEditUsesExistingWritePathAndReexecutes() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let result = try XCTUnwrap(doc.result)
+        let row = try XCTUnwrap(result.rows.first { $0.filePath == "Notes/Alpha.md" })
+        let status = try XCTUnwrap(result.columns.first { $0.id == "status" })
+
+        let announcement = await state.basesSetProperty(
+            row: row,
+            column: status,
+            value: .text(value: "review"))
+
+        XCTAssertEqual(announcement, "Saved. status: review")
+        XCTAssertEqual(state.lastBaseActionAnnouncement, "Saved. status: review")
+        XCTAssertTrue(
+            try String(
+                contentsOf: vaultURL.appendingPathComponent("Notes/Alpha.md"),
+                encoding: .utf8)
+                .contains("status: review"))
+        XCTAssertEqual(
+            doc.result?.rows.first { $0.filePath == "Notes/Alpha.md" }?.values[1].display,
+            "review")
+    }
+
+    func testBasePropertyEditAnnouncesWhenRowLeavesResultSet() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+        _ = doc.applyQuickFilter("active", session: session)
+        let result = try XCTUnwrap(doc.result)
+        let row = try XCTUnwrap(result.rows.first { $0.filePath == "Notes/Alpha.md" })
+        let status = try XCTUnwrap(result.columns.first { $0.id == "status" })
+
+        let announcement = await state.basesSetProperty(
+            row: row,
+            column: status,
+            value: .text(value: "archived"))
+
+        XCTAssertEqual(announcement, "Saved. Row no longer matches this view")
+        XCTAssertTrue(doc.result?.rows.isEmpty == true)
+    }
+
+    func testBaseRowActionsCopyLinkAndShowBacklinks() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let row = try XCTUnwrap(
+            state.activeBaseDocument?.result?.rows.first { $0.filePath == "Notes/Alpha.md" })
+
+        XCTAssertEqual(state.basesCopyLink(for: row), "[[Notes/Alpha]]")
+        XCTAssertEqual(state.lastBaseActionAnnouncement, "Copied link to Alpha.")
+
+        XCTAssertEqual(state.basesShowBacklinks(for: row), "Backlinks for Alpha.")
+        XCTAssertEqual(state.selectedFilePath, "Notes/Alpha.md")
+        XCTAssertEqual(state.workspace.activeLeaf, .backlinks)
+    }
+
+    func testSelectedBaseRowCommandsRequireActiveBaseSurface() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let row = try XCTUnwrap(
+            state.activeBaseDocument?.result?.rows.first { $0.filePath == "Notes/Alpha.md" })
+        state.activeBaseSelectedRow = row
+        state.openFile("Notes/Beta.md", target: .currentTab)
+
+        state.basesCopySelectedLink()
+
+        XCTAssertEqual(state.lastBaseActionAnnouncement, "Select a base row first.")
+    }
+
+    func testBaseEditPolicyAllowsOnlyNoteMetadataColumns() {
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyKey(
+                for: BasesColumn(id: "status", label: "status", valueKind: "text", role: .metadata)),
+            "status")
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyKey(
+                for: BasesColumn(
+                    id: "note.priority", label: "priority", valueKind: "number", role: .metadata)),
+            "priority")
+        XCTAssertNil(
+            BaseCellEditPolicy.propertyKey(
+                for: BasesColumn(
+                    id: "file.name", label: "Name", valueKind: "text", role: .identifier)))
+        XCTAssertNil(
+            BaseCellEditPolicy.propertyKey(
+                for: BasesColumn(
+                    id: "formula.score", label: "Score", valueKind: "number", role: .metric)))
+        XCTAssertNil(
+            BaseCellEditPolicy.propertyKey(
+                for: BasesColumn(
+                    id: "task.status", label: "Task status", valueKind: "text", role: .metadata)))
+    }
+
+    func testBaseEditPolicyConvertsDisplayedValueKinds() {
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyValue(from: "42", valueKind: "number"),
+            .success(.integer(value: 42)))
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyValue(from: "3.5", valueKind: "number"),
+            .success(.float(value: 3.5)))
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyValue(from: "Project/Alpha", valueKind: "wikilink"),
+            .success(.wikilink(target: "Project/Alpha")))
+    }
+
     func testBaseSelectionRestorerKeepsSurvivingRowElseFallsBackToFirst() {
         XCTAssertEqual(
             BaseSelectionRestorer.restoredSelection(

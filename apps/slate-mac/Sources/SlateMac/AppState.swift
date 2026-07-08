@@ -349,6 +349,16 @@ final class AppState: ObservableObject {
     /// never persisted to the `.base` file.
     @Published var baseQuickFilterFocusToken = 0
 
+    /// Last Bases action announcement, exposed for XCTest because the global
+    /// accessibility announcer is a no-op without a running NSApp.
+    @Published var lastBaseActionAnnouncement: String?
+
+    /// Currently selected Bases row/column for registry commands whose
+    /// invocation originates outside the grid's AppKit row-action callback.
+    @Published var activeBaseSelectedRow: BasesRow?
+    @Published var activeBaseSelectedColumn: BasesColumn?
+    @Published var baseEditPropertyRequestToken = 0
+
     /// The one canvas announcement funnel (#518, DoD §H). Every canvas
     /// surface phrases through it; verbosity persists via
     /// `PreferencesStore` (`setCanvasVerbosity`).
