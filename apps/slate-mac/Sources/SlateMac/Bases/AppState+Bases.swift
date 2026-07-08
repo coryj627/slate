@@ -157,6 +157,91 @@ extension AppState {
             priority: .medium)
     }
 
+    func basesNewQuery() {
+        guard currentSession != nil else { return }
+        activeBaseQueryBuilder = BaseQueryBuilderModel()
+        postAccessibilityAnnouncement("New Bases query builder.", priority: .medium)
+    }
+
+    func basesEditViewFilters() {
+        guard let doc = activeBaseDocument, let session = currentSession else { return }
+        if doc.handle == nil {
+            doc.load(session: session)
+        }
+        guard let handle = doc.handle else { return }
+        do {
+            let queryJSON = try session.baseViewQueryJson(
+                handle: handle,
+                view: UInt32(doc.activeViewIndex))
+            activeBaseQueryBuilder = try BaseQueryBuilderModel(
+                draft: BaseQueryBuilderDraft(queryJSON: queryJSON))
+            let viewName = doc.activeViewName ?? "active view"
+            postAccessibilityAnnouncement("Editing filters for \(viewName).", priority: .medium)
+        } catch {
+            postAccessibilityAnnouncement(
+                "Base filters could not be opened in the builder: \(error.localizedDescription)",
+                priority: .medium)
+        }
+    }
+
+    func basesCloseQueryBuilder() {
+        activeBaseQueryBuilder = nil
+    }
+
+    func basesBuilderAddCondition() {
+        activeBaseQueryBuilder?.perform(.addCondition)
+    }
+
+    func basesBuilderAddGroup() {
+        activeBaseQueryBuilder?.perform(.addGroup)
+    }
+
+    func basesBuilderEditCondition() {
+        guard let model = activeBaseQueryBuilder,
+            let index = model.selectedRowIndex ?? model.editingRowIndex ?? model.rows.indices.first
+        else { return }
+        model.perform(.editCondition(index: index))
+    }
+
+    func basesBuilderRemoveCondition() {
+        guard let model = activeBaseQueryBuilder,
+            let index = model.selectedRowIndex ?? model.editingRowIndex ?? model.rows.indices.last
+        else { return }
+        model.perform(.removeCondition(index: index))
+    }
+
+    func basesLoadPropertyKeys() async -> [String] {
+        guard let session = currentSession else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            (try? session.listPropertyKeys().map(\.key)) ?? []
+        }.value
+    }
+
+    func basesLoadTags() async -> [String] {
+        guard let session = currentSession else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            (try? session.listTags()) ?? []
+        }.value
+    }
+
+    func basesLoadNotePaths() async -> [String] {
+        guard let session = currentSession else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            var cursor: String?
+            var out: [String] = []
+            repeat {
+                guard
+                    let page = try? session.listFiles(
+                        filter: .markdownOnly,
+                        paging: Paging(cursor: cursor, limit: 5_000))
+                else { break }
+                out.append(contentsOf: page.items.map(\.path))
+                cursor = page.nextCursor
+            } while cursor != nil && out.count < 50_000
+            return out
+        }.value
+    }
+
     func basesSelectNextView() {
         guard let doc = activeBaseDocument, let session = currentSession else { return }
         doc.selectNextView(session: session)

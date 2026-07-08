@@ -296,6 +296,21 @@ struct MainSplitView: View {
             CommandPaletteView()
                 .environmentObject(appState)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { appState.activeBaseQueryBuilder != nil },
+                set: { presented in
+                    if !presented {
+                        appState.activeBaseQueryBuilder = nil
+                    }
+                }
+            )
+        ) {
+            if let model = appState.activeBaseQueryBuilder {
+                BaseQueryBuilderSheet(model: model)
+                    .environmentObject(appState)
+            }
+        }
         // Quick switcher (#495). Triggered by ⌘T from the SlateMacApp
         // CommandGroup; closes via Esc or on opening a file (handled
         // inside the sheet).
