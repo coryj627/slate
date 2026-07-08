@@ -139,6 +139,14 @@ const MIGRATIONS: &[Migration] = &[
         description: "bases: .base file and query fence indexes (Milestone N, #693)",
         sql: include_str!("../migrations/021_bases.sql"),
     },
+    Migration {
+        description: "bases: saved queries (Milestone N, #700)",
+        sql: include_str!("../migrations/022_saved_queries.sql"),
+    },
+    Migration {
+        description: "bases: dashboards (Milestone N, #700)",
+        sql: include_str!("../migrations/023_dashboards.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -357,6 +365,34 @@ mod tests {
         }
 
         for index in ["idx_bases_files_name", "idx_bases_blocks_file"] {
+            let exists: u32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{index} should exist");
+        }
+    }
+
+    #[test]
+    fn migrations_022_023_create_saved_query_and_dashboard_tables() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+
+        for table in ["saved_queries", "dashboards"] {
+            let exists: u32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{table} table should exist");
+        }
+
+        for index in ["idx_saved_queries_name", "idx_dashboards_name"] {
             let exists: u32 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?1",

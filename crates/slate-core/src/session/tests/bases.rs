@@ -41,6 +41,21 @@ impl SplitMix64 {
     }
 }
 
+fn notes_query_json() -> String {
+    let (base, warnings) = crate::bases::parse_base(
+        r#"views:
+  - type: table
+    name: Reading
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+      - status
+"#,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    serde_json::to_string(&crate::bases::view_query(&base, 0)).unwrap()
+}
+
 #[test]
 fn bases_list_open_views_execute_and_close_handle() {
     let (_tmp, session) = make_vault(|p| {
@@ -607,7 +622,7 @@ fn census_bases_fail_loud() {
     assert!(
         saved_query_err
             .to_string()
-            .contains("saved_queries storage"),
+            .contains("unknown saved query id"),
         "{saved_query_err}"
     );
 
@@ -731,6 +746,383 @@ fn census_bases_read_only() {
         .unwrap();
 
     assert_eq!(vault_content_snapshot(tmp.path()), before);
+}
+
+#[test]
+fn saved_queries_crud_open_export_and_delete() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Notes/Alpha.md",
+            br#"---
+status: active
+---
+# Alpha
+"#,
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Beta.md",
+            br#"---
+status: done
+---
+# Beta
+"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let query_json = notes_query_json();
+    let id = session
+        .save_query(
+            "Reading",
+            Some("Status by note"),
+            &query_json,
+            SavedQuerySourceSyntax::Builder,
+        )
+        .unwrap();
+    assert_eq!(id.len(), 36, "ids should be UUID-shaped");
+    assert_eq!(id.chars().filter(|c| *c == '-').count(), 4);
+
+    let duplicate = session
+        .save_query(
+            "Reading",
+            None,
+            &query_json,
+            SavedQuerySourceSyntax::Builder,
+        )
+        .unwrap_err();
+    assert!(
+        duplicate.to_string().contains("saved query name"),
+        "{duplicate}"
+    );
+
+    let summaries = session.list_saved_queries().unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id, id);
+    assert_eq!(summaries[0].name, "Reading");
+    assert_eq!(summaries[0].description.as_deref(), Some("Status by note"));
+    assert_eq!(summaries[0].source_syntax, SavedQuerySourceSyntax::Builder);
+    assert!(summaries[0].warning.is_none());
+
+    let saved = session.get_saved_query(&id).unwrap();
+    assert_eq!(saved.name, "Reading");
+    assert_eq!(saved.description.as_deref(), Some("Status by note"));
+    assert_eq!(saved.source_syntax, SavedQuerySourceSyntax::Builder);
+    assert!(saved.created_at_ms <= saved.modified_at_ms);
+    assert!(saved.warning.is_none());
+    let envelope: serde_json::Value = serde_json::from_str(&saved.query_json).unwrap();
+    assert_eq!(envelope["v"], 1);
+    assert!(envelope.get("query").is_some());
+    let envelope_id = session
+        .save_query(
+            "Already enveloped",
+            None,
+            &saved.query_json,
+            SavedQuerySourceSyntax::Base,
+        )
+        .unwrap();
+    let envelope_saved = session.get_saved_query(&envelope_id).unwrap();
+    let envelope_round_trip: serde_json::Value =
+        serde_json::from_str(&envelope_saved.query_json).unwrap();
+    assert_eq!(envelope_round_trip["v"], 1);
+    assert!(envelope_saved.warning.is_none());
+    let rename_collision = session
+        .rename_saved_query(&envelope_id, "Reading")
+        .unwrap_err();
+    assert!(
+        rename_collision.to_string().contains("saved query name"),
+        "{rename_collision}"
+    );
+
+    let handle = session.open_saved_query(&id).unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Alpha.md", "Notes/Beta.md"]
+    );
+
+    session
+        .export_saved_query_as_base(&id, "Queries/Reading.base")
+        .unwrap();
+    let exported = session.read_text("Queries/Reading.base").unwrap();
+    assert!(exported.contains("views:\n"));
+    assert!(exported.contains("filters:"));
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let exported_handle = session.open_base("Queries/Reading.base").unwrap();
+    let exported_result = session
+        .base_execute(exported_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(result.rows, exported_result.rows);
+
+    session.rename_saved_query(&id, "Reading renamed").unwrap();
+    assert_eq!(
+        session.get_saved_query(&id).unwrap().name,
+        "Reading renamed"
+    );
+
+    session.delete_saved_query(&id).unwrap();
+    let err = session.open_saved_query(&id).unwrap_err();
+    assert!(err.to_string().contains("saved query"), "{err}");
+    assert!(
+        session.read_text("Queries/Reading.base").is_ok(),
+        "deleting a saved query must not delete exported durable forms"
+    );
+}
+
+#[test]
+fn saved_queries_and_dashboards_persist_across_relaunch() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Notes/Alpha.md",
+            br#"---
+status: active
+---
+# Alpha
+"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let query_json = notes_query_json();
+    let first_id = session
+        .save_query("First", None, &query_json, SavedQuerySourceSyntax::Builder)
+        .unwrap();
+    let second_id = session
+        .save_query(
+            "Second",
+            Some("Converted from DQL"),
+            &query_json,
+            SavedQuerySourceSyntax::Dql,
+        )
+        .unwrap();
+    let dashboard_id = session
+        .save_dashboard(
+            "Overview",
+            vec![
+                DashboardSection {
+                    saved_query_id: first_id.clone(),
+                    heading_override: Some("Pinned first".to_string()),
+                    view_override: None,
+                },
+                DashboardSection {
+                    saved_query_id: second_id.clone(),
+                    heading_override: None,
+                    view_override: Some("Reading".to_string()),
+                },
+            ],
+        )
+        .unwrap();
+    drop(session);
+
+    let reopened = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let summaries = reopened.list_saved_queries().unwrap();
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|summary| summary.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["First", "Second"]
+    );
+
+    let dashboards = reopened.list_dashboards().unwrap();
+    assert_eq!(dashboards.len(), 1);
+    assert_eq!(dashboards[0].id, dashboard_id);
+    assert_eq!(dashboards[0].section_count, 2);
+
+    let dashboard = reopened.get_dashboard(&dashboard_id).unwrap();
+    assert_eq!(dashboard.name, "Overview");
+    assert_eq!(dashboard.sections.len(), 2);
+    assert_eq!(
+        dashboard.sections[0].saved_query_name.as_deref(),
+        Some("First")
+    );
+    assert_eq!(
+        dashboard.sections[0].heading_override.as_deref(),
+        Some("Pinned first")
+    );
+    assert!(!dashboard.sections[0].missing);
+    assert_eq!(
+        dashboard.sections[1].saved_query_name.as_deref(),
+        Some("Second")
+    );
+    assert_eq!(
+        dashboard.sections[1].view_override.as_deref(),
+        Some("Reading")
+    );
+    assert!(!dashboard.sections[1].missing);
+}
+
+#[test]
+fn dashboards_preserve_dangling_refs_and_do_not_own_saved_queries() {
+    let (_tmp, session) = make_vault(|_| {});
+    let query_json = notes_query_json();
+    let query_id = session
+        .save_query(
+            "Live query",
+            None,
+            &query_json,
+            SavedQuerySourceSyntax::Base,
+        )
+        .unwrap();
+    let missing_id = "00000000-0000-4000-8000-000000000000".to_string();
+    let dashboard_id = session
+        .save_dashboard(
+            "Dashboard",
+            vec![
+                DashboardSection {
+                    saved_query_id: query_id.clone(),
+                    heading_override: None,
+                    view_override: None,
+                },
+                DashboardSection {
+                    saved_query_id: missing_id.clone(),
+                    heading_override: Some("Missing section".to_string()),
+                    view_override: Some("Alt".to_string()),
+                },
+            ],
+        )
+        .unwrap();
+
+    let dashboard = session.get_dashboard(&dashboard_id).unwrap();
+    assert_eq!(dashboard.sections.len(), 2);
+    assert_eq!(
+        dashboard.sections[0].saved_query_name.as_deref(),
+        Some("Live query")
+    );
+    assert!(!dashboard.sections[0].missing);
+    assert_eq!(dashboard.sections[1].saved_query_id, missing_id);
+    assert_eq!(
+        dashboard.sections[1].heading_override.as_deref(),
+        Some("Missing section")
+    );
+    assert!(dashboard.sections[1].saved_query_name.is_none());
+    assert!(dashboard.sections[1].missing);
+
+    session
+        .rename_dashboard(&dashboard_id, "Renamed dashboard")
+        .unwrap();
+    assert_eq!(
+        session.get_dashboard(&dashboard_id).unwrap().name,
+        "Renamed dashboard"
+    );
+    let other_dashboard_id = session.save_dashboard("Other dashboard", vec![]).unwrap();
+    let rename_collision = session
+        .rename_dashboard(&other_dashboard_id, "Renamed dashboard")
+        .unwrap_err();
+    assert!(
+        rename_collision.to_string().contains("dashboard name"),
+        "{rename_collision}"
+    );
+
+    session
+        .update_dashboard_sections(
+            &dashboard_id,
+            vec![DashboardSection {
+                saved_query_id: missing_id.clone(),
+                heading_override: Some("Still missing".to_string()),
+                view_override: None,
+            }],
+        )
+        .unwrap();
+    let updated = session.get_dashboard(&dashboard_id).unwrap();
+    assert_eq!(updated.sections.len(), 1);
+    assert_eq!(
+        updated.sections[0].heading_override.as_deref(),
+        Some("Still missing")
+    );
+    assert!(updated.sections[0].missing);
+
+    session.delete_dashboard(&dashboard_id).unwrap();
+    assert!(session.get_dashboard(&dashboard_id).is_err());
+    assert_eq!(
+        session.get_saved_query(&query_id).unwrap().name,
+        "Live query"
+    );
+}
+
+#[test]
+fn future_saved_query_envelopes_load_as_inert_entries() {
+    let (_tmp, session) = make_vault(|_| {});
+    let now = now_ms();
+    session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .execute(
+            "INSERT INTO saved_queries
+             (id, name, description, query_json, source_syntax, created_at_ms, modified_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "future-query",
+                "Future query",
+                Option::<String>::None,
+                r#"{"v":99,"query":{"future":true}}"#,
+                0_i64,
+                now,
+                now,
+            ],
+        )
+        .unwrap();
+
+    let summary = session.list_saved_queries().unwrap().pop().unwrap();
+    assert_eq!(summary.id, "future-query");
+    assert!(
+        summary
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("unsupported query_json envelope version 99")
+    );
+
+    let saved = session.get_saved_query("future-query").unwrap();
+    assert!(saved.warning.unwrap().contains("unsupported"));
+
+    let open_err = session.open_saved_query("future-query").unwrap_err();
+    assert!(open_err.to_string().contains("unsupported"), "{open_err}");
+    let export_err = session
+        .export_saved_query_as_base("future-query", "Queries/Future.base")
+        .unwrap_err();
+    assert!(
+        export_err.to_string().contains("unsupported"),
+        "{export_err}"
+    );
+}
+
+#[test]
+fn malformed_dashboard_sections_fail_loud_in_list_and_get() {
+    let (_tmp, session) = make_vault(|_| {});
+    let now = now_ms();
+    session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .execute(
+            "INSERT INTO dashboards
+             (id, name, sections_json, created_at_ms, modified_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params!["bad-dashboard", "Bad dashboard", "{not json", now, now],
+        )
+        .unwrap();
+
+    let list_err = session.list_dashboards().unwrap_err();
+    assert!(
+        list_err.to_string().contains("invalid dashboard sections"),
+        "{list_err}"
+    );
+
+    let get_err = session.get_dashboard("bad-dashboard").unwrap_err();
+    assert!(
+        get_err.to_string().contains("invalid dashboard sections"),
+        "{get_err}"
+    );
 }
 
 fn result_matrix(result: &BasesResultSet) -> Vec<(String, Vec<String>)> {

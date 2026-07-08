@@ -3941,6 +3941,165 @@ impl From<core::BasesResultSet> for BasesResultSet {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SavedQuerySourceSyntax {
+    Builder,
+    Base,
+    Dql,
+}
+
+impl From<core::SavedQuerySourceSyntax> for SavedQuerySourceSyntax {
+    fn from(s: core::SavedQuerySourceSyntax) -> Self {
+        match s {
+            core::SavedQuerySourceSyntax::Builder => SavedQuerySourceSyntax::Builder,
+            core::SavedQuerySourceSyntax::Base => SavedQuerySourceSyntax::Base,
+            core::SavedQuerySourceSyntax::Dql => SavedQuerySourceSyntax::Dql,
+        }
+    }
+}
+
+impl From<SavedQuerySourceSyntax> for core::SavedQuerySourceSyntax {
+    fn from(s: SavedQuerySourceSyntax) -> Self {
+        match s {
+            SavedQuerySourceSyntax::Builder => core::SavedQuerySourceSyntax::Builder,
+            SavedQuerySourceSyntax::Base => core::SavedQuerySourceSyntax::Base,
+            SavedQuerySourceSyntax::Dql => core::SavedQuerySourceSyntax::Dql,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SavedQuerySummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source_syntax: SavedQuerySourceSyntax,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+    pub warning: Option<String>,
+}
+
+impl From<core::SavedQuerySummary> for SavedQuerySummary {
+    fn from(s: core::SavedQuerySummary) -> Self {
+        SavedQuerySummary {
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            source_syntax: s.source_syntax.into(),
+            created_at_ms: s.created_at_ms,
+            modified_at_ms: s.modified_at_ms,
+            warning: s.warning,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SavedQuery {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub query_json: String,
+    pub source_syntax: SavedQuerySourceSyntax,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+    pub warning: Option<String>,
+}
+
+impl From<core::SavedQuery> for SavedQuery {
+    fn from(s: core::SavedQuery) -> Self {
+        SavedQuery {
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            query_json: s.query_json,
+            source_syntax: s.source_syntax.into(),
+            created_at_ms: s.created_at_ms,
+            modified_at_ms: s.modified_at_ms,
+            warning: s.warning,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DashboardSection {
+    pub saved_query_id: String,
+    pub heading_override: Option<String>,
+    pub view_override: Option<String>,
+}
+
+impl From<DashboardSection> for core::DashboardSection {
+    fn from(s: DashboardSection) -> Self {
+        core::DashboardSection {
+            saved_query_id: s.saved_query_id,
+            heading_override: s.heading_override,
+            view_override: s.view_override,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DashboardSectionStatus {
+    pub saved_query_id: String,
+    pub saved_query_name: Option<String>,
+    pub heading_override: Option<String>,
+    pub view_override: Option<String>,
+    pub missing: bool,
+}
+
+impl From<core::DashboardSectionStatus> for DashboardSectionStatus {
+    fn from(s: core::DashboardSectionStatus) -> Self {
+        DashboardSectionStatus {
+            saved_query_id: s.saved_query_id,
+            saved_query_name: s.saved_query_name,
+            heading_override: s.heading_override,
+            view_override: s.view_override,
+            missing: s.missing,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DashboardSummary {
+    pub id: String,
+    pub name: String,
+    pub section_count: u32,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+}
+
+impl From<core::DashboardSummary> for DashboardSummary {
+    fn from(s: core::DashboardSummary) -> Self {
+        DashboardSummary {
+            id: s.id,
+            name: s.name,
+            section_count: s.section_count,
+            created_at_ms: s.created_at_ms,
+            modified_at_ms: s.modified_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Dashboard {
+    pub id: String,
+    pub name: String,
+    pub sections: Vec<DashboardSectionStatus>,
+    pub created_at_ms: i64,
+    pub modified_at_ms: i64,
+}
+
+impl From<core::Dashboard> for Dashboard {
+    fn from(d: core::Dashboard) -> Self {
+        Dashboard {
+            id: d.id,
+            name: d.name,
+            sections: d.sections.into_iter().map(Into::into).collect(),
+            created_at_ms: d.created_at_ms,
+            modified_at_ms: d.modified_at_ms,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum BaseEdit {
     SetViewKey {
@@ -4098,6 +4257,87 @@ impl VaultSession {
 
     pub fn open_saved_query(&self, id: String) -> Result<u64, VaultError> {
         Ok(self.inner.open_saved_query(&id)?)
+    }
+
+    pub fn save_query(
+        &self,
+        name: String,
+        description: Option<String>,
+        query_json: String,
+        source_syntax: SavedQuerySourceSyntax,
+    ) -> Result<String, VaultError> {
+        Ok(self.inner.save_query(
+            &name,
+            description.as_deref(),
+            &query_json,
+            source_syntax.into(),
+        )?)
+    }
+
+    pub fn list_saved_queries(&self) -> Result<Vec<SavedQuerySummary>, VaultError> {
+        Ok(self
+            .inner
+            .list_saved_queries()?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn get_saved_query(&self, id: String) -> Result<SavedQuery, VaultError> {
+        Ok(self.inner.get_saved_query(&id)?.into())
+    }
+
+    pub fn rename_saved_query(&self, id: String, name: String) -> Result<(), VaultError> {
+        Ok(self.inner.rename_saved_query(&id, &name)?)
+    }
+
+    pub fn delete_saved_query(&self, id: String) -> Result<(), VaultError> {
+        Ok(self.inner.delete_saved_query(&id)?)
+    }
+
+    pub fn export_saved_query_as_base(&self, id: String, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.export_saved_query_as_base(&id, &path)?)
+    }
+
+    pub fn save_dashboard(
+        &self,
+        name: String,
+        sections: Vec<DashboardSection>,
+    ) -> Result<String, VaultError> {
+        Ok(self
+            .inner
+            .save_dashboard(&name, sections.into_iter().map(Into::into).collect())?)
+    }
+
+    pub fn list_dashboards(&self) -> Result<Vec<DashboardSummary>, VaultError> {
+        Ok(self
+            .inner
+            .list_dashboards()?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    pub fn get_dashboard(&self, id: String) -> Result<Dashboard, VaultError> {
+        Ok(self.inner.get_dashboard(&id)?.into())
+    }
+
+    pub fn rename_dashboard(&self, id: String, name: String) -> Result<(), VaultError> {
+        Ok(self.inner.rename_dashboard(&id, &name)?)
+    }
+
+    pub fn update_dashboard_sections(
+        &self,
+        id: String,
+        sections: Vec<DashboardSection>,
+    ) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .update_dashboard_sections(&id, sections.into_iter().map(Into::into).collect())?)
+    }
+
+    pub fn delete_dashboard(&self, id: String) -> Result<(), VaultError> {
+        Ok(self.inner.delete_dashboard(&id)?)
     }
 
     pub fn open_dql(&self, source: String, this_path: Option<String>) -> Result<u64, VaultError> {
@@ -5377,13 +5617,74 @@ mod tests {
             .unwrap();
         assert_eq!(csv, "file.name,status\r\nBeta.md,done\r\n");
 
-        let saved_query_err = session.open_saved_query("missing".into()).unwrap_err();
-        assert!(
-            saved_query_err
-                .to_string()
-                .contains("saved_queries storage"),
-            "{saved_query_err}"
+        let (base, warnings) = core::bases::parse_base(
+            r#"views:
+  - type: table
+    name: Reading
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+      - status
+"#,
         );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let query_json = serde_json::to_string(&core::bases::view_query(&base, 0)).unwrap();
+        let saved_id = session
+            .save_query(
+                "Saved reading".into(),
+                Some("From FFI".into()),
+                query_json,
+                SavedQuerySourceSyntax::Builder,
+            )
+            .unwrap();
+        let saved = session.get_saved_query(saved_id.clone()).unwrap();
+        assert_eq!(saved.name, "Saved reading");
+        assert_eq!(saved.description.as_deref(), Some("From FFI"));
+        assert!(saved.warning.is_none());
+
+        let saved_handle = session.open_saved_query(saved_id.clone()).unwrap();
+        assert_eq!(
+            session
+                .base_execute(
+                    saved_handle,
+                    0,
+                    None,
+                    Some("active".into()),
+                    CancelToken::new()
+                )
+                .unwrap()
+                .rows[0]
+                .file_path,
+            "Notes/Alpha.md"
+        );
+
+        session
+            .export_saved_query_as_base(saved_id.clone(), "Queries/Saved.base".into())
+            .unwrap();
+        assert!(
+            session
+                .bases_list()
+                .unwrap()
+                .iter()
+                .any(|summary| summary.path == "Queries/Saved.base")
+        );
+
+        let dashboard_id = session
+            .save_dashboard(
+                "Reading dashboard".into(),
+                vec![DashboardSection {
+                    saved_query_id: saved_id.clone(),
+                    heading_override: Some("Active".into()),
+                    view_override: None,
+                }],
+            )
+            .unwrap();
+        let dashboard = session.get_dashboard(dashboard_id).unwrap();
+        assert_eq!(
+            dashboard.sections[0].saved_query_name.as_deref(),
+            Some("Saved reading")
+        );
+        assert!(!dashboard.sections[0].missing);
 
         session
             .base_apply_edit(
