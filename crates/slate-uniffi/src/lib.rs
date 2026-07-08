@@ -3695,6 +3695,11 @@ impl CommandRegistry {
         )
     }
 
+    /// Remove a registered command. Returns `true` when an entry existed.
+    pub fn unregister(&self, id: String) -> bool {
+        self.inner.unregister(&id)
+    }
+
     /// Return every registered command's metadata, sorted by
     /// `(section, id)` for deterministic palette rendering.
     pub fn list(&self) -> Vec<Command> {
@@ -4358,6 +4363,21 @@ impl VaultSession {
 
     pub fn rename_saved_query(&self, id: String, name: String) -> Result<(), VaultError> {
         Ok(self.inner.rename_saved_query(&id, &name)?)
+    }
+
+    pub fn update_saved_query(
+        &self,
+        id: String,
+        description: Option<String>,
+        query_json: String,
+        source_syntax: SavedQuerySourceSyntax,
+    ) -> Result<(), VaultError> {
+        Ok(self.inner.update_saved_query(
+            &id,
+            description.as_deref(),
+            &query_json,
+            source_syntax.into(),
+        )?)
     }
 
     pub fn delete_saved_query(&self, id: String) -> Result<(), VaultError> {

@@ -3,12 +3,61 @@
 
 import Foundation
 
+enum BaseDocumentSource: Hashable {
+    case file(path: String)
+    case savedQuery(id: String, name: String)
+
+    init?(item: EditorItem) {
+        switch item {
+        case .base(let path):
+            self = .file(path: path)
+        case .savedQuery(let id, let name):
+            self = .savedQuery(id: id, name: name)
+        default:
+            return nil
+        }
+    }
+
+    var key: String {
+        switch self {
+        case .file(let path):
+            return path
+        case .savedQuery(let id, _):
+            return "saved-query:\(id)"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .file(let path):
+            let name = (path as NSString).lastPathComponent
+            return (name as NSString).deletingPathExtension
+        case .savedQuery(_, let name):
+            return name
+        }
+    }
+
+    var selectionKey: String {
+        switch self {
+        case .file(let path):
+            return path
+        case .savedQuery(let id, _):
+            return "saved-query:\(id)"
+        }
+    }
+
+    var filePath: String? {
+        if case .file(let path) = self { return path }
+        return nil
+    }
+}
+
 /// Per-open-base state (Milestone N, #702): loads the `.base` file over
 /// the FFI, owns the handle, and stores the active view result. One
 /// `BaseDocument` is shared by every tab/pane showing the same path.
 @MainActor
 final class BaseDocument: ObservableObject {
-    @Published private(set) var path: String
+    @Published private(set) var source: BaseDocumentSource
 
     enum LoadState: Equatable {
         case loading
@@ -28,7 +77,11 @@ final class BaseDocument: ObservableObject {
     private(set) var handle: UInt64?
 
     init(path: String) {
-        self.path = path
+        self.source = .file(path: path)
+    }
+
+    init(source: BaseDocumentSource) {
+        self.source = source
     }
 
     var activeViewName: String? {
@@ -37,8 +90,15 @@ final class BaseDocument: ObservableObject {
     }
 
     var displayName: String {
-        let name = (path as NSString).lastPathComponent
-        return (name as NSString).deletingPathExtension
+        source.displayName
+    }
+
+    var selectionKey: String {
+        source.selectionKey
+    }
+
+    var path: String {
+        source.filePath ?? source.selectionKey
     }
 
     var quickFilterActive: Bool {
@@ -53,7 +113,13 @@ final class BaseDocument: ObservableObject {
         state = .loading
         clearQuickFilterState()
         do {
-            let opened = try session.openBase(path: path)
+            let opened: UInt64
+            switch source {
+            case .file(let path):
+                opened = try session.openBase(path: path)
+            case .savedQuery(let id, _):
+                opened = try session.openSavedQuery(id: id)
+            }
             handle = opened
             views = try session.baseViews(handle: opened)
             activeViewIndex = views.isEmpty ? 0 : min(activeViewIndex, views.count - 1)
@@ -112,7 +178,9 @@ final class BaseDocument: ObservableObject {
             } else if view.status == .error {
                 state = .degraded("View \(view.name) has errors.")
             } else if let message = executed.viewError, !message.isEmpty {
-                state = .degraded(message)
+                state = .degraded(friendlyViewErrorMessage(message))
+            } else if let message = firstSavedQueryThisContextError(in: executed) {
+                state = .degraded(friendlyViewErrorMessage(message))
             } else {
                 state = .ready
             }
@@ -210,10 +278,27 @@ final class BaseDocument: ObservableObject {
         } else {
             handle = nil
         }
-        path = newPath
+        source = .file(path: newPath)
         if let session {
             load(session: session)
         }
+    }
+
+    func retarget(to newSource: BaseDocumentSource, session: VaultSession?) {
+        if let session {
+            close(session: session)
+        } else {
+            handle = nil
+        }
+        source = newSource
+        if let session {
+            load(session: session)
+        }
+    }
+
+    func retargetSavedQueryName(_ name: String) {
+        guard case .savedQuery(let id, _) = source else { return }
+        source = .savedQuery(id: id, name: name)
     }
 
     private var quickFilterArgument: String? {
@@ -402,5 +487,27 @@ final class BaseDocument: ObservableObject {
             }
         }
         return "\(displayName) could not be opened: \(error.localizedDescription)"
+    }
+
+    private func friendlyViewErrorMessage(_ message: String) -> String {
+        guard case .savedQuery = source,
+            message.contains("this is unavailable in this evaluation context"),
+            !message.contains("Dock to sidebar to follow the active note.")
+        else { return message }
+        return "\(message) Dock to sidebar to follow the active note."
+    }
+
+    private func firstSavedQueryThisContextError(in result: BasesResultSet) -> String? {
+        guard case .savedQuery = source else { return nil }
+        for row in result.rows {
+            for value in row.values {
+                if let error = value.error,
+                    error.contains("this is unavailable in this evaluation context")
+                {
+                    return error
+                }
+            }
+        }
+        return nil
     }
 }

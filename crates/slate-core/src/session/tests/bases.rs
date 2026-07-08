@@ -976,6 +976,35 @@ status: done
         "{rename_collision}"
     );
 
+    let (active_only_base, warnings) = crate::bases::parse_base(
+        r#"views:
+  - type: table
+    name: Active
+    filters:
+      and:
+        - "file.inFolder(\"Notes\")"
+        - "status == \"active\""
+    order:
+      - file.name
+      - status
+"#,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let active_only_json =
+        serde_json::to_string(&crate::bases::view_query(&active_only_base, 0)).unwrap();
+    session
+        .update_saved_query(
+            &id,
+            Some("Only active notes"),
+            &active_only_json,
+            SavedQuerySourceSyntax::Builder,
+        )
+        .unwrap();
+    let updated = session.get_saved_query(&id).unwrap();
+    assert_eq!(updated.name, "Reading");
+    assert_eq!(updated.description.as_deref(), Some("Only active notes"));
+    assert_eq!(updated.source_syntax, SavedQuerySourceSyntax::Builder);
+
     let handle = session.open_saved_query(&id).unwrap();
     let result = session
         .base_execute(handle, 0, None, None, &CancelToken::new())
@@ -986,7 +1015,7 @@ status: done
             .iter()
             .map(|row| row.file_path.as_str())
             .collect::<Vec<_>>(),
-        vec!["Notes/Alpha.md", "Notes/Beta.md"]
+        vec!["Notes/Alpha.md"]
     );
 
     session

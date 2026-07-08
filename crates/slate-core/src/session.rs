@@ -5600,6 +5600,25 @@ impl VaultSession {
         Ok(())
     }
 
+    pub fn update_saved_query(
+        &self,
+        id: &str,
+        description: Option<&str>,
+        query_json: &str,
+        source_syntax: SavedQuerySourceSyntax,
+    ) -> Result<(), VaultError> {
+        let envelope = normalize_saved_query_envelope_for_save(query_json)?;
+        let now = now_ms();
+        let conn = self.conn.lock().expect("session connection mutex");
+        let changed = conn.execute(
+            "UPDATE saved_queries
+             SET description = ?1, query_json = ?2, source_syntax = ?3, modified_at_ms = ?4
+             WHERE id = ?5",
+            rusqlite::params![description, envelope, source_syntax.to_i64(), now, id],
+        )?;
+        ensure_changed(changed, "saved query", id)
+    }
+
     pub fn delete_saved_query(&self, id: &str) -> Result<(), VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         let changed = conn.execute("DELETE FROM saved_queries WHERE id = ?1", [id])?;

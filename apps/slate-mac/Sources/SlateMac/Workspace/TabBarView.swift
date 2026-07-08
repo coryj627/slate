@@ -122,23 +122,25 @@ struct TabBarView: View {
         }
     }
 
-    /// "tab N of M[, edited][, canvas]" — the VoiceOver value for one tab.
+    /// "tab N of M[, edited][, canvas/base/saved query]" — the VoiceOver value for one tab.
     /// Static so tests pin the exact strings. The kind rides in the value
     /// (t0 §3 inspectability), not the label, so the speakable name stays
     /// the filename for Voice Control.
     static func accessibilityValue(
         index: Int, count: Int, isDirty: Bool, isCanvas: Bool = false,
-        isBase: Bool = false
+        isBase: Bool = false, isSavedQuery: Bool = false
     ) -> String {
         "tab \(index + 1) of \(count)" + (isDirty ? ", edited" : "")
             + (isCanvas ? ", canvas" : "")
             + (isBase ? ", base" : "")
+            + (isSavedQuery ? ", saved query" : "")
     }
 
     private func isDirty(_ tab: WorkspaceTab) -> Bool {
         // Canvas/base tabs are never dirty through the note-buffer close gate.
         if case .canvas = tab.item { return false }
         if case .base = tab.item { return false }
+        if case .savedQuery = tab.item { return false }
         if tab.id == group.activeTabID {
             return appState.hasUnsavedChanges
         }
@@ -146,11 +148,7 @@ struct TabBarView: View {
     }
 
     private func title(_ tab: WorkspaceTab) -> String {
-        let path = appState.workspace.tabPath(tab)
-        let name = (path as NSString).lastPathComponent
-        return (name as NSString).deletingPathExtension.isEmpty
-            ? name
-            : (name as NSString).deletingPathExtension
+        appState.workspace.tabTitle(tab)
     }
 
     @ViewBuilder
@@ -171,6 +169,11 @@ struct TabBarView: View {
                             .foregroundStyle(Tokens.ColorRole.textSecondary)
                     }
                     if case .base = tab.item {
+                        SlateSymbol.base.decorative
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    }
+                    if case .savedQuery = tab.item {
                         SlateSymbol.base.decorative
                             .font(Tokens.Typography.caption)
                             .foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -200,7 +203,8 @@ struct TabBarView: View {
                 Self.accessibilityValue(
                     index: index, count: group.tabs.count, isDirty: dirty,
                     isCanvas: { if case .canvas = tab.item { return true }; return false }(),
-                    isBase: { if case .base = tab.item { return true }; return false }())
+                    isBase: { if case .base = tab.item { return true }; return false }(),
+                    isSavedQuery: { if case .savedQuery = tab.item { return true }; return false }())
             )
             .accessibilityAddTraits(active ? [.isSelected] : [])
             .accessibilityHint(

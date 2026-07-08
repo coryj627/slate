@@ -4,14 +4,24 @@
 import AppKit
 import Foundation
 
+struct BaseQueriesState: Equatable {
+    var savedQueries: [SavedQuerySummary] = []
+    var baseFiles: [BaseFileSummary] = []
+    var pinnedSavedQueryIDs: [String] = []
+}
+
 /// Bases tab lifecycle (Milestone N, #702): the `.base` arm of the
 /// single navigation funnel, the per-path document registry, and the
 /// palette command actions.
 extension AppState {
     func baseDocument(for path: String) -> BaseDocument {
-        if let existing = baseDocuments[path] { return existing }
-        let doc = BaseDocument(path: path)
-        baseDocuments[path] = doc
+        baseDocument(for: .file(path: path))
+    }
+
+    func baseDocument(for source: BaseDocumentSource) -> BaseDocument {
+        if let existing = baseDocuments[source.key] { return existing }
+        let doc = BaseDocument(source: source)
+        baseDocuments[source.key] = doc
         return doc
     }
 
@@ -23,7 +33,7 @@ extension AppState {
         return handle
     }
 
-    func openBaseFile(_ path: String, target: OpenTarget) {
+    func openBaseFile(_ path: String, target: OpenTarget = .currentTab) {
         switch target {
         case .currentTab:
             if let existing = workspace.activeGroupTab(forPath: path) {
@@ -66,10 +76,310 @@ extension AppState {
         }
     }
 
+    func openSavedQuery(_ summary: SavedQuerySummary, target: OpenTarget = .currentTab) {
+        openSavedQuery(id: summary.id, name: summary.name, target: target)
+    }
+
+    func openSavedQuery(id: String, name: String, target: OpenTarget = .currentTab) {
+        let item = EditorItem.savedQuery(id: id, name: name)
+        switch target {
+        case .currentTab:
+            if let existing = workspace.activeGroupSavedQueryTab(id: id) {
+                activateTab(existing.id)
+                return
+            }
+            clearActiveBaseQuickFilter()
+            parkOutgoingNoteBuffer()
+            if workspace.activeTab != nil {
+                let replacedItem = workspace.activeTab?.item
+                workspace.replaceActiveItem(item)
+                releaseCanvasDocumentIfUnreferenced(replacedItem)
+                releaseBaseDocumentIfUnreferenced(replacedItem)
+                if let tabID = workspace.model.activeGroup.activeTabID {
+                    clearBaseRendererOverride(for: tabID)
+                    activateTab(tabID)
+                }
+            } else {
+                let tabID = workspace.openTab(item)
+                activateTab(tabID)
+            }
+        case .newTab:
+            if let existing = workspace.activeGroupSavedQueryTab(id: id) {
+                activateTab(existing.id)
+                return
+            }
+            clearActiveBaseQuickFilter()
+            parkOutgoingNoteBuffer()
+            let tabID = workspace.openTab(item)
+            activateTab(tabID)
+        case .newSplit(let axis):
+            clearActiveBaseQuickFilter()
+            let paneCount = workspace.model.groupsInOrder.count
+            splitActivePane(axis: axis)
+            if workspace.model.groupsInOrder.count == paneCount {
+                openSavedQuery(id: id, name: name, target: .newTab)
+                return
+            }
+            openSavedQuery(id: id, name: name, target: .currentTab)
+        }
+    }
+
+    var orderedSavedQuerySummaries: [SavedQuerySummary] {
+        let pinOrder = Dictionary(
+            uniqueKeysWithValues: baseQueries.pinnedSavedQueryIDs.enumerated().map { ($0.element, $0.offset) })
+        return baseQueries.savedQueries.sorted { lhs, rhs in
+            switch (pinOrder[lhs.id], pinOrder[rhs.id]) {
+            case let (left?, right?):
+                return left < right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                return byName == .orderedSame ? lhs.id < rhs.id : byName == .orderedAscending
+            }
+        }
+    }
+
+    var baseQueriesAccessibilityValue: String {
+        let count = baseQueries.savedQueries.count + baseQueries.baseFiles.count
+        let pinned = baseQueries.pinnedSavedQueryIDs.count
+        return "Queries, \(count) items, \(pinned) pinned"
+    }
+
+    func refreshBaseQueries() {
+        guard let session = currentSession else {
+            resetBaseQueriesForClosedVault()
+            return
+        }
+        do {
+            let saved = try session.listSavedQueries().sorted(by: savedQuerySort)
+            let baseFiles = try session.basesList().sorted {
+                $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
+            }
+            let validIDs = Set(saved.map(\.id))
+            let pins = baseQueries.pinnedSavedQueryIDs.filter { validIDs.contains($0) }
+            baseQueries = BaseQueriesState(
+                savedQueries: saved,
+                baseFiles: baseFiles,
+                pinnedSavedQueryIDs: pins)
+            persistBaseQueryPinsIfNeeded(pins)
+            retargetOpenSavedQueries(saved)
+            refreshSavedQueryCommands(saved)
+        } catch {
+            postBaseActionAnnouncement("Queries could not be refreshed: \(error.localizedDescription)")
+        }
+    }
+
+    func resetBaseQueriesForClosedVault() {
+        refreshSavedQueryCommands([])
+        baseQueries = BaseQueriesState(
+            pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
+    }
+
+    func toggleSavedQueryPin(id: String) {
+        var pins = baseQueries.pinnedSavedQueryIDs
+        if let index = pins.firstIndex(of: id) {
+            pins.remove(at: index)
+        } else if baseQueries.savedQueries.contains(where: { $0.id == id }) {
+            pins.insert(id, at: 0)
+        } else {
+            return
+        }
+        baseQueries.pinnedSavedQueryIDs = pins
+        persistBaseQueryPinsIfNeeded(pins)
+    }
+
+    func runSavedQuery(id: String) {
+        guard let summary = savedQuerySummary(id: id) else {
+            postBaseActionAnnouncement("Saved query is no longer available.")
+            return
+        }
+        openSavedQuery(summary)
+    }
+
+    func editSavedQueryInBuilder(id: String) {
+        guard let session = currentSession else { return }
+        do {
+            let saved = try session.getSavedQuery(id: id)
+            let draft = try BaseQueryBuilderDraft(queryJSON: saved.queryJson)
+            activeBaseQueryBuilder = BaseQueryBuilderModel(
+                draft: draft,
+                editingSavedQuery: EditingSavedQuery(
+                    id: saved.id,
+                    name: saved.name,
+                    description: saved.description))
+            postBaseActionAnnouncement("Editing \(saved.name) in builder.")
+        } catch {
+            postBaseActionAnnouncement("Saved query could not be edited: \(error.localizedDescription)")
+        }
+    }
+
+    func renameSavedQuery(id: String, name: String) {
+        guard let session = currentSession else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            postBaseActionAnnouncement("Enter a saved query name before renaming.")
+            return
+        }
+        do {
+            try session.renameSavedQuery(id: id, name: trimmed)
+            refreshBaseQueries()
+            postBaseActionAnnouncement("Renamed saved query to \(trimmed).")
+        } catch {
+            postBaseActionAnnouncement("Saved query could not be renamed: \(error.localizedDescription)")
+        }
+    }
+
+    func deleteSavedQuery(id: String) {
+        guard let session = currentSession else { return }
+        do {
+            try session.deleteSavedQuery(id: id)
+            baseQueries.pinnedSavedQueryIDs.removeAll { $0 == id }
+            persistBaseQueryPinsIfNeeded(baseQueries.pinnedSavedQueryIDs)
+            closeOpenSavedQueryTabs(id: id)
+            refreshBaseQueries()
+            postBaseActionAnnouncement("Deleted saved query.")
+        } catch {
+            postBaseActionAnnouncement("Saved query could not be deleted: \(error.localizedDescription)")
+        }
+    }
+
+    func exportSavedQuery(id: String, path: String) {
+        guard let session = currentSession else { return }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            postBaseActionAnnouncement("Choose a .base path before exporting.")
+            return
+        }
+        do {
+            try session.exportSavedQueryAsBase(id: id, path: trimmed)
+            refreshBaseQueries()
+            postBaseActionAnnouncement("Exported saved query as \(trimmed).")
+        } catch {
+            postBaseActionAnnouncement("Saved query could not be exported: \(error.localizedDescription)")
+        }
+    }
+
+    func exportSavedQueryUsingSavePanel(id: String) {
+        guard let summary = savedQuerySummary(id: id) else {
+            postBaseActionAnnouncement("Saved query is no longer available.")
+            return
+        }
+        let panel = NSSavePanel()
+        panel.directoryURL = currentVaultURL
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "\(summary.name).base"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard let path = self.vaultRelativeExportPath(for: url) else {
+                    self.postBaseActionAnnouncement("Choose a path inside the vault.")
+                    return
+                }
+                self.exportSavedQuery(id: id, path: path)
+            }
+        }
+    }
+
+    private func savedQuerySummary(id: String) -> SavedQuerySummary? {
+        if let summary = baseQueries.savedQueries.first(where: { $0.id == id }) {
+            return summary
+        }
+        refreshBaseQueries()
+        return baseQueries.savedQueries.first { $0.id == id }
+    }
+
+    private func savedQuerySort(_ lhs: SavedQuerySummary, _ rhs: SavedQuerySummary) -> Bool {
+        let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+        return byName == .orderedSame ? lhs.id < rhs.id : byName == .orderedAscending
+    }
+
+    private func vaultRelativeExportPath(for url: URL) -> String? {
+        guard let root = currentVaultURL else { return nil }
+        let rootPath = root.standardizedFileURL.path
+        let selectedPath = url.standardizedFileURL.path
+        guard selectedPath == rootPath || selectedPath.hasPrefix(rootPath + "/") else {
+            return nil
+        }
+        let start = selectedPath.index(selectedPath.startIndex, offsetBy: rootPath.count)
+        let relative = selectedPath[start...].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return relative.isEmpty ? nil : relative
+    }
+
+    private func persistBaseQueryPinsIfNeeded(_ pins: [String]) {
+        let current = preferencesStore.loadBaseQueryPrefs()
+        guard current.pinnedSavedQueryIDs != pins else { return }
+        preferencesStore.saveBaseQueryPrefs(BaseQueryPrefs(pinnedSavedQueryIDs: pins))
+    }
+
+    private func retargetOpenSavedQueries(_ saved: [SavedQuerySummary]) {
+        for summary in saved {
+            _ = workspace.retargetSavedQuery(id: summary.id, name: summary.name)
+            baseDocuments[BaseDocumentSource.savedQuery(id: summary.id, name: summary.name).key]?
+                .retargetSavedQueryName(summary.name)
+        }
+    }
+
+    private func closeOpenSavedQueryTabs(id: String) {
+        let matchingTabs = workspace.model.allTabs.filter { tab in
+            if case .savedQuery(let queryID, _) = tab.item {
+                return queryID == id
+            }
+            return false
+        }
+        for tab in matchingTabs {
+            performCloseTab(tab.id)
+        }
+        let key = BaseDocumentSource.savedQuery(id: id, name: "").key
+        if let doc = baseDocuments[key] {
+            if let session = currentSession {
+                doc.close(session: session)
+            }
+            baseDocuments[key] = nil
+        }
+        saveWorkspaceLayout()
+    }
+
+    private func refreshSavedQueryCommands(_ saved: [SavedQuerySummary]) {
+        let wanted = Set(saved.map { SlateCommandID.basesRunSavedQuery(id: $0.id) })
+        for id in savedQueryCommandIDs.subtracting(wanted) {
+            _ = commandRegistry.unregister(id: id)
+        }
+        for summary in saved {
+            let id = SlateCommandID.basesRunSavedQuery(id: summary.id)
+            _ = commandRegistry.register(
+                command: Command(
+                    id: id,
+                    label: "Run query: \(summary.name)",
+                    accessibilityHint: "Open the saved query.",
+                    hotkeyHint: nil,
+                    section: .bases),
+                action: MenuCommandAction { [weak self] in
+                    self?.runSavedQuery(id: summary.id)
+                })
+        }
+        savedQueryCommandIDs = wanted
+    }
+
     func activateBaseTab(_ id: TabID, path: String) {
+        activateBaseDocumentTab(id, source: .file(path: path), selectedPath: path)
+    }
+
+    func activateSavedQueryTab(_ id: TabID, savedQueryID: String, name: String) {
+        activateBaseDocumentTab(id, source: .savedQuery(id: savedQueryID, name: name), selectedPath: nil)
+    }
+
+    private func activateBaseDocumentTab(
+        _ id: TabID,
+        source: BaseDocumentSource,
+        selectedPath: String?
+    ) {
         if id == workspace.model.activeGroup.activeTabID,
-            selectedFilePath == path,
-            baseDocuments[path]?.handle != nil
+            selectedFilePath == selectedPath,
+            baseDocuments[source.key]?.handle != nil
         {
             return
         }
@@ -84,21 +394,22 @@ extension AppState {
         clearActiveNoteFields()
         workspace.select(id)
         clearTransitionSensitiveCollections()
-        let doc = baseDocument(for: path)
+        let doc = baseDocument(for: source)
         if doc.handle == nil, let session = currentSession {
             doc.load(session: session)
         }
-        if selectedFilePath != path {
-            selectedFilePath = path
+        if selectedFilePath != selectedPath {
+            selectedFilePath = selectedPath
         }
-        if activeBaseSelectionPath != path {
+        if activeBaseSelectionPath != source.selectionKey {
             clearActiveBaseSelection()
         }
     }
 
     var activeBaseDocument: BaseDocument? {
-        guard let tab = workspace.activeTab, case .base(let path) = tab.item else { return nil }
-        return baseDocument(for: path)
+        guard let tab = workspace.activeTab, let source = BaseDocumentSource(item: tab.item)
+        else { return nil }
+        return baseDocument(for: source)
     }
 
     func baseRendererOverride(for tabID: TabID) -> BaseRendererMode? {
@@ -134,14 +445,15 @@ extension AppState {
     }
 
     func clearActiveBaseQuickFilter() {
-        guard case .base(let path) = workspace.activeTab?.item,
-            let doc = baseDocuments[path]
+        guard let item = workspace.activeTab?.item,
+            let source = BaseDocumentSource(item: item),
+            let doc = baseDocuments[source.key]
         else { return }
         _ = doc.clearQuickFilter(session: currentSession)
     }
 
     private func setActiveBaseRendererOverride(_ mode: BaseRendererMode) {
-        guard let tab = workspace.activeTab, case .base = tab.item else { return }
+        guard let tab = workspace.activeTab, BaseDocumentSource(item: tab.item) != nil else { return }
         baseRendererOverrides[tab.id] = mode
         postAccessibilityAnnouncement("Base view as \(mode.rawValue).", priority: .medium)
     }
@@ -330,6 +642,7 @@ extension AppState {
         }
         do {
             try session.saveQueryAsBase(queryJson: model.draft.queryJSON(), path: trimmed)
+            refreshBaseQueries()
             postAccessibilityAnnouncement("Saved query as \(trimmed).", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
@@ -351,12 +664,42 @@ extension AppState {
                 description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
                 queryJson: model.draft.queryJSON(),
                 sourceSyntax: .builder)
+            refreshBaseQueries()
             postAccessibilityAnnouncement("Saved query \(trimmed).", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
                 "Saved query could not be created: \(error.localizedDescription)",
                 priority: .medium)
         }
+    }
+
+    func basesBuilderUpdateSavedQuery() {
+        guard let model = activeBaseQueryBuilder,
+            let editingSavedQuery = model.editingSavedQuery,
+            let session = currentSession
+        else { return }
+        do {
+            try session.updateSavedQuery(
+                id: editingSavedQuery.id,
+                description: editingSavedQuery.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                queryJson: model.draft.queryJSON(),
+                sourceSyntax: .builder)
+            refreshBaseQueries()
+            refreshOpenSavedQueryDocument(id: editingSavedQuery.id, name: editingSavedQuery.name)
+            postAccessibilityAnnouncement(
+                "Updated saved query \(editingSavedQuery.name).",
+                priority: .medium)
+        } catch {
+            postAccessibilityAnnouncement(
+                "Saved query could not be updated: \(error.localizedDescription)",
+                priority: .medium)
+        }
+    }
+
+    private func refreshOpenSavedQueryDocument(id: String, name: String) {
+        guard let session = currentSession else { return }
+        let key = BaseDocumentSource.savedQuery(id: id, name: name).key
+        baseDocuments[key]?.refresh(session: session)
     }
 
     func basesBuilderAddCondition() {
@@ -612,40 +955,44 @@ extension AppState {
     }
 
     func releaseBaseDocumentIfUnreferenced(_ item: EditorItem?) {
-        guard case .base(let path) = item else { return }
-        let stillOpen = workspace.model.allTabs.contains { $0.item == .base(path: path) }
-        guard !stillOpen, let doc = baseDocuments[path] else { return }
+        guard let source = item.flatMap(BaseDocumentSource.init(item:)) else { return }
+        let stillOpen = workspace.model.allTabs.contains { BaseDocumentSource(item: $0.item)?.key == source.key }
+        guard !stillOpen, let doc = baseDocuments[source.key] else { return }
         if let session = currentSession {
             doc.close(session: session)
         }
-        baseDocuments[path] = nil
+        baseDocuments[source.key] = nil
     }
 
     func rekeyBaseDocumentIfRetargeted(_ changed: [TabID], oldPath: String, newPath: String) {
+        let oldKey = BaseDocumentSource.file(path: oldPath).key
+        let newSource = BaseDocumentSource.file(path: newPath)
+        let newKey = newSource.key
         guard oldPath != newPath,
             changed.contains(where: { id in
                 workspace.model.allTabs.contains {
                     $0.id == id && $0.item == .base(path: newPath)
                 }
             }),
-            let doc = baseDocuments.removeValue(forKey: oldPath)
+            let doc = baseDocuments.removeValue(forKey: oldKey)
         else { return }
-        if let existing = baseDocuments[newPath] {
+        if let existing = baseDocuments[newKey] {
             if existing !== doc, let session = currentSession {
                 doc.close(session: session)
             }
             return
         }
         doc.retarget(to: newPath, session: currentSession)
-        baseDocuments[newPath] = doc
+        baseDocuments[newKey] = doc
     }
 
     func invalidateBaseDocument(path: String) {
-        guard let doc = baseDocuments[path] else { return }
+        let key = BaseDocumentSource.file(path: path).key
+        guard let doc = baseDocuments[key] else { return }
         if let session = currentSession {
             doc.close(session: session)
         }
-        baseDocuments[path] = nil
+        baseDocuments[key] = nil
     }
 
     func releaseAllBaseDocuments() {
@@ -801,7 +1148,7 @@ extension AppState {
 
     private func activeBaseSelectedRowForCommand() -> BasesRow? {
         guard let doc = activeBaseDocument,
-            activeBaseSelectionPath == doc.path,
+            activeBaseSelectionPath == doc.selectionKey,
             let row = activeBaseSelectedRow,
             doc.result?.rows.contains(where: { $0.hasSameBaseIdentity(as: row) }) == true
         else { return nil }

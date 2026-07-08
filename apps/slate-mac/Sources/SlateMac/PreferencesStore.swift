@@ -20,6 +20,7 @@ final class PreferencesStore {
     static let mathKey = "slate.prefs.math"
     static let codeKey = "slate.prefs.code"
     static let canvasKey = "slate.prefs.canvas"
+    static let baseQueriesKey = "slate.prefs.baseQueries"
 
     private let defaults: UserDefaults
 
@@ -58,6 +59,16 @@ final class PreferencesStore {
         encode(prefs, key: Self.canvasKey)
     }
 
+    // MARK: - Base Queries (Milestone N, #709)
+
+    func loadBaseQueryPrefs() -> BaseQueryPrefs {
+        decode(BaseQueryPrefs.self, key: Self.baseQueriesKey) ?? BaseQueryPrefs()
+    }
+
+    func saveBaseQueryPrefs(_ prefs: BaseQueryPrefs) {
+        encode(prefs, key: Self.baseQueriesKey)
+    }
+
     // MARK: - Internals
 
     private func decode<T: Codable>(_ type: T.Type, key: String) -> T? {
@@ -81,4 +92,8 @@ final class PreferencesStore {
             defaults.set(data, forKey: key)
         }
     }
+}
+
+struct BaseQueryPrefs: Codable, Equatable {
+    var pinnedSavedQueryIDs: [String] = []
 }

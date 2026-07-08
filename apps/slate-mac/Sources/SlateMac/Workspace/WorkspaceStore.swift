@@ -106,6 +106,8 @@ struct WorkspaceStore {
     struct Item: Codable, Equatable {
         var kind: String
         var path: String
+        var id: String? = nil
+        var name: String? = nil
     }
 
     /// Unknown tab kinds decode to nil instead of failing the whole
@@ -114,7 +116,7 @@ struct WorkspaceStore {
         let tab: Tab?
         init(from decoder: Decoder) throws {
             let decoded = try? Tab(from: decoder)
-            let known = ["markdown", "canvas", "base"]
+            let known = ["markdown", "canvas", "base", "savedQuery"]
             self.tab = (decoded.map { known.contains($0.item.kind) } == true) ? decoded : nil
         }
         func encode(to encoder: Encoder) throws {
@@ -287,6 +289,8 @@ struct WorkspaceStore {
             return Item(kind: "canvas", path: path)
         case .base(let path):
             return Item(kind: "base", path: path)
+        case .savedQuery(let id, let name):
+            return Item(kind: "savedQuery", path: id, id: id, name: name)
         }
     }
 
@@ -314,6 +318,10 @@ struct WorkspaceStore {
                     item = .canvas(path: tab.item.path)
                 case "base":
                     item = .base(path: tab.item.path)
+                case "savedQuery":
+                    item = .savedQuery(
+                        id: tab.item.id ?? tab.item.path,
+                        name: tab.item.name ?? "Saved query")
                 default:
                     item = .markdown(path: tab.item.path)
                 }

@@ -79,8 +79,8 @@ private struct TabGroupView: View {
         // Milestone T/N: route on the active tab's kind. Canvas/base
         // panes render their containers in BOTH focused and parked
         // positions because the document is shared per path.
-        if let tab = group.activeTab, case .base(let path) = tab.item {
-            BaseContainerView(document: appState.baseDocument(for: path), tabID: tab.id)
+        if let tab = group.activeTab, let source = BaseDocumentSource(item: tab.item) {
+            BaseContainerView(document: appState.baseDocument(for: source), tabID: tab.id)
         } else if case .canvas(let path) = group.activeTab?.item {
             CanvasContainerView(
                 document: appState.canvasDocument(for: path),
@@ -99,9 +99,7 @@ private struct TabGroupView: View {
         guard model.groupsInOrder.count > 1,
             let ordinal = model.ordinal(of: group.id)
         else { return "Note content pane" }
-        let title = group.activeTab.map {
-            (appState.workspace.tabPath($0) as NSString).lastPathComponent
-        } ?? "empty"
+        let title = group.activeTab.map { appState.workspace.tabTitle($0) } ?? "empty"
         return "Editor pane \(ordinal) of \(model.groupsInOrder.count), \(title)"
     }
 }

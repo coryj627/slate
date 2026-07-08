@@ -152,6 +152,20 @@ impl CommandRegistry {
             .is_some()
     }
 
+    /// Remove a registered command. Returns `true` when an entry existed.
+    ///
+    /// Dynamic surfaces (saved queries, plugin hot-reload, etc.) use this to
+    /// keep palette snapshots honest when a backing object is deleted. Static
+    /// core commands should still be registered once at startup and never
+    /// removed.
+    pub fn unregister(&self, id: &str) -> bool {
+        self.commands
+            .write()
+            .expect("CommandRegistry RwLock poisoned")
+            .remove(id)
+            .is_some()
+    }
+
     /// Return every registered command's metadata, sorted by
     /// `(section, id)` for deterministic palette rendering.
     ///
@@ -312,6 +326,23 @@ mod tests {
         );
         assert_eq!(reg.find_by_id("alpha").unwrap().id, "alpha");
         assert!(reg.find_by_id("beta").is_none());
+    }
+
+    #[test]
+    fn unregister_removes_metadata_and_action() {
+        let reg = CommandRegistry::new();
+        let action = Arc::new(CountingAction::new());
+        let _ = reg.register(fixture("alpha", CommandSection::File), action.clone());
+
+        assert!(reg.unregister("alpha"));
+        assert!(!reg.unregister("alpha"), "second removal is a miss");
+        assert!(reg.find_by_id("alpha").is_none());
+        assert!(reg.list().is_empty());
+        assert_eq!(
+            reg.invoke_by_id("alpha"),
+            Err(CommandError::UnknownId("alpha".into()))
+        );
+        assert_eq!(action.invoked(), 0, "removed action is never invoked");
     }
 
     #[test]

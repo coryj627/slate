@@ -17,6 +17,12 @@ enum BaseQueryBuilderError: LocalizedError {
     }
 }
 
+struct EditingSavedQuery: Equatable {
+    var id: String
+    var name: String
+    var description: String?
+}
+
 enum BaseQuerySource: Hashable {
     case allNotes
     case folder(String)
@@ -751,8 +757,11 @@ struct BaseQueryBuilderDraft: Equatable {
     init(queryJSON: String) throws {
         guard
             let data = queryJSON.data(using: .utf8),
-            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            var root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw BaseQueryBuilderError.invalidQueryJSON }
+        if root["v"] != nil, let query = root["query"] as? [String: Any] {
+            root = query
+        }
 
         let rowSource = root["row_source"] as? String
         source = rowSource == "Tasks" ? .tasks : Self.decodeSource(root["source"])
@@ -1366,10 +1375,15 @@ final class BaseQueryBuilderModel: ObservableObject {
     @Published var selectedRowIndex: Int?
     @Published var editingRowIndex: Int?
     @Published var previewState: BaseQueryPreviewState = .idle
+    let editingSavedQuery: EditingSavedQuery?
     private let initialDraft: BaseQueryBuilderDraft
 
-    init(draft: BaseQueryBuilderDraft = BaseQueryBuilderDraft()) {
+    init(
+        draft: BaseQueryBuilderDraft = BaseQueryBuilderDraft(),
+        editingSavedQuery: EditingSavedQuery? = nil
+    ) {
         self.draft = draft
+        self.editingSavedQuery = editingSavedQuery
         self.initialDraft = draft
     }
 

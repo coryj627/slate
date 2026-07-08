@@ -115,11 +115,24 @@ final class WorkspaceState: ObservableObject {
         tab.item.path
     }
 
+    func tabTitle(_ tab: WorkspaceTab) -> String {
+        tab.item.title
+    }
+
     /// The tab in the ACTIVE group holding `path`, if any (dedup rule
     /// scope) — kind-agnostic: a path opens as exactly one item kind, so
     /// equal paths are one tab (#369 openTab dedup).
     func activeGroupTab(forPath path: String) -> WorkspaceTab? {
         model.activeGroup.tabs.first { $0.item.path == path }
+    }
+
+    func activeGroupSavedQueryTab(id: String) -> WorkspaceTab? {
+        model.activeGroup.tabs.first {
+            if case .savedQuery(let queryID, _) = $0.item {
+                return queryID == id
+            }
+            return false
+        }
     }
 
     /// True when any tab — parked or (per the caller-supplied flag) active —
@@ -254,6 +267,13 @@ final class WorkspaceState: ObservableObject {
             rebound.hasLoaded = old.hasLoaded
             documents[tabID] = rebound
         }
+        assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
+        return changed
+    }
+
+    @discardableResult
+    func retargetSavedQuery(id: String, name: String) -> [TabID] {
+        let changed = model.retargetSavedQuery(id: id, name: name)
         assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
         return changed
     }

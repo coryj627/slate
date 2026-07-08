@@ -80,6 +80,18 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCodePrefs(), CodePrefs())
     }
 
+    // MARK: - Base query pins
+
+    func testBaseQueryPinsRoundTripThroughUserDefaults() {
+        let store = PreferencesStore(defaults: defaults)
+        let prefs = BaseQueryPrefs(pinnedSavedQueryIDs: ["sq-backlog", "sq-active"])
+
+        store.saveBaseQueryPrefs(prefs)
+
+        let store2 = PreferencesStore(defaults: defaults)
+        XCTAssertEqual(store2.loadBaseQueryPrefs(), prefs)
+    }
+
     // MARK: - Persistence tags
 
     /// Persistence tags are stable strings, independent of the

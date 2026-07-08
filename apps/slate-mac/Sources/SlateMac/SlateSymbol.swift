@@ -33,6 +33,7 @@ enum SlateSymbol: CaseIterable {
     // In-use roles (rendered today).
     case save
     case search
+    case refresh
     case newFromTemplate
     case tasksReview
     case citationSummary
@@ -61,6 +62,8 @@ enum SlateSymbol: CaseIterable {
     /// Base tab glyph (Milestone N, #702) — marks `.base` tabs in the
     /// tab strip; the tab's AX value carries "base" for VoiceOver.
     case base
+    /// Pinned saved-query glyph (Milestone N, #709).
+    case pin
     case splitRight
     case readingMode
     case editingMode
@@ -143,6 +146,7 @@ enum SlateSymbol: CaseIterable {
         switch self {
         case .save: return "Save"
         case .search: return "Search"
+        case .refresh: return "Refresh"
         case .newFromTemplate: return "New from Template"
         case .tasksReview: return "Tasks Review"
         case .citationSummary: return "Citation Summary"
@@ -162,6 +166,7 @@ enum SlateSymbol: CaseIterable {
         case .newTab: return "New tab"
         case .canvas: return "Canvas"
         case .base: return "Base"
+        case .pin: return "Pin"
         case .closeTab: return "Close tab"
         case .splitRight: return "Split right"
         case .readingMode: return "Reading mode"
@@ -207,6 +212,7 @@ enum SlateSymbol: CaseIterable {
         switch self {
         case .save: return ("square.and.arrow.down", "square.and.arrow.down")
         case .search: return ("magnifyingglass", "magnifyingglass")
+        case .refresh: return ("arrow.clockwise", "arrow.clockwise")
         case .newFromTemplate: return ("doc.badge.plus", "doc.badge.plus")
         case .tasksReview: return ("checklist", "checklist")
         case .citationSummary: return ("quote.bubble.fill", "quote.bubble.fill")
@@ -235,6 +241,7 @@ enum SlateSymbol: CaseIterable {
         case .newTab: return ("plus", "plus")
         case .canvas: return ("rectangle.3.group", "rectangle.3.group")
         case .base: return ("tablecells", "tablecells")
+        case .pin: return ("pin", "pin")
         case .closeTab: return ("xmark", "xmark")
         case .splitRight: return ("rectangle.split.2x1", "rectangle.split.2x1")
         case .readingMode: return ("text.book.closed", "book")
