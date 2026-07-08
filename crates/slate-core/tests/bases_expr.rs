@@ -243,7 +243,11 @@ fn recognizes_every_pinned_global_function_name() {
         ("min", GlobalFn::Min),
         ("now", GlobalFn::Now),
         ("number", GlobalFn::Number),
+        ("object", GlobalFn::Object),
         ("random", GlobalFn::Random),
+        ("string", GlobalFn::String),
+        ("sum", GlobalFn::Sum),
+        ("average", GlobalFn::Average),
         ("today", GlobalFn::Today),
     ] {
         let expr = parse_expr(&format!("{name}()")).expect("known global parses");
@@ -261,8 +265,10 @@ fn recognizes_every_pinned_global_function_name() {
 #[test]
 fn parses_bracketed_properties_degree_fields_and_computed_fields() {
     let expr =
-        parse_expr(r#"note["price"] + file.inDegree + file.outDegree + date("2024-12-01").year"#)
-            .expect("expression parses");
+        parse_expr(
+            r#"note["price"] + file.inDegree + file.outDegree + file.aliases + date("2024-12-01").year"#,
+        )
+        .expect("expression parses");
 
     let ExprKind::Binary {
         op: BinaryOp::Add,
