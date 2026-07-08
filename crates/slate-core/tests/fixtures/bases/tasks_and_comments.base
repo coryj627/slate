@@ -1,0 +1,14 @@
+# Hand-authored tasks view with comments between sibling keys.
+filters:
+  and:
+    - "file.hasTag(\"work\")"
+    # sibling comments should not belong to the previous filter entry
+    - "note.status != \"done\""
+views:
+  - type: list
+    name: "Tasks"
+    source: tasks
+    # plugin state between documented keys
+    rowHeight: 36
+    order:
+      - task.text

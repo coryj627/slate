@@ -1,0 +1,26 @@
+filters:
+  and:
+    - file.hasTag("project")
+formulas:
+  formatted: 'if(status, status)'
+properties:
+  status:
+    displayName: "Status"
+summaries:
+  customAverage: "values.mean()"
+views:
+  - type: table
+    name: "Table"
+    limit: 25
+    groupBy:
+      property: note.status
+      direction: ASC
+    filters: "status"
+    order:
+      - file.name
+      - note.status
+    summaries:
+      note.status: Unique
+    source: files
+    slate:
+      density: compact

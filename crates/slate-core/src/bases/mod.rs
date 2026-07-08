@@ -7,7 +7,10 @@
 //! language parser; `.base` YAML parsing, serialization, scanner indexing,
 //! and execution arrive in later issues.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    fmt,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
@@ -182,6 +185,73 @@ pub enum BaseWarningKind {
     InvalidGroupBy,
     CircularFormula,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaseEdit {
+    SetViewKey {
+        view: usize,
+        key: String,
+        value: String,
+    },
+    AddView {
+        yaml: String,
+    },
+    RemoveView {
+        view: usize,
+    },
+    RenameView {
+        view: usize,
+        name: String,
+    },
+    SetViewFilters {
+        view: usize,
+        yaml: String,
+    },
+    SetTopLevelFilters {
+        yaml: String,
+    },
+    SetFormula {
+        name: String,
+        expression: String,
+    },
+    RemoveFormula {
+        name: String,
+    },
+    SetDisplayName {
+        property: String,
+        display_name: Option<String>,
+    },
+    SetSummaryAssignment {
+        view: usize,
+        property: String,
+        summary: Option<String>,
+    },
+    SetSlateState {
+        view: usize,
+        yaml: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SerializeError {
+    MissingSpan { target: String },
+    WouldClobber { span: Span, reason: String },
+    InvalidEdit { message: String },
+}
+
+impl fmt::Display for SerializeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SerializeError::MissingSpan { target } => {
+                write!(f, "missing source span for {target}")
+            }
+            SerializeError::WouldClobber { reason, .. } => write!(f, "{reason}"),
+            SerializeError::InvalidEdit { message } => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for SerializeError {}
 
 pub fn parse_base(source: &str) -> (BaseFile, Vec<BaseWarning>) {
     let mut base = BaseFile {
@@ -365,6 +435,526 @@ pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery {
         summaries: view.summaries.clone(),
         limit: view.limit,
         view: view_spec,
+    }
+}
+
+pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Result<String, SerializeError> {
+    if edits.is_empty() {
+        return Ok(base.raw.clone());
+    }
+
+    let mut splices = Vec::new();
+    for edit in edits {
+        collect_edit_splices(base, edit, &mut splices)?;
+    }
+    apply_splices(&base.raw, splices)
+}
+
+#[derive(Debug)]
+struct Splice {
+    span: Span,
+    replacement: String,
+    order: usize,
+}
+
+fn collect_edit_splices(
+    base: &BaseFile,
+    edit: &BaseEdit,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    match edit {
+        BaseEdit::SetViewKey { view, key, value } => {
+            ensure_view_key_is_editable(base, *view, key)?;
+            ensure_set_view_key_is_closed(key)?;
+            replace_or_insert_view_key(base, *view, key, &key_value_fragment(key, value), splices)
+        }
+        BaseEdit::AddView { yaml } => push_add_view_splice(base, yaml, splices),
+        BaseEdit::RemoveView { view } => {
+            let entry = view_spans_for(base, *view)?.entry.clone();
+            push_splice(splices, entry.span, String::new());
+            Ok(())
+        }
+        BaseEdit::RenameView { view, name } => replace_or_insert_view_key(
+            base,
+            *view,
+            "name",
+            &format!("name: {}", quote_yaml_string(name)),
+            splices,
+        ),
+        BaseEdit::SetViewFilters { view, yaml } => replace_or_insert_view_key(
+            base,
+            *view,
+            "filters",
+            &key_value_fragment("filters", yaml),
+            splices,
+        ),
+        BaseEdit::SetTopLevelFilters { yaml } => replace_or_insert_top_level(
+            base,
+            "filters",
+            &key_value_fragment("filters", yaml),
+            splices,
+        ),
+        BaseEdit::SetFormula { name, expression } => {
+            replace_or_insert_formula(base, name, expression, splices)
+        }
+        BaseEdit::RemoveFormula { name } => {
+            let region = named_region(&base.spans.formulas, name)
+                .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
+            push_splice(splices, region.region.span, String::new());
+            Ok(())
+        }
+        BaseEdit::SetDisplayName {
+            property,
+            display_name,
+        } => replace_or_remove_display_name(base, property, display_name.as_deref(), splices),
+        BaseEdit::SetSummaryAssignment {
+            view,
+            property,
+            summary,
+        } => {
+            replace_or_remove_summary_assignment(base, *view, property, summary.as_deref(), splices)
+        }
+        BaseEdit::SetSlateState { view, yaml } => match yaml {
+            Some(yaml) => replace_or_insert_view_key(
+                base,
+                *view,
+                "slate",
+                &key_value_fragment("slate", yaml),
+                splices,
+            ),
+            None => {
+                let view_spans = view_spans_for(base, *view)?;
+                if let Some(region) = named_region(&view_spans.keys, "slate") {
+                    push_splice(splices, region.region.span, String::new());
+                }
+                Ok(())
+            }
+        },
+    }
+}
+
+fn replace_or_insert_top_level(
+    base: &BaseFile,
+    key: &str,
+    fragment: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    if let Some(region) = named_region(&base.spans.top_level, key) {
+        let replacement = format_fragment_for_region(&region.region, fragment);
+        push_splice(splices, region.region.span, replacement);
+        return Ok(());
+    }
+
+    let offset = named_region(&base.spans.top_level, "views")
+        .map(|region| region.region.span.start)
+        .unwrap_or(base.raw.len() as u32);
+    push_insertion_splice(
+        splices,
+        &base.raw,
+        offset,
+        format_yaml_fragment(fragment, "", ""),
+    );
+    Ok(())
+}
+
+fn replace_or_insert_formula(
+    base: &BaseFile,
+    name: &str,
+    expression: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let entry = format!("  {}: {}\n", yaml_key(name), quote_yaml_string(expression));
+    if let Some(region) = named_region(&base.spans.formulas, name) {
+        push_splice(splices, region.region.span, entry);
+        return Ok(());
+    }
+
+    if let Some(formulas) = named_region(&base.spans.top_level, "formulas") {
+        push_insertion_splice(splices, &base.raw, formulas.region.span.end, entry);
+        return Ok(());
+    }
+
+    let mut section = String::from("formulas:\n");
+    section.push_str(&entry);
+    let offset = named_region(&base.spans.top_level, "views")
+        .map(|region| region.region.span.start)
+        .unwrap_or(base.raw.len() as u32);
+    push_insertion_splice(splices, &base.raw, offset, section);
+    Ok(())
+}
+
+fn replace_or_remove_display_name(
+    base: &BaseFile,
+    property: &str,
+    display_name: Option<&str>,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let property_region = named_region(&base.spans.properties, property)
+        .ok_or_else(|| missing_span(format!("property {property:?}")))?;
+    let child_regions = regions_in_span(&base.raw, property_region.region.span, 4);
+
+    match (display_name, child_regions.get("displayName")) {
+        (Some(name), Some(region)) => {
+            push_splice(
+                splices,
+                region.span,
+                format!("    displayName: {}\n", quote_yaml_string(name)),
+            );
+        }
+        (Some(name), None) => {
+            push_insertion_splice(
+                splices,
+                &base.raw,
+                property_region.region.span.end,
+                format!("    displayName: {}\n", quote_yaml_string(name)),
+            );
+        }
+        (None, Some(region)) => {
+            push_splice(splices, region.span, String::new());
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+fn replace_or_remove_summary_assignment(
+    base: &BaseFile,
+    view: usize,
+    property: &str,
+    summary: Option<&str>,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    let Some(summaries_region) = named_region(&view_spans.keys, "summaries") else {
+        if let Some(summary) = summary {
+            let fragment = format!(
+                "summaries:\n  {}: {}",
+                yaml_key(property),
+                quote_yaml_string(summary)
+            );
+            push_view_key_insertion(base, view_spans, &fragment, splices);
+        }
+        return Ok(());
+    };
+
+    let assignments = regions_in_span(&base.raw, summaries_region.region.span, 6);
+    match (summary, assignments.get(property)) {
+        (Some(summary), Some(region)) => {
+            push_splice(
+                splices,
+                region.span,
+                format!(
+                    "      {}: {}\n",
+                    yaml_key(property),
+                    quote_yaml_string(summary)
+                ),
+            );
+        }
+        (Some(summary), None) => {
+            push_insertion_splice(
+                splices,
+                &base.raw,
+                summaries_region.region.span.end,
+                format!(
+                    "      {}: {}\n",
+                    yaml_key(property),
+                    quote_yaml_string(summary)
+                ),
+            );
+        }
+        (None, Some(region)) => {
+            push_splice(splices, region.span, String::new());
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+fn replace_or_insert_view_key(
+    base: &BaseFile,
+    view: usize,
+    key: &str,
+    fragment: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    if let Some(region) = named_region(&view_spans.keys, key) {
+        let replacement = format_fragment_for_region(&region.region, fragment);
+        push_splice(splices, region.region.span, replacement);
+        return Ok(());
+    }
+
+    push_view_key_insertion(base, view_spans, fragment, splices);
+    Ok(())
+}
+
+fn push_add_view_splice(
+    base: &BaseFile,
+    yaml: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let item = format_view_item_fragment(yaml)?;
+    if let Some(views) = named_region(&base.spans.top_level, "views") {
+        push_insertion_splice(splices, &base.raw, views.region.span.end, item);
+        return Ok(());
+    }
+
+    let mut section = String::from("views:\n");
+    section.push_str(&item);
+    push_insertion_splice(splices, &base.raw, base.raw.len() as u32, section);
+    Ok(())
+}
+
+fn push_view_key_insertion(
+    base: &BaseFile,
+    view_spans: &ViewSpans,
+    fragment: &str,
+    splices: &mut Vec<Splice>,
+) {
+    push_insertion_splice(
+        splices,
+        &base.raw,
+        view_spans.entry.span.end,
+        format_yaml_fragment(fragment, "    ", "    "),
+    );
+}
+
+fn ensure_view_key_is_editable(
+    base: &BaseFile,
+    view: usize,
+    key: &str,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    let Some(region) = named_region(&view_spans.keys, key) else {
+        return Ok(());
+    };
+    let Some(view_def) = base.views.get(view) else {
+        return Ok(());
+    };
+    if view_def
+        .preserved
+        .regions
+        .iter()
+        .any(|preserved| preserved.span == region.region.span)
+    {
+        return Err(SerializeError::WouldClobber {
+            span: region.region.span,
+            reason: format!("edit would rewrite preserved view key {key:?}"),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_set_view_key_is_closed(key: &str) -> Result<(), SerializeError> {
+    if matches!(key, "type" | "name" | "limit" | "groupBy" | "order") {
+        Ok(())
+    } else {
+        Err(SerializeError::InvalidEdit {
+            message: format!(
+                "SetViewKey only supports type/name/limit/groupBy/order; use the dedicated edit for {key:?}"
+            ),
+        })
+    }
+}
+
+fn apply_splices(source: &str, mut splices: Vec<Splice>) -> Result<String, SerializeError> {
+    splices.sort_by_key(|splice| (splice.span.start, splice.span.end, splice.order));
+
+    let mut last_end = 0usize;
+    for splice in &splices {
+        let (start, end) = span_range(splice.span, source.len())?;
+        if start < last_end {
+            return Err(SerializeError::InvalidEdit {
+                message: "edits target overlapping source spans".to_string(),
+            });
+        }
+        last_end = end;
+    }
+
+    let mut out = source.to_string();
+    for splice in splices.into_iter().rev() {
+        let (start, end) = span_range(splice.span, source.len())?;
+        out.replace_range(start..end, &splice.replacement);
+    }
+    Ok(out)
+}
+
+fn push_splice(splices: &mut Vec<Splice>, span: Span, replacement: String) {
+    splices.push(Splice {
+        span,
+        replacement,
+        order: splices.len(),
+    });
+}
+
+fn push_insertion_splice(splices: &mut Vec<Splice>, source: &str, offset: u32, text: String) {
+    let offset_usize = offset as usize;
+    let mut replacement = String::new();
+    if offset_usize > 0 && !source[..offset_usize].ends_with('\n') {
+        replacement.push('\n');
+    }
+    replacement.push_str(&text);
+    push_splice(
+        splices,
+        Span {
+            start: offset,
+            end: offset,
+        },
+        replacement,
+    );
+}
+
+fn span_range(span: Span, source_len: usize) -> Result<(usize, usize), SerializeError> {
+    let start = span.start as usize;
+    let end = span.end as usize;
+    if start > end || end > source_len {
+        return Err(SerializeError::MissingSpan {
+            target: format!("{}..{}", span.start, span.end),
+        });
+    }
+    Ok((start, end))
+}
+
+fn view_spans_for(base: &BaseFile, view: usize) -> Result<&ViewSpans, SerializeError> {
+    base.spans
+        .views
+        .get(view)
+        .ok_or_else(|| missing_span(format!("view {view}")))
+}
+
+fn named_region<'a>(regions: &'a [NamedRegion], name: &str) -> Option<&'a NamedRegion> {
+    regions.iter().find(|region| region.name == name)
+}
+
+fn missing_span(target: impl Into<String>) -> SerializeError {
+    SerializeError::MissingSpan {
+        target: target.into(),
+    }
+}
+
+fn key_value_fragment(key: &str, value: &str) -> String {
+    if fragment_starts_with_key(value, key) {
+        value.to_string()
+    } else {
+        format!("{}: {}", yaml_key(key), value.trim_end())
+    }
+}
+
+fn fragment_starts_with_key(fragment: &str, key: &str) -> bool {
+    fragment
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .and_then(key_on_line)
+        .is_some_and(|(candidate, _)| candidate == key)
+}
+
+fn format_fragment_for_region(region: &PreservedRegion, fragment: &str) -> String {
+    let (first_prefix, continuation_prefix) = region_prefixes(&region.text);
+    format_yaml_fragment(fragment, &first_prefix, &continuation_prefix)
+}
+
+fn format_yaml_fragment(fragment: &str, first_prefix: &str, continuation_prefix: &str) -> String {
+    let fragment = fragment.trim_end_matches(['\n', '\r']);
+    if fragment.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for (idx, line) in fragment.lines().enumerate() {
+        if idx == 0 {
+            out.push_str(first_prefix);
+        } else if !line.is_empty() {
+            out.push_str(continuation_prefix);
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn region_prefixes(region_text: &str) -> (String, String) {
+    let first = region_text.lines().next().unwrap_or_default();
+    let trimmed = first.trim_start();
+    let leading = first.len() - trimmed.len();
+    if trimmed.starts_with("- ") {
+        (
+            format!("{}- ", " ".repeat(leading)),
+            " ".repeat(leading + 2),
+        )
+    } else {
+        let prefix = " ".repeat(leading);
+        (prefix.clone(), prefix)
+    }
+}
+
+fn format_view_item_fragment(yaml: &str) -> Result<String, SerializeError> {
+    let yaml = yaml.trim_end_matches(['\n', '\r']);
+    if yaml.trim().is_empty() {
+        return Err(SerializeError::InvalidEdit {
+            message: "view YAML cannot be empty".to_string(),
+        });
+    }
+    let Some((first, rest)) = yaml.split_once('\n') else {
+        let first = yaml.trim_start();
+        if first.starts_with("- ") {
+            return Ok(format!("  {first}\n"));
+        }
+        return Ok(format!("  - {first}\n"));
+    };
+
+    let mut out = String::new();
+    let first = first.trim_start();
+    if first.starts_with("- ") {
+        out.push_str("  ");
+        out.push_str(first);
+        out.push('\n');
+        for line in rest.lines() {
+            out.push_str("  ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    } else {
+        out.push_str("  - ");
+        out.push_str(first);
+        out.push('\n');
+        for line in rest.lines() {
+            if line.is_empty() {
+                out.push('\n');
+            } else {
+                out.push_str("    ");
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn quote_yaml_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn yaml_key(key: &str) -> String {
+    if !key.is_empty()
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
+        key.to_string()
+    } else {
+        quote_yaml_string(key)
     }
 }
 
@@ -1192,9 +1782,32 @@ fn regions_in_span(source: &str, span: Span, indent: usize) -> HashMap<String, P
             .get(idx + 1)
             .map(|(_, next_start)| *next_start)
             .unwrap_or(span.end as usize);
+        let end = trim_trailing_interstitial_lines(source, *start, end);
         regions.insert(key.clone(), preserved_region(source, *start, end));
     }
     regions
+}
+
+fn trim_trailing_interstitial_lines(source: &str, start: usize, end: usize) -> usize {
+    let mut trimmed_end = end;
+    for line in line_infos(source).into_iter().rev() {
+        if line.start < start || line.start >= trimmed_end {
+            continue;
+        }
+        if line.start == start {
+            break;
+        }
+
+        let line_end = (line.start + line.text.len()).min(trimmed_end);
+        let text = &source[line.start..line_end];
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            trimmed_end = line.start;
+        } else {
+            break;
+        }
+    }
+    trimmed_end
 }
 
 fn view_item_regions(source: &str) -> Vec<PreservedRegion> {
@@ -1235,15 +1848,47 @@ fn key_on_line(line: &str) -> Option<(String, usize)> {
     }
     let indent = line.len() - trimmed.len();
     let candidate = trimmed.strip_prefix("- ").unwrap_or(trimmed);
-    let colon = candidate.find(':')?;
-    let key = candidate[..colon].trim();
-    if key.is_empty() || key.contains(' ') || key.starts_with('#') {
+    let colon = key_colon_index(candidate)?;
+    let raw_key = candidate[..colon].trim();
+    if raw_key.is_empty() || raw_key.starts_with('#') {
         return None;
     }
-    Some((
-        key.trim_matches(['"', '\'']).to_string(),
-        indent + usize::from(trimmed.starts_with("- ")) * 2,
-    ))
+    let key = if (raw_key.starts_with('"') && raw_key.ends_with('"'))
+        || (raw_key.starts_with('\'') && raw_key.ends_with('\''))
+    {
+        raw_key[1..raw_key.len() - 1].to_string()
+    } else {
+        if raw_key.contains(' ') {
+            return None;
+        }
+        raw_key.to_string()
+    };
+    Some((key, indent + usize::from(trimmed.starts_with("- ")) * 2))
+}
+
+fn key_colon_index(candidate: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (idx, ch) in candidate.char_indices() {
+        match quote {
+            Some('"') if escaped => {
+                escaped = false;
+            }
+            Some('"') if ch == '\\' => {
+                escaped = true;
+            }
+            Some(active) if ch == active => {
+                quote = None;
+            }
+            Some(_) => {}
+            None if ch == '"' || ch == '\'' => {
+                quote = Some(ch);
+            }
+            None if ch == ':' => return Some(idx),
+            None => {}
+        }
+    }
+    None
 }
 
 fn preserved_region(source: &str, start: usize, end: usize) -> PreservedRegion {
