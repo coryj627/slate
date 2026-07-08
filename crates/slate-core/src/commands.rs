@@ -48,6 +48,10 @@ pub enum CommandSection {
     /// canvas action is a registry command; the palette is always a
     /// path). Registered by the canvas container and its surfaces.
     Canvas = 8,
+    /// Bases commands (Milestone N, #702). Discriminant 9 is reserved for
+    /// Excalidraw (Milestone XD); Bases intentionally starts at the next
+    /// non-reserved value.
+    Bases = 10,
 }
 
 /// Metadata for a registered command. The action itself lives in

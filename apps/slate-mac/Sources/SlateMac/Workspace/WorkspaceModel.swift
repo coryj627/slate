@@ -31,7 +31,8 @@ struct GroupID: Hashable, Codable {
 
 // MARK: - Tab content
 
-/// What a tab shows: a markdown note or a canvas (Milestone T, #369).
+/// What a tab shows: a markdown note, canvas (Milestone T, #369), or
+/// base (Milestone N, #702).
 ///
 /// Milestones N (Bases) and P (Graph) add cases here plus a renderer in
 /// `TabGroupView` — nothing else in the shell changes. The persistence
@@ -42,11 +43,12 @@ struct GroupID: Hashable, Codable {
 enum EditorItem: Hashable, Codable {
     case markdown(path: String)
     case canvas(path: String)
+    case base(path: String)
 
     /// The vault-relative file path behind this tab, regardless of kind.
     var path: String {
         switch self {
-        case .markdown(let path), .canvas(let path):
+        case .markdown(let path), .canvas(let path), .base(let path):
             return path
         }
     }
@@ -61,6 +63,8 @@ enum EditorItem: Hashable, Codable {
             self = .markdown(path: try c.decode(String.self, forKey: .path))
         case "canvas":
             self = .canvas(path: try c.decode(String.self, forKey: .path))
+        case "base":
+            self = .base(path: try c.decode(String.self, forKey: .path))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind, in: c,
@@ -76,6 +80,9 @@ enum EditorItem: Hashable, Codable {
             try c.encode(path, forKey: .path)
         case .canvas(let path):
             try c.encode("canvas", forKey: .kind)
+            try c.encode(path, forKey: .path)
+        case .base(let path):
+            try c.encode("base", forKey: .kind)
             try c.encode(path, forKey: .path)
         }
     }

@@ -76,11 +76,12 @@ private struct TabGroupView: View {
 
     @ViewBuilder
     private func paneContent(isFocused: Bool, hasSplits: Bool) -> some View {
-        // Milestone T (#369): route on the active tab's kind. Canvas
-        // panes render the canvas container in BOTH the focused and
-        // parked positions — the document is shared per path (t2), so a
-        // parked canvas pane is just a second live view of it.
-        if case .canvas(let path) = group.activeTab?.item {
+        // Milestone T/N: route on the active tab's kind. Canvas/base
+        // panes render their containers in BOTH focused and parked
+        // positions because the document is shared per path.
+        if case .base(let path) = group.activeTab?.item {
+            BaseContainerView(document: appState.baseDocument(for: path))
+        } else if case .canvas(let path) = group.activeTab?.item {
             CanvasContainerView(
                 document: appState.canvasDocument(for: path),
                 workspace: appState.workspace,

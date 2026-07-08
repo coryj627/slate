@@ -236,6 +236,8 @@ final class WorkspaceState: ObservableObject {
             from: .markdown(path: old), to: .markdown(path: new))
         changed += model.retargetItem(
             from: .canvas(path: old), to: .canvas(path: new))
+        changed += model.retargetItem(
+            from: .base(path: old), to: .base(path: new))
         // Rebind parked documents: `NoteDocument.path` is a `let`, so a moved
         // file gets a fresh document that inherits the old one's buffer state.
         // Only tabs that were actually retargeted are touched (the ACTIVE tab

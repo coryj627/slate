@@ -106,6 +106,16 @@ enum SlateCommandID {
     static let canvasGroupMarked = "slate.canvas.groupMarked"
     static let canvasDeleteMarked = "slate.canvas.deleteMarked"
 
+    // Bases (Milestone N, #702). Registered under CommandSection.bases
+    // with no global chords; the view owns local table/header keys.
+    static let basesOpenViewSwitcher = "slate.bases.openViewSwitcher"
+    static let basesNextView = "slate.bases.nextView"
+    static let basesPreviousView = "slate.bases.previousView"
+    static let basesSortByColumn = "slate.bases.sortByColumn"
+    static let basesSaveSortToView = "slate.bases.saveSortToView"
+    static let basesResultsPopover = "slate.bases.resultsPopover"
+    static let basesRefresh = "slate.bases.refresh"
+
     // Workspace tabs (U1-2, #454). Registered under the View section —
     // CommandSection is an FFI enum; adding a `.workspace` case is a
     // cross-language change deferred to U1-5's registry pass. ⌘1…⌘9
@@ -225,6 +235,13 @@ enum SlateCommandID {
         canvasClearMarks,
         canvasGroupMarked,
         canvasDeleteMarked,
+        basesOpenViewSwitcher,
+        basesNextView,
+        basesPreviousView,
+        basesSortByColumn,
+        basesSaveSortToView,
+        basesResultsPopover,
+        basesRefresh,
         newTab,
         closeTab,
         nextTab,
@@ -788,6 +805,57 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .file,
         hint: "Create an empty canvas file in the vault and open it."
     ) { [weak appState] in appState?.canvasNewCanvasFile() }
+
+    // ----- Bases (Milestone N, #702) -----
+
+    register(
+        SlateCommandID.basesOpenViewSwitcher,
+        label: "Bases: Open View Switcher",
+        section: .bases,
+        hint: "List the views in the active base."
+    ) { [weak appState] in appState?.basesOpenViewSwitcher() }
+
+    register(
+        SlateCommandID.basesNextView,
+        label: "Bases: Next View",
+        section: .bases,
+        hint: "Switch to the next view in the active base."
+    ) { [weak appState] in appState?.basesSelectNextView() }
+
+    register(
+        SlateCommandID.basesPreviousView,
+        label: "Bases: Previous View",
+        section: .bases,
+        hint: "Switch to the previous view in the active base."
+    ) { [weak appState] in appState?.basesSelectPreviousView() }
+
+    register(
+        SlateCommandID.basesSortByColumn,
+        label: "Bases: Sort by Column",
+        section: .bases,
+        hint: "Sort the active base table from the focused column."
+    ) { [weak appState] in appState?.basesSortByColumn() }
+
+    register(
+        SlateCommandID.basesSaveSortToView,
+        label: "Bases: Save Sort to View",
+        section: .bases,
+        hint: "Persist the current base table sort to the active view."
+    ) { [weak appState] in appState?.basesSaveSortToView() }
+
+    register(
+        SlateCommandID.basesResultsPopover,
+        label: "Bases: Results",
+        section: .bases,
+        hint: "Read the result count and summary for the active base."
+    ) { [weak appState] in appState?.basesResultsPopover() }
+
+    register(
+        SlateCommandID.basesRefresh,
+        label: "Bases: Refresh",
+        section: .bases,
+        hint: "Reload the active base and re-run its current view."
+    ) { [weak appState] in appState?.basesRefresh() }
 
     // ----- File management (U2-5, #463) -----
 

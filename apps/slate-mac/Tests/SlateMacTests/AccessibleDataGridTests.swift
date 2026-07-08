@@ -85,6 +85,10 @@ final class AccessibleDataGridTests: XCTestCase {
     private func makeGrid(
         rows: [Row],
         selection: Binding<Int?>? = nil,
+        cellSelection: Binding<AccessibleDataGrid<Row>.CellPosition?>? = nil,
+        sortState: Binding<DataGridSortState?>? = nil,
+        cellNavigation: Bool = false,
+        groups: [AccessibleDataGrid<Row>.Group] = [],
         announce: @escaping (String) -> Void = { _ in }
     ) -> AccessibleDataGrid<Row> {
         AccessibleDataGrid(
@@ -95,7 +99,11 @@ final class AccessibleDataGridTests: XCTestCase {
             rows: rows,
             summary: "Table: \(rows.count) rows, 2 columns.",
             accessibilityLabel: "Table",
+            groups: groups,
             selection: selection,
+            cellSelection: cellSelection,
+            sortState: sortState,
+            cellNavigation: cellNavigation,
             announce: announce)
     }
 
@@ -132,6 +140,22 @@ final class AccessibleDataGridTests: XCTestCase {
         // New data arrives (SwiftUI update): sort order is preserved.
         coordinator.reload(grid: makeGrid(rows: Self.people + [Row(id: 3, a: "Abe", b: "QA")]))
         XCTAssertEqual(coordinator.displayRows.map(\.a), ["Abe", "Ada", "Bea", "Charlie"])
+    }
+
+    @MainActor
+    func testSortStateBindingBridgesHeaderAndCommandSorts() {
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState }, set: { sortState = $0 })
+        let grid = makeGrid(rows: Self.people, sortState: binding)
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.applySort(column: 0, ascending: true)
+        XCTAssertEqual(sortState, DataGridSortState(columnIndex: 0, ascending: true))
+
+        sortState = DataGridSortState(columnIndex: 0, ascending: false)
+        coordinator.reload(grid: makeGrid(rows: Self.people, sortState: binding))
+        XCTAssertEqual(coordinator.displayRows.map(\.a), ["Charlie", "Bea", "Ada"])
     }
 
     @MainActor
@@ -209,5 +233,77 @@ final class AccessibleDataGridTests: XCTestCase {
         let coordinator = GridCoordinator(grid: grid)
         XCTAssertEqual(coordinator.numberOfRows(in: NSTableView()), 2000)
         XCTAssertEqual(coordinator.displayRows.count, 2000)
+    }
+
+    /// N3-1: Bases table mode uses cell navigation, not only row navigation.
+    /// The coordinator seam keeps this test window-free while pinning the
+    /// arrow/Home/End matrix that `GridTableView.keyDown` routes through.
+    @MainActor
+    func testCellNavigationMovesByColumnAndRow() {
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 0)
+        let binding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { selectedCell }, set: { selectedCell = $0 })
+        let grid = makeGrid(rows: Self.people, cellSelection: binding, cellNavigation: true)
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.moveCell(.right, in: nil)
+        XCTAssertEqual(selectedCell, .init(rowID: 0, columnIndex: 1))
+
+        coordinator.moveCell(.down, in: nil)
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+
+        coordinator.moveCell(.home, in: nil)
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 0))
+
+        coordinator.moveCell(.end, in: nil)
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+    }
+
+    @MainActor
+    func testGroupedSectionsAddAddressableHeadingRows() {
+        let grid = makeGrid(
+            rows: Self.people,
+            groups: [
+                .init(label: "Team A", rowStart: 0, rowCount: 2),
+                .init(label: "Team B", rowStart: 2, rowCount: 1),
+            ])
+        let coordinator = GridCoordinator(grid: grid)
+        XCTAssertEqual(coordinator.numberOfRows(in: NSTableView()), 5)
+        XCTAssertEqual(
+            coordinator.accessibilityLabelForDisplayRow(0),
+            "Group: Team A, 2 rows")
+        XCTAssertEqual(
+            coordinator.accessibilityLabelForDisplayRow(3),
+            "Group: Team B, 1 row")
+    }
+
+    @MainActor
+    func testGroupedSortPreservesSectionRanges() {
+        let rows = [
+            Row(id: 0, a: "Delta", b: "Team A"),
+            Row(id: 1, a: "Alpha", b: "Team A"),
+            Row(id: 2, a: "Charlie", b: "Team B"),
+            Row(id: 3, a: "Bravo", b: "Team B"),
+        ]
+        let grid = makeGrid(
+            rows: rows,
+            groups: [
+                .init(label: "Team A", rowStart: 0, rowCount: 2),
+                .init(label: "Team B", rowStart: 2, rowCount: 2),
+            ])
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.applySort(column: 0, ascending: true)
+
+        XCTAssertEqual(coordinator.displayRows.map(\.a), [
+            "Alpha", "Delta", "Bravo", "Charlie",
+        ])
+        XCTAssertEqual(
+            coordinator.accessibilityLabelForDisplayRow(0),
+            "Group: Team A, 2 rows")
+        XCTAssertEqual(
+            coordinator.accessibilityLabelForDisplayRow(3),
+            "Group: Team B, 2 rows")
     }
 }

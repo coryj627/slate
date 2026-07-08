@@ -74,7 +74,11 @@ struct QuickSwitcherView: View {
             isInitialLoad = true
             model.load(
                 files: appState.files
-                    .filter(\.isMarkdown)
+                    .filter { file in
+                        file.isMarkdown
+                            || file.path.lowercased().hasSuffix(".canvas")
+                            || file.path.lowercased().hasSuffix(".base")
+                    }
                     .map { QuickSwitcherModel.FileRow(path: $0.path, name: $0.name) },
                 recents: appState.fileRecents)
             model.announceInitialCount()

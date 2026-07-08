@@ -23,8 +23,8 @@ struct TabBarView: View {
     /// with the active tab's bolded title (never color alone).
     var isFocusedGroup: Bool = true
 
-    private var activeTabIsCanvas: Bool {
-        if case .canvas = group.activeTab?.item { return true }
+    private var activeTabIsMarkdown: Bool {
+        if case .markdown = group.activeTab?.item { return true }
         return false
     }
 
@@ -36,10 +36,9 @@ struct TabBarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // The reading/editing toggle is a note-editor affordance; a
-            // canvas tab has no note mode (#369) — its surfaces switch
-            // via the canvas commands and the container's switcher.
-            if !activeTabIsCanvas {
+            // The reading/editing toggle is a note-editor affordance;
+            // canvas/base tabs switch their own surfaces/views.
+            if activeTabIsMarkdown {
                 modeToggle
             }
             ScrollViewReader { proxy in
@@ -128,16 +127,18 @@ struct TabBarView: View {
     /// (t0 §3 inspectability), not the label, so the speakable name stays
     /// the filename for Voice Control.
     static func accessibilityValue(
-        index: Int, count: Int, isDirty: Bool, isCanvas: Bool = false
+        index: Int, count: Int, isDirty: Bool, isCanvas: Bool = false,
+        isBase: Bool = false
     ) -> String {
         "tab \(index + 1) of \(count)" + (isDirty ? ", edited" : "")
             + (isCanvas ? ", canvas" : "")
+            + (isBase ? ", base" : "")
     }
 
     private func isDirty(_ tab: WorkspaceTab) -> Bool {
-        // Canvas tabs are never dirty: mutations write through on commit
-        // (#369 decision 4).
+        // Canvas/base tabs are never dirty through the note-buffer close gate.
         if case .canvas = tab.item { return false }
+        if case .base = tab.item { return false }
         if tab.id == group.activeTabID {
             return appState.hasUnsavedChanges
         }
@@ -169,6 +170,11 @@ struct TabBarView: View {
                             .font(Tokens.Typography.caption)
                             .foregroundStyle(Tokens.ColorRole.textSecondary)
                     }
+                    if case .base = tab.item {
+                        SlateSymbol.base.decorative
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    }
                     Text(title(tab))
                         .font(active ? Tokens.Typography.body.weight(.semibold) : Tokens.Typography.body)
                         .foregroundStyle(
@@ -193,7 +199,8 @@ struct TabBarView: View {
             .accessibilityValue(
                 Self.accessibilityValue(
                     index: index, count: group.tabs.count, isDirty: dirty,
-                    isCanvas: { if case .canvas = tab.item { return true }; return false }())
+                    isCanvas: { if case .canvas = tab.item { return true }; return false }(),
+                    isBase: { if case .base = tab.item { return true }; return false }())
             )
             .accessibilityAddTraits(active ? [.isSelected] : [])
             .accessibilityHint(

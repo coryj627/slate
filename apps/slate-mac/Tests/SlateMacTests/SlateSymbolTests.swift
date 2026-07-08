@@ -47,6 +47,9 @@ final class SlateSymbolTests: XCTestCase {
         // Milestone T (#369): canvas tab glyph. rectangle.3.group is
         // SF Symbols 2 (macOS 11), comfortably on the macOS 15 floor.
         "rectangle.3.group",
+        // Milestone N (#702): base tab glyph. tablecells predates the
+        // macOS 15 floor and matches the table-first base renderer.
+        "tablecells",
         // Milestone M (M-3, #534): sync-diagnostics leaf fallback + the two
         // risk-badge glyphs. arrow.triangle.2.circlepath is SF Symbols 1
         // (macOS 11); exclamationmark.circle / info.circle are SF Symbols 1.
