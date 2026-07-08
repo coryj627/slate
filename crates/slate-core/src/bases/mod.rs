@@ -96,6 +96,7 @@ pub struct SlateQuery {
     pub row_source: RowSource,
     pub filters: Option<FilterNode>,
     pub formulas: Vec<(String, Expr)>,
+    pub custom_summaries: Vec<(String, Expr)>,
     pub group_by: Option<GroupBy>,
     pub sort: Vec<SortKey>,
     pub columns: Vec<ColumnSelection>,
@@ -432,12 +433,53 @@ pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery {
         row_source: view.source.clone(),
         filters,
         formulas: base.formulas.clone(),
+        custom_summaries: base.summaries.clone(),
         group_by: view.group_by.clone(),
-        sort: Vec::new(),
+        sort: slate_sort_keys(view.slate_state.as_ref()),
         columns,
         summaries: view.summaries.clone(),
         limit: view.limit,
         view: view_spec,
+    }
+}
+
+fn slate_sort_keys(slate_state: Option<&JsonValue>) -> Vec<SortKey> {
+    let Some(JsonValue::Object(state)) = slate_state else {
+        return Vec::new();
+    };
+    let Some(JsonValue::Array(items)) = state.get("sort") else {
+        return Vec::new();
+    };
+    items.iter().filter_map(slate_sort_key).collect()
+}
+
+fn slate_sort_key(value: &JsonValue) -> Option<SortKey> {
+    let JsonValue::Object(entry) = value else {
+        return None;
+    };
+    let source = entry
+        .get("expr")
+        .and_then(JsonValue::as_str)
+        .or_else(|| entry.get("property").and_then(JsonValue::as_str))?;
+    Some(SortKey {
+        expr: parse_expr(source).ok()?,
+        ascending: slate_sort_ascending(entry)?,
+    })
+}
+
+fn slate_sort_ascending(entry: &JsonMap<String, JsonValue>) -> Option<bool> {
+    if let Some(ascending) = entry.get("ascending").and_then(JsonValue::as_bool) {
+        return Some(ascending);
+    }
+    match entry
+        .get("direction")
+        .and_then(JsonValue::as_str)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("desc" | "descending") => Some(false),
+        Some("asc" | "ascending") => Some(true),
+        _ => None,
     }
 }
 

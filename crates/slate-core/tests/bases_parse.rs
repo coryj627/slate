@@ -303,6 +303,64 @@ views:
 }
 
 #[test]
+fn view_query_derives_sort_from_slate_view_state() {
+    let source = r#"views:
+  - type: table
+    name: Sorted
+    limit: 1
+    slate:
+      sort:
+        - property: rating
+          direction: DESC
+        - expr: file.name
+          ascending: true
+      order:
+        - file.name
+        - rating
+"#;
+    let (base, warnings) = parse_base(source);
+
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let query = view_query(&base, 0);
+    assert_eq!(query.sort.len(), 2);
+    assert!(!query.sort[0].ascending);
+    assert!(query.sort[1].ascending);
+    assert!(matches!(
+        query.sort[0].expr.kind,
+        ExprKind::Prop(PropertyRef::Note(ref name)) if name == "rating"
+    ));
+    assert!(matches!(
+        query.sort[1].expr.kind,
+        ExprKind::Prop(PropertyRef::File(FileField::Name))
+    ));
+}
+
+#[test]
+fn view_query_ignores_malformed_slate_sort_entries() {
+    let source = r#"views:
+  - type: table
+    name: Sorted
+    slate:
+      sort:
+        - property: rating
+          direction: SIDEWAYS
+        - expr: file.name
+        - property: status
+          direction: ASC
+"#;
+    let (base, warnings) = parse_base(source);
+
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let query = view_query(&base, 0);
+    assert_eq!(query.sort.len(), 1);
+    assert!(query.sort[0].ascending);
+    assert!(matches!(
+        query.sort[0].expr.kind,
+        ExprKind::Prop(PropertyRef::Note(ref name)) if name == "status"
+    ));
+}
+
+#[test]
 fn circular_formula_references_become_unsupported() {
     let source = r#"formulas:
   a: "formula.b + 1"
