@@ -1013,6 +1013,15 @@ fn dashboards_preserve_dangling_refs_and_do_not_own_saved_queries() {
         session.get_dashboard(&dashboard_id).unwrap().name,
         "Renamed dashboard"
     );
+    let other_dashboard_id = session.save_dashboard("Other dashboard", vec![]).unwrap();
+    let rename_collision = session
+        .rename_dashboard(&other_dashboard_id, "Renamed dashboard")
+        .unwrap_err();
+    assert!(
+        rename_collision.to_string().contains("dashboard name"),
+        "{rename_collision}"
+    );
+
     session
         .update_dashboard_sections(
             &dashboard_id,
