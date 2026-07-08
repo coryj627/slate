@@ -340,6 +340,11 @@ final class AppState: ObservableObject {
     /// Not @Published: views observe each document directly.
     var baseDocuments: [String: BaseDocument] = [:]
 
+    /// Open embedded Bases keyed by source + host note (#706). Reusing the
+    /// handle keeps duplicate embeds on one native cache while each rendered
+    /// embed owns independent quick-filter/sort/view UI state.
+    var baseEmbedHandles: [BaseEmbedCacheKey: BaseEmbedHandle] = [:]
+
     /// Per-tab Bases renderer override (#703). This is transient UI
     /// preference, deliberately outside `.base` persistence.
     @Published var baseRendererOverrides: [TabID: BaseRendererMode] = [:]
@@ -2418,6 +2423,7 @@ final class AppState: ObservableObject {
     /// until the new load lands (#90 anti-flicker discipline).
     func clearTransitionSensitiveCollections() {
         currentNoteEmbedResolutions = [:]
+        releaseAllBaseEmbedDocuments()
         // Drop any open embed-preview popover too — its target may
         // not exist in the new file's embed set.
         pendingEmbedPreview = nil
@@ -2753,6 +2759,7 @@ final class AppState: ObservableObject {
             // would pair old native handles with the wrong registry.
             releaseAllCanvasDocuments()
             releaseAllBaseDocuments()
+            releaseAllBaseEmbedDocuments()
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -3110,6 +3117,7 @@ final class AppState: ObservableObject {
         // the release helpers need the session that created those handles.
         releaseAllCanvasDocuments()
         releaseAllBaseDocuments()
+        releaseAllBaseEmbedDocuments()
         currentSession = nil
         currentVaultURL = nil
         files = []

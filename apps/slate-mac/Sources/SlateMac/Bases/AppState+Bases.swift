@@ -15,6 +15,14 @@ extension AppState {
         return doc
     }
 
+    func baseEmbedHandle(for request: BaseEmbedRequest, thisPath: String?) -> BaseEmbedHandle {
+        let key = BaseEmbedCacheKey(request: request, thisPath: thisPath)
+        if let existing = baseEmbedHandles[key] { return existing }
+        let handle = BaseEmbedHandle(request: request, thisPath: thisPath)
+        baseEmbedHandles[key] = handle
+        return handle
+    }
+
     func openBaseFile(_ path: String, target: OpenTarget) {
         switch target {
         case .currentTab:
@@ -389,6 +397,15 @@ extension AppState {
             }
         }
         baseDocuments = [:]
+    }
+
+    func releaseAllBaseEmbedDocuments() {
+        if let session = currentSession {
+            for handle in baseEmbedHandles.values {
+                handle.close(session: session)
+            }
+        }
+        baseEmbedHandles = [:]
     }
 
     private enum BasePropertyAction: Equatable {

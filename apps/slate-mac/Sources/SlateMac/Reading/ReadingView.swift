@@ -99,6 +99,13 @@ struct ReadingView: View {
         /// `AppState.openEmbedTarget` — the SAME routing the EmbedsPanel rows
         /// and the Cmd+E popover use.
         var onOpenEmbedSource: (String) -> Void = { _ in }
+        /// Bases embeds (#706) render through the Bases handle API, not the
+        /// note/image embed resolver. `thisPath` is the host note path.
+        var baseEmbedSession: VaultSession?
+        var baseEmbedThisPath: String?
+        var onOpenBaseEmbedInTab: (String) -> Void = { _ in }
+        var baseEmbedHandleProvider: @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
+            { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
 
         init(
             mathBlocks: [MathBlock] = [],
@@ -111,7 +118,12 @@ struct ReadingView: View {
             taskLineOffset: Int = 0,
             embedResolutions: [String: EmbedResolution] = [:],
             onResolveEmbed: @escaping (String) async -> Void = { _ in },
-            onOpenEmbedSource: @escaping (String) -> Void = { _ in }
+            onOpenEmbedSource: @escaping (String) -> Void = { _ in },
+            baseEmbedSession: VaultSession? = nil,
+            baseEmbedThisPath: String? = nil,
+            onOpenBaseEmbedInTab: @escaping (String) -> Void = { _ in },
+            baseEmbedHandleProvider: @escaping @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
+                { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
         ) {
             self.mathBlocks = mathBlocks
             self.codeBlocks = codeBlocks
@@ -124,6 +136,10 @@ struct ReadingView: View {
             self.embedResolutions = embedResolutions
             self.onResolveEmbed = onResolveEmbed
             self.onOpenEmbedSource = onOpenEmbedSource
+            self.baseEmbedSession = baseEmbedSession
+            self.baseEmbedThisPath = baseEmbedThisPath
+            self.onOpenBaseEmbedInTab = onOpenBaseEmbedInTab
+            self.baseEmbedHandleProvider = baseEmbedHandleProvider
         }
     }
 
@@ -292,7 +308,11 @@ struct ReadingView: View {
             // SwiftUI `Text` can't host a card mid-run). Detection is the Rust
             // span authority, not a string check (see `blockEmbedTarget`).
             if let embedKey = ReadingInlineMapper.blockEmbedTarget(inSlice: block.source) {
-                embedBlock(key: embedKey, fallbackSlice: block.source)
+                if let request = BaseEmbedRequest.wikilinkTarget(embedKey) {
+                    baseEmbedBlock(request, identity: index)
+                } else {
+                    embedBlock(key: embedKey, fallbackSlice: block.source)
+                }
             } else {
                 inlineLeaf(block.source)
             }
@@ -305,9 +325,13 @@ struct ReadingView: View {
         case .blockQuote(let depth):
             quoteRow(block, depth: depth)
         case .codeFence(let language):
-            // Existing view, reused: visual highlight + the "Code block,
-            // <language>, N lines" preamble + copy affordance.
-            CodeBlockView(block: codeModel(block, language: language, lineStarts: lineStarts))
+            if let request = BaseEmbedRequest.codeFence(language: language, source: block.source) {
+                baseEmbedBlock(request, identity: index)
+            } else {
+                // Existing view, reused: visual highlight + the "Code block,
+                // <language>, N lines" preamble + copy affordance.
+                CodeBlockView(block: codeModel(block, language: language, lineStarts: lineStarts))
+            }
         case .mathBlock:
             // Existing view, reused: MathCAT speech as the AX label.
             MathView(block: mathModel(block, lineStarts: lineStarts))
@@ -428,6 +452,17 @@ struct ReadingView: View {
             defer { completedEmbedKeys.insert(key) }
             await context.onResolveEmbed(key)
         }
+    }
+
+    private func baseEmbedBlock(_ request: BaseEmbedRequest, identity: Int) -> some View {
+        BaseEmbedView(
+            request: request,
+            session: context.baseEmbedSession,
+            thisPath: context.baseEmbedThisPath,
+            sharedHandle: context.baseEmbedHandleProvider(request, context.baseEmbedThisPath),
+            onOpenInTab: { path in context.onOpenBaseEmbedInTab(path) })
+            .id("\(identity)|\(request.cacheKey)|\(context.baseEmbedThisPath ?? "")")
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func headingView(_ block: ReadingBlock, level: UInt8) -> some View {
