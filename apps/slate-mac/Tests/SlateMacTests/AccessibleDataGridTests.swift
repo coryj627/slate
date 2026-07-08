@@ -87,6 +87,10 @@ final class AccessibleDataGridTests: XCTestCase {
         selection: Binding<Int?>? = nil,
         cellSelection: Binding<AccessibleDataGrid<Row>.CellPosition?>? = nil,
         sortState: Binding<DataGridSortState?>? = nil,
+        editRequest: Binding<AccessibleDataGrid<Row>.EditRequest?>? = nil,
+        onCommitEdit: ((Row, Int, String, AccessibleDataGrid<Row>.EditCommitNavigation) -> Void)? =
+            nil,
+        onCancelEdit: (() -> Void)? = nil,
         cellNavigation: Bool = false,
         groups: [AccessibleDataGrid<Row>.Group] = [],
         announce: @escaping (String) -> Void = { _ in }
@@ -94,7 +98,7 @@ final class AccessibleDataGridTests: XCTestCase {
         AccessibleDataGrid(
             columns: [
                 .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
-                .init("Role", cell: { $0.b }),
+                .init("Role", cell: { $0.b }, accessibilityHint: { _ in "read-only: computed" }),
             ],
             rows: rows,
             summary: "Table: \(rows.count) rows, 2 columns.",
@@ -104,6 +108,9 @@ final class AccessibleDataGridTests: XCTestCase {
             cellSelection: cellSelection,
             sortState: sortState,
             cellNavigation: cellNavigation,
+            editRequest: editRequest,
+            onCommitEdit: onCommitEdit,
+            onCancelEdit: onCancelEdit,
             announce: announce)
     }
 
@@ -116,7 +123,7 @@ final class AccessibleDataGridTests: XCTestCase {
     @MainActor
     func testSortComparatorAndAnnouncement() {
         var announced: [String] = []
-        let grid = makeGrid(rows: Self.people) { announced.append($0) }
+        let grid = makeGrid(rows: Self.people, announce: { announced.append($0) })
         let coordinator = GridCoordinator(grid: grid)
 
         XCTAssertEqual(coordinator.applySort(column: 0, ascending: true),
@@ -179,7 +186,7 @@ final class AccessibleDataGridTests: XCTestCase {
     @MainActor
     func testSortDescriptorsTrackActiveSortWithoutReAnnouncing() {
         var announced: [String] = []
-        let grid = makeGrid(rows: Self.people) { announced.append($0) }
+        let grid = makeGrid(rows: Self.people, announce: { announced.append($0) })
         let coordinator = GridCoordinator(grid: grid)
         let table = NSTableView()
         table.delegate = coordinator
@@ -258,6 +265,53 @@ final class AccessibleDataGridTests: XCTestCase {
 
         coordinator.moveCell(.end, in: nil)
         XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+    }
+
+    @MainActor
+    func testCellEditingCommitAndCancelHooks() {
+        var editRequest: AccessibleDataGrid<Row>.EditRequest? =
+            .init(rowID: 0, columnIndex: 0, text: "Charlie")
+        let binding = Binding<AccessibleDataGrid<Row>.EditRequest?>(
+            get: { editRequest }, set: { editRequest = $0 })
+        var commits: [(Int, Int, String, AccessibleDataGrid<Row>.EditCommitNavigation)] = []
+        var canceled = false
+        let grid = makeGrid(
+            rows: Self.people,
+            editRequest: binding,
+            onCommitEdit: { row, columnIndex, text, navigation in
+                commits.append((row.id, columnIndex, text, navigation))
+            },
+            onCancelEdit: { canceled = true })
+        let coordinator = GridCoordinator(grid: grid)
+
+        XCTAssertTrue(coordinator.commitEditing(text: "Edited", navigation: .next))
+        XCTAssertEqual(commits.count, 1)
+        XCTAssertEqual(commits.first?.0, 0)
+        XCTAssertEqual(commits.first?.1, 0)
+        XCTAssertEqual(commits.first?.2, "Edited")
+        XCTAssertEqual(commits.first?.3, .next)
+
+        XCTAssertTrue(coordinator.cancelEditing())
+        XCTAssertNil(editRequest)
+        XCTAssertTrue(canceled)
+    }
+
+    @MainActor
+    func testCellsExposeOptionalAccessibilityHints() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+
+        let roleCell = coordinator.tableView(
+            table,
+            viewFor: table.tableColumns[1],
+            row: 0) as? NSTableCellView
+
+        XCTAssertEqual(roleCell?.textField?.accessibilityHelp(), "read-only: computed")
     }
 
     @MainActor

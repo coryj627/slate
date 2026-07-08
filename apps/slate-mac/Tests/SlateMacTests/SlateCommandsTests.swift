@@ -1039,6 +1039,13 @@ extension SlateCommandsTests {
             SlateCommandID.basesViewAsList,
             SlateCommandID.basesQuickFilter,
             SlateCommandID.basesWhereAmI,
+            SlateCommandID.basesOpenRow,
+            SlateCommandID.basesCopyLink,
+            SlateCommandID.basesShowBacklinks,
+            SlateCommandID.basesEditProperty,
+            SlateCommandID.basesExportCSV,
+            SlateCommandID.basesExportMarkdown,
+            SlateCommandID.basesCopyMarkdown,
             SlateCommandID.basesResultsPopover,
             SlateCommandID.basesRefresh,
         ]

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
 import Foundation
 
 /// Bases tab lifecycle (Milestone N, #702): the `.base` arm of the
@@ -81,6 +82,9 @@ extension AppState {
         }
         if selectedFilePath != path {
             selectedFilePath = path
+        }
+        if activeBaseSelectionPath != path {
+            clearActiveBaseSelection()
         }
     }
 
@@ -185,6 +189,156 @@ extension AppState {
         postAccessibilityAnnouncement("\(result.audioSummary)\(suffix)", priority: .medium)
     }
 
+    @discardableResult
+    func basesOpen(row: BasesRow) -> String? {
+        if let taskOrdinal = row.taskOrdinal,
+            let task = taskItem(path: row.filePath, ordinal: taskOrdinal)
+        {
+            openTaskRowInEditor(
+                TaskWithLocation(task: task, path: row.filePath, fileName: baseFilename(row.filePath)))
+            let text = "Opened \(baseFilename(row.filePath)), line \(task.line)."
+            postBaseActionAnnouncement(text)
+            return text
+        }
+        openFile(row.filePath, target: .currentTab)
+        let text = "Opened \(baseFilename(row.filePath))."
+        postBaseActionAnnouncement(text)
+        return text
+    }
+
+    @discardableResult
+    func basesCopyLink(for row: BasesRow) -> String {
+        let link = baseWikilink(for: row.filePath)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
+        postBaseActionAnnouncement("Copied link to \(displayNameWithoutExtension(row.filePath)).")
+        return link
+    }
+
+    @discardableResult
+    func basesShowBacklinks(for row: BasesRow) -> String {
+        openFile(row.filePath, target: .currentTab)
+        workspace.activeLeaf = .backlinks
+        workspace.focusLeafRegion()
+        let text = "Backlinks for \(displayNameWithoutExtension(row.filePath))."
+        postBaseActionAnnouncement(text)
+        return text
+    }
+
+    func basesExportText(format: ExportFormat, includeQuickFilter: Bool = true) throws -> String {
+        guard let doc = activeBaseDocument, let session = currentSession else {
+            throw BaseActionError.noActiveBase
+        }
+        return try doc.export(
+            format: format,
+            session: session,
+            includeQuickFilter: includeQuickFilter)
+    }
+
+    @discardableResult
+    func basesCopyViewAsMarkdown(includeQuickFilter: Bool? = nil) -> String? {
+        do {
+            guard let doc = activeBaseDocument else {
+                throw BaseActionError.noActiveBase
+            }
+            let shouldIncludeQuickFilter =
+                includeQuickFilter ?? baseExportQuickFilterChoice(doc: doc, verb: "Copy")
+            guard let shouldIncludeQuickFilter else { return nil }
+            let markdown = try basesExportText(
+                format: .markdown,
+                includeQuickFilter: shouldIncludeQuickFilter)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(markdown, forType: .string)
+            postBaseActionAnnouncement("Copied base view as Markdown.")
+            return markdown
+        } catch {
+            postBaseActionAnnouncement("Base view could not be copied: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func basesExportCSV() {
+        basesExportToSavePanel(format: .csv, fileExtension: "csv")
+    }
+
+    func basesExportMarkdown() {
+        basesExportToSavePanel(format: .markdown, fileExtension: "md")
+    }
+
+    @discardableResult
+    func basesSetProperty(row: BasesRow, column: BasesColumn, value: PropertyValue) async -> String? {
+        await basesApplyProperty(row: row, column: column, action: .set(value))
+    }
+
+    @discardableResult
+    func basesDeleteProperty(row: BasesRow, column: BasesColumn) async -> String? {
+        await basesApplyProperty(row: row, column: column, action: .delete)
+    }
+
+    func basesOpenSelectedRow() {
+        guard let row = activeBaseSelectedRowForCommand() else {
+            postBaseActionAnnouncement("Select a base row first.")
+            return
+        }
+        basesOpen(row: row)
+    }
+
+    func basesCopySelectedLink() {
+        guard let row = activeBaseSelectedRowForCommand() else {
+            postBaseActionAnnouncement("Select a base row first.")
+            return
+        }
+        basesCopyLink(for: row)
+    }
+
+    func basesShowSelectedBacklinks() {
+        guard let row = activeBaseSelectedRowForCommand() else {
+            postBaseActionAnnouncement("Select a base row first.")
+            return
+        }
+        basesShowBacklinks(for: row)
+    }
+
+    func basesEditSelectedProperty() {
+        guard activeBaseSelectedRowForCommand() != nil else {
+            postBaseActionAnnouncement("Select a base row first.")
+            return
+        }
+        baseEditPropertyRequestToken &+= 1
+    }
+
+    func updateActiveBaseSelection(
+        path: String,
+        rowID: String?,
+        columnIndex: Int?,
+        result: BasesResultSet?
+    ) {
+        guard let result else {
+            clearActiveBaseSelection()
+            return
+        }
+        let rows = result.rows.enumerated().map { BaseGridRow(row: $0.element, ordinal: $0.offset) }
+        guard let rowID, let selected = rows.first(where: { $0.id == rowID }) else {
+            clearActiveBaseSelection()
+            return
+        }
+        activeBaseSelectionPath = path
+        activeBaseSelectedRow = selected.row
+        if let columnIndex, result.columns.indices.contains(columnIndex) {
+            activeBaseSelectedColumn = result.columns[columnIndex]
+        } else {
+            activeBaseSelectedColumn = result.columns.first {
+                BaseCellEditPolicy.propertyKey(for: $0) != nil
+            }
+        }
+    }
+
+    func clearActiveBaseSelection() {
+        activeBaseSelectionPath = nil
+        activeBaseSelectedRow = nil
+        activeBaseSelectedColumn = nil
+    }
+
     func basesRefresh() {
         guard let doc = activeBaseDocument, let session = currentSession else { return }
         doc.refresh(session: session)
@@ -235,5 +389,174 @@ extension AppState {
             }
         }
         baseDocuments = [:]
+    }
+
+    private enum BasePropertyAction: Equatable {
+        case set(PropertyValue)
+        case delete
+    }
+
+    private enum BaseActionError: LocalizedError {
+        case noActiveBase
+
+        var errorDescription: String? {
+            switch self {
+            case .noActiveBase:
+                return "No active base."
+            }
+        }
+    }
+
+    private func basesApplyProperty(
+        row: BasesRow,
+        column: BasesColumn,
+        action: BasePropertyAction
+    ) async -> String? {
+        guard let key = BaseCellEditPolicy.propertyKey(for: column) else {
+            let hint = BaseCellEditPolicy.readOnlyHint(for: column)
+            postBaseActionAnnouncement(hint)
+            return hint
+        }
+        guard let session = currentSession, let doc = activeBaseDocument else { return nil }
+        let outcome: Result<SaveReport, VaultError> = await Task.detached(priority: .userInitiated) {
+            do {
+                switch action {
+                case .set(let value):
+                    return .success(
+                        try session.setProperty(
+                            path: row.filePath,
+                            key: key,
+                            value: value,
+                            expectedContentHash: nil))
+                case .delete:
+                    return .success(
+                        try session.deleteProperty(
+                            path: row.filePath,
+                            key: key,
+                            expectedContentHash: nil))
+                }
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
+        }.value
+
+        switch outcome {
+        case .success:
+            doc.executeActiveView(session: session)
+            let stillPresent = doc.result?.rows.contains {
+                $0.filePath == row.filePath && $0.taskOrdinal == row.taskOrdinal
+            } ?? false
+            let text: String
+            if stillPresent {
+                switch action {
+                case .set(let value):
+                    text = "Saved. \(column.label): \(BaseCellEditPolicy.displayValue(value))"
+                case .delete:
+                    text = "Saved. \(column.label): empty"
+                }
+            } else {
+                text = "Saved. Row no longer matches this view"
+            }
+            postBaseActionAnnouncement(text)
+            return text
+        case .failure(let error):
+            let text = "Base edit failed: \(error.localizedDescription)"
+            postBaseActionAnnouncement(text)
+            return text
+        }
+    }
+
+    private func basesExportToSavePanel(format: ExportFormat, fileExtension: String) {
+        guard let doc = activeBaseDocument else { return }
+        do {
+            guard let includeQuickFilter = baseExportQuickFilterChoice(doc: doc, verb: "Export")
+            else { return }
+            let text = try basesExportText(format: format, includeQuickFilter: includeQuickFilter)
+            let panel = NSSavePanel()
+            let viewName = doc.activeViewName ?? "View"
+            panel.nameFieldStringValue = "\(doc.displayName) — \(viewName).\(fileExtension)"
+            panel.begin { [weak self] response in
+                guard response == .OK, let url = panel.url else { return }
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let message: String
+                    do {
+                        try text.write(to: url, atomically: true, encoding: .utf8)
+                        message = "Exported base view."
+                    } catch {
+                        message = "Base view could not be exported: \(error.localizedDescription)"
+                    }
+                    DispatchQueue.main.async { [weak self] in
+                        self?.postBaseActionAnnouncement(message)
+                    }
+                }
+            }
+        } catch {
+            postBaseActionAnnouncement("Base view could not be exported: \(error.localizedDescription)")
+        }
+    }
+
+    private func baseExportQuickFilterChoice(doc: BaseDocument, verb: String) -> Bool? {
+        guard doc.quickFilterActive, let result = doc.result else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "\(verb) quick-filtered base view?"
+        alert.informativeText =
+            "Quick filter \"\(doc.quickFilterText)\" is active. Choose filtered rows "
+            + "(\(result.shownCount)) or all rows (\(result.totalCount))."
+        alert.addButton(withTitle: "\(verb) Filtered Rows")
+        alert.addButton(withTitle: "\(verb) All Rows")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return true
+        case .alertSecondButtonReturn:
+            return false
+        default:
+            postBaseActionAnnouncement("\(verb) canceled.")
+            return nil
+        }
+    }
+
+    func postBaseActionAnnouncement(_ message: String) {
+        lastBaseActionAnnouncement = message
+        postAccessibilityAnnouncement(message, priority: .medium)
+    }
+
+    private func activeBaseSelectedRowForCommand() -> BasesRow? {
+        guard let doc = activeBaseDocument,
+            activeBaseSelectionPath == doc.path,
+            let row = activeBaseSelectedRow,
+            doc.result?.rows.contains(where: { $0.hasSameBaseIdentity(as: row) }) == true
+        else { return nil }
+        return row
+    }
+
+    private func taskItem(path: String, ordinal: UInt64) -> TaskItem? {
+        guard let session = currentSession else { return nil }
+        return try? session.tasksForFile(path: path).first {
+            UInt64($0.ordinal) == ordinal
+        }
+    }
+
+    private func baseWikilink(for path: String) -> String {
+        let target = (path as NSString).deletingPathExtension
+        return "[[\(target)]]"
+    }
+
+    private func displayNameWithoutExtension(_ path: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        return (name as NSString).deletingPathExtension
+    }
+
+    private func baseFilename(_ path: String) -> String {
+        (path as NSString).lastPathComponent
+    }
+}
+
+extension BasesRow {
+    func hasSameBaseIdentity(as other: BasesRow) -> Bool {
+        filePath == other.filePath && taskOrdinal == other.taskOrdinal
     }
 }

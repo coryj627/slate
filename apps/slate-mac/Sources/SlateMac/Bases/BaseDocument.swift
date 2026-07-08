@@ -122,6 +122,21 @@ final class BaseDocument: ObservableObject {
         }
     }
 
+    func export(
+        format: ExportFormat,
+        session: VaultSession,
+        includeQuickFilter: Bool = true
+    ) throws -> String {
+        guard let handle, views.indices.contains(activeViewIndex) else {
+            throw BaseDocumentError.noExecutableView
+        }
+        return try session.baseExport(
+            handle: handle,
+            view: UInt32(activeViewIndex),
+            format: format,
+            quickFilter: includeQuickFilter ? quickFilterArgument : nil)
+    }
+
     @discardableResult
     func applyQuickFilter(_ text: String, session: VaultSession) -> String {
         if quickFilterText != text {
@@ -224,6 +239,17 @@ final class BaseDocument: ObservableObject {
     private func clearQuickFilterState() {
         if !quickFilterText.isEmpty {
             quickFilterText = ""
+        }
+    }
+
+    private enum BaseDocumentError: LocalizedError {
+        case noExecutableView
+
+        var errorDescription: String? {
+            switch self {
+            case .noExecutableView:
+                return "No executable base view."
+            }
         }
     }
 
