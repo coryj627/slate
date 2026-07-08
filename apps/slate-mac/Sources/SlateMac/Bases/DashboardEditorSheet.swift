@@ -221,7 +221,7 @@ struct DashboardEditorSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-                    ForEach(draft.sections.indices, id: \.self) { index in
+                    ForEach(Array(draft.sections.enumerated()), id: \.element.id) { index, _ in
                         sectionRow($draft.sections[index], index: index)
                     }
                 }
