@@ -17,7 +17,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use yaml_rust2::{
     Yaml,
     parser::{Event as YamlEvent, Parser as YamlParser},
-    scanner::TScalarStyle,
+    scanner::{Marker as YamlMarker, TScalarStyle},
 };
 
 use self::expr::{Callee, Expr, ExprKind, Lit, PropertyRef, Span, parse_expr};
@@ -531,7 +531,17 @@ pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Result<String, Ser
     for edit in edits {
         collect_edit_splices(base, edit, &mut splices)?;
     }
-    apply_splices(&base.raw, splices)
+    let output = apply_splices(&base.raw, splices)?;
+    let (_, warnings) = parse_base(&output);
+    if let Some(warning) = warnings
+        .iter()
+        .find(|warning| warning.kind == BaseWarningKind::ParseFailed)
+    {
+        return Err(SerializeError::InvalidEdit {
+            message: format!("edit produced invalid YAML: {}", warning.message),
+        });
+    }
+    Ok(output)
 }
 
 #[derive(Debug)]
@@ -561,11 +571,7 @@ fn collect_edit_splices(
             )
         }
         BaseEdit::AddView { yaml } => push_add_view_splice(base, yaml, splices),
-        BaseEdit::RemoveView { view } => {
-            let entry = view_spans_for(base, *view)?.entry.clone();
-            push_splice(splices, entry.span, String::new());
-            Ok(())
-        }
+        BaseEdit::RemoveView { view } => push_remove_view_splice(base, *view, splices),
         BaseEdit::RenameView { view, name } => replace_or_insert_view_key_preserving_scalar(
             base,
             *view,
@@ -602,6 +608,24 @@ fn collect_edit_splices(
         BaseEdit::RemoveFormula { name } => {
             let region = named_region(&base.spans.formulas, name)
                 .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
+            if named_region(&base.spans.top_level, "formulas").is_some_and(|formulas| {
+                flow_collection_close(&formulas.region, "formulas", FlowCollectionKind::Mapping)
+                    .is_some()
+            }) {
+                let index = base
+                    .spans
+                    .formulas
+                    .iter()
+                    .position(|candidate| candidate.region.span == region.region.span)
+                    .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
+                let spans = base
+                    .spans
+                    .formulas
+                    .iter()
+                    .map(|formula| formula.region.span)
+                    .collect::<Vec<_>>();
+                return push_flow_item_removal(&base.raw, &spans, index, splices);
+            }
             push_splice(splices, region.region.span, String::new());
             Ok(())
         }
@@ -680,6 +704,19 @@ fn replace_or_insert_formula(
                 splices,
                 formulas.region.span,
                 expand_empty_collection_region(&formulas.region, "formulas", &child),
+            );
+            return Ok(());
+        }
+        if let Some(offset) =
+            flow_collection_close(&formulas.region, "formulas", FlowCollectionKind::Mapping)
+        {
+            push_splice(
+                splices,
+                Span {
+                    start: offset,
+                    end: offset,
+                },
+                format!(", {}: {}", yaml_key(name), quote_yaml_string(expression)),
             );
             return Ok(());
         }
@@ -858,6 +895,19 @@ fn push_add_view_splice(
             );
             return Ok(());
         }
+        if let Some(offset) =
+            flow_collection_close(&views.region, "views", FlowCollectionKind::Sequence)
+        {
+            push_splice(
+                splices,
+                Span {
+                    start: offset,
+                    end: offset,
+                },
+                format!(", {}", flow_view_item(yaml)?),
+            );
+            return Ok(());
+        }
         push_insertion_splice(splices, &base.raw, views.region.span.end, item);
         return Ok(());
     }
@@ -865,6 +915,64 @@ fn push_add_view_splice(
     let mut section = String::from("views:\n");
     section.push_str(&item);
     push_insertion_splice(splices, &base.raw, base.raw.len() as u32, section);
+    Ok(())
+}
+
+fn push_remove_view_splice(
+    base: &BaseFile,
+    view: usize,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let entry = view_spans_for(base, view)?.entry.clone();
+    if named_region(&base.spans.top_level, "views").is_some_and(|views| {
+        flow_collection_close(&views.region, "views", FlowCollectionKind::Sequence).is_some()
+    }) {
+        let spans = base
+            .spans
+            .views
+            .iter()
+            .map(|view| view.entry.span)
+            .collect::<Vec<_>>();
+        return push_flow_item_removal(&base.raw, &spans, view, splices);
+    }
+    push_splice(splices, entry.span, String::new());
+    Ok(())
+}
+
+fn push_flow_item_removal(
+    source: &str,
+    item_spans: &[Span],
+    item: usize,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let span = *item_spans
+        .get(item)
+        .ok_or_else(|| missing_span(format!("flow item {item}")))?;
+    if item_spans.len() > 1 {
+        let (between_start, between_end) = if let Some(next) = item_spans.get(item + 1) {
+            (span.end as usize, next.start as usize)
+        } else {
+            (item_spans[item - 1].end as usize, span.start as usize)
+        };
+        let between = source
+            .get(between_start..between_end)
+            .ok_or_else(|| missing_span(format!("flow delimiter for item {item}")))?;
+        let comma = between
+            .find(',')
+            .ok_or_else(|| SerializeError::InvalidEdit {
+                message: format!("missing flow delimiter for item {item}"),
+            })?
+            + between_start;
+        push_splice(
+            splices,
+            Span {
+                start: comma as u32,
+                end: comma as u32 + 1,
+            },
+            String::new(),
+        );
+    }
+    push_splice(splices, span, String::new());
     Ok(())
 }
 
@@ -1068,13 +1176,50 @@ fn scalar_tail(region: &PreservedRegion) -> Option<(Span, &str)> {
     if value_start >= line_end || matches!(line.as_bytes()[value_start], b'|' | b'>') {
         return None;
     }
+    let value_end = match line.as_bytes()[value_start] {
+        b'\'' => quoted_scalar_end(region.text.as_bytes(), value_start, b'\'', true),
+        b'"' => quoted_scalar_end(region.text.as_bytes(), value_start, b'"', false),
+        _ => plain_scalar_end(&region.text, value_start),
+    };
+    if value_end <= value_start || value_end > region.text.len() {
+        return None;
+    }
     Some((
         Span {
             start: region.span.start + value_start as u32,
-            end: region.span.start + line_end as u32,
+            end: region.span.start + value_end as u32,
         },
-        &region.text[value_start..line_end],
+        &region.text[value_start..value_end],
     ))
+}
+
+fn plain_scalar_end(source: &str, start: usize) -> usize {
+    let mut cursor = start;
+    let mut end = start;
+    while cursor < source.len() {
+        let newline = source[cursor..]
+            .find('\n')
+            .map_or(source.len(), |offset| cursor + offset);
+        let line_end = if newline > cursor && source.as_bytes()[newline - 1] == b'\r' {
+            newline - 1
+        } else {
+            newline
+        };
+        let line = &source[cursor..line_end];
+        if line.trim_start().starts_with('#') {
+            break;
+        }
+        let (body, comment) = split_inline_comment(line);
+        let body_end = cursor + body.trim_end_matches(char::is_whitespace).len();
+        if body_end > cursor {
+            end = body_end;
+        }
+        if !comment.is_empty() || newline == source.len() {
+            break;
+        }
+        cursor = newline + 1;
+    }
+    end
 }
 
 fn replacement_scalar(existing: &str, value: &str) -> String {
@@ -1143,6 +1288,91 @@ fn empty_flow_collection(region: &PreservedRegion, token: &str) -> bool {
     };
     let (body, _) = split_inline_comment(&line[colon + 1..]);
     body.trim() == token
+}
+
+#[derive(Clone, Copy)]
+enum FlowCollectionKind {
+    Mapping,
+    Sequence,
+}
+
+fn flow_collection_close(
+    region: &PreservedRegion,
+    key: &str,
+    expected: FlowCollectionKind,
+) -> Option<u32> {
+    let root = source_document(&region.text)?;
+    let value = mapping_value(&root, key)?;
+    let closing = match (&value.kind, expected) {
+        (SourceNodeKind::Mapping { flow: true, .. }, FlowCollectionKind::Mapping) => b'}',
+        (SourceNodeKind::Sequence { flow: true, .. }, FlowCollectionKind::Sequence) => b']',
+        _ => return None,
+    };
+    let close = value.end.checked_sub(1)?;
+    if region.text.as_bytes().get(close) != Some(&closing) {
+        return None;
+    }
+    region.span.start.checked_add(u32::try_from(close).ok()?)
+}
+
+fn flow_view_item(source: &str) -> Result<String, SerializeError> {
+    let documents = yaml_rust2::YamlLoader::load_from_str(source).map_err(|error| {
+        SerializeError::InvalidEdit {
+            message: format!("view YAML is invalid: {error}"),
+        }
+    })?;
+    if documents.len() != 1 {
+        return Err(SerializeError::InvalidEdit {
+            message: "view YAML must contain exactly one document".to_string(),
+        });
+    }
+    let document = documents
+        .first()
+        .ok_or_else(|| SerializeError::InvalidEdit {
+            message: "view YAML cannot be empty".to_string(),
+        })?;
+    let view = match document {
+        Yaml::Array(items) if items.len() == 1 => &items[0],
+        other => other,
+    };
+    if !matches!(view, Yaml::Hash(_)) {
+        return Err(SerializeError::InvalidEdit {
+            message: "view YAML must be a mapping".to_string(),
+        });
+    }
+    render_flow_yaml(view)
+}
+
+fn render_flow_yaml(value: &Yaml) -> Result<String, SerializeError> {
+    match value {
+        Yaml::String(value) => Ok(quote_yaml_string(value)),
+        Yaml::Integer(value) => Ok(value.to_string()),
+        Yaml::Real(value) => Ok(value.clone()),
+        Yaml::Boolean(value) => Ok(value.to_string()),
+        Yaml::Array(items) => {
+            let rendered = items
+                .iter()
+                .map(render_flow_yaml)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("[{}]", rendered.join(", ")))
+        }
+        Yaml::Hash(entries) => {
+            let mut rendered = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                rendered.push(format!(
+                    "{}: {}",
+                    render_flow_yaml(key)?,
+                    render_flow_yaml(value)?
+                ));
+            }
+            Ok(format!("{{{}}}", rendered.join(", ")))
+        }
+        Yaml::Null => Ok("null".to_string()),
+        Yaml::Alias(_) | Yaml::BadValue => Err(SerializeError::InvalidEdit {
+            message: "view YAML contains a value that cannot be emitted safely in flow style"
+                .to_string(),
+        }),
+    }
 }
 
 fn expand_empty_collection_region(
@@ -2102,12 +2332,20 @@ fn structural_regions(source: &str) -> Option<StructuralRegions> {
 
 fn source_document(source: &str) -> Option<SourceNode> {
     let mut parser = YamlParser::new_from_str(source);
+    let marker_offsets = MarkerByteOffsets::new(source);
     loop {
         let (event, _) = parser.next_token().ok()?;
         match event {
             YamlEvent::DocumentStart => {
                 let (event, marker) = parser.next_token().ok()?;
-                return source_node(&mut parser, source, event, marker.index());
+                return source_node(
+                    &mut parser,
+                    source,
+                    &marker_offsets,
+                    event,
+                    marker_offsets.byte_offset(marker)?,
+                    false,
+                );
             }
             YamlEvent::StreamEnd => return None,
             _ => {}
@@ -2115,16 +2353,60 @@ fn source_document(source: &str) -> Option<SourceNode> {
     }
 }
 
+struct MarkerByteOffsets {
+    by_index: Vec<usize>,
+    line_char_starts: Vec<usize>,
+}
+
+impl MarkerByteOffsets {
+    fn new(source: &str) -> Self {
+        let by_index = source
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .chain(std::iter::once(source.len()))
+            .collect();
+        let mut line_char_starts = vec![0];
+        let mut chars = source.chars().peekable();
+        let mut char_index = 0usize;
+        while let Some(ch) = chars.next() {
+            char_index += 1;
+            if ch == '\r' {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                    char_index += 1;
+                }
+                line_char_starts.push(char_index);
+            } else if ch == '\n' {
+                line_char_starts.push(char_index);
+            }
+        }
+        Self {
+            by_index,
+            line_char_starts,
+        }
+    }
+
+    fn byte_offset(&self, marker: YamlMarker) -> Option<usize> {
+        let by_line_and_column = marker.line().checked_sub(1).and_then(|line| {
+            let line_start = *self.line_char_starts.get(line)?;
+            self.by_index.get(line_start + marker.col()).copied()
+        });
+        by_line_and_column.or_else(|| self.by_index.get(marker.index()).copied())
+    }
+}
+
 fn source_node(
     parser: &mut YamlParser<core::str::Chars<'_>>,
     source: &str,
+    marker_offsets: &MarkerByteOffsets,
     event: YamlEvent,
     start: usize,
+    in_flow: bool,
 ) -> Option<SourceNode> {
     match event {
         YamlEvent::Scalar(value, style, _, _) => Some(SourceNode {
             start,
-            end: scalar_source_end(source, start, style),
+            end: scalar_source_end(source, start, style, in_flow),
             kind: SourceNodeKind::Scalar { value },
         }),
         YamlEvent::Alias(_) => Some(SourceNode {
@@ -2140,11 +2422,23 @@ fn source_node(
                 if event == YamlEvent::SequenceEnd {
                     return Some(SourceNode {
                         start,
-                        end: collection_end(source, marker.index(), flow, b']'),
+                        end: collection_end(
+                            source,
+                            marker_offsets.byte_offset(marker)?,
+                            flow,
+                            b']',
+                        ),
                         kind: SourceNodeKind::Sequence { flow, items },
                     });
                 }
-                items.push(source_node(parser, source, event, marker.index())?);
+                items.push(source_node(
+                    parser,
+                    source,
+                    marker_offsets,
+                    event,
+                    marker_offsets.byte_offset(marker)?,
+                    flow,
+                )?);
             }
         }
         YamlEvent::MappingStart(_, _) => {
@@ -2155,13 +2449,32 @@ fn source_node(
                 if event == YamlEvent::MappingEnd {
                     return Some(SourceNode {
                         start,
-                        end: collection_end(source, marker.index(), flow, b'}'),
+                        end: collection_end(
+                            source,
+                            marker_offsets.byte_offset(marker)?,
+                            flow,
+                            b'}',
+                        ),
                         kind: SourceNodeKind::Mapping { flow, entries },
                     });
                 }
-                let key = source_node(parser, source, event, marker.index())?;
+                let key = source_node(
+                    parser,
+                    source,
+                    marker_offsets,
+                    event,
+                    marker_offsets.byte_offset(marker)?,
+                    flow,
+                )?;
                 let (event, marker) = parser.next_token().ok()?;
-                let value = source_node(parser, source, event, marker.index())?;
+                let value = source_node(
+                    parser,
+                    source,
+                    marker_offsets,
+                    event,
+                    marker_offsets.byte_offset(marker)?,
+                    flow,
+                )?;
                 entries.push(SourceMappingEntry { key, value });
             }
         }
@@ -2177,7 +2490,7 @@ fn collection_end(source: &str, marker: usize, flow: bool, closing: u8) -> usize
     }
 }
 
-fn scalar_source_end(source: &str, start: usize, style: TScalarStyle) -> usize {
+fn scalar_source_end(source: &str, start: usize, style: TScalarStyle, in_flow: bool) -> usize {
     let bytes = source.as_bytes();
     match style {
         TScalarStyle::SingleQuoted => quoted_scalar_end(bytes, start, b'\'', true),
@@ -2186,7 +2499,8 @@ fn scalar_source_end(source: &str, start: usize, style: TScalarStyle) -> usize {
             let mut end = start;
             while end < bytes.len() {
                 let byte = bytes[end];
-                if matches!(byte, b'\r' | b'\n' | b',' | b']' | b'}') {
+                if matches!(byte, b',' | b']' | b'}') || (!in_flow && matches!(byte, b'\r' | b'\n'))
+                {
                     break;
                 }
                 if byte == b'#' && (end == start || bytes[end - 1].is_ascii_whitespace()) {

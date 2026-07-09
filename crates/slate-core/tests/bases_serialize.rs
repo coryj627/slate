@@ -102,6 +102,223 @@ fn scalar_splice_preserves_comment_quote_and_final_newline() {
 }
 
 #[test]
+fn unicode_marker_offsets_are_safe_before_and_inside_edits() {
+    let before = "emoji: 😀\nviews:\n  - type: table\n    name: 'Old'\n";
+    let changed = edit(
+        before,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views[0].name, "New");
+    assert_eq!(
+        changed,
+        "emoji: 😀\nviews:\n  - type: table\n    name: 'New'\n"
+    );
+
+    let inside = "views:\n  - type: table\n    name: 'Old 😀 Name' # keep\n";
+    let changed = edit(
+        inside,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "Néw 😀".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views[0].name, "Néw 😀");
+    assert_eq!(
+        changed,
+        "views:\n  - type: table\n    name: 'Néw 😀' # keep\n"
+    );
+}
+
+#[test]
+fn unicode_block_scalar_before_edit_uses_marker_line_and_column_fallback() {
+    let block = "α".repeat(100);
+    let source = format!("description: |\n  {block}\nviews:\n  - type: table\n    name: 'Old'\n");
+    let changed = edit(
+        &source,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views[0].name, "New");
+    assert_eq!(
+        changed,
+        format!("description: |\n  {block}\nviews:\n  - type: table\n    name: 'New'\n")
+    );
+}
+
+#[test]
+fn adds_to_nonempty_flow_formula_mapping() {
+    let formulas = edit(
+        "formulas: {old: '1'}\nviews: []\n",
+        BaseEdit::SetFormula {
+            name: "score".into(),
+            expression: "1 + 1".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&formulas);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.formulas.len(), 2);
+    assert!(formulas.contains("old: '1'"));
+}
+
+#[test]
+fn adds_to_nonempty_flow_view_sequence() {
+    let views = edit(
+        "views: [{type: table, name: Old}] # keep\nunknown: 😀\n",
+        BaseEdit::AddView {
+            yaml: "type: list\nname: New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&views);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views.len(), 2);
+    assert_eq!(parsed.views[1].name, "New");
+    assert!(views.contains("{type: table, name: Old}"));
+    assert!(views.ends_with(" # keep\nunknown: 😀\n"));
+}
+
+#[test]
+fn removes_from_nonempty_flow_collections_without_corrupting_delimiters() {
+    let removed = edit(
+        "views: [{type: table, name: Old}, {type: list, name: Keep}] # keep\nunknown: 😀\n",
+        BaseEdit::RemoveView { view: 0 },
+    );
+    let (parsed, warnings) = parse_base(&removed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views.len(), 1);
+    assert_eq!(parsed.views[0].name, "Keep");
+    assert!(removed.contains("{type: list, name: Keep}"));
+    assert!(removed.ends_with(" # keep\nunknown: 😀\n"));
+
+    let removed = edit(
+        "formulas: {old: '1', keep: '2'}\nviews: []\n",
+        BaseEdit::RemoveFormula { name: "old".into() },
+    );
+    let (parsed, warnings) = parse_base(&removed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.formulas.len(), 1);
+    assert!(removed.contains("keep: '2'"));
+}
+
+#[test]
+fn scalar_splice_replaces_complete_multiline_tokens_with_crlf() {
+    let quoted =
+        "views:\r\n  - type: table\r\n    name: 'Old\r\n      Name' # keep\r\n    limit: 5\r\n";
+    let changed = edit(
+        quoted,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views[0].name, "New");
+    assert_eq!(
+        changed,
+        "views:\r\n  - type: table\r\n    name: 'New' # keep\r\n    limit: 5\r\n"
+    );
+    assert!(!changed.replace("\r\n", "").contains('\n'));
+
+    let plain = "views:\n  - type: table\n    name: Old\n      Name\n    limit: 5\n";
+    let changed = edit(
+        plain,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views[0].name, "New");
+    assert_eq!(
+        changed,
+        "views:\n  - type: table\n    name: New\n    limit: 5\n"
+    );
+
+    let flow_plain = "formulas: {calc: old\r\n  continued, keep: '1'}\r\nviews: []\r\n";
+    let changed = edit(
+        flow_plain,
+        BaseEdit::SetFormula {
+            name: "calc".into(),
+            expression: "new".into(),
+        },
+    );
+    let (_, warnings) = parse_base(&changed);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(changed, "formulas: {calc: new, keep: '1'}\r\nviews: []\r\n");
+}
+
+#[test]
+fn successful_edits_are_always_reparsable() {
+    let (base, warnings) = parse_base("views: []\n");
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+
+    let error = serialize_base(
+        &base,
+        &[BaseEdit::AddView {
+            yaml: "type: [unterminated".into(),
+        }],
+    )
+    .expect_err("an edit that emits invalid YAML must not report success");
+    assert!(matches!(error, SerializeError::InvalidEdit { .. }));
+}
+
+#[test]
 fn untouched_corpus_serializes_byte_equal() {
     for (name, source) in corpus() {
         let (base, warnings) = parse_base(source);
