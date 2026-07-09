@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use slate_core::bases::{BaseEdit, SerializeError, parse_base, serialize_base};
+use slate_core::bases::{BaseEdit, BaseWarningKind, SerializeError, parse_base, serialize_base};
 
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -33,7 +33,72 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
             "tasks_and_comments",
             include_str!("fixtures/bases/tasks_and_comments.base"),
         ),
+        (
+            "edit_adversarial",
+            include_str!("fixtures/bases/edit_adversarial.base"),
+        ),
     ]
+}
+
+fn edit(source: &str, edit: BaseEdit) -> String {
+    let (base, warnings) = parse_base(source);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+        "edit source should parse: {warnings:#?}"
+    );
+    serialize_base(&base, &[edit]).expect("edit should serialize")
+}
+
+#[test]
+fn edits_indented_and_flow_collections_without_invalid_yaml() {
+    let four_space = "views:\n    - type: table\n      name: 'Old' # keep\n";
+    let renamed = edit(
+        four_space,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    assert!(
+        parse_base(&renamed)
+            .1
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert!(renamed.contains("name: 'New' # keep"));
+
+    let formulas = edit(
+        "formulas: {}\nviews: []\n",
+        BaseEdit::SetFormula {
+            name: "score".into(),
+            expression: "1 + 1".into(),
+        },
+    );
+    assert_eq!(parse_base(&formulas).0.formulas.len(), 1);
+    let with_view = edit(
+        &formulas,
+        BaseEdit::AddView {
+            yaml: "type: table\nname: \"Main\"".into(),
+        },
+    );
+    assert_eq!(parse_base(&with_view).0.views.len(), 1);
+}
+
+#[test]
+fn scalar_splice_preserves_comment_quote_and_final_newline() {
+    let source = "views:\n  - type: table # keep-inline\n    name: 'Old'";
+    let changed = edit(
+        source,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    assert!(changed.contains("name: 'New'"));
+    assert!(changed.contains("# keep-inline"));
+    assert!(!changed.ends_with('\n'));
 }
 
 #[test]
@@ -88,10 +153,10 @@ fn set_existing_formula_preserves_surrounding_yaml() {
     )
     .expect("formula serializes");
 
-    assert!(edited.contains("  ppu: \"price / 100\"\n"));
+    assert!(edited.contains("  ppu: 'price / 100'\n"));
     assert!(edited.starts_with("# Obsidian-authored shape"));
     assert_eq!(
-        edited.replace("  ppu: \"price / 100\"\n", "  ppu: 'price / pages'\n"),
+        edited.replace("  ppu: 'price / 100'\n", "  ppu: 'price / pages'\n"),
         source
     );
 }
@@ -248,9 +313,9 @@ fn set_display_name_rewrites_property_child_only() {
     )
     .expect("display name serializes");
 
-    assert!(edited.contains("    displayName: \"State\"\n"));
+    assert!(edited.contains("    displayName: State\n"));
     assert_eq!(
-        edited.replace("    displayName: \"State\"\n", "    displayName: Status\n"),
+        edited.replace("    displayName: State\n", "    displayName: Status\n"),
         source
     );
 }
@@ -288,12 +353,9 @@ fn set_summary_assignment_rewrites_assignment_only() {
     )
     .expect("summary assignment serializes");
 
-    assert!(edited.contains("      note.status: \"Count\"\n"));
+    assert!(edited.contains("      note.status: Count\n"));
     assert_eq!(
-        edited.replace(
-            "      note.status: \"Count\"\n",
-            "      note.status: Unique\n"
-        ),
+        edited.replace("      note.status: Count\n", "      note.status: Unique\n"),
         source
     );
 }

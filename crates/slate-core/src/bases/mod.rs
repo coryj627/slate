@@ -14,7 +14,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
-use yaml_rust2::Yaml;
+use yaml_rust2::{
+    Yaml,
+    parser::{Event as YamlEvent, Parser as YamlParser},
+    scanner::TScalarStyle,
+};
 
 use self::expr::{Callee, Expr, ExprKind, Lit, PropertyRef, Span, parse_expr};
 
@@ -315,10 +319,11 @@ pub fn parse_base(source: &str) -> (BaseFile, Vec<BaseWarning>) {
         return (base, warnings);
     };
 
-    let top_level_regions = regions_for_indent(source, 0);
-    let formula_regions = child_regions(source, &top_level_regions, "formulas", 2);
-    let property_regions = child_regions(source, &top_level_regions, "properties", 2);
-    let summary_regions = child_regions(source, &top_level_regions, "summaries", 2);
+    let structural = structural_regions(source).unwrap_or_default();
+    let top_level_regions = structural.top_level;
+    let formula_regions = structural.formulas;
+    let property_regions = structural.properties;
+    let summary_regions = structural.summaries;
     base.spans.top_level = named_regions_from_map(&top_level_regions);
     base.spans.formulas = named_regions_from_map(&formula_regions);
     base.spans.properties = named_regions_from_map(&property_regions);
@@ -327,7 +332,7 @@ pub fn parse_base(source: &str) -> (BaseFile, Vec<BaseWarning>) {
         .get("filters")
         .map(|region| filter_node_regions_in_span(source, region.span))
         .unwrap_or_default();
-    base.spans.views = view_spans(source);
+    base.spans.views = structural.views;
     let mut formula_sources: HashMap<String, String> = HashMap::new();
 
     for (key_yaml, value) in root {
@@ -358,7 +363,8 @@ pub fn parse_base(source: &str) -> (BaseFile, Vec<BaseWarning>) {
                 );
             }
             "properties" => {
-                base.properties = parse_properties(&value, source, &mut warnings);
+                base.properties =
+                    parse_properties(&value, &property_regions, source, &mut warnings);
             }
             "summaries" => {
                 let mut ignored_sources = HashMap::new();
@@ -373,7 +379,13 @@ pub fn parse_base(source: &str) -> (BaseFile, Vec<BaseWarning>) {
                 );
             }
             "views" => {
-                base.views = parse_views(&value, source, &base.summaries, &mut warnings);
+                base.views = parse_views(
+                    &value,
+                    &base.spans.views,
+                    source,
+                    &base.summaries,
+                    &mut warnings,
+                );
             }
             _ => {
                 base.preserved.regions.push(
@@ -538,7 +550,15 @@ fn collect_edit_splices(
         BaseEdit::SetViewKey { view, key, value } => {
             ensure_view_key_is_editable(base, *view, key)?;
             ensure_set_view_key_is_closed(key)?;
-            replace_or_insert_view_key(base, *view, key, &key_value_fragment(key, value), splices)
+            let scalar = editable_view_scalar(key, value);
+            replace_or_insert_view_key_preserving_scalar(
+                base,
+                *view,
+                key,
+                scalar.as_deref(),
+                &key_value_fragment(key, value),
+                splices,
+            )
         }
         BaseEdit::AddView { yaml } => push_add_view_splice(base, yaml, splices),
         BaseEdit::RemoveView { view } => {
@@ -546,10 +566,11 @@ fn collect_edit_splices(
             push_splice(splices, entry.span, String::new());
             Ok(())
         }
-        BaseEdit::RenameView { view, name } => replace_or_insert_view_key(
+        BaseEdit::RenameView { view, name } => replace_or_insert_view_key_preserving_scalar(
             base,
             *view,
             "name",
+            Some(name),
             &format!("name: {}", quote_yaml_string(name)),
             splices,
         ),
@@ -646,11 +667,22 @@ fn replace_or_insert_formula(
 ) -> Result<(), SerializeError> {
     let entry = format!("  {}: {}\n", yaml_key(name), quote_yaml_string(expression));
     if let Some(region) = named_region(&base.spans.formulas, name) {
-        push_splice(splices, region.region.span, entry);
+        if !push_scalar_replacement(splices, &region.region, expression) {
+            push_splice(splices, region.region.span, entry);
+        }
         return Ok(());
     }
 
     if let Some(formulas) = named_region(&base.spans.top_level, "formulas") {
+        if empty_flow_collection(&formulas.region, "{}") {
+            let child = format!("{}: {}", yaml_key(name), quote_yaml_string(expression));
+            push_splice(
+                splices,
+                formulas.region.span,
+                expand_empty_collection_region(&formulas.region, "formulas", &child),
+            );
+            return Ok(());
+        }
         push_insertion_splice(splices, &base.raw, formulas.region.span.end, entry);
         return Ok(());
     }
@@ -693,11 +725,13 @@ fn replace_or_remove_display_name(
 
     match (display_name, child_regions.get("displayName")) {
         (Some(name), Some(region)) => {
-            push_splice(
-                splices,
-                region.span,
-                format!("    displayName: {}\n", quote_yaml_string(name)),
-            );
+            if !push_scalar_replacement(splices, region, name) {
+                push_splice(
+                    splices,
+                    region.span,
+                    format!("    displayName: {}\n", quote_yaml_string(name)),
+                );
+            }
         }
         (Some(name), None) => {
             push_insertion_splice(
@@ -738,15 +772,17 @@ fn replace_or_remove_summary_assignment(
     let assignments = regions_in_span(&base.raw, summaries_region.region.span, 6);
     match (summary, assignments.get(property)) {
         (Some(summary), Some(region)) => {
-            push_splice(
-                splices,
-                region.span,
-                format!(
-                    "      {}: {}\n",
-                    yaml_key(property),
-                    quote_yaml_string(summary)
-                ),
-            );
+            if !push_scalar_replacement(splices, region, summary) {
+                push_splice(
+                    splices,
+                    region.span,
+                    format!(
+                        "      {}: {}\n",
+                        yaml_key(property),
+                        quote_yaml_string(summary)
+                    ),
+                );
+            }
         }
         (Some(summary), None) => {
             push_insertion_splice(
@@ -786,6 +822,23 @@ fn replace_or_insert_view_key(
     Ok(())
 }
 
+fn replace_or_insert_view_key_preserving_scalar(
+    base: &BaseFile,
+    view: usize,
+    key: &str,
+    scalar: Option<&str>,
+    fragment: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    if let (Some(region), Some(value)) = (named_region(&view_spans.keys, key), scalar)
+        && push_scalar_replacement(splices, &region.region, value)
+    {
+        return Ok(());
+    }
+    replace_or_insert_view_key(base, view, key, fragment, splices)
+}
+
 fn push_add_view_splice(
     base: &BaseFile,
     yaml: &str,
@@ -793,6 +846,18 @@ fn push_add_view_splice(
 ) -> Result<(), SerializeError> {
     let item = format_view_item_fragment(yaml)?;
     if let Some(views) = named_region(&base.spans.top_level, "views") {
+        if empty_flow_collection(&views.region, "[]") {
+            let child = item
+                .trim_end_matches(['\n', '\r'])
+                .strip_prefix("  ")
+                .unwrap_or(item.trim_end_matches(['\n', '\r']));
+            push_splice(
+                splices,
+                views.region.span,
+                expand_empty_collection_region(&views.region, "views", child),
+            );
+            return Ok(());
+        }
         push_insertion_splice(splices, &base.raw, views.region.span.end, item);
         return Ok(());
     }
@@ -952,6 +1017,183 @@ fn key_value_fragment(key: &str, value: &str) -> String {
     } else {
         format!("{}: {}", yaml_key(key), value.trim_end())
     }
+}
+
+fn editable_view_scalar(key: &str, value: &str) -> Option<String> {
+    if !matches!(key, "type" | "name" | "source")
+        || value.contains(['\n', '\r'])
+        || fragment_starts_with_key(value, key)
+    {
+        return None;
+    }
+    let trimmed = value.trim();
+    let parsed = yaml_rust2::YamlLoader::load_from_str(trimmed)
+        .ok()
+        .and_then(|documents| documents.into_iter().next());
+    Some(match parsed {
+        Some(Yaml::String(value)) => value,
+        _ => trimmed.to_string(),
+    })
+}
+
+fn push_scalar_replacement(
+    splices: &mut Vec<Splice>,
+    region: &PreservedRegion,
+    value: &str,
+) -> bool {
+    let Some((span, existing)) = scalar_tail(region) else {
+        return false;
+    };
+    push_splice(splices, span, replacement_scalar(existing, value));
+    true
+}
+
+fn scalar_tail(region: &PreservedRegion) -> Option<(Span, &str)> {
+    let line_end = region.text.find(['\r', '\n']).unwrap_or(region.text.len());
+    let line = &region.text[..line_end];
+    let candidate = line
+        .trim_start()
+        .strip_prefix("- ")
+        .unwrap_or(line.trim_start());
+    let candidate_offset = line.len() - candidate.len();
+    let colon = key_colon_index(candidate)?;
+    let mut value_start = candidate_offset + colon + 1;
+    while line
+        .as_bytes()
+        .get(value_start)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        value_start += 1;
+    }
+    if value_start >= line_end || matches!(line.as_bytes()[value_start], b'|' | b'>') {
+        return None;
+    }
+    Some((
+        Span {
+            start: region.span.start + value_start as u32,
+            end: region.span.start + line_end as u32,
+        },
+        &region.text[value_start..line_end],
+    ))
+}
+
+fn replacement_scalar(existing: &str, value: &str) -> String {
+    let (body, comment) = split_inline_comment(existing);
+    let rendered = match body.trim().chars().next() {
+        Some('\'') => quote_single_yaml(value),
+        Some('"') => quote_double_yaml(value),
+        _ => yaml_scalar(value),
+    };
+    format!("{rendered}{comment}")
+}
+
+fn split_inline_comment(value: &str) -> (&str, &str) {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in value.char_indices() {
+        match quote {
+            Some('"') if escaped => escaped = false,
+            Some('"') if ch == '\\' => escaped = true,
+            Some(active) if ch == active => quote = None,
+            Some(_) => {}
+            None if matches!(ch, '\'' | '"') => quote = Some(ch),
+            None if ch == '#' && (index == 0 || value[..index].ends_with(char::is_whitespace)) => {
+                let comment_start = value[..index].trim_end_matches(char::is_whitespace).len();
+                return (&value[..comment_start], &value[comment_start..]);
+            }
+            None => {}
+        }
+    }
+    (value, "")
+}
+
+fn quote_single_yaml(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn quote_double_yaml(value: &str) -> String {
+    quote_yaml_string(value)
+}
+
+fn yaml_scalar(value: &str) -> String {
+    let plain_is_string = yaml_rust2::YamlLoader::load_from_str(value)
+        .ok()
+        .and_then(|documents| documents.into_iter().next())
+        .is_some_and(|yaml| matches!(yaml, Yaml::String(ref parsed) if parsed == value));
+    let unsafe_plain = value.is_empty()
+        || value.trim() != value
+        || value.contains(['\n', '\r'])
+        || value.contains(": ")
+        || value.contains(" #")
+        || value
+            .chars()
+            .next()
+            .is_some_and(|ch| "-?:,[]{}#&*!|>'\"%@`".contains(ch));
+    if plain_is_string && !unsafe_plain {
+        value.to_string()
+    } else {
+        quote_double_yaml(value)
+    }
+}
+
+fn empty_flow_collection(region: &PreservedRegion, token: &str) -> bool {
+    let line = region.text.lines().next().unwrap_or_default().trim_start();
+    let Some(colon) = key_colon_index(line) else {
+        return false;
+    };
+    let (body, _) = split_inline_comment(&line[colon + 1..]);
+    body.trim() == token
+}
+
+fn expand_empty_collection_region(
+    region: &PreservedRegion,
+    fallback_key: &str,
+    child: &str,
+) -> String {
+    let first_line = region.text.lines().next().unwrap_or_default();
+    let trimmed = first_line.trim_start();
+    let indent_len = first_line.len() - trimmed.len();
+    let (key, comment) = key_colon_index(trimmed).map_or_else(
+        || (fallback_key, ""),
+        |colon| {
+            let (_, comment) = split_inline_comment(&trimmed[colon + 1..]);
+            (&trimmed[..colon], comment)
+        },
+    );
+    let indent = &first_line[..indent_len];
+    let child = child
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                line.to_string()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut expanded = expand_empty_collection(indent, key, &child);
+    if !comment.is_empty()
+        && let Some(newline) = expanded.find('\n')
+    {
+        expanded.insert_str(newline, comment);
+    }
+    if region.text.contains("\r\n") {
+        expanded = expanded.replace('\n', "\r\n");
+    }
+    if region.text.ends_with('\n') {
+        expanded.push_str(if region.text.ends_with("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        });
+    }
+    expanded
+}
+
+fn expand_empty_collection(key_indent: &str, key: &str, child: &str) -> String {
+    format!("{key_indent}{key}:\n{key_indent}  {child}")
 }
 
 fn fragment_starts_with_key(fragment: &str, key: &str) -> bool {
@@ -1117,6 +1359,7 @@ fn parse_expr_map(
 
 fn parse_properties(
     value: &Yaml,
+    property_regions: &HashMap<String, PreservedRegion>,
     source: &str,
     warnings: &mut Vec<BaseWarning>,
 ) -> Vec<(String, PropertyConfig)> {
@@ -1129,7 +1372,6 @@ fn parse_properties(
         return Vec::new();
     };
 
-    let property_regions = regions_for_indent(source, 2);
     map.iter()
         .map(|(key_yaml, value)| {
             let id = yaml_key_to_string(key_yaml);
@@ -1165,6 +1407,7 @@ fn parse_properties(
 
 fn parse_views(
     value: &Yaml,
+    view_spans: &[ViewSpans],
     source: &str,
     custom_summaries: &[(String, Expr)],
     warnings: &mut Vec<BaseWarning>,
@@ -1178,7 +1421,6 @@ fn parse_views(
         return Vec::new();
     };
 
-    let view_regions = view_item_regions(source);
     let custom_summary_names: HashSet<&str> = custom_summaries
         .iter()
         .map(|(name, _)| name.as_str())
@@ -1211,10 +1453,10 @@ fn parse_views(
 
         let mut has_name = false;
         let mut has_type = false;
-        let item_region = view_regions.get(idx).cloned();
-        let item_key_regions = item_region
-            .as_ref()
-            .map(|region| regions_in_span(source, region.span, 4))
+        let item_region = view_spans.get(idx).map(|spans| spans.entry.clone());
+        let item_key_regions = view_spans
+            .get(idx)
+            .map(|spans| named_region_map(&spans.keys))
             .unwrap_or_default();
 
         for (key_yaml, value) in map {
@@ -1796,16 +2038,300 @@ fn is_builtin_summary(name: &str) -> bool {
     )
 }
 
-fn child_regions(
+#[derive(Debug, Default)]
+struct StructuralRegions {
+    top_level: HashMap<String, PreservedRegion>,
+    formulas: HashMap<String, PreservedRegion>,
+    properties: HashMap<String, PreservedRegion>,
+    summaries: HashMap<String, PreservedRegion>,
+    views: Vec<ViewSpans>,
+}
+
+#[derive(Debug)]
+struct SourceNode {
+    start: usize,
+    end: usize,
+    kind: SourceNodeKind,
+}
+
+#[derive(Debug)]
+enum SourceNodeKind {
+    Scalar {
+        value: String,
+    },
+    Sequence {
+        flow: bool,
+        items: Vec<SourceNode>,
+    },
+    Mapping {
+        flow: bool,
+        entries: Vec<SourceMappingEntry>,
+    },
+    Alias,
+}
+
+#[derive(Debug)]
+struct SourceMappingEntry {
+    key: SourceNode,
+    value: SourceNode,
+}
+
+fn structural_regions(source: &str) -> Option<StructuralRegions> {
+    let root = source_document(source)?;
+    let top_level = mapping_regions(source, &root);
+    let formulas = mapping_value(&root, "formulas")
+        .map(|node| mapping_regions(source, node))
+        .unwrap_or_default();
+    let properties = mapping_value(&root, "properties")
+        .map(|node| mapping_regions(source, node))
+        .unwrap_or_default();
+    let summaries = mapping_value(&root, "summaries")
+        .map(|node| mapping_regions(source, node))
+        .unwrap_or_default();
+    let views = mapping_value(&root, "views")
+        .map(|node| view_spans_from_node(source, node))
+        .unwrap_or_default();
+    Some(StructuralRegions {
+        top_level,
+        formulas,
+        properties,
+        summaries,
+        views,
+    })
+}
+
+fn source_document(source: &str) -> Option<SourceNode> {
+    let mut parser = YamlParser::new_from_str(source);
+    loop {
+        let (event, _) = parser.next_token().ok()?;
+        match event {
+            YamlEvent::DocumentStart => {
+                let (event, marker) = parser.next_token().ok()?;
+                return source_node(&mut parser, source, event, marker.index());
+            }
+            YamlEvent::StreamEnd => return None,
+            _ => {}
+        }
+    }
+}
+
+fn source_node(
+    parser: &mut YamlParser<core::str::Chars<'_>>,
     source: &str,
-    top_level_regions: &HashMap<String, PreservedRegion>,
-    key: &str,
-    indent: usize,
-) -> HashMap<String, PreservedRegion> {
-    top_level_regions
-        .get(key)
-        .map(|region| regions_in_span(source, region.span, indent))
-        .unwrap_or_default()
+    event: YamlEvent,
+    start: usize,
+) -> Option<SourceNode> {
+    match event {
+        YamlEvent::Scalar(value, style, _, _) => Some(SourceNode {
+            start,
+            end: scalar_source_end(source, start, style),
+            kind: SourceNodeKind::Scalar { value },
+        }),
+        YamlEvent::Alias(_) => Some(SourceNode {
+            start,
+            end: start,
+            kind: SourceNodeKind::Alias,
+        }),
+        YamlEvent::SequenceStart(_, _) => {
+            let flow = source.as_bytes().get(start) == Some(&b'[');
+            let mut items = Vec::new();
+            loop {
+                let (event, marker) = parser.next_token().ok()?;
+                if event == YamlEvent::SequenceEnd {
+                    return Some(SourceNode {
+                        start,
+                        end: collection_end(source, marker.index(), flow, b']'),
+                        kind: SourceNodeKind::Sequence { flow, items },
+                    });
+                }
+                items.push(source_node(parser, source, event, marker.index())?);
+            }
+        }
+        YamlEvent::MappingStart(_, _) => {
+            let flow = source.as_bytes().get(start) == Some(&b'{');
+            let mut entries = Vec::new();
+            loop {
+                let (event, marker) = parser.next_token().ok()?;
+                if event == YamlEvent::MappingEnd {
+                    return Some(SourceNode {
+                        start,
+                        end: collection_end(source, marker.index(), flow, b'}'),
+                        kind: SourceNodeKind::Mapping { flow, entries },
+                    });
+                }
+                let key = source_node(parser, source, event, marker.index())?;
+                let (event, marker) = parser.next_token().ok()?;
+                let value = source_node(parser, source, event, marker.index())?;
+                entries.push(SourceMappingEntry { key, value });
+            }
+        }
+        _ => None,
+    }
+}
+
+fn collection_end(source: &str, marker: usize, flow: bool, closing: u8) -> usize {
+    if flow && source.as_bytes().get(marker) == Some(&closing) {
+        marker + 1
+    } else {
+        marker
+    }
+}
+
+fn scalar_source_end(source: &str, start: usize, style: TScalarStyle) -> usize {
+    let bytes = source.as_bytes();
+    match style {
+        TScalarStyle::SingleQuoted => quoted_scalar_end(bytes, start, b'\'', true),
+        TScalarStyle::DoubleQuoted => quoted_scalar_end(bytes, start, b'"', false),
+        TScalarStyle::Plain => {
+            let mut end = start;
+            while end < bytes.len() {
+                let byte = bytes[end];
+                if matches!(byte, b'\r' | b'\n' | b',' | b']' | b'}') {
+                    break;
+                }
+                if byte == b'#' && (end == start || bytes[end - 1].is_ascii_whitespace()) {
+                    break;
+                }
+                if byte == b':'
+                    && bytes.get(end + 1).is_none_or(|next| {
+                        next.is_ascii_whitespace() || matches!(next, b',' | b']' | b'}')
+                    })
+                {
+                    break;
+                }
+                end += 1;
+            }
+            while end > start && bytes[end - 1].is_ascii_whitespace() {
+                end -= 1;
+            }
+            end
+        }
+        TScalarStyle::Literal | TScalarStyle::Folded => source[start..]
+            .find('\n')
+            .map_or(source.len(), |offset| start + offset),
+    }
+}
+
+fn quoted_scalar_end(bytes: &[u8], start: usize, quote: u8, doubled_quote: bool) -> usize {
+    let mut cursor = start.saturating_add(1);
+    let mut escaped = false;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        if !doubled_quote && escaped {
+            escaped = false;
+            cursor += 1;
+            continue;
+        }
+        if !doubled_quote && byte == b'\\' {
+            escaped = true;
+            cursor += 1;
+            continue;
+        }
+        if byte == quote {
+            if doubled_quote && bytes.get(cursor + 1) == Some(&quote) {
+                cursor += 2;
+                continue;
+            }
+            return cursor + 1;
+        }
+        cursor += 1;
+    }
+    bytes.len()
+}
+
+fn mapping_value<'a>(node: &'a SourceNode, name: &str) -> Option<&'a SourceNode> {
+    let SourceNodeKind::Mapping { entries, .. } = &node.kind else {
+        return None;
+    };
+    entries.iter().find_map(|entry| {
+        let SourceNodeKind::Scalar { value } = &entry.key.kind else {
+            return None;
+        };
+        (value == name).then_some(&entry.value)
+    })
+}
+
+fn mapping_regions(source: &str, node: &SourceNode) -> HashMap<String, PreservedRegion> {
+    let SourceNodeKind::Mapping { flow, entries } = &node.kind else {
+        return HashMap::new();
+    };
+    let mut regions = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let SourceNodeKind::Scalar { value: name } = &entry.key.kind else {
+            continue;
+        };
+        let start = if *flow {
+            entry.key.start
+        } else {
+            line_start(source, entry.key.start)
+        };
+        let end = if *flow {
+            entry.value.end
+        } else {
+            entries
+                .get(index + 1)
+                .map(|next| line_start(source, next.key.start))
+                .unwrap_or(node.end)
+        };
+        let end = if *flow {
+            end
+        } else {
+            trim_trailing_interstitial_lines(source, start, end)
+        };
+        regions.insert(name.clone(), preserved_region(source, start, end));
+    }
+    regions
+}
+
+fn view_spans_from_node(source: &str, node: &SourceNode) -> Vec<ViewSpans> {
+    let SourceNodeKind::Sequence { flow, items } = &node.kind else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let start = if *flow {
+                item.start
+            } else {
+                line_start(source, node_content_start(item))
+            };
+            let end = if *flow {
+                item.end
+            } else {
+                items
+                    .get(index + 1)
+                    .map(|next| line_start(source, node_content_start(next)))
+                    .unwrap_or(node.end)
+            };
+            let entry = preserved_region(source, start, end);
+            let key_regions = mapping_regions(source, item);
+            let filters = key_regions
+                .get("filters")
+                .map(|region| filter_node_regions_in_span(source, region.span))
+                .unwrap_or_default();
+            ViewSpans {
+                entry,
+                keys: named_regions_from_map(&key_regions),
+                filters,
+            }
+        })
+        .collect()
+}
+
+fn node_content_start(node: &SourceNode) -> usize {
+    match &node.kind {
+        SourceNodeKind::Mapping { entries, .. } => {
+            entries.first().map_or(node.start, |entry| entry.key.start)
+        }
+        _ => node.start,
+    }
+}
+
+fn line_start(source: &str, offset: usize) -> usize {
+    source[..offset.min(source.len())]
+        .rfind('\n')
+        .map_or(0, |index| index + 1)
 }
 
 fn named_regions_from_map(regions: &HashMap<String, PreservedRegion>) -> Vec<NamedRegion> {
@@ -1820,21 +2346,10 @@ fn named_regions_from_map(regions: &HashMap<String, PreservedRegion>) -> Vec<Nam
     out
 }
 
-fn view_spans(source: &str) -> Vec<ViewSpans> {
-    view_item_regions(source)
-        .into_iter()
-        .map(|entry| {
-            let key_regions = regions_in_span(source, entry.span, 4);
-            let filters = key_regions
-                .get("filters")
-                .map(|region| filter_node_regions_in_span(source, region.span))
-                .unwrap_or_default();
-            ViewSpans {
-                entry,
-                keys: named_regions_from_map(&key_regions),
-                filters,
-            }
-        })
+fn named_region_map(regions: &[NamedRegion]) -> HashMap<String, PreservedRegion> {
+    regions
+        .iter()
+        .map(|named| (named.name.clone(), named.region.clone()))
         .collect()
 }
 
@@ -1864,17 +2379,6 @@ fn filter_node_regions_in_span(source: &str, span: Span) -> Vec<PreservedRegion>
         regions.push(preserved_region(source, *start, end));
     }
     regions
-}
-
-fn regions_for_indent(source: &str, indent: usize) -> HashMap<String, PreservedRegion> {
-    regions_in_span(
-        source,
-        Span {
-            start: 0,
-            end: source.len() as u32,
-        },
-        indent,
-    )
 }
 
 fn regions_in_span(source: &str, span: Span, indent: usize) -> HashMap<String, PreservedRegion> {
@@ -1922,37 +2426,6 @@ fn trim_trailing_interstitial_lines(source: &str, start: usize, end: usize) -> u
         }
     }
     trimmed_end
-}
-
-fn view_item_regions(source: &str) -> Vec<PreservedRegion> {
-    let Some(views_region) = regions_for_indent(source, 0).get("views").cloned() else {
-        return Vec::new();
-    };
-    let lines = line_infos(source);
-    let mut starts = Vec::new();
-    for line in &lines {
-        if line.start <= views_region.span.start as usize
-            || line.start >= views_region.span.end as usize
-        {
-            continue;
-        }
-        let trimmed = line.text.trim_start();
-        let indent = line.text.len() - trimmed.len();
-        if indent == 2 && trimmed.starts_with("- ") {
-            starts.push(line.start);
-        }
-    }
-    starts
-        .iter()
-        .enumerate()
-        .map(|(idx, start)| {
-            let end = starts
-                .get(idx + 1)
-                .copied()
-                .unwrap_or(views_region.span.end as usize);
-            preserved_region(source, *start, end)
-        })
-        .collect()
 }
 
 fn key_on_line(line: &str) -> Option<(String, usize)> {
