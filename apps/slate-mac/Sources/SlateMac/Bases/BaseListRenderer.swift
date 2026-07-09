@@ -90,6 +90,7 @@ struct BaseListProjection: Equatable {
     let items: [BaseListItem]
     let sections: [BaseListSection]
     let summary: String
+    let audioSummary: String
 
     init(result: BasesResultSet, options: BaseListOptions, isQuickFiltered: Bool = false) {
         items = result.rows.enumerated().map { rowIndex, row in
@@ -108,6 +109,7 @@ struct BaseListProjection: Equatable {
                     summaries: $0.summaries, columns: result.columns))
         }
         summary = BaseSummaryFormatter.summaryText(result, isQuickFiltered: isQuickFiltered)
+        audioSummary = result.audioSummary
     }
 }
 
@@ -280,7 +282,7 @@ struct BaseListView: View {
                 onActivate: onActivate,
                 rowActions: rowActions)
                 .frame(minHeight: 200)
-                .accessibilityLabel("Base list")
+                .accessibilityLabel(projection.audioSummary)
             Divider()
             Text(projection.summary)
                 .font(Tokens.Typography.caption)
@@ -292,7 +294,7 @@ struct BaseListView: View {
                 .accessibilityAddTraits(.isSummaryElement)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Base list")
+        .accessibilityLabel(projection.audioSummary)
     }
 }
 
@@ -328,7 +330,7 @@ private struct BaseOutlineList: NSViewRepresentable {
         outline.dataSource = context.coordinator
         outline.target = context.coordinator
         outline.doubleAction = #selector(BaseListCoordinator.doubleClicked(_:))
-        outline.setAccessibilityLabel("Base list")
+        outline.setAccessibilityLabel(projection.audioSummary)
 
         let column = NSTableColumn(identifier: .init("base-list"))
         column.resizingMask = .autoresizingMask
@@ -458,6 +460,8 @@ private final class BaseListCoordinator: NSObject, NSOutlineViewDataSource, NSOu
         cell.textField?.font = NSFont.preferredFont(forTextStyle: .headline)
         cell.textField?.setAccessibilityLabel(text)
         cell.textField?.setAccessibilityCustomActions(nil)
+        configureNativeHeadingAccessibility(cell, label: text)
+        cell.textField?.setAccessibilityElement(false)
         return cell
     }
 

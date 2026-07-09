@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -569,6 +571,32 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertTrue(doc.result?.rows.isEmpty == true)
     }
 
+    func testBlankCellCommitRoutesToDeleteAndPreservesNonblankText() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let result = try XCTUnwrap(state.activeBaseDocument?.result)
+        let row = try XCTUnwrap(result.rows.first { $0.filePath == "Notes/Alpha.md" })
+        let status = try XCTUnwrap(result.columns.first { $0.id == "status" })
+
+        let announcement = await state.basesDeleteProperty(row: row, column: status)
+
+        XCTAssertEqual(announcement, "Saved. status: empty")
+        let note = try String(
+            contentsOf: vaultURL.appendingPathComponent("Notes/Alpha.md"),
+            encoding: .utf8)
+        XCTAssertFalse(note.contains("status:"), "blank commit must remove the property key")
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyValue(from: "  keep exactly  ", valueKind: "text"),
+            .success(.text(value: "  keep exactly  ")),
+            "nonblank text drafts must not be normalized")
+
+        let source = try sourceFile("Bases/BaseContainerView.swift")
+        XCTAssertTrue(source.contains("trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
+        XCTAssertTrue(
+            source.contains("await appState.basesDeleteProperty"),
+            "the editable-cell commit path must route blank drafts to deletion")
+    }
+
     func testBaseRowActionsCopyLinkAndShowBacklinks() async throws {
         let state = try await makeQuickFilterAppState()
         state.openFile("Queries/Reading.base", target: .currentTab)
@@ -672,24 +700,9 @@ final class BasesTabRoutingTests: XCTestCase {
     }
 
     func testBaseQuickFilterEscapeRestoresNativeResultFocus() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let baseContainer = try String(
-            contentsOf: root.appendingPathComponent(
-                "apps/slate-mac/Sources/SlateMac/Bases/BaseContainerView.swift"),
-            encoding: .utf8)
-        let grid = try String(
-            contentsOf: root.appendingPathComponent(
-                "apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift"),
-            encoding: .utf8)
-        let list = try String(
-            contentsOf: root.appendingPathComponent(
-                "apps/slate-mac/Sources/SlateMac/Bases/BaseListRenderer.swift"),
-            encoding: .utf8)
+        let baseContainer = try sourceFile("Bases/BaseContainerView.swift")
+        let grid = try sourceFile("AccessibleDataGrid.swift")
+        let list = try sourceFile("Bases/BaseListRenderer.swift")
 
         XCTAssertTrue(baseContainer.contains("resultFocusToken &+="))
         XCTAssertTrue(baseContainer.contains("focusRequest: resultFocusToken"))
@@ -805,6 +818,36 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(projection.sections.map(\.label), ["Status: active", "Status: done"])
         XCTAssertEqual(projection.summary, "status count: 2")
         XCTAssertEqual(projection.items.first?.accessibilityLabel, "Alpha row audio")
+    }
+
+    func testGridAndListEntryUseResultAudioSummaryAndListSectionsAreHeadings() throws {
+        let result = Self.sampleBaseResult()
+        let projection = BaseListProjection(
+            result: result,
+            options: BaseListOptions(slateStateJson: nil))
+        var selection: String?
+        let list = BaseListView(
+            projection: projection,
+            selection: Binding(get: { selection }, set: { selection = $0 }),
+            onActivate: { _ in })
+        let host = NSHostingView(rootView: list)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        host.layoutSubtreeIfNeeded()
+
+        let outline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        outline.reloadData()
+        outline.layoutSubtreeIfNeeded()
+        XCTAssertEqual(outline.accessibilityLabel(), result.audioSummary)
+        let section = try XCTUnwrap(
+            outline.view(atColumn: 0, row: 0, makeIfNecessary: true))
+        XCTAssertEqual(
+            section.accessibilityRole(),
+            NSAccessibility.Role(rawValue: "AXHeading"))
+
+        XCTAssertTrue(
+            try sourceFile("Bases/BaseContainerView.swift")
+                .contains("accessibilityLabel: result.audioSummary"),
+            "grid entry must expose the engine result audio summary")
     }
 
     func testIndentedListDisplayRowsExposeDetailsAndSkipSectionsForHomeEnd() {
@@ -978,5 +1021,27 @@ final class BasesTabRoutingTests: XCTestCase {
             linkDisplay: nil,
             list: [],
             error: nil)
+    }
+
+    private func sourceFile(_ relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root
+                .appendingPathComponent("apps/slate-mac/Sources/SlateMac")
+                .appendingPathComponent(relativePath),
+            encoding: .utf8)
+    }
+
+    private func firstSubview<T: NSView>(of type: T.Type, in root: NSView) -> T? {
+        if let match = root as? T { return match }
+        for child in root.subviews {
+            if let match = firstSubview(of: type, in: child) { return match }
+        }
+        return nil
     }
 }

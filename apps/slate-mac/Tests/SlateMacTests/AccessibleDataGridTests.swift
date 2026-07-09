@@ -13,6 +13,14 @@ import XCTest
 /// view is its first content consumer.
 final class AccessibleDataGridTests: XCTestCase {
 
+    private final class VisibleRowsTableView: NSTableView {
+        var reportedVisibleRows = NSRange(location: 0, length: 0)
+
+        override func rows(in rect: NSRect) -> NSRange {
+            reportedVisibleRows
+        }
+    }
+
     private struct Row: Identifiable {
         let id: Int
         let a: String
@@ -88,6 +96,7 @@ final class AccessibleDataGridTests: XCTestCase {
         cellSelection: Binding<AccessibleDataGrid<Row>.CellPosition?>? = nil,
         sortState: Binding<DataGridSortState?>? = nil,
         editRequest: Binding<AccessibleDataGrid<Row>.EditRequest?>? = nil,
+        onEditCell: ((Row, Int) -> Void)? = nil,
         onCommitEdit: ((Row, Int, String, AccessibleDataGrid<Row>.EditCommitNavigation) -> Void)? =
             nil,
         onCancelEdit: (() -> Void)? = nil,
@@ -108,6 +117,7 @@ final class AccessibleDataGridTests: XCTestCase {
             cellSelection: cellSelection,
             sortState: sortState,
             cellNavigation: cellNavigation,
+            onEditCell: onEditCell,
             editRequest: editRequest,
             onCommitEdit: onCommitEdit,
             onCancelEdit: onCancelEdit,
@@ -296,6 +306,119 @@ final class AccessibleDataGridTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeRowSelectionRetargetsCellBeforeReturnAndRejectsGroupRows() {
+        var selectedRow: Int?
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 1)
+        var edited: [(row: Int, column: Int)] = []
+        let grid = makeGrid(
+            rows: Self.people,
+            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            onEditCell: { edited.append(($0.id, $1)) },
+            cellNavigation: true)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+
+        table.selectRowIndexes([1], byExtendingSelection: false)
+        coordinator.tableViewSelectionDidChange(
+            Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+
+        XCTAssertEqual(selectedRow, 1)
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+        XCTAssertTrue(coordinator.handleKeyDown(Self.returnKeyEvent(), in: table))
+        XCTAssertEqual(edited.map(\.row), [1], "Return must edit the newly selected native row")
+        XCTAssertEqual(edited.map(\.column), [1], "native row changes preserve the current column")
+
+        table.selectRowIndexes([2], byExtendingSelection: false)
+        coordinator.tableViewSelectionDidChange(
+            Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+        XCTAssertTrue(coordinator.handleKeyDown(Self.f2KeyEvent(), in: table))
+        XCTAssertEqual(edited.map(\.row), [1, 2], "F2 must edit the newly selected native row")
+
+        let grouped = makeGrid(
+            rows: Self.people,
+            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            onEditCell: { edited.append(($0.id, $1)) },
+            cellNavigation: true,
+            groups: [.init(label: "Everyone", rowStart: 0, rowCount: 3)])
+        coordinator.reload(grid: grouped)
+        table.selectRowIndexes([0], byExtendingSelection: false)
+        coordinator.tableViewSelectionDidChange(
+            Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+
+        XCTAssertNil(selectedRow)
+        XCTAssertNil(selectedCell)
+        XCTAssertFalse(
+            coordinator.handleKeyDown(Self.returnKeyEvent(), in: table),
+            "group headings must not dispatch cell edits")
+        XCTAssertEqual(edited.map(\.row), [1, 2])
+    }
+
+    @MainActor
+    func testPageDownMovesOneVisibleDataViewportSkippingGroupRows() {
+        let rows = (0..<12).map { Row(id: $0, a: "Row \($0)", b: "value") }
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 4, columnIndex: 1)
+        let grid = makeGrid(
+            rows: rows,
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            cellNavigation: true,
+            groups: [.init(label: "All", rowStart: 0, rowCount: rows.count)])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = VisibleRowsTableView()
+        table.reportedVisibleRows = NSRange(location: 0, length: 4)
+
+        coordinator.moveCell(.pageDown, in: table)
+        XCTAssertEqual(
+            selectedCell,
+            .init(rowID: 7, columnIndex: 1),
+            "one heading plus three visible data rows means a three-row page")
+
+        coordinator.moveCell(.pageUp, in: table)
+        XCTAssertEqual(selectedCell, .init(rowID: 4, columnIndex: 1))
+    }
+
+    @MainActor
+    func testSortableHeaderPublishesPinnedGrammarAndRefreshesSortDirection() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        for (index, title) in ["Name", "Role"].enumerated() {
+            let column = NSTableColumn(identifier: .init("col\(index)"))
+            column.title = title
+            if index == 0 {
+                column.sortDescriptorPrototype = NSSortDescriptor(key: "0", ascending: true)
+            }
+            table.addTableColumn(column)
+        }
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+
+        coordinator.reload(grid: grid)
+        XCTAssertEqual(
+            table.tableColumns[0].headerCell.accessibilityLabel(),
+            "Column: Name, sortable, current sort: none")
+
+        coordinator.applySort(column: 0, ascending: true)
+        XCTAssertEqual(
+            table.tableColumns[0].headerCell.accessibilityLabel(),
+            "Column: Name, sortable, current sort: asc")
+
+        coordinator.applySort(column: 0, ascending: false)
+        XCTAssertEqual(
+            table.tableColumns[0].headerCell.accessibilityLabel(),
+            "Column: Name, sortable, current sort: desc")
+    }
+
+    @MainActor
     func testCellEditingCommitAndCancelHooks() {
         var editRequest: AccessibleDataGrid<Row>.EditRequest? =
             .init(rowID: 0, columnIndex: 0, text: "Charlie")
@@ -358,6 +481,22 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(
             coordinator.accessibilityLabelForDisplayRow(3),
             "Group: Team B, 1 row")
+
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        let groupCell = coordinator.tableView(
+            table,
+            viewFor: table.tableColumns[0],
+            row: 0)
+        XCTAssertEqual(
+            groupCell?.accessibilityRole(),
+            NSAccessibility.Role(rawValue: "AXHeading"))
+        let trailingGroupCell = coordinator.tableView(
+            table,
+            viewFor: table.tableColumns[1],
+            row: 0)
+        XCTAssertEqual(trailingGroupCell?.isAccessibilityElement(), false)
     }
 
     @MainActor
@@ -387,5 +526,33 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(
             coordinator.accessibilityLabelForDisplayRow(3),
             "Group: Team B, 2 rows")
+    }
+
+    private static func returnKeyEvent() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36)!
+    }
+
+    private static func f2KeyEvent() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.function],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 120)!
     }
 }

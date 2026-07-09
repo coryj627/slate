@@ -160,7 +160,7 @@ struct BaseContainerView: View {
             columns: columns(from: result),
             rows: rows(from: result),
             summary: summaryText(result),
-            accessibilityLabel: "Base table",
+            accessibilityLabel: result.audioSummary,
             groups: groups(from: result),
             selection: Binding(
                 get: { selectedRow },
@@ -399,6 +399,15 @@ struct BaseContainerView: View {
         guard result.columns.indices.contains(columnIndex) else { return }
         let column = result.columns[columnIndex]
         let previousSelection = selectedRow
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            gridEditRequest = nil
+            Task { @MainActor in
+                await appState.basesDeleteProperty(row: row, column: column)
+                restoreSelection(previous: previousSelection)
+                moveAfterEditCommit(navigation, from: rowID, columnIndex: columnIndex)
+            }
+            return
+        }
         switch BaseCellEditPolicy.propertyValue(from: draft, valueKind: column.valueKind) {
         case .success(let value):
             gridEditRequest = nil
