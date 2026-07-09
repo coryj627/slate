@@ -569,6 +569,9 @@ git commit -m "fix(bases): refresh live views after note saves [N3-07]"
 ### Task 8: Lossless typed builder and actionable dashboards (N4-01..N4-04)
 
 **Files:**
+- Modify: `crates/slate-core/src/properties_db.rs`
+- Modify: `crates/slate-core/src/session/tests/properties.rs`
+- Modify: `crates/slate-uniffi/src/lib.rs`
 - Modify: `apps/slate-mac/Sources/SlateMac/Bases/BaseQueryBuilderModel.swift`
 - Modify: `apps/slate-mac/Sources/SlateMac/Bases/BaseQueryBuilderSheet.swift`
 - Modify: `apps/slate-mac/Sources/SlateMac/Bases/AppState+Bases.swift`
@@ -578,7 +581,7 @@ git commit -m "fix(bases): refresh live views after note saves [N3-07]"
 - Modify: `apps/slate-mac/Tests/SlateMacTests/RightPaneViewTests.swift`
 
 **Interfaces:**
-- Consumes: full `SlateQuery` JSON, property-key kind inventory, expression validator,
+- Consumes: full `SlateQuery` JSON, indexed property value kinds, expression validator,
   dashboard CRUD, follow-active refresh.
 - Produces: opaque facet preservation plus structured edits; per-kind operator/editor
   descriptors; function completion; missing-section actions; membership-set comparison.
@@ -603,6 +606,10 @@ func testFollowActiveAnnouncesEmptyToNonemptyButNotReorder() {
     XCTAssertTrue(change(old: [], new: ["A"]).shouldAnnounce)
     XCTAssertFalse(change(old: ["A", "B"], new: ["B", "A"]).shouldAnnounce)
 }
+
+func testPropertyKeyInventoryCarriesStableKinds() throws {
+    XCTAssertEqual(try key("mixed").valueKinds, ["boolean", "number"])
+}
 ```
 
 - [ ] **Step 2: Verify failures**
@@ -617,12 +624,17 @@ Decode and store `limit`, `summaries`, `custom_summaries`, and an opaque root ma
 When encoding, start from the opaque root and replace only builder-owned keys.
 Keep two explicit products: effective full-query JSON for preview/Save-as/saved-query,
 and view-local `BaseEdit` splices for Save to View. The Edit View Filters entry point
-must retain the global filter in the effective query without writing it into the
-view-local filter block.
+must load both `base_view_query_json` and `base_view_edit_query_json`, retain the
+global filter in the effective query, and never write it into the view-local filter
+block. Preserve the durable Recent boundary as inclusive `>=`/`Gte` in both
+directions.
 
 - [ ] **Step 4: Add typed builder descriptors**
 
-Carry the indexed property kind beside each property choice. Filter the operator
+Extend `PropertyKeySummary` additively with sorted `value_kinds` aggregated from
+the existing properties index (no migration); mixed keys remain explicitly mixed
+rather than selecting a majority type. Regenerate UniFFI bindings. Carry the
+indexed kind beside each property choice. Filter the operator
 menu by kind; use checkbox, number, date/list, and text controls from the shipped
 property editor family. A relative-date control emits `now() - duration("Nd")`.
 Add the pinned function names as completion suggestions while retaining Rust live
