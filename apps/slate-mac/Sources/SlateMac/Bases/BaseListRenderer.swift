@@ -376,6 +376,7 @@ private final class BaseListCoordinator: NSObject, NSOutlineViewDataSource, NSOu
     func reload(list: BaseOutlineList) {
         self.list = list
         displayModel = BaseListDisplayModel(projection: list.projection)
+        outline?.setAccessibilityLabel(list.projection.audioSummary)
         outline?.reloadData()
         syncSelectionFromBinding()
     }

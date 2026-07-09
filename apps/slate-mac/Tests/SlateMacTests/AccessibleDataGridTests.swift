@@ -362,6 +362,38 @@ final class AccessibleDataGridTests: XCTestCase {
     }
 
     @MainActor
+    func testRejectedGroupRowClearsStaleCellBeforeReturnOrF2() {
+        var selectedRow: Int? = 0
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 1)
+        var edited: [(row: Int, column: Int)] = []
+        let grouped = makeGrid(
+            rows: Self.people,
+            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            onEditCell: { edited.append(($0.id, $1)) },
+            cellNavigation: true,
+            groups: [.init(label: "Everyone", rowStart: 0, rowCount: 3)])
+        let coordinator = GridCoordinator(grid: grouped)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grouped)
+
+        XCTAssertEqual(table.selectedRow, 1, "the selected data row follows the group heading")
+        XCTAssertFalse(coordinator.tableView(table, shouldSelectRow: 0))
+        XCTAssertNil(
+            selectedCell,
+            "a rejected heading click must disarm the prior cell without a selection-change event")
+        XCTAssertFalse(coordinator.handleKeyDown(Self.returnKeyEvent(), in: table))
+        XCTAssertFalse(coordinator.handleKeyDown(Self.f2KeyEvent(), in: table))
+        XCTAssertTrue(edited.isEmpty, "Return/F2 must not edit the previously selected data row")
+    }
+
+    @MainActor
     func testPageDownMovesOneVisibleDataViewportSkippingGroupRows() {
         let rows = (0..<12).map { Row(id: $0, a: "Row \($0)", b: "value") }
         var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
@@ -416,6 +448,70 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(
             table.tableColumns[0].headerCell.accessibilityLabel(),
             "Column: Name, sortable, current sort: desc")
+    }
+
+    @MainActor
+    func testReloadReconcilesColumnsSortStateAndNativeAudioLabel() {
+        var sortState: DataGridSortState? = .init(columnIndex: 1, ascending: true)
+        let sortBinding = Binding<DataGridSortState?>(
+            get: { sortState }, set: { sortState = $0 })
+        let sortableColumns: [AccessibleDataGrid<Row>.Column] = [
+            .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
+            .init("Role", cell: { $0.b }, sort: { $0.b < $1.b }),
+        ]
+        let initialGrid = AccessibleDataGrid(
+            columns: sortableColumns,
+            rows: Self.people,
+            summary: "Table: 3 rows, 2 columns.",
+            accessibilityLabel: "2 notes.",
+            sortState: sortBinding)
+        let coordinator = GridCoordinator(grid: initialGrid)
+        let table = NSTableView()
+        table.setAccessibilityLabel(initialGrid.accessibilityLabel)
+        for (index, column) in sortableColumns.enumerated() {
+            let tableColumn = NSTableColumn(identifier: .init("col\(index)"))
+            tableColumn.title = column.header
+            tableColumn.sortDescriptorPrototype = NSSortDescriptor(
+                key: "\(index)", ascending: true)
+            table.addTableColumn(tableColumn)
+        }
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: initialGrid)
+
+        XCTAssertEqual(table.tableColumns.count, 2)
+        XCTAssertEqual(
+            table.tableColumns[1].headerCell.accessibilityLabel(),
+            "Column: Role, sortable, current sort: asc")
+
+        let updatedGrid = AccessibleDataGrid(
+            columns: [AccessibleDataGrid<Row>.Column("Title", cell: { $0.a })],
+            rows: Self.people,
+            summary: "Table: 3 rows, 1 column.",
+            accessibilityLabel: "1 note.",
+            sortState: sortBinding)
+        coordinator.reload(grid: updatedGrid)
+
+        XCTAssertEqual(table.tableColumns.count, 1)
+        XCTAssertEqual(table.tableColumns[0].identifier.rawValue, "col0")
+        XCTAssertEqual(table.tableColumns[0].title, "Title")
+        XCTAssertNil(table.tableColumns[0].sortDescriptorPrototype)
+        XCTAssertEqual(table.tableColumns[0].headerCell.accessibilityLabel(), "Title")
+        XCTAssertEqual(table.accessibilityLabel(), "1 note.")
+        XCTAssertTrue(table.sortDescriptors.isEmpty)
+        XCTAssertNil(coordinator.activeSort)
+        XCTAssertNil(sortState, "an invalidated native sort must also clear the bound sort state")
+
+        coordinator.reload(grid: initialGrid)
+        XCTAssertEqual(table.tableColumns.count, 2, "reload must add newly restored columns")
+        XCTAssertEqual(table.tableColumns.map(\.title), ["Name", "Role"])
+        XCTAssertNotNil(table.tableColumns[0].sortDescriptorPrototype)
+        XCTAssertNotNil(table.tableColumns[1].sortDescriptorPrototype)
+        XCTAssertEqual(
+            table.tableColumns[1].headerCell.accessibilityLabel(),
+            "Column: Role, sortable, current sort: none")
+        XCTAssertEqual(table.accessibilityLabel(), "2 notes.")
     }
 
     @MainActor

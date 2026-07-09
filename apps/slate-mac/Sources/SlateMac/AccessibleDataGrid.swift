@@ -308,8 +308,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         if let sortState = grid.sortState {
             activeSort = sortState.wrappedValue
         }
+        invalidateUnavailableSort()
         resortPreservingDescriptor()
         rebuildDisplayEntries()
+        reconcileTableColumnsAndLabel()
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
@@ -325,6 +327,42 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     // MARK: Sorting
+
+    private func invalidateUnavailableSort() {
+        guard let activeSort,
+            (!grid.columns.indices.contains(activeSort.columnIndex)
+                || grid.columns[activeSort.columnIndex].sort == nil)
+        else { return }
+        self.activeSort = nil
+        if grid.sortState?.wrappedValue != nil {
+            grid.sortState?.wrappedValue = nil
+        }
+    }
+
+    private func reconcileTableColumnsAndLabel() {
+        guard let table else { return }
+        table.setAccessibilityLabel(grid.accessibilityLabel)
+
+        while table.tableColumns.count > grid.columns.count {
+            guard let trailingColumn = table.tableColumns.last else { break }
+            table.removeTableColumn(trailingColumn)
+        }
+        while table.tableColumns.count < grid.columns.count {
+            let index = table.tableColumns.count
+            table.addTableColumn(
+                NSTableColumn(identifier: NSUserInterfaceItemIdentifier("col\(index)")))
+        }
+
+        for (index, column) in grid.columns.enumerated() {
+            let tableColumn = table.tableColumns[index]
+            tableColumn.identifier = NSUserInterfaceItemIdentifier("col\(index)")
+            tableColumn.title = column.header
+            tableColumn.resizingMask = .autoresizingMask
+            tableColumn.sortDescriptorPrototype = column.sort == nil
+                ? nil
+                : NSSortDescriptor(key: "\(index)", ascending: true)
+        }
+    }
 
     private func resortPreservingDescriptor() {
         displayRows = grid.rows
@@ -588,7 +626,13 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     nonisolated func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        MainActor.assumeIsolated { rowValue(atDisplayIndex: row) != nil }
+        MainActor.assumeIsolated {
+            guard rowValue(atDisplayIndex: row) != nil else {
+                grid.cellSelection?.wrappedValue = nil
+                return false
+            }
+            return true
+        }
     }
 
     private func syncSelectionFromBinding() {

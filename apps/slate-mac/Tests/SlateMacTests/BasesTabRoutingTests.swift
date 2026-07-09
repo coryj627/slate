@@ -850,6 +850,44 @@ final class BasesTabRoutingTests: XCTestCase {
             "grid entry must expose the engine result audio summary")
     }
 
+    func testNativeListAudioSummaryRefreshesWhenProjectionUpdates() throws {
+        let result = Self.sampleBaseResult()
+        var selection: String?
+        let selectionBinding = Binding<String?>(
+            get: { selection }, set: { selection = $0 })
+        let list = BaseListView(
+            projection: BaseListProjection(
+                result: result,
+                options: BaseListOptions(slateStateJson: nil)),
+            selection: selectionBinding,
+            onActivate: { _ in })
+        let host = NSHostingView(rootView: list)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        host.layoutSubtreeIfNeeded()
+
+        let outline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        XCTAssertEqual(outline.accessibilityLabel(), "2 notes.")
+
+        var filteredResult = result
+        filteredResult.rows = Array(result.rows.prefix(1))
+        filteredResult.groups = Array(result.groups.prefix(1))
+        filteredResult.totalCount = 1
+        filteredResult.shownCount = 1
+        filteredResult.unfilteredShownCount = 1
+        filteredResult.audioSummary = "1 note."
+        host.rootView = BaseListView(
+            projection: BaseListProjection(
+                result: filteredResult,
+                options: BaseListOptions(slateStateJson: nil)),
+            selection: selectionBinding,
+            onActivate: { _ in })
+        host.layoutSubtreeIfNeeded()
+
+        let updatedOutline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        XCTAssertTrue(outline === updatedOutline, "the probe must exercise updateNSView, not makeNSView")
+        XCTAssertEqual(updatedOutline.accessibilityLabel(), "1 note.")
+    }
+
     func testIndentedListDisplayRowsExposeDetailsAndSkipSectionsForHomeEnd() {
         let projection = BaseListProjection(
             result: Self.sampleBaseResult(),
