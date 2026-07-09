@@ -428,7 +428,9 @@ fn sub_values(lhs: Value, rhs: Value, ctx: &EvalCtx<'_>) -> Result<Value, EvalEr
             *date,
             duration_arg(rhs).expect("checked").negated(),
         ))),
-        (Value::Date(lhs), Value::Date(rhs)) => Ok(Value::Duration(lhs.epoch_ms - rhs.epoch_ms)),
+        (Value::Date(lhs), Value::Date(rhs)) => {
+            Ok(Value::Duration(lhs.epoch_ms.saturating_sub(rhs.epoch_ms)))
+        }
         _ => numeric_binary(&lhs, &rhs, ctx, |a, b| a - b),
     }
 }
@@ -701,15 +703,25 @@ fn eval_method(
         }
         MethodName::ContainsAll => {
             expect_arity("containsAll", args.len(), 1, usize::MAX)?;
+            let needles = match args {
+                [Value::List(values)] => values.as_slice(),
+                _ => args,
+            };
             Ok(Value::Bool(
-                args.iter()
+                needles
+                    .iter()
                     .all(|needle| contains_value(&receiver, needle, false)),
             ))
         }
         MethodName::ContainsAny => {
             expect_arity("containsAny", args.len(), 1, usize::MAX)?;
+            let needles = match args {
+                [Value::List(values)] => values.as_slice(),
+                _ => args,
+            };
             Ok(Value::Bool(
-                args.iter()
+                needles
+                    .iter()
                     .any(|needle| contains_value(&receiver, needle, false)),
             ))
         }

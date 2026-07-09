@@ -171,6 +171,29 @@ fn list_contains_all_accepts_variadic_needles() {
 }
 
 #[test]
+fn string_contains_all_expands_a_single_list_of_matching_needles() {
+    assert_eq!(value(r#""abc".containsAll(["a", "c"])"#), Value::Bool(true));
+}
+
+#[test]
+fn string_contains_all_expands_a_single_list_with_a_missing_needle() {
+    assert_eq!(
+        value(r#""abc".containsAll(["a", "z"])"#),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn list_contains_all_expands_a_single_list_of_matching_needles() {
+    assert_eq!(value("[1, 2, 3].containsAll([1, 3])"), Value::Bool(true));
+}
+
+#[test]
+fn list_contains_all_expands_a_single_list_with_a_missing_needle() {
+    assert_eq!(value("[1, 2, 3].containsAll([1, 4])"), Value::Bool(false));
+}
+
+#[test]
 fn string_contains_any_accepts_variadic_needles() {
     assert_eq!(
         value("\"abc\".containsAny(\"x\", \"c\")"),
@@ -181,6 +204,29 @@ fn string_contains_any_accepts_variadic_needles() {
 #[test]
 fn list_contains_any_accepts_variadic_needles() {
     assert_eq!(value("[1, 2, 3].containsAny(4, 2)"), Value::Bool(true));
+}
+
+#[test]
+fn string_contains_any_expands_a_single_list_with_a_matching_needle() {
+    assert_eq!(value(r#""abc".containsAny(["z", "b"])"#), Value::Bool(true));
+}
+
+#[test]
+fn string_contains_any_expands_a_single_list_without_a_matching_needle() {
+    assert_eq!(
+        value(r#""abc".containsAny(["x", "z"])"#),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn list_contains_any_expands_a_single_list_with_a_matching_needle() {
+    assert_eq!(value("[1, 2, 3].containsAny([4, 2])"), Value::Bool(true));
+}
+
+#[test]
+fn list_contains_any_expands_a_single_list_without_a_matching_needle() {
+    assert_eq!(value("[1, 2, 3].containsAny([4, 5])"), Value::Bool(false));
 }
 
 #[test]
@@ -294,6 +340,27 @@ fn date_time_returns_an_hh_mm_ss_string() {
         value("date(\"2026-07-08T15:04:05\").time()"),
         Value::Text("15:04:05".into())
     );
+}
+
+#[test]
+fn date_subtraction_saturates_positive_overflow() {
+    assert_eq!(
+        date_difference(i64::MAX, i64::MIN),
+        Value::Duration(i64::MAX)
+    );
+}
+
+#[test]
+fn date_subtraction_saturates_negative_overflow() {
+    assert_eq!(
+        date_difference(i64::MIN, i64::MAX),
+        Value::Duration(i64::MIN)
+    );
+}
+
+#[test]
+fn date_subtraction_preserves_ordinary_differences() {
+    assert_eq!(date_difference(12_345, 2_345), Value::Duration(10_000));
 }
 
 #[test]
@@ -568,6 +635,33 @@ fn value(source: &str) -> Value {
     let file = fixture_row("Projects/Alpha.md");
     let formulas = ResolvedFormulas::default();
     eval_src(source, &ctx(&file, None, &formulas, &vault, &warnings)).unwrap()
+}
+
+fn date_difference(lhs_ms: i64, rhs_ms: i64) -> Value {
+    let vault = TestVault::default();
+    let warnings = WarningSink::default();
+    let file = fixture_row("Projects/Alpha.md");
+    let formulas = ResolvedFormulas::from([
+        (
+            "lhs".to_string(),
+            Value::Date(DateValue {
+                epoch_ms: lhs_ms,
+                has_time: true,
+            }),
+        ),
+        (
+            "rhs".to_string(),
+            Value::Date(DateValue {
+                epoch_ms: rhs_ms,
+                has_time: true,
+            }),
+        ),
+    ]);
+    eval_src(
+        "formula.lhs - formula.rhs",
+        &ctx(&file, None, &formulas, &vault, &warnings),
+    )
+    .unwrap()
 }
 
 fn error_message(source: &str) -> String {
