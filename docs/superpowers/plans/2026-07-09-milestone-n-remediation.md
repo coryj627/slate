@@ -255,9 +255,11 @@ Use `1..=usize::MAX` for variadic contains methods, exact unary arity for
 
 Split accepts one or two arguments. Split the full string with `Regex::split` or
 `str::split`, then retain the first `n` elements when the optional limit is
-present. Parse `%Y-%m-%d %H:%M:%S` in addition to the
-existing ISO forms. Preserve parsed calendar months separately from fixed
-milliseconds and apply months (with end-of-month clamp) before days/time.
+present. Parse `%Y-%m-%d %H:%M:%S` in addition to the existing ISO forms. For
+the pinned `Date +/- "duration string"` path, preserve parsed calendar months
+separately from fixed milliseconds and apply months (with end-of-month clamp)
+before days/time. Keep the pinned `Value::Duration(i64)` representation in
+milliseconds unchanged.
 
 - [ ] **Step 5: Run evaluator and engine suites**
 
