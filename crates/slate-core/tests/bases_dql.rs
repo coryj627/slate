@@ -125,6 +125,15 @@ fn dql_explicit_outgoing_resolves_extensionless_wikilink_membership() {
 }
 
 #[test]
+fn dql_explicit_outgoing_resolves_extensionless_target_from_host_context() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(&conn, OUTGOING_DQL, Some("Notes/View.base"));
+
+    assert_eq!(row_paths(&result), ["Notes/Target.md"]);
+    assert_eq!(result.error, None);
+}
+
+#[test]
 fn dql_dynamic_outgoing_uses_this_file_membership() {
     let conn = dql_fixture_conn();
     let result = execute_dql(&conn, "LIST\nFROM outgoing([[]])\n", Some("Hub.md"));
@@ -156,6 +165,39 @@ fn dql_regextest_converts_literal_pattern_and_evaluates() {
     let result = execute_dql(&conn, FUNCTIONS_DQL, None);
     assert_eq!(first_value(&result, 0), &Value::Bool(true));
     assert_eq!(result.error, None);
+}
+
+#[test]
+fn dql_regex_literals_preserve_escapes_in_ast_and_execution() {
+    let source = r#"TABLE WITHOUT ID regextest("\d+", "123") AS "Digits", regextest("a/b", "a/b") AS "Slash", regextest("a\"b", "a\"b") AS "Quote", regextest("\\\\", "\\") AS "Backslash", regextest("\n", "\n") AS "Newline", regextest("\r", "\r") AS "Carriage return", regextest("\t", "\t") AS "Tab"
+"#;
+    let (query, warnings) = parse_dql(source);
+
+    assert_eq!(warnings, []);
+    assert_eq!(
+        query
+            .formulas
+            .iter()
+            .map(|(_, expr)| regex_pattern(expr))
+            .collect::<Vec<_>>(),
+        [r"\d+", "a/b", "a\"b", r"\\", "\n", "\r", "\t"]
+    );
+
+    let conn = dql_fixture_conn();
+    let values = execute_dql(&conn, source, None);
+    for column in 0..query.formulas.len() {
+        assert_eq!(first_value(&values, column), &Value::Bool(true));
+    }
+
+    let membership = execute_dql(
+        &conn,
+        r#"LIST WITHOUT ID file.path
+WHERE regextest("\d+", file.name)
+"#,
+        None,
+    );
+    assert_eq!(row_paths(&membership), ["123.md"]);
+    assert_eq!(membership.error, None);
 }
 
 #[test]
@@ -404,7 +446,15 @@ fn parse_dql_is_total_and_deterministic_for_arbitrary_text() {
 fn dql_fixture_conn() -> Connection {
     let mut conn = Connection::open_in_memory().expect("open in-memory database");
     migrate(&mut conn).expect("migrate schema");
-    for (id, path) in [(1_i64, "Hub.md"), (2, "Target.md"), (3, "Other.md")] {
+    for (id, path) in [
+        (1_i64, "Hub.md"),
+        (2, "Target.md"),
+        (3, "Other.md"),
+        (4, "123.md"),
+        (5, "Notes/Hub.md"),
+        (6, "Notes/Target.md"),
+        (7, "Notes/View.base"),
+    ] {
         conn.execute(
             "INSERT INTO files (
                 id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
@@ -424,6 +474,15 @@ fn dql_fixture_conn() -> Connection {
         [],
     )
     .expect("insert outgoing DQL fixture link");
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         )
+         VALUES (5, 0, 'Notes/Target.md', 'Target', NULL, 'wikilink', 0, 0, '', 0, 10)",
+        [],
+    )
+    .expect("insert contextual outgoing DQL fixture link");
     conn
 }
 
@@ -455,6 +514,21 @@ fn first_value(result: &slate_core::bases::engine::BasesResultSet, column: usize
         panic!("expected first-row value in column {column}: {result:?}");
     };
     value
+}
+
+fn regex_pattern(expr: &Expr) -> &str {
+    let ExprKind::Call {
+        callee: Callee::Method { receiver, .. },
+        ..
+    } = &expr.kind
+    else {
+        panic!("regextest should convert to a regex method call: {expr:?}");
+    };
+    let ExprKind::Lit(Lit::Regex { pattern, flags }) = &receiver.kind else {
+        panic!("regextest receiver should be a regex literal: {receiver:?}");
+    };
+    assert!(flags.is_empty());
+    pattern
 }
 
 fn filter_contains_task_status_eq_x(filter: &FilterNode) -> bool {

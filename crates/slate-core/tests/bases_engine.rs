@@ -1095,6 +1095,60 @@ fn linked_source_depth_one_limits_candidates_and_later_depths_fail_loudly() {
 }
 
 #[test]
+fn linked_source_preserves_exact_public_path_over_contextual_collision() {
+    let conn = migrated_conn();
+    for (id, path) in [
+        (1_i64, "Hub.md"),
+        (2, "Notes/Hub.md"),
+        (3, "RootTarget.md"),
+        (4, "Notes/Target.md"),
+        (5, "Notes/View.base"),
+    ] {
+        let (name, extension) = path.rsplit_once('.').expect("fixture extension");
+        insert_file(&conn, id, path, name, extension, 0, 0);
+    }
+    for (source_file_id, target_path) in [(1_i64, "RootTarget.md"), (2_i64, "Notes/Target.md")] {
+        conn.execute(
+            "INSERT INTO links (
+                source_file_id, ordinal, target_path, target_raw, target_anchor,
+                kind, is_embed, is_external, snippet, span_start, span_end
+             )
+             VALUES (?1, 0, ?2, ?2, NULL, 'wikilink', 0, 0, '', 0, 10)",
+            params![source_file_id, target_path],
+        )
+        .expect("insert colliding linked-source fixture");
+    }
+
+    let mut linked = query();
+    linked.source = QuerySource::Linked {
+        from_path: "Hub.md".to_string(),
+        depth: 1,
+    };
+    linked.columns = vec![column("file.path")];
+
+    let result = execute(
+        &linked,
+        &conn,
+        &EngineCtx {
+            this_path: Some("Notes/View.base".to_string()),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute exact canonical linked source");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        ["RootTarget.md"]
+    );
+}
+
+#[test]
 fn folder_source_is_case_sensitive_and_handles_root_folder() {
     let conn = migrated_conn();
     seed_index(&conn);

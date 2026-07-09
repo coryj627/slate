@@ -336,6 +336,7 @@ pub fn execute(
     };
     let mut resolved_query = None;
     if let QuerySource::Linked { from_path, depth } = &query.source
+        && !exact_file_path_exists(conn, from_path)?
         && let Some(resolved_path) = vault.resolve_link(from_path)
     {
         let mut canonical = query.clone();
@@ -495,6 +496,14 @@ pub fn execute(
     }
     result.cache_hit = false;
     Ok(result)
+}
+
+fn exact_file_path_exists(conn: &Connection, path: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM files WHERE path = ?1)",
+        params![path],
+        |row| row.get(0),
+    )
 }
 
 fn load_candidates(

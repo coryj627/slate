@@ -472,6 +472,7 @@ impl<'a> Lexer<'a> {
                     '\'' => value.push('\''),
                     '\\' => value.push('\\'),
                     'n' => value.push('\n'),
+                    'r' => value.push('\r'),
                     't' => value.push('\t'),
                     other => {
                         value.push('\\');

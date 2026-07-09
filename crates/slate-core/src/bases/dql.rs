@@ -24,7 +24,7 @@
 //! | TASK `completed`, `checked` | `task.status == "x"`, `task.status != " "` | supported |
 //! | TASK `created`, `completion`, `start`, `fullyCompleted`, `children`, `section` | `Unsupported` | fail-loud |
 
-use super::expr::{Expr, ExprKind, Span, parse_expr};
+use super::expr::{Callee, Expr, ExprKind, Lit, MethodName, Span, parse_expr};
 use super::{ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SortKey, ViewSpec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +70,9 @@ struct SourceParse {
     source: Option<QuerySource>,
     filter: Option<FilterNode>,
 }
+
+const DQL_REGEX_MARKER_PREFIX: &str = "\u{f8ff}slate-dql-regex:";
+const DQL_REGEX_MARKER_SUFFIX: char = '\u{f8fe}';
 
 /// Parse a Dataview block query into a `SlateQuery`.
 ///
@@ -768,7 +771,8 @@ fn convert_expr_or_unsupported(
 ) -> Expr {
     match translate_expr(source, task_context) {
         Ok(translated) => match parse_expr(&translated) {
-            Ok(expr) => {
+            Ok(mut expr) => {
+                restore_dql_regex_literals(&mut expr);
                 let mut reasons = Vec::new();
                 collect_unsupported_reasons(&expr, &mut reasons);
                 reasons.sort();
@@ -837,6 +841,62 @@ fn collect_unsupported_reasons(expr: &Expr, reasons: &mut Vec<String>) {
             }
         }
         ExprKind::Lit(_) | ExprKind::Prop(_) => {}
+    }
+}
+
+fn restore_dql_regex_literals(expr: &mut Expr) {
+    match &mut expr.kind {
+        ExprKind::Call { callee, args } => {
+            match callee {
+                Callee::Method {
+                    receiver,
+                    name: MethodName::Matches,
+                } => {
+                    let pattern = match &receiver.kind {
+                        ExprKind::Lit(Lit::String(marker)) => marker
+                            .strip_prefix(DQL_REGEX_MARKER_PREFIX)
+                            .and_then(|marker| marker.strip_suffix(DQL_REGEX_MARKER_SUFFIX))
+                            .map(str::to_string),
+                        _ => None,
+                    };
+                    if let Some(pattern) = pattern {
+                        receiver.kind = ExprKind::Lit(Lit::Regex {
+                            pattern,
+                            flags: String::new(),
+                        });
+                    } else {
+                        restore_dql_regex_literals(receiver);
+                    }
+                }
+                Callee::Method { receiver, .. } => restore_dql_regex_literals(receiver),
+                Callee::Global(_) => {}
+            }
+            args.iter_mut().for_each(restore_dql_regex_literals);
+        }
+        ExprKind::Lit(Lit::List(items)) => items.iter_mut().for_each(restore_dql_regex_literals),
+        ExprKind::Lit(Lit::Object(items)) => items
+            .iter_mut()
+            .for_each(|(_, value)| restore_dql_regex_literals(value)),
+        ExprKind::Index { base, index } => {
+            restore_dql_regex_literals(base);
+            restore_dql_regex_literals(index);
+        }
+        ExprKind::Field { base, .. } => restore_dql_regex_literals(base),
+        ExprKind::Unary { rhs, .. } => restore_dql_regex_literals(rhs),
+        ExprKind::Binary { lhs, rhs, .. } => {
+            restore_dql_regex_literals(lhs);
+            restore_dql_regex_literals(rhs);
+        }
+        ExprKind::ListExpr {
+            base, body, init, ..
+        } => {
+            restore_dql_regex_literals(base);
+            restore_dql_regex_literals(body);
+            if let Some(init) = init {
+                restore_dql_regex_literals(init);
+            }
+        }
+        ExprKind::Lit(_) | ExprKind::Prop(_) | ExprKind::Unsupported { .. } => {}
     }
 }
 
@@ -1096,8 +1156,12 @@ fn map_function_call(name: &str, original_args: &str, args: &[String]) -> Result
             let (pattern, _) = parse_quoted_with_len(raw_pattern)
                 .filter(|(_, consumed)| raw_pattern[*consumed..].trim().is_empty())
                 .ok_or_else(|| format!("{name} requires a literal regex pattern"))?;
-            let pattern = pattern.replace('/', "\\/");
-            Ok(format!("(/{pattern}/).matches({})", args[1]))
+            let marker = format!("{DQL_REGEX_MARKER_PREFIX}{pattern}{DQL_REGEX_MARKER_SUFFIX}");
+            Ok(format!(
+                "({}).matches({})",
+                quote_expr_string(&marker),
+                args[1]
+            ))
         }
         "regexreplace" => method("replace"),
         "split" => method("split"),
@@ -1687,7 +1751,18 @@ fn parse_quoted_with_len(source: &str) -> Option<(String, usize)> {
         if ch == '\\' {
             let escaped = trimmed[pos..].chars().next()?;
             pos += escaped.len_utf8();
-            value.push(escaped);
+            match escaped {
+                'n' => value.push('\n'),
+                'r' => value.push('\r'),
+                't' => value.push('\t'),
+                '"' => value.push('"'),
+                '\'' => value.push('\''),
+                '\\' => value.push('\\'),
+                other => {
+                    value.push('\\');
+                    value.push(other);
+                }
+            }
         } else {
             value.push(ch);
         }
