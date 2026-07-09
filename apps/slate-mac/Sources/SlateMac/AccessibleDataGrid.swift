@@ -628,7 +628,13 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     nonisolated func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
         MainActor.assumeIsolated {
             guard rowValue(atDisplayIndex: row) != nil else {
+                if tableView.selectedRow != -1 {
+                    mirrorTableSelectionFromBinding {
+                        tableView.deselectAll(nil)
+                    }
+                }
                 grid.cellSelection?.wrappedValue = nil
+                grid.selection?.wrappedValue = nil
                 return false
             }
             return true

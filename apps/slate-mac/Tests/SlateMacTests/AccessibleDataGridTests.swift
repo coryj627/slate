@@ -96,6 +96,7 @@ final class AccessibleDataGridTests: XCTestCase {
         cellSelection: Binding<AccessibleDataGrid<Row>.CellPosition?>? = nil,
         sortState: Binding<DataGridSortState?>? = nil,
         editRequest: Binding<AccessibleDataGrid<Row>.EditRequest?>? = nil,
+        onActivate: ((Row) -> Void)? = nil,
         onEditCell: ((Row, Int) -> Void)? = nil,
         onCommitEdit: ((Row, Int, String, AccessibleDataGrid<Row>.EditCommitNavigation) -> Void)? =
             nil,
@@ -117,6 +118,7 @@ final class AccessibleDataGridTests: XCTestCase {
             cellSelection: cellSelection,
             sortState: sortState,
             cellNavigation: cellNavigation,
+            onActivate: onActivate,
             onEditCell: onEditCell,
             editRequest: editRequest,
             onCommitEdit: onCommitEdit,
@@ -391,6 +393,41 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertFalse(coordinator.handleKeyDown(Self.returnKeyEvent(), in: table))
         XCTAssertFalse(coordinator.handleKeyDown(Self.f2KeyEvent(), in: table))
         XCTAssertTrue(edited.isEmpty, "Return/F2 must not edit the previously selected data row")
+    }
+
+    @MainActor
+    func testRejectedGroupRowDisarmsReturnEditAndActivation() {
+        var selectedRow: Int? = 0
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 1)
+        var edited: [Int] = []
+        var activated: [Int] = []
+        let grouped = makeGrid(
+            rows: Self.people,
+            selection: Binding(get: { selectedRow }, set: { selectedRow = $0 }),
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            onActivate: { activated.append($0.id) },
+            onEditCell: { row, _ in edited.append(row.id) },
+            cellNavigation: true,
+            groups: [.init(label: "Everyone", rowStart: 0, rowCount: 3)])
+        let coordinator = GridCoordinator(grid: grouped)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grouped)
+
+        XCTAssertEqual(table.selectedRow, 1, "the selected data row follows the group heading")
+        XCTAssertFalse(coordinator.tableView(table, shouldSelectRow: 0))
+        XCTAssertNil(selectedCell)
+        XCTAssertNil(selectedRow)
+        XCTAssertEqual(table.selectedRow, -1)
+
+        XCTAssertFalse(coordinator.handleKeyDown(Self.returnKeyEvent(), in: table))
+        XCTAssertTrue(edited.isEmpty, "Return must not edit the prior data row")
+        XCTAssertTrue(activated.isEmpty, "Return must not activate the prior data row")
     }
 
     @MainActor
