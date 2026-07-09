@@ -740,7 +740,7 @@ extension AppState {
             } else {
                 doc.executeActiveView(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = doc.result?.rows.map(baseRowMembership) ?? []
+            basesDock.lastMembershipSignature = BaseRowMembership(rows: doc.result?.rows ?? [])
             basesDock.target = .base(path: path, name: name)
         case .savedQuery(let id, let name):
             if let dashboardDoc = basesDockDashboardDocument {
@@ -759,7 +759,7 @@ extension AppState {
             } else {
                 doc.executeActiveView(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = doc.result?.rows.map(baseRowMembership) ?? []
+            basesDock.lastMembershipSignature = BaseRowMembership(rows: doc.result?.rows ?? [])
         case .dashboard(let id, let name):
             if let baseDoc = basesDockDocument {
                 baseDoc.close(session: session)
@@ -783,10 +783,6 @@ extension AppState {
         }
     }
 
-    private func baseRowMembership(_ row: BasesRow) -> String {
-        row.taskOrdinal.map { "\(row.filePath)#\($0)" } ?? row.filePath
-    }
-
     private var basesDockActiveNotePath: String? {
         if case .markdown(let path) = workspace.activeTab?.item {
             return path
@@ -795,6 +791,193 @@ extension AppState {
             selectedFilePath.lowercased().hasSuffix(".md")
         else { return nil }
         return selectedFilePath
+    }
+
+    /// The single N3-07 post-write funnel. It re-executes every registered
+    /// Bases consumer against the exact session that committed the write,
+    /// compares counted stable row identities, restores a surviving active
+    /// selection, and posts each distinct membership announcement once.
+    @discardableResult
+    func refreshVisibleBasesAfterInAppWrite(
+        session: VaultSession,
+        changedPath: String
+    ) -> [String] {
+        guard currentSession === session else { return [] }
+
+        let selectedPath = activeBaseSelectionPath
+        let selectedIdentity = activeBaseSelectedRow.map {
+            BaseRowMembership.Identity(path: $0.filePath, taskOrdinal: $0.taskOrdinal)
+        }
+        let selectedColumnID = activeBaseSelectedColumn?.id
+        let changedBasePath = changedPath.lowercased().hasSuffix(".base")
+            ? changedPath
+            : nil
+        var announcements: [String] = []
+
+        func append(_ message: String) {
+            guard !announcements.contains(message) else { return }
+            announcements.append(message)
+        }
+
+        func appendMembershipChange(
+            previous: BaseRowMembership,
+            result: BasesResultSet?
+        ) {
+            let current = BaseRowMembership(rows: result?.rows ?? [])
+            guard previous != current, let summary = result?.audioSummary else { return }
+            append("Updated: \(summary)")
+        }
+
+        let registeredBases = baseDocuments.sorted { $0.key < $1.key }
+        for (key, document) in registeredBases {
+            guard currentSession === session, baseDocuments[key] === document else { continue }
+            let previous = BaseRowMembership(rows: document.result?.rows ?? [])
+            refreshLiveBaseDocument(
+                document,
+                session: session,
+                thisPath: nil,
+                changedBasePath: changedBasePath)
+            guard currentSession === session, baseDocuments[key] === document else { continue }
+            appendMembershipChange(previous: previous, result: document.result)
+        }
+
+        let registeredDashboards = dashboardDocuments.sorted { $0.key < $1.key }
+        for (id, document) in registeredDashboards {
+            guard currentSession === session, dashboardDocuments[id] === document else { continue }
+            let updates = document.refreshAfterInAppWrite(session: session)
+            guard currentSession === session, dashboardDocuments[id] === document else { continue }
+            updates.forEach(append)
+        }
+
+        refreshBasesDockAfterInAppWrite(
+            session: session,
+            changedBasePath: changedBasePath,
+            appendMembershipChange: appendMembershipChange,
+            append: append)
+
+        guard currentSession === session else { return [] }
+        restoreActiveBaseSelection(
+            path: selectedPath,
+            identity: selectedIdentity,
+            columnID: selectedColumnID)
+        lastBaseRefreshAnnouncements = announcements
+        announcements.forEach(postBaseActionAnnouncement)
+        return announcements
+    }
+
+    private func refreshLiveBaseDocument(
+        _ document: BaseDocument,
+        session: VaultSession,
+        thisPath: String?,
+        changedBasePath: String?
+    ) {
+        if document.handle == nil {
+            document.load(session: session, thisPath: thisPath)
+        } else if let changedBasePath,
+            document.source.filePath == changedBasePath
+        {
+            // `.base` definition edits reopen so view summaries and every
+            // separate native handle observe the new parsed definition.
+            // Indexed note/property writes never enter this lane.
+            document.load(session: session, thisPath: thisPath)
+        } else {
+            document.executeActiveView(session: session, thisPath: thisPath)
+        }
+    }
+
+    private func refreshBasesDockAfterInAppWrite(
+        session: VaultSession,
+        changedBasePath: String?,
+        appendMembershipChange: (BaseRowMembership, BasesResultSet?) -> Void,
+        append: (String) -> Void
+    ) {
+        guard currentSession === session, let target = basesDock.target else { return }
+        let thisPath = basesDock.thisPath
+        switch target {
+        case .base(let path, _):
+            let document: BaseDocument
+            if let existing = basesDockDocument, existing.source.filePath == path {
+                document = existing
+            } else {
+                basesDockDocument?.close(session: session)
+                document = BaseDocument(source: .file(path: path))
+                basesDockDocument = document
+            }
+            let previous = BaseRowMembership(rows: document.result?.rows ?? [])
+            refreshLiveBaseDocument(
+                document,
+                session: session,
+                thisPath: thisPath,
+                changedBasePath: changedBasePath)
+            guard currentSession === session,
+                basesDock.target == target,
+                basesDockDocument === document
+            else { return }
+            basesDock.lastMembershipSignature = BaseRowMembership(rows: document.result?.rows ?? [])
+            appendMembershipChange(previous, document.result)
+
+        case .savedQuery(let id, let name):
+            let source = BaseDocumentSource.savedQuery(id: id, name: name)
+            let document: BaseDocument
+            if let existing = basesDockDocument, existing.selectionKey == source.selectionKey {
+                document = existing
+            } else {
+                basesDockDocument?.close(session: session)
+                document = BaseDocument(source: source)
+                basesDockDocument = document
+            }
+            let previous = BaseRowMembership(rows: document.result?.rows ?? [])
+            refreshLiveBaseDocument(
+                document,
+                session: session,
+                thisPath: thisPath,
+                changedBasePath: changedBasePath)
+            guard currentSession === session,
+                basesDock.target == target,
+                basesDockDocument === document
+            else { return }
+            basesDock.lastMembershipSignature = BaseRowMembership(rows: document.result?.rows ?? [])
+            appendMembershipChange(previous, document.result)
+
+        case .dashboard(let id, let name):
+            let document: DashboardDocument
+            if let existing = basesDockDashboardDocument, existing.id == id {
+                document = existing
+            } else {
+                basesDockDashboardDocument?.close(session: session)
+                document = DashboardDocument(id: id, name: name)
+                basesDockDashboardDocument = document
+            }
+            let updates = document.refreshAfterInAppWrite(session: session, thisPath: thisPath)
+            guard currentSession === session,
+                basesDock.target == target,
+                basesDockDashboardDocument === document
+            else { return }
+            basesDock.lastMembershipSignature = document.membershipSignature
+            updates.forEach(append)
+        }
+    }
+
+    private func restoreActiveBaseSelection(
+        path: String?,
+        identity: BaseRowMembership.Identity?,
+        columnID: String?
+    ) {
+        guard let path, let identity,
+            let document = baseDocuments.values.first(where: { $0.selectionKey == path }),
+            let result = document.result,
+            let row = result.rows.first(where: {
+                $0.filePath == identity.path && $0.taskOrdinal == identity.taskOrdinal
+            })
+        else {
+            if path != nil { clearActiveBaseSelection() }
+            return
+        }
+        activeBaseSelectionPath = path
+        activeBaseSelectedRow = row
+        activeBaseSelectedColumn = columnID.flatMap { id in
+            result.columns.first { $0.id == id }
+        }
     }
 
     private func reloadDashboardDocumentsAfterSavedQueryChange() {
@@ -980,7 +1163,9 @@ extension AppState {
             for edit in try model.baseEditsForView(UInt32(doc.activeViewIndex)) {
                 try session.baseApplyEdit(handle: handle, edit: edit)
             }
-            doc.refresh(session: session)
+            refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: doc.source.filePath ?? doc.selectionKey)
             postAccessibilityAnnouncement("Saved builder changes to view.", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
@@ -999,6 +1184,7 @@ extension AppState {
         do {
             try session.saveQueryAsBase(queryJson: model.draft.queryJSON(), path: trimmed)
             refreshBaseQueries()
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: trimmed)
             postAccessibilityAnnouncement("Saved query as \(trimmed).", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
@@ -1141,6 +1327,9 @@ extension AppState {
         guard let doc = activeBaseDocument, let session = currentSession else { return }
         do {
             if let text = try doc.saveSortToView(session: session) {
+                refreshVisibleBasesAfterInAppWrite(
+                    session: session,
+                    changedPath: doc.source.filePath ?? doc.selectionKey)
                 postAccessibilityAnnouncement(text, priority: .medium)
             }
         } catch {
@@ -1453,12 +1642,15 @@ extension AppState {
             }
         }.value
 
+        guard currentSession === session else { return nil }
+
         switch outcome {
         case .success:
-            doc.executeActiveView(session: session)
-            let stillPresent = doc.result?.rows.contains {
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: row.filePath)
+            let stillRegistered = baseDocuments[doc.source.key] === doc
+            let stillPresent = stillRegistered && (doc.result?.rows.contains {
                 $0.filePath == row.filePath && $0.taskOrdinal == row.taskOrdinal
-            } ?? false
+            } ?? false)
             let text: String
             if stillPresent {
                 switch action {

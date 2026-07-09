@@ -374,6 +374,17 @@ final class AppState: ObservableObject {
     /// accessibility announcer is a no-op without a running NSApp.
     @Published var lastBaseActionAnnouncement: String?
 
+    /// Deduplicated membership announcements produced by the most recent
+    /// successful in-app write refresh. This is also the deterministic XCTest
+    /// surface for the no-spam gate; ordinary Bases action announcements stay
+    /// in `lastBaseActionAnnouncement`.
+    @Published var lastBaseRefreshAnnouncements: [String] = []
+
+    /// N3-07 race-test seam — always nil in production. Tests park a completed
+    /// write immediately before the session/path publish guard, switch vaults,
+    /// then release it to prove a stale session cannot refresh live documents.
+    var basesPostWritePublishGate: (() async -> Void)?
+
     /// Currently selected Bases row/column for registry commands whose
     /// invocation originates outside the grid's AppKit row-action callback.
     @Published var activeBaseSelectionPath: String?
@@ -695,7 +706,7 @@ final class AppState: ObservableObject {
         let parts: NotePartsBundle? = await Task.detached(priority: .userInitiated) {
             try? session.readNoteParts(path: path)
         }.value
-        guard let parts, loadedFilePath == path else { return }
+        guard let parts, currentSession === session, loadedFilePath == path else { return }
         currentNoteFMSource = parts.fmSource
         bodyByteOffset = Int(parts.bodyByteOffset)
         bodyLineOffset = Int(parts.bodyLineOffset)
@@ -2806,6 +2817,15 @@ final class AppState: ObservableObject {
             releaseAllBaseDocuments()
             releaseAllBaseEmbedDocuments()
             releaseAllDashboardDocuments()
+            // A directly reopened vault replaces the operation lifecycle too.
+            // Cancel/reset before installing the new session so an old task
+            // resuming later cannot own the new vault's saving/editing flags.
+            saveTask?.cancel()
+            saveTask = nil
+            isSaving = false
+            propertyEditTask?.cancel()
+            propertyEditTask = nil
+            isEditingProperty = false
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -3607,7 +3627,7 @@ final class AppState: ObservableObject {
         // on. Same reasoning as `loadCurrentLinks`: the newer task
         // already set the flag, and clearing it here would flicker
         // the loading state off briefly.
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled, currentSession === session, selectedFilePath == path else { return }
 
         switch result {
         case .success(let (parts, headings)):
@@ -5146,10 +5166,13 @@ final class AppState: ObservableObject {
             }
         }.value
 
+        if let gate = basesPostWritePublishGate { await gate() }
+
         // The user could have switched files (or closed the vault)
         // while we were saving. Drop the result in that case
         // rather than mutating state for a file the user has
         // already moved on from.
+        guard currentSession === session else { return }
         guard loadedFilePath == path else {
             isSaving = false
             return
@@ -5165,6 +5188,7 @@ final class AppState: ObservableObject {
             workspace.mirrorSaveResult(
                 path: path, baseline: contents,
                 contentHash: report.newContentHash)
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
             // U1-2: a close-tab request that chose "Save" completes its
             // close once the save lands cleanly.
             if let pending = pendingTabCloseAfterSave,
@@ -6152,9 +6176,12 @@ final class AppState: ObservableObject {
             }
         }.value
 
+        if let gate = basesPostWritePublishGate { await gate() }
+
         // If the user navigated away mid-edit, drop the result
         // rather than mutating state for a file the user has
         // already moved on from. Same shape as `performSave`.
+        guard currentSession === session else { return }
         guard loadedFilePath == path else {
             isEditingProperty = false
             return
@@ -6169,12 +6196,23 @@ final class AppState: ObservableObject {
             // by an fm-only edit, so the buffer + baseline stay untouched
             // (property edits are allowed while the body is dirty).
             await refreshNoteParts(session: session, path: path)
+            guard currentSession === session else { return }
+            guard loadedFilePath == path else {
+                isEditingProperty = false
+                return
+            }
             // Refresh the properties panel so the row updates in
             // place. `loadCurrentLinks` already runs one trip
             // through the SQLite mutex for backlinks + outgoing +
             // properties — reusing it keeps the panel coherent
             // without a second round-trip.
             await loadCurrentLinks(path: path)
+            guard currentSession === session else { return }
+            guard loadedFilePath == path else {
+                isEditingProperty = false
+                return
+            }
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
             if case .setSource = action {
                 propertiesSourceError = nil
                 propertiesSourceCommitted &+= 1

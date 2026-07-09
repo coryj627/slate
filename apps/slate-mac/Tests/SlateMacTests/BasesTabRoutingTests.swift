@@ -251,6 +251,164 @@ final class BasesTabRoutingTests: XCTestCase {
         return state
     }
 
+    private func makeLiveTaskSurfacesState() async throws -> (
+        state: AppState,
+        openBase: BaseDocument,
+        openDashboard: DashboardDocument,
+        dock: BaseDocument
+    ) {
+        let vault = tempDir.appendingPathComponent("live-task-vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Tasks
+                source: tasks
+                filters: "file.inFolder(\"Notes\")"
+                order:
+                  - task.text
+                  - task.status
+                  - task.file
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Tasks.base"))
+        try Data("# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+
+        var taskQuery = BaseQueryBuilderDraft()
+        taskQuery.source = .tasks
+        let queryID = try session.saveQuery(
+            name: "All tasks",
+            description: nil,
+            queryJson: taskQuery.queryJSON(),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Task dashboard",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+        state.refreshBaseQueries()
+
+        state.openBaseFile("Queries/Tasks.base")
+        let openBase = state.baseDocument(for: "Queries/Tasks.base")
+        state.openDashboard(id: dashboardID, name: "Task dashboard", target: .newTab)
+        let openDashboard = try XCTUnwrap(state.activeDashboardDocument)
+        state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+
+        state.openFile("Notes/Alpha.md", target: .newTab)
+        await state.noteLoadTask?.value
+        return (state, openBase, openDashboard, dock)
+    }
+
+    private func makeLivePropertySurfacesState() async throws -> (
+        state: AppState,
+        active: BaseDocument,
+        sibling: BaseDocument,
+        dashboard: DashboardDocument,
+        dock: BaseDocument,
+        alpha: BasesRow,
+        beta: BasesRow,
+        status: BasesColumn
+    ) {
+        let vault = tempDir.appendingPathComponent("live-property-vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Primary
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, status]
+              - type: table
+                name: Alternate
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, status]
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Edit.base"))
+        try Data("---\nstatus: active\n---\n# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("---\nstatus: active\n---\n# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
+
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+
+        var activeQuery = BaseQueryBuilderDraft()
+        activeQuery.source = .folder("Notes")
+        activeQuery.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .note("status"),
+                    operator: .equals,
+                    value: .text("active")))
+        ]
+        let queryID = try session.saveQuery(
+            name: "Active notes",
+            description: nil,
+            queryJson: activeQuery.queryJSON(),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Active dashboard",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+        state.refreshBaseQueries()
+
+        state.openSavedQuery(id: queryID, name: "Active notes")
+        let sibling = try XCTUnwrap(state.activeBaseDocument)
+        state.openDashboard(id: dashboardID, name: "Active dashboard", target: .newTab)
+        let dashboard = try XCTUnwrap(state.activeDashboardDocument)
+        state.openBaseFile("Queries/Edit.base", target: .newTab)
+        let active = try XCTUnwrap(state.activeBaseDocument)
+        state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+
+        active.selectView(index: 1, session: session)
+        let unfiltered = try XCTUnwrap(active.result)
+        let alpha = try XCTUnwrap(unfiltered.rows.first { $0.filePath == "Notes/Alpha.md" })
+        let beta = try XCTUnwrap(unfiltered.rows.first { $0.filePath == "Notes/Beta.md" })
+        let status = try XCTUnwrap(unfiltered.columns.first { $0.id == "status" })
+        _ = active.applyQuickFilter("Alpha", session: session)
+        _ = active.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: false),
+            session: session)
+        state.updateActiveBaseSelection(
+            path: active.selectionKey,
+            rowID: BaseGridRow.id(for: alpha),
+            columnIndex: 1,
+            result: active.result)
+        return (state, active, sibling, dashboard, dock, alpha, beta, status)
+    }
+
     func testOpenFileRoutesBaseToBasesTabAndLoadsDefaultView() async throws {
         let state = try await makeAppState()
 
@@ -269,6 +427,159 @@ final class BasesTabRoutingTests: XCTestCase {
 
         XCTAssertNil(state.currentNoteText, "the note loader must not read .base as markdown")
         XCTAssertNil(state.noteLoadError)
+    }
+
+    func testSavingNoteRefreshesOpenBaseDashboardAndDock() async throws {
+        let fixture = try await makeLiveTaskSurfacesState()
+        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Ship it\n")
+        await fixture.state.saveCurrentNote()?.value
+
+        XCTAssertEqual(fixture.openBase.result?.rows.count, 1)
+        XCTAssertEqual(fixture.openDashboard.sections[0].result?.rows.count, 1)
+        XCTAssertEqual(fixture.dock.result?.rows.count, 1)
+        XCTAssertEqual(
+            fixture.openBase.result?.rows.first?.filePath,
+            "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 task."])
+    }
+
+    func testGridSetAndDeleteRefreshSiblingSurfacesAndPreserveActiveState() async throws {
+        let fixture = try await makeLivePropertySurfacesState()
+
+        _ = await fixture.state.basesSetProperty(
+            row: fixture.alpha,
+            column: fixture.status,
+            value: .text(value: "archived"))
+
+        XCTAssertEqual(fixture.sibling.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(
+            fixture.dashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Beta.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(fixture.active.activeViewIndex, 1)
+        XCTAssertEqual(fixture.active.quickFilterText, "Alpha")
+        XCTAssertEqual(
+            fixture.active.sortState,
+            DataGridSortState(columnIndex: 1, ascending: false))
+        XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.activeBaseSelectedRow?.filePath, "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.activeBaseSelectedColumn?.id, "status")
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
+
+        _ = await fixture.state.basesDeleteProperty(
+            row: fixture.beta,
+            column: fixture.status)
+
+        XCTAssertTrue(fixture.sibling.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+        XCTAssertEqual(fixture.active.activeViewIndex, 1)
+        XCTAssertEqual(fixture.active.quickFilterText, "Alpha")
+        XCTAssertEqual(
+            fixture.active.sortState,
+            DataGridSortState(columnIndex: 1, ascending: false))
+        XCTAssertEqual(fixture.state.activeBaseSelectedRow?.filePath, "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: No results."])
+    }
+
+    func testPropertyPanelSetAndDeleteRefreshOpenBase() async throws {
+        let state = try await makeAppState()
+        state.openBaseFile("Queries/Reading.base")
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+        doc.selectView(index: 1, session: session)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        state.openFile("Notes/Alpha.md", target: .newTab)
+        await state.noteLoadTask?.value
+
+        await state.setProperty(
+            path: "Notes/Alpha.md",
+            key: "status",
+            value: .text(value: "done"))?.value
+
+        XCTAssertEqual(
+            Set(doc.result?.rows.map(\.filePath) ?? []),
+            Set(["Notes/Alpha.md", "Notes/Beta.md"]))
+        XCTAssertEqual(doc.activeViewIndex, 1)
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 2 notes."])
+
+        await state.deleteProperty(path: "Notes/Alpha.md", key: "status")?.value
+
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(doc.activeViewIndex, 1)
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
+    }
+
+    func testConflictedNoteSaveDoesNotRefreshOrAnnounce() async throws {
+        let fixture = try await makeLiveTaskSurfacesState()
+        let session = try XCTUnwrap(fixture.state.currentSession)
+        _ = try session.saveComposed(
+            path: "Notes/Alpha.md",
+            fmSource: "",
+            body: "# Alpha\n\n- [ ] External task\n",
+            expectedContentHash: fixture.state.currentNoteContentHash)
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Local task\n")
+
+        await fixture.state.saveCurrentNote()?.value
+
+        XCTAssertNotNil(fixture.state.currentSaveConflict)
+        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.state.lastBaseRefreshAnnouncements.isEmpty)
+    }
+
+    func testStaleSessionNoteSaveCannotPublishIntoReopenedVault() async throws {
+        let fixture = try await makeLiveTaskSurfacesState()
+        let entered = expectation(description: "save parked before Bases publish")
+        let (gateStream, release) = AsyncStream.makeStream(of: Void.self)
+        fixture.state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gateStream {}
+        }
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Stale task\n")
+        let staleSave = try XCTUnwrap(fixture.state.saveCurrentNote())
+        await fulfillment(of: [entered], timeout: 10)
+        fixture.state.basesPostWritePublishGate = nil
+
+        let replacement = tempDir.appendingPathComponent("replacement-vault")
+        try FileManager.default.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try Data("# Replacement\n".utf8).write(to: replacement.appendingPathComponent("note.md"))
+        fixture.state.openVault(at: replacement)
+        await fixture.state.scanTask?.value
+        fixture.state.openFile("note.md", target: .currentTab)
+        await fixture.state.noteLoadTask?.value
+
+        let replacementEntered = expectation(description: "replacement save parked")
+        let (replacementGate, releaseReplacement) = AsyncStream.makeStream(of: Void.self)
+        fixture.state.basesPostWritePublishGate = {
+            replacementEntered.fulfill()
+            for await _ in replacementGate {}
+        }
+        fixture.state.updateEditorText("# Replacement saved\n")
+        let replacementSave = try XCTUnwrap(fixture.state.saveCurrentNote())
+        await fulfillment(of: [replacementEntered], timeout: 10)
+        XCTAssertTrue(fixture.state.isSaving)
+
+        release.finish()
+        await staleSave.value
+
+        XCTAssertTrue(
+            fixture.state.isSaving,
+            "a stale old-session save must not clear the replacement session's in-flight flag")
+        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.state.lastBaseRefreshAnnouncements.isEmpty)
+
+        fixture.state.basesPostWritePublishGate = nil
+        releaseReplacement.finish()
+        await replacementSave.value
+        XCTAssertFalse(fixture.state.isSaving)
     }
 
     func testSummaryFormatterUsesSummaryCellsNotOnlyAudioSummary() async throws {

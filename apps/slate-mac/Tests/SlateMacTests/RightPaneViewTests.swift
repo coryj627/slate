@@ -187,6 +187,36 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertTrue(source.contains("BasesDockPanel()"))
     }
 
+    func testBaseRowMembershipUsesStableIdentityMultisetSemantics() {
+        let alpha = BasesRow(
+            filePath: "Notes/Alpha.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "Alpha")
+        let task = BasesRow(
+            filePath: "Notes/Tasks.md",
+            taskOrdinal: 2,
+            values: [],
+            audioDescription: "Task")
+
+        XCTAssertEqual(
+            BaseRowMembership(rows: [alpha, task, alpha]),
+            BaseRowMembership(rows: [alpha, alpha, task]),
+            "reordering alone is not a membership change")
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: [alpha, task, alpha]),
+            BaseRowMembership(rows: [alpha, task]),
+            "duplicate row identities are counted, not collapsed like a set")
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: []),
+            BaseRowMembership(rows: [alpha]),
+            "empty-to-nonempty is a membership change")
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: [task]),
+            BaseRowMembership(rows: []),
+            "nonempty-to-empty is a membership change")
+    }
+
     // MARK: - Persistence
 
     /// Unknown / absent tokens fall back to `.outline`; every known token

@@ -3,6 +3,30 @@
 
 import Foundation
 
+/// Order-independent, multiplicity-preserving membership for a Bases result.
+/// A task row is distinct from its owning note (and from sibling tasks) by its
+/// optional task ordinal. Keeping this reusable prevents tab, dashboard, and
+/// dock refresh paths from drifting back to ordered-array or plain-set checks.
+struct BaseRowMembership: Equatable {
+    struct Identity: Hashable {
+        let path: String
+        let taskOrdinal: UInt64?
+    }
+
+    static let empty = BaseRowMembership(rows: [])
+
+    private(set) var counts: [Identity: Int]
+
+    init(rows: [BasesRow]) {
+        counts = rows.reduce(into: [:]) { counts, row in
+            let identity = Identity(path: row.filePath, taskOrdinal: row.taskOrdinal)
+            counts[identity, default: 0] += 1
+        }
+    }
+
+    var isEmpty: Bool { counts.isEmpty }
+}
+
 enum BasesDockTarget: Equatable {
     case base(path: String, name: String)
     case savedQuery(id: String, name: String)
@@ -19,7 +43,7 @@ enum BasesDockTarget: Equatable {
 struct BasesDockState: Equatable {
     var target: BasesDockTarget?
     var thisPath: String?
-    var lastMembershipSignature: [String] = []
+    var lastMembershipSignature: BaseRowMembership = .empty
 }
 
 @MainActor
@@ -72,6 +96,21 @@ final class DashboardDocument: ObservableObject {
         }
     }
 
+    /// Re-execute every live section and return membership announcements for
+    /// sections whose counted row identities changed. Callers coalesce these
+    /// strings across dashboard/tab/dock surfaces before posting them.
+    func refreshAfterInAppWrite(session: VaultSession, thisPath: String? = nil) -> [String] {
+        let previous = Dictionary(
+            uniqueKeysWithValues: sections.map { ($0.id, $0.membership) })
+        refresh(session: session, thisPath: thisPath)
+        return sections.compactMap { section in
+            guard (previous[section.id] ?? .empty) != section.membership,
+                let summary = section.result?.audioSummary
+            else { return nil }
+            return "Updated: \(summary)"
+        }
+    }
+
     func close(session: VaultSession) {
         for section in sections {
             section.close(session: session)
@@ -82,8 +121,8 @@ final class DashboardDocument: ObservableObject {
         name = newName
     }
 
-    var membershipSignature: [String] {
-        sections.flatMap(\.membershipSignature)
+    var membershipSignature: BaseRowMembership {
+        BaseRowMembership(rows: sections.flatMap { $0.result?.rows ?? [] })
     }
 }
 
@@ -168,10 +207,8 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
         handle = nil
     }
 
-    var membershipSignature: [String] {
-        result?.rows.map { row in
-            row.taskOrdinal.map { "\(row.filePath)#\($0)" } ?? row.filePath
-        } ?? []
+    var membership: BaseRowMembership {
+        BaseRowMembership(rows: result?.rows ?? [])
     }
 
     private func viewIndex(session: VaultSession, handle: UInt64) -> Int {
