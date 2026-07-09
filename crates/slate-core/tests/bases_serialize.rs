@@ -87,6 +87,64 @@ fn edits_indented_and_flow_collections_without_invalid_yaml() {
 }
 
 #[test]
+fn rename_view_inserts_name_at_authored_item_indent() {
+    let source = "views:\n    - type: table\n";
+    let changed = edit(
+        source,
+        BaseEdit::RenameView {
+            view: 0,
+            name: "New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(parsed.views[0].name, "New");
+    assert_eq!(changed, "views:\n    - type: table\n      name: \"New\"\n");
+}
+
+#[test]
+fn set_display_name_stays_inside_four_space_indented_property() {
+    let source = "properties:\n    status:\n        type: text\nviews: []\n";
+    let changed = edit(
+        source,
+        BaseEdit::SetDisplayName {
+            property: "status".into(),
+            display_name: Some("State".into()),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed)
+    );
+    assert_eq!(
+        parsed
+            .properties
+            .iter()
+            .find(|(property, _)| property == "status")
+            .and_then(|(_, config)| config.display_name.as_deref()),
+        Some("State")
+    );
+    assert!(
+        !parsed
+            .properties
+            .iter()
+            .any(|(property, _)| property == "displayName")
+    );
+    assert_eq!(
+        changed,
+        "properties:\n    status:\n        type: text\n        displayName: \"State\"\nviews: []\n"
+    );
+}
+
+#[test]
 fn scalar_splice_preserves_comment_quote_and_final_newline() {
     let source = "views:\n  - type: table # keep-inline\n    name: 'Old'";
     let changed = edit(

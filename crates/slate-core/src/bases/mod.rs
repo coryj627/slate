@@ -758,7 +758,10 @@ fn replace_or_remove_display_name(
         }
         return Ok(());
     };
-    let child_regions = regions_in_span(&base.raw, property_region.region.span, 4);
+    let child_indent = child_mapping_indent(&property_region.region);
+    let child_regions = child_indent
+        .map(|indent| regions_in_span(&base.raw, property_region.region.span, indent))
+        .unwrap_or_default();
 
     match (display_name, child_regions.get("displayName")) {
         (Some(name), Some(region)) => {
@@ -766,16 +769,26 @@ fn replace_or_remove_display_name(
                 push_splice(
                     splices,
                     region.span,
-                    format!("    displayName: {}\n", quote_yaml_string(name)),
+                    format_fragment_for_region(
+                        region,
+                        &format!("displayName: {}", quote_yaml_string(name)),
+                    ),
                 );
             }
         }
         (Some(name), None) => {
+            let child_indent = child_indent
+                .ok_or_else(|| missing_span(format!("property {property:?} child indentation")))?;
+            let prefix = " ".repeat(child_indent);
             push_insertion_splice(
                 splices,
                 &base.raw,
                 property_region.region.span.end,
-                format!("    displayName: {}\n", quote_yaml_string(name)),
+                format_yaml_fragment(
+                    &format!("displayName: {}", quote_yaml_string(name)),
+                    &prefix,
+                    &prefix,
+                ),
             );
         }
         (None, Some(region)) => {
@@ -982,11 +995,12 @@ fn push_view_key_insertion(
     fragment: &str,
     splices: &mut Vec<Splice>,
 ) {
+    let (_, key_prefix) = region_prefixes(&view_spans.entry.text);
     push_insertion_splice(
         splices,
         &base.raw,
         view_spans.entry.span.end,
-        format_yaml_fragment(fragment, "    ", "    "),
+        format_yaml_fragment(fragment, &key_prefix, &key_prefix),
     );
 }
 
@@ -2718,6 +2732,15 @@ fn regions_in_span(source: &str, span: Span, indent: usize) -> HashMap<String, P
         regions.insert(key.clone(), preserved_region(source, *start, end));
     }
     regions
+}
+
+fn child_mapping_indent(region: &PreservedRegion) -> Option<usize> {
+    let mut indents = region
+        .text
+        .lines()
+        .filter_map(|line| key_on_line(line).map(|(_, indent)| indent));
+    let parent_indent = indents.next()?;
+    indents.filter(|indent| *indent > parent_indent).min()
 }
 
 fn trim_trailing_interstitial_lines(source: &str, start: usize, end: usize) -> usize {
