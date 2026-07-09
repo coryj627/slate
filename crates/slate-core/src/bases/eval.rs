@@ -34,6 +34,28 @@ pub type ResolvedFormulas = BTreeMap<String, Value>;
 const CALENDAR_DURATION_BASE: i64 = i64::MIN / 2;
 const CALENDAR_DURATION_RANGE: i64 = 1_000_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DurationParts {
+    calendar_months: i64,
+    fixed_ms: i64,
+}
+
+impl DurationParts {
+    const fn fixed(fixed_ms: i64) -> Self {
+        Self {
+            calendar_months: 0,
+            fixed_ms,
+        }
+    }
+
+    fn negated(self) -> Self {
+        Self {
+            calendar_months: self.calendar_months.saturating_neg(),
+            fixed_ms: self.fixed_ms.saturating_neg(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -390,12 +412,6 @@ fn add_values(lhs: Value, rhs: Value, ctx: &EvalCtx<'_>) -> Result<Value, EvalEr
             *date,
             duration_arg(lhs).expect("checked"),
         ))),
-        (Value::Date(date), Value::Duration(duration)) => {
-            Ok(Value::Date(add_duration(*date, *duration)))
-        }
-        (Value::Duration(duration), Value::Date(date)) => {
-            Ok(Value::Date(add_duration(*date, *duration)))
-        }
         _ if coerce_number(&lhs).zip(coerce_number(&rhs)).is_some() => {
             numeric_binary(&lhs, &rhs, ctx, |a, b| a + b)
         }
@@ -410,11 +426,8 @@ fn sub_values(lhs: Value, rhs: Value, ctx: &EvalCtx<'_>) -> Result<Value, EvalEr
     match (&lhs, &rhs) {
         (Value::Date(date), rhs) if duration_arg(rhs).is_some() => Ok(Value::Date(add_duration(
             *date,
-            negate_duration(duration_arg(rhs).expect("checked")),
+            duration_arg(rhs).expect("checked").negated(),
         ))),
-        (Value::Date(date), Value::Duration(duration)) => {
-            Ok(Value::Date(add_duration(*date, negate_duration(*duration))))
-        }
         (Value::Date(lhs), Value::Date(rhs)) => Ok(Value::Duration(lhs.epoch_ms - rhs.epoch_ms)),
         _ => numeric_binary(&lhs, &rhs, ctx, |a, b| a - b),
     }
@@ -504,11 +517,13 @@ fn eval_call(
 }
 
 fn eval_if(args: &[Expr], ctx: &EvalCtx<'_>, locals: &Locals<'_>) -> Result<Value, EvalError> {
-    expect_arity("if", args.len(), 3, 3)?;
+    expect_arity("if", args.len(), 2, 3)?;
     if eval_inner(&args[0], ctx, locals)?.is_truthy() {
         eval_inner(&args[1], ctx, locals)
+    } else if let Some(otherwise) = args.get(2) {
+        eval_inner(otherwise, ctx, locals)
     } else {
-        eval_inner(&args[2], ctx, locals)
+        Ok(Value::Null)
     }
 }
 
@@ -574,7 +589,7 @@ fn eval_global(
         }
         GlobalFn::List => {
             let values = eval_args(args, ctx, locals)?;
-            Ok(Value::List(values))
+            normalize_list(values)
         }
         GlobalFn::Object => {
             let values = eval_args(args, ctx, locals)?;
@@ -582,12 +597,8 @@ fn eval_global(
         }
         GlobalFn::File => {
             let values = eval_args(args, ctx, locals)?;
-            expect_arity("file", values.len(), 0, 1)?;
-            let path = values
-                .first()
-                .map(file_path_from_value)
-                .transpose()?
-                .unwrap_or_else(|| ctx.file.file_path.clone());
+            expect_arity("file", values.len(), 1, 1)?;
+            let path = file_path_from_value(&values[0])?;
             Ok(Value::File(FileHandleValue { path }))
         }
         GlobalFn::EscapeHtml => {
@@ -597,14 +608,14 @@ fn eval_global(
         }
         GlobalFn::Html | GlobalFn::Icon | GlobalFn::Image => {
             let values = eval_args(args, ctx, locals)?;
-            expect_arity(format!("{function:?}"), values.len(), 1, usize::MAX)?;
-            Ok(Value::Text(
-                values
-                    .iter()
-                    .map(value_to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ))
+            let name = match function {
+                GlobalFn::Html => "html",
+                GlobalFn::Icon => "icon",
+                GlobalFn::Image => "image",
+                _ => unreachable!(),
+            };
+            expect_arity(name, values.len(), 1, 1)?;
+            Ok(Value::Text(value_to_string(&values[0])))
         }
         GlobalFn::Min | GlobalFn::Max | GlobalFn::Sum | GlobalFn::Average => {
             let values = eval_args(args, ctx, locals)?;
@@ -666,9 +677,7 @@ fn eval_method(
             expect_arity("time", args.len(), 0, 0)?;
             if let Value::Date(date) = receiver {
                 let dt = date_time(date)?;
-                let ms = ((dt.hour() * 3_600 + dt.minute() * 60 + dt.second()) as i64 * 1000)
-                    + dt.timestamp_subsec_millis() as i64;
-                Ok(Value::Duration(ms))
+                Ok(Value::Text(dt.format("%H:%M:%S").to_string()))
             } else {
                 Ok(Value::Null)
             }
@@ -691,22 +700,18 @@ fn eval_method(
             Ok(Value::Bool(contains_value(&receiver, &args[0], false)))
         }
         MethodName::ContainsAll => {
-            expect_arity("containsAll", args.len(), 1, 1)?;
-            Ok(Value::Bool(match &args[0] {
-                Value::List(values) => values
-                    .iter()
+            expect_arity("containsAll", args.len(), 1, usize::MAX)?;
+            Ok(Value::Bool(
+                args.iter()
                     .all(|needle| contains_value(&receiver, needle, false)),
-                needle => contains_value(&receiver, needle, false),
-            }))
+            ))
         }
         MethodName::ContainsAny => {
-            expect_arity("containsAny", args.len(), 1, 1)?;
-            Ok(Value::Bool(match &args[0] {
-                Value::List(values) => values
-                    .iter()
+            expect_arity("containsAny", args.len(), 1, usize::MAX)?;
+            Ok(Value::Bool(
+                args.iter()
                     .any(|needle| contains_value(&receiver, needle, false)),
-                needle => contains_value(&receiver, needle, false),
-            }))
+            ))
         }
         MethodName::StartsWith => string_method(&receiver, "startsWith", args, 1, |s, args| {
             Value::Bool(s.starts_with(&value_to_string(&args[0])))
@@ -740,26 +745,7 @@ fn eval_method(
             Value::Text(s.repeat(n))
         }),
         MethodName::Slice => slice_value(receiver, args),
-        MethodName::Split => string_method(&receiver, "split", args, 1, |s, args| {
-            let sep = value_to_string(&args[0]);
-            let limit = args
-                .get(1)
-                .and_then(coerce_number)
-                .map(|n| n.max(0.0) as usize);
-            let mut parts = if sep.is_empty() {
-                s.chars()
-                    .map(|ch| Value::Text(ch.to_string()))
-                    .collect::<Vec<_>>()
-            } else {
-                s.split(&sep)
-                    .map(|part| Value::Text(part.to_string()))
-                    .collect::<Vec<_>>()
-            };
-            if let Some(limit) = limit {
-                parts.truncate(limit);
-            }
-            Value::List(parts)
-        }),
+        MethodName::Split => split_value(receiver, args),
         MethodName::Replace => replace_value(receiver, args),
         MethodName::Abs => number_method(receiver, "abs", args, 0, |n, _| Value::Number(n.abs())),
         MethodName::Ceil => {
@@ -789,14 +775,11 @@ fn eval_method(
             Ok(Value::Text(format!("{number:.precision$}")))
         }
         MethodName::Join => {
-            expect_arity("join", args.len(), 0, 1)?;
+            expect_arity("join", args.len(), 1, 1)?;
             let Value::List(values) = receiver else {
                 return Ok(Value::Null);
             };
-            let sep = args
-                .first()
-                .map(value_to_string)
-                .unwrap_or_else(|| ", ".to_string());
+            let sep = value_to_string(&args[0]);
             Ok(Value::Text(
                 values
                     .iter()
@@ -806,12 +789,11 @@ fn eval_method(
             ))
         }
         MethodName::Flat => {
-            expect_arity("flat", args.len(), 0, 1)?;
+            expect_arity("flat", args.len(), 0, 0)?;
             let Value::List(values) = receiver else {
                 return Ok(Value::Null);
             };
-            let depth = args.first().and_then(coerce_number).unwrap_or(1.0).max(0.0) as usize;
-            Ok(Value::List(flatten(values, depth)))
+            Ok(Value::List(flatten(values, 1)))
         }
         MethodName::Sort => {
             expect_arity("sort", args.len(), 0, 0)?;
@@ -1027,6 +1009,14 @@ fn eval_duration(values: &[Value]) -> Result<Value, EvalError> {
                 "expected text, number, duration, or null",
             ));
         }
+    })
+}
+
+fn normalize_list(mut values: Vec<Value>) -> Result<Value, EvalError> {
+    expect_arity("list", values.len(), 1, 1)?;
+    Ok(match values.pop().expect("arity checked") {
+        value @ Value::List(_) => value,
+        value => Value::List(vec![value]),
     })
 }
 
@@ -1265,6 +1255,51 @@ fn string_method(
         Value::Null => Ok(Value::Null),
         other => Ok(f(&value_to_string(other), args)),
     }
+}
+
+fn split_value(receiver: Value, args: &[Value]) -> Result<Value, EvalError> {
+    expect_arity("split", args.len(), 1, 2)?;
+    let text = match receiver {
+        Value::Text(text) => text,
+        Value::Null => return Ok(Value::Null),
+        other => value_to_string(&other),
+    };
+    let limit = match args.get(1) {
+        None => None,
+        Some(Value::Number(limit)) => Some(javascript_uint32(*limit) as usize),
+        Some(_) => return Err(invalid_arg("split", "expected numeric limit")),
+    };
+    let mut parts = match &args[0] {
+        Value::Text(separator) if separator.is_empty() => text
+            .chars()
+            .map(|character| Value::Text(character.to_string()))
+            .collect::<Vec<_>>(),
+        Value::Text(separator) => text
+            .split(separator)
+            .map(|part| Value::Text(part.to_string()))
+            .collect::<Vec<_>>(),
+        Value::Regex(pattern, flags) => build_regex(pattern, flags, "split")?
+            .split(&text)
+            .map(|part| Value::Text(part.to_string()))
+            .collect::<Vec<_>>(),
+        _ => {
+            return Err(invalid_arg(
+                "split",
+                "expected text or regular expression separator",
+            ));
+        }
+    };
+    if let Some(limit) = limit {
+        parts.truncate(limit);
+    }
+    Ok(Value::List(parts))
+}
+
+fn javascript_uint32(value: f64) -> u32 {
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    value.trunc().rem_euclid(u32::MAX as f64 + 1.0) as u32
 }
 
 fn number_method(
@@ -1516,10 +1551,17 @@ fn coerce_number(value: &Value) -> Option<f64> {
     }
 }
 
-fn duration_arg(value: &Value) -> Option<i64> {
+fn duration_arg(value: &Value) -> Option<DurationParts> {
     match value {
-        Value::Duration(value) => Some(*value),
-        Value::Text(text) => parse_duration_ms(text),
+        Value::Duration(value) => Some(
+            decode_calendar_months(*value)
+                .map(|calendar_months| DurationParts {
+                    calendar_months,
+                    fixed_ms: 0,
+                })
+                .unwrap_or_else(|| DurationParts::fixed(*value)),
+        ),
+        Value::Text(text) => parse_duration_parts(text),
         _ => None,
     }
 }
@@ -1668,8 +1710,14 @@ fn parse_date_text(text: &str, now_ms: i64) -> Option<DateValue> {
             has_time: true,
         }),
         "today" => Some(today_value(now_ms)),
-        "tomorrow" => Some(add_duration(today_value(now_ms), 86_400_000)),
-        "yesterday" => Some(add_duration(today_value(now_ms), -86_400_000)),
+        "tomorrow" => Some(add_duration(
+            today_value(now_ms),
+            DurationParts::fixed(86_400_000),
+        )),
+        "yesterday" => Some(add_duration(
+            today_value(now_ms),
+            DurationParts::fixed(-86_400_000),
+        )),
         _ => parse_iso_date(text),
     }
 }
@@ -1694,11 +1742,29 @@ fn parse_iso_date(text: &str) -> Option<DateValue> {
             has_time: true,
         });
     }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S") {
+        return Some(DateValue {
+            epoch_ms: Utc.from_utc_datetime(&dt).timestamp_millis(),
+            has_time: true,
+        });
+    }
     None
 }
 
 fn parse_duration_ms(text: &str) -> Option<i64> {
-    let mut total = 0i64;
+    let parts = parse_duration_parts(text)?;
+    if parts.calendar_months != 0 && parts.fixed_ms == 0 {
+        return Some(encode_calendar_months(parts.calendar_months));
+    }
+    Some(
+        parts
+            .fixed_ms
+            .saturating_add(parts.calendar_months.saturating_mul(30 * 86_400_000)),
+    )
+}
+
+fn parse_duration_parts(text: &str) -> Option<DurationParts> {
+    let mut fixed_ms = 0i64;
     let mut calendar_months = 0i64;
     let mut pos = 0usize;
     let bytes = text.as_bytes();
@@ -1745,15 +1811,12 @@ fn parse_duration_ms(text: &str) -> Option<i64> {
             }
             _ => return None,
         };
-        total = total.saturating_add((number * factor) as i64);
+        fixed_ms = fixed_ms.saturating_add((number * factor) as i64);
     }
-    if calendar_months != 0 && total == 0 {
-        return Some(encode_calendar_months(calendar_months));
-    }
-    if calendar_months != 0 {
-        total = total.saturating_add(calendar_months.saturating_mul(30 * 86_400_000));
-    }
-    Some(total)
+    Some(DurationParts {
+        calendar_months,
+        fixed_ms,
+    })
 }
 
 fn today_value(now_ms: i64) -> DateValue {
@@ -1774,13 +1837,15 @@ fn strip_time(date: DateValue) -> DateValue {
     today_value(date.epoch_ms)
 }
 
-fn add_duration(date: DateValue, duration_ms: i64) -> DateValue {
-    if let Some(months) = decode_calendar_months(duration_ms) {
-        return add_calendar_months(date, months);
-    }
+fn add_duration(date: DateValue, duration: DurationParts) -> DateValue {
+    let date = if duration.calendar_months == 0 {
+        date
+    } else {
+        add_calendar_months(date, duration.calendar_months)
+    };
     DateValue {
-        epoch_ms: date.epoch_ms.saturating_add(duration_ms),
-        has_time: date.has_time || duration_ms % 86_400_000 != 0,
+        epoch_ms: date.epoch_ms.saturating_add(duration.fixed_ms),
+        has_time: date.has_time || duration.fixed_ms % 86_400_000 != 0,
     }
 }
 
@@ -1788,11 +1853,22 @@ fn add_calendar_months(date: DateValue, months: i64) -> DateValue {
     let Ok(dt) = date_time(date) else {
         return date;
     };
-    let month0 = dt.year() as i64 * 12 + dt.month0() as i64 + months;
-    let year = month0.div_euclid(12) as i32;
+    let Some(month0) = i64::from(dt.year())
+        .checked_mul(12)
+        .and_then(|year_month| year_month.checked_add(i64::from(dt.month0())))
+        .and_then(|current_month| current_month.checked_add(months))
+    else {
+        return date;
+    };
+    let Ok(year) = i32::try_from(month0.div_euclid(12)) else {
+        return date;
+    };
     let month0 = month0.rem_euclid(12) as u32;
     let month = month0 + 1;
-    let day = dt.day().min(days_in_month(year, month));
+    let Some(last_day) = days_in_month(year, month) else {
+        return date;
+    };
+    let day = dt.day().min(last_day);
     let Some(naive) = NaiveDate::from_ymd_opt(year, month, day).and_then(|d| {
         d.and_hms_milli_opt(
             dt.hour(),
@@ -1809,14 +1885,14 @@ fn add_calendar_months(date: DateValue, months: i64) -> DateValue {
     }
 }
 
-fn days_in_month(year: i32, month: u32) -> u32 {
+fn days_in_month(year: i32, month: u32) -> Option<u32> {
     let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
+        (year.checked_add(1)?, 1)
     } else {
         (year, month + 1)
     };
-    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1).expect("valid month");
-    first_next.pred_opt().expect("previous day exists").day()
+    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
+    first_next.pred_opt().map(|date| date.day())
 }
 
 fn encode_calendar_months(months: i64) -> i64 {
@@ -1826,12 +1902,6 @@ fn encode_calendar_months(months: i64) -> i64 {
 fn decode_calendar_months(duration: i64) -> Option<i64> {
     let months = duration.saturating_sub(CALENDAR_DURATION_BASE);
     (months.abs() <= CALENDAR_DURATION_RANGE).then_some(months)
-}
-
-fn negate_duration(duration: i64) -> i64 {
-    decode_calendar_months(duration)
-        .map(|months| encode_calendar_months(-months))
-        .unwrap_or_else(|| duration.saturating_neg())
 }
 
 fn duration_to_ms(duration: i64) -> i64 {

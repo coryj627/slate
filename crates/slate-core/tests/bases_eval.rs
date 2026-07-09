@@ -112,6 +112,264 @@ fn structural_problems_fail_loud() {
 }
 
 #[test]
+fn two_argument_if_returns_the_true_branch() {
+    assert_eq!(value("if(true, 7)"), Value::Number(7.0));
+}
+
+#[test]
+fn two_argument_if_defaults_the_false_branch_to_null() {
+    assert_eq!(value("if(false, 7)"), Value::Null);
+}
+
+#[test]
+fn if_rejects_too_few_arguments() {
+    assert_eq!(error_message("if(true)"), "if expected 2..=3, got 1");
+}
+
+#[test]
+fn if_rejects_too_many_arguments() {
+    assert_eq!(
+        error_message("if(true, 1, 2, 3)"),
+        "if expected 2..=3, got 4"
+    );
+}
+
+#[test]
+fn list_wraps_a_scalar() {
+    assert_eq!(value("list(1)"), Value::List(vec![Value::Number(1.0)]));
+}
+
+#[test]
+fn list_returns_an_existing_list_unchanged() {
+    assert_eq!(
+        value("list([1, 2])"),
+        Value::List(vec![Value::Number(1.0), Value::Number(2.0)])
+    );
+}
+
+#[test]
+fn list_rejects_no_arguments() {
+    assert_eq!(error_message("list()"), "list expected 1, got 0");
+}
+
+#[test]
+fn list_rejects_multiple_arguments() {
+    assert_eq!(error_message("list(1, 2)"), "list expected 1, got 2");
+}
+
+#[test]
+fn string_contains_all_accepts_variadic_needles() {
+    assert_eq!(
+        value("\"abc\".containsAll(\"a\", \"c\")"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn list_contains_all_accepts_variadic_needles() {
+    assert_eq!(value("[1, 2, 3].containsAll(1, 3)"), Value::Bool(true));
+}
+
+#[test]
+fn string_contains_any_accepts_variadic_needles() {
+    assert_eq!(
+        value("\"abc\".containsAny(\"x\", \"c\")"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn list_contains_any_accepts_variadic_needles() {
+    assert_eq!(value("[1, 2, 3].containsAny(4, 2)"), Value::Bool(true));
+}
+
+#[test]
+fn contains_all_rejects_no_needles() {
+    assert_eq!(
+        error_message("\"abc\".containsAll()"),
+        "containsAll expected at least 1, got 0"
+    );
+}
+
+#[test]
+fn contains_any_rejects_no_needles() {
+    assert_eq!(
+        error_message("\"abc\".containsAny()"),
+        "containsAny expected at least 1, got 0"
+    );
+}
+
+#[test]
+fn split_accepts_a_text_separator() {
+    assert_eq!(value("\"a,b,c\".split(\",\")"), text_list(&["a", "b", "c"]));
+}
+
+#[test]
+fn split_limit_retains_the_first_n_elements() {
+    assert_eq!(value("\"a,b,c\".split(\",\", 2)"), text_list(&["a", "b"]));
+}
+
+#[test]
+fn split_accepts_a_regular_expression_separator() {
+    assert_eq!(
+        value(r#""a, b,c".split(/,\s*/)"#),
+        text_list(&["a", "b", "c"])
+    );
+}
+
+#[test]
+fn split_zero_limit_returns_an_empty_list() {
+    assert_eq!(value("\"a,b,c\".split(\",\", 0)"), text_list(&[]));
+}
+
+#[test]
+fn split_negative_limit_uses_javascript_uint32_behavior() {
+    assert_eq!(
+        value("\"a,b,c\".split(\",\", -1)"),
+        text_list(&["a", "b", "c"])
+    );
+}
+
+#[test]
+fn split_rejects_a_non_numeric_limit() {
+    assert_eq!(
+        error_message("\"a,b,c\".split(\",\", \"two\")"),
+        "split: expected numeric limit"
+    );
+}
+
+#[test]
+fn split_rejects_a_non_text_or_regex_separator() {
+    assert_eq!(
+        error_message("\"a,b,c\".split(1)"),
+        "split: expected text or regular expression separator"
+    );
+}
+
+#[test]
+fn split_rejects_no_arguments() {
+    assert_eq!(
+        error_message("\"a,b,c\".split()"),
+        "split expected 1..=2, got 0"
+    );
+}
+
+#[test]
+fn split_rejects_too_many_arguments() {
+    assert_eq!(
+        error_message("\"a,b,c\".split(\",\", 1, 2)"),
+        "split expected 1..=2, got 3"
+    );
+}
+
+#[test]
+fn date_parses_the_documented_space_separated_datetime() {
+    assert_eq!(
+        value("date(\"2026-07-08 15:04:05\").format(\"YYYY-MM-DD HH:mm:ss\")"),
+        Value::Text("2026-07-08 15:04:05".into())
+    );
+}
+
+#[test]
+fn mixed_calendar_and_fixed_duration_clamps_month_before_adding_day() {
+    assert_eq!(
+        value("(date(\"2026-01-31\") + \"1M 1d\").format(\"YYYY-MM-DD\")"),
+        Value::Text("2026-03-01".into())
+    );
+}
+
+#[test]
+fn out_of_range_calendar_duration_is_total() {
+    assert_eq!(
+        value(
+            "(date(\"2026-01-31\") + \"999999999999999999999999999999999999M\").format(\"YYYY-MM-DD\")"
+        ),
+        Value::Text("2026-01-31".into())
+    );
+}
+
+#[test]
+fn date_time_returns_an_hh_mm_ss_string() {
+    assert_eq!(
+        value("date(\"2026-07-08T15:04:05\").time()"),
+        Value::Text("15:04:05".into())
+    );
+}
+
+#[test]
+fn file_rejects_no_arguments() {
+    assert_eq!(error_message("file()"), "file expected 1, got 0");
+}
+
+#[test]
+fn file_rejects_multiple_arguments() {
+    assert_eq!(
+        error_message("file(\"a.md\", \"b.md\")"),
+        "file expected 1, got 2"
+    );
+}
+
+#[test]
+fn html_rejects_no_arguments() {
+    assert_eq!(error_message("html()"), "html expected 1, got 0");
+}
+
+#[test]
+fn html_rejects_multiple_arguments() {
+    assert_eq!(
+        error_message("html(\"a\", \"b\")"),
+        "html expected 1, got 2"
+    );
+}
+
+#[test]
+fn image_rejects_no_arguments() {
+    assert_eq!(error_message("image()"), "image expected 1, got 0");
+}
+
+#[test]
+fn image_rejects_multiple_arguments() {
+    assert_eq!(
+        error_message("image(\"a\", \"b\")"),
+        "image expected 1, got 2"
+    );
+}
+
+#[test]
+fn icon_rejects_no_arguments() {
+    assert_eq!(error_message("icon()"), "icon expected 1, got 0");
+}
+
+#[test]
+fn icon_rejects_multiple_arguments() {
+    assert_eq!(
+        error_message("icon(\"a\", \"b\")"),
+        "icon expected 1, got 2"
+    );
+}
+
+#[test]
+fn join_rejects_no_arguments() {
+    assert_eq!(error_message("[1, 2].join()"), "join expected 1, got 0");
+}
+
+#[test]
+fn join_rejects_multiple_arguments() {
+    assert_eq!(
+        error_message("[1, 2].join(\",\", \";\")"),
+        "join expected 1, got 2"
+    );
+}
+
+#[test]
+fn flat_rejects_arguments() {
+    assert_eq!(
+        error_message("[[1], [2]].flat(1)"),
+        "flat expected 0, got 1"
+    );
+}
+
+#[test]
 fn evaluates_pinned_global_functions() {
     let vault = TestVault::default();
     let warnings = WarningSink::default();
@@ -169,7 +427,7 @@ fn evaluates_pinned_global_functions() {
         Value::Text("<b>x</b>".into())
     );
     assert_eq!(
-        eval_src("list(1, 2, 3).length", &ctx).unwrap(),
+        eval_src("list([1, 2, 3]).length", &ctx).unwrap(),
         Value::Number(3.0)
     );
     assert_eq!(eval_src("min(3, 2, 5)", &ctx).unwrap(), Value::Number(2.0));
@@ -302,6 +560,33 @@ proptest! {
 fn eval_src(source: &str, ctx: &EvalCtx<'_>) -> Result<Value, EvalError> {
     let expr = parse_expr(source).expect(source);
     eval(&expr, ctx)
+}
+
+fn value(source: &str) -> Value {
+    let vault = TestVault::default();
+    let warnings = WarningSink::default();
+    let file = fixture_row("Projects/Alpha.md");
+    let formulas = ResolvedFormulas::default();
+    eval_src(source, &ctx(&file, None, &formulas, &vault, &warnings)).unwrap()
+}
+
+fn error_message(source: &str) -> String {
+    let vault = TestVault::default();
+    let warnings = WarningSink::default();
+    let file = fixture_row("Projects/Alpha.md");
+    let formulas = ResolvedFormulas::default();
+    eval_src(source, &ctx(&file, None, &formulas, &vault, &warnings))
+        .unwrap_err()
+        .to_string()
+}
+
+fn text_list(values: &[&str]) -> Value {
+    Value::List(
+        values
+            .iter()
+            .map(|value| Value::Text((*value).to_string()))
+            .collect(),
+    )
 }
 
 fn eval_expr_source() -> impl Strategy<Value = String> {
