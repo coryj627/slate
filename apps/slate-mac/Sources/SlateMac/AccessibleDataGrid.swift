@@ -289,6 +289,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     private var displayEntries: [DisplayEntry] = []
     private(set) var activeSort: DataGridSortState?
     private(set) var lastFocusRequest = 0
+    private var isSyncingSelectionFromBinding = false
 
     // Type-ahead state (first-column prefix match, 1s window).
     private var typeAheadBuffer = ""
@@ -535,7 +536,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
 
     nonisolated func tableViewSelectionDidChange(_ notification: Notification) {
         MainActor.assumeIsolated {
-            guard let table else { return }
+            guard !isSyncingSelectionFromBinding, let table else { return }
             let row = table.selectedRow
             grid.selection?.wrappedValue = rowValue(atDisplayIndex: row)?.id
         }
@@ -549,13 +550,25 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         guard let wanted = grid.selection?.wrappedValue,
             let index = displayIndex(forRowID: wanted)
         else {
-            if table.selectedRow != -1 { table.deselectAll(nil) }
+            if table.selectedRow != -1 {
+                mirrorTableSelectionFromBinding {
+                    table.deselectAll(nil)
+                }
+            }
             return
         }
         if table.selectedRow != index {
-            table.selectRowIndexes([index], byExtendingSelection: false)
-            table.scrollRowToVisible(index)
+            mirrorTableSelectionFromBinding {
+                table.selectRowIndexes([index], byExtendingSelection: false)
+                table.scrollRowToVisible(index)
+            }
         }
+    }
+
+    private func mirrorTableSelectionFromBinding(_ action: () -> Void) {
+        isSyncingSelectionFromBinding = true
+        defer { isSyncingSelectionFromBinding = false }
+        action()
     }
 
     private func syncEditRequestToTable() {

@@ -231,6 +231,34 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(table.selectedRow, -1, "dangling id deselects")
     }
 
+    /// A SwiftUI update can ask the AppKit table to mirror an already-current
+    /// selection binding. That sync must not write the same value back through
+    /// the binding, because callers may publish selection state and trigger a
+    /// layout/update feedback loop while `updateNSView` is still on the stack.
+    @MainActor
+    func testBindingDrivenSelectionSyncDoesNotWriteBackDuringReload() {
+        var selected: Int? = 1
+        var bindingWrites = 0
+        let binding = Binding<Int?>(
+            get: { selected },
+            set: {
+                bindingWrites += 1
+                selected = $0
+            })
+        let grid = makeGrid(rows: Self.people, selection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+
+        coordinator.reload(grid: makeGrid(rows: Self.people, selection: binding))
+
+        XCTAssertEqual(table.selectedRow, 1, "binding still drives the table selection")
+        XCTAssertEqual(bindingWrites, 0, "syncing from binding must not write back to it")
+    }
+
     @MainActor
     func testVirtualizedDataSourceAtScaleBudget() {
         // §K: 2,000 rows through the data source — row count is O(1),
