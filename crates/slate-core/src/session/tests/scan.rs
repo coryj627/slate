@@ -144,6 +144,22 @@ fn scan_discovers_base_slate_query_and_dataview_fences_only() {
 }
 
 #[test]
+fn indexed_base_fence_body_is_original_bytes() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"```base\r\nviews: []\r\n```\r\n")
+            .unwrap();
+    });
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let source_text: String = conn
+        .query_row("SELECT source_text FROM bases_blocks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(source_text.as_bytes(), b"views: []\r\n");
+}
+
+#[test]
 fn census_bases_scan_incremental() {
     let (tmp, session) = make_vault(|p| {
         p.write_file("one.base", b"views:\n  - type: table\n    name: One\n")

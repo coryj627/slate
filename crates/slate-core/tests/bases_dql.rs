@@ -1,9 +1,17 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use rusqlite::{Connection, params};
+use slate_core::CancelToken;
 use slate_core::bases::dql::{DqlWarningKind, parse_dql};
-use slate_core::bases::expr::{BinaryOp, Expr, ExprKind, PropertyRef, TaskField};
+use slate_core::bases::engine::{CellValue, EngineCtx, execute};
+use slate_core::bases::eval::Value;
+use slate_core::bases::expr::{BinaryOp, Callee, Expr, ExprKind, Lit, PropertyRef, TaskField};
 use slate_core::bases::{FilterNode, QuerySource, RowSource, ViewSpec};
+use slate_core::db::migrate;
+
+const OUTGOING_DQL: &str = include_str!("fixtures/dql/outgoing.dql");
+const FUNCTIONS_DQL: &str = include_str!("fixtures/dql/functions.dql");
 
 #[test]
 fn table_without_id_maps_columns_sources_where_sort_and_limit() {
@@ -105,6 +113,73 @@ fn from_sources_support_outgoing_and_boolean_negation() {
         invalid.filters.as_ref().expect("invalid source filter"),
         "invalid FROM source"
     ));
+}
+
+#[test]
+fn dql_explicit_outgoing_resolves_extensionless_wikilink_membership() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(&conn, OUTGOING_DQL, None);
+
+    assert_eq!(row_paths(&result), ["Target.md"]);
+    assert_eq!(result.error, None);
+}
+
+#[test]
+fn dql_dynamic_outgoing_uses_this_file_membership() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(&conn, "LIST\nFROM outgoing([[]])\n", Some("Hub.md"));
+
+    assert_eq!(row_paths(&result), ["Target.md"]);
+    assert_eq!(result.error, None);
+}
+
+#[test]
+fn dql_regextest_converts_literal_pattern_and_evaluates() {
+    let conn = dql_fixture_conn();
+    let (query, warnings) = parse_dql(FUNCTIONS_DQL);
+    assert_eq!(warnings, []);
+    let ExprKind::Call {
+        callee: Callee::Method { receiver, .. },
+        ..
+    } = &query.formulas[0].1.kind
+    else {
+        panic!("regextest should convert to a regex method call");
+    };
+    assert!(matches!(
+        receiver.kind,
+        ExprKind::Lit(Lit::Regex {
+            ref pattern,
+            ref flags,
+        }) if pattern == "^foo" && flags.is_empty()
+    ));
+
+    let result = execute_dql(&conn, FUNCTIONS_DQL, None);
+    assert_eq!(first_value(&result, 0), &Value::Bool(true));
+    assert_eq!(result.error, None);
+}
+
+#[test]
+fn dql_nonliteral_regex_pattern_fails_loudly() {
+    let (query, warnings) =
+        parse_dql("TABLE WITHOUT ID regextest(pattern, file.name) AS \"Match\"\n");
+
+    assert!(warnings.iter().any(|warning| {
+        warning.kind == DqlWarningKind::UnsupportedConstruct
+            && warning.message.contains("literal regex pattern")
+    }));
+    assert!(matches!(
+        query.formulas[0].1.kind,
+        ExprKind::Unsupported { .. }
+    ));
+}
+
+#[test]
+fn dql_negative_truncates_toward_zero() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(&conn, FUNCTIONS_DQL, None);
+
+    assert_eq!(first_value(&result, 1), &Value::Number(-1.0));
+    assert_eq!(result.error, None);
 }
 
 #[test]
@@ -324,6 +399,62 @@ fn parse_dql_is_total_and_deterministic_for_arbitrary_text() {
             "parse_dql should be deterministic for {case:?}"
         );
     }
+}
+
+fn dql_fixture_conn() -> Connection {
+    let mut conn = Connection::open_in_memory().expect("open in-memory database");
+    migrate(&mut conn).expect("migrate schema");
+    for (id, path) in [(1_i64, "Hub.md"), (2, "Target.md"), (3, "Other.md")] {
+        conn.execute(
+            "INSERT INTO files (
+                id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                content_hash, parser_version, indexed_at_ms, is_markdown
+             )
+             VALUES (?1, ?2, ?2, 'md', 0, 0, 0, ?3, 1, 0, 1)",
+            params![id, path, format!("hash-{id}")],
+        )
+        .expect("insert DQL fixture file");
+    }
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         )
+         VALUES (1, 0, 'Target.md', 'Target', NULL, 'wikilink', 0, 0, '', 0, 10)",
+        [],
+    )
+    .expect("insert outgoing DQL fixture link");
+    conn
+}
+
+fn execute_dql(
+    conn: &Connection,
+    source: &str,
+    this_path: Option<&str>,
+) -> slate_core::bases::engine::BasesResultSet {
+    let (query, warnings) = parse_dql(source);
+    assert_eq!(warnings, [], "fixture should convert without loss");
+    execute(
+        &query,
+        conn,
+        &EngineCtx {
+            this_path: this_path.map(str::to_string),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute converted DQL")
+}
+
+fn row_paths(result: &slate_core::bases::engine::BasesResultSet) -> Vec<&str> {
+    result.rows.iter().map(|row| row.path.as_str()).collect()
+}
+
+fn first_value(result: &slate_core::bases::engine::BasesResultSet, column: usize) -> &Value {
+    let Some(CellValue::Value(value)) = result.rows[0].cells.get(column) else {
+        panic!("expected first-row value in column {column}: {result:?}");
+    };
+    value
 }
 
 fn filter_contains_task_status_eq_x(filter: &FilterNode) -> bool {

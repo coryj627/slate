@@ -557,10 +557,17 @@ fn eval_global(
         GlobalFn::Link => {
             let values = eval_args(args, ctx, locals)?;
             expect_arity("link", values.len(), 1, 2)?;
-            let target = expect_text_like("link", &values[0])?;
+            let (target, resolved_path) = match &values[0] {
+                Value::File(file) => (file.path.clone(), Some(file.path.clone())),
+                value => {
+                    let target = expect_text_like("link", value)?;
+                    let resolved_path = ctx.vault.resolve_link(&target);
+                    (target, resolved_path)
+                }
+            };
             let display = values.get(1).map(value_to_string);
             Ok(Value::Link(LinkValue {
-                resolved_path: ctx.vault.resolve_link(&target),
+                resolved_path,
                 target,
                 display,
             }))
@@ -760,6 +767,9 @@ fn eval_method(
         }
         MethodName::Floor => {
             number_method(receiver, "floor", args, 0, |n, _| Value::Number(n.floor()))
+        }
+        MethodName::Trunc => {
+            number_method(receiver, "trunc", args, 0, |n, _| Value::Number(n.trunc()))
         }
         MethodName::Round => {
             expect_arity("round", args.len(), 0, 1)?;

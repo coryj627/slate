@@ -326,14 +326,29 @@ pub fn execute(
 
     let warnings = WarningSink::default();
     let fts = FtsMatchCache::default();
-    let load_deps = CandidateLoadDeps {
-        fts: &fts,
-        warnings: &warnings,
-        cancel,
-    };
     let vault = SqlVaultLookup {
         conn,
         fts: &fts,
+        cancel,
+        source_path: ctx.this_path.as_deref().unwrap_or_default(),
+        link_index: RefCell::new(None),
+        link_resolutions: RefCell::new(BTreeMap::new()),
+    };
+    let mut resolved_query = None;
+    if let QuerySource::Linked { from_path, depth } = &query.source
+        && let Some(resolved_path) = vault.resolve_link(from_path)
+    {
+        let mut canonical = query.clone();
+        canonical.source = QuerySource::Linked {
+            from_path: resolved_path,
+            depth: *depth,
+        };
+        resolved_query = Some(canonical);
+    }
+    let query = resolved_query.as_ref().unwrap_or(query);
+    let load_deps = CandidateLoadDeps {
+        fts: &fts,
+        warnings: &warnings,
         cancel,
     };
     let this = ctx
@@ -2537,19 +2552,37 @@ struct SqlVaultLookup<'a> {
     conn: &'a Connection,
     fts: &'a FtsMatchCache,
     cancel: &'a CancelToken,
+    source_path: &'a str,
+    link_index: RefCell<Option<crate::InMemoryVaultIndex>>,
+    link_resolutions: RefCell<BTreeMap<String, Option<String>>>,
 }
 
 impl VaultLookup for SqlVaultLookup<'_> {
     fn resolve_link(&self, target: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT path FROM files WHERE path = ?1 OR name = ?1 LIMIT 1",
-                params![target],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
+        if let Some(resolved) = self.link_resolutions.borrow().get(target) {
+            return resolved.clone();
+        }
+        if self.link_index.borrow().is_none() {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT path FROM files ORDER BY path")
+                .ok()?;
+            let paths = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .ok()?
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            *self.link_index.borrow_mut() = Some(crate::InMemoryVaultIndex::new(paths));
+        }
+        let index = self.link_index.borrow();
+        let resolved = match crate::resolve_link(target, None, self.source_path, index.as_ref()?) {
+            crate::ResolvedLink::Resolved { target_path, .. } => Some(target_path),
+            crate::ResolvedLink::Unresolved { .. } | crate::ResolvedLink::External => None,
+        };
+        self.link_resolutions
+            .borrow_mut()
+            .insert(target.to_string(), resolved.clone());
+        resolved
     }
 
     fn file_matches(&self, path: &str, query: &str) -> Result<bool, EvalError> {

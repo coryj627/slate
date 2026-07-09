@@ -484,7 +484,9 @@ fn parse_limit(
 }
 
 fn parse_source(source: &str, offset: usize) -> SourceParse {
-    if let Some(link) = parse_standalone_outgoing(source) {
+    if let Some(link) =
+        parse_standalone_outgoing(source).filter(|link| !link.is_empty() && link != "#")
+    {
         return SourceParse {
             source: Some(QuerySource::Linked {
                 from_path: link,
@@ -732,11 +734,7 @@ fn parse_standalone_outgoing(source: &str) -> Option<String> {
         return None;
     }
     let link = inner[2..inner.len() - 2].trim();
-    if link.is_empty() || link == "#" {
-        Some("this".to_string())
-    } else {
-        Some(link.to_string())
-    }
+    Some(link.to_string())
 }
 
 fn pipeline_order_is_safe(commands: &[CommandKind]) -> bool {
@@ -1087,8 +1085,20 @@ fn map_function_call(name: &str, original_args: &str, args: &[String]) -> Result
         "round" => method("round"),
         "floor" => one("floor"),
         "ceil" => one("ceil"),
-        "trunc" => one("floor"),
-        "regextest" | "regexmatch" => method("matches"),
+        "trunc" => one("trunc"),
+        "regextest" | "regexmatch" => {
+            require_arg_count(name, args, 2)?;
+            let raw_args = split_top_level(original_args, ',');
+            let raw_pattern = raw_args
+                .first()
+                .map(|arg| arg.trim())
+                .ok_or_else(|| format!("{name} requires a literal regex pattern"))?;
+            let (pattern, _) = parse_quoted_with_len(raw_pattern)
+                .filter(|(_, consumed)| raw_pattern[*consumed..].trim().is_empty())
+                .ok_or_else(|| format!("{name} requires a literal regex pattern"))?;
+            let pattern = pattern.replace('/', "\\/");
+            Ok(format!("(/{pattern}/).matches({})", args[1]))
+        }
         "regexreplace" => method("replace"),
         "split" => method("split"),
         "striptime" => one("date"),

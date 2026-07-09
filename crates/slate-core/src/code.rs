@@ -103,6 +103,9 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
     let mut current_lang: Option<String> = None;
     let mut current_buffer = String::new();
     let mut current_start: Option<usize> = None;
+    let mut current_body_start: Option<usize> = None;
+    let mut current_body_end: Option<usize> = None;
+    let mut current_fenced = false;
     let mut in_code = false;
     // #387: count newlines once over the source as block starts arrive in
     // document order, instead of re-counting from byte 0 per block.
@@ -115,8 +118,12 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
                 in_code = true;
                 current_buffer.clear();
                 current_start = Some(range.start);
+                current_body_start = None;
+                current_body_end = None;
+                current_fenced = matches!(kind, CodeBlockKind::Fenced(_));
                 current_lang = match kind {
                     CodeBlockKind::Fenced(tag) => {
+                        current_body_start = Some(fenced_body_start(source, range.start));
                         let s = tag.into_string();
                         let trimmed = s.trim();
                         if trimmed.is_empty() {
@@ -130,8 +137,15 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
             }
             Event::End(TagEnd::CodeBlock) if in_code => {
                 let start = current_start.take().unwrap_or(0);
+                let block_source = if current_fenced {
+                    let body_start = current_body_start.take().unwrap_or(start);
+                    let body_end = current_body_end.take().unwrap_or(body_start);
+                    source[body_start..body_end].to_string()
+                } else {
+                    std::mem::take(&mut current_buffer)
+                };
                 out.push(RawCodeBlock {
-                    source: std::mem::take(&mut current_buffer),
+                    source: block_source,
                     language: current_lang.take(),
                     line: lines.line_at(start),
                     byte_offset: start as u32,
@@ -139,12 +153,23 @@ pub fn extract_code_blocks(source: &str) -> Vec<RawCodeBlock> {
                 in_code = false;
             }
             Event::Text(s) if in_code => {
-                current_buffer.push_str(&s);
+                if current_fenced {
+                    current_body_end =
+                        Some(current_body_end.map_or(range.end, |end| end.max(range.end)));
+                } else {
+                    current_buffer.push_str(&s);
+                }
             }
             _ => {}
         }
     }
     out
+}
+
+fn fenced_body_start(source: &str, fence_start: usize) -> usize {
+    source[fence_start..]
+        .find('\n')
+        .map_or(source.len(), |newline| fence_start + newline + 1)
 }
 
 /// Largest code-block source we hand to tree-sitter (audit #245 M3).
@@ -657,6 +682,15 @@ mod tests {
         let blocks = extract_code_blocks(src);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].language, None);
+    }
+
+    #[test]
+    fn extracts_fenced_block_source_as_original_bytes() {
+        let src = "```base\r\nviews: []\r\n```\r\n";
+        let blocks = extract_code_blocks(src);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].source.as_bytes(), b"views: []\r\n");
     }
 
     #[test]

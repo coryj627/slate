@@ -1,0 +1,1 @@
+TABLE WITHOUT ID regextest("^foo", "foobar") AS "Regex", trunc(-1.2) AS "Trunc"

@@ -302,6 +302,66 @@ views:
 }
 
 #[test]
+fn dql_outgoing_executes_explicit_and_dynamic_source_membership() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Hub.md", b"[[Target]]\n").unwrap();
+        p.write_file("Target.md", b"# Target\n").unwrap();
+        p.write_file("Other.md", b"# Other\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let cases = [
+        (
+            include_str!("../../../tests/fixtures/dql/outgoing.dql"),
+            None,
+        ),
+        ("LIST\nFROM outgoing([[]])\n", Some("Hub.md".to_string())),
+    ];
+    for (source, this_path) in cases {
+        let handle = session.open_dql(source, this_path).unwrap();
+        let result = session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap();
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.file_path.as_str())
+                .collect::<Vec<_>>(),
+            ["Target.md"],
+            "source was {source:?}"
+        );
+        assert_eq!(result.view_error, None);
+    }
+}
+
+#[test]
+fn dql_regex_and_trunc_survive_base_conversion() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Note.md", b"# Note\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let converted = session
+        .dql_as_base(include_str!("../../../tests/fixtures/dql/functions.dql"))
+        .unwrap();
+    let handle = session.open_base_inline(&converted, None).unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+
+    assert_eq!(result.view_error, None);
+    assert_eq!(
+        result.rows[0]
+            .values
+            .iter()
+            .map(|value| value.display.as_str())
+            .collect::<Vec<_>>(),
+        ["true", "-1"]
+    );
+}
+
+#[test]
 fn base_view_query_json_returns_the_view_ast_for_builder_loading() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(

@@ -6867,6 +6867,7 @@ fn method_source(method: crate::bases::expr::MethodName) -> &'static str {
         MethodName::Abs => "abs",
         MethodName::Ceil => "ceil",
         MethodName::Floor => "floor",
+        MethodName::Trunc => "trunc",
         MethodName::Round => "round",
         MethodName::ToFixed => "toFixed",
         MethodName::Join => "join",
