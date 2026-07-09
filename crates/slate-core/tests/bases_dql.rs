@@ -168,6 +168,35 @@ fn dql_regextest_converts_literal_pattern_and_evaluates() {
 }
 
 #[test]
+fn dql_user_marker_shaped_string_is_not_promoted_to_regex() {
+    let old_marker = format!("{}slate-dql-regex:^foo{}", '\u{f8ff}', '\u{f8fe}');
+    let source = format!(
+        "TABLE WITHOUT ID \"{old_marker}\".matches(\"foobar\") AS \"Authored\", regextest(\"^foo\", \"foobar\") AS \"Synthesized\"\n"
+    );
+    let (query, warnings) = parse_dql(&source);
+
+    assert_eq!(warnings, []);
+    let ExprKind::Call {
+        callee: Callee::Method { receiver, .. },
+        ..
+    } = &query.formulas[0].1.kind
+    else {
+        panic!("authored marker should remain a string method receiver");
+    };
+    assert!(matches!(
+        &receiver.kind,
+        ExprKind::Lit(Lit::String(value)) if value == &old_marker
+    ));
+    assert_eq!(regex_pattern(&query.formulas[1].1), "^foo");
+
+    let conn = dql_fixture_conn();
+    let result = execute_dql(&conn, &source, None);
+    assert_eq!(first_value(&result, 0), &Value::Null);
+    assert_eq!(first_value(&result, 1), &Value::Bool(true));
+    assert_eq!(result.error, None);
+}
+
+#[test]
 fn dql_regex_literals_preserve_escapes_in_ast_and_execution() {
     let source = r#"TABLE WITHOUT ID regextest("\d+", "123") AS "Digits", regextest("a/b", "a/b") AS "Slash", regextest("a\"b", "a\"b") AS "Quote", regextest("\\\\", "\\") AS "Backslash", regextest("\n", "\n") AS "Newline", regextest("\r", "\r") AS "Carriage return", regextest("\t", "\t") AS "Tab"
 "#;

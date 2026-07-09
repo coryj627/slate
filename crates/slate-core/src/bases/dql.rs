@@ -71,8 +71,28 @@ struct SourceParse {
     filter: Option<FilterNode>,
 }
 
-const DQL_REGEX_MARKER_PREFIX: &str = "\u{f8ff}slate-dql-regex:";
-const DQL_REGEX_MARKER_SUFFIX: char = '\u{f8fe}';
+const DQL_REGEX_TOKEN_STEM: &str = "\u{f8ff}slate-dql-regex:";
+const DQL_REGEX_PLACEHOLDER_SUFFIX: char = '\u{f8fe}';
+
+struct TranslatedExpr {
+    source: String,
+    regex_token: String,
+}
+
+/// Pick a deterministic token absent from the authored expression so only
+/// placeholders synthesized during this translation can carry its prefix.
+fn dql_regex_token(source: &str) -> String {
+    let mut id = 0usize;
+    loop {
+        let token = format!("{DQL_REGEX_TOKEN_STEM}{id}:");
+        if !source.contains(&token) {
+            return token;
+        }
+        id = id
+            .checked_add(1)
+            .expect("DQL regex placeholder namespace exhausted");
+    }
+}
 
 /// Parse a Dataview block query into a `SlateQuery`.
 ///
@@ -770,9 +790,9 @@ fn convert_expr_or_unsupported(
     warnings: &mut Vec<DqlWarning>,
 ) -> Expr {
     match translate_expr(source, task_context) {
-        Ok(translated) => match parse_expr(&translated) {
+        Ok(translated) => match parse_expr(&translated.source) {
             Ok(mut expr) => {
-                restore_dql_regex_literals(&mut expr);
+                restore_dql_regex_literals(&mut expr, &translated.regex_token);
                 let mut reasons = Vec::new();
                 collect_unsupported_reasons(&expr, &mut reasons);
                 reasons.sort();
@@ -844,7 +864,7 @@ fn collect_unsupported_reasons(expr: &Expr, reasons: &mut Vec<String>) {
     }
 }
 
-fn restore_dql_regex_literals(expr: &mut Expr) {
+fn restore_dql_regex_literals(expr: &mut Expr, regex_token: &str) {
     match &mut expr.kind {
         ExprKind::Call { callee, args } => {
             match callee {
@@ -853,9 +873,11 @@ fn restore_dql_regex_literals(expr: &mut Expr) {
                     name: MethodName::Matches,
                 } => {
                     let pattern = match &receiver.kind {
-                        ExprKind::Lit(Lit::String(marker)) => marker
-                            .strip_prefix(DQL_REGEX_MARKER_PREFIX)
-                            .and_then(|marker| marker.strip_suffix(DQL_REGEX_MARKER_SUFFIX))
+                        ExprKind::Lit(Lit::String(placeholder)) => placeholder
+                            .strip_prefix(regex_token)
+                            .and_then(|placeholder| {
+                                placeholder.strip_suffix(DQL_REGEX_PLACEHOLDER_SUFFIX)
+                            })
                             .map(str::to_string),
                         _ => None,
                     };
@@ -865,45 +887,63 @@ fn restore_dql_regex_literals(expr: &mut Expr) {
                             flags: String::new(),
                         });
                     } else {
-                        restore_dql_regex_literals(receiver);
+                        restore_dql_regex_literals(receiver, regex_token);
                     }
                 }
-                Callee::Method { receiver, .. } => restore_dql_regex_literals(receiver),
+                Callee::Method { receiver, .. } => {
+                    restore_dql_regex_literals(receiver, regex_token)
+                }
                 Callee::Global(_) => {}
             }
-            args.iter_mut().for_each(restore_dql_regex_literals);
+            args.iter_mut()
+                .for_each(|arg| restore_dql_regex_literals(arg, regex_token));
         }
-        ExprKind::Lit(Lit::List(items)) => items.iter_mut().for_each(restore_dql_regex_literals),
-        ExprKind::Lit(Lit::Object(items)) => items
+        ExprKind::Lit(Lit::List(items)) => items
             .iter_mut()
-            .for_each(|(_, value)| restore_dql_regex_literals(value)),
+            .for_each(|item| restore_dql_regex_literals(item, regex_token)),
+        ExprKind::Lit(Lit::Object(items)) => items.iter_mut().for_each(|(_, value)| {
+            restore_dql_regex_literals(value, regex_token);
+        }),
         ExprKind::Index { base, index } => {
-            restore_dql_regex_literals(base);
-            restore_dql_regex_literals(index);
+            restore_dql_regex_literals(base, regex_token);
+            restore_dql_regex_literals(index, regex_token);
         }
-        ExprKind::Field { base, .. } => restore_dql_regex_literals(base),
-        ExprKind::Unary { rhs, .. } => restore_dql_regex_literals(rhs),
+        ExprKind::Field { base, .. } => restore_dql_regex_literals(base, regex_token),
+        ExprKind::Unary { rhs, .. } => restore_dql_regex_literals(rhs, regex_token),
         ExprKind::Binary { lhs, rhs, .. } => {
-            restore_dql_regex_literals(lhs);
-            restore_dql_regex_literals(rhs);
+            restore_dql_regex_literals(lhs, regex_token);
+            restore_dql_regex_literals(rhs, regex_token);
         }
         ExprKind::ListExpr {
             base, body, init, ..
         } => {
-            restore_dql_regex_literals(base);
-            restore_dql_regex_literals(body);
+            restore_dql_regex_literals(base, regex_token);
+            restore_dql_regex_literals(body, regex_token);
             if let Some(init) = init {
-                restore_dql_regex_literals(init);
+                restore_dql_regex_literals(init, regex_token);
             }
         }
         ExprKind::Lit(_) | ExprKind::Prop(_) | ExprKind::Unsupported { .. } => {}
     }
 }
 
-fn translate_expr(source: &str, task_context: bool) -> Result<String, String> {
+fn translate_expr(source: &str, task_context: bool) -> Result<TranslatedExpr, String> {
+    let regex_token = dql_regex_token(source);
+    let source = translate_expr_with_token(source, task_context, &regex_token)?;
+    Ok(TranslatedExpr {
+        source,
+        regex_token,
+    })
+}
+
+fn translate_expr_with_token(
+    source: &str,
+    task_context: bool,
+    regex_token: &str,
+) -> Result<String, String> {
     check_unsupported_fields(source, task_context)?;
     let rewritten = rewrite_typeof_comparisons(source)?;
-    let rewritten = rewrite_function_calls(&rewritten)?;
+    let rewritten = rewrite_function_calls(&rewritten, regex_token)?;
     let rewritten = rewrite_string_repeat(&rewritten);
     let rewritten = rewrite_special_fields(&rewritten, task_context);
     let rewritten = rewrite_boolean_words_and_equality(&rewritten);
@@ -953,7 +993,7 @@ fn check_unsupported_fields(source: &str, task_context: bool) -> Result<(), Stri
     Ok(())
 }
 
-fn rewrite_function_calls(source: &str) -> Result<String, String> {
+fn rewrite_function_calls(source: &str, regex_token: &str) -> Result<String, String> {
     let mut out = String::new();
     let bytes = source.as_bytes();
     let mut pos = 0usize;
@@ -985,9 +1025,9 @@ fn rewrite_function_calls(source: &str) -> Result<String, String> {
                 let args_src = &source[probe + 1..close];
                 let args = split_top_level(args_src, ',')
                     .into_iter()
-                    .map(|arg| rewrite_function_calls(arg.trim()))
+                    .map(|arg| rewrite_function_calls(arg.trim(), regex_token))
                     .collect::<Result<Vec<_>, _>>()?;
-                out.push_str(&map_function_call(name, args_src, &args)?);
+                out.push_str(&map_function_call(name, args_src, &args, regex_token)?);
                 pos = close + 1;
             } else {
                 out.push_str(name);
@@ -1072,7 +1112,12 @@ fn rewrite_typeof_comparisons(source: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn map_function_call(name: &str, original_args: &str, args: &[String]) -> Result<String, String> {
+fn map_function_call(
+    name: &str,
+    original_args: &str,
+    args: &[String],
+    regex_token: &str,
+) -> Result<String, String> {
     let lower = name.to_ascii_lowercase();
     let one = |method: &str| -> Result<String, String> {
         require_arg_count(name, args, 1)?;
@@ -1138,8 +1183,8 @@ fn map_function_call(name: &str, original_args: &str, args: &[String]) -> Result
         "unique" => one("unique"),
         "flat" => method("flat"),
         "slice" | "substring" => method("slice"),
-        "filter" => map_lambda_list_expr(name, original_args, args, "filter"),
-        "map" => map_lambda_list_expr(name, original_args, args, "map"),
+        "filter" => map_lambda_list_expr(name, original_args, args, "filter", regex_token),
+        "map" => map_lambda_list_expr(name, original_args, args, "map", regex_token),
         "startswith" => method("startsWith"),
         "endswith" => method("endsWith"),
         "round" => method("round"),
@@ -1156,10 +1201,10 @@ fn map_function_call(name: &str, original_args: &str, args: &[String]) -> Result
             let (pattern, _) = parse_quoted_with_len(raw_pattern)
                 .filter(|(_, consumed)| raw_pattern[*consumed..].trim().is_empty())
                 .ok_or_else(|| format!("{name} requires a literal regex pattern"))?;
-            let marker = format!("{DQL_REGEX_MARKER_PREFIX}{pattern}{DQL_REGEX_MARKER_SUFFIX}");
+            let placeholder = format!("{regex_token}{pattern}{DQL_REGEX_PLACEHOLDER_SUFFIX}");
             Ok(format!(
                 "({}).matches({})",
-                quote_expr_string(&marker),
+                quote_expr_string(&placeholder),
                 args[1]
             ))
         }
@@ -1193,6 +1238,7 @@ fn map_lambda_list_expr(
     original_args: &str,
     args: &[String],
     method: &str,
+    regex_token: &str,
 ) -> Result<String, String> {
     require_arg_count(name, args, 2)?;
     let raw_args = split_top_level(original_args, ',');
@@ -1204,7 +1250,7 @@ fn map_lambda_list_expr(
         return Err(format!("unsupported DQL lambda in {name}"));
     };
     let body = replace_word(body, param, "value");
-    let body = translate_expr(&body, false)?;
+    let body = translate_expr_with_token(&body, false, regex_token)?;
     Ok(format!("({}).{method}({body})", args[0]))
 }
 

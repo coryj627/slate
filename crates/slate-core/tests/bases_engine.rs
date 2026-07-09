@@ -1146,6 +1146,26 @@ fn linked_source_preserves_exact_public_path_over_contextual_collision() {
             .collect::<Vec<_>>(),
         ["RootTarget.md"]
     );
+
+    conn.execute("DELETE FROM files WHERE path = 'Hub.md'", [])
+        .expect("remove exact canonical linked source");
+    let missing = execute(
+        &linked,
+        &conn,
+        &EngineCtx {
+            this_path: Some("Notes/View.base".to_string()),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute missing canonical linked source");
+
+    assert_eq!(missing.error, None);
+    assert!(
+        missing.rows.is_empty(),
+        "missing canonical Hub.md must not retarget to Notes/Hub.md: {:?}",
+        missing.rows
+    );
 }
 
 #[test]
