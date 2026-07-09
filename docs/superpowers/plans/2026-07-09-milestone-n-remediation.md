@@ -670,6 +670,7 @@ git commit -m "fix(bases): complete builder and dashboard contracts [N4-01 N4-02
 ### Task 9: Replace smoke gates with generated censuses and close performance evidence (N-VER-01, N-VER-02)
 
 **Files:**
+- Modify: `crates/slate-core/src/bases/engine.rs`
 - Modify: `crates/slate-core/tests/bases_serialize.rs`
 - Modify: `crates/slate-core/tests/bases_dql.rs`
 - Modify: `crates/slate-core/tests/bases_engine.rs`
@@ -708,7 +709,9 @@ proptest! {
 Add a checked-in DQL golden corpus; generated pushdown/interpreter equivalence;
 generated save/rename/delete/cache/fail-loud/read-only interleavings; a 10k scan
 mutation census under `SLATE_CENSUS_FULL=1`; and deterministic cancellation that
-signals after work begins and asserts completion within 100 ms.
+parks on a test-only engine probe after materialization begins, cancels, releases
+the probe, and asserts completion within 100 ms. Do not use sleeps as the
+"work began" signal.
 
 - [ ] **Step 2: Run default and full census modes**
 
@@ -722,7 +725,10 @@ Expected: all gates pass; logs show full scale and under-load cancellation.
 
 Run: `cargo bench -p slate-core --bench bases_bench -- --sample-size 20`
 
-Run the Milestone N-relevant `scan_bench` cases on the same machine/sample size.
+Move hard-coded group sample sizes into CLI-overridable Criterion defaults so the
+command really records 20 samples. Run the 10k/50k `first_open_and_scan` cases at
+the pre-N commit `b05f86f` and at the Task 9 tip on the same machine/sample size;
+the scan harness/fixture is byte-identical across those revisions.
 Read Criterion's `median/point_estimate` from each `estimates.json`; do not copy the
 mean. Compare the scan p50 against the recorded pre-N baseline and calculate the
 percentage delta.
