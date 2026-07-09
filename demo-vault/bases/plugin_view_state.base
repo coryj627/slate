@@ -1,0 +1,9 @@
+views:
+  - type: kanban
+    name: "Board"
+    columnWidths:
+      title: 240
+    slate:
+      selected: true
+    order:
+      - file.name
