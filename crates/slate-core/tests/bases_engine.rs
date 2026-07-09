@@ -1059,6 +1059,116 @@ fn temporal_sources_and_custom_summaries_never_cache() {
 }
 
 #[test]
+fn hidden_now_summary_column_disables_cache() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let cache = BasesQueryCache::default();
+
+    let mut now_summary = query();
+    now_summary.columns = vec![column("file.path")];
+    now_summary.summaries = vec![(
+        "now()".to_string(),
+        SummaryRef::Builtin("earliest".to_string()),
+    )];
+    let first_now = execute(
+        &now_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 100,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute first hidden now summary");
+    let second_now = execute(
+        &now_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 200,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute second hidden now summary");
+    assert!(matches!(
+        &first_now.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 100
+    ));
+    assert!(matches!(
+        &second_now.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 200
+    ));
+    assert!(!first_now.cache_hit);
+    assert!(!second_now.cache_hit);
+}
+
+#[test]
+fn hidden_today_summary_column_invalidates_cache_across_days() {
+    const DAY_MS: i64 = 86_400_000;
+
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let cache = BasesQueryCache::default();
+
+    let mut today_summary = query();
+    today_summary.columns = vec![column("file.path")];
+    today_summary.summaries = vec![(
+        "today()".to_string(),
+        SummaryRef::Builtin("earliest".to_string()),
+    )];
+    let first_today = execute(
+        &today_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS * 10 + 100,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute first hidden today summary");
+    let same_day_today = execute(
+        &today_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS * 10 + 200,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute same-day hidden today summary");
+    let next_day_today = execute(
+        &today_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS * 11,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute next-day hidden today summary");
+    assert!(matches!(
+        &first_today.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == DAY_MS * 10
+    ));
+    assert!(same_day_today.cache_hit);
+    assert!(matches!(
+        &next_day_today.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == DAY_MS * 11
+    ));
+    assert!(!next_day_today.cache_hit);
+}
+
+#[test]
 fn cache_keys_stable_queries_by_generation_and_today_queries_by_day() {
     let conn = migrated_conn();
     seed_index(&conn);

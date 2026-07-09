@@ -2545,6 +2545,10 @@ fn query_mentions_global(query: &SlateQuery, needle: GlobalFn) -> bool {
             .columns
             .iter()
             .any(|column| expr_mentions_global(&column_expr(&column.id), needle))
+        || query
+            .summaries
+            .iter()
+            .any(|(column_id, _)| expr_mentions_global(&column_expr(column_id), needle))
 }
 
 fn filter_mentions_global(filter: &FilterNode, needle: GlobalFn) -> bool {
