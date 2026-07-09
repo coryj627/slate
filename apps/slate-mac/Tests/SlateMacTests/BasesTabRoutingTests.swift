@@ -1042,6 +1042,46 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md", "Notes/Alpha.md"])
     }
 
+    func testSaveSortPreservesOwnerStateWhileReloadingSameBaseDockMetadata() async throws {
+        let fixture = try await makeLivePropertySurfacesState()
+        fixture.state.dockBaseFileToSidebar(
+            path: "Queries/Edit.base",
+            refreshDelayNanoseconds: 0)
+        await fixture.state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(fixture.state.basesDockDocument)
+        let ownerHandle = try XCTUnwrap(fixture.active.handle)
+        let dockHandle = try XCTUnwrap(dock.handle)
+        XCTAssertFalse(
+            fixture.active.views[1].slateStateJson?.contains(#""sort""#) == true)
+        XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+
+        fixture.state.basesSaveSortToView()
+
+        XCTAssertEqual(
+            fixture.active.handle,
+            ownerHandle,
+            "saveSortToView already refreshes its handle; the shared funnel must not reopen it")
+        XCTAssertEqual(fixture.active.activeViewIndex, 1)
+        XCTAssertEqual(fixture.active.quickFilterText, "Alpha")
+        XCTAssertEqual(
+            fixture.active.sortState,
+            DataGridSortState(columnIndex: 1, ascending: false))
+        XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.activeBaseSelectedRow?.filePath, "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.activeBaseSelectedColumn?.id, "status")
+
+        XCTAssertNotEqual(
+            dock.handle,
+            dockHandle,
+            "the separately opened dock handle must reload the edited .base definition")
+        let ownerSlateState = try XCTUnwrap(fixture.active.views[1].slateStateJson)
+        let dockSlateState = try XCTUnwrap(dock.views[1].slateStateJson)
+        XCTAssertEqual(dockSlateState, ownerSlateState)
+        XCTAssertTrue(dockSlateState.contains(#""sort""#), dockSlateState)
+        XCTAssertTrue(dockSlateState.contains(#""property":"status""#), dockSlateState)
+        XCTAssertTrue(dockSlateState.contains(#""direction":"DESC""#), dockSlateState)
+    }
+
     func testReplacingBaseTabReleasesUnreferencedBaseDocument() async throws {
         let state = try await makeAppState()
         state.openFile("Queries/Reading.base", target: .currentTab)

@@ -800,7 +800,8 @@ extension AppState {
     @discardableResult
     func refreshVisibleBasesAfterInAppWrite(
         session: VaultSession,
-        changedPath: String
+        changedPath: String,
+        alreadyRefreshedDefinitionOwner: BaseDocument? = nil
     ) -> [String] {
         guard currentSession === session else { return [] }
 
@@ -831,6 +832,15 @@ extension AppState {
         let registeredBases = baseDocuments.sorted { $0.key < $1.key }
         for (key, document) in registeredBases {
             guard currentSession === session, baseDocuments[key] === document else { continue }
+            if let changedBasePath,
+                document === alreadyRefreshedDefinitionOwner,
+                document.source.filePath == changedBasePath
+            {
+                // `BaseDocument.saveSortToView` already refreshes this exact
+                // handle's view metadata and result while preserving its
+                // transient UI state. Sibling/dock handles still reload below.
+                continue
+            }
             let previous = BaseRowMembership(rows: document.result?.rows ?? [])
             refreshLiveBaseDocument(
                 document,
@@ -1329,7 +1339,8 @@ extension AppState {
             if let text = try doc.saveSortToView(session: session) {
                 refreshVisibleBasesAfterInAppWrite(
                     session: session,
-                    changedPath: doc.source.filePath ?? doc.selectionKey)
+                    changedPath: doc.source.filePath ?? doc.selectionKey,
+                    alreadyRefreshedDefinitionOwner: doc)
                 postAccessibilityAnnouncement(text, priority: .medium)
             }
         } catch {
