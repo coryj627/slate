@@ -1,0 +1,12 @@
+# Obsidian-authored shape: comments and non-canonical top-level order.
+views:
+  - name: "Reading"
+    type: list
+    # undocumented state must survive
+    rowHeight: 28
+    order:
+      - file.name
+      - note.status
+filters: "file.hasTag(\"reading\")"
+formulas:
+  ppu: 'price / pages'

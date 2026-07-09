@@ -1,0 +1,26 @@
+{
+  "vault": {
+    "name": "Slate demo vault",
+    "version": 1
+  },
+  "citations": {
+    "bibliography": "library.bib",
+    "cite_style": "ieee",
+    "available_styles": [
+      "ieee",
+      "chicago-author-date",
+      "apa"
+    ],
+    "csl_directory": "csl"
+  },
+  "templates": {
+    "directory": "templates",
+    "daily_note": "daily-note.md",
+    "meeting_note": "meeting-note.md"
+  },
+  "rendering": {
+    "math": "mathcat",
+    "diagrams": "mermaid",
+    "code": "tree-sitter"
+  }
+}

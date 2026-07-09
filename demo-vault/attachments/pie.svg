@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="A simple line drawing of a pie with one slice removed">
+  <title>Pie with one slice removed</title>
+  <desc>A circular pie viewed from above with a wedge-shaped slice cut out of the upper-right quadrant.</desc>
+
+  <!-- Pie body: a circle with a wedge cut out from 12 o'clock to 3 o'clock (90° wedge) -->
+  <!-- Path: start at center, line to top (0,-80 from center), arc clockwise to right (80,0 from center), close -->
+  <path d="M 100 100 L 100 20 A 80 80 0 0 1 180 100 Z"
+        fill="none" stroke="#333" stroke-width="2" stroke-linejoin="round"/>
+
+  <!-- The rest of the pie: arc from 3 o'clock around to 12 o'clock -->
+  <path d="M 180 100 A 80 80 0 1 1 100 20"
+        fill="none" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- A small notch detail suggesting filling -->
+  <circle cx="100" cy="100" r="55" fill="none" stroke="#999" stroke-width="1" stroke-dasharray="3 3"/>
+</svg>

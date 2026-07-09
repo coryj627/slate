@@ -1,0 +1,16 @@
+{
+	"nodes":[
+		{"id":"good-1","type":"text","text":"first good card","x":0,"y":0,"width":100,"height":50},
+		{"id":"missing-x","type":"text","text":"no x coordinate","y":0,"width":100,"height":50},
+		42,
+		{"id":"future-video","type":"video","src":"clip.mp4","x":200,"y":0,"width":100,"height":50},
+		{"id":"good-1","type":"text","text":"duplicate id","x":300,"y":0,"width":100,"height":50},
+		{"id":"good-2","type":"text","text":"second good card","x":0,"y":100,"width":100,"height":50,"color":"totally-custom"}
+	],
+	"edges":[
+		{"id":"edge-good","fromNode":"good-1","toNode":"good-2"},
+		{"id":"edge-no-target","fromNode":"good-1"},
+		{"id":"edge-dangling","fromNode":"good-2","toNode":"missing-x"},
+		{"id":"edge-odd-side","fromNode":"good-2","toNode":"good-1","fromSide":"diagonal","toEnd":"sparkle"}
+	]
+}

@@ -1,0 +1,11 @@
+{
+	"slateMeta":{"generator":"future-slate","version":9},
+	"nodes":[
+		{"id":"n1","zIndex":3,"type":"text","text":"has unknown keys","x":0,"y":0,"width":100,"height":50,"futureFlag":true,"nested":{"b":1,"a":[2,3],"c":{"z":"last","m":"mid"}}},
+		{"id":"n2","type":"file","file":"a.md","x":0,"y":100,"width":100,"height":50,"altText":"a spare diagram"}
+	],
+	"edges":[
+		{"id":"e1","fromNode":"n1","toNode":"n2","waypoints":[[0,0],[10,10]],"label":"typed"}
+	],
+	"trailingRootKey":"still here"
+}

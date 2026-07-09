@@ -1,0 +1,20 @@
+{
+	"nodes":[
+		{"id":"grp-research","type":"group","x":-40,"y":-40,"width":560,"height":400,"label":"Research"},
+		{"id":"card-question","type":"text","text":"# Core question\nCan a spatial thinking tool be fully accessible?","x":0,"y":0,"width":240,"height":140,"color":"1"},
+		{"id":"card-evidence","type":"text","text":"Evidence so far","x":260,"y":0,"width":220,"height":140},
+		{"id":"card-notes","type":"file","file":"notes/canvas research.md","x":0,"y":180,"width":240,"height":140,"color":"4"},
+		{"id":"card-spec","type":"file","file":"specs/interaction.md","subpath":"#Announcement grammar","x":260,"y":180,"width":220,"height":140},
+		{"id":"grp-inspiration","type":"group","x":600,"y":-40,"width":320,"height":400,"label":"Inspiration","background":"assets/corkboard.png","backgroundStyle":"cover"},
+		{"id":"card-jsoncanvas","type":"link","url":"https://jsoncanvas.org/spec/1.0","x":640,"y":0,"width":240,"height":140,"color":"5"},
+		{"id":"card-diagram","type":"file","file":"assets/architecture diagram.png","x":640,"y":180,"width":240,"height":140},
+		{"id":"card-loose","type":"text","text":"Unfiled thought","x":0,"y":460,"width":200,"height":100,"color":"#8850c8"}
+	],
+	"edges":[
+		{"id":"edge-q-evidence","fromNode":"card-question","fromSide":"right","toNode":"card-evidence","toSide":"left","label":"supports"},
+		{"id":"edge-q-notes","fromNode":"card-question","fromSide":"bottom","toNode":"card-notes","toSide":"top"},
+		{"id":"edge-notes-spec","fromNode":"card-notes","toNode":"card-spec","fromEnd":"arrow","toEnd":"arrow","label":"cross-checks"},
+		{"id":"edge-evidence-json","fromNode":"card-evidence","toNode":"card-jsoncanvas","fromEnd":"none","toEnd":"none"},
+		{"id":"edge-loose","fromNode":"card-loose","toNode":"card-question","toSide":"left","color":"2","label":"revisit"}
+	]
+}

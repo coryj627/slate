@@ -1,0 +1,15 @@
+{
+	"nodes":[
+		{"id":"outer","type":"group","x":0,"y":0,"width":1000,"height":800,"label":"Quarter"},
+		{"id":"inner-a","type":"group","x":40,"y":40,"width":400,"height":300,"label":"Q3"},
+		{"id":"inner-b","type":"group","x":40,"y":400,"width":400,"height":300},
+		{"id":"deep","type":"group","x":60,"y":60,"width":180,"height":140,"label":"Week 1"},
+		{"id":"in-deep","type":"text","text":"deepest card","x":80,"y":80,"width":100,"height":60},
+		{"id":"in-a","type":"text","text":"inside Q3 only","x":300,"y":100,"width":100,"height":60},
+		{"id":"in-b","type":"text","text":"inside unlabeled group","x":100,"y":450,"width":100,"height":60},
+		{"id":"in-outer","type":"text","text":"directly in Quarter","x":600,"y":100,"width":100,"height":60},
+		{"id":"free","type":"text","text":"outside everything","x":1200,"y":0,"width":100,"height":60},
+		{"id":"boundary","type":"text","text":"center on group edge","x":950,"y":370,"width":100,"height":60}
+	],
+	"edges":[]
+}

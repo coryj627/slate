@@ -1,0 +1,208 @@
+{
+  "main": {
+    "id": "75b732d3b84a5523",
+    "type": "split",
+    "children": [
+      {
+        "id": "c1ce9cd34c910946",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c492657d8671d732",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "reference/HTML codeblock sample.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "HTML codeblock sample"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "120a6806fed5d4f6",
+    "type": "split",
+    "children": [
+      {
+        "id": "2c97f27a33c1788d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "6f7ab2c04d9acc76",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "229a395c7f72a2f7",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "[\"aliases\"]",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "804bd9f3ba7a9365",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "4af14149715c2040",
+    "type": "split",
+    "children": [
+      {
+        "id": "e8b253932efff046",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "31c41ce426602ed5",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "reference/HTML codeblock sample.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for HTML codeblock sample"
+            }
+          },
+          {
+            "id": "e5d36032f7dde7fe",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "reference/HTML codeblock sample.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from HTML codeblock sample"
+            }
+          },
+          {
+            "id": "bae2e2e728bff4a6",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "509c1e304759304d",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "f1e69213490d747e",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "reference/HTML codeblock sample.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of HTML codeblock sample"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "c492657d8671d732",
+  "lastOpenFiles": [
+    "people/Cory Joseph.md",
+    "pages/contents.md",
+    "learning/The future of personal knowledge management.md",
+    "templates/meeting-note.md",
+    "templates/daily-note.md",
+    "recipes/Apple pie.md",
+    "recipes/Whipped cream.md",
+    "personal/Grocery list.md",
+    "learning/Linear algebra glossary.md",
+    "projects/Slate.md",
+    "learning/Calculus notes — derivatives.md",
+    "learning/MathML raw.md",
+    "daily/2026-05-27.md",
+    "blog/Why Slate.md",
+    "blog/Hello world.md",
+    "Untitled.canvas",
+    "learning/Linear algebra lecture 4.md",
+    "personal/Index.md",
+    "personal/Weekly ToDos.md",
+    "README.md"
+  ]
+}
