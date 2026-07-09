@@ -568,8 +568,9 @@ impl VaultSession {
     }
 
     /// Every distinct frontmatter property key in the vault, key-sorted,
-    /// each with the count of files that carry it (m_spec §M-5). For the
-    /// app's future property browser.
+    /// each with the count of files that carry it and the sorted distinct
+    /// value kinds observed for it (m_spec §M-5). For the app's future
+    /// property browser.
     pub fn list_property_keys(&self) -> Result<Vec<PropertyKeySummary>, VaultError> {
         let keys = self.inner.list_property_keys()?;
         Ok(keys.into_iter().map(Into::into).collect())
@@ -1375,13 +1376,15 @@ impl From<core::FileSummary> for FileSummary {
     }
 }
 
-/// One distinct property key + the count of files that carry it
-/// (m_spec §M-5). Mirrors `core::PropertyKeySummary` across the FFI
-/// boundary for the app's future property browser.
+/// One distinct property key, the count of files that carry it, and its
+/// sorted distinct value kinds (m_spec §M-5). Mirrors
+/// `core::PropertyKeySummary` across the FFI boundary for the app's
+/// future property browser.
 #[derive(uniffi::Record)]
 pub struct PropertyKeySummary {
     pub key: String,
     pub file_count: u64,
+    pub value_kinds: Vec<String>,
 }
 
 impl From<core::PropertyKeySummary> for PropertyKeySummary {
@@ -1389,6 +1392,7 @@ impl From<core::PropertyKeySummary> for PropertyKeySummary {
         Self {
             key: s.key,
             file_count: s.file_count,
+            value_kinds: s.value_kinds,
         }
     }
 }
@@ -5935,6 +5939,22 @@ mod tests {
             Err(other) => panic!("expected Cancelled, got error {other:?}"),
             Ok(_) => panic!("expected Cancelled, scan returned Ok"),
         }
+    }
+
+    #[test]
+    fn list_property_keys_carries_sorted_kinds_through_ffi_conversion() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), "---\nmixed: 42\n---\n").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "---\nmixed: true\n---\n").unwrap();
+        std::fs::write(tmp.path().join("c.md"), "---\nmixed: 7\n---\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let keys = session.list_property_keys().unwrap();
+        let mixed = keys.iter().find(|summary| summary.key == "mixed").unwrap();
+        assert_eq!(mixed.file_count, 3);
+        assert_eq!(mixed.value_kinds, vec!["boolean", "number"]);
     }
 
     #[test]

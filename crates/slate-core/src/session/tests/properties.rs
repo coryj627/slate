@@ -220,6 +220,37 @@ fn list_property_keys_returns_distinct_keys_sorted_with_file_counts() {
 }
 
 #[test]
+fn list_property_keys_reports_one_distinct_kind_for_uniform_values() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"---\nstatus: draft\n---\n").unwrap();
+        p.write_file("b.md", b"---\nstatus: done\n---\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let keys = session.list_property_keys().unwrap();
+    let status = keys.iter().find(|summary| summary.key == "status").unwrap();
+    assert_eq!(status.file_count, 2);
+    assert_eq!(status.value_kinds, vec!["text"]);
+}
+
+#[test]
+fn list_property_keys_reports_all_mixed_kinds_sorted_and_distinct() {
+    let (_tmp, session) = make_vault(|p| {
+        // Deliberately encounter number before boolean; the inventory
+        // contract is kind-sorted rather than scan-order or majority based.
+        p.write_file("a.md", b"---\nmixed: 42\n---\n").unwrap();
+        p.write_file("b.md", b"---\nmixed: true\n---\n").unwrap();
+        p.write_file("c.md", b"---\nmixed: 7\n---\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let keys = session.list_property_keys().unwrap();
+    let mixed = keys.iter().find(|summary| summary.key == "mixed").unwrap();
+    assert_eq!(mixed.file_count, 3);
+    assert_eq!(mixed.value_kinds, vec!["boolean", "number"]);
+}
+
+#[test]
 fn list_property_keys_counts_each_file_once_per_key() {
     // A file carrying the same key across two dotted rows (person.name
     // + person) must still count once for each distinct key.

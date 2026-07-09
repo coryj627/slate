@@ -340,17 +340,20 @@ pub(crate) fn files_with_property(
 }
 
 /// One distinct property key across the vault, plus the number of files
-/// that carry it. Returned by [`list_property_keys`] (m_spec §M-5). The
-/// app's future property browser wants the same summary, so the type
-/// lives in core rather than in the CLI layer.
+/// that carry it and the sorted distinct value kinds observed for it.
+/// Returned by [`list_property_keys`] (m_spec §M-5). The app's future
+/// property browser wants the same summary, so the type lives in core
+/// rather than in the CLI layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyKeySummary {
     pub key: String,
     pub file_count: u64,
+    pub value_kinds: Vec<String>,
 }
 
 /// Every distinct property key in the vault, key-sorted, each with the
-/// count of files that carry it (m_spec §M-5).
+/// count of files that carry it and the sorted distinct value kinds
+/// observed in those files (m_spec §M-5).
 ///
 /// `COUNT(DISTINCT file_id)` — a file with the same key on more than one
 /// `properties` row (e.g. a dotted key that repeats) is counted once, so
@@ -366,20 +369,43 @@ pub struct PropertyKeySummary {
 /// is the complete key universe. No separate UNION needed.
 pub(crate) fn list_property_keys(conn: &Connection) -> Result<Vec<PropertyKeySummary>, VaultError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT key, COUNT(DISTINCT file_id) AS file_count
-         FROM properties
-         GROUP BY key
-         ORDER BY key ASC",
+        "WITH key_counts AS (
+             SELECT key, COUNT(DISTINCT file_id) AS file_count
+             FROM properties
+             GROUP BY key
+         ),
+         key_kinds AS (
+             SELECT DISTINCT key, value_kind
+             FROM properties
+         )
+         SELECT key_counts.key, key_counts.file_count, key_kinds.value_kind
+         FROM key_counts
+         JOIN key_kinds ON key_kinds.key = key_counts.key
+         ORDER BY key_counts.key ASC, key_kinds.value_kind ASC",
     )?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(PropertyKeySummary {
-                key: row.get::<_, String>(0)?,
-                file_count: row.get::<_, i64>(1)? as u64,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)? as u64,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut summaries: Vec<PropertyKeySummary> = Vec::new();
+    for row in rows {
+        let (key, file_count, value_kind) = row?;
+        if let Some(summary) = summaries.last_mut()
+            && summary.key == key
+        {
+            summary.value_kinds.push(value_kind);
+            continue;
+        }
+        summaries.push(PropertyKeySummary {
+            key,
+            file_count,
+            value_kinds: vec![value_kind],
+        });
+    }
+    Ok(summaries)
 }
 
 /// Paged list of files that carry property `key` with **any** value
