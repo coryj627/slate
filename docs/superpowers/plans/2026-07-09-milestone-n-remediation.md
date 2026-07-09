@@ -210,7 +210,7 @@ fn pinned_function_edges_match_the_v1_table() {
     assert_eq!(value("list([1, 2])"), list![1.0, 2.0]);
     assert_error("list(1, 2)", "list expected 1, got 2");
     assert_eq!(value("\"abc\".containsAll(\"a\", \"c\")"), Value::Bool(true));
-    assert_eq!(value("\"a,b,c\".split(\",\", 2)"), list!["a", "b,c"]);
+    assert_eq!(value("\"a,b,c\".split(\",\", 2)"), list!["a", "b"]);
     assert_eq!(value("\"a, b,c\".split(/,\\s*/)"), list!["a", "b", "c"]);
     assert_date("date(\"2026-07-08 15:04:05\")", "2026-07-08T15:04:05");
     assert_date("date(\"2026-01-31\") + \"1M 1d\"", "2026-03-01");
@@ -253,8 +253,9 @@ Use `1..=usize::MAX` for variadic contains methods, exact unary arity for
 
 - [ ] **Step 4: Implement split/date/duration behavior**
 
-Split accepts one or two arguments. Use `Regex::splitn` for `Value::Regex` and
-`str::splitn` for text separators. Parse `%Y-%m-%d %H:%M:%S` in addition to the
+Split accepts one or two arguments. Split the full string with `Regex::split` or
+`str::split`, then retain the first `n` elements when the optional limit is
+present. Parse `%Y-%m-%d %H:%M:%S` in addition to the
 existing ISO forms. Preserve parsed calendar months separately from fixed
 milliseconds and apply months (with end-of-month clamp) before days/time.
 
