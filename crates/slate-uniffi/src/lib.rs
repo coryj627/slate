@@ -3939,6 +3939,7 @@ pub struct BasesResultSet {
     pub summaries: Vec<BasesSummaryCell>,
     pub total_count: u64,
     pub shown_count: u64,
+    pub unfiltered_shown_count: u64,
     pub executed_at_ms: i64,
     pub warnings: Vec<String>,
     pub view_error: Option<String>,
@@ -3954,6 +3955,7 @@ impl From<core::BasesResultSet> for BasesResultSet {
             summaries: r.summaries.into_iter().map(Into::into).collect(),
             total_count: r.total_count,
             shown_count: r.shown_count,
+            unfiltered_shown_count: r.unfiltered_shown_count,
             executed_at_ms: r.executed_at_ms,
             warnings: r.warnings,
             view_error: r.view_error,
@@ -4319,6 +4321,18 @@ impl VaultSession {
             .inner
             .base_execute(handle, view, this_path, quick_filter, &cancel.inner)?
             .into())
+    }
+
+    pub fn base_set_transient_sort(
+        &self,
+        handle: u64,
+        view: u32,
+        column_id: Option<String>,
+        ascending: bool,
+    ) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .base_set_transient_sort(handle, view, column_id, ascending)?)
     }
 
     pub fn open_query(
@@ -5699,12 +5713,31 @@ mod tests {
             .base_execute(handle, 0, None, Some("done".into()), CancelToken::new())
             .unwrap();
         assert_eq!(result.total_count, 1);
+        assert_eq!(result.unfiltered_shown_count, 2);
         assert_eq!(result.rows[0].values[0].display, "Beta.md");
 
         let csv = session
             .base_export(handle, 0, ExportFormat::Csv, Some("done".into()))
             .unwrap();
         assert_eq!(csv, "file.name,status\r\nBeta.md,done\r\n");
+
+        session
+            .base_set_transient_sort(handle, 0, Some("status".into()), false)
+            .unwrap();
+        let sorted = session
+            .base_execute(handle, 0, None, None, CancelToken::new())
+            .unwrap();
+        assert_eq!(
+            sorted
+                .rows
+                .iter()
+                .map(|row| row.file_path.as_str())
+                .collect::<Vec<_>>(),
+            ["Notes/Beta.md", "Notes/Alpha.md"]
+        );
+        session
+            .base_set_transient_sort(handle, 0, None, false)
+            .unwrap();
 
         let (base, warnings) = core::bases::parse_base(
             r#"views:

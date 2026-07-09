@@ -212,6 +212,43 @@ final class BasesTabRoutingTests: XCTestCase {
         return state
     }
 
+    private func makeTypedSortAppState() async throws -> AppState {
+        let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Table
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, score, due]
+              - type: list
+                name: List
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, score, due]
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Typed.base"))
+        try Data("---\nscore: 10\ndue: 2026-03-01\n---\n# Aardvark\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Aardvark.md"))
+        try Data("---\nscore: 10\ndue: 2026-03-01\n---\n# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("---\nscore: 2\ndue: 2026-02-01\n---\n# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
+        try Data("# Null\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Null.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return state
+    }
+
     func testOpenFileRoutesBaseToBasesTabAndLoadsDefaultView() async throws {
         let state = try await makeAppState()
 
@@ -275,7 +312,8 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertTrue(doc.quickFilterActive)
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Cafe.md"])
         XCTAssertEqual(doc.result?.audioSummary, "1 note.")
-        XCTAssertEqual(announcement, "1 of 1 results")
+        XCTAssertEqual(announcement, "1 of 3 results")
+        XCTAssertEqual(doc.result?.unfilteredShownCount, 3)
         XCTAssertTrue(doc.whereAmIReadback.contains("quick filter: CAFE"))
         XCTAssertEqual(
             BaseSummaryFormatter.summaryText(
@@ -383,6 +421,108 @@ final class BasesTabRoutingTests: XCTestCase {
             state.basesCopyViewAsMarkdown(includeQuickFilter: true),
             "| file.name | status |\n| --- | --- |\n| Beta.md | done |\n")
         XCTAssertEqual(state.lastBaseActionAnnouncement, "Copied base view as Markdown.")
+    }
+
+    func testQuickFilterLimitMatchesFilteredAndUnfilteredExportRows() async throws {
+        let state = try await makeQuickFilterAppState()
+        let baseURL = vaultURL.appendingPathComponent("Queries/Reading.base")
+        let source = try String(contentsOf: baseURL, encoding: .utf8)
+        try source.replacingOccurrences(
+            of: "    name: Reading\n",
+            with: "    name: Reading\n    limit: 2\n"
+        ).write(to: baseURL, atomically: true, encoding: .utf8)
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+
+        XCTAssertEqual(doc.applyQuickFilter("cafe", session: session), "1 of 2 results")
+        XCTAssertEqual(doc.result?.shownCount, 1)
+        XCTAssertEqual(doc.result?.unfilteredShownCount, 2)
+        XCTAssertEqual(
+            try doc.export(format: .csv, session: session, includeQuickFilter: true),
+            "file.name,status\r\nCafe.md,café\r\n")
+        XCTAssertEqual(
+            try doc.export(format: .csv, session: session, includeQuickFilter: false),
+            "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n")
+    }
+
+    func testTransientTypedSortDrivesTableListExportAndLifecycle() async throws {
+        let state = try await makeTypedSortAppState()
+        state.openFile("Queries/Typed.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Typed.base")
+        let session = try XCTUnwrap(state.currentSession)
+        let initial = try XCTUnwrap(doc.result)
+        let localRows = Dictionary(
+            uniqueKeysWithValues: initial.rows.enumerated().map {
+                ($0.element.filePath, BaseGridRow(row: $0.element, ordinal: $0.offset))
+            })
+        let beta = try XCTUnwrap(localRows["Notes/Beta.md"])
+        let aardvark = try XCTUnwrap(localRows["Notes/Aardvark.md"])
+        let alpha = try XCTUnwrap(localRows["Notes/Alpha.md"])
+        let null = try XCTUnwrap(localRows["Notes/Null.md"])
+        XCTAssertTrue(beta.sortsBefore(aardvark, at: 1), "numbers compare by value, not display")
+        XCTAssertTrue(aardvark.sortsBefore(alpha, at: 1), "equal values use the path tiebreak")
+        XCTAssertTrue(alpha.sortsBefore(null, at: 1), "nulls sort after typed values")
+        XCTAssertTrue(beta.sortsBefore(aardvark, at: 2), "dates compare by epoch")
+        XCTAssertTrue(
+            aardvark.sortsBefore(beta, at: 1, ascending: false),
+            "descending reverses typed values")
+        XCTAssertTrue(
+            beta.sortsBefore(null, at: 1, ascending: false),
+            "nulls remain last descending")
+        XCTAssertTrue(
+            aardvark.sortsBefore(alpha, at: 1, ascending: false),
+            "path ties remain ascending regardless of sort direction")
+
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: true), session: session)
+        let numericPaths = [
+            "Notes/Beta.md", "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Null.md",
+        ]
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), numericPaths)
+        XCTAssertEqual(
+            try doc.export(format: .csv, session: session)
+                .split(whereSeparator: \.isNewline).dropFirst()
+                .compactMap { $0.split(separator: ",").first.map(String.init) },
+            ["Beta.md", "Aardvark.md", "Alpha.md", "Null.md"])
+        XCTAssertEqual(
+            BaseListProjection(
+                result: try XCTUnwrap(doc.result),
+                options: BaseListOptions(slateStateJson: nil)
+            ).items.map(\.filePath),
+            numericPaths)
+
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 2, ascending: false), session: session)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), [
+            "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
+        ])
+
+        doc.selectView(index: 1, session: session)
+        XCTAssertNil(doc.sortState)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), [
+            "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
+        ])
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: true), session: session)
+        XCTAssertEqual(
+            BaseListProjection(
+                result: try XCTUnwrap(doc.result),
+                options: BaseListOptions(slateStateJson: nil)
+            ).items.map(\.filePath),
+            numericPaths)
+
+        doc.setTransientSort(nil, session: session)
+        XCTAssertNil(doc.sortState)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), [
+            "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
+        ])
+
+        let staleHandle = try XCTUnwrap(doc.handle)
+        doc.close(session: session)
+        XCTAssertThrowsError(
+            try session.baseSetTransientSort(
+                handle: staleHandle, view: 0, columnId: "score", ascending: true))
     }
 
     func testBasePropertyEditUsesExistingWritePathAndReexecutes() async throws {
@@ -818,6 +958,7 @@ final class BasesTabRoutingTests: XCTestCase {
             ],
             totalCount: 2,
             shownCount: 2,
+            unfilteredShownCount: 2,
             executedAtMs: 0,
             warnings: [],
             viewError: nil,

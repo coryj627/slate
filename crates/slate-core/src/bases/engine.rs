@@ -19,7 +19,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use super::{
-    ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SummaryRef,
+    ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SortKey, SummaryRef,
     eval::{
         DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext,
         TaskRow, Value, VaultLookup, WarningSink, eval,
@@ -43,6 +43,7 @@ pub struct BasesResultSet {
     pub summaries: Vec<BasesSummaryCell>,
     pub total_count: usize,
     pub shown_count: usize,
+    pub unfiltered_shown_count: usize,
     pub warnings: Vec<String>,
     pub error: Option<ViewError>,
     pub executed_at_ms: i64,
@@ -431,6 +432,7 @@ pub fn execute(
         offset += page_size;
     }
 
+    let unfiltered_total_count = rows.len();
     apply_quick_filter(&mut rows, ctx.quick_filter);
     sort_rows(query, &mut rows);
     let group_slices = group_rows(query, &mut rows);
@@ -470,6 +472,10 @@ pub fn execute(
         .limit
         .map(|limit| (limit as usize).min(total_count))
         .unwrap_or(total_count);
+    let unfiltered_shown_count = query
+        .limit
+        .map(|limit| (limit as usize).min(unfiltered_total_count))
+        .unwrap_or(unfiltered_total_count);
     let audio_summary = audio_summary(query, total_count, shown_count, &group_slices);
     let groups = visible_groups(group_slices, group_summaries, shown_count);
     let columns = result_columns(query);
@@ -482,6 +488,7 @@ pub fn execute(
         columns,
         shown_count,
         total_count,
+        unfiltered_shown_count,
         rows,
         groups,
         summaries,
@@ -2390,6 +2397,13 @@ fn column_expr(id: &str) -> Expr {
     })
 }
 
+pub(crate) fn sort_key_for_column_id(id: &str, ascending: bool) -> SortKey {
+    SortKey {
+        expr: column_expr(id),
+        ascending,
+    }
+}
+
 fn first_formula_error<'a>(
     node: &FilterNode,
     errors: &'a BTreeMap<String, EvalError>,
@@ -2491,6 +2505,7 @@ fn error_result(
         summaries: Vec::new(),
         total_count: 0,
         shown_count: 0,
+        unfiltered_shown_count: 0,
         warnings: Vec::new(),
         error: Some(ViewError {
             construct: construct.into(),

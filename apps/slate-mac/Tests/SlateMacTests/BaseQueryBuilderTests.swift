@@ -583,6 +583,7 @@ final class BaseQueryBuilderTests: XCTestCase {
             summaries: [],
             totalCount: 1,
             shownCount: 1,
+            unfilteredShownCount: 1,
             executedAtMs: 0,
             warnings: [],
             viewError: nil,

@@ -375,7 +375,8 @@ final class BaseEmbedDocument: ObservableObject {
 
     var quickFilterResultAnnouncement: String {
         guard let result else { return "0 of 0 results" }
-        return "\(result.shownCount) of \(result.totalCount) results"
+        let total = quickFilterActive ? result.unfilteredShownCount : result.totalCount
+        return "\(result.shownCount) of \(total) results"
     }
 
     func load(session: VaultSession) {
@@ -398,6 +399,18 @@ final class BaseEmbedDocument: ObservableObject {
 
     func selectView(index: Int, session: VaultSession) {
         guard views.indices.contains(index), activeViewIndex != index else { return }
+        if let handle = sharedHandle.handle {
+            do {
+                try session.baseSetTransientSort(
+                    handle: handle,
+                    view: UInt32(activeViewIndex),
+                    columnId: nil,
+                    ascending: true)
+            } catch {
+                fail(friendlyMessage(for: error))
+                return
+            }
+        }
         activeViewIndex = index
         sortState = nil
         executeActiveView(session: session)
@@ -409,6 +422,16 @@ final class BaseEmbedDocument: ObservableObject {
             return
         }
         do {
+            let columnID = sortState.flatMap { sort in
+                result?.columns.indices.contains(sort.columnIndex) == true
+                    ? result?.columns[sort.columnIndex].id
+                    : nil
+            }
+            try session.baseSetTransientSort(
+                handle: handle,
+                view: UInt32(activeViewIndex),
+                columnId: columnID,
+                ascending: sortState?.ascending ?? true)
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
@@ -438,6 +461,14 @@ final class BaseEmbedDocument: ObservableObject {
         }
         executeActiveView(session: session)
         return quickFilterResultAnnouncement
+    }
+
+    func setTransientSort(_ newSort: DataGridSortState?, session: VaultSession) {
+        if let newSort {
+            guard let result, result.columns.indices.contains(newSort.columnIndex) else { return }
+        }
+        sortState = newSort
+        executeActiveView(session: session)
     }
 
     func close(session: VaultSession) {

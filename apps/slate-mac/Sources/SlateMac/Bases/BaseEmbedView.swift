@@ -79,7 +79,9 @@ struct BaseEmbedView: View {
             }
             Spacer(minLength: 0)
             if let result = document.result {
-                Text("\(result.shownCount) of \(result.totalCount)")
+                Text(
+                    "\(result.shownCount) of \(document.quickFilterActive ? result.unfilteredShownCount : result.totalCount)"
+                )
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
             }
@@ -165,7 +167,10 @@ struct BaseEmbedView: View {
                 set: { selectedCell = $0 }),
             sortState: Binding(
                 get: { document.sortState },
-                set: { document.sortState = $0 }),
+                set: { sort in
+                    guard let session else { return }
+                    document.setTransientSort(sort, session: session)
+                }),
             cellNavigation: true)
     }
 
@@ -189,8 +194,10 @@ struct BaseEmbedView: View {
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
                 sort: { lhs, rhs in
-                    lhs.value(at: columnIndex).localizedCaseInsensitiveCompare(
-                        rhs.value(at: columnIndex)) == .orderedAscending
+                    let ascending = document.sortState?.ascending ?? true
+                    return ascending
+                        ? lhs.sortsBefore(rhs, at: columnIndex, ascending: true)
+                        : rhs.sortsBefore(lhs, at: columnIndex, ascending: false)
                 },
                 accessibilityHint: { _ in document.cellEditingAccessibilityHint })
         }

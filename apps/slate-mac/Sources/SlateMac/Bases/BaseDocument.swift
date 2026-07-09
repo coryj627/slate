@@ -141,6 +141,19 @@ final class BaseDocument: ObservableObject {
     func selectView(index: Int, session: VaultSession) {
         guard views.indices.contains(index) else { return }
         guard activeViewIndex != index else { return }
+        if let handle {
+            do {
+                try session.baseSetTransientSort(
+                    handle: handle,
+                    view: UInt32(activeViewIndex),
+                    columnId: nil,
+                    ascending: true)
+            } catch {
+                result = nil
+                state = .failed(friendlyMessage(for: error))
+                return
+            }
+        }
         activeViewIndex = index
         sortState = nil
         clearQuickFilterState()
@@ -231,7 +244,7 @@ final class BaseDocument: ObservableObject {
     }
 
     @discardableResult
-    func sortFocusedColumn() -> String? {
+    func sortFocusedColumn(session: VaultSession) -> String? {
         guard let result, result.columns.indices.contains(focusedColumnIndex) else {
             return nil
         }
@@ -241,9 +254,40 @@ final class BaseDocument: ObservableObject {
         } else {
             ascending = true
         }
-        sortState = DataGridSortState(columnIndex: focusedColumnIndex, ascending: ascending)
+        guard setTransientSort(
+            DataGridSortState(columnIndex: focusedColumnIndex, ascending: ascending),
+            session: session)
+        else { return nil }
         let direction = ascending ? "ascending" : "descending"
         return "Sorted by \(result.columns[focusedColumnIndex].label), \(direction)"
+    }
+
+    @discardableResult
+    func setTransientSort(_ newSort: DataGridSortState?, session: VaultSession) -> Bool {
+        guard let handle, views.indices.contains(activeViewIndex) else { return false }
+        let columnID: String?
+        if let newSort {
+            guard let result, result.columns.indices.contains(newSort.columnIndex) else {
+                return false
+            }
+            columnID = result.columns[newSort.columnIndex].id
+        } else {
+            columnID = nil
+        }
+        do {
+            try session.baseSetTransientSort(
+                handle: handle,
+                view: UInt32(activeViewIndex),
+                columnId: columnID,
+                ascending: newSort?.ascending ?? true)
+            sortState = newSort
+            executeActiveView(session: session)
+            return true
+        } catch {
+            result = nil
+            state = .failed(friendlyMessage(for: error))
+            return false
+        }
     }
 
     @discardableResult
@@ -259,6 +303,11 @@ final class BaseDocument: ObservableObject {
             edit: .setSlateState(
                 view: UInt32(activeViewIndex),
                 yaml: slateSortStateYAML(columnID: column.id, ascending: sortState.ascending)))
+        try session.baseSetTransientSort(
+            handle: handle,
+            view: UInt32(activeViewIndex),
+            columnId: nil,
+            ascending: true)
         views = try session.baseViews(handle: handle)
         executeActiveView(session: session)
         let direction = sortState.ascending ? "ascending" : "descending"
@@ -307,7 +356,8 @@ final class BaseDocument: ObservableObject {
 
     var quickFilterResultAnnouncement: String {
         guard let result else { return "0 of 0 results" }
-        return "\(result.shownCount) of \(result.totalCount) results"
+        let total = quickFilterActive ? result.unfilteredShownCount : result.totalCount
+        return "\(result.shownCount) of \(total) results"
     }
 
     var whereAmIReadback: String {

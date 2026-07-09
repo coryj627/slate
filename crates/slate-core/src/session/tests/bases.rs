@@ -149,7 +149,7 @@ fn base_execute_quick_filter_and_export_use_displayed_values() {
             br#"views:
   - type: table
     name: Reading
-    limit: 1
+    limit: 2
     filters: "file.inFolder(\"Notes\")"
     order:
       - file.name
@@ -197,6 +197,7 @@ status: done
         .unwrap();
     assert_eq!(filtered.total_count, 1);
     assert_eq!(filtered.shown_count, 1);
+    assert_eq!(filtered.unfiltered_shown_count, 2);
     assert_eq!(filtered.rows[0].file_path, "Notes/Beta.md");
     assert_eq!(filtered.rows[0].values[0].display, "Beta.md");
     assert_eq!(filtered.rows[0].values[1].display, "done");
@@ -216,6 +217,7 @@ status: done
         .unwrap();
     assert_eq!(accent_filtered.total_count, 1);
     assert_eq!(accent_filtered.shown_count, 1);
+    assert_eq!(accent_filtered.unfiltered_shown_count, 2);
     assert_eq!(accent_filtered.rows[0].file_path, "Notes/Gamma.md");
     assert_eq!(accent_filtered.rows[0].values[1].display, "café");
 
@@ -231,6 +233,202 @@ status: done
         markdown,
         "| file.name | status |\n| --- | --- |\n| Beta.md | done |\n"
     );
+
+    let unfiltered_csv = session
+        .base_export(handle, 0, ExportFormat::Csv, None)
+        .unwrap();
+    assert_eq!(
+        unfiltered_csv,
+        "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n"
+    );
+}
+
+#[test]
+fn transient_sort_uses_typed_order_for_table_list_and_export() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Typed.base",
+            br#"views:
+  - type: table
+    name: Table
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score, due]
+  - type: list
+    name: List
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score, due]
+"#,
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Aardvark.md",
+            b"---\nscore: 10\ndue: 2026-03-01\n---\n# Aardvark\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Alpha.md",
+            b"---\nscore: 10\ndue: 2026-03-01\n---\n# Alpha\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Beta.md",
+            b"---\nscore: 2\ndue: 2026-02-01\n---\n# Beta\n",
+        )
+        .unwrap();
+        p.write_file("Notes/Null.md", b"# Null\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/Typed.base").unwrap();
+
+    let natural = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        natural
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Notes/Aardvark.md",
+            "Notes/Alpha.md",
+            "Notes/Beta.md",
+            "Notes/Null.md",
+        ]
+    );
+
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    let numeric = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    let numeric_paths = numeric
+        .rows
+        .iter()
+        .map(|row| row.file_path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        numeric_paths,
+        [
+            "Notes/Beta.md",
+            "Notes/Aardvark.md",
+            "Notes/Alpha.md",
+            "Notes/Null.md",
+        ]
+    );
+    let csv = session
+        .base_export(handle, 0, ExportFormat::Csv, None)
+        .unwrap();
+    assert_eq!(
+        csv.lines()
+            .skip(1)
+            .map(|line| line.split(',').next().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["Beta.md", "Aardvark.md", "Alpha.md", "Null.md"]
+    );
+
+    session
+        .base_set_transient_sort(handle, 1, Some("due".to_string()), false)
+        .unwrap();
+    let list = session
+        .base_execute(handle, 1, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        list.rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Notes/Aardvark.md",
+            "Notes/Alpha.md",
+            "Notes/Beta.md",
+            "Notes/Null.md",
+        ]
+    );
+    let list_csv = session
+        .base_export(handle, 1, ExportFormat::Csv, None)
+        .unwrap();
+    assert_eq!(
+        list_csv
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').next().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["Aardvark.md", "Alpha.md", "Beta.md", "Null.md"]
+    );
+}
+
+#[test]
+fn transient_sort_validates_and_clears_on_reset_save_and_close() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Sort.base",
+            br#"views:
+  - type: table
+    name: Sort
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/Sort.base").unwrap();
+
+    let invalid_view = session
+        .base_set_transient_sort(handle, 9, Some("score".to_string()), true)
+        .unwrap_err();
+    assert!(invalid_view.to_string().contains("out of range"));
+    let invalid_column = session
+        .base_set_transient_sort(handle, 0, Some("missing".to_string()), true)
+        .unwrap_err();
+    assert!(invalid_column.to_string().contains("not displayed"));
+
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    let sorted = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(sorted.rows[0].file_path, "Notes/Two.md");
+
+    session
+        .base_set_transient_sort(handle, 0, None, true)
+        .unwrap();
+    let reset = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(reset.rows[0].file_path, "Notes/Ten.md");
+
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    session
+        .base_apply_edit(
+            handle,
+            crate::bases::BaseEdit::SetSlateState {
+                view: 0,
+                yaml: Some(
+                    "slate:\n  sort:\n    - property: score\n      direction: DESC".to_string(),
+                ),
+            },
+        )
+        .unwrap();
+    let persisted = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(persisted.rows[0].file_path, "Notes/Ten.md");
+
+    session.close_base(handle);
+    let closed = session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap_err();
+    assert!(closed.to_string().contains("unknown base handle"));
 }
 
 #[test]

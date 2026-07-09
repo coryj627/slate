@@ -602,6 +602,7 @@ struct OpenBaseState {
     warnings: Vec<String>,
     default_this_path: Option<String>,
     cache: crate::bases::engine::BasesQueryCache,
+    transient_sort: Option<(u32, crate::bases::SortKey)>,
 }
 
 impl VaultSession {
@@ -5339,6 +5340,7 @@ pub struct BasesResultSet {
     pub summaries: Vec<BasesSummaryCell>,
     pub total_count: u64,
     pub shown_count: u64,
+    pub unfiltered_shown_count: u64,
     pub executed_at_ms: i64,
     pub warnings: Vec<String>,
     pub view_error: Option<String>,
@@ -5415,6 +5417,30 @@ fn bad_base_handle(handle: u64) -> VaultError {
     }
 }
 
+fn base_query_for_view(
+    state: &OpenBaseState,
+    view: u32,
+) -> Result<crate::bases::SlateQuery, VaultError> {
+    match &state.source {
+        OpenBaseSource::Base(base) => {
+            if base.views.get(view as usize).is_none() {
+                return Err(VaultError::InvalidArgument {
+                    message: format!("base view {view} is out of range"),
+                });
+            }
+            Ok(crate::bases::view_query(base, view as usize))
+        }
+        OpenBaseSource::Query(query) => {
+            if view != 0 {
+                return Err(VaultError::InvalidArgument {
+                    message: format!("query handle has one view; got {view}"),
+                });
+            }
+            Ok(query.clone())
+        }
+    }
+}
+
 impl VaultSession {
     pub fn bases_list(&self) -> Result<Vec<BaseFileSummary>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
@@ -5461,6 +5487,7 @@ impl VaultSession {
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: Some(path.to_string()),
                 cache: crate::bases::engine::BasesQueryCache::default(),
+                transient_sort: None,
             },
         );
         Ok(handle)
@@ -5483,6 +5510,7 @@ impl VaultSession {
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: this_path,
                 cache: crate::bases::engine::BasesQueryCache::default(),
+                transient_sort: None,
             },
         );
         Ok(handle)
@@ -5510,6 +5538,7 @@ impl VaultSession {
                 warnings: Vec::new(),
                 default_this_path: this_path,
                 cache: crate::bases::engine::BasesQueryCache::default(),
+                transient_sort: None,
             },
         );
         Ok(handle)
@@ -5532,6 +5561,7 @@ impl VaultSession {
                 warnings: Vec::new(),
                 default_this_path: None,
                 cache: crate::bases::engine::BasesQueryCache::default(),
+                transient_sort: None,
             },
         );
         Ok(handle)
@@ -5735,6 +5765,7 @@ impl VaultSession {
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: this_path,
                 cache: crate::bases::engine::BasesQueryCache::default(),
+                transient_sort: None,
             },
         );
         Ok(handle)
@@ -5788,6 +5819,34 @@ impl VaultSession {
         self.base_query_json_for_view(handle, view, crate::bases::view_edit_query)
     }
 
+    pub fn base_set_transient_sort(
+        &self,
+        handle: u64,
+        view: u32,
+        column_id: Option<String>,
+        ascending: bool,
+    ) -> Result<(), VaultError> {
+        let mut bases = self.bases.lock().expect("base registry mutex");
+        let state = bases
+            .get_mut(&handle)
+            .ok_or_else(|| bad_base_handle(handle))?;
+        let query = base_query_for_view(state, view)?;
+        let Some(column_id) = column_id else {
+            state.transient_sort = None;
+            return Ok(());
+        };
+        if !query.columns.iter().any(|column| column.id == column_id) {
+            return Err(VaultError::InvalidArgument {
+                message: format!("base column {column_id:?} is not displayed in view {view}"),
+            });
+        }
+        state.transient_sort = Some((
+            view,
+            crate::bases::engine::sort_key_for_column_id(&column_id, ascending),
+        ));
+        Ok(())
+    }
+
     fn base_query_json_for_view<F>(
         &self,
         handle: u64,
@@ -5832,24 +5891,12 @@ impl VaultSession {
     ) -> Result<BasesResultSet, VaultError> {
         let bases = self.bases.lock().expect("base registry mutex");
         let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
-        let query = match &state.source {
-            OpenBaseSource::Base(base) => {
-                if base.views.get(view as usize).is_none() {
-                    return Err(VaultError::InvalidArgument {
-                        message: format!("base view {view} is out of range"),
-                    });
-                }
-                crate::bases::view_query(base, view as usize)
-            }
-            OpenBaseSource::Query(query) => {
-                if view != 0 {
-                    return Err(VaultError::InvalidArgument {
-                        message: format!("query handle has one view; got {view}"),
-                    });
-                }
-                query.clone()
-            }
-        };
+        let mut query = base_query_for_view(state, view)?;
+        if let Some((sort_view, sort)) = &state.transient_sort
+            && *sort_view == view
+        {
+            query.sort = vec![sort.clone()];
+        }
         let default_this_path = state.default_this_path.clone();
         let warnings = state.warnings.clone();
         let quick_filter = quick_filter
@@ -5902,6 +5949,10 @@ impl VaultSession {
                 message: "ephemeral query handles cannot be edited as .base files".to_string(),
             });
         };
+        let edited_slate_view = match &edit {
+            crate::bases::BaseEdit::SetSlateState { view, .. } => Some(*view as u32),
+            _ => None,
+        };
         let new_text = crate::bases::serialize_base(base, &[edit]).map_err(|err| {
             VaultError::InvalidArgument {
                 message: format!("base edit rejected: {err}"),
@@ -5912,6 +5963,14 @@ impl VaultSession {
         state.source = OpenBaseSource::Base(base);
         state.warnings = warnings.into_iter().map(|w| w.message).collect();
         state.cache = crate::bases::engine::BasesQueryCache::default();
+        if edited_slate_view.is_some_and(|view| {
+            state
+                .transient_sort
+                .as_ref()
+                .is_some_and(|(sort_view, _)| *sort_view == view)
+        }) {
+            state.transient_sort = None;
+        }
         Ok(())
     }
 }
@@ -6979,6 +7038,7 @@ fn bases_result_from_engine(
         summaries: result.summaries.iter().map(summary_from_engine).collect(),
         total_count: result.total_count as u64,
         shown_count: result.shown_count as u64,
+        unfiltered_shown_count: result.unfiltered_shown_count as u64,
         executed_at_ms: result.executed_at_ms,
         warnings: open_warnings,
         view_error: result.error.map(|e| {

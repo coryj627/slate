@@ -217,8 +217,10 @@ struct BaseReadOnlyResultView: View {
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
                 sort: { lhs, rhs in
-                    lhs.value(at: columnIndex).localizedCaseInsensitiveCompare(
-                        rhs.value(at: columnIndex)) == .orderedAscending
+                    let ascending = sortState?.ascending ?? true
+                    return ascending
+                        ? lhs.sortsBefore(rhs, at: columnIndex, ascending: true)
+                        : rhs.sortsBefore(lhs, at: columnIndex, ascending: false)
                 })
         }
     }

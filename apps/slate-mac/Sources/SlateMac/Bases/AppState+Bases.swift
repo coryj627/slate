@@ -1131,7 +1131,9 @@ extension AppState {
     }
 
     func basesSortByColumn() {
-        guard let text = activeBaseDocument?.sortFocusedColumn() else { return }
+        guard let session = currentSession,
+            let text = activeBaseDocument?.sortFocusedColumn(session: session)
+        else { return }
         postAccessibilityAnnouncement(text, priority: .medium)
     }
 
@@ -1513,7 +1515,7 @@ extension AppState {
         alert.messageText = "\(verb) quick-filtered base view?"
         alert.informativeText =
             "Quick filter \"\(doc.quickFilterText)\" is active. Choose filtered rows "
-            + "(\(result.shownCount)) or all rows (\(result.totalCount))."
+            + "(\(result.shownCount)) or all rows (\(result.unfilteredShownCount))."
         alert.addButton(withTitle: "\(verb) Filtered Rows")
         alert.addButton(withTitle: "\(verb) All Rows")
         alert.addButton(withTitle: "Cancel")

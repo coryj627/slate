@@ -291,6 +291,15 @@ final class BaseEmbedTests: XCTestCase {
         XCTAssertEqual(first.result?.shownCount, 1)
         XCTAssertEqual(duplicate.result?.shownCount, 2)
 
+        first.setTransientSort(
+            DataGridSortState(columnIndex: 0, ascending: false), session: session)
+        XCTAssertEqual(first.result?.rows.map(\.filePath), ["Notes/Other.md"])
+        _ = duplicate.applyQuickFilter("", session: session)
+        XCTAssertEqual(
+            duplicate.result?.rows.map(\.filePath),
+            ["Notes/Host.md", "Notes/Other.md"],
+            "each embed execution must re-establish its own sort on a shared handle")
+
         state.releaseAllBaseEmbedDocuments()
 
         XCTAssertNil(first.handle)

@@ -179,7 +179,10 @@ struct BaseContainerView: View {
                 }),
             sortState: Binding(
                 get: { document.sortState },
-                set: { document.sortState = $0 }),
+                set: { sort in
+                    guard let session = appState.currentSession else { return }
+                    document.setTransientSort(sort, session: session)
+                }),
             cellNavigation: true,
             onActivate: { _ = appState.basesOpen(row: $0.row) },
             onEditCell: { row, columnIndex in
@@ -263,8 +266,10 @@ struct BaseContainerView: View {
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
                 sort: { lhs, rhs in
-                    lhs.value(at: columnIndex).localizedCaseInsensitiveCompare(
-                        rhs.value(at: columnIndex)) == .orderedAscending
+                    let ascending = document.sortState?.ascending ?? true
+                    return ascending
+                        ? lhs.sortsBefore(rhs, at: columnIndex, ascending: true)
+                        : rhs.sortsBefore(lhs, at: columnIndex, ascending: false)
                 },
                 accessibilityHint: { _ in
                     BaseCellEditPolicy.propertyKey(for: column) == nil
@@ -460,7 +465,8 @@ struct BaseContainerView: View {
 
     private var resultCountText: String {
         guard let result = document.result else { return "No results" }
-        return "\(result.shownCount) of \(result.totalCount)"
+        let total = document.quickFilterActive ? result.unfilteredShownCount : result.totalCount
+        return "\(result.shownCount) of \(total)"
     }
 
     private var stateWarning: String? {
@@ -507,6 +513,84 @@ struct BaseGridRow: Identifiable {
     func value(at columnIndex: Int) -> String {
         guard row.values.indices.contains(columnIndex) else { return "" }
         return row.values[columnIndex].display
+    }
+
+    func sortsBefore(
+        _ other: BaseGridRow,
+        at columnIndex: Int,
+        ascending: Bool = true
+    ) -> Bool {
+        guard row.values.indices.contains(columnIndex),
+            other.row.values.indices.contains(columnIndex)
+        else { return pathTiebreaksBefore(other) }
+        let lhs = row.values[columnIndex]
+        let rhs = other.row.values[columnIndex]
+        let lhsNull = lhs.rawKind == "null"
+        let rhsNull = rhs.rawKind == "null"
+        if lhsNull != rhsNull { return !lhsNull }
+        let ordering = BaseValueOrdering.compare(lhs, rhs)
+        if ordering == 0 { return pathTiebreaksBefore(other) }
+        return ascending ? ordering < 0 : ordering > 0
+    }
+
+    private func pathTiebreaksBefore(_ other: BaseGridRow) -> Bool {
+        if row.filePath != other.row.filePath {
+            return row.filePath < other.row.filePath
+        }
+        switch (row.taskOrdinal, other.row.taskOrdinal) {
+        case (nil, nil): return false
+        case (nil, .some): return true
+        case (.some, nil): return false
+        case (.some(let lhs), .some(let rhs)): return lhs < rhs
+        }
+    }
+}
+
+private enum BaseValueOrdering {
+    static func compare(_ lhs: BasesValue, _ rhs: BasesValue) -> Int {
+        let lhsNull = lhs.rawKind == "null"
+        let rhsNull = rhs.rawKind == "null"
+        if lhsNull || rhsNull {
+            if lhsNull == rhsNull { return 0 }
+            return lhsNull ? 1 : -1
+        }
+        let lhsRank = rank(lhs.rawKind)
+        let rhsRank = rank(rhs.rawKind)
+        if lhsRank != rhsRank { return lhsRank < rhsRank ? -1 : 1 }
+        switch (lhs.rawKind, rhs.rawKind) {
+        case ("bool", "bool"):
+            return compare(lhs.boolValue == true ? 1 : 0, rhs.boolValue == true ? 1 : 0)
+        case ("number", "number"):
+            return compare(lhs.number ?? 0, rhs.number ?? 0)
+        case ("date", "date"):
+            return compare(lhs.dateEpochMs ?? 0, rhs.dateEpochMs ?? 0)
+        case ("text", "text"):
+            return compare(
+                (lhs.text ?? lhs.display).lowercased(),
+                (rhs.text ?? rhs.display).lowercased())
+        default:
+            return compare(lhs.display, rhs.display)
+        }
+    }
+
+    private static func rank(_ kind: String) -> Int {
+        switch kind {
+        case "bool": 0
+        case "number": 1
+        case "date": 2
+        case "duration": 3
+        case "text": 4
+        case "link": 5
+        case "file": 6
+        case "regex": 7
+        case "list": 8
+        default: 9
+        }
+    }
+
+    private static func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> Int {
+        if lhs == rhs { return 0 }
+        return lhs < rhs ? -1 : 1
     }
 }
 

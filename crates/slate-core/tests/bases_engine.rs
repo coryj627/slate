@@ -334,6 +334,7 @@ fn sort_limit_summaries_and_audio_use_post_filter_pre_limit_rows() {
     assert_eq!(result.error, None);
     assert_eq!(result.total_count, 3);
     assert_eq!(result.shown_count, 2);
+    assert_eq!(result.unfiltered_shown_count, 2);
     assert_eq!(
         result
             .rows
@@ -348,6 +349,55 @@ fn sort_limit_summaries_and_audio_use_post_filter_pre_limit_rows() {
     );
     assert_eq!(result.rows[0].audio_description, "Gamma.md. rating: 5");
     assert!((summary_number(&result.summaries[0]) - (11.5 / 3.0)).abs() < f64::EPSILON);
+}
+
+#[test]
+fn quick_filter_preserves_unfiltered_shown_count_with_and_without_limit() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.columns = vec![column("file.name"), column("status")];
+    query.summaries = vec![(
+        "status".to_string(),
+        SummaryRef::Builtin("count".to_string()),
+    )];
+
+    let unlimited = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            quick_filter: Some("Gamma"),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute unlimited quick filter");
+
+    assert_eq!(unlimited.total_count, 1);
+    assert_eq!(unlimited.shown_count, 1);
+    assert_eq!(unlimited.unfiltered_shown_count, 3);
+    assert_eq!(unlimited.rows[0].path, "Notes/Gamma.md");
+    assert_eq!(summary_number(&unlimited.summaries[0]), 1.0);
+    assert_eq!(unlimited.audio_summary, "1 note.");
+
+    query.limit = Some(2);
+    let limited = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            quick_filter: Some("Gamma"),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute limited quick filter");
+
+    assert_eq!(limited.total_count, 1);
+    assert_eq!(limited.shown_count, 1);
+    assert_eq!(limited.unfiltered_shown_count, 2);
+    assert_eq!(limited.rows[0].path, "Notes/Gamma.md");
+    assert_eq!(summary_number(&limited.summaries[0]), 1.0);
+    assert_eq!(limited.audio_summary, "1 note.");
 }
 
 #[test]
@@ -379,6 +429,82 @@ fn multi_key_sort_uses_later_keys_and_path_tiebreak() {
             .collect::<Vec<_>>(),
         vec!["Notes/Gamma.md", "Projects/Alpha.md", "Projects/Beta.md"]
     );
+}
+
+#[test]
+fn typed_sort_orders_numbers_dates_nulls_and_uses_stable_path_ties() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_file(&conn, 4, "Notes/Null.md", "Null.md", "md", 400, 4_000);
+    insert_number_property(&conn, 1, 5, "score", 10.0);
+    insert_number_property(&conn, 2, 3, "score", 2.0);
+    insert_number_property(&conn, 3, 3, "score", 10.0);
+    insert_date_property(&conn, 1, 6, "due", "2026-03-01");
+    insert_date_property(&conn, 2, 4, "due", "2026-02-01");
+    insert_date_property(&conn, 3, 4, "due", "2026-03-01");
+    let mut query = query();
+    query.columns = vec![column("file.name"), column("score"), column("due")];
+
+    let cases = [
+        (
+            "score",
+            true,
+            vec![
+                "Projects/Beta.md",
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Notes/Null.md",
+            ],
+        ),
+        (
+            "score",
+            false,
+            vec![
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Projects/Beta.md",
+                "Notes/Null.md",
+            ],
+        ),
+        (
+            "due",
+            true,
+            vec![
+                "Projects/Beta.md",
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Notes/Null.md",
+            ],
+        ),
+        (
+            "due",
+            false,
+            vec![
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Projects/Beta.md",
+                "Notes/Null.md",
+            ],
+        ),
+    ];
+
+    for (column_id, ascending, expected) in cases {
+        query.sort = vec![SortKey {
+            expr: expr(column_id),
+            ascending,
+        }];
+        let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+            .expect("execute typed sort");
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "sort {column_id} ascending={ascending}"
+        );
+    }
 }
 
 #[test]
