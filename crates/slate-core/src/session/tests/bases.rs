@@ -645,6 +645,187 @@ fn save_query_as_base_and_dql_as_base_write_canonical_executable_base() {
 }
 
 #[test]
+fn session_column_kinds_skip_leading_nulls_and_errors() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Notes/Alpha.md",
+            b"---\nwhen: [bad]\nbad: [x]\n---\n# Alpha\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Bravo.md",
+            b"---\nscore: 3\nwhen: 1000\nbad: [x]\n---\n# Bravo\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Charlie.md",
+            b"---\nscore: high\nwhen: 2024-01-01\nbad: [x]\n---\n# Charlie\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let query = crate::bases::SlateQuery {
+        source: crate::bases::QuerySource::Folder("Notes".to_string()),
+        row_source: crate::bases::RowSource::Files,
+        filters: None,
+        formulas: Vec::new(),
+        custom_summaries: Vec::new(),
+        group_by: None,
+        sort: Vec::new(),
+        columns: ["score", "date(when)", "missing", "date(bad)"]
+            .into_iter()
+            .map(|id| crate::bases::ColumnSelection {
+                id: id.to_string(),
+                display_name: None,
+            })
+            .collect(),
+        summaries: Vec::new(),
+        limit: None,
+        view: crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        },
+    };
+    let handle = session
+        .open_query(&serde_json::to_string(&query).unwrap(), None)
+        .unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+
+    assert_eq!(
+        result
+            .columns
+            .iter()
+            .map(|column| column.value_kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["number", "date", "null", "null"]
+    );
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.values[0].raw_kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["null", "number", "text"]
+    );
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.values[1].raw_kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["error", "date", "date"]
+    );
+    assert!(
+        result
+            .rows
+            .iter()
+            .all(|row| row.values[2].raw_kind == "null")
+    );
+    assert!(
+        result
+            .rows
+            .iter()
+            .all(|row| row.values[3].raw_kind == "error")
+    );
+}
+
+#[test]
+fn recent_export_reopen_preserves_exact_cutoff_membership() {
+    const DAY_MS: i64 = 86_400_000;
+    const NOW_MS: i64 = DAY_MS * 2;
+    const CUTOFF_MS: i64 = NOW_MS - DAY_MS;
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Exact.md", b"# Exact\n").unwrap();
+        p.write_file("Notes/Older.md", b"# Older\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .execute(
+            "UPDATE files
+             SET mtime_ms = CASE path
+                 WHEN 'Notes/Exact.md' THEN ?1
+                 WHEN 'Notes/Older.md' THEN ?2
+                 ELSE mtime_ms
+             END",
+            rusqlite::params![CUTOFF_MS, CUTOFF_MS - 1],
+        )
+        .unwrap();
+
+    let query = crate::bases::SlateQuery {
+        source: crate::bases::QuerySource::Recent { days: 1 },
+        row_source: crate::bases::RowSource::Files,
+        filters: Some(crate::bases::FilterNode::Stmt(
+            crate::bases::expr::parse_expr(r#"file.ext == "md""#).unwrap(),
+        )),
+        formulas: Vec::new(),
+        custom_summaries: Vec::new(),
+        group_by: None,
+        sort: Vec::new(),
+        columns: vec![crate::bases::ColumnSelection {
+            id: "file.path".to_string(),
+            display_name: None,
+        }],
+        summaries: Vec::new(),
+        limit: None,
+        view: crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        },
+    };
+    let execute_at_fixed_time = |query: &crate::bases::SlateQuery| {
+        let conn = session.conn.lock().expect("session connection mutex");
+        crate::bases::engine::execute(
+            query,
+            &conn,
+            &crate::bases::engine::EngineCtx {
+                now_ms: NOW_MS,
+                ..crate::bases::engine::EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap()
+    };
+
+    let before_export = execute_at_fixed_time(&query);
+    assert_eq!(
+        before_export
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Exact.md"]
+    );
+
+    let query_json = serde_json::to_string(&query).unwrap();
+    session
+        .save_query_as_base(&query_json, "Queries/Recent.base")
+        .unwrap();
+    let exported = session.read_text("Queries/Recent.base").unwrap();
+    assert!(
+        exported.contains("file.mtime >= now() - duration"),
+        "{exported}"
+    );
+
+    let reopened_handle = session.open_base("Queries/Recent.base").unwrap();
+    let reopened_query: crate::bases::SlateQuery =
+        serde_json::from_str(&session.base_view_query_json(reopened_handle, 0).unwrap()).unwrap();
+    let after_reopen = execute_at_fixed_time(&reopened_query);
+    assert_eq!(
+        after_reopen
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Exact.md"]
+    );
+}
+
+#[test]
 fn census_bases_roundtrip() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("Notes/Alpha.md", b"---\nstatus: active\n---\n# Alpha\n")

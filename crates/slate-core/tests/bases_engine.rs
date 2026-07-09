@@ -8,7 +8,7 @@ use slate_core::{
         ColumnSelection, FilterNode, GroupBy, QuerySource, RowSource, SlateQuery, SortKey,
         SummaryRef, ViewSpec,
         engine::{BasesQueryCache, BasesSummaryCell, CellValue, EngineCtx, execute},
-        eval::Value,
+        eval::{LinkValue, Value},
         expr::{Expr, PropertyRef, parse_expr},
     },
     db::migrate,
@@ -880,6 +880,182 @@ fn column_formula_errors_poison_cells_without_failing_view() {
         &result.rows[0].cells[1],
         CellValue::Value(Value::Text(name)) if name.ends_with(".md")
     ));
+}
+
+#[test]
+fn aliases_are_loaded_from_the_indexed_property() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_list_property(&conn, 2, 3, "aliases", &["B", "Beta alias"]);
+
+    let mut query = query();
+    query.source = QuerySource::Folder("Projects".to_string());
+    query.columns = vec![column("file.aliases")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute aliases query");
+    let beta = result
+        .rows
+        .iter()
+        .find(|row| row.path == "Projects/Beta.md")
+        .expect("Beta result row");
+    assert_eq!(
+        beta.cells,
+        vec![CellValue::Value(Value::List(vec![
+            Value::Text("B".to_string()),
+            Value::Text("Beta alias".to_string()),
+        ]))]
+    );
+}
+
+#[test]
+fn links_and_embeds_are_complete_and_partitioned() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         )
+         VALUES (2, 0, 'Notes/Target.md', 'Target', NULL, 'wikilink', 1, 0, '', 10, 19)",
+        [],
+    )
+    .expect("insert embed");
+
+    let mut query = query();
+    query.source = QuerySource::Folder("Projects".to_string());
+    query.columns = vec![
+        column("file.links"),
+        column("file.embeds"),
+        column("file.outDegree"),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute aliases and embeds query");
+    let alpha = result
+        .rows
+        .iter()
+        .find(|row| row.path == "Projects/Alpha.md")
+        .expect("Alpha result row");
+    assert_eq!(
+        alpha.cells,
+        vec![
+            CellValue::Value(Value::List(vec![Value::Link(LinkValue {
+                target: "Gamma".to_string(),
+                display: None,
+                resolved_path: Some("Notes/Gamma.md".to_string()),
+            })])),
+            CellValue::Value(Value::List(vec![])),
+            CellValue::Value(Value::Number(1.0)),
+        ]
+    );
+    let beta = result
+        .rows
+        .iter()
+        .find(|row| row.path == "Projects/Beta.md")
+        .expect("Beta result row");
+    assert_eq!(
+        beta.cells,
+        vec![
+            CellValue::Value(Value::List(vec![])),
+            CellValue::Value(Value::List(vec![Value::Link(LinkValue {
+                target: "Target".to_string(),
+                display: None,
+                resolved_path: Some("Notes/Target.md".to_string()),
+            })])),
+            CellValue::Value(Value::Number(1.0)),
+        ]
+    );
+}
+
+#[test]
+fn temporal_sources_and_custom_summaries_never_cache() {
+    const DAY_MS: i64 = 86_400_000;
+
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let cache = BasesQueryCache::default();
+
+    let mut recent = query();
+    recent.source = QuerySource::Recent { days: 1 };
+    recent.columns = vec![column("file.path")];
+    let before_cutoff_transition = execute(
+        &recent,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS + 3_000,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute recent query before cutoff transition");
+    let after_cutoff_transition = execute(
+        &recent,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS + 3_001,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute recent query after cutoff transition");
+    assert_eq!(
+        before_cutoff_transition
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Gamma.md"]
+    );
+    assert!(after_cutoff_transition.rows.is_empty());
+    assert!(!before_cutoff_transition.cache_hit);
+    assert!(!after_cutoff_transition.cache_hit);
+
+    let mut summary = query();
+    summary.columns = vec![column("status")];
+    summary.custom_summaries = vec![("clock".to_string(), expr("now()"))];
+    summary.summaries = vec![(
+        "status".to_string(),
+        SummaryRef::Custom("clock".to_string()),
+    )];
+    let first_summary = execute(
+        &summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 100,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute first temporal custom summary");
+    let second_summary = execute(
+        &summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 200,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute second temporal custom summary");
+    assert!(matches!(
+        &first_summary.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 100
+    ));
+    assert!(matches!(
+        &second_summary.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 200
+    ));
+    assert!(!first_summary.cache_hit);
+    assert!(!second_summary.cache_hit);
 }
 
 #[test]

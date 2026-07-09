@@ -6582,7 +6582,7 @@ fn query_source_filter(
             expr_string_literal(tag)
         ))),
         QuerySource::Recent { days } => Some(FilterYaml::Stmt(format!(
-            "file.mtime > now() - duration({})",
+            "file.mtime >= now() - duration({})",
             expr_string_literal(&format!("{days}d"))
         ))),
         QuerySource::Linked { from_path, depth } if *depth == 1 => Some(FilterYaml::Stmt(format!(
@@ -7022,10 +7022,11 @@ fn column_value_kind(index: usize, rows: &[crate::bases::engine::BasesRow]) -> S
     rows.iter()
         .filter_map(|row| row.cells.get(index))
         .find_map(|cell| match cell {
+            crate::bases::engine::CellValue::Value(crate::bases::eval::Value::Null)
+            | crate::bases::engine::CellValue::Error(_) => None,
             crate::bases::engine::CellValue::Value(value) => Some(value_kind(value).to_string()),
-            crate::bases::engine::CellValue::Error(_) => None,
         })
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn column_role(index: usize, id: &str) -> ColumnRole {

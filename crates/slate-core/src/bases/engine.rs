@@ -1181,14 +1181,27 @@ fn assemble_row(
         has_time: true,
     });
     file_fields.tags = load_tags(conn, file.id)?;
-    file_fields.links = load_links(conn, file.id)?;
+    let outgoing = load_outgoing_links(conn, file.id)?;
+    file_fields.links = outgoing.links;
+    file_fields.embeds = outgoing.embeds;
     file_fields.backlinks = load_backlinks(conn, &file.path)?;
-    file_fields.out_degree = file_fields.links.len() as u64;
+    file_fields.out_degree = (file_fields.links.len() + file_fields.embeds.len()) as u64;
     file_fields.in_degree = file_fields.backlinks.len() as u64;
     let properties = load_properties(conn, file.id)?;
     for (key, value) in &properties {
         file_fields.properties.insert(key.clone(), value.clone());
     }
+    file_fields.aliases = match file_fields.properties.get("aliases") {
+        Some(Value::Text(alias)) => vec![alias.clone()],
+        Some(Value::List(aliases)) => aliases
+            .iter()
+            .filter_map(|alias| match alias {
+                Value::Text(alias) => Some(alias.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     file_fields
         .properties
         .insert("tasks".to_string(), task_counts_value(task_counts));
@@ -1400,24 +1413,44 @@ fn load_tags(conn: &Connection, file_id: i64) -> Result<Vec<String>, VaultError>
         .map_err(|err| DbError::from(err).into())
 }
 
-fn load_links(conn: &Connection, file_id: i64) -> Result<Vec<LinkValue>, VaultError> {
+#[derive(Debug, Default)]
+struct OutgoingLinks {
+    links: Vec<LinkValue>,
+    embeds: Vec<LinkValue>,
+}
+
+fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks, VaultError> {
     let mut stmt = conn
         .prepare(
-            "SELECT target_raw, target_path FROM links WHERE source_file_id = ?1 ORDER BY ordinal",
+            "SELECT target_raw, target_path, is_embed
+             FROM links
+             WHERE source_file_id = ?1
+             ORDER BY ordinal",
         )
         .map_err(DbError::from)?;
-    stmt.query_map(params![file_id], |row| {
+    let rows = stmt.query_map(params![file_id], |row| {
         let target: String = row.get(0)?;
         let resolved_path: Option<String> = row.get(1)?;
-        Ok(LinkValue {
-            target,
-            display: None,
-            resolved_path,
-        })
-    })
-    .map_err(DbError::from)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|err| DbError::from(err).into())
+        let is_embed = row.get::<_, i64>(2)? != 0;
+        Ok((
+            LinkValue {
+                target,
+                display: None,
+                resolved_path,
+            },
+            is_embed,
+        ))
+    })?;
+    let mut outgoing = OutgoingLinks::default();
+    for row in rows {
+        let (link, is_embed) = row.map_err(DbError::from)?;
+        if is_embed {
+            outgoing.embeds.push(link);
+        } else {
+            outgoing.links.push(link);
+        }
+    }
+    Ok(outgoing)
 }
 
 fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, VaultError> {
@@ -2491,12 +2524,17 @@ fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
 }
 
 fn query_mentions_global(query: &SlateQuery, needle: GlobalFn) -> bool {
-    query
-        .filters
-        .as_ref()
-        .is_some_and(|filter| filter_mentions_global(filter, needle))
+    matches!(query.source, QuerySource::Recent { .. })
+        || query
+            .filters
+            .as_ref()
+            .is_some_and(|filter| filter_mentions_global(filter, needle))
         || query
             .formulas
+            .iter()
+            .any(|(_, expr)| expr_mentions_global(expr, needle))
+        || query
+            .custom_summaries
             .iter()
             .any(|(_, expr)| expr_mentions_global(expr, needle))
         || query
@@ -2615,7 +2653,8 @@ impl VaultLookup for SqlVaultLookup<'_> {
             .optional()
             .ok()
             .flatten()
-            .and_then(|id| load_links(self.conn, id).ok())
+            .and_then(|id| load_outgoing_links(self.conn, id).ok())
+            .map(|outgoing| outgoing.links)
             .unwrap_or_default()
     }
 
