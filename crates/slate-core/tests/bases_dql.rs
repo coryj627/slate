@@ -1688,6 +1688,22 @@ WHERE file.path = "123.md"
 
 #[test]
 fn dql_exact_runtime_semantics_cover_constructors_operators_and_nulls() {
+    const CHILD: &str = "SLATE_DQL_EXACT_RUNTIME_TZ_CHILD";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("locate DQL exact-runtime test binary"),
+        )
+        .arg("dql_exact_runtime_semantics_cover_constructors_operators_and_nulls")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TZ", "America/New_York")
+        .env(CHILD, "1")
+        .status()
+        .expect("run DQL exact-runtime test in America/New_York");
+        assert!(status.success(), "DQL exact-runtime timezone child failed");
+        return;
+    }
+
     let conn = dql_fixture_conn();
     let source = r#"TABLE WITHOUT ID number(42) AS "Number", link(link("Target.md")) AS "Link identity", date(link("2026-07-10", "2020-01-01")) AS "Link date", embed(link("Target.md")) AS "Embed", embed(missing, 42) AS "Null embed left", embed(link("Target.md"), missing) AS "Null embed right", slice([1, 2]) AS "Slice", sum([5]) AS "Sum", average([5]) AS "Average", sum([missing]) AS "Sum only null", regextest(missing, "x") AS "Regex null", regexreplace("x", missing, "y") AS "Replace null", split("x", missing) AS "Split null", string([1, [2, 3]]) AS "Nested string", string(date("2026-07-10")) AS "Date string", string(dur("1d")) AS "Duration string", string(link("Target.md")) AS "Link string", join([1, [2, 3], {a: 1}], missing) AS "Join", "done: " + true AS "Concat bool", "values: " + [1, 2] AS "Concat list", "x" * -2 AS "Negative right", -2 * "x" AS "Negative left", dur("1d") * 2 AS "Duration multiply", missing + missing AS "Null add", date("2026-07-10") - missing AS "Date null", striptime(date("2026-07-10T12:00:00")) AS "Strip", replace(true, missing, true) AS "Literal null precedence", regexreplace(true, missing, true) AS "Regex null precedence", dur("-1day, 2hrs") AS "Negative duration", dur("1yrs 2mos 3wks") AS "Aliases", dur("1ms") AS "Invalid ms", dur("1M") AS "Invalid M", dur("1y") AS "Invalid y", dur(1day) AS "Raw"
 WHERE file.path = "123.md"
