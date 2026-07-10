@@ -122,20 +122,33 @@ struct BaseEmbedRequest: Equatable, Hashable {
         previews(in: text).map(\.request)
     }
 
-    fileprivate func openHandle(session: VaultSession, thisPath: String?) throws -> UInt64 {
+    fileprivate func openHandle(
+        session: VaultSession,
+        thisPath: String?,
+        resolvedSavedQueryID: String? = nil
+    ) throws -> OpenedBaseEmbedHandle {
         switch source {
         case .file(let path, _):
-            return try session.openBase(path: path)
+            return OpenedBaseEmbedHandle(
+                handle: try session.openBase(path: path),
+                savedQueryID: nil)
         case .inlineBase(let source):
-            return try session.openBaseInline(source: source, thisPath: thisPath)
+            return OpenedBaseEmbedHandle(
+                handle: try session.openBaseInline(source: source, thisPath: thisPath),
+                savedQueryID: nil)
         case .savedQuery(let reference, let viewName):
-            let query = try Self.savedQueryID(reference: reference, session: session)
+            let query = try resolvedSavedQueryID
+                ?? Self.savedQueryID(reference: reference, session: session)
             let saved = try session.getSavedQuery(id: query)
             let queryJSON = try Self.savedQueryJSON(
                 fromEnvelope: saved.queryJson, viewOverride: viewName)
-            return try session.openQuery(queryJson: queryJSON, thisPath: thisPath)
+            return OpenedBaseEmbedHandle(
+                handle: try session.openQuery(queryJson: queryJSON, thisPath: thisPath),
+                savedQueryID: query)
         case .dataview(let source):
-            return try session.openDql(source: source, thisPath: thisPath)
+            return OpenedBaseEmbedHandle(
+                handle: try session.openDql(source: source, thisPath: thisPath),
+                savedQueryID: nil)
         }
     }
 
@@ -234,6 +247,11 @@ struct BaseEmbedRequest: Equatable, Hashable {
     }
 }
 
+fileprivate struct OpenedBaseEmbedHandle {
+    let handle: UInt64
+    let savedQueryID: String?
+}
+
 struct BaseEmbedCacheKey: Equatable, Hashable {
     let request: BaseEmbedRequest
     let thisPath: String?
@@ -293,6 +311,9 @@ final class BaseEmbedHandle {
 
     private(set) var handle: UInt64?
     private(set) var views: [BaseViewSummary] = []
+    private(set) var resolvedSavedQueryID: String?
+    private(set) weak var session: VaultSession?
+    private var documents: [ObjectIdentifier: WeakBaseEmbedDocument] = [:]
 
     init(request: BaseEmbedRequest, thisPath: String?) {
         self.request = request
@@ -300,15 +321,49 @@ final class BaseEmbedHandle {
     }
 
     func loadIfNeeded(session: VaultSession) throws {
-        guard handle == nil else { return }
+        if handle != nil {
+            guard self.session === session else {
+                throw BaseEmbedDocumentError.message(
+                    "Embedded base belongs to a replaced vault session.")
+            }
+            return
+        }
         do {
-            let opened = try request.openHandle(session: session, thisPath: thisPath)
-            handle = opened
-            views = try session.baseViews(handle: opened)
+            let opened = try request.openHandle(
+                session: session,
+                thisPath: thisPath,
+                resolvedSavedQueryID: resolvedSavedQueryID)
+            handle = opened.handle
+            resolvedSavedQueryID = opened.savedQueryID
+            self.session = session
+            views = try session.baseViews(handle: opened.handle)
         } catch {
             close(session: session)
             throw error
         }
+    }
+
+    func reload(session: VaultSession) throws {
+        close(session: session)
+        try loadIfNeeded(session: session)
+    }
+
+    func register(_ document: BaseEmbedDocument) {
+        pruneDocuments()
+        documents[ObjectIdentifier(document)] = WeakBaseEmbedDocument(document)
+    }
+
+    func unregister(_ document: BaseEmbedDocument) {
+        documents[ObjectIdentifier(document)] = nil
+        pruneDocuments()
+        if documents.isEmpty, let session {
+            close(session: session)
+        }
+    }
+
+    var liveDocuments: [BaseEmbedDocument] {
+        pruneDocuments()
+        return documents.values.compactMap(\.document)
     }
 
     func close(session: VaultSession) {
@@ -317,6 +372,20 @@ final class BaseEmbedHandle {
         }
         handle = nil
         views = []
+        self.session = nil
+    }
+
+    private func pruneDocuments() {
+        documents = documents.filter { $0.value.document != nil }
+    }
+}
+
+@MainActor
+private final class WeakBaseEmbedDocument {
+    weak var document: BaseEmbedDocument?
+
+    init(_ document: BaseEmbedDocument) {
+        self.document = document
     }
 }
 
@@ -360,6 +429,7 @@ final class BaseEmbedDocument: ObservableObject {
         self.request = request
         self.thisPath = thisPath
         self.sharedHandle = sharedHandle ?? BaseEmbedHandle(request: request, thisPath: thisPath)
+        self.sharedHandle.register(self)
     }
 
     var activeViewName: String? {
@@ -452,6 +522,70 @@ final class BaseEmbedDocument: ObservableObject {
         } catch {
             fail(friendlyMessage(for: error))
         }
+    }
+
+    /// Re-execute an indexed note/property write without disturbing this
+    /// embed's view, quick filter, or transient sort state.
+    func refreshAfterInAppWrite(session: VaultSession) {
+        guard !needsInitialLoad, sharedHandle.session === session else { return }
+        executeActiveView(session: session)
+    }
+
+    /// Adopt a handle that the owner registry reopened after its `.base`
+    /// definition or resolved saved-query AST changed. UI state stays local to
+    /// this embed and is restored by stable view/column identity.
+    func refreshAfterSharedHandleReload(session: VaultSession) {
+        guard !needsInitialLoad, sharedHandle.session === session else { return }
+        let previousViewName = activeViewName
+        let previousViewIndex = activeViewIndex
+        let previousSortColumnID = sortState.flatMap { sort in
+            result?.columns.indices.contains(sort.columnIndex) == true
+                ? result?.columns[sort.columnIndex].id
+                : nil
+        }
+        let previousSortAscending = sortState?.ascending ?? true
+
+        views = request.displayViews(from: sharedHandle.views)
+        if let requested = request.requestedViewName {
+            guard let requestedIndex = views.firstIndex(where: { $0.name == requested }) else {
+                fail(
+                    "Unknown base view \(requested). Available views: "
+                        + "\(availableList(views.map(\.name))).")
+                return
+            }
+            activeViewIndex = requestedIndex
+        } else if let previousViewName,
+            let matchingIndex = views.firstIndex(where: { $0.name == previousViewName })
+        {
+            activeViewIndex = matchingIndex
+        } else {
+            activeViewIndex = views.isEmpty ? 0 : min(previousViewIndex, views.count - 1)
+        }
+
+        // Establish the reopened view first, then remap transient sort by its
+        // stable column id before executing the sorted result.
+        sortState = nil
+        executeActiveView(session: session)
+        if let previousSortColumnID,
+            let columnIndex = result?.columns.firstIndex(where: { $0.id == previousSortColumnID })
+        {
+            sortState = DataGridSortState(
+                columnIndex: columnIndex,
+                ascending: previousSortAscending)
+            executeActiveView(session: session)
+        }
+    }
+
+    func failRefresh(_ error: Error) {
+        fail(friendlyMessage(for: error))
+    }
+
+    func acquireRefreshLease() {
+        sharedHandle.register(self)
+    }
+
+    func releaseRefreshLease() {
+        sharedHandle.unregister(self)
     }
 
     @discardableResult

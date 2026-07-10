@@ -381,8 +381,8 @@ final class AppState: ObservableObject {
     @Published var lastBaseRefreshAnnouncements: [String] = []
 
     /// N3-07 race-test seam — always nil in production. Tests park a completed
-    /// write immediately before the session/path publish guard, switch vaults,
-    /// then release it to prove a stale session cannot refresh live documents.
+    /// write immediately before the session/active-note publish guards, switch
+    /// notes or vaults, then release it to prove global Bases refresh ownership.
     var basesPostWritePublishGate: (() async -> Void)?
 
     /// Currently selected Bases row/column for registry commands whose
@@ -2473,13 +2473,14 @@ final class AppState: ObservableObject {
         tasksLoadError = nil
     }
 
-    /// Audit #203: embeds + content pipelines clear synchronously on any
-    /// transition (their cached payloads are whole rendered content of the
-    /// PREVIOUS file); links/properties intentionally hold stale values
-    /// until the new load lands (#90 anti-flicker discipline).
+    /// Audit #203: resolved note embeds + content pipelines clear synchronously
+    /// on transition (their cached payloads belong to the previous file).
+    /// Rendered Base embeds use weak visibility leases because sibling panes
+    /// can remain live; links/properties intentionally hold stale values until
+    /// the new load lands (#90 anti-flicker discipline).
     func clearTransitionSensitiveCollections() {
         currentNoteEmbedResolutions = [:]
-        releaseAllBaseEmbedDocuments()
+        releaseUnleasedBaseEmbedDocuments()
         // Drop any open embed-preview popover too — its target may
         // not exist in the new file's embed set.
         pendingEmbedPreview = nil
@@ -5173,6 +5174,11 @@ final class AppState: ObservableObject {
         // rather than mutating state for a file the user has
         // already moved on from.
         guard currentSession === session else { return }
+        if case .success = outcome {
+            // Bases are session-global consumers. A same-session note switch
+            // must not suppress their refresh after this write committed.
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+        }
         guard loadedFilePath == path else {
             isSaving = false
             return
@@ -5188,7 +5194,6 @@ final class AppState: ObservableObject {
             workspace.mirrorSaveResult(
                 path: path, baseline: contents,
                 contentHash: report.newContentHash)
-            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
             // U1-2: a close-tab request that chose "Save" completes its
             // close once the save lands cleanly.
             if let pending = pendingTabCloseAfterSave,
@@ -6182,6 +6187,11 @@ final class AppState: ObservableObject {
         // rather than mutating state for a file the user has
         // already moved on from. Same shape as `performSave`.
         guard currentSession === session else { return }
+        if case .success = outcome {
+            // The native property write is already indexed. Refresh global
+            // Bases consumers before guarding active-note-only publication.
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+        }
         guard loadedFilePath == path else {
             isEditingProperty = false
             return
@@ -6212,7 +6222,6 @@ final class AppState: ObservableObject {
                 isEditingProperty = false
                 return
             }
-            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
             if case .setSource = action {
                 propertiesSourceError = nil
                 propertiesSourceCommitted &+= 1

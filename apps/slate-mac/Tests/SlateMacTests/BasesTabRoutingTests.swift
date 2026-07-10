@@ -278,6 +278,8 @@ final class BasesTabRoutingTests: XCTestCase {
         ).write(to: vault.appendingPathComponent("Queries/Tasks.base"))
         try Data("# Alpha\n".utf8)
             .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
 
         let store = RecentVaultsStore(
             fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
@@ -447,6 +449,54 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 task."])
     }
 
+    func testSameSessionNavigationAfterNoteSaveRefreshesGlobalBasesWithoutPublishingStaleNoteState()
+        async throws
+    {
+        let fixture = try await makeLiveTaskSurfacesState()
+        let session = try XCTUnwrap(fixture.state.currentSession)
+        let request = try XCTUnwrap(BaseEmbedRequest.wikilinkTarget("Queries/Tasks.base"))
+        let embed = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Alpha.md",
+            sharedHandle: fixture.state.baseEmbedHandle(
+                for: request,
+                thisPath: "Notes/Alpha.md"))
+        embed.load(session: session)
+        XCTAssertTrue(embed.result?.rows.isEmpty == true)
+
+        let entered = expectation(description: "same-session save parked after native write")
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        fixture.state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gate {}
+        }
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Ship after navigation\n")
+        let save = try XCTUnwrap(fixture.state.saveCurrentNote())
+        await fulfillment(of: [entered], timeout: 10)
+        fixture.state.basesPostWritePublishGate = nil
+
+        fixture.state.openFile("Notes/Beta.md", target: .newTab)
+        await fixture.state.noteLoadTask?.value
+        let betaText = fixture.state.currentNoteText
+        let betaHash = fixture.state.currentNoteContentHash
+        let betaPropertyKeys = fixture.state.currentNoteProperties.map(\.key)
+
+        release.finish()
+        await save.value
+
+        XCTAssertEqual(fixture.state.loadedFilePath, "Notes/Beta.md")
+        XCTAssertEqual(fixture.state.currentNoteText, betaText)
+        XCTAssertEqual(fixture.state.currentNoteContentHash, betaHash)
+        XCTAssertEqual(fixture.state.currentNoteProperties.map(\.key), betaPropertyKeys)
+        XCTAssertEqual(fixture.openBase.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(
+            fixture.openDashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(embed.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 task."])
+    }
+
     func testGridSetAndDeleteRefreshSiblingSurfacesAndPreserveActiveState() async throws {
         let fixture = try await makeLivePropertySurfacesState()
 
@@ -511,6 +561,67 @@ final class BasesTabRoutingTests: XCTestCase {
 
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
         XCTAssertEqual(doc.activeViewIndex, 1)
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
+    }
+
+    func testSameSessionNavigationAfterPropertyEditRefreshesGlobalBasesWithoutPublishingStaleNoteState()
+        async throws
+    {
+        let fixture = try await makeLivePropertySurfacesState()
+        let state = fixture.state
+        let session = try XCTUnwrap(state.currentSession)
+        let query = try XCTUnwrap(
+            state.baseQueries.savedQueries.first { $0.name == "Active notes" })
+        let request = try XCTUnwrap(
+            BaseEmbedRequest.codeFence(
+                language: "slate-query",
+                source: "```slate-query\nquery: \(query.id)\n```"))
+        let embed = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Alpha.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: request,
+                thisPath: "Notes/Alpha.md"))
+        embed.load(session: session)
+        XCTAssertEqual(
+            embed.result?.rows.map(\.filePath),
+            ["Notes/Alpha.md", "Notes/Beta.md"])
+
+        state.openFile("Notes/Alpha.md", target: .newTab)
+        await state.noteLoadTask?.value
+        let entered = expectation(description: "same-session property edit parked after native write")
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gate {}
+        }
+        let edit = try XCTUnwrap(
+            state.setProperty(
+                path: "Notes/Alpha.md",
+                key: "status",
+                value: .text(value: "archived")))
+        await fulfillment(of: [entered], timeout: 10)
+        state.basesPostWritePublishGate = nil
+
+        state.openFile("Notes/Beta.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        let betaText = state.currentNoteText
+        let betaHash = state.currentNoteContentHash
+        let betaPropertyKeys = state.currentNoteProperties.map(\.key)
+
+        release.finish()
+        await edit.value
+
+        XCTAssertEqual(state.loadedFilePath, "Notes/Beta.md")
+        XCTAssertEqual(state.currentNoteText, betaText)
+        XCTAssertEqual(state.currentNoteContentHash, betaHash)
+        XCTAssertEqual(state.currentNoteProperties.map(\.key), betaPropertyKeys)
+        XCTAssertEqual(fixture.sibling.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(
+            fixture.dashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Beta.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(embed.result?.rows.map(\.filePath), ["Notes/Beta.md"])
         XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
     }
 

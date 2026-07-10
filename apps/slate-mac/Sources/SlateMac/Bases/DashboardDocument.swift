@@ -135,6 +135,15 @@ final class DashboardDocument: ObservableObject {
         }
     }
 
+    /// Reopen only sections that consume the changed saved-query identity.
+    /// Other sections keep their handles and result state; a failed reopen is
+    /// localized to the matching section's existing error surface.
+    func reloadSavedQuery(id: String, session: VaultSession, thisPath: String? = nil) {
+        for section in sections {
+            section.reloadSavedQuery(id: id, session: session, thisPath: thisPath)
+        }
+    }
+
     /// Re-execute every live section and return membership announcements for
     /// sections whose counted row identities changed. Callers coalesce these
     /// strings across dashboard/tab/dock surfaces before posting them.
@@ -249,6 +258,11 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
         } else {
             execute(session: session, thisPath: thisPath)
         }
+    }
+
+    func reloadSavedQuery(id: String, session: VaultSession, thisPath: String? = nil) {
+        guard status.savedQueryId == id else { return }
+        load(session: session, thisPath: thisPath)
     }
 
     func close(session: VaultSession) {

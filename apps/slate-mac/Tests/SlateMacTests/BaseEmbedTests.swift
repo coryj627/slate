@@ -307,6 +307,62 @@ final class BaseEmbedTests: XCTestCase {
         XCTAssertTrue(state.baseEmbedHandles.isEmpty)
     }
 
+    func testRegisteredEmbedRefreshPreservesViewQuickFilterAndSortAfterNoteWrite() async throws {
+        let state = try await makeAppState()
+        let session = try XCTUnwrap(state.currentSession)
+        let request = try XCTUnwrap(
+            BaseEmbedRequest.codeFence(
+                language: "base",
+                source:
+                    #"""
+                    ```base
+                    views:
+                      - type: table
+                        name: All
+                        filters: "file.inFolder(\"Notes\")"
+                        order: [file.name, status]
+                      - type: table
+                        name: Host status
+                        filters:
+                          and:
+                            - "file.inFolder(\"Notes\")"
+                            - "status == \"host\""
+                        order: [file.name, status]
+                    ```
+                    """#))
+        let document = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Host.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: request,
+                thisPath: "Notes/Host.md"))
+        document.load(session: session)
+        document.selectView(index: 1, session: session)
+        _ = document.applyQuickFilter("o", session: session)
+        document.setTransientSort(
+            DataGridSortState(columnIndex: 0, ascending: false),
+            session: session)
+        XCTAssertEqual(document.result?.rows.map(\.filePath), ["Notes/Host.md"])
+
+        _ = try session.setProperty(
+            path: "Notes/Other.md",
+            key: "status",
+            value: .text(value: "host"),
+            expectedContentHash: nil)
+        state.refreshVisibleBasesAfterInAppWrite(
+            session: session,
+            changedPath: "Notes/Other.md")
+
+        XCTAssertEqual(document.activeViewName, "Host status")
+        XCTAssertEqual(document.quickFilterText, "o")
+        XCTAssertEqual(
+            document.sortState,
+            DataGridSortState(columnIndex: 0, ascending: false))
+        XCTAssertEqual(
+            document.result?.rows.map(\.filePath),
+            ["Notes/Other.md", "Notes/Host.md"])
+    }
+
     func testUnknownNamedViewFailsWithAvailableViews() async throws {
         let state = try await makeAppState()
         let session = try XCTUnwrap(state.currentSession)

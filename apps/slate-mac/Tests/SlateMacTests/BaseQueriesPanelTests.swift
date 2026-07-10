@@ -588,6 +588,103 @@ final class BaseQueriesPanelTests: XCTestCase {
             "Run query: Active projects")
     }
 
+    func testUpdatingSavedQueryReopensTabDashboardDirectDockAndNameAndIDEmbeds() async throws {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: "Open work",
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Overview",
+            sections: [
+                DashboardSection(
+                    savedQueryId: id,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+        state.refreshBaseQueries()
+
+        let nameRequest = try XCTUnwrap(
+            BaseEmbedRequest.codeFence(
+                language: "slate-query",
+                source: "```slate-query\nquery: Active projects\n```"))
+        let nameEmbed = BaseEmbedDocument(
+            request: nameRequest,
+            thisPath: "Projects/Alpha.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: nameRequest,
+                thisPath: "Projects/Alpha.md"))
+        nameEmbed.load(session: session)
+        let idRequest = try XCTUnwrap(
+            BaseEmbedRequest.codeFence(
+                language: "slate-query",
+                source: "```slate-query\nquery: \(id)\n```"))
+        let idEmbed = BaseEmbedDocument(
+            request: idRequest,
+            thisPath: "Projects/Beta.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: idRequest,
+                thisPath: "Projects/Beta.md"))
+        idEmbed.load(session: session)
+        XCTAssertEqual(nameEmbed.result?.rows.count, 3)
+        XCTAssertEqual(idEmbed.result?.rows.count, 3)
+
+        state.renameSavedQuery(id: id, name: "Renamed projects")
+        state.openSavedQuery(id: id, name: "Renamed projects")
+        let tab = try XCTUnwrap(state.activeBaseDocument)
+        state.openDashboard(id: dashboardID, name: "Overview", target: .newTab)
+        let dashboard = try XCTUnwrap(state.activeDashboardDocument)
+        state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+        XCTAssertEqual(tab.result?.rows.count, 3)
+        XCTAssertEqual(dashboard.sections[0].result?.rows.count, 3)
+        XCTAssertEqual(dock.result?.rows.count, 3)
+
+        state.editSavedQueryInBuilder(id: id)
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        model.source = .folder("Backlog")
+        state.basesBuilderUpdateSavedQuery()
+
+        XCTAssertTrue(tab.result?.rows.isEmpty == true)
+        XCTAssertTrue(dashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(dock.result?.rows.isEmpty == true)
+        XCTAssertEqual(nameEmbed.state, .ready)
+        XCTAssertTrue(nameEmbed.result?.rows.isEmpty == true)
+        XCTAssertEqual(idEmbed.state, .ready)
+        XCTAssertTrue(idEmbed.result?.rows.isEmpty == true)
+    }
+
+    func testUpdatingSavedQueryReopensDockedDashboardSection() async throws {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Overview",
+            sections: [
+                DashboardSection(
+                    savedQueryId: id,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+        state.refreshBaseQueries()
+        state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dockedDashboard = try XCTUnwrap(state.basesDockDashboardDocument)
+        XCTAssertEqual(dockedDashboard.sections[0].result?.rows.count, 3)
+
+        state.editSavedQueryInBuilder(id: id)
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        model.source = .folder("Backlog")
+        state.basesBuilderUpdateSavedQuery()
+
+        XCTAssertTrue(dockedDashboard.sections[0].result?.rows.isEmpty == true)
+    }
+
     func testDeletingSavedQueryClosesOpenTabsAndDocument() async throws {
         let (state, session) = try await makeState()
         let id = try session.saveQuery(

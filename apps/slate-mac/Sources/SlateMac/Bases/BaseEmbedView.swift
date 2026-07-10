@@ -48,10 +48,14 @@ struct BaseEmbedView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(request.accessibilityLabel)
         .onAppear {
-            guard document.needsInitialLoad, let session else { return }
+            document.acquireRefreshLease()
+            guard let session,
+                document.needsInitialLoad || document.handle == nil
+            else { return }
             document.load(session: session)
         }
         .onDisappear {
+            document.releaseRefreshLease()
             quickFilterTask?.cancel()
             quickFilterTask = nil
         }

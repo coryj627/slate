@@ -929,6 +929,11 @@ extension AppState {
             updates.forEach(append)
         }
 
+        refreshBaseEmbedDocumentsAfterInAppWrite(
+            session: session,
+            changedBasePath: changedBasePath,
+            appendMembershipChange: appendMembershipChange)
+
         refreshBasesDockAfterInAppWrite(
             session: session,
             changedBasePath: changedBasePath,
@@ -962,6 +967,48 @@ extension AppState {
             document.load(session: session, thisPath: thisPath)
         } else {
             document.executeActiveView(session: session, thisPath: thisPath)
+        }
+    }
+
+    private func refreshBaseEmbedDocumentsAfterInAppWrite(
+        session: VaultSession,
+        changedBasePath: String?,
+        appendMembershipChange: (BaseRowMembership, BasesResultSet?) -> Void
+    ) {
+        let registeredHandles = baseEmbedHandles.sorted { lhs, rhs in
+            let left = "\(lhs.key.request.cacheKey)|\(lhs.key.thisPath ?? "")"
+            let right = "\(rhs.key.request.cacheKey)|\(rhs.key.thisPath ?? "")"
+            return left < right
+        }
+        for (key, handle) in registeredHandles {
+            guard currentSession === session,
+                baseEmbedHandles[key] === handle,
+                handle.session === session
+            else { continue }
+            let documents = handle.liveDocuments.filter { !$0.needsInitialLoad }
+            guard !documents.isEmpty else { continue }
+            let previous = Dictionary(
+                uniqueKeysWithValues: documents.map {
+                    (ObjectIdentifier($0), BaseRowMembership(rows: $0.result?.rows ?? []))
+                })
+
+            if let changedBasePath, handle.request.targetPath == changedBasePath {
+                do {
+                    try handle.reload(session: session)
+                    documents.forEach { $0.refreshAfterSharedHandleReload(session: session) }
+                } catch {
+                    documents.forEach { $0.failRefresh(error) }
+                }
+            } else {
+                documents.forEach { $0.refreshAfterInAppWrite(session: session) }
+            }
+
+            guard currentSession === session, baseEmbedHandles[key] === handle else { continue }
+            for document in documents {
+                appendMembershipChange(
+                    previous[ObjectIdentifier(document)] ?? .empty,
+                    document.result)
+            }
         }
     }
 
@@ -1312,7 +1359,7 @@ extension AppState {
                 queryJson: model.draft.queryJSON(),
                 sourceSyntax: .builder)
             refreshBaseQueries()
-            refreshOpenSavedQueryDocument(id: editingSavedQuery.id, name: editingSavedQuery.name)
+            refreshSavedQueryConsumers(id: editingSavedQuery.id, session: session)
             postAccessibilityAnnouncement(
                 "Updated saved query \(editingSavedQuery.name).",
                 priority: .medium)
@@ -1323,10 +1370,62 @@ extension AppState {
         }
     }
 
-    private func refreshOpenSavedQueryDocument(id: String, name: String) {
-        guard let session = currentSession else { return }
-        let key = BaseDocumentSource.savedQuery(id: id, name: name).key
-        baseDocuments[key]?.refresh(session: session)
+    private func refreshSavedQueryConsumers(id: String, session: VaultSession) {
+        guard currentSession === session else { return }
+
+        let registeredBases = baseDocuments.sorted { $0.key < $1.key }
+        for (key, document) in registeredBases {
+            guard currentSession === session, baseDocuments[key] === document else { continue }
+            guard case .savedQuery(let documentID, _) = document.source,
+                documentID == id
+            else { continue }
+            document.load(session: session)
+        }
+
+        let registeredDashboards = dashboardDocuments.sorted { $0.key < $1.key }
+        for (dashboardID, document) in registeredDashboards {
+            guard currentSession === session,
+                dashboardDocuments[dashboardID] === document
+            else { continue }
+            document.reloadSavedQuery(id: id, session: session)
+        }
+
+        if case .savedQuery(let dockedID, _) = basesDock.target,
+            dockedID == id,
+            let document = basesDockDocument
+        {
+            document.load(session: session, thisPath: basesDock.thisPath)
+            basesDock.rebaseMembership(BaseRowMembership(rows: document.result?.rows ?? []))
+        } else if case .dashboard = basesDock.target,
+            let document = basesDockDashboardDocument
+        {
+            document.reloadSavedQuery(
+                id: id,
+                session: session,
+                thisPath: basesDock.thisPath)
+            basesDock.rebaseMembership(document.membershipSignature)
+        }
+
+        let registeredEmbeds = baseEmbedHandles.sorted { lhs, rhs in
+            let left = "\(lhs.key.request.cacheKey)|\(lhs.key.thisPath ?? "")"
+            let right = "\(rhs.key.request.cacheKey)|\(rhs.key.thisPath ?? "")"
+            return left < right
+        }
+        for (key, handle) in registeredEmbeds {
+            guard currentSession === session,
+                baseEmbedHandles[key] === handle,
+                handle.session === session,
+                handle.resolvedSavedQueryID == id
+            else { continue }
+            let documents = handle.liveDocuments.filter { !$0.needsInitialLoad }
+            guard !documents.isEmpty else { continue }
+            do {
+                try handle.reload(session: session)
+                documents.forEach { $0.refreshAfterSharedHandleReload(session: session) }
+            } catch {
+                documents.forEach { $0.failRefresh(error) }
+            }
+        }
     }
 
     func basesBuilderAddCondition() {
@@ -1675,6 +1774,21 @@ extension AppState {
             }
         }
         baseEmbedHandles = [:]
+    }
+
+    /// Active-note transitions must not tear down embeds still rendered in a
+    /// sibling editor/reading surface. Weak document leases identify handles
+    /// with no visible owner; those are the only entries safe to release here.
+    func releaseUnleasedBaseEmbedDocuments() {
+        guard let session = currentSession else {
+            baseEmbedHandles = [:]
+            return
+        }
+        let unleased = baseEmbedHandles.filter { $0.value.liveDocuments.isEmpty }
+        for (key, handle) in unleased {
+            handle.close(session: session)
+            baseEmbedHandles[key] = nil
+        }
     }
 
     private enum BasePropertyAction: Equatable {
