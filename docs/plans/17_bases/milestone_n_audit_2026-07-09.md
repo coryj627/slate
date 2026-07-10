@@ -3,10 +3,11 @@
 Milestone N (Bases v1) had material gaps despite green focused suites at audit
 start. Direct counterexamples and contract tracing found the issues below. The
 automatable code, regression-test, and performance-evidence findings are now
-remediated on `codex/milestone-n-gap-fixes`; operational closure remains blocked
-only by the human VoiceOver checklist.
+remediated through `dacb2b0` on `codex/milestone-n-gap-fixes`; operational
+closure still requires remote CI after branch publication and the human
+VoiceOver checklist.
 
-## Verification baseline
+## Audit-start verification baseline (historical)
 
 - Rust Bases parser/evaluator/engine/DQL/serializer integration suites: 103 passed.
 - Rust session Bases suite: 19 passed.
@@ -14,9 +15,11 @@ only by the human VoiceOver checklist.
 - Focused Swift Bases suites: 93 passed.
 - `SlateCommandsTests`: 38 passed.
 - `a11y-check apps/slate-mac/Sources/SlateMac`: 100.0/100, zero findings.
-- GitHub milestone 14 remains open with 23/23 issues closed; the written program
-  intentionally keeps the milestone open until manual AT is recorded.
+- At audit start, GitHub milestone 14 was open with 23/23 issues closed; the
+  written program intentionally kept it open until remote CI and manual AT were
+  recorded.
 
+These are the counts observed before remediation, not the final closure counts.
 Green focused suites were not accepted as proof where the suite asserted the
 defective behavior or omitted the required adversarial case.
 
@@ -67,20 +70,65 @@ reviewed, and re-reviewed after each actionable counterexample wave.
 | N3-07 | Successful note writes now refresh visible Bases surfaces without duplicate sort refreshes. | `501b55b`, `e3a7f0b` |
 | N4-01..N4-04 | Typed lossless builder, complete expression regeneration, dashboard actions, and membership announcements completed. | `3a3004f`, `1b6620c` |
 | N-VER-01 | Generated serializer/DQL/engine/session/scanner censuses, real under-load cancellation, public-delete cache coverage, and CLI-overridable Criterion runners added. | `526b615` |
-| N-VER-02 | Criterion p50s and matched pre/post scan evidence recorded. 10k scan is +3.403%; 50k is +2.390%; both pass the 5% gate. | `BENCHMARKS.md` close-out entry in this evidence update |
+| N-VER-02 | Criterion p50s and matched pre/post scan evidence recorded. The final source is 4.7616% faster at 10k and 3.2911% faster at 50k than pre-N. | `BENCHMARKS.md` close-out entry in this evidence update |
 
-Key closure gates include 39 serializer tests, 2,048 generated serializer
-cases, 4,096 generated DQL statements, 3,072 pushdown/interpreter query
-comparisons, 10,000-row parked-under-load cancellation, generated warm/cold
-session interleavings, and the 10,000-file + 1,000-mutation scanner census. The
-Task 8 Swift matrix passed 130 tests and `a11y-check` remained 100.0/100.
+### Final-review and convergence findings
 
-## Remaining manual-only blocker
+Whole-branch re-review found additional contract gaps after the first audit
+wave. Each was reproduced before repair and is closed in `dacb2b0`.
+
+| Area | Closed gap | Final evidence |
+|---|---|---|
+| Indexed DQL values | Date, Datetime, and Wikilink list elements no longer erase to text; scalar/list wikilinks resolve relative to the owning note; migration 026 forces one safe rebuild. | Storage/session regressions plus full Core and census gates. |
+| DQL ordering and links | Command sorting uses isolated DQL semantics, duplicate outgoing pages preserve first occurrence, and inconsistent comparisons (NaN, equal-casual structured durations, nested values) fall back to a deterministic total order without changing expression comparisons. | Six command-sort regressions; full DQL integration 106/106. |
+| Cache and execution | Obsolete generations are pruned, same-generation variants have a 16-entry per-handle LRU, static SQL/query plans are reused, and fresh scanner writes avoid needless deletes. | Cache retention regressions and final Criterion/scanner runs. |
+| Stable identity | Core exposes the exact native sort key; every Base path, query/view/column ID, row, cell, and transient sort uses exact UTF-8 identity without changing Markdown/Canvas string behavior. | Core/UniFFI and Swift identity regressions; independent Rust/Swift review approval. |
+| Embeds and fences | Core classifies the complete `slate-query` YAML document; Swift preserves the fence body verbatim including YAML chomp newlines; all embed forms fail visibly, stay lazily mounted, and retain VoiceOver structure. | Core classifier tests, focused embed/reading tests, full Swift suite, and a11y 100/100. |
+| Live UI state | Writes refresh every visible consumer after session checks; global edits route through the active pane only; Base rename/retarget is exact; dashboard renderer overrides execute; failed saves retain the editable draft. | Focused routing/dashboard/builder regressions and full Swift suite. |
+| Post-scan `.base` context | Opening a newly created `.base` after the initial scan performs targeted indexing, so `this` resolves without requiring a whole-vault rescan. | Session regression and independent contract review approval. |
+
+## Final automated verification — exact `dacb2b0` source
+
+- Strict Clippy passed for Core, CLI, and UniFFI with all targets/features and
+  warnings denied; `cargo fmt --all -- --check` and `git diff --check` passed.
+- The allowed full Core run passed 1,205 library tests (2 ignored), plus every
+  integration target including DQL 106/106 and session Bases 50/50. Four
+  Finder/trash tests were filtered after an isolated probe reproduced the macOS
+  sandbox failure (`osascript` connection invalid / Finder -1728); this is an
+  environmental exclusion, not a product PASS claim.
+- CLI and UniFFI test targets passed; UniFFI's focused suite was 42/42.
+- `SLATE_CENSUS_FULL=1` passed the explicit serializer/DQL/engine/session/scanner
+  census set: 9 Core session/engine/scanner cases, DQL 2/2, engine 2/2, and
+  serializer 9/9. The generated workloads include 2,048 serializer cases,
+  4,096 DQL statements, 3,072 pushdown/interpreter comparisons, a 10,000-row
+  parked-under-load cancellation, warm/cold session interleavings, and the
+  10,000-file + 1,000-mutation scanner census.
+- The checked-in DQL corpus has 170 unique cases: 45 supported, 117 parse-time
+  unsupported, and 8 runtime fail-loud; all 426 coverage tags have exactly one
+  owner.
+- Full Swift verification passed 1,281 tests with one intentional skip and zero
+  failures in 35.471 seconds. APCA Aqua/Dark Aqua Lc values were 94.5/79.7 for
+  high risk, 87.5/85.8 for medium risk, and 85.1/82.6 for low risk;
+  `a11y-check` scored 100.0/100 across 20 criteria with zero errors or warnings.
+- Raw Obsidian fixtures retained SHA-256
+  `0ae6455a9b4c5a6e39e48aa3291bd80669ee8735254f3e0885b26178d3149fd5`
+  (`obsidian-basic.base`) and
+  `8127ab360d98b05fb85eea33b76e93c5ad9f8b25c6efd9255a603ec6f81ccbf8`
+  (`obsidian-formulas.base`).
+- Final Criterion p50 gates pass with substantial headroom: indexed query
+  2.041 ms at 10k and 10.016 ms at 50k, cache replay about 0.041 ms, and
+  parse/serialize 0.023 ms. Matched cold scan is 4.7616% faster at 10k and 3.2911%
+  faster at 50k than pre-N.
+- Independent Rust, Swift, and contract reviewers each returned APPROVED with
+  no remaining High or Medium finding after the final RED→GREEN wave.
+
+## Remaining external closure gates
 
 `at_smoke_checklist.md` is entirely unchecked. This audit will not manufacture a
 VoiceOver PASS from static checks. Code, automated tests, and benchmark evidence
-are remediated; the GitHub milestone must remain open until a human runs the
-checklist and records PASS or follow-up issues for failures.
+are remediated locally; the branch still needs publication for its remote-CI
+result, and the GitHub milestone must remain open until that result is green and
+a human runs the checklist and records PASS or follow-up issues for failures.
 
 ## Checked and found correct
 
@@ -98,5 +146,7 @@ checklist and records PASS or follow-up issues for failures.
 - `.base` routing, view switching, list projection variants, embeds, read-only
   embed enforcement, pin persistence, dynamic commands, and help drift checks.
 
-The implementation plan is
-[`docs/superpowers/plans/2026-07-09-milestone-n-remediation.md`](../../superpowers/plans/2026-07-09-milestone-n-remediation.md).
+The implementation plans are
+[`docs/superpowers/plans/2026-07-09-milestone-n-remediation.md`](../../superpowers/plans/2026-07-09-milestone-n-remediation.md)
+and
+[`docs/superpowers/plans/2026-07-09-milestone-n-final-review-fixes.md`](../../superpowers/plans/2026-07-09-milestone-n-final-review-fixes.md).

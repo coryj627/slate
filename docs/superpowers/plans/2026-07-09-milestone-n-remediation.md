@@ -1,10 +1,11 @@
 # Milestone N Remediation Implementation Plan
 
-**Execution status (2026-07-09):** All automatable audit findings are complete
-on `codex/milestone-n-gap-fixes`; code and test remediation is committed through
-`526b615`, independently re-reviewed, and this close-out update records matched
-p50 performance evidence. The manual VoiceOver checklist remains intentionally
-open and is the sole operational closure blocker.
+**Execution status (2026-07-10):** The original audit remediation closed through
+`526b615`; later whole-branch review findings closed through final code commit
+`dacb2b0` on `codex/milestone-n-gap-fixes`. The combined result is independently
+approved and the close-out records exact matched p50 performance evidence.
+Remote CI awaits branch publication, and the manual VoiceOver checklist remains
+intentionally open.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -40,7 +41,7 @@ open and is the sole operational closure blocker.
 - Consumes: `parse_base(&str) -> (BaseFile, Vec<ParseWarning>)` and `apply_edit(&str, &BaseFile, BaseEdit) -> Result<String, BaseEditError>`.
 - Produces: structural-region discovery independent of two-space indentation; `replace_scalar_preserving_style`; block replacement for flow collections.
 
-- [ ] **Step 1: Add failing edit regressions**
+- [x] **Step 1: Add failing edit regressions**
 
 ```rust
 #[test]
@@ -68,13 +69,13 @@ fn scalar_splice_preserves_comment_quote_and_final_newline() {
 }
 ```
 
-- [ ] **Step 2: Run the regressions and verify failure**
+- [x] **Step 2: Run the regressions and verify failure**
 
 Run: `cargo test -p slate-core --test bases_serialize -- --nocapture`
 
 Expected: failures showing `MissingSpan`, `ParseFailed`, lost comment/quote, or added newline.
 
-- [ ] **Step 3: Replace indentation heuristics with parsed structural ranges**
+- [x] **Step 3: Replace indentation heuristics with parsed structural ranges**
 
 Use the YAML event/marker offsets already collected by `parse_base` to populate the
 top-level and per-view `PreservedRegion` values. A collection whose source value is
@@ -88,7 +89,7 @@ fn expand_empty_collection(key_indent: &str, key: &str, child: &str) -> String {
 
 Do not append a block child after a flow scalar.
 
-- [ ] **Step 4: Preserve scalar lexical style**
+- [x] **Step 4: Preserve scalar lexical style**
 
 ```rust
 fn replacement_scalar(existing: &str, value: &str) -> String {
@@ -105,13 +106,13 @@ fn replacement_scalar(existing: &str, value: &str) -> String {
 Splice exactly the scalar token range; retain the source's `\n`/`\r\n` and final
 newline state.
 
-- [ ] **Step 5: Run format-layer coverage**
+- [x] **Step 5: Run format-layer coverage**
 
 Run: `cargo test -p slate-core --test bases_parse --test bases_serialize`
 
 Expected: all tests pass, including the new adversarial fixture.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/slate-core/src/bases/mod.rs crates/slate-core/tests/bases_serialize.rs crates/slate-core/tests/fixtures/bases/edit_adversarial.base
@@ -136,7 +137,7 @@ git commit -m "fix(bases): preserve valid YAML edits [N0-01 N0-02]"
 - Consumes: `parse_dql`, `dql_as_base`, `execute`, scanner code-block offsets, vault link resolution.
 - Produces: dynamic `this` source representation, regex literals for `regextest`, true truncation, byte-sliced fence bodies.
 
-- [ ] **Step 1: Add failing DQL and CRLF tests**
+- [x] **Step 1: Add failing DQL and CRLF tests**
 
 ```rust
 #[test]
@@ -154,13 +155,13 @@ fn indexed_base_fence_body_is_original_bytes() {
 }
 ```
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `cargo test -p slate-core --test bases_dql dql_outgoing_regex_and_trunc_preserve_semantics -- --nocapture && cargo test -p slate-core --lib indexed_base_fence_body_is_original_bytes -- --nocapture`
 
 Expected: outgoing rows absent, regex `Null`, trunc `-2`, and LF-normalized source.
 
-- [ ] **Step 3: Preserve DQL source meaning**
+- [x] **Step 3: Preserve DQL source meaning**
 
 Represent `[[]]` as the existing `Expr::This`/link expression rather than the
 literal string `"this"`. Resolve explicit extensionless wikilinks with the same
@@ -169,7 +170,7 @@ literal regex pattern to `Expr::Literal(Literal::Regex { pattern, flags: "" })`.
 Add `MethodName::Trunc` and evaluate numbers with `value.trunc()`; do not reuse
 `Floor`.
 
-- [ ] **Step 4: Slice original fence bytes**
+- [x] **Step 4: Slice original fence bytes**
 
 Keep Markdown parsing for the opening/closing fence offsets, then derive the body
 from the original source:
@@ -180,13 +181,13 @@ let source_text = source[body_start..body_end].to_string();
 
 Do not reconstruct the body from normalized parser events.
 
-- [ ] **Step 5: Run DQL/scanner suites**
+- [x] **Step 5: Run DQL/scanner suites**
 
 Run: `cargo test -p slate-core --test bases_dql && cargo test -p slate-core --lib census_bases_scan_incremental`
 
 Expected: all tests pass and unsupported conversions still fail loudly.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/slate-core/src/bases/dql.rs crates/slate-core/src/bases/eval.rs crates/slate-core/src/bases/engine.rs crates/slate-core/src/code.rs crates/slate-core/src/bases_db.rs crates/slate-core/tests/bases_dql.rs crates/slate-core/src/session/tests/bases.rs crates/slate-core/src/session/tests/scan.rs crates/slate-core/tests/fixtures/dql
@@ -206,7 +207,7 @@ git commit -m "fix(bases): preserve DQL and fence semantics [N0-03 N0-04 N0-05 N
   variadic contains methods, split separator/limit, datetime parsing, mixed duration
   application, and strict render/file/list arities.
 
-- [ ] **Step 1: Add a failing compatibility table**
+- [x] **Step 1: Add a failing compatibility table**
 
 ```rust
 #[test]
@@ -224,13 +225,13 @@ fn pinned_function_edges_match_the_v1_table() {
 }
 ```
 
-- [ ] **Step 2: Verify the table fails**
+- [x] **Step 2: Verify the table fails**
 
 Run: `cargo test -p slate-core --test bases_eval pinned_function_edges_match_the_v1_table -- --nocapture`
 
 Expected: failures for each audited edge.
 
-- [ ] **Step 3: Implement arity and normalization fixes**
+- [x] **Step 3: Implement arity and normalization fixes**
 
 ```rust
 fn eval_if(args: &[Expr], ctx: &EvalCtx<'_>) -> Result<Value, EvalError> {
@@ -257,7 +258,7 @@ Use `1..=usize::MAX` for variadic contains methods, exact unary arity for
 `file/html/image/icon/join`, zero arity for `flat`, and return a string from
 `date.time()`.
 
-- [ ] **Step 4: Implement split/date/duration behavior**
+- [x] **Step 4: Implement split/date/duration behavior**
 
 Split accepts one or two arguments. Split the full string with `Regex::split` or
 `str::split`, then retain the first `n` elements when the optional limit is
@@ -267,13 +268,13 @@ separately from fixed milliseconds and apply months (with end-of-month clamp)
 before days/time. Keep the pinned `Value::Duration(i64)` representation in
 milliseconds unchanged.
 
-- [ ] **Step 5: Run evaluator and engine suites**
+- [x] **Step 5: Run evaluator and engine suites**
 
 Run: `cargo test -p slate-core --test bases_eval --test bases_engine`
 
 Expected: all tests pass; no previous pinned function regresses.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/slate-core/src/bases/eval.rs crates/slate-core/src/bases/expr.rs crates/slate-core/tests/bases_eval.rs
@@ -293,7 +294,7 @@ git commit -m "fix(bases): complete evaluator compatibility [N1-02 N1-03]"
 - Produces: conservative temporal cache predicate, aliases/embeds file fields,
   first-non-null column-kind inference, inclusive Recent export.
 
-- [ ] **Step 1: Add failing engine/session regressions**
+- [x] **Step 1: Add failing engine/session regressions**
 
 ```rust
 #[test]
@@ -316,37 +317,37 @@ fn recent_export_keeps_inclusive_cutoff() {
 }
 ```
 
-- [ ] **Step 2: Verify the regressions fail**
+- [x] **Step 2: Verify the regressions fail**
 
 Run: `cargo test -p slate-core --test bases_engine temporal_sources_and_custom_summaries_never_cache -- --nocapture && cargo test -p slate-core --lib session::tests::bases -- --nocapture`
 
 Expected: stale cache hit, empty aliases/embeds, `null` kind, and exclusive cutoff.
 
-- [ ] **Step 3: Make the cache predicate conservative**
+- [x] **Step 3: Make the cache predicate conservative**
 
 Return `true` from `query_mentions_global` for `QuerySource::Recent`; visit every
 custom-summary expression in addition to filters/formulas/sort/columns. Retain
 the existing no-cache behavior for quick filter.
 
-- [ ] **Step 4: Populate file fields and infer kind safely**
+- [x] **Step 4: Populate file fields and infer kind safely**
 
 Load `aliases` from the indexed aliases property. Partition outgoing link rows by
 `is_embed`, keeping links and embeds separately. Change `column_value_kind` to
 skip `Null` and error cells and return the first stable concrete kind (or `null`
 only when every row is null/error).
 
-- [ ] **Step 5: Align durable Recent export**
+- [x] **Step 5: Align durable Recent export**
 
 Emit `file.mtime >= now() - duration("Nd")` and add an exact-cutoff execute →
 export → reopen membership assertion.
 
-- [ ] **Step 6: Run engine/session coverage**
+- [x] **Step 6: Run engine/session coverage**
 
 Run: `cargo test -p slate-core --test bases_engine && cargo test -p slate-core --lib session::tests::bases`
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/slate-core/src/bases/engine.rs crates/slate-core/src/session.rs crates/slate-core/tests/bases_engine.rs crates/slate-core/src/session/tests/bases.rs
@@ -373,7 +374,7 @@ git commit -m "fix(bases): keep session results fresh and typed [N1-01 N1-04 N2-
 - Consumes: `base_execute`, `base_export`, open-handle state, `DataGridSortState`.
 - Produces: `base_set_transient_sort(handle:view:column_id:ascending:)`; one engine-sorted result used by table/list/export; unfiltered quick-filter count preserved in the result contract.
 
-- [ ] **Step 1: Add failing count and ordering tests**
+- [x] **Step 1: Add failing count and ordering tests**
 
 ```swift
 func testQuickFilterReportsOneOfThreeAndExportChoicesMatch() throws {
@@ -390,7 +391,7 @@ func testTransientNumericSortSurvivesListAndExport() throws {
 }
 ```
 
-- [ ] **Step 2: Verify failures in Rust and Swift**
+- [x] **Step 2: Verify failures in Rust and Swift**
 
 Run: `cargo test -p slate-core --lib session::tests::bases::quick_filter -- --nocapture`
 
@@ -398,28 +399,28 @@ Run: `cd apps/slate-mac && swift test --filter BasesTabRoutingTests`
 
 Expected: `1 of 1`, string order `[10,2]`, and unsorted export.
 
-- [ ] **Step 3: Preserve the unfiltered count during execution**
+- [x] **Step 3: Preserve the unfiltered count during execution**
 
 Capture the unfiltered cardinality before `apply_quick_filter`; keep filtered rows
 for summaries/audio/groups. Expose the unfiltered view cardinality used by the N/M
 announcement without changing filtered summary semantics. Tests must cover a view
 limit so the dialog's M equals what the unfiltered export actually emits.
 
-- [ ] **Step 4: Add handle-scoped transient sort**
+- [x] **Step 4: Add handle-scoped transient sort**
 
 Store an optional per-view sort override in `OpenBaseState`. The new session method
 resolves a selected column ID to the same expression/value ordering used by
 `sort_rows`, replaces the query sort only for execution/export, and clears the
 override on view/handle close. `base_export` must execute through that override.
 
-- [ ] **Step 5: Bind Swift table headers to session state**
+- [x] **Step 5: Bind Swift table headers to session state**
 
 `BaseDocument.setTransientSort` calls the new session method and re-executes.
 `BaseContainerView` uses `BasesValue` kind-aware comparison only for the immediate
 AppKit projection; list and export consume the re-executed engine ordering. Saving
 the sort persists it and clears the transient override.
 
-- [ ] **Step 6: Regenerate bindings and run coverage**
+- [x] **Step 6: Regenerate bindings and run coverage**
 
 Run: `make regenerate-bindings`
 
@@ -429,7 +430,7 @@ Run: `cd apps/slate-mac && swift test --filter BasesTabRoutingTests --filter Bas
 
 Expected: all tests pass and generated bindings are current.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/slate-core apps/slate-mac/Sources/SlateMac/Bases apps/slate-mac/Tests/SlateMacTests/BasesTabRoutingTests.swift apps/slate-mac/Tests/SlateMacTests/BaseEmbedTests.swift
@@ -450,7 +451,7 @@ git commit -m "fix(bases): unify filtered counts and transient sort [N3-01 N3-04
 - Produces: synchronized row/cell identity; viewport-derived paging; heading/header
   AX grammar; clear-cell deletion.
 
-- [ ] **Step 1: Add failing AppKit and property-write tests**
+- [x] **Step 1: Add failing AppKit and property-write tests**
 
 ```swift
 func testNativeRowChangeRetargetsCellBeforeReturn() {
@@ -473,32 +474,32 @@ func testBlankCommitDeletesProperty() async {
 }
 ```
 
-- [ ] **Step 2: Verify failures**
+- [x] **Step 2: Verify failures**
 
 Run: `cd apps/slate-mac && swift test --filter AccessibleDataGridTests --filter BasesTabRoutingTests`
 
 Expected: stale row edit, ten-row page, and empty surrogate value/failure.
 
-- [ ] **Step 3: Synchronize selection and delete blanks**
+- [x] **Step 3: Synchronize selection and delete blanks**
 
 In `tableViewSelectionDidChange`, map the native row entry back to the selected
 row and retain the current column index (clamped), then publish both bindings.
 In `commitEdit`, trim only to detect clearing; route a blank draft to
 `basesDeleteProperty`, while nonblank text continues through the typed converter.
 
-- [ ] **Step 4: Use the visible viewport for paging**
+- [x] **Step 4: Use the visible viewport for paging**
 
 Compute the visible data-row count from `tableView.rows(in: tableView.visibleRect)`;
 move by `max(visibleDataRows, 1)` while skipping inserted group rows.
 
-- [ ] **Step 5: Expose pinned accessibility grammar**
+- [x] **Step 5: Expose pinned accessibility grammar**
 
 Group cells and list section headers expose heading role/trait. Sortable headers
 publish `Column: <label>, sortable, current sort: <asc/desc/none>` and update their
 sort direction after every reload. Grid entry uses the engine `audio_summary`, not
 the generic “Base table” label.
 
-- [ ] **Step 6: Run Swift and static accessibility coverage**
+- [x] **Step 6: Run Swift and static accessibility coverage**
 
 Run: `cd apps/slate-mac && swift test --filter AccessibleDataGridTests --filter BasesTabRoutingTests`
 
@@ -506,7 +507,7 @@ Run: `a11y-check apps/slate-mac/Sources/SlateMac`
 
 Expected: tests pass; a11y score remains 100.0/100.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift apps/slate-mac/Sources/SlateMac/Bases/BaseContainerView.swift apps/slate-mac/Sources/SlateMac/Bases/BaseListRenderer.swift apps/slate-mac/Tests/SlateMacTests/AccessibleDataGridTests.swift apps/slate-mac/Tests/SlateMacTests/BasesTabRoutingTests.swift
@@ -526,7 +527,7 @@ git commit -m "fix(bases): make grid editing and navigation safe [N3-02 N3-03 N3
 - Consumes: successful `performSave`, open document registries, dashboard/dock refresh methods.
 - Produces: `refreshVisibleBasesAfterInAppWrite(session:changedPath:)` with membership-aware announcements.
 
-- [ ] **Step 1: Add a failing save-to-live-view test**
+- [x] **Step 1: Add a failing save-to-live-view test**
 
 ```swift
 func testSavingNoteRefreshesOpenBaseDashboardAndDock() async throws {
@@ -540,32 +541,32 @@ func testSavingNoteRefreshesOpenBaseDashboardAndDock() async throws {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cd apps/slate-mac && swift test --filter BasesTabRoutingTests/testSavingNoteRefreshesOpenBaseDashboardAndDock`
 
 Expected: all three surfaces retain pre-save rows.
 
-- [ ] **Step 3: Add the shared post-write refresh**
+- [x] **Step 3: Add the shared post-write refresh**
 
 Capture each document's row-identity multiset, re-execute open base documents,
 dashboard sections, and the dock against the same live session, restore selections,
 and announce `Updated: <audio_summary>` only where membership changed. Guard
 publication with `currentSession === session` and current document identity.
 
-- [ ] **Step 4: Call it only after successful in-app writes**
+- [x] **Step 4: Call it only after successful in-app writes**
 
 Invoke the helper in `performSave` after the session save succeeds, and reuse it
 from property writes/base edits where those paths do not already refresh the same
 surface. Do not add a filesystem watcher.
 
-- [ ] **Step 5: Run focused Swift coverage**
+- [x] **Step 5: Run focused Swift coverage**
 
 Run: `cd apps/slate-mac && swift test --filter BasesTabRoutingTests --filter RightPaneViewTests`
 
 Expected: all tests pass with no duplicate announcement.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/slate-mac/Sources/SlateMac/AppState.swift apps/slate-mac/Sources/SlateMac/Bases/AppState+Bases.swift apps/slate-mac/Sources/SlateMac/Bases/DashboardDocument.swift apps/slate-mac/Tests/SlateMacTests/BasesTabRoutingTests.swift apps/slate-mac/Tests/SlateMacTests/RightPaneViewTests.swift
@@ -592,7 +593,7 @@ git commit -m "fix(bases): refresh live views after note saves [N3-07]"
 - Produces: opaque facet preservation plus structured edits; per-kind operator/editor
   descriptors; function completion; missing-section actions; membership-set comparison.
 
-- [ ] **Step 1: Add failing builder/dashboard tests**
+- [x] **Step 1: Add failing builder/dashboard tests**
 
 ```swift
 func testBuilderRoundTripPreservesOpaqueQueryFacets() throws {
@@ -618,13 +619,13 @@ func testPropertyKeyInventoryCarriesStableKinds() throws {
 }
 ```
 
-- [ ] **Step 2: Verify failures**
+- [x] **Step 2: Verify failures**
 
 Run: `cd apps/slate-mac && swift test --filter BaseQueryBuilderTests --filter RightPaneViewTests`
 
 Expected: lost facets, universal operators/text editor, absent actions, and suppressed/extra announcements.
 
-- [ ] **Step 3: Preserve the complete query**
+- [x] **Step 3: Preserve the complete query**
 
 Decode and store `limit`, `summaries`, `custom_summaries`, and an opaque root map.
 When encoding, start from the opaque root and replace only builder-owned keys.
@@ -635,7 +636,7 @@ global filter in the effective query, and never write it into the view-local fil
 block. Preserve the durable Recent boundary as inclusive `>=`/`Gte` in both
 directions.
 
-- [ ] **Step 4: Add typed builder descriptors**
+- [x] **Step 4: Add typed builder descriptors**
 
 Extend `PropertyKeySummary` additively with sorted `value_kinds` aggregated from
 the existing properties index (no migration); mixed keys remain explicitly mixed
@@ -646,19 +647,19 @@ property editor family. A relative-date control emits `now() - duration("Nd")`.
 Add the pinned function names as completion suggestions while retaining Rust live
 validation as authority.
 
-- [ ] **Step 5: Make missing dashboard sections actionable**
+- [x] **Step 5: Make missing dashboard sections actionable**
 
 Pass Remove/Pick Replacement closures into `DashboardSectionView`; render keyboard
 buttons and equivalent AX custom actions. Persist removal/replacement through the
 existing dashboard update API.
 
-- [ ] **Step 6: Fix follow-active change detection**
+- [x] **Step 6: Fix follow-active change detection**
 
 Track `hasPublishedBaseline` independently from membership. Compare multisets of
 stable row identities, not ordered arrays, so empty→nonempty announces and reorder
 alone does not.
 
-- [ ] **Step 7: Run Swift and accessibility coverage**
+- [x] **Step 7: Run Swift and accessibility coverage**
 
 Run: `cd apps/slate-mac && swift test --filter BaseQueryBuilderTests --filter RightPaneViewTests --filter BaseQueriesPanelTests`
 
@@ -666,7 +667,7 @@ Run: `a11y-check apps/slate-mac/Sources/SlateMac`
 
 Expected: all tests pass; a11y remains 100.0/100.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/slate-mac/Sources/SlateMac/Bases apps/slate-mac/Tests/SlateMacTests/BaseQueryBuilderTests.swift apps/slate-mac/Tests/SlateMacTests/RightPaneViewTests.swift apps/slate-mac/Tests/SlateMacTests/BaseQueriesPanelTests.swift
@@ -694,7 +695,7 @@ git commit -m "fix(bases): complete builder and dashboard contracts [N4-01 N4-02
 - Produces: deterministic generated gates, real under-load cancellation, Criterion
   p50 records, scan regression evidence, finding-status closeout.
 
-- [ ] **Step 1: Expand the automated gates before changing their labels**
+- [x] **Step 1: Expand the automated gates before changing their labels**
 
 Add proptests/generated loops that assert:
 
@@ -719,7 +720,7 @@ parks on a test-only engine probe after materialization begins, cancels, release
 the probe, and asserts completion within 100 ms. Do not use sleeps as the
 "work began" signal.
 
-- [ ] **Step 2: Run default and full census modes**
+- [x] **Step 2: Run default and full census modes**
 
 Run: `cargo test -p slate-core --test bases_expr --test bases_parse --test bases_serialize --test bases_dql --test bases_eval --test bases_engine`
 
@@ -727,7 +728,7 @@ Run: `SLATE_CENSUS_FULL=1 cargo test -p slate-core census_bases -- --nocapture -
 
 Expected: all gates pass; logs show full scale and under-load cancellation.
 
-- [ ] **Step 3: Run fresh p50 benchmarks**
+- [x] **Step 3: Run fresh p50 benchmarks**
 
 Run: `cargo bench -p slate-core --bench bases_bench -- --sample-size 20`
 
@@ -739,14 +740,14 @@ Read Criterion's `median/point_estimate` from each `estimates.json`; do not copy
 mean. Compare the scan p50 against the recorded pre-N baseline and calculate the
 percentage delta.
 
-- [ ] **Step 4: Update close-out evidence honestly**
+- [x] **Step 4: Update close-out evidence honestly**
 
 Replace the mean table in `BENCHMARKS.md` with p50 values, date, commit, command,
 machine context, and scan delta. Mark every audit finding `RESOLVED` only after its
 test passes. Keep manual AT open and keep the program/GitHub milestone status
 operationally open until a human result exists.
 
-- [ ] **Step 5: Run final repository verification**
+- [x] **Step 5: Run final repository verification**
 
 Run: `cargo fmt --check`
 
@@ -758,9 +759,14 @@ Run: `cd apps/slate-mac && swift test`
 
 Run: `a11y-check apps/slate-mac/Sources/SlateMac`
 
-Expected: every command passes; a11y is 100.0/100.
+Expected product result: every non-environmental command passes and a11y is
+100.0/100. In the final sandbox run, four Finder/trash cases were filtered after
+isolated probes returned AppleScript connection-invalid / Finder `-1728`; the
+allowed Core rerun, CLI tests, strict Core/CLI/UniFFI Clippy, full Swift, and
+accessibility gates passed. The audit records the exclusion without calling
+those four tests failed product behavior or verified passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/slate-core BENCHMARKS.md docs/plans/17_bases/00_program.md docs/plans/17_bases/specs/gap_analysis.md docs/plans/17_bases/milestone_n_audit_2026-07-09.md
@@ -771,5 +777,5 @@ git commit -m "test(bases): enforce Milestone N closure gates [N-VER-01 N-VER-02
 
 Tasks 1–9 close the automatable gaps. Completion does **not** authorize checking
 boxes in `at_smoke_checklist.md`; the final handoff must name that human execution
-as the sole remaining milestone-close action unless the user separately performs
-and supplies the results.
+and remote CI after branch publication as the remaining milestone-close actions
+unless the user separately performs and supplies the results.

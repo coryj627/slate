@@ -1,5 +1,11 @@
 # Milestone N Final-Review Fixes Implementation Plan
 
+**Execution status (2026-07-10):** Tasks 1–9 are complete. The final independent
+Rust/Swift/contract pass produced the convergence findings below; every
+actionable item was reproduced, repaired, and committed through `dacb2b0`, and
+all allowed local automated closure gates pass. Remote CI awaits branch
+publication, and human VoiceOver remains intentionally open.
+
 > **Execution rule:** implement every production change through a focused
 > failing regression, then run the named focused suite before committing. Use
 > `superpowers:subagent-driven-development` for the independent Rust, atomic
@@ -61,29 +67,29 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Add a DQL regression whose vault contains only an embed from `Hub.md` to
+- [x] Add a DQL regression whose vault contains only an embed from `Hub.md` to
   `Target.md`. Assert live `FROM outgoing([[Hub]])` and the result of
   `dql_as_base` + parse + execute both return `Target.md`.
-- [ ] Run `cargo test -p slate-core --test bases_dql outgoing -- --nocapture`
+- [x] Run `cargo test -p slate-core --test bases_dql outgoing -- --nocapture`
   and retain the RED result showing the saved path drops the embed.
-- [ ] Make `Link.linksTo` membership combine the lookup's links and embeds, as
+- [x] Make `Link.linksTo` membership combine the lookup's links and embeds, as
   `QuerySource::Linked` already does. Keep `file.links` and `file.embeds`
   separately addressable; do not broaden `file.links` as a side effect.
-- [ ] Add an evaluator regression proving both
+- [x] Add an evaluator regression proving both
   `date("2026-01-31") + "1M 1d"` and
   `date("2026-01-31") + duration("1M 1d")` produce 2026-03-01 while standalone
   `duration("1M 1d")` remains the pinned millisecond `Value::Duration`.
-- [ ] Run the single evaluator regression and retain the RED 2026-03-03 result.
-- [ ] At the binary date-arithmetic boundary, recognize a literal
+- [x] Run the single evaluator regression and retain the RED 2026-03-03 result.
+- [x] At the binary date-arithmetic boundary, recognize a literal
   `duration("...")` call before ordinary argument evaluation, parse its
   calendar months and fixed remainder, and apply months first with end-of-month
   clamping. Leave computed/nonliteral duration values on the existing fixed
   millisecond path.
-- [ ] Add parser goldens for `"\\r"` and other unlisted escapes. Assert the AST
+- [x] Add parser goldens for `"\\r"` and other unlisted escapes. Assert the AST
   contains the two literal characters backslash + `r`, while listed escapes
   keep their pinned behavior.
-- [ ] Remove carriage-return decoding from the expression string escape table.
-- [ ] Run:
+- [x] Remove carriage-return decoding from the expression string escape table.
+- [x] Run:
 
   ```bash
   cargo test -p slate-core --test bases_dql --test bases_eval --test bases_expr --test bases_engine
@@ -92,7 +98,7 @@ SwiftUI/AppKit, XCTest.
 
   Expected: all GREEN, including live/saved row equality and calendar-duration
   equality.
-- [ ] Commit only the Task 1 files with
+- [x] Commit only the Task 1 files with
   `fix(bases): preserve DQL and duration semantics [N0-05 N1-03]`.
 
 ---
@@ -108,27 +114,27 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Add serializer regressions that independently apply `SetFormula`,
+- [x] Add serializer regressions that independently apply `SetFormula`,
   `SetTopLevelFilters`, and `AddView` to the flow-style root
   `{views: [], plugin: keep}` where the formula/filter keys are absent and the
   views collection is empty. Add a second `AddView` case whose flow root omits
   `views` entirely. Assert valid YAML, parsed values, preserved flow-root syntax,
   and unchanged unrelated entries.
-- [ ] Run the two regressions and retain the RED `InvalidEdit`/missing-span
+- [x] Run the two regressions and retain the RED `InvalidEdit`/missing-span
   evidence.
-- [ ] Extend root structural discovery/replacement so a root flow mapping can
+- [x] Extend root structural discovery/replacement so a root flow mapping can
   replace the whole mapping while preserving the source's flow style and
   unrelated entries. Reparse after each edit as the existing batch serializer
   requires.
-- [ ] Add a session regression: apply transient sort to view 0, remove or
+- [x] Add a session regression: apply transient sort to view 0, remove or
   reorder that view, add/open the new view 0, and prove the old sort no longer
   affects it. Cover structural column/order edits whose sort key disappears.
-- [ ] Run the regression and retain the RED stale-sort result.
-- [ ] Centralize transient-state invalidation after successful structural edits:
+- [x] Run the regression and retain the RED stale-sort result.
+- [x] Centralize transient-state invalidation after successful structural edits:
   clear on view add/remove/reorder; clear when the edited view's order/sort
   structure can invalidate the transient key; preserve it for unrelated scalar
   edits.
-- [ ] Run:
+- [x] Run:
 
   ```bash
   cargo test -p slate-core --test bases_serialize
@@ -136,7 +142,7 @@ SwiftUI/AppKit, XCTest.
   ```
 
   Expected: all GREEN and lossless serializer censuses remain GREEN.
-- [ ] Commit only the Task 2 files with
+- [x] Commit only the Task 2 files with
   `fix(bases): handle root flow edits and transient state [N0-01 N3-04]`.
 
 ---
@@ -154,29 +160,29 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Add a Core session regression that opens a `.base`, submits an ordered
+- [x] Add a Core session regression that opens a `.base`, submits an ordered
   batch whose first edit is valid and second edit fails validation, then asserts:
   exact file bytes unchanged, parsed handle unchanged, query result unchanged,
   and a fresh session sees the original file.
-- [ ] Add a success regression proving dependent edits (for example add formula
+- [x] Add a success regression proving dependent edits (for example add formula
   then reference it in order/filter) serialize once, reindex once, and update
   the open handle to the final parse.
-- [ ] Run the focused session tests and retain the RED partial-write behavior of
+- [x] Run the focused session tests and retain the RED partial-write behavior of
   sequential public calls.
-- [ ] Add `VaultSession::base_apply_edits(handle, Vec<BaseEdit>)`. Validate and
+- [x] Add `VaultSession::base_apply_edits(handle, Vec<BaseEdit>)`. Validate and
   serialize the entire batch before `save_text`; after one successful write,
   parse once, replace handle source/warnings once, reset cache once, and apply
   Task 2 transient-state invalidation once. Keep `base_apply_edit` as a
   one-element compatibility wrapper.
-- [ ] Export `base_apply_edits` through UniFFI as `[BaseEdit]` and keep the
+- [x] Export `base_apply_edits` through UniFFI as `[BaseEdit]` and keep the
   one-edit API for existing callers.
-- [ ] Add Swift regressions showing Save-to-View calls the batch API once, a
+- [x] Add Swift regressions showing Save-to-View calls the batch API once, a
   failed later edit leaves bytes unchanged, and two consecutive successful
   saves do not replay an already-applied `RemoveFormula`.
-- [ ] Make `basesBuilderSaveToView` submit one batch. On success, rebase the
+- [x] Make `basesBuilderSaveToView` submit one batch. On success, rebase the
   model's comparison baseline to the saved draft before announcing or allowing
   another save; on failure, leave both draft and baseline untouched.
-- [ ] Rebuild/check UniFFI integration and run:
+- [x] Rebuild/check UniFFI integration and run:
 
   ```bash
   cargo test -p slate-core --lib session::tests::bases
@@ -186,7 +192,7 @@ SwiftUI/AppKit, XCTest.
   ```
 
   Expected: atomic failure and repeated-save tests GREEN.
-- [ ] Commit only the Task 3 files with
+- [x] Commit only the Task 3 files with
   `fix(bases): apply builder edits atomically [N4-02]`.
 
 ---
@@ -202,29 +208,29 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Add a table-driven operator regression for every
+- [x] Add a table-driven operator regression for every
   `BaseQueryValueKind`. In particular, text does not advertise `matches`; file
   exposes `hasTag`, `hasLink`, and `matches`; operator values produce executable
   receiver/argument families.
-- [ ] Add builder -> JSON -> engine -> `.base` -> parse -> engine regressions for
+- [x] Add builder -> JSON -> engine -> `.base` -> parse -> engine regressions for
   all three file-special operators. Assert identical rows and that reopening
   reconstructs structured rows instead of advanced chips.
-- [ ] Run the focused tests and retain the RED operator/decode failures.
-- [ ] Correct `BaseQueryOperator.options(for:)` and use operator-aware typed
+- [x] Run the focused tests and retain the RED operator/decode failures.
+- [x] Correct `BaseQueryOperator.options(for:)` and use operator-aware typed
   operand decoding: text values for `hasTag` and file-search `matches`,
   link/file values for `hasLink`, and the existing typed decoder for the
   remaining methods.
-- [ ] Add a deterministic preview executor seam that records whether native
+- [x] Add a deterministic preview executor seam that records whether native
   `openQuery`, `baseExecute`, and `closeBase` execute on MainActor. Add a
   cancellation/generation test where an older parked preview finishes after a
   newer preview and cannot publish.
-- [ ] Run the tests and retain the RED MainActor execution evidence.
-- [ ] Keep debounce/model state on MainActor, but run the synchronous native
+- [x] Run the tests and retain the RED MainActor execution evidence.
+- [x] Keep debounce/model state on MainActor, but run the synchronous native
   query lifecycle in `Task.detached` (or an equivalent `nonisolated` executor).
   Always close an opened handle; propagate only a value/error back to the
   generation-checked publisher; cancel both the Swift task and native token
   when superseded.
-- [ ] Run:
+- [x] Run:
 
   ```bash
   cd apps/slate-mac && DYLD_LIBRARY_PATH="../../target/debug" swift test --filter BaseQueryBuilderTests
@@ -232,7 +238,7 @@ SwiftUI/AppKit, XCTest.
 
   Expected: operator round trips, off-main execution, cancellation, and stale
   publication coverage all GREEN.
-- [ ] Commit only the Task 4 files with
+- [x] Commit only the Task 4 files with
   `fix(bases): harden typed builder preview [N4-02]`.
 
 ---
@@ -253,28 +259,28 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Extend the existing publish-gate race tests: park a successful note save
+- [x] Extend the existing publish-gate race tests: park a successful note save
   and property edit after the native write, switch active notes within the same
   session, release, and assert open Base tabs, dashboards, docked queries, and
   visible embeds refresh while active-note fields do not publish stale state.
-- [ ] Run the focused routing/embed tests and retain the RED early-return
+- [x] Run the focused routing/embed tests and retain the RED early-return
   evidence.
-- [ ] After the session-identity guard and a successful outcome, run the global
+- [x] After the session-identity guard and a successful outcome, run the global
   Bases refresh before any `loadedFilePath == path` guard. Keep note-specific
   hash, editor, links, properties, and panel publication behind the active-note
   guard. Do not refresh on write conflict/failure or after vault replacement.
-- [ ] Give visible `BaseEmbedDocument` instances the same weak/leased registry
+- [x] Give visible `BaseEmbedDocument` instances the same weak/leased registry
   lifecycle as other Base consumers; register on appearance/acquisition and
   release on disappearance/owner teardown. Refresh only documents belonging to
   the current session.
-- [ ] Add a saved-query update regression with the same query ID simultaneously
+- [x] Add a saved-query update regression with the same query ID simultaneously
   open in a tab, dashboard section, dock, and visible embed. Assert all consumers
   reopen/refresh and show the new AST result.
-- [ ] Replace the single-key `refreshOpenSavedQueryDocument` path with registry
+- [x] Replace the single-key `refreshOpenSavedQueryDocument` path with registry
   traversal by saved-query ID across tabs, dashboard sections, docks, and embed
   documents. Keep owner errors localized rather than discarding the persisted
   saved query.
-- [ ] Run:
+- [x] Run:
 
   ```bash
   cd apps/slate-mac && DYLD_LIBRARY_PATH="../../target/debug" swift test \
@@ -286,7 +292,7 @@ SwiftUI/AppKit, XCTest.
 
   Expected: same-session navigation, replacement-session suppression, visible
   embed refresh, and multi-consumer saved-query update tests GREEN.
-- [ ] Commit only the Task 5 files with
+- [x] Commit only the Task 5 files with
   `fix(bases): refresh all live query consumers [N3-07 N4-04]`.
 
 ---
@@ -307,27 +313,27 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Add a grid regression that selects property B, receives a result whose
+- [x] Add a grid regression that selects property B, receives a result whose
   columns reorder B and A, then invokes Return/F2. Assert the editor targets B,
   not the new column at B's former index. Add a disappearing-column case that
   safely clears or clamps selection.
-- [ ] Store/derive selection using row identity plus the stable column ID. At
+- [x] Store/derive selection using row identity plus the stable column ID. At
   each render boundary, translate the ID to the current grid index; never retain
   an index across result changes.
-- [ ] Add keyboard-command tests that focus each of: a builder sort row, builder
+- [x] Add keyboard-command tests that focus each of: a builder sort row, builder
   included-column row, and dashboard section. Dispatch Option-Up/Down and assert
   exactly one local reorder, correct boundary behavior, retained focus, and an
   accessibility announcement.
-- [ ] Add focused-row keyboard handlers/commands reusing the existing row move
+- [x] Add focused-row keyboard handlers/commands reusing the existing row move
   actions. Buttons remain available; no drag interaction or global command is
   added. Accept Option-only and pass Control-Option through so VoiceOver Quick
   Nav remains intact.
-- [ ] Add source/AX structure tests requiring dashboard title H1 and section
+- [x] Add source/AX structure tests requiring dashboard title H1 and section
   title H2 in addition to `.isHeader`.
-- [ ] Apply `.accessibilityHeading(.h1)` to the dashboard title and
+- [x] Apply `.accessibilityHeading(.h1)` to the dashboard title and
   `.accessibilityHeading(.h2)` to section headings on every normal, empty, and
   missing-section path.
-- [ ] Run:
+- [x] Run:
 
   ```bash
   cd apps/slate-mac && DYLD_LIBRARY_PATH="../../target/debug" swift test \
@@ -340,7 +346,7 @@ SwiftUI/AppKit, XCTest.
 
   Expected: selection follows column identity, keyboard tests GREEN, heading
   hierarchy present, and a11y-check remains 100/100.
-- [ ] Commit only the Task 6 files with
+- [x] Commit only the Task 6 files with
   `fix(bases): complete grid and dashboard accessibility [N3-02 N4-02 N4-04]`.
 
 ---
@@ -358,24 +364,24 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Amend N4 rule 1's Recently edited canonical form from `>` to the shipped,
+- [x] Amend N4 rule 1's Recently edited canonical form from `>` to the shipped,
   inclusive `>=`, matching N2 export and the governing inclusive cutoff.
-- [ ] Create a temporary vault outside the repository, launch the installed
+- [x] Create a temporary vault outside the repository, launch the installed
   Obsidian application against it, and use Obsidian's Bases UI to create at
   least two representative `.base` files: one basic table/filter/sort file and
   one formulas/properties/multiple-view file. Do not hand-edit the captures.
-- [ ] Record the Obsidian version, OS, UTC capture timestamp, exact UI steps,
+- [x] Record the Obsidian version, OS, UTC capture timestamp, exact UI steps,
   source temp-vault relative paths, and SHA-256 for every raw capture in
   `PROVENANCE.md`.
-- [ ] Copy the raw files byte-for-byte into the fixture directory. Verify each
+- [x] Copy the raw files byte-for-byte into the fixture directory. Verify each
   committed SHA-256 matches the source capture before removing the temporary
   vault.
-- [ ] Add parse/open/execute assertions appropriate to the captures and include
+- [x] Add parse/open/execute assertions appropriate to the captures and include
   them in the no-edit byte-equality and generated serializer corpus gates. Tests
   must read the raw bytes and never normalize line endings or whitespace.
-- [ ] Correct the gap-analysis language so genuine captures are a satisfied hard
+- [x] Correct the gap-analysis language so genuine captures are a satisfied hard
   gate, not “as available.”
-- [ ] Run:
+- [x] Run:
 
   ```bash
   shasum -a 256 crates/slate-core/tests/fixtures/bases/obsidian/*.base
@@ -383,7 +389,7 @@ SwiftUI/AppKit, XCTest.
   ```
 
   Expected: hashes equal `PROVENANCE.md`; all raw-corpus gates GREEN.
-- [ ] Commit only the Task 7 files with
+- [x] Commit only the Task 7 files with
   `test(bases): add genuine Obsidian corpus [N4-05]`.
 
 ---
@@ -400,14 +406,14 @@ SwiftUI/AppKit, XCTest.
 
 ### Steps
 
-- [ ] Dispatch three independent read-only reviews of the combined branch:
+- [x] Dispatch three independent read-only reviews of the combined branch:
   Rust semantics/session atomicity, Swift concurrency/consumer refresh, and
   N0-N4 contract/evidence completeness. Require executable counterexamples and
   exact file:line evidence; accept no speculative findings.
-- [ ] For every actionable finding, add a RED regression, fix it, run its focused
+- [x] For every actionable finding, add a RED regression, fix it, run its focused
   suite, and request re-review. Repeat until all three reviewers approve with no
   HIGH/MEDIUM findings.
-- [ ] Run Rust gates:
+- [x] Run Rust gates:
 
   ```bash
   cargo fmt --check
@@ -415,28 +421,110 @@ SwiftUI/AppKit, XCTest.
   cargo test -p slate-core -p slate-cli -p slate-uniffi
   ```
 
-- [ ] Run Swift and accessibility gates:
+  Final local result: strict Clippy passed for all three packages. The allowed
+  Core rerun passed after filtering only four Finder/trash tests whose isolated
+  probes failed in the macOS sandbox with AppleScript connection-invalid /
+  Finder `-1728`; CLI and UniFFI targets passed. The audit records the exact
+  exclusions and does not count them as product failures or verified passes.
+
+- [x] Run Swift and accessibility gates:
 
   ```bash
   cd apps/slate-mac && DYLD_LIBRARY_PATH="../../target/debug" swift test
   cd ../.. && a11y-check apps/slate-mac/Sources/SlateMac
   ```
 
-- [ ] Re-run the serializer/DQL/engine/session/scanner generated censuses named
+- [x] Re-run the serializer/DQL/engine/session/scanner generated censuses named
   in the original remediation evidence. Performance benchmarks need not be
   repeated unless a changed hot path invalidates the recorded matched p50
   comparison; if it does, record fresh p50 evidence.
-- [ ] Classify any environmental failure precisely. Do not call a blocked
+- [x] Classify any environmental failure precisely. Do not call a blocked
   Finder/trash or sandbox-only test a product failure, and do not call it
   verified without a successful allowed rerun.
-- [ ] Update the audit and both plans: remove the premature “all automatable
+- [x] Update the audit and both plans: remove the premature “all automatable
   findings complete” claim until the gates above pass, list the final-review
   findings and evidence commits, and leave the human VoiceOver checklist as the
   only manual blocker only if that statement is then true.
-- [ ] Review `git diff --check`, `git status --short`, and the exact staged file
+- [x] Review `git diff --check`, `git status --short`, and the exact staged file
   list. Stage no user-owned/unrelated files.
-- [ ] Commit the evidence updates with
+- [x] Commit the evidence updates with
   `docs(bases): close final Milestone N review gaps`.
+
+## Task 9: Close final convergence findings
+
+**Files:**
+
+- Modify: `crates/slate-core/src/{db.rs,dql_inline_fields_db.rs,properties_db.rs,session.rs,tags_db.rs}`
+- Create: `crates/slate-core/migrations/026_reindex_typed_property_lists.sql`
+- Modify: `crates/slate-core/src/bases/{dql.rs,engine.rs,eval.rs,mod.rs}`
+- Create: `crates/slate-core/src/bases/slate_query_fence.rs`
+- Create: `crates/slate-core/tests/bases_slate_query_fence.rs`
+- Modify: `crates/slate-core/src/session/tests/bases.rs`
+- Modify: `crates/slate-core/tests/{bases_dql.rs,bases_engine.rs}`
+- Modify: `crates/slate-uniffi/src/lib.rs`
+- Regenerate: `apps/slate-mac/Sources/SlateMac/slate_uniffi.swift`
+- Modify: `apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift`
+- Create: `apps/slate-mac/Sources/SlateMac/Bases/BaseExactIdentity.swift`
+- Modify: `apps/slate-mac/Sources/SlateMac/Bases/*.swift`
+- Modify: `apps/slate-mac/Sources/SlateMac/{NoteContentView.swift,Reading/ReadingBlockSource.swift,Reading/ReadingView.swift,Workspace/WorkspaceModel.swift,Workspace/WorkspaceState.swift}`
+- Modify focused `SlateMacTests` files and contradicted Milestone N evidence/specs.
+
+### Additional convergence findings discovered during execution
+
+- Exact UTF-8 identity must survive builder inventories/diffs, formula and
+  column references, saved-query/embed lookup, Base workspace paths, and
+  row/cell/sort state. Base-specific identity is byte-exact; existing Markdown
+  and Canvas registries retain their native canonical-string behavior.
+- `slate-query` routing belongs to Core's full YAML parser, and the Swift fence
+  bridge must preserve the complete authored interior, including the boundary
+  newline needed by YAML block-scalar chomping.
+- Base commands in a split pane route only through the active tab; Base rename
+  and retarget operations use exact path identity and cannot activate a
+  canonically equivalent sibling.
+- Builder previews and dashboard sections must surface engine `view_error`
+  states instead of presenting empty success, and a failed atomic dashboard
+  update must retain the user's editor draft for correction/retry.
+- A `.base` created after the initial scan must receive targeted indexing when
+  opened so its own path can satisfy `this` without a whole-vault rescan; the
+  scanner/query hot path must avoid repeated statement and query preparation.
+- DQL command sorting must remain deterministic even when Dataview comparison
+  is not a total comparator (NaN, equal-casual structured durations, or nested
+  inconsistent values). Only command ordering receives the total fallback;
+  expression comparison semantics stay unchanged.
+
+### Steps
+
+- [x] Add storage + session RED regressions proving scalar/list frontmatter
+  wikilinks resolve relative to their owning note and list Date/Datetime/Link
+  elements retain type through SQLite.
+- [x] Store typed list elements losslessly, force one safe reindex through
+  migration 026, and prove old caches cannot retain erased list types.
+- [x] Add RED DQL command-sort and duplicate-outlink regressions; route command
+  sort through the isolated DQL comparator, total-fallback inconsistent pairs,
+  and first-occurrence-deduplicate outgoing page identity.
+- [x] Add RED cache-retention coverage; evict obsolete generations and impose a
+  small per-handle LRU bound for same-generation query/`this` variants.
+- [x] Expose the engine's exact native value sort key through Core/UniFFI;
+  engine-backed grids must not locally re-sort, while local-only preview and
+  dashboard grids use that exact key after typed primitives.
+- [x] Store cell and sort selection by stable column ID on every Base surface,
+  clear disappeared identities, preserve active view by name across reload,
+  and clear embedded quick filters on view switch/Escape.
+- [x] Make embed recovery truthful for file, saved-query, inline, and DQL
+  forms; omit dead row-only edit actions and announce unavailable commands.
+- [x] Make dashboard view override an executable Default/Table/List renderer
+  choice; legacy invalid values fail visibly instead of silently selecting the
+  synthetic saved-query view.
+- [x] Visibility-gate heavy embedded query execution without hiding the
+  reading structure from VoiceOver; cover editor and reading surfaces.
+- [x] Add a post-scan `.base`/`this` regression and targeted open-time indexing;
+  precompile Base queries and reuse static scanner SQL without changing fresh
+  versus replacement transaction semantics.
+- [x] Re-run focused RED→GREEN suites, regenerate bindings, independently
+  re-review all three lanes, then repeat the complete allowed Core/CLI/UniFFI,
+  Swift, a11y, full-census, raw-hash, and final hot-path benchmark gates.
+- [x] Update the audit, help, specs, benchmarks, and both implementation plans;
+  leave `at_smoke_checklist.md` untouched.
 
 ## Final acceptance
 
@@ -451,4 +539,5 @@ SwiftUI/AppKit, XCTest.
 - Option-arrow reorder and H1/H2 dashboard semantics are automated.
 - Genuine Obsidian captures have raw hashes and sidecar provenance.
 - Independent reviewers approve; all allowed automated gates pass.
+- Remote CI remains pending until the branch is published.
 - Human VoiceOver status remains honestly open.

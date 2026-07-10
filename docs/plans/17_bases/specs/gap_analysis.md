@@ -31,11 +31,13 @@ Cross-references: [00_program.md](../00_program.md) decisions · [01_research_br
 | O8 | Tasks not queryable (team-stated cache limit) | `source: tasks` + `file.tasks.*` | The differentiator (brief §5.2, decision 8). |
 | O9 | Bases search shipped 1.12 filename-first | Quick filter across displayed columns, transient | Brief §5.1; decision 12. |
 | O10 | No full-text in Bases ("Bases ≠ search" moderation stance) | `file.matches()` extension | 05 §8.8 locked it; decision 9. |
-| O11 | Dataview DQL semantics that don't map | CALENDAR, **all** GROUP BY (even "simple" grouping changes row membership — one row per key vs. labeled sections), FLATTEN, order-dependent command pipelines, multi-arg lambdas, and ~20 unmapped functions convert to **named fail-loud errors**, never approximations. DQL's `null <= date` truthiness needs no special case under the N1-1 totality rules (Null ordering ⇒ false both sides of the conversion; the residual `<=`-on-missing edge is in the migration help) | N0-5 rules 2, 4–7; brief §8. The mapping tables are the traceable backlog for future function additions. |
+| O11 | Dataview DQL semantics that don't map | CALENDAR, **all** GROUP BY (even "simple" grouping changes row membership — one row per key vs. labeled sections), FLATTEN, order-dependent command pipelines, nested/multi-arg lambdas, direct mixed-null ordering (including the documented `null <= date(...)` edge), and the unmapped function inventory convert to **named fail-loud errors**, never approximations. | N0-5 rules 2, 4–7; brief §8. The mapping tables and golden-corpus dispositions are the traceable backlog for future additions. |
 | O12 | Dataview task-field semantics | `created`/`completion`/`start`/`fullyCompleted` ⇒ `Unsupported` (tasks table has due/scheduled/priority/recurrence only — deliberate migration-008 shape). Per the current executable Dataview source, DQL `completed` accepts both `"x"` and `"X"`, while `checked` requires a status that is neither empty nor the single unchecked space; Slate pins those predicates directly. Conversely Slate indexes `priority`, which Dataview explicitly does not support. |
-| O13 | Obsidian "follows JavaScript behavior" — full JS coercion in comparisons/arithmetic | Slate evaluates documented coercions + numeric-string coercion, and makes everything else **total over data** (Null/cross-type ordering ⇒ false + view warning; incompatible arithmetic ⇒ Null + warning; structural problems alone are fatal) | n1 §N1-1 rules 2–3; program decisions 5–6. More defined and less magical than JS; membership deltas vs. Obsidian are edge-case (exotic coercions), surfaced as warnings, and documented in help. |
+| O13 | Obsidian Bases and Dataview each carry JavaScript-like behavior, but with different documented semantics | **Native Bases** keeps the N1 total-over-data rules (Null/cross-type ordering ⇒ false + warning; incompatible arithmetic ⇒ Null + warning; structural problems fatal). The **isolated DQL compatibility layer** preserves the supported Dataview truthiness, typed equality/order, coercion, vectorization, regex, date, duration, and aggregate rules through explicit internal markers; unrepresentable shapes fail loud. DQL markers never change native Bases evaluation. | n0 §N0-5 rules 5–7; n1 §N1-1 rules 2–3; program decisions 5–6. |
 | O14 | 05 §8.4 names the post-limit count `filtered_count` | `shown_count` | It carries the shown-row count, not a filter count (n1 §N1-3 rule 6, n2 §N2-1) — renamed for honesty; `total_count` unchanged. |
 | O15 | 05 §8.7 row action "show local graph" | Deferred until Milestone P ships the local-graph leaf; context-menu slot reserved | n3 §N3-4 rule 1. N cannot depend on P (program sequencing note); the action lands as a P-or-later follow-up, not silently dropped. |
+| O16 | Dataview `file.tags` preserves authored case/order, string-coerces non-null tag values, and exposes parent tags with leading `#` | Slate's native tag index stays normalized for search; migration 024 adds a scanner-owned ordered raw DQL projection and rebuilds both projections in one transaction | n0 §N0-5 rule 6. The compatibility projection does not weaken native tag matching or rewrite source. |
+| O17 | Dataview page fields include body/list inline fields in source order | Slate's native property index remains frontmatter-oriented; migration 025 adds a scanner-owned DQL inline-field projection. Exact authored keys win, repeated/list values retain their shape, owning-note link context is preserved, and incomplete projection fails loud. | n0 §N0-5 rule 6. Native Bases property semantics remain unchanged. |
 
 ## Known risks the specs already fence
 
@@ -53,9 +55,21 @@ Cross-references: [00_program.md](../00_program.md) decisions · [01_research_br
   closed lossless serializer, DQL/evaluator, freshness/typing, grid, live-refresh,
   builder, dashboard, and closure-gate gaps. Generated default/full censuses now
   enforce the N-specific DoD, and Criterion p50 evidence includes a matched
-  pre/post scan comparison (+3.403% at 10k, +2.390% at 50k; both inside the 5%
-  gate). This changes no deliberate product delta above. Manual VoiceOver AT
-  remains open and is not inferred from static accessibility checks.
+  pre/post scan comparison. The final source is 4.7616% faster at 10k and 3.2911%
+  faster at 50k than pre-N, so both pass the 5% gate. This changes no deliberate
+  product delta above. Manual VoiceOver AT remains open and is not inferred from
+  static accessibility checks.
+- **2026-07-10 — final-review compatibility closure:** residual session,
+  Obsidian-corpus, row-only accessibility, ordered-tag, inline-field, and DQL
+  compatibility gaps were closed through `dacb2b0`. This final convergence also
+  preserves typed Date/Datetime/Wikilink lists through the index, bounds query
+  caches, uses total native/DQL sort fallbacks for inconsistent values, keeps
+  exact UTF-8 Base identities across Core and Swift, and makes embed/dashboard
+  failure and refresh behavior explicit. The checked-in DQL corpus has 170
+  unique cases with exactly three dispositions (45 supported, 117 parse-time
+  unsupported, 8 runtime fail-loud) and exact one-owner equality for all 426
+  coverage tags. Native Bases semantics remain governed by N1; DQL's extra
+  compatibility rules remain isolated per O13.
 
 ## Feature-request traceability (the owner's two pinned threads)
 

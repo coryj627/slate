@@ -50,9 +50,9 @@ views:
 
 Bare identifiers read note properties. Use `note.status`, `file.name`, `formula.ageDays`, `task.text`, or `this.file.name` when you want the namespace to be explicit.
 
-## Function Status
+## Native Bases Function Status
 
-Slate parses the documented Obsidian Bases function inventory, but v1 only evaluates the deterministic subset. Unsupported constructs fail loud in the view instead of silently changing membership.
+This table describes expressions authored directly in `.base` files or the Slate builder. Slate parses the documented Obsidian Bases function inventory, but v1 only evaluates the deterministic subset. Unsupported constructs fail loud in the view instead of silently changing membership. Dataview conversion has a separate, isolated compatibility layer described below; its coercion and vectorization rules do not change native Bases behavior.
 
 | Function or family | Slate v1 status |
 |---|---|
@@ -157,45 +157,56 @@ Both source negations (`-source` and `!source`) convert to a `not` filter. `and`
 
 | DQL field | Slate target | Status |
 |---|---|---|
-| `file.name`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`, `file.tags`, `file.aliases` | Same-named `file.*` field. | Converts. |
+| `file.name` | Dataview page title. | Converts; strips `.md` but preserves other extensions. |
+| `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime` | Same-named indexed file value. | Converts. |
+| `file.tags` | Ordered Dataview tag projection. | Converts with leading `#`; preserves authored case and first-occurrence order, expands nested parents once, and string-coerces non-null tag values. This does not rewrite Slate's normalized native tag index. |
+| `file.aliases` | Frontmatter aliases only. | Converts; body inline fields named `alias` or `aliases` do not contribute. |
 | `file.cday`, `file.mday` | `file.ctime.date()`, `file.mtime.date()`. | Converts. |
 | `file.link` | `link(file.path)`. | Converts. |
-| `file.inlinks` | `file.backlinks`. | Converts. |
-| `file.outlinks` | `file.links`. | Converts; embeds remain separately available as `file.embeds`. |
+| `file.inlinks` | Resolved incoming page links. | Converts; links and embeds are deduplicated by page identity. |
+| `file.outlinks` | Resolved outgoing page links. | Converts; preserves link/embed metadata while deduplicating pages. |
 | `file.etags`, `file.lists`, `file.frontmatter`, `file.day`, `file.starred` | No v1 field. | Fails loud. |
+
+Ordinary DQL row properties merge frontmatter with indexed page/list inline fields in source order. Exact authored keys win before canonical-key collision merging, repeated values remain ordered, and inline links resolve relative to the note that owns them. If Slate cannot prove the body projection complete, the query fails loud instead of returning partial fields.
 
 ### DQL task fields
 
 | DQL field | Slate target | Status / caveat |
 |---|---|---|
 | `text`, `status` | `task.text`, `task.status`. | Converts in `TASK` queries. |
-| `completed` | `task.status == "x"`. | Matches Dataview's lowercase-`x` rule exactly. |
-| `checked` | `task.status != " "`. | Converts. |
+| `completed` | `task.status == "x" OR task.status == "X"`. | Matches Dataview's two completed markers. |
+| `checked` | Status is nonempty and is not the single unchecked space. | Converts. |
 | `due`, `scheduled` | `task.due`, `task.scheduled`. | Converts. |
-| `created`, `completion`, `start`, `fullyCompleted`, `children`, `section` | No indexed v1 task field. | Fails loud. |
+| `created`, `completion`, `start`, `fullyCompleted`, `children`, `section`, `subtasks`, `line`, `lineCount`, `path`, `blockId`, `link` | No indexed v1 task field. | Fails loud. |
 
 ### DQL functions
 
 | DQL function or family | Slate conversion | Status / caveat |
 |---|---|---|
-| `contains`, `lower`, `replace`, `join`, `length` | Corresponding string/list method (`length` becomes `.length`). | Converts. `replace` is literal-all. |
-| `sort`, `reverse`, `unique`, `flat`, `slice`, `filter`, `map` | Corresponding list method. | Converts single-element lambdas for `filter` and `map`. |
-| `sum`, `average`, `min`, `max` | Corresponding aggregate when the input is list-shaped. | Converts. |
+| `contains`, `lower`, `replace`, `join`, `length` | Isolated DQL-compatible operation. | Converts. `replace` is literal-all; `join` also stringifies a scalar and ignores its separator. |
+| `sort`, `reverse`, `unique`, `flat`, `slice`, `filter`, `map` | Isolated DQL-compatible list operation. | Converts supported list shapes and one-argument lambdas for `filter`/`map`; unsupported dynamic, nested, or multi-argument lambda shapes fail loud. |
+| `sum`, `average`, `min`, `max` | DQL aggregate over a list-shaped input. | Converts. A null first element fails; later nulls are skipped, while `average` still divides by the full list length. `min`/`max` preserve supported typed values. |
 | `startswith`, `endswith` | `.startsWith`, `.endsWith`. | Converts. |
 | `round`, `trunc`, `floor`, `ceil` | Corresponding numeric operation; `trunc` rounds toward zero. | Converts. |
-| `regextest`, `regexmatch`, `regexreplace` | Regex `.matches` / `.replace` forms. | Converts supported regex shapes. |
-| `split`, `substring` | `.split`, `.slice`. | Converts. |
+| `regextest`, `regexmatch`, `regexreplace` | JavaScript-compatible regex operation. | Converts representable patterns: `regextest` searches, `regexmatch` requires the whole string, and replacement/ASCII character-class behavior follows DQL. Rust-only or unrepresentable JavaScript syntax fails loud. |
+| `split`, `substring` | DQL split/slice operation. | Converts. `split` accepts scalar text only and does not vectorize over list input. |
 | `striptime` | `.date()`. | Converts. |
-| `choice`, `default` | `if(...)` forms. | Converts. |
+| `choice`, `default` | DQL truth/default operation. | Converts. `default` replaces null only; empty strings, lists, and objects remain values. `ldefault` is unsupported. |
 | `typeof` | `isType` rewrite in boolean comparisons. | Converts; use it to guard nullable fields. |
-| `number`, `string`, `date`, `dur`, `link`, `object`, `list`, `embed` | Corresponding Bases constructor (`dur` becomes `duration`; `embed` becomes `link`). | Converts. |
+| `number`, `string`, `date`, `dur`, `link`, `embed`, `object`, `list`, `array` | Isolated DQL constructor. | Converts supported shapes. `list`/`array` are variadic and preserve nested lists. One- and two-argument `link` calls vectorize; the three-argument form is scalar-only and requires string, string, boolean. |
 | `upper`, `truncate`, `padleft`, `padright`, `containsword`, `econtains`, `icontains` | No v1 DQL conversion. | Fails loud. |
 | `dateformat`, `durationformat`, `currencyformat`, `localtime` | Formatting/local-time semantics are not portable to v1. | Fails loud. |
-| `hash`, `meta`, `minby`, `maxby`, `product`, `reduce`, `extract`, `firstvalue`, `nonnull`, `display`, `elink` | No v1 DQL conversion. | Fails loud. |
+| `hash`, `meta`, `minby`, `maxby`, `product`, `reduce`, `extract`, `firstvalue`, `nonnull`, `display`, `elink`, `ldefault` | No v1 DQL conversion. | Fails loud. |
+
+Function names and date shorthand tokens are lowercase and case-sensitive in DQL. Supported scalar functions vectorize over list arguments using the shortest list. DataArray-style property projection drops missing/null entries before flattening list-valued entries. Authored method-call syntax and authored `if(...)` are not Dataview DQL forms; use the mapped functions above, including `choice(...)`, or the conversion fails loud.
+
+DQL dates retain local-calendar versus explicit-offset provenance. Local date arithmetic preserves the authored day across daylight-saving transitions; week shorthands use Monday through Sunday, and end-of-week/month/year values end at `23:59:59.999`. Durations retain their authored year/month/week/day/hour/minute/second units for DQL equality and calendar arithmetic. `date(link)` tries the exact display and path, then the resolved page's ordered `date`/`day` fields and dated Markdown title.
 
 ### Failure behavior
 
-Null comparisons differ from Dataview's JavaScript-like behavior. When a migrated filter depended on `null <= date(...)`, make the intent explicit with `typeof`/presence checks or a condition such as `field && date(field) <= today()`.
+The converter preserves the supported DQL truthiness, equality, ordering, coercion, and vectorization rules inside compatibility markers. Those rules are intentionally isolated from native Bases expressions. A bare DQL `null` literal, native-Bases-only fields, unsupported authored methods, and unrepresentable dynamic shapes fail loud rather than falling through to similarly named native properties or functions.
+
+Direct mixed-null ordering is not representable safely. When a migrated filter depended on `null <= date(...)`, make the intent explicit with a `typeof`/presence check or a condition such as `field && date(field) <= today()`.
 
 DataviewJS and inline `$=` / `= expr` have no JavaScript runtime in Slate v1. Rewrite them as Slate queries or wait for a future plugin/WASM extension point. Every unsupported conversion remains visible as a named warning or view error; Slate never silently broadens or narrows the query.
 

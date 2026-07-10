@@ -25,20 +25,20 @@ Baseline facts (verified 2026-07-06, this worktree):
 
 1. **Routing:** `.base` paths take a new arm in the `openFile` funnel (AppState.swift:799) → workspace tab `case base(path:)`. File tree, links, recents need no special cases (funnel property). Quick-open: extend `FileFilter` additively (XD gap-R7 precedent) so `.base` files list.
 2. **Tab layout:** header = base name + **view switcher** (menu-button listing `base_views`; first view default — brief §1; ⌘-less cycling command "Bases: Next/Previous view" in the registry); toolbar = Results count (activates a popover: total/shown counts, limit readout), Quick filter (N3-3 placeholder slot), Export (N3-4). Body = renderer for the active view; footer = summary row when any summary is assigned.
-3. **Table renderer** on `AccessibleDataGrid` v2 — additive component work, existing callers compile unchanged: (a) **cell-navigation mode** (plain arrows move cell-by-cell in all four directions; Home/End = first/last column, PageUp/PageDown = viewport rows, per the vendored keyboard matrix ../02_milestone_brief.md; within-text arrow movement applies only *inside an open cell editor* — Return/F2 opens one, Esc closes, N3-4 rule 3), (b) **grouped sections** (group header rows: AX heading trait + "Group: <label>, N rows"), (c) **summary row** separately addressable from data rows (vendored checkpoint), announced "Summary: <column>: <value>, …", (d) editable-cell hooks (consumed by N3-4).
+3. **Table renderer** on `AccessibleDataGrid` v2 — additive component work, existing callers compile unchanged: (a) **cell-navigation mode** (plain arrows move cell-by-cell in all four directions; Home/End = first/last column, PageUp/PageDown = viewport rows, per the vendored keyboard matrix ../02_milestone_brief.md; within-text arrow movement applies only *inside an open cell editor* — Return/F2 opens one, Esc closes, N3-4 rule 3), (b) **grouped sections** (group header rows: AX heading trait + "Group: <label>, N rows"), (c) **summary row** separately addressable from data rows (vendored checkpoint), announced "Summary: <column>: <value>, …", (d) editable-cell hooks (consumed by N3-4). Cell selection and transient-sort state are keyed by the exact stable column ID, never an array offset or Swift's canonically-equivalent `String` identity; a disappeared ID clears the state rather than retargeting another column.
 4. **Announcement grammar** (pinned, vendored checkpoints verbatim — ../02_milestone_brief.md): entering grid ⇒ `audio_summary`; column move ⇒ "Column: <label>, sortable, current sort: <asc/desc/none>"; cell move ⇒ "<column label>: <value>"; sort change ⇒ "Sorted by <column>, <direction>" (grid `applySort` return, AccessibleDataGrid.swift:255); row move announces the `ColumnRole::Primary` value first (05 §8.4).
 5. **Sort affordance:** header click **and** keyboard command per column (05 §8.7 "no header-click-only"); v1 sort is **session-transient view state** unless explicitly saved ("Save sort to view" command writes the `slate` sub-key via `base_apply_edit` — decision 3; never Obsidian's undocumented keys).
 6. **Degraded views** (decision 6): `view_error` ⇒ banner naming the construct + empty grid with AX text = the error; `warnings` ⇒ non-modal banner list; cards/map/unknown types ⇒ table fallback + notice naming the requested layout (decision 4).
 7. **Commands** (decision 15): `CommandSection::Bases` lands here (cross-language enum + bindings regen); registered commands this PR: open-view-switcher, next/previous view, sort-by-column, save-sort-to-view, results-popover. All three drift tests extend. Zero new global chords.
-8. Live updates follow the repo's shipped stance: **in-app writes** (grid property edit N3-4, note save, `.base` edit) re-execute the visible view through the existing post-write refresh path, preserving selection by row identity `(path, ordinal)` and announcing "Updated: <audio_summary>" only when membership changed (no announcement spam). **External changes: Refresh is the path** — a registry command "Bases: Refresh" (the XD external-change precedent, `../16_excalidraw/specs/xd2_spec.md` rule "no automatic external-change reload"); no filesystem watcher is added by N.
+8. Live updates follow the repo's shipped stance: **in-app writes** (grid property edit N3-4, note save, `.base` edit) re-execute the visible view through the existing post-write refresh path, preserving selection by row identity `(path, ordinal)` plus exact column ID and preserving the active view by its exact name across definition reorder. Announce "Updated: <audio_summary>" only when membership changed (no announcement spam). **External changes: Refresh is the path** — a registry command "Bases: Refresh" (the XD external-change precedent, `../16_excalidraw/specs/xd2_spec.md` rule "no automatic external-change reload"); no filesystem watcher is added by N.
 
 ### Tests (PR 1)
 
 XCTest: keyboard matrix (arrows/Home/End/PageUp/PageDown/sort — vendored test list); announcement-string goldens per rule 4; view-switcher + fallback-banner rendering; routing (funnel + quick-open). Grid component tests extend `AccessibleDataGridTests.swift` (existing callers' behavior unchanged — regression suite must stay green untouched).
 
-- [ ] Rules 1–8; CommandSection::Bases + bindings regen; drift tests extended
-- [ ] XCTest matrices + goldens; a11y-check 100/100; APCA both appearances
-- [ ] fmt/clippy (Rust side of enum) + Swift lint conventions
+- [x] Rules 1–8; CommandSection::Bases + bindings regen; drift tests extended
+- [x] XCTest matrices + goldens; a11y-check 100/100; APCA both appearances
+- [x] fmt/clippy (Rust side of enum) + Swift lint conventions
 
 ## N3-2 · List renderer (#703) — PR 2
 
@@ -53,9 +53,9 @@ XCTest: keyboard matrix (arrows/Home/End/PageUp/PageDown/sort — vendored test 
 
 XCTest: parity suite runs the same fixtures through table and list asserting identical row sets/actions (§N-G); indent/separator/marker variants; announcement goldens.
 
-- [ ] Rules 1–4
-- [ ] Parity + variant tests; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–4
+- [x] Parity + variant tests; a11y-check; APCA
+- [x] Swift conventions
 
 ## N3-3 · Transient quick filter (#704) — PR 3
 
@@ -75,9 +75,9 @@ The owner-pinned request (brief §5.1). **Strictly in-memory** (decision 12).
 
 XCTest: matching/normalization goldens (incl. diacritics — engine-side, asserted through the FFI); Esc/selection restoration; view-switch clearing; announcement strings from the result set; the never-dirties test (bytes + tab-dirty state); summary-recompute banner.
 
-- [ ] Rules 1–6 (rule 7 is a reserved-scope note, no code)
-- [ ] XCTests incl. never-dirties; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–6 (rule 7 is a reserved-scope note, no code)
+- [x] XCTests incl. never-dirties; a11y-check; APCA
+- [x] Swift conventions
 
 ## N3-4 · Row actions, in-grid editing, export (#705) — PR 4
 
@@ -93,27 +93,27 @@ XCTest: matching/normalization goldens (incl. diacritics — engine-side, assert
 
 XCTest: per-kind editor commit/cancel/clear round-trips against a fixture vault (bytes asserted — frontmatter edited atomically, body untouched); row-departure announcement; read-only hints; export goldens (CSV RFC 4180 quoting, Markdown escaping); task-row open-at-line.
 
-- [ ] Rules 1–5
-- [ ] XCTests incl. byte-level write assertions; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–5
+- [x] XCTests incl. byte-level write assertions; a11y-check; APCA
+- [x] Swift conventions
 
 ## N3-5 · Embeds: `![[x.base]]`, `#View`, fences, `this` (#706) — PR 5
 
 ### Normative rules
 
-1. Five forms, one renderer (decision 14 + amended decision 2): `![[x.base]]` (first view), `![[x.base#View]]` (view by name; unknown ⇒ labeled error chip listing views), ` ```base ` (inline YAML via `open_base_inline`), ` ```slate-query ` (**dual-mode**, decision 14: a top-level `query:` key ⇒ saved-query reference with optional `view:` override, unknown ⇒ labeled error chip listing saved queries; otherwise the body parses as inline Bases YAML exactly like ` ```base ` — the milestone's "tester defines queries in slate-query blocks" form), and ` ```dataview ` (block DQL via `open_dql` — read-only render; conversion losses surface the decision-6 banner naming the construct; a "Convert to .base…" action on the banner/context menu runs `dql_as_base`). ` ```dataviewjs ` stays an ordinary code block — no renderer, no banner. Discovery from the N0-4 index; render on scroll-into-view (parse-on-open economy).
+1. Five forms, one renderer (decision 14 + amended decision 2): `![[x.base]]` (first view), `![[x.base#View]]` (view by exact name; unknown ⇒ labeled error chip listing views), ` ```base ` (inline YAML via `open_base_inline`), ` ```slate-query ` (**dual-mode**, decision 14: Core's full-YAML classifier treats a top-level scalar `query` as a saved-query reference with optional scalar `view`; otherwise valid YAML is inline Bases YAML exactly like ` ```base ` — the milestone's "tester defines queries in slate-query blocks" form), and ` ```dataview ` (block DQL via `open_dql` — read-only render; conversion losses surface the decision-6 banner naming the construct; a "Convert to .base…" action on the banner/context menu runs `dql_as_base`). The fence interior passed to Core is sliced verbatim, including the line ending before the closing fence, so YAML `|`, `|-`, and `|+` chomping semantics survive. Invalid reference YAML fails loud instead of being reinterpreted as inline Base content. ` ```dataviewjs ` stays an ordinary code block — no renderer, no banner. Discovery comes from the N0-4 index.
 2. Context: `this_path` = the **embedding note** (decision 20; brief §4). Same grid component as N3-1 — full keyboard/AX inside the embed; the embed region is a labeled AX group "Embedded base: <name>, view <view>" with an "Open in tab" action (funnel).
 3. **Embeds are read-only in v1, both surfaces** (decision 14): the grid is fully interactive for navigation, sort, and quick filter, but cell editing is disabled with the AX hint "read-only in embeds — open in tab to edit" ("Open in tab" is one keystroke). This honors the milestone's "non-editable inline group" wording literally; in-embed editing is a possible post-v1 relaxation, not a v1 ambiguity.
-4. Editor surface: the fence/embed source stays editable text; the rendered grid appears as a non-editable inline group below/adjacent per the K math-block editor convention.
-5. Embed execution shares the cache (same AST hash + `this`); a note with five embeds of one base costs one execution per distinct (view, this) pair.
+4. Editor surface: the fence/embed source stays editable text; a labeled semantic placeholder mounts immediately below/adjacent per the K math-block editor convention. Heavy open/execute work begins only after the embed first becomes scroll-visible, but the placeholder remains in the reading structure and holds its mounted registry lease until unmount so VoiceOver never loses the region while execution is deferred.
+5. Embed execution shares the cache (same AST hash + `this`); a note with five embeds of one base costs one execution per distinct (view, this) pair. File paths, saved-query IDs/names, requested views, and result column identities use exact UTF-8 identity so canonically equivalent spellings cannot alias one another.
 6. Failure honesty: a fence that fails `parse_base` renders the degraded banner + raw source remains visible in editor; never a blank hole (XD placeholder discipline, `../../16_excalidraw/specs/xd0_spec.md` render rule 8).
 
 ### Tests (PR 5)
 
 XCTest: all five forms render + announce (both ` ```slate-query ` modes); `#View` selection; unknown-target chips; `this` resolution golden (`file.hasLink(this)` fixture — the better-backlinks pattern); editor/reading mode split; cache-sharing (execution-count probe); read-only enforcement (edit attempts refused with the hint, both surfaces); DQL fence render + Unsupported banner + convert-to-`.base` action; `dataviewjs` fence stays a plain code block.
 
-- [ ] Rules 1–6
-- [ ] XCTests; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–6
+- [x] XCTests; a11y-check; APCA
+- [x] Swift conventions
 
 **Wave-4 exit:** the vendored accessibility checkpoints (`../02_milestone_brief.md`) all demonstrably met on fixtures (announcement goldens), §N-G table/list parity suite green, quick-filter never-dirties test green.

@@ -19,6 +19,13 @@ Baseline facts (verified 2026-07-06, this worktree):
 - Census/bench conventions: `census_*` test fns, `SLATE_CENSUS_FULL=1` via `census_scale()`; criterion benches in `crates/slate-core/benches/`; baselines in `BENCHMARKS.md`.
 - Workspace YAML: yaml-rust2 does **not** preserve comments through emit — this is why decision 3 mandates the preservation model below (raw-text retention + targeted splicing), not naive parse→emit.
 
+**Close-out storage amendment (2026-07-10):** list elements have no separate
+`value_kind` column, so Date, Datetime, and Wikilink elements are stored in
+`value_text` as private tagged JSON objects while old untagged strings continue
+to decode as Text. Migration 026 forces one scanner slow path by assigning the
+impossible cached size `-1`; it deliberately retains the old property rows until
+that rescan succeeds, so an interrupted upgrade cannot make metadata disappear.
+
 ---
 
 ## N0-1 · Expression language: lexer, parser, AST (#690) — PR 1
@@ -76,9 +83,9 @@ pub enum PropertyRef {
 - Property (proptest): parse never panics on arbitrary strings; parse determinism; parse→emit(verbatim span)→parse fixpoint.
 - Exhaustive inventory test: every brief-§3 function name parses to its enum arm; a name one edit-distance off parses to `Unsupported`.
 
-- [ ] Types + `parse_expr` per rules 1–7
-- [ ] Golden + property + inventory tests
-- [ ] fmt/clippy clean; host-independent; no I/O
+- [x] Types + `parse_expr` per rules 1–7
+- [x] Golden + property + inventory tests
+- [x] fmt/clippy clean; host-independent; no I/O
 
 ## N0-2 · `.base` parser → `SlateQuery` (#691) — PR 2
 
@@ -154,10 +161,10 @@ Derived per view: `pub fn view_query(base: &BaseFile, view: usize) -> SlateQuery
 - Unit per rule; property: never panics on arbitrary YAML/text; determinism.
 - Cross-check: `view_query` output for the brief example matches a hand-written expected `SlateQuery` (golden).
 
-- [ ] Types + `parse_base` + `view_query` per rules 1–7; **`SlateQuery` pinned as above (serde-derived)** — downstream waves consume it as-is
-- [ ] Structural node spans recorded (N0-3's splice substrate)
-- [ ] Fixtures + golden + property tests
-- [ ] fmt/clippy; host-independent; no I/O
+- [x] Types + `parse_base` + `view_query` per rules 1–7; **`SlateQuery` pinned as above (serde-derived)** — downstream waves consume it as-is
+- [x] Structural node spans recorded (N0-3's splice substrate)
+- [x] Fixtures + golden + property tests
+- [x] fmt/clippy; host-independent; no I/O
 
 ## N0-3 · `.base` serializer + round-trip corpus (#692) — PR 3
 
@@ -166,7 +173,7 @@ Same module: `pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Resu
 ### Normative rules
 
 1. **Untouched ⇒ byte-equal:** `serialize_base(parse_base(s).0, &[])` returns `s` exactly (the `raw` field is authoritative when no edits apply). This is the 05 §8.1 hard requirement and it is trivially true by construction — test it anyway, forever (§N-A).
-2. **Edits are targeted splices**, not re-emission: `BaseEdit` is a closed enum — the **complete v1 set** (additions are spec amendments, not judgment calls): `SetViewKey { view, key, value }` (type/name/limit/groupBy/order), `AddView`, `RemoveView`, `RenameView`, `SetViewFilters`, `SetTopLevelFilters`, `SetFormula`, `RemoveFormula`, `SetDisplayName`, `SetSummaryAssignment`, `SetSlateState`, `SetSlateSort`. `SetSlateSort` owns only the `slate.sort` child and must preserve every other `slate` key and comment; clearing the sole child also removes the now-empty `slate` parent. Each edit rewrites only the minimal YAML span it owns (the structural node spans recorded by N0-2), preserving surrounding bytes, key order, quoting style, comments, and final-newline state. Line-oriented splicing over the retained `raw` + node spans; **never** parse→mutate→emit the whole document through yaml-rust2 (baseline fact: it drops comments).
+2. **Edits are targeted splices**, not re-emission: `BaseEdit` is a closed enum — the **complete v1 set** (additions are spec amendments, not judgment calls): `SetViewKey { view, key, value }` (type/name/limit/groupBy/order), `AddView`, `RemoveView`, `RenameView`, `RemoveViewKey`, `SetViewFilters`, `SetTopLevelFilters`, `SetFormula`, `RemoveFormula`, `SetDisplayName`, `SetSummaryAssignment`, `SetSlateState`, `SetSlateSort`. `SetSlateSort` owns only the `slate.sort` child and must preserve every other `slate` key and comment; clearing the sole child also removes the now-empty `slate` parent. Each edit rewrites only the minimal YAML span it owns (the structural node spans recorded by N0-2), preserving surrounding bytes, key order, quoting style, comments, and final-newline state. Line-oriented splicing over the retained `raw` + node spans; **never** parse→mutate→emit the whole document through yaml-rust2 (baseline fact: it drops comments).
 3. New content Slate writes (added views, builder-authored files) uses a **pinned canonical style**: two-space indent, keys in the brief-§1 example order (`type`, `name`, `limit`, `groupBy`, `filters`, `order`, `summaries`, then `source`/`slate`), double-quoted strings only where YAML requires, LF endings, trailing newline. New files created by the builder are entirely canonical-style.
 4. Filter nodes edited structurally re-emit in the mapping form (brief §1 example shape); a `Stmt` whose `Expr` is untouched re-emits its verbatim span (N0-1 rule 7).
 5. `Unsupported` nodes and `preserved` YAML re-emit byte-verbatim always — an edit that would have to rewrite inside preserved content is a `SerializeError::WouldClobber` (callers surface it; never silent data loss).
@@ -174,14 +181,14 @@ Same module: `pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Resu
 
 ### Tests (PR 3)
 
-- **Golden corpus** `tests/fixtures/bases/`: the brief-§1 example verbatim; ≥ 6 hand-authored Obsidian-style files exercising comments, key-order variance, single/double quoting, plugin view types, undocumented view-state keys (row height, column widths — realistic names), a base with only a filter string, a base with every documented key. Corpus rule (XD precedent): format-faithful now; genuine Obsidian-app-written captures are added as they become available and **must never be normalized**.
+- **Golden corpus** `tests/fixtures/bases/`: the brief-§1 example verbatim; ≥ 6 hand-authored Obsidian-style files exercising comments, key-order variance, single/double quoting, plugin view types, undocumented view-state keys (row height, column widths — realistic names), a base with only a filter string, a base with every documented key; plus two raw Obsidian 1.12.7 application captures with immutable provenance hashes. Every fixture **must never be normalized**.
 - Byte-equal round-trip over the whole corpus in CI (§N-A).
 - Per-edit minimal-diff tests: apply each `BaseEdit` kind to each fixture; assert untouched lines byte-identical (diff-shape golden).
 - Adversarial census `census_bases_roundtrip` (§N-A): random YAML mutations of corpus files — parse → serialize untouched ⇒ byte-equal; parse → random valid edit → serialize ⇒ minimal diff or explicit `WouldClobber`; never panic, never drop content.
 
-- [ ] `serialize_base` per rules 1–6; `BaseEdit` closed enum
-- [ ] Golden corpus + byte-equal CI + minimal-diff tests + census
-- [ ] fmt/clippy; host-independent
+- [x] `serialize_base` per rules 1–6; `BaseEdit` closed enum
+- [x] Golden corpus + byte-equal CI gate wired and locally verified + minimal-diff tests + census
+- [x] fmt/clippy; host-independent
 
 ## N0-4 · Scanner discovery: `bases_files` index + fence discovery (#693) — PR 4
 
@@ -223,9 +230,9 @@ Deviations from the 05 sketches, recorded: no `raw_yaml` column — §9.2 (SQLit
 
 Unit per rule; `census_bases_scan_incremental` at 10k-file scale; scan-bench diff proving decision-16's "no first-open regression" (§N-E).
 
-- [ ] Migration 021 (both tables) + scanner + fence discovery per rules 1–4
-- [ ] `census_bases_scan_incremental` + scan-bench diff
-- [ ] fmt/clippy clean
+- [x] Migration 021 (both tables) + scanner + fence discovery per rules 1–4
+- [x] `census_bases_scan_incremental` + scan-bench diff
+- [x] fmt/clippy clean
 
 ## N0-5 · Dataview DQL parser → `SlateQuery` (#713) — PR 5
 
@@ -238,7 +245,7 @@ In N scope by owner decision 2026-07-06 (program decision 2, amended — reverse
 3. **FROM sources** (brief §8.2): `#tag` ⇒ `file.hasTag("tag")` (subtag semantics already match Slate's shipped tag matching — search_db.rs:60); `"folder"` ⇒ `file.inFolder("folder")` (recursive matches); `"path/to/file"` ⇒ path-equality filter (folder-wins tie rule honored: emit the folder form unless the source ends in `.md`); `[[note]]` ⇒ `file.hasLink("note")`; `outgoing([[note]])` ⇒ `QuerySource::Linked { from_path, depth: 1 }` internally, **serializing to the filter form `link("note").linksTo(file.file)`** on save-as-`.base` (brief §3's documented `linksTo`; this is also the builder's Linked-source serialization — N4-1 rule 1, gap G6); `[[]]`/`[[#]]` ⇒ the same forms over `this`. Combinators `and`/`or` (case-insensitive) + parentheses ⇒ `FilterNode` nesting; **both** negation spellings `-`/`!` ⇒ `Not` (brief §8.2's dual documentation).
 4. **Data commands** (brief §8.2): repeated `WHERE` ⇒ ANDed filters; `SORT` (all four direction spellings) ⇒ sort keys; `GROUP BY` ⇒ **always `Unsupported { reason: "rows aggregation" }`** — DQL grouping yields *one row per key* with a `rows` array, Slate `group_by` keeps every row in labeled sections; even the "simple" case silently changes row membership, so none of it maps (decision 6; the user re-groups in the grid or builder); `FLATTEN` ⇒ `Unsupported` (v1); `LIMIT` ⇒ `limit`. **Pipeline-order guard (precise predicate):** the written command sequence, ignoring `FROM`, must match `WHERE* SORT? LIMIT?` (each present at most once except `WHERE`, in exactly that relative order — repeated `WHERE`s are order-free among themselves). Anything else — `LIMIT` before `SORT`, repeated `SORT`, any `GROUP BY`/`FLATTEN` — is order-dependent in DQL's written-order execution model and ⇒ `Unsupported { reason: "order-dependent commands" }` (decision-6 over convenience).
 5. **Expressions** (brief §8.3): `=` ⇒ typed DQL equality; `!=` and comparisons retain DQL type ordering; infix `AND`/`OR`, prefix `!`, `choice`, and `default` carry explicit DQL truth/default markers so eager Dataview evaluation is preserved instead of inheriting Bases short-circuit/coercion behavior. String `a * n` ⇒ repeat; authored DQL strings are double-quoted and unary minus is supported only on numeric literals. `date(…)` produces a DQL date value: ISO fractional seconds, when present, are exactly three digits; dates and shorthands retain system-local calendar provenance; explicit RFC3339 offsets remain fixed; equality requires the same instant and the same local/fixed zone provenance; week boundaries are Monday–Sunday; `eow`/`eom`/`eoy` are local 23:59:59.999 date-times; and calendar arithmetic preserves the local day across DST. Native date-only fields bridge by authored calendar Y-M-D when compared/coerced against DQL dates; native date-times remain instant-based. `dur(…)` retains authored years/months/weeks/days/hours/minutes/seconds as structured components (calendar units are not collapsed to fixed milliseconds; the evaluator may retain an internal millisecond remainder); arithmetic normalizes casual totals while equality preserves unit identity. Lambdas `(x) => e` ⇒ the implicit-`value` list-expr form where the target is `map`/`filter`; multi-arg/nested lambdas and `minby`/`maxby`/predicate-form `all`/`any`/`none` ⇒ `Unsupported`. Direct mixed-null ordering remains fail-loud rather than silently adopting DQL's documented `null <= date(today)` quirk; the migration help points users to a `typeof` guard.
-6. **Implicit fields** (brief §8.4), with the mapping table pinned in the module: `file.name` is the Dataview title (strip `.md`, preserve other extensions); path/folder/ext/size/ctime/mtime remain indexed file values. `file.tags` reads the scanner-owned ordered raw projection from migration 024 (case and first-occurrence order preserved, non-null scalar values such as `0`/`false` string-coerced, then parent tags expanded once); `file.aliases` reads frontmatter only, filters empty scalar comma tokens, and preserves string-coerced entries—including null—in list form. `file.cday/mday` strip time; `file.link` is a page link; `file.inlinks/outlinks` use resolved page-link identity, preserve embed/link metadata, and deduplicate pages. `file.etags/lists/frontmatter/day/starred` remain `Unsupported`. Ordinary row properties merge frontmatter with scanner-owned page/list inline fields from migration 025 in source order; exact authored keys win before canonical-key collision merging, list-valued occurrences remain nested values, inline links resolve relative to their owning Markdown file, and an incomplete body projection fails loud. Task fields: `text`, `status`, `due`, and `scheduled` map directly; `completed` is true for both `x` and `X`; `checked` requires a non-empty status other than the single unchecked space; unsupported task metadata stays named `Unsupported`. `this.` uses the same rules against the captured Base context.
+6. **Implicit fields** (brief §8.4), with the mapping table pinned in the module: `file.name` is the Dataview title (strip `.md`, preserve other extensions); path/folder/ext/size/ctime/mtime remain indexed file values. `file.tags` reads the scanner-owned ordered raw projection from migration 024 (case and first-occurrence order preserved, non-null scalar values such as `0`/`false` string-coerced, then parent tags expanded once); `file.aliases` reads frontmatter only, filters empty scalar comma tokens, and preserves string-coerced entries—including null—in list form. `file.cday/mday` strip time; `file.link` is a page link; `file.inlinks/outlinks` use resolved page-link identity, preserve embed/link metadata, and deduplicate pages. `file.etags/lists/frontmatter/day/starred` remain `Unsupported`. Ordinary row properties merge frontmatter with scanner-owned page/list inline fields from migration 025 in source order; exact authored keys win before canonical-key collision merging, list-valued occurrences remain nested values, and an incomplete body projection fails loud. Frontmatter Date, Datetime, and Wikilink list elements retain their types through the SQLite projection; both scalar and list Wikilinks resolve relative to the owning Markdown file rather than the query host. Inline links follow the same owning-file rule. Migration 026 forces one safe reindex so pre-tagged caches cannot retain the old erased list types. Task fields: `text`, `status`, `due`, and `scheduled` map directly; `completed` is true for both `x` and `X`; `checked` requires a non-empty status other than the single unchecked space; unsupported task metadata stays named `Unsupported`. `this.` uses the same rules against the captured Base context.
 7. **Functions** (brief §8.5), same three-column table: function names and date-shorthand tokens are case-sensitive and lowercase. Direct maps include `contains`, `lower`, literal-all `replace`, `join`, `length`, `sort/reverse/unique/flat/slice/filter/map`, list-shaped `sum/average/min/max`, `startswith/endswith`, numeric rounding, regex functions, `split`, `substring`, `striptime`, `choice`, null-only `default` (empty string/list/object stay unchanged), boolean-position `typeof`, and `number/string/date/dur/link/object/list/array/embed`; upstream `ldefault` remains unsupported and non-vectorized. `sum`/`average` preserve the upstream asymmetric reduction: a null first element fails, later nulls are skipped, and average still divides by the full list length. `join` accepts a scalar (stringifies it and ignores the separator) as well as a list; DataArray property projection drops missing/null entries before flattening list-valued entries; list utilities carry their pinned null/scalar overloads and otherwise fail loud on unsupported dynamic shapes. `link(path, display?, embed?)` preserves resolved target/subpath/type/embed metadata; equality ignores display/embed; only the one- and two-argument registrations vectorize; and the scalar-only three-argument form requires string/string/boolean exactly. `date(Link)` parses exact display then exact path before resolving the target page in query context and applying `file.day` precedence (source-ordered date/day fields with first-element-only date arrays and link path→subpath→display extraction, then dated Markdown title). `embed` requires a link value and marks it embedded. Locale-sensitive ordering—including object keys—is supported only for the pinned lowercase-ASCII subset and fails loud outside it. Everything else (`upper`, `truncate`, `padleft/right`, `containsword/econtains/icontains`, date/duration/currency formatting, `localtime`, `hash`, `meta`, `minby/maxby`, `product`, `reduce`, `extract`, `firstvalue`, `nonnull`, `display`, `elink`, `ldefault`) remains `Unsupported`; additions are individually tracked.
 8. Inline `= expr` queries: out of scope (reserved N-E1 remainder; brief §8.6). Only ` ```dataview ` **block** queries convert.
 9. Determinism: pure function; equal input ⇒ equal output.
@@ -249,8 +256,8 @@ In N scope by owner decision 2026-07-06 (program decision 2, amended — reverse
 - Unit per rule incl. the pipeline-order guard both ways, both negation spellings, `WITHOUT ID` variants, TASK ⇒ tasks-source mapping.
 - Property: never panics on arbitrary text; determinism; converted queries execute under the N1 engine without panicking (integration once N1 lands — wired into the N2-1 census run).
 
-- [ ] `parse_dql` per rules 1–9; mapping tables in module docs
-- [ ] Golden corpus + unit + property tests
-- [ ] fmt/clippy; host-independent; no I/O
+- [x] `parse_dql` per rules 1–9; mapping tables in module docs
+- [x] Golden corpus + unit + property tests
+- [x] fmt/clippy; host-independent; no I/O
 
-**Wave-1 exit:** round-trip census clean (§N-A), corpus in CI (Bases + DQL), scanner benches inside budget, no save-path deltas.
+**Wave-1 exit:** round-trip census clean (§N-A), Bases + DQL corpus gates wired for CI and locally green (remote run pending publication), scanner benches inside budget, no save-path deltas.

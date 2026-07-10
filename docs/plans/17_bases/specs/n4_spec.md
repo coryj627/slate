@@ -33,9 +33,9 @@ A sheet/panel reachable from: BasesView toolbar ("Edit view filters"), the comma
 
 XCTest: full keyboard walk (construct the brief-§1 example filter tree without a pointer — the acceptance bar); VO string goldens per rule 3; advanced-chip round-trip (parse → builder → save ⇒ byte-identical for untouched conditions); source↔filter compilation round-trip (§N-G).
 
-- [ ] Rules 1–5
-- [ ] XCTests incl. keyboard-only construction; a11y-check 100/100; APCA both appearances
-- [ ] Swift conventions
+- [x] Rules 1–5
+- [x] XCTests incl. keyboard-only construction; a11y-check 100/100; APCA both appearances
+- [x] Swift conventions
 
 ## N4-2 · Builder completion: sort/group/columns/formulas, preview, save (#708) — PR 2
 
@@ -46,15 +46,15 @@ XCTest: full keyboard walk (construct the brief-§1 example filter tree without 
 3. **Formula editor**: name + expression text field with **live validation** (parse via N0-1; green-check/error message with the offending span read to VO — Obsidian's checkmark parity, brief §4 "Formula editor"); function-name completion from the pinned v1 table; inserted formulas appear in the columns picker.
 4. **Live preview** (05 §8.6 item 5): an embedded N3-1 grid in a **separate accessible region** below the builder, re-executing via `open_query` on the in-memory draft (N2-1 — no file, no saved row; debounced 300 ms, cancel-superseded) as the draft changes. Announcement on settle = the engine's `audio_summary` (n1 §N1-3 rule 5 grammar — the single pinned grammar) followed by a UI-composed first-row suffix: "First result: <primary-column audio_description>". 05 §8.6's "Query returns 23 notes…" sentence is *illustrative* of this experience, not a competing literal grammar — recorded so no one implements two. Preview errors surface the decision-6 banner — the builder is where fail-loud is most useful.
 5. **Raw-expression escape hatch** (decision 21): per-condition "Edit as expression" swaps the structured row for a validated text field (same live validation); the advanced chips from N4-1 rule 4 open here. Raw editing is the secondary path — reachable, never required for the v1 operator set.
-6. **Save** (05 §8.6 item 6): three commits — Save to view (`base_apply_edit` splice into the open `.base`), Save as new `.base` file (canonical style, N0-3 rule 3), Save as saved query (N2-2). Builder→AST→`.base`→AST identity is the §N-G gate.
+6. **Save** (05 §8.6 item 6): three commits — Save to view submits the complete dependent edit list through one atomic `base_apply_edits` operation against the open `.base`; Save as new `.base` file uses canonical style (N0-3 rule 3); Save as saved query uses N2-2. Builder→AST→`.base`→AST identity is the §N-G gate.
 
 ### Tests (PR 2)
 
 XCTest: preview debounce/cancel; validation goldens (good/bad expressions incl. unknown function naming); all three save paths byte/AST-asserted; §N-G identity suite (builder-constructed corpus queries survive the full loop).
 
-- [ ] Rules 1–6
-- [ ] XCTests + §N-G suite; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–6
+- [x] XCTests + §N-G suite; a11y-check; APCA
+- [x] Swift conventions
 
 ## N4-3 · Queries sidebar section, palette, pins (#709) — PR 3
 
@@ -69,16 +69,16 @@ XCTest: preview debounce/cancel; validation goldens (good/bad expressions incl. 
 
 XCTest: section rendering + actions; pin persistence; palette registration lifecycle; VO goldens.
 
-- [ ] Rules 1–4
-- [ ] XCTests; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–4
+- [x] XCTests; a11y-check; APCA
+- [x] Swift conventions
 
 ## N4-4 · Dashboards + sidebar follow-active `this` (#710) — PR 4
 
 ### Normative rules
 
 1. **Dashboard surface** (05 §8.10, decision 17): a tab rendering an ordered list of sections; each section = heading (saved-query name or override) + live grid (its own execution, shared cache). AX structure = **heading hierarchy + grid hierarchy, never flat blobs** (vendored checkpoint verbatim, ../02_milestone_brief.md): dashboard title H1, sections H2, VO rotor-navigable by headings.
-2. Dashboard editor: structured list editor (add section from saved-query picker, reorder ⌥↑/↓, heading override, view override) — same builder ergonomics; CRUD via N2-2.
+2. Dashboard editor: structured list editor (add section from saved-query picker, reorder ⌥↑/↓, heading override, **renderer override: Default / Table / List**) — same builder ergonomics; CRUD via N2-2. Saved queries expose one executable view, so this override selects the section renderer rather than a named query view. Legacy nonblank values other than `table` / `list` fail visibly in the section instead of silently falling back.
 3. **Sidebar follow-active** (decision 20): **this PR owns the hosting `Leaf` case** — `Leaf.basesDock` (a docked grid over a `.base`, saved query, or dashboard; distinct from N4-3's `queries` list leaf) — which resolves `this` = the active note and re-executes on note switch (debounced 500 ms, cancel-superseded). The "better backlinks" pattern (`file.hasLink(this)` — brief §4) is the acceptance fixture. Follow-mode announces on settle only when membership changed (N3-1 rule 8 discipline). Together, tab + `queries` leaf + `basesDock` deliver the milestone's "standalone BasesView (sidebar surface)" capability — placement delta recorded, gap G10.
 4. Missing/dangling saved-query refs render labeled missing-sections (N2-2 rule 3), actionable ("Remove section / Pick replacement").
 5. Empty dashboard/empty section states carry instructive AX text, never blank regions.
@@ -87,9 +87,9 @@ XCTest: section rendering + actions; pin persistence; palette registration lifec
 
 XCTest: heading-hierarchy AX snapshot; section CRUD; follow-active fixture (note switch ⇒ correct rows; debounce; announcement-on-change-only); dangling-ref handling.
 
-- [ ] Rules 1–5
-- [ ] XCTests; a11y-check; APCA
-- [ ] Swift conventions
+- [x] Rules 1–5
+- [x] XCTests; a11y-check; APCA
+- [x] Swift conventions
 
 ## N4-5 · Docs, help, E2E corpus, AT checklist, benchmarks (#711) — PR 5
 
@@ -105,9 +105,10 @@ XCTest: heading-hierarchy AX snapshot; section CRUD; follow-active fixture (note
 
 The E2E suite **is** the test; CI-runs the CLI-driven subset; the AT checklist is human-executed and recorded in the milestone (not CI).
 
-- [ ] Help + extensions/interop pages
-- [ ] E2E green in CI; goldens committed
-- [ ] AT checklist document + BENCHMARKS.md close-out
-- [ ] Program/gap-analysis status updates
+- [x] Help + extensions/interop pages
+- [x] Local E2E green; goldens committed
+- [ ] E2E green in remote CI — pending branch publication
+- [x] AT checklist document + BENCHMARKS.md close-out; human execution remains open
+- [x] Program/gap-analysis status updates
 
-**Wave-5 exit / milestone DoD (from the milestone-14 description, restated):** `.base` round-trip byte-equal on the corpus; real-vault queries render correctly; saved queries persist across launches; §9.5 performance on a 10k vault; the §8.7 VoiceOver matrix passes; no data-loss path (§N-F census + atomic writes). The GH milestone closes only after the human AT pass (item 3).
+**Wave-5 exit / milestone DoD (from the milestone-14 description, restated):** `.base` round-trip byte-equal on the corpus; real-vault queries render correctly; saved queries persist across launches; §9.5 performance on a 10k vault; the §8.7 VoiceOver matrix passes; no data-loss path (§N-F census + atomic writes). The GH milestone closes only after remote CI is green and the human AT pass is recorded (item 3).
