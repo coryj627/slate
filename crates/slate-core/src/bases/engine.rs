@@ -2746,6 +2746,21 @@ impl VaultLookup for SqlVaultLookup<'_> {
             .unwrap_or_default()
     }
 
+    fn embeds_for(&self, path: &str) -> Vec<LinkValue> {
+        self.conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|id| load_outgoing_links(self.conn, id).ok())
+            .map(|outgoing| outgoing.embeds)
+            .unwrap_or_default()
+    }
+
     fn backlinks_for(&self, path: &str) -> Vec<LinkValue> {
         load_backlinks(self.conn, path).unwrap_or_default()
     }

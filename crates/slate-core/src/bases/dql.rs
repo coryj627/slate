@@ -1000,8 +1000,12 @@ fn rewrite_function_calls(source: &str, regex_token: &str) -> Result<String, Str
     while pos < bytes.len() {
         let b = bytes[pos];
         if b == b'"' || b == b'\'' {
-            let end = copy_quoted(source, pos, &mut out);
-            pos = end;
+            if let Some((value, consumed)) = parse_quoted_with_len(&source[pos..]) {
+                out.push_str(&quote_expr_string(&value));
+                pos += consumed;
+            } else {
+                pos = copy_quoted(source, pos, &mut out);
+            }
             continue;
         }
         if is_ident_start(b) {

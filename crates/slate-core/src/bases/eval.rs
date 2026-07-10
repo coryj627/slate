@@ -31,9 +31,6 @@ use super::expr::{
 
 pub type ResolvedFormulas = BTreeMap<String, Value>;
 
-const CALENDAR_DURATION_BASE: i64 = i64::MIN / 2;
-const CALENDAR_DURATION_RANGE: i64 = 1_000_000;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DurationParts {
     calendar_months: i64,
@@ -176,6 +173,10 @@ pub trait VaultLookup {
     }
 
     fn links_for(&self, _path: &str) -> Vec<LinkValue> {
+        Vec::new()
+    }
+
+    fn embeds_for(&self, _path: &str) -> Vec<LinkValue> {
         Vec::new()
     }
 
@@ -375,11 +376,24 @@ fn eval_binary(
         return Ok(Value::Bool(eval_inner(rhs, ctx, locals)?.is_truthy()));
     }
 
-    let lhs = eval_inner(lhs, ctx, locals)?;
-    let rhs = eval_inner(rhs, ctx, locals)?;
+    let (lhs, lhs_literal_duration) = eval_binary_operand(lhs, ctx, locals)?;
+    let (rhs, rhs_literal_duration) = eval_binary_operand(rhs, ctx, locals)?;
     match op {
-        BinaryOp::Add => add_values(lhs, rhs, ctx),
-        BinaryOp::Sub => sub_values(lhs, rhs, ctx),
+        BinaryOp::Add => {
+            if let (Value::Date(date), Some(duration)) = (&lhs, rhs_literal_duration) {
+                return Ok(Value::Date(add_duration(*date, duration)));
+            }
+            if let (Some(duration), Value::Date(date)) = (lhs_literal_duration, &rhs) {
+                return Ok(Value::Date(add_duration(*date, duration)));
+            }
+            add_values(lhs, rhs, ctx)
+        }
+        BinaryOp::Sub => {
+            if let (Value::Date(date), Some(duration)) = (&lhs, rhs_literal_duration) {
+                return Ok(Value::Date(add_duration(*date, duration.negated())));
+            }
+            sub_values(lhs, rhs, ctx)
+        }
         BinaryOp::Mul => mul_values(lhs, rhs, ctx),
         BinaryOp::Div => div_values(lhs, rhs, ctx),
         BinaryOp::Mod => mod_values(lhs, rhs, ctx),
@@ -400,6 +414,37 @@ fn eval_binary(
         }
         BinaryOp::And | BinaryOp::Or => unreachable!(),
     }
+}
+
+fn eval_binary_operand(
+    expr: &Expr,
+    ctx: &EvalCtx<'_>,
+    locals: &Locals<'_>,
+) -> Result<(Value, Option<DurationParts>), EvalError> {
+    if let Some(duration) = literal_duration_parts(expr) {
+        return Ok((
+            Value::Duration(duration_parts_to_ms(duration)),
+            Some(duration),
+        ));
+    }
+    Ok((eval_inner(expr, ctx, locals)?, None))
+}
+
+fn literal_duration_parts(expr: &Expr) -> Option<DurationParts> {
+    let ExprKind::Call {
+        callee: Callee::Global(GlobalFn::Duration),
+        args,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    let [arg] = args.as_slice() else {
+        return None;
+    };
+    let ExprKind::Lit(Lit::String(text)) = &arg.kind else {
+        return None;
+    };
+    parse_duration_parts(text)
 }
 
 fn add_values(lhs: Value, rhs: Value, ctx: &EvalCtx<'_>) -> Result<Value, EvalError> {
@@ -838,11 +883,16 @@ fn eval_method(
             expect_arity("linksTo", args.len(), 1, 1)?;
             let source = file_path_from_value(&receiver)?;
             let target = file_path_from_value(&args[0])?;
-            Ok(Value::Bool(ctx.vault.links_for(&source).iter().any(
-                |link| {
-                    link.resolved_path.as_deref() == Some(target.as_str()) || link.target == target
-                },
-            )))
+            Ok(Value::Bool(
+                ctx.vault
+                    .links_for(&source)
+                    .into_iter()
+                    .chain(ctx.vault.embeds_for(&source))
+                    .any(|link| {
+                        link.resolved_path.as_deref() == Some(target.as_str())
+                            || link.target == target
+                    }),
+            ))
         }
         MethodName::AsLink => {
             expect_arity("asLink", args.len(), 0, 1)?;
@@ -1558,21 +1608,14 @@ fn coerce_number(value: &Value) -> Option<f64> {
         Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
         Value::Text(value) => value.trim().parse::<f64>().ok(),
         Value::Date(value) => Some(value.epoch_ms as f64),
-        Value::Duration(value) => Some(duration_to_ms(*value) as f64),
+        Value::Duration(value) => Some(*value as f64),
         _ => None,
     }
 }
 
 fn duration_arg(value: &Value) -> Option<DurationParts> {
     match value {
-        Value::Duration(value) => Some(
-            decode_calendar_months(*value)
-                .map(|calendar_months| DurationParts {
-                    calendar_months,
-                    fixed_ms: 0,
-                })
-                .unwrap_or_else(|| DurationParts::fixed(*value)),
-        ),
+        Value::Duration(value) => Some(DurationParts::fixed(*value)),
         Value::Text(text) => parse_duration_parts(text),
         _ => None,
     }
@@ -1585,7 +1628,7 @@ fn value_to_string(value: &Value) -> String {
         Value::Number(value) => format_number(*value),
         Value::Text(value) => value.clone(),
         Value::Date(value) => format_date_default(*value),
-        Value::Duration(value) => duration_to_ms(*value).to_string(),
+        Value::Duration(value) => value.to_string(),
         Value::List(values) => values
             .iter()
             .map(value_to_string)
@@ -1764,15 +1807,13 @@ fn parse_iso_date(text: &str) -> Option<DateValue> {
 }
 
 fn parse_duration_ms(text: &str) -> Option<i64> {
-    let parts = parse_duration_parts(text)?;
-    if parts.calendar_months != 0 && parts.fixed_ms == 0 {
-        return Some(encode_calendar_months(parts.calendar_months));
-    }
-    Some(
-        parts
-            .fixed_ms
-            .saturating_add(parts.calendar_months.saturating_mul(30 * 86_400_000)),
-    )
+    parse_duration_parts(text).map(duration_parts_to_ms)
+}
+
+fn duration_parts_to_ms(parts: DurationParts) -> i64 {
+    parts
+        .fixed_ms
+        .saturating_add(parts.calendar_months.saturating_mul(30 * 86_400_000))
 }
 
 fn parse_duration_parts(text: &str) -> Option<DurationParts> {
@@ -1905,21 +1946,6 @@ fn days_in_month(year: i32, month: u32) -> Option<u32> {
     };
     let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
     first_next.pred_opt().map(|date| date.day())
-}
-
-fn encode_calendar_months(months: i64) -> i64 {
-    CALENDAR_DURATION_BASE.saturating_add(months)
-}
-
-fn decode_calendar_months(duration: i64) -> Option<i64> {
-    let months = duration.saturating_sub(CALENDAR_DURATION_BASE);
-    (months.abs() <= CALENDAR_DURATION_RANGE).then_some(months)
-}
-
-fn duration_to_ms(duration: i64) -> i64 {
-    decode_calendar_months(duration)
-        .map(|months| months.saturating_mul(30 * 86_400_000))
-        .unwrap_or(duration)
 }
 
 fn date_time(date: DateValue) -> Result<DateTime<Utc>, EvalError> {

@@ -42,6 +42,14 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
             "edit_adversarial",
             include_str!("fixtures/bases/edit_adversarial.base"),
         ),
+        (
+            "obsidian_basic_app_capture",
+            include_str!("fixtures/bases/obsidian/obsidian-basic.base"),
+        ),
+        (
+            "obsidian_formulas_app_capture",
+            include_str!("fixtures/bases/obsidian/obsidian-formulas.base"),
+        ),
     ]
 }
 
@@ -54,6 +62,25 @@ fn edit(source: &str, edit: BaseEdit) -> String {
         "edit source should parse: {warnings:#?}"
     );
     serialize_base(&base, &[edit]).expect("edit should serialize")
+}
+
+fn parse_preserved_root_flow_edit(source: &str) -> slate_core::bases::BaseFile {
+    assert!(
+        source.starts_with('{') && source.ends_with('}'),
+        "edit must preserve flow-style root syntax: {source}"
+    );
+    assert!(
+        source.contains("plugin: keep"),
+        "edit changed or removed the unrelated plugin entry: {source}"
+    );
+    let (base, warnings) = parse_base(source);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+        "root flow edit must reparse: {warnings:#?}\n{source}"
+    );
+    base
 }
 
 #[test]
@@ -268,6 +295,220 @@ fn adds_to_nonempty_flow_view_sequence() {
     assert_eq!(parsed.views[1].name, "New");
     assert!(views.contains("{type: table, name: Old}"));
     assert!(views.ends_with(" # keep\nunknown: 😀\n"));
+}
+
+#[test]
+fn root_flow_set_formula_inserts_missing_key() {
+    let changed = edit(
+        "{views: [], plugin: keep}",
+        BaseEdit::SetFormula {
+            name: "score".into(),
+            expression: "1 + 1".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert_eq!(
+        parsed.formulas,
+        vec![(
+            "score".to_string(),
+            parse_base_expr("1 + 1").expect("formula expectation must parse"),
+        )]
+    );
+    assert!(parsed.views.is_empty());
+}
+
+#[test]
+fn root_flow_set_top_level_filters_inserts_missing_key() {
+    let changed = edit(
+        "{views: [], plugin: keep}",
+        BaseEdit::SetTopLevelFilters {
+            yaml: "filters: \"status == 'active'\"".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert_eq!(
+        parsed.filters,
+        Some(FilterNode::Stmt(
+            parse_base_expr("status == 'active'").expect("filter expectation must parse")
+        ))
+    );
+    assert!(parsed.views.is_empty());
+}
+
+#[test]
+fn root_flow_add_view_expands_empty_views() {
+    let changed = edit(
+        "{views: [], plugin: keep}",
+        BaseEdit::AddView {
+            yaml: "type: table\nname: Main".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert_eq!(parsed.views.len(), 1);
+    assert_eq!(
+        parsed.views[0].view_type,
+        slate_core::bases::ViewType::Table
+    );
+    assert_eq!(parsed.views[0].name, "Main");
+}
+
+#[test]
+fn root_flow_add_view_inserts_missing_views_key() {
+    let changed = edit(
+        "{plugin: keep}",
+        BaseEdit::AddView {
+            yaml: "type: list\nname: Main".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert_eq!(parsed.views.len(), 1);
+    assert_eq!(parsed.views[0].view_type, slate_core::bases::ViewType::List);
+    assert_eq!(parsed.views[0].name, "Main");
+}
+
+#[test]
+fn root_flow_trailing_comma_accepts_set_formula() {
+    let changed = edit(
+        "{plugin: keep,}",
+        BaseEdit::SetFormula {
+            name: "score".into(),
+            expression: "1 + 1".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert_eq!(parsed.formulas[0].0, "score");
+}
+
+#[test]
+fn root_flow_trailing_comma_accepts_top_level_filters() {
+    let changed = edit(
+        "{plugin: keep,}",
+        BaseEdit::SetTopLevelFilters {
+            yaml: "filters: \"status == 'active'\"".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert!(parsed.filters.is_some());
+}
+
+#[test]
+fn root_flow_trailing_comma_accepts_add_view() {
+    let changed = edit(
+        "{plugin: keep,}",
+        BaseEdit::AddView {
+            yaml: "type: table\nname: Main".into(),
+        },
+    );
+    let parsed = parse_preserved_root_flow_edit(&changed);
+
+    assert_eq!(parsed.views.len(), 1);
+    assert_eq!(parsed.views[0].name, "Main");
+}
+
+#[test]
+fn nonempty_flow_formula_trailing_comma_accepts_append_in_block_and_root() {
+    for source in [
+        "formulas: {old: '1',}\nviews: []\n",
+        "{formulas: {old: '1',}, plugin: keep}",
+    ] {
+        let changed = edit(
+            source,
+            BaseEdit::SetFormula {
+                name: "new".into(),
+                expression: "2".into(),
+            },
+        );
+        let (parsed, warnings) = parse_base(&changed);
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+            "flow formula append must reparse: {warnings:#?}\n{changed}"
+        );
+        assert_eq!(parsed.formulas.len(), 2);
+        assert!(changed.contains("old: '1'"));
+        if source.starts_with('{') {
+            assert!(changed.contains("plugin: keep"));
+        }
+    }
+}
+
+#[test]
+fn nonempty_flow_views_trailing_comma_accepts_append_in_block_and_root() {
+    for source in [
+        "views: [{type: table, name: Old},]\n",
+        "{views: [{type: table, name: Old},], plugin: keep}",
+    ] {
+        let changed = edit(
+            source,
+            BaseEdit::AddView {
+                yaml: "type: table\nname: New".into(),
+            },
+        );
+        let (parsed, warnings) = parse_base(&changed);
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+            "flow view append must reparse: {warnings:#?}\n{changed}"
+        );
+        assert_eq!(parsed.views.len(), 2);
+        assert_eq!(parsed.views[0].name, "Old");
+        assert_eq!(parsed.views[1].name, "New");
+        if source.starts_with('{') {
+            assert!(changed.contains("plugin: keep"));
+        }
+    }
+}
+
+#[test]
+fn multiline_block_flow_formula_trailing_comment_accepts_append() {
+    let source = "formulas: {old: '1', # tail\n}\nviews: []\n";
+    let changed = edit(
+        source,
+        BaseEdit::SetFormula {
+            name: "new".into(),
+            expression: "2".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+        "multiline flow formula append must reparse: {warnings:#?}\n{changed}"
+    );
+    assert_eq!(parsed.formulas.len(), 2);
+    assert!(changed.contains("# tail\n"));
+}
+
+#[test]
+fn multiline_block_flow_views_trailing_comment_accepts_append() {
+    let source = "views: [{type: table, name: Old}, # tail\n]\n";
+    let changed = edit(
+        source,
+        BaseEdit::AddView {
+            yaml: "type: table\nname: New".into(),
+        },
+    );
+    let (parsed, warnings) = parse_base(&changed);
+
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+        "multiline flow view append must reparse: {warnings:#?}\n{changed}"
+    );
+    assert_eq!(parsed.views.len(), 2);
+    assert_eq!(parsed.views[1].name, "New");
+    assert!(changed.contains("# tail\n"));
 }
 
 #[test]

@@ -317,10 +317,26 @@ fn date_parses_the_documented_space_separated_datetime() {
 }
 
 #[test]
-fn mixed_calendar_and_fixed_duration_clamps_month_before_adding_day() {
+fn mixed_calendar_and_fixed_duration_literals_clamp_before_adding_day() {
     assert_eq!(
         value("(date(\"2026-01-31\") + \"1M 1d\").format(\"YYYY-MM-DD\")"),
         Value::Text("2026-03-01".into())
+    );
+    assert_eq!(
+        value("(date(\"2026-01-31\") + duration(\"1M 1d\")).format(\"YYYY-MM-DD\")"),
+        Value::Text("2026-03-01".into())
+    );
+    assert_eq!(value("duration(\"1M 1d\")"), Value::Duration(2_678_400_000));
+}
+
+#[test]
+fn duration_values_outside_literal_date_boundary_are_fixed_milliseconds() {
+    assert_eq!(value("duration(\"1M\")"), Value::Duration(2_592_000_000));
+    assert_eq!(
+        value(
+            "(date(\"2026-01-31\") + if(true, duration(\"1M\"), duration(\"0d\"))).format(\"YYYY-MM-DD\")"
+        ),
+        Value::Text("2026-03-02".into())
     );
 }
 

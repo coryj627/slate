@@ -7,6 +7,42 @@ use slate_core::bases::{
 };
 
 #[test]
+fn parses_genuine_obsidian_app_captures_without_normalizing_bytes() {
+    let basic_source = include_str!("fixtures/bases/obsidian/obsidian-basic.base");
+    let (basic, basic_warnings) = parse_base(basic_source);
+    assert_eq!(basic.raw, basic_source);
+    assert!(
+        basic_warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+        "genuine basic capture must parse: {basic_warnings:#?}"
+    );
+    assert_eq!(basic.views.len(), 1);
+    assert_eq!(
+        basic.views[0].order,
+        ["file.name", "category", "priority", "status"]
+    );
+    assert!(basic.views[0].filters.is_some());
+
+    let formulas_source = include_str!("fixtures/bases/obsidian/obsidian-formulas.base");
+    let (formulas, formula_warnings) = parse_base(formulas_source);
+    assert_eq!(formulas.raw, formulas_source);
+    assert!(
+        formula_warnings
+            .iter()
+            .all(|warning| warning.kind != BaseWarningKind::ParseFailed),
+        "genuine formula capture must parse: {formula_warnings:#?}"
+    );
+    assert_eq!(formulas.formulas[0].0, "weighted_total");
+    assert_eq!(formulas.views.len(), 2);
+    assert_eq!(
+        formulas.views[0].order,
+        ["file.name", "formula.weighted_total"]
+    );
+    assert!(formulas.views[1].filters.is_some());
+}
+
+#[test]
 fn parses_brief_example_and_derives_view_query() {
     let source = include_str!("fixtures/bases/brief_example.base");
     let (base, warnings) = parse_base(source);

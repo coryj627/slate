@@ -10,7 +10,7 @@ use slate_core::bases::dql::{DqlWarningKind, parse_dql};
 use slate_core::bases::engine::{CellValue, EngineCtx, execute};
 use slate_core::bases::eval::Value;
 use slate_core::bases::expr::{BinaryOp, Callee, Expr, ExprKind, Lit, PropertyRef, TaskField};
-use slate_core::bases::{FilterNode, QuerySource, RowSource, ViewSpec};
+use slate_core::bases::{FilterNode, QuerySource, RowSource, ViewSpec, parse_base, view_query};
 use slate_core::db::migrate;
 
 const OUTGOING_DQL: &str = include_str!("fixtures/dql/outgoing.dql");
@@ -145,6 +145,40 @@ fn dql_dynamic_outgoing_uses_this_file_membership() {
 
     assert_eq!(row_paths(&result), ["Target.md"]);
     assert_eq!(result.error, None);
+}
+
+#[test]
+fn dql_outgoing_embed_membership_matches_saved_base_filter() {
+    let conn = dql_embed_fixture_conn();
+    let live = execute_dql(
+        &conn,
+        "LIST WITHOUT ID file.path\nFROM outgoing([[Hub]])\n",
+        None,
+    );
+
+    assert_eq!(row_paths(&live), ["Target.md"]);
+    assert_eq!(live.error, None);
+
+    let (base, warnings) = parse_base(
+        r#"filters: 'link("Hub").linksTo(file.file)'
+views:
+  - type: list
+    name: Outgoing
+    order:
+      - file.path
+"#,
+    );
+    assert_eq!(warnings, []);
+    let saved = execute(
+        &view_query(&base, 0),
+        &conn,
+        &EngineCtx::default(),
+        &CancelToken::new(),
+    )
+    .expect("execute saved Base equivalent");
+
+    assert_eq!(row_paths(&saved), ["Target.md"]);
+    assert_eq!(saved.error, None);
 }
 
 #[test]
@@ -1027,6 +1061,32 @@ fn dql_fixture_conn() -> Connection {
         )
         .expect("insert DQL fixture task");
     }
+    conn
+}
+
+fn dql_embed_fixture_conn() -> Connection {
+    let mut conn = Connection::open_in_memory().expect("open in-memory database");
+    migrate(&mut conn).expect("migrate schema");
+    for (id, path) in [(1_i64, "Hub.md"), (2, "Target.md"), (3, "Other.md")] {
+        conn.execute(
+            "INSERT INTO files (
+                id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                content_hash, parser_version, indexed_at_ms, is_markdown
+             )
+             VALUES (?1, ?2, ?2, 'md', 0, 0, 0, ?3, 1, 0, 1)",
+            params![id, path, format!("embed-hash-{id}")],
+        )
+        .expect("insert embed DQL fixture file");
+    }
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         )
+         VALUES (1, 0, 'Target.md', 'Target', NULL, 'wikilink', 1, 0, '', 0, 11)",
+        [],
+    )
+    .expect("insert embed-only DQL fixture link");
     conn
 }
 

@@ -1,0 +1,13 @@
+formulas:
+  weighted_total: score * priority
+views:
+  - type: table
+    name: Table
+    order:
+      - file.name
+      - formula.weighted_total
+  - type: table
+    name: View
+    filters:
+      and:
+        - status == "active"

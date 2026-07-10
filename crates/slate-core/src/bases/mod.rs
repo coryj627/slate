@@ -637,6 +637,10 @@ fn replace_or_insert_top_level(
         return Ok(());
     }
 
+    if push_root_flow_mapping_entry(base, fragment, splices)? {
+        return Ok(());
+    }
+
     let offset = named_region(&base.spans.top_level, "views")
         .map(|region| region.region.span.start)
         .unwrap_or(base.raw.len() as u32);
@@ -676,16 +680,18 @@ fn replace_or_insert_formula(
             );
             return Ok(());
         }
-        if let Some(offset) =
-            flow_collection_close(&formulas.region, "formulas", FlowCollectionKind::Mapping)
+        if let Some((offset, has_trailing_comma, continuation_padding)) =
+            flow_collection_append_point(&formulas.region, "formulas", FlowCollectionKind::Mapping)
         {
+            let delimiter = if has_trailing_comma { "" } else { ", " };
+            let padding = " ".repeat(continuation_padding);
             push_splice(
                 splices,
                 Span {
                     start: offset,
                     end: offset,
                 },
-                format!(", {entry_fragment}"),
+                format!("{padding}{delimiter}{entry_fragment}"),
             );
             return Ok(());
         }
@@ -697,6 +703,9 @@ fn replace_or_insert_formula(
     }
 
     let section = format!("formulas:\n  {entry_fragment}\n");
+    if push_root_flow_mapping_entry(base, &section, splices)? {
+        return Ok(());
+    }
     let offset = named_region(&base.spans.top_level, "views")
         .map(|region| region.region.span.start)
         .unwrap_or(base.raw.len() as u32);
@@ -1196,6 +1205,72 @@ fn view_uses_flow_mapping(source: &str, view: usize) -> bool {
         .is_some_and(|view| matches!(&view.kind, SourceNodeKind::Mapping { flow: true, .. }))
 }
 
+fn root_uses_flow_mapping(source: &str) -> bool {
+    source_document(source)
+        .is_some_and(|root| matches!(root.kind, SourceNodeKind::Mapping { flow: true, .. }))
+}
+
+fn push_root_flow_mapping_entry(
+    base: &BaseFile,
+    fragment: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<bool, SerializeError> {
+    let Some(root) = source_document(&base.raw) else {
+        return Ok(false);
+    };
+    let SourceNodeKind::Mapping {
+        flow: true,
+        entries,
+    } = &root.kind
+    else {
+        return Ok(false);
+    };
+    let close = root
+        .end
+        .checked_sub(1)
+        .filter(|close| base.raw.as_bytes().get(*close) == Some(&b'}'))
+        .ok_or_else(|| missing_span("root flow mapping close"))?;
+    let offset = u32::try_from(close).map_err(|_| missing_span("root flow mapping close"))?;
+    let has_trailing_comma = entries
+        .last()
+        .is_some_and(|entry| flow_suffix_has_comma(&base.raw, entry.value.end, close));
+    let delimiter = if entries.is_empty() || has_trailing_comma {
+        ""
+    } else {
+        ", "
+    };
+    push_splice(
+        splices,
+        Span {
+            start: offset,
+            end: offset,
+        },
+        format!("{delimiter}{}", flow_mapping_entry(fragment)?),
+    );
+    Ok(true)
+}
+
+fn flow_suffix_has_comma(source: &str, start: usize, end: usize) -> bool {
+    let Some(bytes) = source.as_bytes().get(start..end) else {
+        return false;
+    };
+    let mut in_comment = false;
+    for &byte in bytes {
+        if in_comment {
+            if matches!(byte, b'\r' | b'\n') {
+                in_comment = false;
+            }
+            continue;
+        }
+        match byte {
+            b'#' => in_comment = true,
+            b',' => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn replace_or_insert_view_key_preserving_scalar(
     base: &BaseFile,
     view: usize,
@@ -1221,6 +1296,11 @@ fn push_add_view_splice(
     let item = format_view_item_fragment(yaml)?;
     if let Some(views) = named_region(&base.spans.top_level, "views") {
         if empty_flow_collection(&views.region, "[]") {
+            if root_uses_flow_mapping(&base.raw) {
+                let section = format!("views:\n{item}");
+                push_splice(splices, views.region.span, flow_mapping_entry(&section)?);
+                return Ok(());
+            }
             let child = item
                 .trim_end_matches(['\n', '\r'])
                 .strip_prefix("  ")
@@ -1232,16 +1312,18 @@ fn push_add_view_splice(
             );
             return Ok(());
         }
-        if let Some(offset) =
-            flow_collection_close(&views.region, "views", FlowCollectionKind::Sequence)
+        if let Some((offset, has_trailing_comma, continuation_padding)) =
+            flow_collection_append_point(&views.region, "views", FlowCollectionKind::Sequence)
         {
+            let delimiter = if has_trailing_comma { "" } else { ", " };
+            let padding = " ".repeat(continuation_padding);
             push_splice(
                 splices,
                 Span {
                     start: offset,
                     end: offset,
                 },
-                format!(", {}", flow_view_item(yaml)?),
+                format!("{padding}{delimiter}{}", flow_view_item(yaml)?),
             );
             return Ok(());
         }
@@ -1257,6 +1339,9 @@ fn push_add_view_splice(
 
     let mut section = String::from("views:\n");
     section.push_str(&item);
+    if push_root_flow_mapping_entry(base, &section, splices)? {
+        return Ok(());
+    }
     push_insertion_splice(splices, &base.raw, base.raw.len() as u32, section);
     Ok(())
 }
@@ -1848,6 +1933,54 @@ fn flow_collection_close(
         return None;
     }
     region.span.start.checked_add(u32::try_from(close).ok()?)
+}
+
+fn flow_collection_append_point(
+    region: &PreservedRegion,
+    key: &str,
+    expected: FlowCollectionKind,
+) -> Option<(u32, bool, usize)> {
+    let root = source_document(&region.text)?;
+    let value = mapping_value(&root, key)?;
+    let (closing, last_end) = match (&value.kind, expected) {
+        (
+            SourceNodeKind::Mapping {
+                flow: true,
+                entries,
+            },
+            FlowCollectionKind::Mapping,
+        ) => (b'}', entries.last().map(|entry| entry.value.end)),
+        (SourceNodeKind::Sequence { flow: true, items }, FlowCollectionKind::Sequence) => {
+            (b']', items.last().map(|item| item.end))
+        }
+        _ => return None,
+    };
+    let close = value.end.checked_sub(1)?;
+    if region.text.as_bytes().get(close) != Some(&closing) {
+        return None;
+    }
+    let offset = region.span.start.checked_add(u32::try_from(close).ok()?)?;
+    let has_trailing_comma =
+        last_end.is_some_and(|last_end| flow_suffix_has_comma(&region.text, last_end, close));
+    let continuation_padding = flow_continuation_padding(&region.text, value.start, close);
+    Some((offset, has_trailing_comma, continuation_padding))
+}
+
+fn flow_continuation_padding(source: &str, value_start: usize, close: usize) -> usize {
+    let value_line_start = line_start(source, value_start);
+    let close_line_start = line_start(source, close);
+    if value_line_start == close_line_start {
+        return 0;
+    }
+    let key_indent = source[value_line_start..value_start]
+        .bytes()
+        .take_while(u8::is_ascii_whitespace)
+        .count();
+    let close_prefix = &source[close_line_start..close];
+    if !close_prefix.bytes().all(|byte| byte.is_ascii_whitespace()) {
+        return 0;
+    }
+    (key_indent + 2).saturating_sub(close_prefix.len())
 }
 
 fn flow_view_item(source: &str) -> Result<String, SerializeError> {
@@ -3040,11 +3173,32 @@ fn source_node(
 }
 
 fn collection_end(source: &str, marker: usize, flow: bool, closing: u8) -> usize {
-    if flow && source.as_bytes().get(marker) == Some(&closing) {
-        marker + 1
-    } else {
-        marker
+    if !flow {
+        return marker;
     }
+    let bytes = source.as_bytes();
+    let mut cursor = marker;
+    while let Some(&byte) = bytes.get(cursor) {
+        if byte == closing {
+            return cursor + 1;
+        }
+        if byte == b',' || byte.is_ascii_whitespace() {
+            cursor += 1;
+            continue;
+        }
+        if byte == b'#' {
+            cursor += 1;
+            while bytes
+                .get(cursor)
+                .is_some_and(|byte| !matches!(byte, b'\r' | b'\n'))
+            {
+                cursor += 1;
+            }
+            continue;
+        }
+        break;
+    }
+    marker
 }
 
 fn scalar_source_end(source: &str, start: usize, style: TScalarStyle, in_flow: bool) -> usize {

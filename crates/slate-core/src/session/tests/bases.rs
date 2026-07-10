@@ -679,6 +679,46 @@ fn dql_outgoing_executes_explicit_and_dynamic_source_membership() {
 }
 
 #[test]
+fn dql_outgoing_embed_membership_survives_conversion_save_and_reopen() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Hub.md", b"![[Target]]\n").unwrap();
+        p.write_file("Target.md", b"# Target\n").unwrap();
+        p.write_file("Other.md", b"# Other\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let source = "LIST WITHOUT ID file.path\nFROM outgoing([[Hub]])\n";
+    let live_handle = session.open_dql(source, None).unwrap();
+    let live = session
+        .base_execute(live_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        live.rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        ["Target.md"]
+    );
+
+    let converted = session.dql_as_base(source).unwrap();
+    session
+        .save_text("Outgoing.base", &converted, None)
+        .unwrap();
+    let saved_handle = session.open_base("Outgoing.base").unwrap();
+    let saved = session
+        .base_execute(saved_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        saved
+            .rows
+            .iter()
+            .map(|row| row.file_path.as_str())
+            .collect::<Vec<_>>(),
+        ["Target.md"]
+    );
+}
+
+#[test]
 fn dql_regex_and_trunc_survive_base_conversion() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("Note.md", b"# Note\n").unwrap();
