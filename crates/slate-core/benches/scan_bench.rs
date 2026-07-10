@@ -36,9 +36,8 @@ const SIZES: &[usize] = &[1_000, 10_000, 50_000];
 fn bench_first_open_and_scan(c: &mut Criterion) {
     let mut group = c.benchmark_group("first_open_and_scan");
     // Cold scan on 50k files can take ~30–60 s per sample; cap
-    // measurement_time and shrink sample size so total walltime
-    // stays sane.
-    group.sample_size(10);
+    // measurement_time and use the runner's practical 10-sample default.
+    // Criterion's CLI parser can still replace it with `--sample-size`.
 
     for &size in SIZES {
         let vault = generate_vault(size);
@@ -71,7 +70,6 @@ fn bench_first_open_and_scan(c: &mut Criterion) {
 
 fn bench_reopen_with_cache(c: &mut Criterion) {
     let mut group = c.benchmark_group("reopen_with_cache");
-    group.sample_size(20);
 
     for &size in SIZES {
         let vault = generate_vault(size);
@@ -99,7 +97,6 @@ fn bench_reopen_with_cache(c: &mut Criterion) {
 
 fn bench_list_files_paged(c: &mut Criterion) {
     let mut group = c.benchmark_group("list_files_paged");
-    group.sample_size(20);
 
     for &size in SIZES {
         let vault = generate_vault(size);
@@ -164,7 +161,6 @@ fn bench_tasks_scan_and_query(c: &mut Criterion) {
     const FILE_COUNT: usize = 1_000;
 
     let mut cold = c.benchmark_group("tasks_cold_scan");
-    cold.sample_size(10);
     cold.bench_function("1k_files_realistic", |b| {
         let vault = generate_tasks_vault(FILE_COUNT);
         let vault_path = vault.path().to_path_buf();
@@ -184,7 +180,6 @@ fn bench_tasks_scan_and_query(c: &mut Criterion) {
     cold.finish();
 
     let mut query = c.benchmark_group("tasks_in_vault_first_page");
-    query.sample_size(20);
     query.bench_function("1k_files_realistic", |b| {
         let vault = generate_tasks_vault(FILE_COUNT);
         let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
@@ -210,7 +205,6 @@ fn bench_parser_zero_task_overhead(c: &mut Criterion) {
     // pulldown-cmark walk + line scan (~50 µs on 50 KB per the
     // red-team measurement).
     let mut group = c.benchmark_group("parser_zero_task_overhead");
-    group.sample_size(100);
 
     for &kb in &[1usize, 10, 50] {
         let mut body = String::with_capacity(kb * 1024 + 256);
@@ -253,7 +247,6 @@ fn bench_full_text_search(c: &mut Criterion) {
     // `synthetic_markdown`). Single number per run; this is the
     // hot path for the Mac search overlay's "Enter to search."
     let mut group = c.benchmark_group("full_text_search");
-    group.sample_size(20);
 
     let vault = generate_vault(10_000);
     let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
@@ -294,7 +287,6 @@ fn bench_files_with_property(c: &mut Criterion) {
     // broad-tag query, which is exactly the shape #100 was
     // optimised for.
     let mut group = c.benchmark_group("files_with_property");
-    group.sample_size(20);
 
     let vault = generate_vault(10_000);
     let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
@@ -330,7 +322,6 @@ fn bench_note_load_bundle(c: &mut Criterion) {
     // is the regression target; under contention the win is
     // strictly larger.
     let mut group = c.benchmark_group("note_load_bundle");
-    group.sample_size(20);
 
     let vault = generate_linked_vault(10_000);
     let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
@@ -430,7 +421,6 @@ fn bench_editor_highlight_ranged(c: &mut Criterion) {
     let doc8 = synthetic_note(8 * MB);
 
     let mut group = c.benchmark_group("editor_highlight_ranged");
-    group.sample_size(10);
 
     // Baseline: the whole-document recompute the editor runs today.
     group.bench_function("whole_document_8mb", |b| {
@@ -476,7 +466,6 @@ fn bench_editor_highlight_ranged(c: &mut Criterion) {
 
 fn bench_extract_code_blocks(c: &mut Criterion) {
     let mut group = c.benchmark_group("extract_code_blocks");
-    group.sample_size(20);
     for &n in &[500usize, 1_000, 2_000, 4_000] {
         // `n` fenced blocks separated by a prose paragraph, so the source
         // accumulates many newlines before the late blocks — the worst case
@@ -507,7 +496,6 @@ fn bench_doc_buffer_keystroke(c: &mut Criterion) {
     const MB: usize = 1 << 20;
 
     let mut group = c.benchmark_group("doc_buffer_keystroke");
-    group.sample_size(10);
 
     // Mid-document edit across realistic note sizes. The fixture is ASCII, so
     // a prose byte offset doubles as the UTF-16 offset the buffer takes.
@@ -555,7 +543,6 @@ fn bench_doc_buffer_keystroke(c: &mut Criterion) {
 /// benches, recorded as Milestone U baselines in BENCHMARKS.md.
 fn bench_dir_and_rewrite(c: &mut Criterion) {
     let mut group = c.benchmark_group("dir_and_rewrite");
-    group.sample_size(20);
 
     // list_dir_children over a 10k-file vault root — the tree's lazy
     // per-level fetch (the sidebar's hot path on expand).
@@ -617,19 +604,23 @@ fn bench_dir_and_rewrite(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_first_open_and_scan,
-    bench_reopen_with_cache,
-    bench_list_files_paged,
-    bench_tasks_scan_and_query,
-    bench_parser_zero_task_overhead,
-    bench_full_text_search,
-    bench_files_with_property,
-    bench_note_load_bundle,
-    bench_editor_highlight_ranged,
-    bench_extract_code_blocks,
-    bench_doc_buffer_keystroke,
-    bench_dir_and_rewrite,
-);
+criterion_group! {
+    name = benches;
+    // Runner-level defaults remain overridable from Criterion's CLI. Do not
+    // set sample sizes on individual groups; those win over `--sample-size`.
+    config = Criterion::default().sample_size(10);
+    targets =
+        bench_first_open_and_scan,
+        bench_reopen_with_cache,
+        bench_list_files_paged,
+        bench_tasks_scan_and_query,
+        bench_parser_zero_task_overhead,
+        bench_full_text_search,
+        bench_files_with_property,
+        bench_note_load_bundle,
+        bench_editor_highlight_ranged,
+        bench_extract_code_blocks,
+        bench_doc_buffer_keystroke,
+        bench_dir_and_rewrite
+}
 criterion_main!(benches);

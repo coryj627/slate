@@ -9,7 +9,7 @@ use slate_core::{
         SummaryRef, ViewSpec,
         engine::{BasesQueryCache, BasesSummaryCell, CellValue, EngineCtx, execute},
         eval::{LinkValue, Value},
-        expr::{Expr, PropertyRef, parse_expr},
+        expr::{BinaryOp, Expr, ExprKind, PropertyRef, TaskField, parse_expr},
     },
     db::migrate,
 };
@@ -2361,4 +2361,353 @@ fn file_matches_outside_filter_position_fails_loud() {
         &result.rows[0].cells[0],
         CellValue::Error(error) if error.contains("file.matches") && error.contains("filter position")
     ));
+}
+
+#[test]
+fn nullable_task_ordering_pushdown_preserves_interpreter_warning() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(&conn, 1, 0, "Comparable", " ", false, None, None, Some(5));
+    insert_task(
+        &conn,
+        2,
+        0,
+        "Missing priority",
+        " ",
+        false,
+        None,
+        None,
+        None,
+    );
+
+    let mut generated = query();
+    generated.row_source = RowSource::Tasks;
+    generated.filters = Some(stmt("task.priority >= 3"));
+    generated.columns = vec![column("task.text"), column("task.priority")];
+    let pushdown = execute(
+        &generated,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute nullable priority with pushdown enabled");
+    let interpreted = execute(
+        &generated,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute nullable priority in interpreter");
+
+    assert_eq!(pushdown, interpreted);
+    assert_eq!(pushdown.rows.len(), 1);
+    assert_eq!(pushdown.rows[0].path, "Projects/Alpha.md");
+    assert_eq!(
+        pushdown.warnings,
+        ["ordering comparison on non-comparable values evaluated to false"]
+    );
+}
+
+const ENGINE_CENSUS_SEED: u64 = 0xE11E_CE55_5EED_0001;
+const ENGINE_CENSUS_ROWS: usize = 36;
+
+#[derive(Clone)]
+struct CensusFile {
+    id: i64,
+    path: String,
+    name: String,
+    extension: String,
+    size: i64,
+    mtime_ms: i64,
+}
+
+struct CensusRng(u64);
+
+impl CensusRng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+
+    fn below(&mut self, upper: usize) -> usize {
+        (self.next() % upper as u64) as usize
+    }
+}
+
+fn engine_census_scale() -> (usize, usize) {
+    if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+        (128, 24)
+    } else {
+        (32, 12)
+    }
+}
+
+fn census_file(seed: u64, logical: usize) -> CensusFile {
+    let folders = ["Projects", "Notes", "Archive"];
+    let extensions = ["md", "md", "canvas", "txt"];
+    let folder = folders[(logical + seed as usize) % folders.len()];
+    let extension = extensions[(logical * 3 + seed as usize) % extensions.len()];
+    let name = format!("note-{seed:016x}-{logical:03}.{extension}");
+    CensusFile {
+        id: logical as i64 + 1,
+        path: format!("{folder}/{name}"),
+        name,
+        extension: extension.to_string(),
+        size: 100 + ((logical as u64 * 37 + seed) % 2_000) as i64,
+        mtime_ms: 1_700_000_000_000 + (seed % 10_000) as i64 + logical as i64 * 1_000,
+    }
+}
+
+fn seed_engine_census(seed: u64) -> Connection {
+    let conn = migrated_conn();
+    let mut order = (0..ENGINE_CENSUS_ROWS).collect::<Vec<_>>();
+    let mut rng = CensusRng(seed);
+    for index in (1..order.len()).rev() {
+        let other = rng.below(index + 1);
+        order.swap(index, other);
+    }
+
+    for logical in order {
+        let file = census_file(seed, logical);
+        insert_file(
+            &conn,
+            file.id,
+            &file.path,
+            &file.name,
+            &file.extension,
+            file.size,
+            file.mtime_ms,
+        );
+        let status = ["active", "waiting", "done"][(logical + seed as usize) % 3];
+        let tag = if (logical + seed as usize).is_multiple_of(2) {
+            "project"
+        } else {
+            "archive"
+        };
+        insert_text_property(&conn, file.id, 0, "status", status);
+        insert_number_property(
+            &conn,
+            file.id,
+            1,
+            "rating",
+            ((logical * 7 + seed as usize) % 50) as f64 / 10.0,
+        );
+        insert_bool_property(&conn, file.id, 2, "done", logical % 3 == 0);
+        insert_date_property(
+            &conn,
+            file.id,
+            3,
+            "due",
+            &format!("2027-01-{:02}", logical % 28 + 1),
+        );
+        insert_list_property(&conn, file.id, 4, "tags", &[tag]);
+        insert_tag(&conn, file.id, tag);
+        if tag == "project" && logical % 4 == 0 {
+            insert_tag(&conn, file.id, "project/rust");
+        }
+        insert_task(
+            &conn,
+            file.id,
+            0,
+            &format!("Census task {seed:016x}-{logical:03}"),
+            if logical % 3 == 0 { "x" } else { " " },
+            logical % 3 == 0,
+            (logical % 7 != 0).then_some(1_800_000_000_000 + logical as i64 * 86_400_000),
+            (logical % 6 != 0).then_some(1_799_000_000_000 + logical as i64 * 86_400_000),
+            (logical % 5 != 0).then_some((logical % 5 + 1) as i64),
+        );
+        update_body_text(
+            &conn,
+            file.id,
+            if logical % 2 == 0 {
+                "commonneedle generated engine census body"
+            } else {
+                "alternate generated engine census body"
+            },
+        );
+    }
+
+    let source = census_file(seed, 0);
+    let target = census_file(seed, 1);
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         ) VALUES (?1, 0, ?2, ?3, NULL, 'wikilink', 0, 0, '', 0, 10)",
+        params![source.id, target.path, target.name],
+    )
+    .expect("insert engine census link");
+    conn
+}
+
+fn engine_census_query(seed: u64, family: usize) -> SlateQuery {
+    let target = census_file(seed, (seed as usize + family) % ENGINE_CENSUS_ROWS);
+    let mut generated = query();
+    generated.columns = vec![
+        column("file.path"),
+        column("status"),
+        column("rating"),
+        column("done"),
+        column("due"),
+    ];
+    generated.limit = family.is_multiple_of(5).then_some(7);
+
+    match family {
+        0 => generated.filters = Some(stmt(r#"file.ext == "md""#)),
+        1 => {
+            generated.filters = Some(stmt(&format!("file.name == {:?}", target.name)));
+        }
+        2 => {
+            generated.filters = Some(stmt(&format!("file.path == {:?}", target.path)));
+        }
+        3 => generated.filters = Some(stmt(&format!("file.size >= {}", target.size))),
+        4 => {
+            generated.filters = Some(stmt(&format!("file.mtime < {}", target.mtime_ms + 1)));
+        }
+        5 => {
+            generated.filters = Some(stmt(&format!("file.ctime >= {}", target.mtime_ms + 10_000)));
+        }
+        6 => generated.filters = Some(stmt(r#"status == "active""#)),
+        7 => generated.filters = Some(stmt(r#"file.inFolder("Projects")"#)),
+        8 => generated.filters = Some(stmt(r#"file.hasTag("project")"#)),
+        9 => generated.filters = Some(stmt(r#"file.name.startsWith("note-")"#)),
+        10 => generated.filters = Some(stmt(r#"file.path.startsWith("Projects/")"#)),
+        11 => generated.filters = Some(stmt(r#"tags.contains("project")"#)),
+        12 => generated.filters = Some(stmt(r#"file.matches("commonneedle")"#)),
+        13 => {
+            generated.filters = Some(FilterNode::And(vec![
+                stmt(r#"file.ext == "md""#),
+                stmt("rating + 1 > 3"),
+            ]));
+            generated.formulas = vec![("rank".to_string(), expr("rating + file.size"))];
+            generated.columns.push(column("formula.rank"));
+        }
+        14 => generated.source = QuerySource::Folder("Projects".to_string()),
+        15 => generated.source = QuerySource::Tag("project".to_string()),
+        16 => generated.source = QuerySource::Recent { days: 1 },
+        17 => {
+            generated.source = QuerySource::Linked {
+                from_path: census_file(seed, 0).path,
+                depth: 1,
+            };
+        }
+        18..=23 => {
+            generated.row_source = RowSource::Tasks;
+            generated.columns = vec![
+                column("task.file.path"),
+                column("task.text"),
+                column("task.status"),
+                column("task.completed"),
+                column("task.priority"),
+                column("task.due"),
+                column("task.scheduled"),
+            ];
+            generated.filters = Some(match family {
+                18 => stmt("!task.completed"),
+                19 => stmt(r#"task.status == "x""#),
+                20 => stmt("task.priority == 3"),
+                21 => stmt(r#"task.due == date("2027-01-16")"#),
+                22 => FilterNode::And(vec![
+                    stmt(r#"task.file.inFolder("Projects")"#),
+                    stmt(r#"task.file.hasTag("project")"#),
+                ]),
+                23 => stmt(r#"task.scheduled != date("2027-01-20")"#),
+                _ => unreachable!(),
+            });
+        }
+        _ => unreachable!("24 engine census query families"),
+    }
+    generated
+}
+
+#[test]
+fn census_bases_generated_tasks_include_nullable_equality_pushdowns() {
+    for (family, expected_field) in [(20, TaskField::Priority), (21, TaskField::Due)] {
+        let generated = engine_census_query(ENGINE_CENSUS_SEED, family);
+        let Some(FilterNode::Stmt(expression)) = generated.filters else {
+            panic!("family {family} must be a statement filter: {generated:#?}");
+        };
+        let ExprKind::Binary { op, lhs, .. } = &expression.kind else {
+            panic!("family {family} must be a binary filter: {expression:#?}");
+        };
+        assert_eq!(
+            *op,
+            BinaryOp::Eq,
+            "family {family} must exercise equality pushdown: {expression:#?}"
+        );
+        assert!(
+            matches!(&lhs.kind, ExprKind::Prop(PropertyRef::TaskField(field)) if *field == expected_field),
+            "family {family} must target {expected_field:?}: {expression:#?}"
+        );
+    }
+}
+
+#[test]
+fn census_bases_engine_pushdown_matches_interpreter() {
+    let (seed_count, queries_per_seed) = engine_census_scale();
+    for seed_index in 0..seed_count {
+        let seed = ENGINE_CENSUS_SEED
+            .wrapping_add((seed_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let conn = seed_engine_census(seed);
+        for query_index in 0..queries_per_seed {
+            let family = if queries_per_seed == 24 {
+                query_index
+            } else {
+                query_index + (seed_index % 2) * 12
+            };
+            let generated = engine_census_query(seed, family);
+            let now_ms = census_file(seed, ENGINE_CENSUS_ROWS - 1).mtime_ms + 60_000;
+            let page_size = [1, 2, 3, 7, 16, 64][(seed_index + query_index) % 6];
+            let cancel = CancelToken::new();
+            let pushdown = execute(
+                &generated,
+                &conn,
+                &EngineCtx {
+                    now_ms,
+                    page_size,
+                    pushdown: true,
+                    ..EngineCtx::default()
+                },
+                &cancel,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "pushdown execution failed seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}: {error}\nquery={generated:#?}"
+                )
+            });
+            let interpreted = execute(
+                &generated,
+                &conn,
+                &EngineCtx {
+                    now_ms,
+                    page_size,
+                    pushdown: false,
+                    ..EngineCtx::default()
+                },
+                &cancel,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "interpreted execution failed seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}: {error}\nquery={generated:#?}"
+                )
+            });
+            assert_eq!(
+                pushdown, interpreted,
+                "pushdown mismatch seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}\nquery={generated:#?}"
+            );
+            assert_eq!(
+                pushdown.error, None,
+                "generated supported query failed loud seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}\nquery={generated:#?}"
+            );
+        }
+    }
 }

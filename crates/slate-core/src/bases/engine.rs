@@ -294,6 +294,55 @@ struct SqlPlan {
     params: Vec<String>,
 }
 
+#[cfg(test)]
+struct TestMaterializationProbe {
+    after_rows: usize,
+    reached: std::sync::mpsc::Sender<usize>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_MATERIALIZATION_PROBE: RefCell<Option<TestMaterializationProbe>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn install_test_materialization_probe(probe: TestMaterializationProbe) {
+    TEST_MATERIALIZATION_PROBE.with(|slot| {
+        let previous = slot.replace(Some(probe));
+        assert!(
+            previous.is_none(),
+            "materialization probe already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn park_on_test_materialization_probe(materialized_rows: usize) {
+    let probe = TEST_MATERIALIZATION_PROBE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|probe| probe.after_rows == materialized_rows)
+        {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some(probe) = probe {
+        probe
+            .reached
+            .send(materialized_rows)
+            .expect("cancellation test receives materialization signal");
+        probe
+            .release
+            .recv()
+            .expect("cancellation test releases engine worker");
+    }
+}
+
 pub fn execute(
     query: &SlateQuery,
     conn: &Connection,
@@ -423,7 +472,11 @@ pub fn execute(
                 &vault,
                 &warnings,
             ) {
-                Ok(row) => rows.push(row),
+                Ok(row) => {
+                    rows.push(row);
+                    #[cfg(test)]
+                    park_on_test_materialization_probe(rows.len());
+                }
                 Err(error) => {
                     return Ok(error_result(query, ctx, error, &candidate.row.file_path));
                 }
@@ -989,15 +1042,31 @@ fn task_field_pushdown(field: TaskField, op: BinaryOp, value: &Expr) -> Option<S
             task_comparison_clause("t.status_char", op, literal_text(value)?, false)
         }
         TaskField::Priority => {
-            task_comparison_clause("t.priority", op, numeric_literal_string(value)?, true)
+            nullable_task_comparison_clause("t.priority", op, numeric_literal_string(value)?)
         }
         TaskField::Due => {
-            task_comparison_clause("t.due_ms", op, date_literal_ms_string(value)?, true)
+            nullable_task_comparison_clause("t.due_ms", op, date_literal_ms_string(value)?)
         }
         TaskField::Scheduled => {
-            task_comparison_clause("t.scheduled_ms", op, date_literal_ms_string(value)?, true)
+            nullable_task_comparison_clause("t.scheduled_ms", op, date_literal_ms_string(value)?)
         }
         TaskField::Text | TaskField::File => None,
+    }
+}
+
+fn nullable_task_comparison_clause(
+    column: &str,
+    op: BinaryOp,
+    value: String,
+) -> Option<SqlPredicate> {
+    // Ordering a missing task field is false *and emits a view warning*.
+    // SQL could reproduce the membership but would discard the Null rows
+    // before Rust can preserve that observable warning, so only the
+    // warning-free equality family is safe to push down.
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        task_comparison_clause(column, op, value, true)
+    } else {
+        None
     }
 }
 
@@ -2679,5 +2748,229 @@ impl VaultLookup for SqlVaultLookup<'_> {
 
     fn backlinks_for(&self, path: &str) -> Vec<LinkValue> {
         load_backlinks(self.conn, path).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::{Mutex, mpsc},
+        time::{Duration, Instant},
+    };
+
+    static CANCELLATION_TEST_SERIAL: Mutex<()> = Mutex::new(());
+    const CANCELLATION_PROBE_ROW: usize = 512;
+    const CANCELLATION_VAULT_ROWS: usize = 10_000;
+
+    fn filter(source: &str) -> FilterNode {
+        FilterNode::Stmt(
+            super::super::expr::parse_expr(source).unwrap_or_else(|error| {
+                panic!("planner census expression must parse: {source}: {error}")
+            }),
+        )
+    }
+
+    #[test]
+    fn census_bases_planner_selects_every_active_pushdown_family() {
+        let file_families = [
+            ("extension equality", r#"file.ext == "md""#),
+            ("name equality", r#"file.name == "note.md""#),
+            ("path equality", r#"file.path == "Notes/note.md""#),
+            ("size comparison", "file.size >= 42"),
+            ("mtime comparison", "file.mtime < 1234"),
+            ("ctime comparison", "file.ctime == 5678"),
+            ("note property equality", r#"status == "active""#),
+            ("folder membership", r#"file.inFolder("Notes")"#),
+            ("tag membership", r#"file.hasTag("project")"#),
+            ("name prefix", r#"file.name.startsWith("note")"#),
+            ("path prefix", r#"file.path.startsWith("Notes/")"#),
+            ("note list/text membership", r#"tags.contains("project")"#),
+        ];
+        for (family, source) in file_families {
+            let predicate = pushdown_predicate(&filter(source))
+                .unwrap_or_else(|| panic!("file optimizer did not select {family} for {source}"));
+            assert!(
+                !predicate.clause.trim().is_empty(),
+                "file optimizer selected an empty predicate for {family}: {source}"
+            );
+        }
+
+        let task_families = [
+            ("completed truthiness", "task.completed"),
+            ("completed negation", "!task.completed"),
+            ("completed comparison", "task.completed == false"),
+            ("status comparison", r#"task.status == " ""#),
+            ("priority equality", "task.priority == 3"),
+            ("due equality", r#"task.due == date("2027-01-16")"#),
+            (
+                "scheduled equality",
+                r#"task.scheduled == date("2027-01-15")"#,
+            ),
+            (
+                "scheduled inequality",
+                r#"task.scheduled != date("2027-01-15")"#,
+            ),
+            (
+                "task file folder membership",
+                r#"task.file.inFolder("Notes")"#,
+            ),
+            ("task file tag membership", r#"task.file.hasTag("project")"#),
+        ];
+        for (family, source) in task_families {
+            let predicate = task_pushdown_predicate(&filter(source))
+                .unwrap_or_else(|| panic!("task optimizer did not select {family} for {source}"));
+            assert!(
+                !predicate.clause.trim().is_empty(),
+                "task optimizer selected an empty predicate for {family}: {source}"
+            );
+        }
+
+        let source_families = [
+            ("folder source", QuerySource::Folder("Notes".to_string())),
+            ("tag source", QuerySource::Tag("project".to_string())),
+            ("recent source", QuerySource::Recent { days: 7 }),
+            (
+                "linked depth-one source",
+                QuerySource::Linked {
+                    from_path: "Index.md".to_string(),
+                    depth: 1,
+                },
+            ),
+        ];
+        for (family, source) in source_families {
+            let mut plan = SqlPlan::default();
+            source_predicates(
+                &source,
+                &EngineCtx {
+                    now_ms: 1_800_000_000_000,
+                    ..EngineCtx::default()
+                },
+                &mut plan,
+            );
+            assert!(
+                !plan.clauses.is_empty(),
+                "source optimizer did not select {family}: {source:?}"
+            );
+        }
+
+        let mut conn = Connection::open_in_memory().expect("open FTS planner database");
+        crate::db::migrate(&mut conn).expect("migrate FTS planner database");
+        let fts = FtsMatchCache::default();
+        let warnings = WarningSink::default();
+        let cancel = CancelToken::new();
+        let predicate = fts_pushdown_predicate(
+            &filter(r#"file.matches("needle")"#),
+            &conn,
+            &fts,
+            &warnings,
+            &cancel,
+        )
+        .expect("FTS planner must not fail")
+        .expect("FTS optimizer must select file.matches");
+        assert!(
+            predicate.sql.clause.contains("slate_bases_fts_matches"),
+            "FTS optimizer selected the wrong SQL predicate: {:?}",
+            predicate.sql
+        );
+        assert_eq!(predicate.sql.params, ["needle"]);
+    }
+
+    fn cancellation_query() -> SlateQuery {
+        SlateQuery {
+            source: QuerySource::All,
+            row_source: RowSource::Files,
+            filters: None,
+            formulas: Vec::new(),
+            custom_summaries: Vec::new(),
+            group_by: None,
+            sort: Vec::new(),
+            columns: vec![ColumnSelection {
+                id: "file.name".to_string(),
+                display_name: None,
+            }],
+            summaries: Vec::new(),
+            limit: None,
+            view: super::super::ViewSpec::Table {
+                fallback_from: None,
+            },
+        }
+    }
+
+    fn cancellation_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open cancellation database");
+        crate::db::migrate(&mut conn).expect("migrate cancellation database");
+        {
+            let tx = conn.transaction().expect("begin cancellation seed");
+            {
+                let mut insert = tx
+                    .prepare(
+                        "INSERT INTO files (
+                            id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                            content_hash, parser_version, indexed_at_ms, is_markdown
+                         ) VALUES (?1, ?2, ?3, 'md', ?4, ?5, ?5, ?6, 1, ?5, 1)",
+                    )
+                    .expect("prepare cancellation seed");
+                for index in 0..CANCELLATION_VAULT_ROWS {
+                    insert
+                        .execute(params![
+                            index as i64 + 1,
+                            format!("Notes/note-{index:05}.md"),
+                            format!("note-{index:05}.md"),
+                            index as i64 + 1,
+                            index as i64,
+                            format!("cancellation-hash-{index}")
+                        ])
+                        .expect("insert cancellation row");
+                }
+            }
+            tx.commit().expect("commit cancellation seed");
+        }
+        conn
+    }
+
+    #[test]
+    fn census_bases_cancellation_under_load_returns_within_100ms() {
+        let _serial = CANCELLATION_TEST_SERIAL
+            .lock()
+            .expect("serialize cancellation probe test");
+        let conn = cancellation_vault();
+        let query = cancellation_query();
+        let cancel = CancelToken::new();
+        let worker_cancel = cancel.clone();
+        let (reached_tx, reached) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            install_test_materialization_probe(TestMaterializationProbe {
+                after_rows: CANCELLATION_PROBE_ROW,
+                reached: reached_tx,
+                release: release_rx,
+            });
+            let result = execute(&query, &conn, &EngineCtx::default(), &worker_cancel);
+            result_tx.send(result).expect("send engine result");
+        });
+
+        let materialized = reached
+            .recv_timeout(Duration::from_secs(5))
+            .expect("engine must park after real row materialization");
+        assert_eq!(materialized, CANCELLATION_PROBE_ROW);
+        let cancelled_at = Instant::now();
+        cancel.cancel();
+        release.send(()).expect("release engine worker");
+        let result = result_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "cancelled engine must finish within 100ms; waited {:?}: {error}",
+                    cancelled_at.elapsed()
+                )
+            });
+        assert!(
+            matches!(result, Err(VaultError::Cancelled)),
+            "expected exact VaultError::Cancelled, got {result:?}"
+        );
+        worker.join().expect("join cancellation worker");
     }
 }

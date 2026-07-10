@@ -10,6 +10,7 @@
 use super::common::*;
 use super::*;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 type BasesResultSignature = (
     Vec<(String, Vec<String>)>,
@@ -20,11 +21,74 @@ type BasesResultSignature = (
 
 fn bases_census_seed_count() -> u64 {
     if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
-        120
+        128
     } else {
-        24
+        32
     }
 }
+
+fn bases_cache_census_seed_count() -> u64 {
+    if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+        64
+    } else {
+        16
+    }
+}
+
+const DETERMINISM_BASES: [&[u8]; 4] = [
+    br#"views:
+  - type: table
+    name: ByStatus
+    filters: "file.inFolder(\"Notes\")"
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - status
+    slate:
+      sort:
+        - expr: file.name
+          direction: asc
+"#,
+    br#"views:
+  - type: list
+    name: Limited
+    filters: "file.inFolder(\"Notes\")"
+    limit: 3
+    order:
+      - file.path
+      - status
+    slate:
+      sort:
+        - expr: status
+          direction: desc
+        - expr: file.name
+          direction: asc
+"#,
+    br#"views:
+  - type: table
+    name: Filtered
+    filters:
+      or:
+        - "status == \"now\""
+        - "status == \"done\""
+    order:
+      - status
+      - file.name
+"#,
+    br#"views:
+  - type: plugin-grid
+    name: Fallback
+    filters: "file.inFolder(\"Notes\")"
+    groupBy:
+      property: status
+      direction: DESC
+    order:
+      - file.name
+      - status
+"#,
+];
 
 struct SplitMix64(u64);
 impl SplitMix64 {
@@ -39,6 +103,87 @@ impl SplitMix64 {
     fn below(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
     }
+}
+
+struct UnlinkingTestProvider {
+    inner: FsVaultProvider,
+    root: PathBuf,
+}
+
+impl UnlinkingTestProvider {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            inner: FsVaultProvider::new(root.clone()),
+            root,
+        }
+    }
+}
+
+impl crate::VaultProvider for UnlinkingTestProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.inner.read_file(relative)
+    }
+
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(relative, contents)
+    }
+
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        let relative_path = Path::new(relative);
+        if relative_path.is_absolute()
+            || relative_path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(VaultError::InvalidPath {
+                path: relative.to_string(),
+                reason: "test unlink path must be clean and vault-relative".to_string(),
+            });
+        }
+        let target = self.root.join(relative_path);
+        let metadata = target.symlink_metadata().map_err(VaultError::Io)?;
+        if metadata.is_dir() {
+            std::fs::remove_dir_all(target).map_err(VaultError::Io)
+        } else {
+            std::fs::remove_file(target).map_err(VaultError::Io)
+        }
+    }
+
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
+fn make_unlinking_vault(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
+    let tmp = tempfile::tempdir().expect("create unlinking test vault");
+    let root = tmp.path().to_path_buf();
+    let setup_provider = FsVaultProvider::new(root.clone());
+    setup(&setup_provider);
+    let session = VaultSession::open(
+        Arc::new(UnlinkingTestProvider::new(root.clone())),
+        SessionConfig::new(root.join(".slate")),
+    )
+    .expect("open unlinking test vault");
+    (tmp, session)
 }
 
 fn notes_query_json() -> String {
@@ -1090,21 +1235,6 @@ views:
 
 #[test]
 fn census_bases_determinism() {
-    let base = br#"views:
-  - type: table
-    name: ByStatus
-    filters: "file.inFolder(\"Notes\")"
-    groupBy:
-      property: status
-      direction: ASC
-    order:
-      - file.name
-      - status
-    slate:
-      sort:
-        - expr: file.name
-          direction: asc
-"#;
     let notes = [
         ("Notes/Zeta.md", "---\nstatus: later\n---\n# Zeta\n"),
         ("Notes/Alpha.md", "---\nstatus: now\n---\n# Alpha\n"),
@@ -1112,8 +1242,11 @@ fn census_bases_determinism() {
         ("Notes/Eta.md", "---\nstatus: later\n---\n# Eta\n"),
         ("Notes/Delta.md", "---\nstatus: done\n---\n# Delta\n"),
     ];
-    let mut expected: Option<BasesResultSignature> = None;
+    let mut expected = vec![None::<BasesResultSignature>; DETERMINISM_BASES.len()];
     for seed in 0..bases_census_seed_count() {
+        let shape = seed as usize % DETERMINISM_BASES.len();
+        let base = DETERMINISM_BASES[shape];
+        let base_source = String::from_utf8_lossy(base);
         let mut rng = SplitMix64(seed);
         let mut order = (0..notes.len()).collect::<Vec<_>>();
         for i in (1..order.len()).rev() {
@@ -1121,29 +1254,63 @@ fn census_bases_determinism() {
             order.swap(i, j);
         }
         let (_tmp, session) = make_vault(|p| {
-            p.write_file("Queries/ByStatus.base", base).unwrap();
+            p.write_file("Queries/ByStatus.base", base)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "write determinism base failed seed={seed} shape={shape}: {error}\nbase={base_source}"
+                    )
+                });
             for index in order {
                 let (path, source) = notes[index];
-                p.write_file(path, source.as_bytes()).unwrap();
+                p.write_file(path, source.as_bytes())
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "write determinism note failed seed={seed} shape={shape} path={path}: {error}\nbase={base_source}"
+                        )
+                    });
             }
         });
-        session.scan_initial(&CancelToken::new()).unwrap();
-        let handle = session.open_base("Queries/ByStatus.base").unwrap();
+        session
+            .scan_initial(&CancelToken::new())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "determinism scan failed seed={seed} shape={shape}: {error}\nbase={base_source}"
+                )
+            });
+        let handle = session
+            .open_base("Queries/ByStatus.base")
+            .unwrap_or_else(|error| {
+                panic!(
+                    "determinism handle open failed seed={seed} shape={shape}: {error}\nbase={base_source}"
+                )
+            });
         let result = session
             .base_execute(handle, 0, None, None, &CancelToken::new())
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "determinism execute failed seed={seed} shape={shape}: {error}\nbase={base_source}"
+                )
+            });
         let signature = (
             result_matrix(&result),
             group_signature(&result),
             result.total_count,
             result.shown_count,
         );
-        if let Some(expected) = &expected {
-            assert_eq!(&signature, expected);
+        if let Some(expected) = &expected[shape] {
+            assert_eq!(
+                &signature, expected,
+                "insertion-order determinism mismatch seed={seed} shape={shape}\nbase={}",
+                base_source
+            );
         } else {
-            expected = Some(signature);
+            expected[shape] = Some(signature);
         }
     }
+    assert!(
+        expected.iter().all(Option::is_some),
+        "every determinism query shape must run"
+    );
 }
 
 #[test]
@@ -1186,6 +1353,258 @@ fn census_bases_cache_fresh() {
         .unwrap();
     assert_eq!(renamed.rows[0].file_path, "Notes/Omega.md");
     assert_eq!(renamed.rows[0].values[0].display, "Omega.md");
+}
+
+#[test]
+fn delete_file_via_session_invalidates_a_warm_bases_handle() {
+    let (tmp, session) = make_unlinking_vault(|provider| {
+        provider
+            .write_file(
+                "Queries/Delete.base",
+                br#"views:
+  - type: table
+    name: Delete
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+"#,
+            )
+            .unwrap();
+        provider.write_file("Notes/Keep.md", b"# Keep\n").unwrap();
+        provider
+            .write_file("Notes/Delete.md", b"# Delete\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let warm_handle = session.open_base("Queries/Delete.base").unwrap();
+    let before = session
+        .base_execute(warm_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(before.total_count, 2);
+    session
+        .base_execute(warm_handle, 0, None, None, &CancelToken::new())
+        .expect("populate per-handle cache");
+
+    session
+        .delete_file("Notes/Delete.md")
+        .expect("public session delete succeeds through unlinking test provider");
+    assert!(!tmp.path().join("Notes/Delete.md").exists());
+
+    let warm_after = session
+        .base_execute(warm_handle, 0, None, None, &CancelToken::new())
+        .expect("generation bump invalidates warm result");
+    let cold_handle = session.open_base("Queries/Delete.base").unwrap();
+    let cold_after = session
+        .base_execute(cold_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(warm_after.total_count, 1);
+    assert_eq!(warm_after.rows[0].file_path, "Notes/Keep.md");
+    assert_eq!(
+        normalize_bases_result_time(warm_after),
+        normalize_bases_result_time(cold_after)
+    );
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CacheCensusOp {
+    Save,
+    SetProperty,
+    DeleteProperty,
+    Rename,
+    DeleteViaSession,
+    CacheReadA,
+    CacheReadB,
+}
+
+fn normalize_bases_result_time(mut result: BasesResultSet) -> BasesResultSet {
+    result.executed_at_ms = 0;
+    result
+}
+
+#[test]
+fn census_bases_warm_handle_matches_cold_after_generated_mutations() {
+    const BASE: &[u8] = br#"views:
+  - type: table
+    name: Mutation census
+    filters: "file.inFolder(\"Notes\")"
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - status
+      - score
+    slate:
+      sort:
+        - expr: status
+          direction: asc
+        - expr: file.name
+          direction: asc
+"#;
+    let seeds = bases_cache_census_seed_count();
+    let base_source = String::from_utf8_lossy(BASE);
+
+    for seed in 0..seeds {
+        let (tmp, session) = make_unlinking_vault(|provider| {
+            provider.write_file("Queries/Mutation.base", BASE).unwrap();
+            for (path, status, score) in [
+                ("Notes/Save.md", "active", 1),
+                ("Notes/Set.md", "waiting", 2),
+                ("Notes/DropProperty.md", "done", 3),
+                ("Notes/Rename.md", "active", 4),
+                ("Notes/Delete.md", "archived", 5),
+                ("Notes/Keep.md", "active", 6),
+            ] {
+                provider
+                    .write_file(
+                        path,
+                        format!(
+                            "---\nstatus: {status}\nscore: {score}\n---\n# {path}\nseed {seed}\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+            }
+        });
+        session
+            .scan_initial(&CancelToken::new())
+            .unwrap_or_else(|error| {
+                panic!("initial scan failed seed={seed}: {error}\nbase={base_source}")
+            });
+        let warm_handle = session
+            .open_base("Queries/Mutation.base")
+            .unwrap_or_else(|error| {
+                panic!("warm handle open failed seed={seed}: {error}\nbase={base_source}")
+            });
+        session
+            .base_execute(warm_handle, 0, None, None, &CancelToken::new())
+            .unwrap_or_else(|error| {
+                panic!("initial warm execution failed seed={seed}: {error}\nbase={base_source}")
+            });
+
+        let mut operations = [
+            CacheCensusOp::Save,
+            CacheCensusOp::SetProperty,
+            CacheCensusOp::DeleteProperty,
+            CacheCensusOp::Rename,
+            CacheCensusOp::DeleteViaSession,
+            CacheCensusOp::CacheReadA,
+            CacheCensusOp::CacheReadB,
+        ];
+        let mut rng = SplitMix64(seed ^ 0xCA_C4_EF_12_5E_ED);
+        for index in (1..operations.len()).rev() {
+            let other = rng.below(index + 1);
+            operations.swap(index, other);
+        }
+
+        for (op_index, operation) in operations.iter().copied().enumerate() {
+            let prefix = &operations[..=op_index];
+            match operation {
+                CacheCensusOp::Save => {
+                    session
+                        .save_text(
+                            "Notes/Save.md",
+                            &format!(
+                                "---\nstatus: saved-{seed}\nscore: 11\n---\n# Save\nseed {seed}\n"
+                            ),
+                            None,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "save failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                            )
+                        });
+                }
+                CacheCensusOp::SetProperty => {
+                    session
+                        .set_property(
+                            "Notes/Set.md",
+                            "status",
+                            crate::PropertyValue::Text(format!("set-{seed}")),
+                            None,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "property set failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                            )
+                        });
+                }
+                CacheCensusOp::DeleteProperty => {
+                    session
+                        .delete_property("Notes/DropProperty.md", "status", None)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "property delete failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                            )
+                        });
+                }
+                CacheCensusOp::Rename => {
+                    session
+                        .rename_file("Notes/Rename.md", &format!("Renamed-{seed}.md"))
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "rename failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                            )
+                        });
+                }
+                CacheCensusOp::DeleteViaSession => {
+                    session.delete_file("Notes/Delete.md").unwrap_or_else(|error| {
+                        panic!(
+                            "session delete failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                        )
+                    });
+                }
+                CacheCensusOp::CacheReadA | CacheCensusOp::CacheReadB => {}
+            }
+
+            let before_read_only = vault_content_snapshot(tmp.path());
+            let warm_after_mutation = session
+                .base_execute(warm_handle, 0, None, None, &CancelToken::new())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "warm execution failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                    )
+                });
+            let warm_cached = session
+                .base_execute(warm_handle, 0, None, None, &CancelToken::new())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "warm cache execution failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                    )
+                });
+            let cold_handle = session
+                .open_base("Queries/Mutation.base")
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "cold handle open failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                    )
+                });
+            let cold = session
+                .base_execute(cold_handle, 0, None, None, &CancelToken::new())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "cold execution failed seed={seed} op_index={op_index} prefix={prefix:?}: {error}\nbase={base_source}"
+                    )
+                });
+            session.close_base(cold_handle);
+
+            assert_eq!(
+                normalize_bases_result_time(warm_after_mutation),
+                normalize_bases_result_time(warm_cached.clone()),
+                "warm cache changed result seed={seed} op_index={op_index} prefix={prefix:?}\nbase={base_source}"
+            );
+            assert_eq!(
+                normalize_bases_result_time(warm_cached),
+                normalize_bases_result_time(cold),
+                "warm handle diverged from cold handle seed={seed} op_index={op_index} prefix={prefix:?}\nbase={base_source}"
+            );
+            assert_eq!(
+                vault_content_snapshot(tmp.path()),
+                before_read_only,
+                "Bases execution wrote vault bytes seed={seed} op_index={op_index} prefix={prefix:?}\nbase={base_source}"
+            );
+        }
+    }
 }
 
 #[test]

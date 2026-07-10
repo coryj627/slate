@@ -1,7 +1,10 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use std::collections::BTreeSet;
+
 use rusqlite::{Connection, params};
+use serde::Deserialize;
 use slate_core::CancelToken;
 use slate_core::bases::dql::{DqlWarningKind, parse_dql};
 use slate_core::bases::engine::{CellValue, EngineCtx, execute};
@@ -12,6 +15,8 @@ use slate_core::db::migrate;
 
 const OUTGOING_DQL: &str = include_str!("fixtures/dql/outgoing.dql");
 const FUNCTIONS_DQL: &str = include_str!("fixtures/dql/functions.dql");
+const CLOSURE_CORPUS_JSON: &str = include_str!("fixtures/dql/closure_corpus.json");
+const DQL_CENSUS_SEED: u64 = 0x4e5f_4451_4c5f_7631;
 
 #[test]
 fn table_without_id_maps_columns_sources_where_sort_and_limit() {
@@ -472,6 +477,492 @@ fn parse_dql_is_total_and_deterministic_for_arbitrary_text() {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GoldenDisposition {
+    Supported,
+    Unsupported,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoldenDqlCase {
+    name: String,
+    operation: String,
+    disposition: GoldenDisposition,
+    source: String,
+    #[serde(default)]
+    this_path: Option<String>,
+    #[serde(default)]
+    warning_kind: Option<String>,
+    #[serde(default)]
+    warning_contains: Option<String>,
+    #[serde(default)]
+    error_contains: Option<String>,
+    #[serde(default)]
+    expected_rows: Vec<String>,
+    #[serde(default)]
+    expected_cells: Vec<Vec<String>>,
+}
+
+#[derive(Debug)]
+enum GeneratedExpectation {
+    Supported {
+        rows: Vec<String>,
+        cells: Vec<Vec<String>>,
+    },
+    FailLoud {
+        warning_kind: DqlWarningKind,
+        warning_contains: String,
+        error_contains: String,
+    },
+}
+
+#[derive(Debug)]
+struct GeneratedDqlCase {
+    operation: &'static str,
+    source: String,
+    this_path: Option<String>,
+    expectation: GeneratedExpectation,
+}
+
+#[test]
+fn census_bases_dql_golden_corpus_executes_or_fails_loud() {
+    let cases: Vec<GoldenDqlCase> =
+        serde_json::from_str(CLOSURE_CORPUS_JSON).expect("parse checked-in DQL closure corpus");
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.disposition == GoldenDisposition::Supported),
+        "golden corpus must pin supported DQL"
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.disposition == GoldenDisposition::Unsupported),
+        "golden corpus must pin unsupported DQL"
+    );
+
+    let conn = dql_fixture_conn();
+    for case in &cases {
+        let context = format!(
+            "golden_case={} operation={} source={:?}",
+            case.name, case.operation, case.source
+        );
+        let (query, warnings) = parse_dql(&case.source);
+        let result = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                this_path: case.this_path.clone(),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("{context}: execute failed: {error}"));
+
+        match case.disposition {
+            GoldenDisposition::Supported => {
+                assert_eq!(warnings, [], "{context}: unexpected conversion warnings");
+                assert_eq!(result.error, None, "{context}: execution failed loud");
+                assert_result_rows_and_cells(
+                    &result,
+                    &case.expected_rows,
+                    &case.expected_cells,
+                    &context,
+                );
+            }
+            GoldenDisposition::Unsupported => {
+                let expected_kind = case
+                    .warning_kind
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{context}: unsupported case lacks warning_kind"));
+                let expected_warning = case.warning_contains.as_deref().unwrap_or_else(|| {
+                    panic!("{context}: unsupported case lacks warning_contains")
+                });
+                assert!(
+                    warnings.iter().any(|warning| {
+                        dql_warning_kind_name(warning.kind) == expected_kind
+                            && warning.message.contains(expected_warning)
+                    }),
+                    "{context}: expected {expected_kind} warning containing {expected_warning:?}, got {warnings:?}"
+                );
+                let expected_error = case
+                    .error_contains
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{context}: unsupported case lacks error_contains"));
+                assert_fail_loud(&result, expected_error, &context);
+            }
+        }
+    }
+}
+
+#[test]
+fn census_bases_dql_generated_statements_execute_or_fail_loud() {
+    let case_count = if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+        4_096
+    } else {
+        256
+    };
+    let conn = dql_fixture_conn();
+    let mut covered_operations = BTreeSet::new();
+    let mut covered_sources = BTreeSet::new();
+
+    for case_index in 0..case_count {
+        let case = generated_dql_case(DQL_CENSUS_SEED, case_index);
+        covered_operations.insert(case.operation);
+        covered_sources.insert(case.source.clone());
+        let context = format!(
+            "seed={DQL_CENSUS_SEED:#018x} case_index={case_index} operation={} source={:?}",
+            case.operation, case.source
+        );
+        assert_generated_dql_case(&conn, &case, &context);
+    }
+
+    assert_eq!(
+        covered_operations,
+        BTreeSet::from([
+            "constructors",
+            "group_by",
+            "malformed",
+            "outgoing",
+            "regex_escapes",
+            "tasks",
+            "trunc",
+            "unsupported",
+        ]),
+        "seed={DQL_CENSUS_SEED:#018x}: generated census lost an operation family"
+    );
+    assert_eq!(
+        covered_sources.len(),
+        case_count,
+        "seed={DQL_CENSUS_SEED:#018x}: generated census repeated a statement"
+    );
+}
+
+fn generated_dql_case(seed: u64, case_index: usize) -> GeneratedDqlCase {
+    let word = census_word(seed, case_index as u64);
+    match case_index % 8 {
+        0 => GeneratedDqlCase {
+            operation: "outgoing",
+            source: format!(
+                "TABLE WITHOUT ID file.path AS \"Path {case_index}\"\nFROM outgoing([[Hub]])\nLIMIT 1\n"
+            ),
+            this_path: None,
+            expectation: GeneratedExpectation::Supported {
+                rows: vec!["Target.md#-".to_string()],
+                cells: vec![vec!["text:Target.md".to_string()]],
+            },
+        },
+        1 => {
+            let (pattern, candidate) = match word % 3 {
+                0 => (r#""\d+""#, format!("case{case_index}123")),
+                1 => (r#""a/b""#, format!("case{case_index}a/b")),
+                _ => (r#""\w+\s+\w+""#, format!("case{case_index} second")),
+            };
+            GeneratedDqlCase {
+                operation: "regex_escapes",
+                source: format!(
+                    "TABLE WITHOUT ID regextest({pattern}, \"{candidate}\") AS \"Match {case_index}\"\nWHERE file.path = \"123.md\"\n"
+                ),
+                this_path: None,
+                expectation: GeneratedExpectation::Supported {
+                    rows: vec!["123.md#-".to_string()],
+                    cells: vec![vec!["bool:true".to_string()]],
+                },
+            }
+        }
+        2 => {
+            let whole = 1 + (word % 97) as i64;
+            let tenth = 1 + ((word >> 8) % 9) as i64;
+            let negative = word & 1 == 1;
+            let literal = if negative {
+                format!("-{whole}.{tenth}")
+            } else {
+                format!("{whole}.{tenth}")
+            };
+            let truncated = if negative { -whole } else { whole };
+            GeneratedDqlCase {
+                operation: "trunc",
+                source: format!(
+                    "TABLE WITHOUT ID trunc({literal}) AS \"Truncated {case_index}\"\nWHERE file.path = \"123.md\"\n"
+                ),
+                this_path: None,
+                expectation: GeneratedExpectation::Supported {
+                    rows: vec!["123.md#-".to_string()],
+                    cells: vec![vec![format!("number:{truncated}")]],
+                },
+            }
+        }
+        3 => {
+            let number = 1 + word % 999;
+            let token = format!("case-{case_index}-{number}");
+            GeneratedDqlCase {
+                operation: "constructors",
+                source: format!(
+                    "TABLE WITHOUT ID string({number}) AS \"String\", array(\"{token}\") AS \"Array\", object(\"key\", \"{token}\")[\"key\"] AS \"Object\", link(file.path) AS \"Link\"\nWHERE file.path = \"123.md\"\n"
+                ),
+                this_path: None,
+                expectation: GeneratedExpectation::Supported {
+                    rows: vec!["123.md#-".to_string()],
+                    cells: vec![vec![
+                        format!("text:{number}"),
+                        format!("list:[text:{token}]"),
+                        format!("text:{token}"),
+                        "link:123.md|-|123.md".to_string(),
+                    ]],
+                },
+            }
+        }
+        4 => {
+            let completed = word & 1 == 0;
+            let predicate = if completed {
+                format!("completed AND text != \"never-{case_index}\"")
+            } else {
+                format!("!completed AND text != \"never-{case_index}\"")
+            };
+            let rows = if completed {
+                vec!["Hub.md#1".to_string()]
+            } else {
+                vec!["Hub.md#0".to_string(), "Target.md#0".to_string()]
+            };
+            GeneratedDqlCase {
+                operation: "tasks",
+                source: format!("TASK\nWHERE {predicate}\nSORT text ASC\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::Supported {
+                    cells: vec![Vec::new(); rows.len()],
+                    rows,
+                },
+            }
+        }
+        5 => match word % 3 {
+            0 => GeneratedDqlCase {
+                operation: "malformed",
+                source: format!("TABLE file.name\nLIMIT nope{case_index}\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::FailLoud {
+                    warning_kind: DqlWarningKind::InvalidCommand,
+                    warning_contains: "LIMIT must be an unsigned integer".to_string(),
+                    error_contains: "invalid LIMIT".to_string(),
+                },
+            },
+            1 => GeneratedDqlCase {
+                operation: "malformed",
+                source: format!("TABLE WITHOUT ID regextest(\"x\", \"case-{case_index}\"\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::FailLoud {
+                    warning_kind: DqlWarningKind::UnsupportedConstruct,
+                    warning_contains: "unterminated function call regextest".to_string(),
+                    error_contains: "unterminated function call regextest".to_string(),
+                },
+            },
+            _ => GeneratedDqlCase {
+                operation: "malformed",
+                source: format!("LIST file.name, \"case-{case_index}\"\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::FailLoud {
+                    warning_kind: DqlWarningKind::InvalidCommand,
+                    warning_contains: "LIST accepts at most one expression".to_string(),
+                    error_contains: "LIST with multiple expressions".to_string(),
+                },
+            },
+        },
+        6 => match word % 3 {
+            0 => GeneratedDqlCase {
+                operation: "unsupported",
+                source: format!("TABLE WITHOUT ID upper(file.name) AS \"Upper {case_index}\"\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::FailLoud {
+                    warning_kind: DqlWarningKind::UnsupportedConstruct,
+                    warning_contains: "unsupported DQL function upper".to_string(),
+                    error_contains: "unsupported DQL function upper".to_string(),
+                },
+            },
+            1 => GeneratedDqlCase {
+                operation: "unsupported",
+                source: format!("TABLE WITHOUT ID file.etags AS \"Tags {case_index}\"\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::FailLoud {
+                    warning_kind: DqlWarningKind::UnsupportedConstruct,
+                    warning_contains: "unsupported DQL field file.etags".to_string(),
+                    error_contains: "unsupported DQL field file.etags".to_string(),
+                },
+            },
+            _ => GeneratedDqlCase {
+                operation: "unsupported",
+                source: format!("TASK\nWHERE line > {case_index}\n"),
+                this_path: None,
+                expectation: GeneratedExpectation::FailLoud {
+                    warning_kind: DqlWarningKind::UnsupportedConstruct,
+                    warning_contains: "unsupported DQL task field line".to_string(),
+                    error_contains: "unsupported DQL task field line".to_string(),
+                },
+            },
+        },
+        _ => GeneratedDqlCase {
+            operation: "group_by",
+            source: format!("TABLE file.name AS \"Name {case_index}\"\nGROUP BY file.folder\n"),
+            this_path: None,
+            expectation: GeneratedExpectation::FailLoud {
+                warning_kind: DqlWarningKind::UnsupportedConstruct,
+                warning_contains: "GROUP BY changes row membership".to_string(),
+                error_contains: "rows aggregation".to_string(),
+            },
+        },
+    }
+}
+
+fn census_word(seed: u64, case_index: u64) -> u64 {
+    let mut value = seed ^ case_index.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn assert_generated_dql_case(conn: &Connection, case: &GeneratedDqlCase, context: &str) {
+    let (query, warnings) = parse_dql(&case.source);
+    let result = execute(
+        &query,
+        conn,
+        &EngineCtx {
+            this_path: case.this_path.clone(),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .unwrap_or_else(|error| panic!("{context}: execute failed: {error}"));
+
+    match &case.expectation {
+        GeneratedExpectation::Supported { rows, cells } => {
+            assert_eq!(warnings, [], "{context}: unexpected conversion warnings");
+            assert_eq!(result.error, None, "{context}: execution failed loud");
+            assert_result_rows_and_cells(&result, rows, cells, context);
+        }
+        GeneratedExpectation::FailLoud {
+            warning_kind,
+            warning_contains,
+            error_contains,
+        } => {
+            assert!(
+                warnings.iter().any(|warning| {
+                    warning.kind == *warning_kind
+                        && warning.message.contains(warning_contains.as_str())
+                }),
+                "{context}: expected {warning_kind:?} warning containing {warning_contains:?}, got {warnings:?}"
+            );
+            assert_fail_loud(&result, error_contains, context);
+        }
+    }
+}
+
+fn assert_result_rows_and_cells(
+    result: &slate_core::bases::engine::BasesResultSet,
+    expected_rows: &[String],
+    expected_cells: &[Vec<String>],
+    context: &str,
+) {
+    let actual_rows = result
+        .rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{}#{}",
+                row.path,
+                row.task_ordinal
+                    .map(|ordinal| ordinal.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            )
+        })
+        .collect::<Vec<_>>();
+    let actual_cells = result
+        .rows
+        .iter()
+        .map(|row| row.cells.iter().map(cell_signature).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(actual_rows, expected_rows, "{context}: row mismatch");
+    assert_eq!(actual_cells, expected_cells, "{context}: cell mismatch");
+}
+
+fn assert_fail_loud(
+    result: &slate_core::bases::engine::BasesResultSet,
+    expected_error: &str,
+    context: &str,
+) {
+    if let Some(error) = &result.error {
+        assert!(
+            error.construct.contains(expected_error),
+            "{context}: expected fail-loud construct containing {expected_error:?}, got {error:?}"
+        );
+        assert!(
+            result.rows.is_empty(),
+            "{context}: result-level failure must not leak partial rows"
+        );
+        return;
+    }
+
+    assert!(
+        !result.rows.is_empty()
+            && result.rows.iter().all(|row| {
+                !row.cells.is_empty()
+                    && row.cells.iter().all(|cell| {
+                        matches!(cell, CellValue::Error(error) if error.contains(expected_error))
+                    })
+            }),
+        "{context}: expected every rendered cell to name {expected_error:?}, got {result:?}"
+    );
+}
+
+fn dql_warning_kind_name(kind: DqlWarningKind) -> &'static str {
+    match kind {
+        DqlWarningKind::ParseProblem => "parse_problem",
+        DqlWarningKind::UnsupportedConstruct => "unsupported_construct",
+        DqlWarningKind::InvalidCommand => "invalid_command",
+        DqlWarningKind::InvalidExpression => "invalid_expression",
+    }
+}
+
+fn cell_signature(cell: &CellValue) -> String {
+    match cell {
+        CellValue::Value(value) => value_signature(value),
+        CellValue::Error(error) => format!("error:{error}"),
+    }
+}
+
+fn value_signature(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => format!("bool:{value}"),
+        Value::Number(value) => format!("number:{value}"),
+        Value::Text(value) => format!("text:{value}"),
+        Value::Date(value) => format!("date:{}:{}", value.epoch_ms, value.has_time),
+        Value::Duration(value) => format!("duration:{value}"),
+        Value::List(values) => format!(
+            "list:[{}]",
+            values
+                .iter()
+                .map(value_signature)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(values) => format!(
+            "object:{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!("{key}={}", value_signature(value)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Link(value) => format!(
+            "link:{}|{}|{}",
+            value.target,
+            value.display.as_deref().unwrap_or("-"),
+            value.resolved_path.as_deref().unwrap_or("-")
+        ),
+        Value::File(value) => format!("file:{}", value.path),
+        Value::Regex(pattern, flags) => format!("regex:{pattern}/{flags}"),
+    }
+}
+
 fn dql_fixture_conn() -> Connection {
     let mut conn = Connection::open_in_memory().expect("open in-memory database");
     migrate(&mut conn).expect("migrate schema");
@@ -512,6 +1003,30 @@ fn dql_fixture_conn() -> Connection {
         [],
     )
     .expect("insert contextual outgoing DQL fixture link");
+    for (file_id, ordinal, text, status, completed, priority) in [
+        (1_i64, 0_i64, "Open task", " ", false, 3_i64),
+        (1, 1, "Done task", "x", true, 1),
+        (2, 0, "Waiting task", "/", false, 2),
+    ] {
+        conn.execute(
+            "INSERT INTO tasks (
+                file_id, ordinal, text, status_char, completed, due_ms, scheduled_ms,
+                priority, recurrence, line, byte_offset
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, NULL, ?7, ?8)",
+            params![
+                file_id,
+                ordinal,
+                text,
+                status,
+                completed,
+                priority,
+                10 + ordinal,
+                100 + ordinal,
+            ],
+        )
+        .expect("insert DQL fixture task");
+    }
     conn
 }
 

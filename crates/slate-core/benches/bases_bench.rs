@@ -66,7 +66,6 @@ struct BasesBenchVault {
 
 fn bases_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("bases_session");
-    group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
 
@@ -227,5 +226,11 @@ fn generate_bases_vault(file_count: usize) -> TempDir {
     tmp
 }
 
-criterion_group!(benches, bases_benches);
+criterion_group! {
+    name = benches;
+    // Keep the normal 50k-vault run practical while allowing Criterion's
+    // `--sample-size` argument to replace the runner default for every group.
+    config = Criterion::default().sample_size(10);
+    targets = bases_benches
+}
 criterion_main!(benches);

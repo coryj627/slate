@@ -527,21 +527,27 @@ pub fn serialize_base(base: &BaseFile, edits: &[BaseEdit]) -> Result<String, Ser
         return Ok(base.raw.clone());
     }
 
-    let mut splices = Vec::new();
+    // Edits form an ordered slice: later operations must plan against the
+    // document and spans produced by earlier operations. This matters for
+    // dependent batches such as removing every child from a mapping or
+    // removing one formula before inserting its replacement.
+    let mut current = base.clone();
     for edit in edits {
-        collect_edit_splices(base, edit, &mut splices)?;
+        let mut splices = Vec::new();
+        collect_edit_splices(&current, edit, &mut splices)?;
+        let output = apply_splices(&current.raw, splices)?;
+        let (next, warnings) = parse_base(&output);
+        if let Some(warning) = warnings
+            .iter()
+            .find(|warning| warning.kind == BaseWarningKind::ParseFailed)
+        {
+            return Err(SerializeError::InvalidEdit {
+                message: format!("edit produced invalid YAML: {}", warning.message),
+            });
+        }
+        current = next;
     }
-    let output = apply_splices(&base.raw, splices)?;
-    let (_, warnings) = parse_base(&output);
-    if let Some(warning) = warnings
-        .iter()
-        .find(|warning| warning.kind == BaseWarningKind::ParseFailed)
-    {
-        return Err(SerializeError::InvalidEdit {
-            message: format!("edit produced invalid YAML: {}", warning.message),
-        });
-    }
-    Ok(output)
+    Ok(current.raw)
 }
 
 #[derive(Debug)]
@@ -583,11 +589,7 @@ fn collect_edit_splices(
         BaseEdit::RemoveViewKey { view, key } => {
             ensure_view_key_is_editable(base, *view, key)?;
             ensure_remove_view_key_is_closed(key)?;
-            let view_spans = view_spans_for(base, *view)?;
-            if let Some(region) = named_region(&view_spans.keys, key) {
-                push_splice(splices, region.region.span, String::new());
-            }
-            Ok(())
+            push_remove_view_key_splice(base, *view, key, splices)
         }
         BaseEdit::SetViewFilters { view, yaml } => replace_or_insert_view_key(
             base,
@@ -605,30 +607,7 @@ fn collect_edit_splices(
         BaseEdit::SetFormula { name, expression } => {
             replace_or_insert_formula(base, name, expression, splices)
         }
-        BaseEdit::RemoveFormula { name } => {
-            let region = named_region(&base.spans.formulas, name)
-                .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
-            if named_region(&base.spans.top_level, "formulas").is_some_and(|formulas| {
-                flow_collection_close(&formulas.region, "formulas", FlowCollectionKind::Mapping)
-                    .is_some()
-            }) {
-                let index = base
-                    .spans
-                    .formulas
-                    .iter()
-                    .position(|candidate| candidate.region.span == region.region.span)
-                    .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
-                let spans = base
-                    .spans
-                    .formulas
-                    .iter()
-                    .map(|formula| formula.region.span)
-                    .collect::<Vec<_>>();
-                return push_flow_item_removal(&base.raw, &spans, index, splices);
-            }
-            push_splice(splices, region.region.span, String::new());
-            Ok(())
-        }
+        BaseEdit::RemoveFormula { name } => push_remove_formula_splice(base, name, splices),
         BaseEdit::SetDisplayName {
             property,
             display_name,
@@ -640,22 +619,9 @@ fn collect_edit_splices(
         } => {
             replace_or_remove_summary_assignment(base, *view, property, summary.as_deref(), splices)
         }
-        BaseEdit::SetSlateState { view, yaml } => match yaml {
-            Some(yaml) => replace_or_insert_view_key(
-                base,
-                *view,
-                "slate",
-                &key_value_fragment("slate", yaml),
-                splices,
-            ),
-            None => {
-                let view_spans = view_spans_for(base, *view)?;
-                if let Some(region) = named_region(&view_spans.keys, "slate") {
-                    push_splice(splices, region.region.span, String::new());
-                }
-                Ok(())
-            }
-        },
+        BaseEdit::SetSlateState { view, yaml } => {
+            replace_or_remove_slate_state(base, *view, yaml.as_deref(), splices)
+        }
     }
 }
 
@@ -689,21 +655,24 @@ fn replace_or_insert_formula(
     expression: &str,
     splices: &mut Vec<Splice>,
 ) -> Result<(), SerializeError> {
-    let entry = format!("  {}: {}\n", yaml_key(name), quote_yaml_string(expression));
+    let entry_fragment = format!("{}: {}", yaml_key(name), quote_yaml_string(expression));
     if let Some(region) = named_region(&base.spans.formulas, name) {
         if !push_scalar_replacement(splices, &region.region, expression) {
-            push_splice(splices, region.region.span, entry);
+            push_splice(
+                splices,
+                region.region.span,
+                format_fragment_for_region(&region.region, &entry_fragment),
+            );
         }
         return Ok(());
     }
 
     if let Some(formulas) = named_region(&base.spans.top_level, "formulas") {
         if empty_flow_collection(&formulas.region, "{}") {
-            let child = format!("{}: {}", yaml_key(name), quote_yaml_string(expression));
             push_splice(
                 splices,
                 formulas.region.span,
-                expand_empty_collection_region(&formulas.region, "formulas", &child),
+                expand_empty_collection_region(&formulas.region, "formulas", &entry_fragment),
             );
             return Ok(());
         }
@@ -716,20 +685,61 @@ fn replace_or_insert_formula(
                     start: offset,
                     end: offset,
                 },
-                format!(", {}: {}", yaml_key(name), quote_yaml_string(expression)),
+                format!(", {entry_fragment}"),
             );
             return Ok(());
         }
+        let child_indent = child_mapping_indent(&formulas.region)
+            .ok_or_else(|| missing_span("formulas child indentation"))?;
+        let entry = format!("{}{entry_fragment}\n", " ".repeat(child_indent));
         push_insertion_splice(splices, &base.raw, formulas.region.span.end, entry);
         return Ok(());
     }
 
-    let mut section = String::from("formulas:\n");
-    section.push_str(&entry);
+    let section = format!("formulas:\n  {entry_fragment}\n");
     let offset = named_region(&base.spans.top_level, "views")
         .map(|region| region.region.span.start)
         .unwrap_or(base.raw.len() as u32);
     push_insertion_splice(splices, &base.raw, offset, section);
+    Ok(())
+}
+
+fn push_remove_formula_splice(
+    base: &BaseFile,
+    name: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let region = named_region(&base.spans.formulas, name)
+        .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
+    let formulas =
+        named_region(&base.spans.top_level, "formulas").ok_or_else(|| missing_span("formulas"))?;
+    if flow_collection_close(&formulas.region, "formulas", FlowCollectionKind::Mapping).is_some() {
+        let index = base
+            .spans
+            .formulas
+            .iter()
+            .position(|candidate| candidate.region.span == region.region.span)
+            .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
+        let spans = base
+            .spans
+            .formulas
+            .iter()
+            .map(|formula| formula.region.span)
+            .collect::<Vec<_>>();
+        return push_flow_item_removal(&base.raw, &spans, index, splices);
+    }
+    if base.spans.formulas.len() == 1 {
+        push_block_parent_collapse(
+            splices,
+            &base.raw,
+            &formulas.region,
+            "formulas",
+            "{}",
+            region.region.span,
+        )?;
+        return Ok(());
+    }
+    push_block_removal_splice(splices, &base.raw, region.region.span);
     Ok(())
 }
 
@@ -741,15 +751,58 @@ fn replace_or_remove_display_name(
 ) -> Result<(), SerializeError> {
     let Some(property_region) = named_region(&base.spans.properties, property) else {
         if let Some(name) = display_name {
-            let entry = format!(
-                "  {}:\n    displayName: {}\n",
-                yaml_key(property),
-                quote_yaml_string(name)
-            );
             if let Some(properties) = named_region(&base.spans.top_level, "properties") {
+                if let Some(root) = source_document(&base.raw)
+                    && let Some(properties_node) = mapping_value(&root, "properties")
+                    && let SourceNodeKind::Mapping {
+                        flow: true,
+                        entries,
+                    } = &properties_node.kind
+                {
+                    let close = properties_node
+                        .end
+                        .checked_sub(1)
+                        .ok_or_else(|| missing_span("properties flow close"))?;
+                    push_splice(
+                        splices,
+                        Span {
+                            start: close as u32,
+                            end: close as u32,
+                        },
+                        format!(
+                            "{}{}: {{ displayName: {} }}",
+                            if entries.is_empty() { "" } else { ", " },
+                            yaml_key(property),
+                            quote_yaml_string(name)
+                        ),
+                    );
+                    return Ok(());
+                }
+                let property_indent = child_mapping_indent(&properties.region)
+                    .or_else(|| {
+                        properties
+                            .region
+                            .text
+                            .lines()
+                            .next()
+                            .and_then(key_on_line)
+                            .map(|(_, indent)| indent + 2)
+                    })
+                    .ok_or_else(|| missing_span("properties child indentation"))?;
+                let entry = format!(
+                    "{}{}:\n{}displayName: {}\n",
+                    " ".repeat(property_indent),
+                    yaml_key(property),
+                    " ".repeat(property_indent + 2),
+                    quote_yaml_string(name)
+                );
                 push_insertion_splice(splices, &base.raw, properties.region.span.end, entry);
             } else {
-                let section = format!("properties:\n{entry}");
+                let section = format!(
+                    "properties:\n  {}:\n    displayName: {}\n",
+                    yaml_key(property),
+                    quote_yaml_string(name)
+                );
                 let offset = named_region(&base.spans.top_level, "views")
                     .map(|region| region.region.span.start)
                     .unwrap_or(base.raw.len() as u32);
@@ -758,6 +811,63 @@ fn replace_or_remove_display_name(
         }
         return Ok(());
     };
+    if let Some(root) = source_document(&base.raw)
+        && let Some(properties) = mapping_value(&root, "properties")
+        && let Some(property_node) = mapping_value(properties, property)
+        && let SourceNodeKind::Mapping {
+            flow: true,
+            entries,
+        } = &property_node.kind
+    {
+        let child_regions = mapping_regions(&base.raw, property_node);
+        if let Some(region) = child_regions.get("displayName") {
+            if let Some(name) = display_name {
+                if !push_scalar_replacement(splices, region, name) {
+                    push_splice(
+                        splices,
+                        region.span,
+                        format!("displayName: {}", quote_yaml_string(name)),
+                    );
+                }
+            } else {
+                let spans = entries
+                    .iter()
+                    .map(|entry| Span {
+                        start: entry.key.start as u32,
+                        end: entry.value.end as u32,
+                    })
+                    .collect::<Vec<_>>();
+                let index = entries
+                    .iter()
+                    .position(|entry| {
+                        matches!(
+                            &entry.key.kind,
+                            SourceNodeKind::Scalar { value } if value == "displayName"
+                        )
+                    })
+                    .ok_or_else(|| missing_span("flow displayName entry"))?;
+                push_flow_item_removal(&base.raw, &spans, index, splices)?;
+            }
+        } else if let Some(name) = display_name {
+            let close = property_node
+                .end
+                .checked_sub(1)
+                .ok_or_else(|| missing_span(format!("property {property:?} flow close")))?;
+            push_splice(
+                splices,
+                Span {
+                    start: close as u32,
+                    end: close as u32,
+                },
+                format!(
+                    "{}displayName: {}",
+                    if entries.is_empty() { "" } else { ", " },
+                    quote_yaml_string(name)
+                ),
+            );
+        }
+        return Ok(());
+    }
     let child_indent = child_mapping_indent(&property_region.region);
     let child_regions = child_indent
         .map(|indent| regions_in_span(&base.raw, property_region.region.span, indent))
@@ -792,7 +902,18 @@ fn replace_or_remove_display_name(
             );
         }
         (None, Some(region)) => {
-            push_splice(splices, region.span, String::new());
+            if child_regions.len() == 1 {
+                push_block_parent_collapse(
+                    splices,
+                    &base.raw,
+                    &property_region.region,
+                    property,
+                    "{}",
+                    region.span,
+                )?;
+            } else {
+                push_block_removal_splice(splices, &base.raw, region.span);
+            }
         }
         (None, None) => {}
     }
@@ -814,12 +935,96 @@ fn replace_or_remove_summary_assignment(
                 yaml_key(property),
                 quote_yaml_string(summary)
             );
-            push_view_key_insertion(base, view_spans, &fragment, splices);
+            push_view_key_insertion(base, view, view_spans, &fragment, splices)?;
         }
         return Ok(());
     };
 
-    let assignments = regions_in_span(&base.raw, summaries_region.region.span, 6);
+    if let Some(root) = source_document(&base.raw)
+        && let Some(views) = mapping_value(&root, "views")
+        && let SourceNodeKind::Sequence { items, .. } = &views.kind
+        && let Some(view_node) = items.get(view)
+        && let Some(summaries_node) = mapping_value(view_node, "summaries")
+        && let SourceNodeKind::Mapping {
+            flow: true,
+            entries,
+        } = &summaries_node.kind
+    {
+        let assignments = mapping_regions(&base.raw, summaries_node);
+        if let Some(region) = assignments.get(property) {
+            if let Some(summary) = summary {
+                if !push_scalar_replacement(splices, region, summary) {
+                    push_splice(
+                        splices,
+                        region.span,
+                        format!("{}: {}", yaml_key(property), quote_yaml_string(summary)),
+                    );
+                }
+            } else {
+                let spans = entries
+                    .iter()
+                    .map(|entry| Span {
+                        start: entry.key.start as u32,
+                        end: entry.value.end as u32,
+                    })
+                    .collect::<Vec<_>>();
+                let index = entries
+                    .iter()
+                    .position(|entry| {
+                        matches!(
+                            &entry.key.kind,
+                            SourceNodeKind::Scalar { value } if value == property
+                        )
+                    })
+                    .ok_or_else(|| missing_span(format!("summary assignment {property:?}")))?;
+                push_flow_item_removal(&base.raw, &spans, index, splices)?;
+            }
+        } else if let Some(summary) = summary {
+            let close = summaries_node
+                .end
+                .checked_sub(1)
+                .ok_or_else(|| missing_span("flow summaries close"))?;
+            push_splice(
+                splices,
+                Span {
+                    start: close as u32,
+                    end: close as u32,
+                },
+                format!(
+                    "{}{}: {}",
+                    if entries.is_empty() { "" } else { ", " },
+                    yaml_key(property),
+                    quote_yaml_string(summary)
+                ),
+            );
+        }
+        return Ok(());
+    }
+
+    let assignment_indent = child_mapping_indent(&summaries_region.region)
+        .or_else(|| {
+            summaries_region
+                .region
+                .text
+                .lines()
+                .next()
+                .and_then(key_on_line)
+                .map(|(_, indent)| indent + 2)
+        })
+        .ok_or_else(|| missing_span(format!("view {view} summaries child indentation")))?;
+    let assignment_prefix = " ".repeat(assignment_indent);
+    let assignments = regions_in_span(&base.raw, summaries_region.region.span, assignment_indent);
+    if summary.is_none() && assignments.len() == 1 && assignments.contains_key(property) {
+        push_block_parent_collapse(
+            splices,
+            &base.raw,
+            &summaries_region.region,
+            "summaries",
+            "{}",
+            assignments[property].span,
+        )?;
+        return Ok(());
+    }
     match (summary, assignments.get(property)) {
         (Some(summary), Some(region)) => {
             if !push_scalar_replacement(splices, region, summary) {
@@ -827,7 +1032,7 @@ fn replace_or_remove_summary_assignment(
                     splices,
                     region.span,
                     format!(
-                        "      {}: {}\n",
+                        "{assignment_prefix}{}: {}\n",
                         yaml_key(property),
                         quote_yaml_string(summary)
                     ),
@@ -840,18 +1045,119 @@ fn replace_or_remove_summary_assignment(
                 &base.raw,
                 summaries_region.region.span.end,
                 format!(
-                    "      {}: {}\n",
+                    "{assignment_prefix}{}: {}\n",
                     yaml_key(property),
                     quote_yaml_string(summary)
                 ),
             );
         }
         (None, Some(region)) => {
-            push_splice(splices, region.span, String::new());
+            push_block_removal_splice(splices, &base.raw, region.span);
         }
         (None, None) => {}
     }
     Ok(())
+}
+
+fn replace_or_remove_slate_state(
+    base: &BaseFile,
+    view: usize,
+    yaml: Option<&str>,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    if let Some(root) = source_document(&base.raw)
+        && let Some(views) = mapping_value(&root, "views")
+        && let SourceNodeKind::Sequence { items, .. } = &views.kind
+        && let Some(view_node) = items.get(view)
+        && let SourceNodeKind::Mapping {
+            flow: true,
+            entries,
+        } = &view_node.kind
+    {
+        if let Some(region) = named_region(&view_spans.keys, "slate") {
+            if let Some(yaml) = yaml {
+                push_splice(
+                    splices,
+                    region.region.span,
+                    format!("slate: {}", flow_edit_value("slate", yaml)?),
+                );
+            } else {
+                let spans = entries
+                    .iter()
+                    .map(|entry| Span {
+                        start: entry.key.start as u32,
+                        end: entry.value.end as u32,
+                    })
+                    .collect::<Vec<_>>();
+                let index = entries
+                    .iter()
+                    .position(|entry| {
+                        matches!(
+                            &entry.key.kind,
+                            SourceNodeKind::Scalar { value } if value == "slate"
+                        )
+                    })
+                    .ok_or_else(|| missing_span("flow slate entry"))?;
+                push_flow_item_removal(&base.raw, &spans, index, splices)?;
+            }
+        } else if let Some(yaml) = yaml {
+            let close = view_node
+                .end
+                .checked_sub(1)
+                .ok_or_else(|| missing_span(format!("view {view} flow close")))?;
+            push_splice(
+                splices,
+                Span {
+                    start: close as u32,
+                    end: close as u32,
+                },
+                format!(
+                    "{}slate: {}",
+                    if entries.is_empty() { "" } else { ", " },
+                    flow_edit_value("slate", yaml)?
+                ),
+            );
+        }
+        return Ok(());
+    }
+
+    match yaml {
+        Some(yaml) => replace_or_insert_view_key(
+            base,
+            view,
+            "slate",
+            &key_value_fragment("slate", yaml),
+            splices,
+        ),
+        None => {
+            if let Some(region) = named_region(&view_spans.keys, "slate") {
+                push_block_removal_splice(splices, &base.raw, region.region.span);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn flow_edit_value(key: &str, yaml: &str) -> Result<String, SerializeError> {
+    let fragment = key_value_fragment(key, yaml);
+    let documents = yaml_rust2::YamlLoader::load_from_str(&fragment).map_err(|error| {
+        SerializeError::InvalidEdit {
+            message: format!("{key} YAML is invalid: {error}"),
+        }
+    })?;
+    let Some(Yaml::Hash(mapping)) = documents.first() else {
+        return Err(SerializeError::InvalidEdit {
+            message: format!("{key} YAML must be a mapping fragment"),
+        });
+    };
+    let value = mapping
+        .iter()
+        .find_map(|(candidate, value)| (yaml_key_to_string(candidate) == key).then_some(value))
+        .ok_or_else(|| SerializeError::InvalidEdit {
+            message: format!("{key} YAML must contain {key:?}"),
+        })?;
+    render_flow_yaml(value)
 }
 
 fn replace_or_insert_view_key(
@@ -863,13 +1169,31 @@ fn replace_or_insert_view_key(
 ) -> Result<(), SerializeError> {
     let view_spans = view_spans_for(base, view)?;
     if let Some(region) = named_region(&view_spans.keys, key) {
-        let replacement = format_fragment_for_region(&region.region, fragment);
+        let replacement = if view_uses_flow_mapping(&base.raw, view) {
+            flow_mapping_entry(fragment)?
+        } else {
+            format_fragment_for_region(&region.region, fragment)
+        };
         push_splice(splices, region.region.span, replacement);
         return Ok(());
     }
 
-    push_view_key_insertion(base, view_spans, fragment, splices);
-    Ok(())
+    push_view_key_insertion(base, view, view_spans, fragment, splices)
+}
+
+fn view_uses_flow_mapping(source: &str, view: usize) -> bool {
+    let Some(root) = source_document(source) else {
+        return false;
+    };
+    let Some(views) = mapping_value(&root, "views") else {
+        return false;
+    };
+    let SourceNodeKind::Sequence { items, .. } = &views.kind else {
+        return false;
+    };
+    items
+        .get(view)
+        .is_some_and(|view| matches!(&view.kind, SourceNodeKind::Mapping { flow: true, .. }))
 }
 
 fn replace_or_insert_view_key_preserving_scalar(
@@ -921,6 +1245,12 @@ fn push_add_view_splice(
             );
             return Ok(());
         }
+        let item = base
+            .spans
+            .views
+            .last()
+            .map(|view| reindent_view_item(&item, view.entry.text.as_str()))
+            .unwrap_or(item);
         push_insertion_splice(splices, &base.raw, views.region.span.end, item);
         return Ok(());
     }
@@ -948,7 +1278,51 @@ fn push_remove_view_splice(
             .collect::<Vec<_>>();
         return push_flow_item_removal(&base.raw, &spans, view, splices);
     }
-    push_splice(splices, entry.span, String::new());
+    if base.spans.views.len() == 1 {
+        let views =
+            named_region(&base.spans.top_level, "views").ok_or_else(|| missing_span("views"))?;
+        push_block_parent_collapse(splices, &base.raw, &views.region, "views", "[]", entry.span)?;
+        return Ok(());
+    }
+    push_block_removal_splice(splices, &base.raw, entry.span);
+    Ok(())
+}
+
+fn push_remove_view_key_splice(
+    base: &BaseFile,
+    view: usize,
+    key: &str,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    let Some(region) = named_region(&view_spans.keys, key) else {
+        return Ok(());
+    };
+    if let Some(root) = source_document(&base.raw)
+        && let Some(views) = mapping_value(&root, "views")
+        && let SourceNodeKind::Sequence { items, .. } = &views.kind
+        && let Some(view_node) = items.get(view)
+        && let SourceNodeKind::Mapping {
+            flow: true,
+            entries,
+        } = &view_node.kind
+    {
+        let spans = entries
+            .iter()
+            .map(|entry| Span {
+                start: entry.key.start as u32,
+                end: entry.value.end as u32,
+            })
+            .collect::<Vec<_>>();
+        let index = entries
+            .iter()
+            .position(
+                |entry| matches!(&entry.key.kind, SourceNodeKind::Scalar { value } if value == key),
+            )
+            .ok_or_else(|| missing_span(format!("view {view} key {key:?}")))?;
+        return push_flow_item_removal(&base.raw, &spans, index, splices);
+    }
+    push_block_removal_splice(splices, &base.raw, region.region.span);
     Ok(())
 }
 
@@ -991,10 +1365,38 @@ fn push_flow_item_removal(
 
 fn push_view_key_insertion(
     base: &BaseFile,
+    view: usize,
     view_spans: &ViewSpans,
     fragment: &str,
     splices: &mut Vec<Splice>,
-) {
+) -> Result<(), SerializeError> {
+    if let Some(root) = source_document(&base.raw)
+        && let Some(views) = mapping_value(&root, "views")
+        && let SourceNodeKind::Sequence { items, .. } = &views.kind
+        && let Some(view_node) = items.get(view)
+        && let SourceNodeKind::Mapping {
+            flow: true,
+            entries,
+        } = &view_node.kind
+    {
+        let close = view_node
+            .end
+            .checked_sub(1)
+            .ok_or_else(|| missing_span(format!("view {view} flow close")))?;
+        push_splice(
+            splices,
+            Span {
+                start: close as u32,
+                end: close as u32,
+            },
+            format!(
+                "{}{}",
+                if entries.is_empty() { "" } else { ", " },
+                flow_mapping_entry(fragment)?
+            ),
+        );
+        return Ok(());
+    }
     let (_, key_prefix) = region_prefixes(&view_spans.entry.text);
     push_insertion_splice(
         splices,
@@ -1002,6 +1404,31 @@ fn push_view_key_insertion(
         view_spans.entry.span.end,
         format_yaml_fragment(fragment, &key_prefix, &key_prefix),
     );
+    Ok(())
+}
+
+fn flow_mapping_entry(fragment: &str) -> Result<String, SerializeError> {
+    let documents = yaml_rust2::YamlLoader::load_from_str(fragment).map_err(|error| {
+        SerializeError::InvalidEdit {
+            message: format!("view key YAML is invalid: {error}"),
+        }
+    })?;
+    let Some(Yaml::Hash(mapping)) = documents.first() else {
+        return Err(SerializeError::InvalidEdit {
+            message: "view key YAML must be a mapping fragment".to_string(),
+        });
+    };
+    if mapping.len() != 1 {
+        return Err(SerializeError::InvalidEdit {
+            message: "view key YAML must contain exactly one entry".to_string(),
+        });
+    }
+    let (key, value) = mapping.iter().next().expect("single-entry mapping");
+    Ok(format!(
+        "{}: {}",
+        render_flow_yaml(key)?,
+        render_flow_yaml(value)?
+    ))
 }
 
 fn ensure_view_key_is_editable(
@@ -1088,11 +1515,105 @@ fn push_splice(splices: &mut Vec<Splice>, span: Span, replacement: String) {
     });
 }
 
+fn push_block_removal_splice(splices: &mut Vec<Splice>, source: &str, mut span: Span) {
+    span = block_removal_span_preserving_eof(source, span);
+    push_splice(splices, span, String::new());
+}
+
+fn push_block_parent_collapse(
+    splices: &mut Vec<Splice>,
+    source: &str,
+    parent: &PreservedRegion,
+    fallback_key: &str,
+    empty_value: &str,
+    child: Span,
+) -> Result<(), SerializeError> {
+    let newline_offset = parent
+        .text
+        .find('\n')
+        .ok_or_else(|| missing_span(format!("{fallback_key} parent line")))?;
+    let line_end = if newline_offset > 0 && parent.text.as_bytes()[newline_offset - 1] == b'\r' {
+        newline_offset - 1
+    } else {
+        newline_offset
+    };
+    let line = &parent.text[..line_end];
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let (authored_key, comment) = key_colon_index(trimmed).map_or_else(
+        || (fallback_key, ""),
+        |colon| {
+            let (_, comment) = split_inline_comment(&trimmed[colon + 1..]);
+            (&trimmed[..colon], comment)
+        },
+    );
+    let line_span = Span {
+        start: parent.span.start,
+        end: parent
+            .span
+            .start
+            .checked_add((newline_offset + 1) as u32)
+            .ok_or_else(|| missing_span(format!("{fallback_key} parent line")))?,
+    };
+    if child.start < line_span.end {
+        return Err(missing_span(format!(
+            "{fallback_key} child after parent line"
+        )));
+    }
+    let child_is_adjacent = child.start == line_span.end;
+    let omit_newline =
+        child_is_adjacent && child.end as usize == source.len() && !source.ends_with('\n');
+    let line_ending = if omit_newline {
+        ""
+    } else if parent.text[..=newline_offset].ends_with("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    push_splice(
+        splices,
+        line_span,
+        format!("{indent}{authored_key}: {empty_value}{comment}{line_ending}"),
+    );
+    if child_is_adjacent {
+        push_splice(splices, child, String::new());
+    } else {
+        push_block_removal_splice(splices, source, child);
+    }
+    Ok(())
+}
+
+fn block_removal_span_preserving_eof(source: &str, mut span: Span) -> Span {
+    if span.end as usize == source.len() && !source.ends_with('\n') {
+        let start = span.start as usize;
+        span.start = if source[..start].ends_with("\r\n") {
+            span.start.saturating_sub(2)
+        } else if source[..start].ends_with('\n') {
+            span.start.saturating_sub(1)
+        } else {
+            span.start
+        };
+    }
+    span
+}
+
 fn push_insertion_splice(splices: &mut Vec<Splice>, source: &str, offset: u32, text: String) {
     let offset_usize = offset as usize;
+    let newline = if source.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut text = text.replace("\r\n", "\n");
+    if newline == "\r\n" {
+        text = text.replace('\n', "\r\n");
+    }
+    if offset_usize == source.len() && !source.ends_with('\n') {
+        text.truncate(text.trim_end_matches(['\r', '\n']).len());
+    }
     let mut replacement = String::new();
     if offset_usize > 0 && !source[..offset_usize].ends_with('\n') {
-        replacement.push('\n');
+        replacement.push_str(newline);
     }
     replacement.push_str(&text);
     push_splice(
@@ -1450,7 +1971,14 @@ fn fragment_starts_with_key(fragment: &str, key: &str) -> bool {
 
 fn format_fragment_for_region(region: &PreservedRegion, fragment: &str) -> String {
     let (first_prefix, continuation_prefix) = region_prefixes(&region.text);
-    format_yaml_fragment(fragment, &first_prefix, &continuation_prefix)
+    let mut formatted = format_yaml_fragment(fragment, &first_prefix, &continuation_prefix);
+    if region.text.contains("\r\n") {
+        formatted = formatted.replace('\n', "\r\n");
+    }
+    if !region.text.ends_with('\n') {
+        formatted.truncate(formatted.trim_end_matches(['\r', '\n']).len());
+    }
+    formatted
 }
 
 fn format_yaml_fragment(fragment: &str, first_prefix: &str, continuation_prefix: &str) -> String {
@@ -1528,6 +2056,21 @@ fn format_view_item_fragment(yaml: &str) -> Result<String, SerializeError> {
         }
     }
     Ok(out)
+}
+
+fn reindent_view_item(item: &str, authored_view: &str) -> String {
+    let authored_indent = authored_view
+        .lines()
+        .next()
+        .map(|line| line.len() - line.trim_start().len())
+        .unwrap_or(2);
+    if authored_indent == 2 {
+        return item.to_string();
+    }
+    let prefix = " ".repeat(authored_indent);
+    item.lines()
+        .map(|line| format!("{prefix}{}\n", line.strip_prefix("  ").unwrap_or(line)))
+        .collect()
 }
 
 fn quote_yaml_string(value: &str) -> String {

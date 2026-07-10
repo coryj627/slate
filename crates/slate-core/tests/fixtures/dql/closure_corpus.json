@@ -1,0 +1,79 @@
+[
+  {
+    "name": "supported-outgoing",
+    "operation": "outgoing",
+    "disposition": "supported",
+    "source": "LIST WITHOUT ID file.path\nFROM outgoing([[Hub]])\n",
+    "expected_rows": ["Target.md#-"],
+    "expected_cells": [["text:Target.md"]]
+  },
+  {
+    "name": "supported-regex-escapes",
+    "operation": "regex_escapes",
+    "disposition": "supported",
+    "source": "TABLE WITHOUT ID regextest(\"\\d+\", file.name) AS \"Digits\", regextest(\"a/b\", \"a/b\") AS \"Slash\"\nWHERE file.path = \"123.md\"\n",
+    "expected_rows": ["123.md#-"],
+    "expected_cells": [["bool:true", "bool:true"]]
+  },
+  {
+    "name": "supported-trunc-and-constructors",
+    "operation": "trunc_constructors",
+    "disposition": "supported",
+    "source": "TABLE WITHOUT ID trunc(-1.8) AS \"Trunc\", string(file.name) AS \"Name\", array(file.name) AS \"Names\", link(file.path) AS \"Link\"\nWHERE file.path = \"123.md\"\n",
+    "expected_rows": ["123.md#-"],
+    "expected_cells": [["number:-1", "text:123.md", "list:[text:123.md]", "link:123.md|-|123.md"]]
+  },
+  {
+    "name": "supported-tasks",
+    "operation": "tasks",
+    "disposition": "supported",
+    "source": "TASK\nWHERE !completed\nSORT text ASC\n",
+    "expected_rows": ["Hub.md#0", "Target.md#0"],
+    "expected_cells": [[], []]
+  },
+  {
+    "name": "unsupported-invalid-limit",
+    "operation": "malformed_limit",
+    "disposition": "unsupported",
+    "source": "TABLE file.name\nLIMIT nope\n",
+    "warning_kind": "invalid_command",
+    "warning_contains": "LIMIT must be an unsigned integer",
+    "error_contains": "invalid LIMIT"
+  },
+  {
+    "name": "unsupported-malformed-expression",
+    "operation": "malformed_expression",
+    "disposition": "unsupported",
+    "source": "TABLE WITHOUT ID regextest(\"x\", file.name\n",
+    "warning_kind": "unsupported_construct",
+    "warning_contains": "unterminated function call regextest",
+    "error_contains": "unterminated function call regextest"
+  },
+  {
+    "name": "unsupported-function",
+    "operation": "unsupported_function",
+    "disposition": "unsupported",
+    "source": "TABLE WITHOUT ID upper(file.name) AS \"Upper\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_contains": "unsupported DQL function upper",
+    "error_contains": "unsupported DQL function upper"
+  },
+  {
+    "name": "unsupported-field",
+    "operation": "unsupported_field",
+    "disposition": "unsupported",
+    "source": "TABLE WITHOUT ID file.etags AS \"Explicit tags\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_contains": "unsupported DQL field file.etags",
+    "error_contains": "unsupported DQL field file.etags"
+  },
+  {
+    "name": "unsupported-group-by",
+    "operation": "group_by",
+    "disposition": "unsupported",
+    "source": "TABLE file.name\nGROUP BY file.folder\n",
+    "warning_kind": "unsupported_construct",
+    "warning_contains": "GROUP BY changes row membership",
+    "error_contains": "rows aggregation"
+  }
+]
