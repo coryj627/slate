@@ -3,14 +3,52 @@
 
 import SwiftUI
 
+enum BaseQueryDateCodec {
+    static func date(from value: String, timeZone: TimeZone) -> Date? {
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+            parts[0].count == 4,
+            parts[1].count == 2,
+            parts[2].count == 2,
+            let year = Int(parts[0]),
+            let month = Int(parts[1]),
+            let day = Int(parts[2])
+        else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        guard let result = calendar.date(
+            from: DateComponents(
+                timeZone: timeZone,
+                year: year,
+                month: month,
+                day: day,
+                hour: 12)),
+            string(from: result, timeZone: timeZone) == value
+        else { return nil }
+        return result
+    }
+
+    static func string(from date: Date, timeZone: TimeZone) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            parts.year ?? 0,
+            parts.month ?? 0,
+            parts.day ?? 0)
+    }
+}
+
 struct BaseQueryBuilderSheet: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.timeZone) private var timeZone
     @ObservedObject var model: BaseQueryBuilderModel
 
     @State private var folders: [String] = []
     @State private var tags: [String] = []
     @State private var notePaths: [String] = []
-    @State private var propertyKeys: [String] = []
+    @State private var propertySummaries: [PropertyKeySummary] = []
     @State private var folderQuery = ""
     @State private var tagQuery = ""
     @State private var noteQuery = ""
@@ -52,7 +90,9 @@ struct BaseQueryBuilderSheet: View {
             folders = await loadedFolders
             tags = await loadedTags
             notePaths = await loadedNotes
-            propertyKeys = await loadedProperties
+            let summaries = await loadedProperties
+            propertySummaries = summaries
+            model.applyPropertyChoices(makePropertyChoices(summaries: summaries))
         }
         .onAppear {
             hydrateSavedQueryFields()
@@ -83,7 +123,7 @@ struct BaseQueryBuilderSheet: View {
                 .font(.subheadline.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             Picker("Source", selection: sourceKindBinding) {
-                ForEach(BaseQuerySourceKind.allCases) { kind in
+                ForEach(sourceKindChoices) { kind in
                     Text(kind.title).tag(kind)
                 }
             }
@@ -98,7 +138,7 @@ struct BaseQueryBuilderSheet: View {
     @ViewBuilder
     private var sourceDetail: some View {
         switch sourceKind {
-        case .allNotes, .tasks:
+        case .allNotes, .tasks, .unsupported:
             EmptyView()
         case .folder:
             VStack(alignment: .leading, spacing: 8) {
@@ -249,7 +289,7 @@ struct BaseQueryBuilderSheet: View {
                 .font(.subheadline.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             Picker("View type", selection: viewTypeBinding) {
-                ForEach(BaseQueryViewType.allCases) { viewType in
+                ForEach(viewTypeChoices) { viewType in
                     Text(viewType.title).tag(viewType)
                 }
             }
@@ -332,6 +372,25 @@ struct BaseQueryBuilderSheet: View {
                 }
                 Button("Add formula") { addFormula() }
             }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Function suggestions")
+                    .font(.caption)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(formulaCompletionNames, id: \.self) { name in
+                            Button("\(name)()") {
+                                formulaExpression = BaseFormulaCompletion.inserting(
+                                    name,
+                                    into: formulaExpression)
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("\(name)(), insert function")
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
             ForEach(model.formulas) { formula in
                 HStack {
                     Text("formula.\(formula.name)")
@@ -436,6 +495,195 @@ struct BaseQueryBuilderSheet: View {
     }
 
     @ViewBuilder
+    private func conditionControls(
+        condition: BaseQueryCondition,
+        property: Binding<BaseQueryProperty>,
+        operator conditionOperator: Binding<BaseQueryOperator>,
+        value: Binding<BaseQueryValue>
+    ) -> some View {
+        let choice = propertyChoice(for: condition.property)
+        let inputKind = BaseQueryCondition.inputKind(for: choice.kind, operator: condition.op)
+        Picker("Property", selection: property) {
+            ForEach(propertyChoices, id: \.self) { item in
+                Text(item.accessibilityName).tag(item)
+            }
+        }
+        .frame(minWidth: 150)
+
+        Picker("Operator", selection: conditionOperator) {
+            ForEach(BaseQueryOperator.options(for: choice.kind), id: \.self) { item in
+                Text(item.accessibilityName).tag(item)
+            }
+        }
+        .frame(minWidth: 150)
+
+        if condition.op == .isEmpty {
+            Text("No value")
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .frame(minWidth: 150, alignment: .leading)
+                .accessibilityHidden(true)
+        } else {
+            conditionValueEditor(
+                value: value,
+                kind: inputKind,
+                descriptor: BaseQueryEditorDescriptor.forKind(inputKind))
+        }
+    }
+
+    @ViewBuilder
+    private func conditionValueEditor(
+        value: Binding<BaseQueryValue>,
+        kind: BaseQueryValueKind,
+        descriptor: BaseQueryEditorDescriptor
+    ) -> some View {
+        switch descriptor {
+        case .text:
+            TextField("Value", text: valueTextBinding(value, kind: kind))
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 150)
+                .accessibilityLabel("Condition value")
+        case .number:
+            HStack(spacing: 4) {
+                TextField("Number", text: valueTextBinding(value, kind: kind))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 105)
+                    .accessibilityLabel("Condition number")
+                Stepper(
+                    "Number",
+                    value: numberValueBinding(value),
+                    in: -1_000_000_000...1_000_000_000,
+                    step: 1)
+                    .labelsHidden()
+                    .accessibilityLabel("Step condition number")
+            }
+        case .toggle:
+            Toggle("Condition value", isOn: booleanValueBinding(value))
+                .toggleStyle(.switch)
+                .frame(minWidth: 150, alignment: .leading)
+        case .tokenList:
+            TextField("Comma-separated values", text: tokenValueBinding(value))
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 150)
+                .accessibilityLabel("Condition values, comma separated")
+        case .link:
+            HStack(spacing: 4) {
+                TextField("Note path", text: valueTextBinding(value, kind: kind))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 105)
+                    .accessibilityLabel("Condition note path")
+                Menu("Pick…") {
+                    ForEach(Array(notePaths.prefix(100)), id: \.self) { path in
+                        Button(path) { value.wrappedValue = linkValue(path, kind: kind) }
+                    }
+                }
+                .accessibilityLabel("Pick… condition note path")
+            }
+        case .dateAndRelative:
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Date form", selection: relativeDateBinding(value)) {
+                    Text("On date").tag(false)
+                    Text("N days ago").tag(true)
+                }
+                .pickerStyle(.segmented)
+                if case .relativeDays = value.wrappedValue {
+                    Stepper(value: relativeDaysBinding(value), in: 1...3_650) {
+                        Text("\(relativeDaysBinding(value).wrappedValue) days ago")
+                    }
+                    .accessibilityLabel("Relative date, days ago")
+                } else {
+                    DatePicker(
+                        "Date",
+                        selection: absoluteDateBinding(value),
+                        displayedComponents: .date)
+                        .labelsHidden()
+                        .accessibilityLabel("Absolute condition date")
+                }
+            }
+            .frame(minWidth: 180)
+        }
+    }
+
+    private func valueTextBinding(
+        _ value: Binding<BaseQueryValue>,
+        kind: BaseQueryValueKind
+    ) -> Binding<String> {
+        Binding(
+            get: { value.wrappedValue.editingText },
+            set: { value.wrappedValue = value.wrappedValue.replacingEditingText($0, preferredKind: kind) })
+    }
+
+    private func numberValueBinding(_ value: Binding<BaseQueryValue>) -> Binding<Double> {
+        Binding(
+            get: {
+                if case .number(let number) = value.wrappedValue { return number }
+                return 0
+            },
+            set: { value.wrappedValue = .number($0) })
+    }
+
+    private func booleanValueBinding(_ value: Binding<BaseQueryValue>) -> Binding<Bool> {
+        Binding(
+            get: {
+                if case .bool(let enabled) = value.wrappedValue { return enabled }
+                return false
+            },
+            set: { value.wrappedValue = .bool($0) })
+    }
+
+    private func tokenValueBinding(_ value: Binding<BaseQueryValue>) -> Binding<String> {
+        Binding(
+            get: { value.wrappedValue.editingText },
+            set: { text in
+                value.wrappedValue = .tokens(
+                    text.split(separator: ",", omittingEmptySubsequences: true)
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty })
+            })
+    }
+
+    private func linkValue(_ path: String, kind: BaseQueryValueKind) -> BaseQueryValue {
+        kind == .file ? .file(path) : .wikilink(path)
+    }
+
+    private func relativeDateBinding(_ value: Binding<BaseQueryValue>) -> Binding<Bool> {
+        Binding(
+            get: {
+                if case .relativeDays = value.wrappedValue { return true }
+                return false
+            },
+            set: { relative in
+                value.wrappedValue = relative
+                    ? .relativeDays(7)
+                    : .absoluteDate(BaseQueryDateCodec.string(from: Date(), timeZone: timeZone))
+            })
+    }
+
+    private func relativeDaysBinding(_ value: Binding<BaseQueryValue>) -> Binding<Int> {
+        Binding(
+            get: {
+                if case .relativeDays(let days) = value.wrappedValue { return days }
+                return 7
+            },
+            set: { value.wrappedValue = .relativeDays(max($0, 1)) })
+    }
+
+    private func absoluteDateBinding(_ value: Binding<BaseQueryValue>) -> Binding<Date> {
+        Binding(
+            get: {
+                if case .absoluteDate(let text) = value.wrappedValue,
+                    let date = BaseQueryDateCodec.date(from: text, timeZone: timeZone)
+                {
+                    return date
+                }
+                return Date()
+            },
+            set: {
+                value.wrappedValue = .absoluteDate(
+                    BaseQueryDateCodec.string(from: $0, timeZone: timeZone))
+            })
+    }
+
+    @ViewBuilder
     private func rowView(row: BaseQueryBuilderRow, index: Int) -> some View {
         switch row {
         case .condition(let condition):
@@ -461,21 +709,11 @@ struct BaseQueryBuilderSheet: View {
             .buttonStyle(.borderless)
             .help("Select condition")
             .accessibilityLabel("Select condition \(index + 1)")
-            Picker("Property", selection: conditionPropertyBinding(index: index)) {
-                ForEach(propertyChoices, id: \.self) { property in
-                    Text(property.accessibilityName).tag(property)
-                }
-            }
-            .frame(minWidth: 150)
-            Picker("Operator", selection: conditionOperatorBinding(index: index)) {
-                ForEach(operatorChoices, id: \.self) { op in
-                    Text(op.accessibilityName).tag(op)
-                }
-            }
-            .frame(minWidth: 150)
-            TextField("Value", text: conditionValueBinding(index: index))
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 150)
+            conditionControls(
+                condition: condition,
+                property: conditionPropertyBinding(index: index),
+                operator: conditionOperatorBinding(index: index),
+                value: conditionValueBinding(index: index))
             rowButtons(index: index)
         }
         .padding(8)
@@ -544,34 +782,17 @@ struct BaseQueryBuilderSheet: View {
                 .help("Select group")
                 .accessibilityLabel(
                     "Select group \(groupIndex + 1), condition \(childIndex + 1)")
-                Picker(
-                    "Property",
-                    selection: groupConditionPropertyBinding(
+                conditionControls(
+                    condition: condition,
+                    property: groupConditionPropertyBinding(
                         groupIndex: groupIndex,
-                        childIndex: childIndex)
-                ) {
-                    ForEach(propertyChoices, id: \.self) { property in
-                        Text(property.accessibilityName).tag(property)
-                    }
-                }
-                .frame(minWidth: 150)
-                Picker(
-                    "Operator",
-                    selection: groupConditionOperatorBinding(
+                        childIndex: childIndex),
+                    operator: groupConditionOperatorBinding(
                         groupIndex: groupIndex,
-                        childIndex: childIndex)
-                ) {
-                    ForEach(operatorChoices, id: \.self) { op in
-                        Text(op.accessibilityName).tag(op)
-                    }
-                }
-                .frame(minWidth: 150)
-                TextField(
-                    "Value",
-                    text: groupConditionValueBinding(groupIndex: groupIndex, childIndex: childIndex)
-                )
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 150)
+                        childIndex: childIndex),
+                    value: groupConditionValueBinding(
+                        groupIndex: groupIndex,
+                        childIndex: childIndex))
                 Button {
                     model.perform(
                         .removeConditionFromGroup(
@@ -757,6 +978,15 @@ struct BaseQueryBuilderSheet: View {
         Binding(
             get: { model.viewType },
             set: { model.viewType = $0 })
+    }
+
+    private var viewTypeChoices: [BaseQueryViewType] {
+        switch model.viewType {
+        case .unsupported:
+            return [model.viewType, .table, .list]
+        case .table, .list:
+            return [.table, .list]
+        }
     }
 
     private func sortPropertyBinding(index: Int) -> Binding<BaseQueryProperty> {
@@ -950,6 +1180,13 @@ struct BaseQueryBuilderSheet: View {
         sourceKindBinding.wrappedValue
     }
 
+    private var sourceKindChoices: [BaseQuerySourceKind] {
+        if case .unsupported = model.source {
+            return [.unsupported] + BaseQuerySourceKind.supportedCases
+        }
+        return BaseQuerySourceKind.supportedCases
+    }
+
     private var sourceKindBinding: Binding<BaseQuerySourceKind> {
         Binding(
             get: { BaseQuerySourceKind(source: model.source) },
@@ -1006,26 +1243,54 @@ struct BaseQueryBuilderSheet: View {
         return rows.filter { $0.lowercased().contains(trimmed) }
     }
 
-    private var propertyChoices: [BaseQueryProperty] {
-        var properties: [BaseQueryProperty] = [
-            .file(.name), .file(.path), .file(.folder), .file(.mtime),
-            .file(.size), .file(.inDegree), .file(.outDegree),
-        ]
-        let noteKeys = propertyKeys.isEmpty ? ["status", "priority"] : propertyKeys
-        properties.append(contentsOf: noteKeys.map(BaseQueryProperty.note))
-        properties.append(contentsOf: model.formulas.map { BaseQueryProperty.formula($0.name) })
-        if model.source == .tasks {
-            properties.append(contentsOf: BaseQueryTaskField.allCases.map(BaseQueryProperty.task))
-        }
-        return properties
+    private var propertyDescriptorChoices: [BaseQueryPropertyChoice] {
+        makePropertyChoices(summaries: propertySummaries)
     }
 
-    private var operatorChoices: [BaseQueryOperator] {
-        [
-            .equals, .notEquals, .contains, .startsWith, .endsWith, .isEmpty,
-            .hasTag, .hasLink, .greaterThan, .greaterThanOrEqual, .lessThan,
-            .lessThanOrEqual, .matches,
-        ]
+    private var propertyChoices: [BaseQueryProperty] {
+        propertyDescriptorChoices.map(\.property)
+    }
+
+    private func makePropertyChoices(
+        summaries: [PropertyKeySummary]
+    ) -> [BaseQueryPropertyChoice] {
+        var choices = BaseQueryPropertyChoice.fileChoices
+        let noteChoices: [BaseQueryPropertyChoice]
+        if summaries.isEmpty {
+            noteChoices = [
+                BaseQueryPropertyChoice(property: .note("status"), kind: .mixedOrUnknown),
+                BaseQueryPropertyChoice(property: .note("priority"), kind: .mixedOrUnknown),
+            ]
+        } else {
+            noteChoices = summaries.map(BaseQueryPropertyChoice.init(summary:))
+        }
+        choices.append(contentsOf: noteChoices)
+        choices.append(
+            contentsOf: model.formulas.map {
+                BaseQueryPropertyChoice(property: .formula($0.name), kind: .formula)
+            })
+        if model.source == .tasks {
+            choices.append(contentsOf: BaseQueryPropertyChoice.taskChoices)
+        }
+        return choices
+    }
+
+    private func propertyChoice(for property: BaseQueryProperty) -> BaseQueryPropertyChoice {
+        propertyDescriptorChoices.first { $0.property == property }
+            ?? BaseQueryPropertyChoice(
+                property: property,
+                kind: property.staticValueKind ?? .mixedOrUnknown)
+    }
+
+    private var formulaCompletionNames: [String] {
+        let prefix = formulaExpression.split { character in
+            !(character.isLetter || character.isNumber || character == "_")
+        }.last.map(String.init) ?? ""
+        guard !prefix.isEmpty else { return BaseFormulaCompletion.names }
+        let matches = BaseFormulaCompletion.names.filter {
+            $0.lowercased().hasPrefix(prefix.lowercased())
+        }
+        return matches.isEmpty ? BaseFormulaCompletion.names : matches
     }
 
     private func groupCombinatorBinding(index: Int) -> Binding<BaseQueryCombinator> {
@@ -1051,8 +1316,7 @@ struct BaseQueryBuilderSheet: View {
             set: { property in
                 guard model.rows.indices.contains(index) else { return }
                 guard case .condition(var condition) = model.rows[index] else { return }
-                condition.property = property
-                condition.replaceValueEditingText(condition.value.editingText)
+                condition.retarget(to: propertyChoice(for: property))
                 model.rows[index] = .condition(condition)
             })
     }
@@ -1067,22 +1331,22 @@ struct BaseQueryBuilderSheet: View {
             set: { op in
                 guard model.rows.indices.contains(index) else { return }
                 guard case .condition(var condition) = model.rows[index] else { return }
-                condition.op = op
+                condition.setOperator(op, kind: propertyChoice(for: condition.property).kind)
                 model.rows[index] = .condition(condition)
             })
     }
 
-    private func conditionValueBinding(index: Int) -> Binding<String> {
+    private func conditionValueBinding(index: Int) -> Binding<BaseQueryValue> {
         Binding(
             get: {
-                guard model.rows.indices.contains(index) else { return "" }
-                guard case .condition(let condition) = model.rows[index] else { return "" }
-                return condition.value.editingText
+                guard model.rows.indices.contains(index) else { return .text("") }
+                guard case .condition(let condition) = model.rows[index] else { return .text("") }
+                return condition.value
             },
             set: { value in
                 guard model.rows.indices.contains(index) else { return }
                 guard case .condition(var condition) = model.rows[index] else { return }
-                condition.replaceValueEditingText(value)
+                condition.setValue(value)
                 model.rows[index] = .condition(condition)
             })
     }
@@ -1099,8 +1363,7 @@ struct BaseQueryBuilderSheet: View {
             },
             set: { property in
                 updateGroupCondition(groupIndex: groupIndex, childIndex: childIndex) { condition in
-                    condition.property = property
-                    condition.replaceValueEditingText(condition.value.editingText)
+                    condition.retarget(to: propertyChoice(for: property))
                 }
             })
     }
@@ -1117,21 +1380,24 @@ struct BaseQueryBuilderSheet: View {
             },
             set: { op in
                 updateGroupCondition(groupIndex: groupIndex, childIndex: childIndex) { condition in
-                    condition.op = op
+                    condition.setOperator(op, kind: propertyChoice(for: condition.property).kind)
                 }
             })
     }
 
-    private func groupConditionValueBinding(groupIndex: Int, childIndex: Int) -> Binding<String> {
+    private func groupConditionValueBinding(
+        groupIndex: Int,
+        childIndex: Int
+    ) -> Binding<BaseQueryValue> {
         Binding(
             get: {
                 guard let condition = groupCondition(groupIndex: groupIndex, childIndex: childIndex)
-                else { return "" }
-                return condition.value.editingText
+                else { return .text("") }
+                return condition.value
             },
             set: { value in
                 updateGroupCondition(groupIndex: groupIndex, childIndex: childIndex) { condition in
-                    condition.replaceValueEditingText(value)
+                    condition.setValue(value)
                 }
             })
     }
@@ -1161,13 +1427,18 @@ struct BaseQueryBuilderSheet: View {
     }
 }
 
-private enum BaseQuerySourceKind: String, CaseIterable, Identifiable {
+private enum BaseQuerySourceKind: String, Identifiable {
     case allNotes
     case folder
     case tag
     case recent
     case linked
     case tasks
+    case unsupported
+
+    static let supportedCases: [BaseQuerySourceKind] = [
+        .allNotes, .folder, .tag, .recent, .linked, .tasks,
+    ]
 
     var id: String { rawValue }
 
@@ -1179,6 +1450,7 @@ private enum BaseQuerySourceKind: String, CaseIterable, Identifiable {
         case .recent: return "Recently edited"
         case .linked: return "Linked from note"
         case .tasks: return "Tasks"
+        case .unsupported: return "Unsupported source (read only)"
         }
     }
 
@@ -1190,6 +1462,7 @@ private enum BaseQuerySourceKind: String, CaseIterable, Identifiable {
         case .recent: self = .recent
         case .linked: self = .linked
         case .tasks: self = .tasks
+        case .unsupported: self = .unsupported
         }
     }
 
@@ -1211,6 +1484,8 @@ private enum BaseQuerySourceKind: String, CaseIterable, Identifiable {
             return .linked(fromPath: "")
         case .tasks:
             return .tasks
+        case .unsupported:
+            return current
         }
     }
 }

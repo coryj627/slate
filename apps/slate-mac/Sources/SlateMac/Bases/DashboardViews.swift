@@ -37,8 +37,24 @@ struct DashboardContainerView: View {
             if document.sections.isEmpty {
                 placeholder("No dashboard sections. Add a saved query section to show results.")
             } else {
+                let expectedSections = document.editableSectionsSnapshot
                 ForEach(document.sections) { section in
-                    DashboardSectionView(section: section)
+                    DashboardSectionView(
+                        section: section,
+                        replacementChoices: appState.baseQueries.savedQueries,
+                        onRemove: {
+                            appState.removeMissingDashboardSection(
+                                dashboardID: document.id,
+                                index: section.index,
+                                expectedSections: expectedSections)
+                        },
+                        onReplace: { replacementID in
+                            appState.replaceMissingDashboardSection(
+                                dashboardID: document.id,
+                                index: section.index,
+                                expectedSections: expectedSections,
+                                replacementSavedQueryID: replacementID)
+                        })
                 }
             }
         }
@@ -55,6 +71,10 @@ struct DashboardContainerView: View {
 
 private struct DashboardSectionView: View {
     @ObservedObject var section: DashboardSectionDocument
+    let replacementChoices: [SavedQuerySummary]
+    let onRemove: () -> Void
+    let onReplace: (String) -> Void
+    @State private var showingReplacementPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
@@ -73,7 +93,7 @@ private struct DashboardSectionView: View {
         case .loading:
             placeholder("Loading section...")
         case .missing:
-            placeholder("Missing saved query. Remove section or pick replacement.")
+            missingSection
         case .failed(let message):
             placeholder(message)
         case .ready:
@@ -83,6 +103,57 @@ private struct DashboardSectionView: View {
             } else {
                 placeholder("No results in this section.")
             }
+        }
+    }
+
+    private var missingSection: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+            placeholder("Missing saved query. Remove this section or pick a replacement.")
+            HStack(spacing: Tokens.Spacing.sm) {
+                Button("Remove section") { onRemove() }
+                    .buttonStyle(.bordered)
+                Button("Pick replacement") { showingReplacementPicker = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: Text("Remove section")) { onRemove() }
+        .accessibilityAction(named: Text("Pick replacement")) {
+            showingReplacementPicker = true
+        }
+        .sheet(isPresented: $showingReplacementPicker) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
+                Text("Pick replacement")
+                    .font(Tokens.Typography.sectionHeader)
+                    .accessibilityAddTraits(.isHeader)
+                if replacementChoices.isEmpty {
+                    Text("No saved queries are available.")
+                        .font(Tokens.Typography.callout)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+                            ForEach(replacementChoices, id: \.id) { choice in
+                                Button(choice.name) {
+                                    showingReplacementPicker = false
+                                    onReplace(choice.id)
+                                }
+                                .buttonStyle(.plain)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Replace with \(choice.name)")
+                            }
+                        }
+                    }
+                    .frame(minHeight: 180)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showingReplacementPicker = false }
+                        .keyboardShortcut(.cancelAction)
+                }
+            }
+            .padding(Tokens.Spacing.md)
+            .frame(minWidth: 360, minHeight: 260)
         }
     }
 

@@ -38,12 +38,51 @@ enum BasesDockTarget: Equatable {
             return name
         }
     }
+
+    fileprivate enum StableIdentity: Equatable {
+        case base(String)
+        case savedQuery(String)
+        case dashboard(String)
+    }
+
+    fileprivate var stableIdentity: StableIdentity {
+        switch self {
+        case .base(let path, _): return .base(path)
+        case .savedQuery(let id, _): return .savedQuery(id)
+        case .dashboard(let id, _): return .dashboard(id)
+        }
+    }
 }
 
 struct BasesDockState: Equatable {
     var target: BasesDockTarget?
     var thisPath: String?
     var lastMembershipSignature: BaseRowMembership = .empty
+    private(set) var hasPublishedBaseline = false
+
+    mutating func setTarget(_ newTarget: BasesDockTarget?) {
+        if target?.stableIdentity != newTarget?.stableIdentity {
+            lastMembershipSignature = .empty
+            hasPublishedBaseline = false
+        }
+        target = newTarget
+    }
+
+    /// Publish one settled follow-active result. The first publication is a
+    /// baseline even when it is empty; only later multiset changes announce.
+    mutating func publishMembership(_ membership: BaseRowMembership) -> Bool {
+        let changed = hasPublishedBaseline && lastMembershipSignature != membership
+        lastMembershipSignature = membership
+        hasPublishedBaseline = true
+        return changed
+    }
+
+    /// Adopt membership after an out-of-band reload (dashboard edit, saved-query
+    /// mutation, in-app write) without attributing that change to note following.
+    mutating func rebaseMembership(_ membership: BaseRowMembership) {
+        lastMembershipSignature = membership
+        hasPublishedBaseline = true
+    }
 }
 
 @MainActor
@@ -123,6 +162,18 @@ final class DashboardDocument: ObservableObject {
 
     var membershipSignature: BaseRowMembership {
         BaseRowMembership(rows: sections.flatMap { $0.result?.rows ?? [] })
+    }
+
+    /// Exact editable section order and overrides represented by this document.
+    /// Missing-section actions send this snapshot back so duplicate query IDs
+    /// cannot make a stale row callback target a different section after reorder.
+    var editableSectionsSnapshot: [DashboardSection] {
+        sections.map { section in
+            DashboardSection(
+                savedQueryId: section.status.savedQueryId,
+                headingOverride: section.status.headingOverride,
+                viewOverride: section.status.viewOverride)
+        }
     }
 }
 

@@ -374,11 +374,81 @@ extension AppState {
             dashboardDocuments[id]?.load(session: session, thisPath: nil)
             if case .dashboard(let dockedID, _) = basesDock.target, dockedID == id {
                 basesDockDashboardDocument?.load(session: session, thisPath: basesDockActiveNotePath)
+                if let docked = basesDockDashboardDocument {
+                    basesDock.rebaseMembership(docked.membershipSignature)
+                }
             }
             refreshBaseQueries()
             postBaseActionAnnouncement("Updated dashboard \(trimmed).")
         } catch {
             postBaseActionAnnouncement("Dashboard could not be updated: \(error.localizedDescription)")
+        }
+    }
+
+    func removeMissingDashboardSection(
+        dashboardID: String,
+        index: Int,
+        expectedSections: [DashboardSection]
+    ) {
+        guard let session = currentSession else { return }
+        do {
+            let dashboard = try session.getDashboard(id: dashboardID)
+            let freshSections = editableDashboardSections(dashboard.sections)
+            guard freshSections == expectedSections,
+                dashboard.sections.indices.contains(index),
+                dashboard.sections[index].missing
+            else {
+                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                return
+            }
+            var sections = freshSections
+            sections.remove(at: index)
+            updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
+        } catch {
+            postBaseActionAnnouncement(
+                "Dashboard section could not be removed: \(error.localizedDescription)")
+        }
+    }
+
+    func replaceMissingDashboardSection(
+        dashboardID: String,
+        index: Int,
+        expectedSections: [DashboardSection],
+        replacementSavedQueryID: String
+    ) {
+        guard let session = currentSession else { return }
+        do {
+            _ = try session.getSavedQuery(id: replacementSavedQueryID)
+            let dashboard = try session.getDashboard(id: dashboardID)
+            let freshSections = editableDashboardSections(dashboard.sections)
+            guard freshSections == expectedSections,
+                dashboard.sections.indices.contains(index),
+                dashboard.sections[index].missing
+            else {
+                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                return
+            }
+            var sections = freshSections
+            let current = sections[index]
+            sections[index] = DashboardSection(
+                savedQueryId: replacementSavedQueryID,
+                headingOverride: current.headingOverride,
+                viewOverride: current.viewOverride)
+            updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
+        } catch {
+            postBaseActionAnnouncement(
+                "Dashboard section could not be replaced: \(error.localizedDescription)")
+        }
+    }
+
+    private func editableDashboardSections(
+        _ statuses: [DashboardSectionStatus]
+    ) -> [DashboardSection] {
+        statuses.map {
+            DashboardSection(
+                savedQueryId: $0.savedQueryId,
+                headingOverride: $0.headingOverride,
+                viewOverride: $0.viewOverride)
         }
     }
 
@@ -461,7 +531,7 @@ extension AppState {
             _ = workspace.retargetDashboard(id: summary.id, name: summary.name)
             dashboardDocuments[summary.id]?.retargetName(summary.name)
             if case .dashboard(let id, _) = basesDock.target, id == summary.id {
-                basesDock.target = .dashboard(id: summary.id, name: summary.name)
+                basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
             }
         }
     }
@@ -660,9 +730,9 @@ extension AppState {
     }
 
     func dockBaseFileToSidebar(path: String, name: String? = nil, refreshDelayNanoseconds: UInt64 = 500_000_000) {
-        basesDock.target = .base(
+        basesDock.setTarget(.base(
             path: path,
-            name: name ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension)
+            name: name ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension))
         workspace.activeLeaf = .basesDock
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
@@ -672,7 +742,7 @@ extension AppState {
             postBaseActionAnnouncement("Saved query is no longer available.")
             return
         }
-        basesDock.target = .savedQuery(id: summary.id, name: summary.name)
+        basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
         workspace.activeLeaf = .basesDock
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
@@ -682,7 +752,7 @@ extension AppState {
             postBaseActionAnnouncement("Dashboard is no longer available.")
             return
         }
-        basesDock.target = .dashboard(id: summary.id, name: summary.name)
+        basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
         workspace.activeLeaf = .basesDock
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
@@ -722,9 +792,9 @@ extension AppState {
         session: VaultSession,
         thisPath: String?
     ) {
-        let previous = basesDock.lastMembershipSignature
+        let membership: BaseRowMembership
         switch target {
-        case .base(let path, let name):
+        case .base(let path, _):
             if let dashboardDoc = basesDockDashboardDocument {
                 dashboardDoc.close(session: session)
             }
@@ -740,8 +810,7 @@ extension AppState {
             } else {
                 doc.executeActiveView(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = BaseRowMembership(rows: doc.result?.rows ?? [])
-            basesDock.target = .base(path: path, name: name)
+            membership = BaseRowMembership(rows: doc.result?.rows ?? [])
         case .savedQuery(let id, let name):
             if let dashboardDoc = basesDockDashboardDocument {
                 dashboardDoc.close(session: session)
@@ -759,7 +828,7 @@ extension AppState {
             } else {
                 doc.executeActiveView(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = BaseRowMembership(rows: doc.result?.rows ?? [])
+            membership = BaseRowMembership(rows: doc.result?.rows ?? [])
         case .dashboard(let id, let name):
             if let baseDoc = basesDockDocument {
                 baseDoc.close(session: session)
@@ -776,9 +845,10 @@ extension AppState {
             } else {
                 doc.refresh(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = doc.membershipSignature
+            membership = doc.membershipSignature
         }
-        if !previous.isEmpty, previous != basesDock.lastMembershipSignature {
+        basesDock.setTarget(target)
+        if basesDock.publishMembership(membership) {
             postBaseActionAnnouncement("Base dock updated for active note.")
         }
     }
@@ -923,7 +993,7 @@ extension AppState {
                 basesDock.target == target,
                 basesDockDocument === document
             else { return }
-            basesDock.lastMembershipSignature = BaseRowMembership(rows: document.result?.rows ?? [])
+            basesDock.rebaseMembership(BaseRowMembership(rows: document.result?.rows ?? []))
             appendMembershipChange(previous, document.result)
 
         case .savedQuery(let id, let name):
@@ -946,7 +1016,7 @@ extension AppState {
                 basesDock.target == target,
                 basesDockDocument === document
             else { return }
-            basesDock.lastMembershipSignature = BaseRowMembership(rows: document.result?.rows ?? [])
+            basesDock.rebaseMembership(BaseRowMembership(rows: document.result?.rows ?? []))
             appendMembershipChange(previous, document.result)
 
         case .dashboard(let id, let name):
@@ -963,7 +1033,7 @@ extension AppState {
                 basesDock.target == target,
                 basesDockDashboardDocument === document
             else { return }
-            basesDock.lastMembershipSignature = document.membershipSignature
+            basesDock.rebaseMembership(document.membershipSignature)
             updates.forEach(append)
         }
     }
@@ -997,7 +1067,7 @@ extension AppState {
         }
         if let docked = basesDockDashboardDocument {
             docked.load(session: session, thisPath: basesDockActiveNotePath)
-            basesDock.lastMembershipSignature = docked.membershipSignature
+            basesDock.rebaseMembership(docked.membershipSignature)
         }
     }
 
@@ -1031,11 +1101,16 @@ extension AppState {
         }
         guard let handle = doc.handle else { return }
         do {
-            let queryJSON = try session.baseViewEditQueryJson(
+            let effectiveQueryJSON = try session.baseViewQueryJson(
+                handle: handle,
+                view: UInt32(doc.activeViewIndex))
+            let localQueryJSON = try session.baseViewEditQueryJson(
                 handle: handle,
                 view: UInt32(doc.activeViewIndex))
             activeBaseQueryBuilder = try BaseQueryBuilderModel(
-                draft: BaseQueryBuilderDraft(queryJSON: queryJSON))
+                draft: BaseQueryBuilderDraft(
+                    effectiveQueryJSON: effectiveQueryJSON,
+                    localQueryJSON: localQueryJSON))
             let viewName = doc.activeViewName ?? "active view"
             postAccessibilityAnnouncement("Editing filters for \(viewName).", priority: .medium)
         } catch {
@@ -1278,10 +1353,10 @@ extension AppState {
         model.perform(.removeCondition(index: index))
     }
 
-    func basesLoadPropertyKeys() async -> [String] {
+    func basesLoadPropertyKeys() async -> [PropertyKeySummary] {
         guard let session = currentSession else { return [] }
         return await Task.detached(priority: .userInitiated) {
-            (try? session.listPropertyKeys().map(\.key)) ?? []
+            (try? session.listPropertyKeys()) ?? []
         }.value
     }
 

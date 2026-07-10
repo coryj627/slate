@@ -217,6 +217,63 @@ final class RightPaneViewTests: XCTestCase {
             "nonempty-to-empty is a membership change")
     }
 
+    func testBasesDockBaselinePublishesEmptyThenDetectsMultisetChanges() {
+        let alpha = BasesRow(
+            filePath: "Notes/Alpha.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "Alpha")
+        let beta = BasesRow(
+            filePath: "Notes/Beta.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "Beta")
+        var dock = BasesDockState()
+        dock.setTarget(.base(path: "Queries/One.base", name: "One"))
+
+        XCTAssertFalse(
+            dock.publishMembership(.empty),
+            "the first settled empty result publishes a baseline without announcing")
+        XCTAssertTrue(
+            dock.publishMembership(BaseRowMembership(rows: [alpha])),
+            "empty-to-nonempty after a published baseline must announce")
+        XCTAssertTrue(dock.hasPublishedBaseline)
+        XCTAssertFalse(
+            dock.publishMembership(BaseRowMembership(rows: [alpha])),
+            "identical membership must not announce")
+        dock.setTarget(.base(path: "Queries/One.base", name: "Renamed"))
+        XCTAssertTrue(
+            dock.hasPublishedBaseline,
+            "display-name retargeting must not reset the same underlying dock identity")
+
+        dock.rebaseMembership(BaseRowMembership(rows: [alpha, beta]))
+        XCTAssertFalse(
+            dock.publishMembership(BaseRowMembership(rows: [beta, alpha])),
+            "reorder-only refreshes must not announce")
+        XCTAssertTrue(
+            dock.publishMembership(BaseRowMembership(rows: [alpha, alpha, beta])),
+            "duplicate cardinality is part of membership")
+
+        dock.setTarget(.savedQuery(id: "new-query", name: "New"))
+        XCTAssertFalse(dock.hasPublishedBaseline)
+        XCTAssertFalse(
+            dock.publishMembership(BaseRowMembership(rows: [alpha])),
+            "a new target's first settled result establishes a fresh baseline")
+    }
+
+    func testMissingDashboardSectionsExposeButtonsAndEquivalentNamedAXActions() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/DashboardViews.swift")
+
+        XCTAssertTrue(source.contains(#"Button("Remove section")"#), source)
+        XCTAssertTrue(source.contains(#"Button("Pick replacement")"#), source)
+        XCTAssertTrue(
+            source.contains(#".accessibilityAction(named: Text("Remove section"))"#),
+            source)
+        XCTAssertTrue(
+            source.contains(#".accessibilityAction(named: Text("Pick replacement"))"#),
+            source)
+    }
+
     // MARK: - Persistence
 
     /// Unknown / absent tokens fall back to `.outline`; every known token
