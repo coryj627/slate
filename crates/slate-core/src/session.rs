@@ -598,6 +598,10 @@ enum OpenBaseSource {
 
 struct OpenBaseState {
     path: Option<String>,
+    /// Whole-file hash observed at open/after the last successful edit.
+    /// File-backed handles use it as the CAS expectation for the next save;
+    /// inline/query handles have no persistence identity and keep `None`.
+    content_hash: Option<String>,
     source: OpenBaseSource,
     warnings: Vec<String>,
     default_this_path: Option<String>,
@@ -5459,6 +5463,7 @@ fn base_edits_invalidate_transient_sort(
             *view as u32 == *sort_view && matches!(key.as_str(), "order" | "slate" | "source")
         }
         crate::bases::BaseEdit::SetSlateState { view, .. } => *view as u32 == *sort_view,
+        crate::bases::BaseEdit::SetSlateSort { view, .. } => *view as u32 == *sort_view,
         // A removed formula can be the transient column itself or a dependency
         // of that column. Clearing conservatively avoids retaining a key that
         // becomes meaningful again after a later formula edit.
@@ -5514,6 +5519,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: Some(path.to_string()),
+                content_hash: Some(content_hash(source.as_bytes())),
                 source: OpenBaseSource::Base(base),
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: Some(path.to_string()),
@@ -5537,6 +5543,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: None,
+                content_hash: None,
                 source: OpenBaseSource::Base(base),
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: this_path,
@@ -5565,6 +5572,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: None,
+                content_hash: None,
                 source: OpenBaseSource::Query(query),
                 warnings: Vec::new(),
                 default_this_path: this_path,
@@ -5588,6 +5596,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: None,
+                content_hash: None,
                 source: OpenBaseSource::Query(query),
                 warnings: Vec::new(),
                 default_this_path: None,
@@ -5792,6 +5801,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: None,
+                content_hash: None,
                 source: OpenBaseSource::Query(query),
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: this_path,
@@ -6000,9 +6010,17 @@ impl VaultSession {
                 message: format!("base edit rejected: {err}"),
             }
         })?;
-        self.save_text(&path, &new_text, None)?;
+        let expected_hash =
+            state
+                .content_hash
+                .as_deref()
+                .ok_or_else(|| VaultError::InvalidArgument {
+                    message: "file-backed .base handle is missing its content hash".to_string(),
+                })?;
+        let report = self.save_text(&path, &new_text, Some(expected_hash))?;
         let (base, warnings) = crate::bases::parse_base(&new_text);
         state.source = OpenBaseSource::Base(base);
+        state.content_hash = Some(report.new_content_hash);
         state.warnings = warnings.into_iter().map(|w| w.message).collect();
         state.cache = crate::bases::engine::BasesQueryCache::default();
         if clear_transient_sort {
@@ -6367,10 +6385,11 @@ fn query_as_base_text(query: &crate::bases::SlateQuery) -> Result<String, VaultE
     if !query.formulas.is_empty() {
         out.push_str("formulas:\n");
         for (name, expr) in &query.formulas {
+            let expression = expr_to_source(expr)?;
             out.push_str(&format!(
                 "  {}: {}\n",
                 yaml_key(name),
-                yaml_scalar(&expr_to_source(expr)?)
+                expr_string_literal(&expression)
             ));
         }
     }
@@ -6394,10 +6413,11 @@ fn query_as_base_text(query: &crate::bases::SlateQuery) -> Result<String, VaultE
     if !query.custom_summaries.is_empty() {
         out.push_str("summaries:\n");
         for (name, expr) in &query.custom_summaries {
+            let expression = expr_to_source(expr)?;
             out.push_str(&format!(
                 "  {}: {}\n",
                 yaml_key(name),
-                yaml_scalar(&expr_to_source(expr)?)
+                expr_string_literal(&expression)
             ));
         }
     }
@@ -6868,9 +6888,9 @@ fn property_ref_to_source(
     Ok(match property {
         PropertyRef::Note(name) => note_property_source(name),
         PropertyRef::File(field) => format!("file.{}", file_field_source(*field)),
-        PropertyRef::Formula(name) => format!("formula.{name}"),
+        PropertyRef::Formula(name) => namespaced_property_source("formula", name),
         PropertyRef::This => "this".to_string(),
-        PropertyRef::ThisNote(name) => format!("this.{}", note_property_source(name)),
+        PropertyRef::ThisNote(name) => this_note_property_source(name),
         PropertyRef::ThisFile(field) => format!("this.file.{}", file_field_source(*field)),
         PropertyRef::TaskField(field) => format!("task.{}", task_field_source(*field)),
         PropertyRef::ImplicitValue => "value".to_string(),
@@ -6880,15 +6900,53 @@ fn property_ref_to_source(
 }
 
 fn note_property_source(name: &str) -> String {
-    if name
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        && !name.is_empty()
-    {
+    if lexer_safe_property_identifier(name) {
         name.to_string()
     } else {
         format!("note[{}]", expr_string_literal(name))
     }
+}
+
+fn namespaced_property_source(namespace: &str, name: &str) -> String {
+    if lexer_safe_property_identifier(name) {
+        format!("{namespace}.{name}")
+    } else {
+        format!("{namespace}[{}]", expr_string_literal(name))
+    }
+}
+
+fn this_note_property_source(name: &str) -> String {
+    if lexer_identifier(name) && !matches!(name, "true" | "false" | "file") {
+        format!("this.{name}")
+    } else {
+        format!("this[{}]", expr_string_literal(name))
+    }
+}
+
+fn lexer_safe_property_identifier(name: &str) -> bool {
+    lexer_identifier(name)
+        && !matches!(
+            name,
+            "true"
+                | "false"
+                | "note"
+                | "formula"
+                | "file"
+                | "this"
+                | "task"
+                | "value"
+                | "index"
+                | "acc"
+        )
+}
+
+fn lexer_identifier(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn binary_op_source(op: crate::bases::expr::BinaryOp) -> &'static str {

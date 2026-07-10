@@ -300,9 +300,9 @@ final class BaseDocument: ObservableObject {
         let column = result.columns[sortState.columnIndex]
         try session.baseApplyEdit(
             handle: handle,
-            edit: .setSlateState(
+            edit: .setSlateSort(
                 view: UInt32(activeViewIndex),
-                yaml: slateSortStateYAML(columnID: column.id, ascending: sortState.ascending)))
+                yaml: slateSortYAML(columnID: column.id, ascending: sortState.ascending)))
         try session.baseSetTransientSort(
             handle: handle,
             view: UInt32(activeViewIndex),
@@ -388,129 +388,11 @@ final class BaseDocument: ObservableObject {
         }
     }
 
-    private func slateSortStateYAML(columnID: String, ascending: Bool) -> String {
-        var lines = ["slate:"]
-        if let view = views.indices.contains(activeViewIndex) ? views[activeViewIndex] : nil {
-            appendExistingSlateState(
-                view.slateStateJson,
-                excluding: ["sort"],
-                to: &lines,
-                indent: 2)
-        }
-        lines.append("  sort:")
-        lines.append("    - property: \(quoteYAMLString(columnID))")
-        lines.append("      direction: \(ascending ? "ASC" : "DESC")")
-        return lines.joined(separator: "\n")
-    }
-
-    private func appendExistingSlateState(
-        _ slateStateJson: String?,
-        excluding excludedKeys: Set<String>,
-        to lines: inout [String],
-        indent: Int
-    ) {
-        guard let slateStateJson,
-            let data = slateStateJson.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data),
-            let dictionary = object as? [String: Any]
-        else { return }
-        for key in dictionary.keys.sorted() where !excludedKeys.contains(key) {
-            appendYAML(key: key, value: dictionary[key] as Any, to: &lines, indent: indent)
-        }
-    }
-
-    private func appendYAML(key: String, value: Any, to lines: inout [String], indent: Int) {
-        let spaces = String(repeating: " ", count: indent)
-        let keyText = yamlKey(key)
-        if let dictionary = value as? [String: Any] {
-            lines.append("\(spaces)\(keyText):")
-            for childKey in dictionary.keys.sorted() {
-                appendYAML(
-                    key: childKey,
-                    value: dictionary[childKey] as Any,
-                    to: &lines,
-                    indent: indent + 2)
-            }
-        } else if let array = value as? [Any] {
-            lines.append("\(spaces)\(keyText):")
-            for item in array {
-                appendYAMLSequenceItem(item, to: &lines, indent: indent + 2)
-            }
-        } else {
-            lines.append("\(spaces)\(keyText): \(yamlScalar(value))")
-        }
-    }
-
-    private func appendYAMLSequenceItem(_ value: Any, to lines: inout [String], indent: Int) {
-        let spaces = String(repeating: " ", count: indent)
-        if let dictionary = value as? [String: Any] {
-            guard let firstKey = dictionary.keys.sorted().first else {
-                lines.append("\(spaces)- {}")
-                return
-            }
-            let firstValue = dictionary[firstKey] as Any
-            if firstValue is [String: Any] || firstValue is [Any] {
-                lines.append("\(spaces)- \(yamlKey(firstKey)):")
-                appendYAMLSequenceValue(firstValue, to: &lines, indent: indent + 4)
-            } else {
-                lines.append("\(spaces)- \(yamlKey(firstKey)): \(yamlScalar(firstValue))")
-            }
-            for key in dictionary.keys.sorted().dropFirst() {
-                appendYAML(
-                    key: key,
-                    value: dictionary[key] as Any,
-                    to: &lines,
-                    indent: indent + 2)
-            }
-        } else {
-            lines.append("\(spaces)- \(yamlScalar(value))")
-        }
-    }
-
-    private func appendYAMLSequenceValue(_ value: Any, to lines: inout [String], indent: Int) {
-        if let dictionary = value as? [String: Any] {
-            for key in dictionary.keys.sorted() {
-                appendYAML(key: key, value: dictionary[key] as Any, to: &lines, indent: indent)
-            }
-        } else if let array = value as? [Any] {
-            for item in array {
-                appendYAMLSequenceItem(item, to: &lines, indent: indent)
-            }
-        } else {
-            lines.append("\(String(repeating: " ", count: indent))\(yamlScalar(value))")
-        }
-    }
-
-    private func yamlKey(_ key: String) -> String {
-        let allowed = CharacterSet(
-            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
-        return key.unicodeScalars.allSatisfy { allowed.contains($0) } ? key : quoteYAMLString(key)
-    }
-
-    private func yamlScalar(_ value: Any) -> String {
-        if value is NSNull { return "null" }
-        if let text = value as? String { return yamlString(text) }
-        if let bool = value as? Bool { return bool ? "true" : "false" }
-        if let number = value as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
-                return number.boolValue ? "true" : "false"
-            }
-            return number.stringValue
-        }
-        return quoteYAMLString(String(describing: value))
-    }
-
-    private func yamlString(_ value: String) -> String {
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
-        let lower = value.lowercased()
-        let reserved = ["true", "false", "null", "~"]
-        if !value.isEmpty,
-            value.unicodeScalars.allSatisfy({ allowed.contains($0) }),
-            !reserved.contains(lower)
-        {
-            return value
-        }
-        return quoteYAMLString(value)
+    private func slateSortYAML(columnID: String, ascending: Bool) -> String {
+        [
+            "- property: \(quoteYAMLString(columnID))",
+            "  direction: \(ascending ? "ASC" : "DESC")",
+        ].joined(separator: "\n")
     }
 
     private func quoteYAMLString(_ value: String) -> String {

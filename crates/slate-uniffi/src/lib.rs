@@ -4184,6 +4184,10 @@ pub enum BaseEdit {
         view: u32,
         yaml: Option<String>,
     },
+    SetSlateSort {
+        view: u32,
+        yaml: Option<String>,
+    },
 }
 
 impl From<BaseEdit> for core::bases::BaseEdit {
@@ -4234,6 +4238,10 @@ impl From<BaseEdit> for core::bases::BaseEdit {
                 summary,
             },
             BaseEdit::SetSlateState { view, yaml } => core::bases::BaseEdit::SetSlateState {
+                view: view as usize,
+                yaml,
+            },
+            BaseEdit::SetSlateSort { view, yaml } => core::bases::BaseEdit::SetSlateSort {
                 view: view as usize,
                 yaml,
             },
@@ -5844,6 +5852,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(session.base_views(handle).unwrap()[0].name, "Batched");
+        session
+            .base_apply_edit(
+                handle,
+                BaseEdit::SetSlateSort {
+                    view: 0,
+                    yaml: Some("- expr: status\n  direction: desc".into()),
+                },
+            )
+            .unwrap();
+        let saved_base = std::fs::read_to_string(tmp.path().join("Queries/Reading.base")).unwrap();
+        assert!(saved_base.contains("    slate:\n      sort:\n        - expr: status"));
 
         let converted = session
             .dql_as_base("TABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n".into())

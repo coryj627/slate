@@ -3,7 +3,8 @@
 
 use slate_core::bases::expr::{BinaryOp, ExprKind, FileField, PropertyRef};
 use slate_core::bases::{
-    BaseWarningKind, FilterNode, RowSource, SummaryRef, ViewSpec, ViewType, parse_base, view_query,
+    BaseEdit, BaseWarningKind, FilterNode, RowSource, SummaryRef, ViewSpec, ViewType, parse_base,
+    serialize_base, view_query,
 };
 
 #[test]
@@ -507,5 +508,156 @@ fn group_by_file_property_parses_closed_field_set() {
         base.views[0].group_by,
         Some(ref group)
             if group.property == PropertyRef::File(FileField::Folder) && group.ascending
+    ));
+}
+
+#[test]
+fn group_by_operator_punctuation_is_a_literal_note_property_id() {
+    let source = r#"views:
+  - type: table
+    name: Table
+    groupBy:
+      property: a+b
+"#;
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    assert!(matches!(
+        base.views[0].group_by,
+        Some(ref group)
+            if group.property == PropertyRef::Note("a+b".to_string()) && group.ascending
+    ));
+}
+
+#[test]
+fn reserved_property_namespaces_stay_closed_in_every_property_id_position() {
+    let source = r#"views:
+  - type: table
+    name: Columns
+    order: [file.typo, task.typo, this.file.typo]
+  - type: table
+    name: Sort
+    sort:
+      - property: file.typo
+        direction: ASC
+  - type: table
+    name: Group
+    groupBy:
+      property: file.typo
+      direction: ASC
+"#;
+    let (base, warnings) = parse_base(source);
+
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.kind == BaseWarningKind::InvalidGroupBy
+                && warning.message.contains("unknown file field")
+        }),
+        "reserved groupBy namespaces must surface the closed-set error: {warnings:#?}"
+    );
+    assert!(base.views[2].group_by.is_none());
+
+    let columns = view_query(&base, 0);
+    assert_eq!(
+        columns
+            .columns
+            .iter()
+            .map(|column| column.id.as_str())
+            .collect::<Vec<_>>(),
+        ["file.typo", "task.typo", "this.file.typo"]
+    );
+
+    let sorted = view_query(&base, 1);
+    assert!(matches!(
+        sorted.sort[0].expr.kind,
+        ExprKind::Unsupported { ref reason, .. } if reason.contains("unknown file field")
+    ));
+}
+
+#[test]
+fn native_obsidian_view_sort_executes_and_survives_an_unrelated_edit() {
+    let source = r#"views:
+  - type: table
+    name: Table
+    sort:
+      - property: foo-bar
+        direction: DESC
+      - expr: score * priority
+        direction: ASC
+    pluginState: { keep: "exactly" }
+"#;
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let query = view_query(&base, 0);
+    assert_eq!(query.sort.len(), 2);
+    assert!(!query.sort[0].ascending);
+    assert!(matches!(
+        query.sort[0].expr.kind,
+        ExprKind::Prop(PropertyRef::Note(ref name)) if name == "foo-bar"
+    ));
+    assert!(query.sort[1].ascending);
+    assert!(matches!(
+        query.sort[1].expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Mul,
+            ..
+        }
+    ));
+
+    let renamed = serialize_base(
+        &base,
+        &[BaseEdit::RenameView {
+            view: 0,
+            name: "Renamed".to_string(),
+        }],
+    )
+    .unwrap();
+    assert!(renamed.contains(
+        "    sort:\n      - property: foo-bar\n        direction: DESC\n      - expr: score * priority\n        direction: ASC\n"
+    ));
+    assert!(renamed.contains("    pluginState: { keep: \"exactly\" }\n"));
+}
+
+#[test]
+fn explicit_empty_slate_sort_overrides_native_obsidian_sort() {
+    let source = r#"views:
+  - type: table
+    name: Table
+    sort:
+      - property: foo-bar
+        direction: DESC
+    slate:
+      sort: []
+"#;
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let query = view_query(&base, 0);
+    assert!(query.sort.is_empty());
+}
+
+#[test]
+fn slate_namespaced_sort_takes_precedence_over_native_obsidian_sort() {
+    let source = r#"views:
+  - type: table
+    name: Table
+    sort:
+      - property: priority
+        direction: DESC
+    slate:
+      sort:
+        - property: status
+          direction: ASC
+"#;
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let query = view_query(&base, 0);
+    assert_eq!(query.sort.len(), 1);
+    assert!(query.sort[0].ascending);
+    assert!(matches!(
+        query.sort[0].expr.kind,
+        ExprKind::Prop(PropertyRef::Note(ref name)) if name == "status"
     ));
 }

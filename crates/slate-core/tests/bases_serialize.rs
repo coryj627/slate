@@ -1394,6 +1394,560 @@ fn set_slate_state_rewrites_state_block_only() {
     );
 }
 
+fn set_slate_sort_edit(view: usize, yaml: Option<&str>) -> BaseEdit {
+    serde_json::from_value(serde_json::json!({
+        "SetSlateSort": {
+            "view": view,
+            "yaml": yaml,
+        }
+    }))
+    .expect("SetSlateSort must be part of the closed BaseEdit API")
+}
+
+#[test]
+fn set_slate_sort_rewrites_only_sort_in_block_state() {
+    let source = "views:\n  - type: table\n    name: Main\n    slate:\n      density: compact # keep density\n      sort:\n        - expr: old\n          direction: asc\n      pluginState:\n        nested: keep\n      listMarker: dash\n      secondaryProperties:\n        - alpha\n      # keep trailing state comment\n";
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let changed = serialize_base(
+        &base,
+        &[set_slate_sort_edit(
+            0,
+            Some("- expr: new\n  direction: desc"),
+        )],
+    )
+    .expect("sort edit serializes");
+
+    assert_eq!(
+        changed,
+        source.replace(
+            "      sort:\n        - expr: old\n          direction: asc\n",
+            "      sort:\n        - expr: new\n          direction: desc\n"
+        )
+    );
+}
+
+#[test]
+fn set_slate_sort_preserves_flow_state_and_clear_preserves_other_state() {
+    let source = "views: [{type: table, name: Main, slate: {density: compact, sort: [{expr: old, direction: asc}], pluginState: {nested: keep}, listMarker: dash}}] # keep tail\n";
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let changed = serialize_base(
+        &base,
+        &[set_slate_sort_edit(
+            0,
+            Some("- expr: new\n  direction: desc"),
+        )],
+    )
+    .expect("flow sort edit serializes");
+    assert_eq!(
+        changed,
+        "views: [{type: table, name: Main, slate: {density: compact, \"sort\": [{\"expr\": \"new\", \"direction\": \"desc\"}], pluginState: {nested: keep}, listMarker: dash}}] # keep tail\n"
+    );
+
+    let (changed_base, warnings) = parse_base(&changed);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let cleared = serialize_base(&changed_base, &[set_slate_sort_edit(0, None)])
+        .expect("flow sort clear serializes");
+    assert_eq!(
+        cleared,
+        "views: [{type: table, name: Main, slate: {density: compact, pluginState: {nested: keep}, listMarker: dash}}] # keep tail\n"
+    );
+}
+
+#[test]
+fn set_slate_sort_inserts_and_clears_without_rewriting_unrelated_state() {
+    let source = "views:\n  - type: table\n    name: Main\n    slate:\n      density: compact\n      pluginState: keep # comment\n";
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let changed = serialize_base(
+        &base,
+        &[set_slate_sort_edit(
+            0,
+            Some("- expr: file.name\n  direction: asc"),
+        )],
+    )
+    .expect("sort insertion serializes");
+    assert_eq!(
+        changed,
+        "views:\n  - type: table\n    name: Main\n    slate:\n      density: compact\n      pluginState: keep # comment\n      sort:\n        - expr: file.name\n          direction: asc\n"
+    );
+
+    let (changed_base, warnings) = parse_base(&changed);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let cleared = serialize_base(&changed_base, &[set_slate_sort_edit(0, None)])
+        .expect("sort removal serializes");
+    assert_eq!(cleared, source);
+}
+
+#[test]
+fn clear_only_slate_sort_removes_the_now_empty_slate_parent() {
+    let block = "views:\n  - type: table\n    name: Main\n    # before slate\n    slate:\n      sort:\n        - expr: file.name\n          direction: asc\n    # after slate\n    order: [file.name]\n";
+    let (base, warnings) = parse_base(block);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let cleared =
+        serialize_base(&base, &[set_slate_sort_edit(0, None)]).expect("only block sort clears");
+    assert_eq!(
+        cleared,
+        "views:\n  - type: table\n    name: Main\n    # before slate\n    # after slate\n    order: [file.name]\n"
+    );
+
+    let flow = "views: [{type: table, name: Main, slate: {sort: [{expr: file.name, direction: asc}]}, order: [file.name]}]\n";
+    let (base, warnings) = parse_base(flow);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let cleared =
+        serialize_base(&base, &[set_slate_sort_edit(0, None)]).expect("only flow sort clears");
+    assert_eq!(
+        cleared,
+        "views: [{type: table, name: Main, order: [file.name]}]\n"
+    );
+}
+
+#[test]
+fn clear_final_flow_slate_sort_preserves_preceding_comment_and_crlf_trailing_comma() {
+    let source = concat!(
+        "views: [{type: table, name: Main, slate: {\r\n",
+        "  pluginState: keep, # KEEP_PLUGIN\r\n",
+        "  sort: [{expr: file.name, direction: asc}],\r\n",
+        "}}]\r\n",
+    );
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let cleared = serialize_base(&base, &[set_slate_sort_edit(0, None)])
+        .expect("final flow sort clears without consuming prior comments");
+
+    assert_eq!(
+        cleared,
+        concat!(
+            "views: [{type: table, name: Main, slate: {\r\n",
+            "  pluginState: keep, # KEEP_PLUGIN\r\n",
+            "}}]\r\n",
+        )
+    );
+    assert!(cleared.contains("# KEEP_PLUGIN"));
+    assert!(!cleared.replace("\r\n", "").contains('\n'));
+
+    let no_trailing_comma = concat!(
+        "views: [{type: table, name: Main, slate: {\n",
+        "  pluginState: keep, # KEEP_PLUGIN\n",
+        "  sort: [{expr: file.name, direction: asc}]\n",
+        "}}]\n",
+    );
+    let (base, warnings) = parse_base(no_trailing_comma);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let cleared = serialize_base(&base, &[set_slate_sort_edit(0, None)])
+        .expect("final flow sort without trailing comma clears");
+    assert_eq!(
+        cleared,
+        concat!(
+            "views: [{type: table, name: Main, slate: {\n",
+            "  pluginState: keep # KEEP_PLUGIN\n",
+            "}}]\n",
+        )
+    );
+}
+
+#[test]
+fn remove_final_flow_formula_preserves_preceding_comment_with_and_without_trailing_comma() {
+    let crlf = concat!(
+        "formulas: {\r\n",
+        "  keep: \"1\", # KEEP_FORMULA\r\n",
+        "  remove: \"2\",\r\n",
+        "}\r\n",
+        "views: []\r\n",
+    );
+    let (base, warnings) = parse_base(crlf);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(
+        &base,
+        &[BaseEdit::RemoveFormula {
+            name: "remove".to_string(),
+        }],
+    )
+    .expect("final CRLF flow formula removal serializes");
+    assert_eq!(
+        changed,
+        concat!(
+            "formulas: {\r\n",
+            "  keep: \"1\", # KEEP_FORMULA\r\n",
+            "}\r\n",
+            "views: []\r\n",
+        )
+    );
+
+    let lf = concat!(
+        "formulas: {\n",
+        "  keep: \"1\", # KEEP_FORMULA\n",
+        "  remove: \"2\"\n",
+        "}\n",
+        "views: []\n",
+    );
+    let (base, warnings) = parse_base(lf);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(
+        &base,
+        &[BaseEdit::RemoveFormula {
+            name: "remove".to_string(),
+        }],
+    )
+    .expect("final LF flow formula removal serializes");
+    assert_eq!(
+        changed,
+        concat!(
+            "formulas: {\n",
+            "  keep: \"1\" # KEEP_FORMULA\n",
+            "}\n",
+            "views: []\n",
+        )
+    );
+}
+
+#[test]
+fn remove_final_flow_view_preserves_preceding_comment_with_and_without_trailing_comma() {
+    let crlf = concat!(
+        "views: [\r\n",
+        "  {type: table, name: Keep}, # KEEP_VIEW\r\n",
+        "  {type: list, name: Remove},\r\n",
+        "]\r\n",
+    );
+    let (base, warnings) = parse_base(crlf);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(&base, &[BaseEdit::RemoveView { view: 1 }])
+        .expect("final CRLF flow view removal serializes");
+    assert_eq!(
+        changed,
+        concat!(
+            "views: [\r\n",
+            "  {type: table, name: Keep}, # KEEP_VIEW\r\n",
+            "]\r\n",
+        )
+    );
+
+    let lf = concat!(
+        "views: [\n",
+        "  {type: table, name: Keep}, # KEEP_VIEW\n",
+        "  {type: list, name: Remove}\n",
+        "]\n",
+    );
+    let (base, warnings) = parse_base(lf);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(&base, &[BaseEdit::RemoveView { view: 1 }])
+        .expect("final LF flow view removal serializes");
+    assert_eq!(
+        changed,
+        concat!(
+            "views: [\n",
+            "  {type: table, name: Keep} # KEEP_VIEW\n",
+            "]\n",
+        )
+    );
+}
+
+#[test]
+fn remove_sole_flow_items_consumes_legal_trailing_comma_and_preserves_suffix_trivia() {
+    let formula = "formulas: {remove: \"1\",} # KEEP_SOLE\r\nviews: []\r\n";
+    let (base, warnings) = parse_base(formula);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(
+        &base,
+        &[BaseEdit::RemoveFormula {
+            name: "remove".to_string(),
+        }],
+    )
+    .expect("sole flow formula removal serializes");
+    assert_eq!(changed, "formulas: {} # KEEP_SOLE\r\nviews: []\r\n");
+    assert!(parse_base(&changed).1.is_empty());
+
+    let view = "views: [{type: table, name: Remove},] # KEEP_SOLE\n";
+    let (base, warnings) = parse_base(view);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(&base, &[BaseEdit::RemoveView { view: 0 }])
+        .expect("sole flow view removal serializes");
+    assert_eq!(changed, "views: [] # KEEP_SOLE\n");
+    assert!(parse_base(&changed).1.is_empty());
+
+    let multiline_formula = concat!(
+        "formulas: {\r\n",
+        "  # KEEP_PREFIX\r\n",
+        "  remove: \"1\"\r\n",
+        "} # KEEP_SUFFIX\r\n",
+        "views: []\r\n",
+    );
+    let (base, warnings) = parse_base(multiline_formula);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(
+        &base,
+        &[BaseEdit::RemoveFormula {
+            name: "remove".to_string(),
+        }],
+    )
+    .expect("sole multiline flow formula removal serializes");
+    assert_eq!(
+        changed,
+        concat!(
+            "formulas: { # KEEP_PREFIX\r\n",
+            "  } # KEEP_SUFFIX\r\n",
+            "views: []\r\n",
+        )
+    );
+    assert!(parse_base(&changed).1.is_empty());
+
+    let multiline_view = concat!(
+        "views: [\n",
+        "  # KEEP_PREFIX\n",
+        "  {type: table, name: Remove},\n",
+        "] # KEEP_SUFFIX\n",
+    );
+    let (base, warnings) = parse_base(multiline_view);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    let changed = serialize_base(&base, &[BaseEdit::RemoveView { view: 0 }])
+        .expect("sole multiline flow view removal serializes");
+    assert_eq!(
+        changed,
+        concat!("views: [ # KEEP_PREFIX\n", "  ] # KEEP_SUFFIX\n")
+    );
+    assert!(parse_base(&changed).1.is_empty());
+}
+
+#[test]
+fn remove_sole_flow_suffix_comments_normalize_empty_close_indentation() {
+    for (newline, close_indent) in [("\n", ""), ("\n", "  "), ("\r\n", ""), ("\r\n", "  ")] {
+        let context = format!("newline={newline:?} close_indent={close_indent:?}");
+        let formula = format!(
+            "formulas: {{remove: \"2\", # KEEP_SOLE{newline}{close_indent}}}{newline}views: []{newline}"
+        );
+        let (base, warnings) = parse_base(&formula);
+        assert!(
+            warnings.is_empty(),
+            "formula source warnings ({context}): {warnings:#?}"
+        );
+        let changed = serialize_base(
+            &base,
+            &[BaseEdit::RemoveFormula {
+                name: "remove".to_string(),
+            }],
+        )
+        .unwrap_or_else(|error| panic!("formula removal failed ({context}): {error}"));
+        assert_eq!(
+            changed,
+            format!("formulas: {{ # KEEP_SOLE{newline}  }}{newline}views: []{newline}"),
+            "{context}"
+        );
+        assert!(
+            parse_base(&changed).1.is_empty(),
+            "formula result did not reparse ({context}):\n{changed}"
+        );
+
+        let view = format!(
+            "views: [{{type: table, name: Remove}}, # KEEP_SOLE{newline}{close_indent}]{newline}"
+        );
+        let (base, warnings) = parse_base(&view);
+        assert!(
+            warnings.is_empty(),
+            "view source warnings ({context}): {warnings:#?}"
+        );
+        let changed = serialize_base(&base, &[BaseEdit::RemoveView { view: 0 }])
+            .unwrap_or_else(|error| panic!("view removal failed ({context}): {error}"));
+        assert_eq!(
+            changed,
+            format!("views: [ # KEEP_SOLE{newline}  ]{newline}"),
+            "{context}"
+        );
+        assert!(
+            parse_base(&changed).1.is_empty(),
+            "view result did not reparse ({context}):\n{changed}"
+        );
+    }
+}
+
+#[test]
+fn remove_nonfinal_flow_item_preserves_standalone_comment_before_next_item() {
+    let source = concat!(
+        "formulas: {\n",
+        "  remove: \"1\",\n",
+        "  # KEEP_NEXT\n",
+        "  keep: \"2\"\n",
+        "}\n",
+        "views: []\n",
+    );
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let changed = serialize_base(
+        &base,
+        &[BaseEdit::RemoveFormula {
+            name: "remove".to_string(),
+        }],
+    )
+    .expect("non-final flow formula removal serializes");
+
+    assert_eq!(
+        changed,
+        concat!(
+            "formulas: {\n",
+            "  # KEEP_NEXT\n",
+            "  keep: \"2\"\n",
+            "}\n",
+            "views: []\n",
+        )
+    );
+    assert!(parse_base(&changed).1.is_empty());
+}
+
+#[test]
+fn flow_removal_matrix_preserves_trivia_and_reparses_for_every_position() {
+    #[derive(Clone, Copy, Debug)]
+    enum Collection {
+        Formulas,
+        Views,
+    }
+    #[derive(Clone, Copy, Debug)]
+    enum CommentPlacement {
+        Prefix,
+        Suffix,
+    }
+    let positions = [
+        ("first", 3usize, 0usize),
+        ("middle", 3, 1),
+        ("final", 3, 2),
+        ("sole", 1, 0),
+    ];
+
+    for collection in [Collection::Formulas, Collection::Views] {
+        for (position, count, remove) in positions {
+            for trailing_comma in [false, true] {
+                for comment_placement in [CommentPlacement::Prefix, CommentPlacement::Suffix] {
+                    for newline in ["\n", "\r\n"] {
+                        let mut source = match collection {
+                            Collection::Formulas => "formulas: {\n".to_string(),
+                            Collection::Views => "views: [\n".to_string(),
+                        };
+                        for index in 0..count {
+                            let comma = if index + 1 < count || trailing_comma {
+                                ","
+                            } else {
+                                ""
+                            };
+                            let item = match collection {
+                                Collection::Formulas => format!("f{index}: \"{index}\""),
+                                Collection::Views => {
+                                    format!("{{type: table, name: V{index}}}")
+                                }
+                            };
+                            match comment_placement {
+                                CommentPlacement::Prefix => {
+                                    source.push_str(&format!("  # KEEP_{index}\n"));
+                                    source.push_str(&format!("  {item}{comma}\n"));
+                                }
+                                CommentPlacement::Suffix => {
+                                    source.push_str(&format!("  {item}{comma} # KEEP_{index}\n"));
+                                }
+                            }
+                        }
+                        source.push_str(match collection {
+                            Collection::Formulas => "} # KEEP_SUFFIX\nviews: []\n",
+                            Collection::Views => "] # KEEP_SUFFIX\n",
+                        });
+                        if newline == "\r\n" {
+                            source = source.replace('\n', "\r\n");
+                        }
+                        let context = format!(
+                            "collection={collection:?} position={position} trailing={trailing_comma} comments={comment_placement:?} newline={newline:?}"
+                        );
+                        let (base, warnings) = parse_base(&source);
+                        assert!(
+                            warnings.is_empty(),
+                            "source warnings ({context}): {warnings:#?}"
+                        );
+                        let operation = match collection {
+                            Collection::Formulas => BaseEdit::RemoveFormula {
+                                name: format!("f{remove}"),
+                            },
+                            Collection::Views => BaseEdit::RemoveView { view: remove },
+                        };
+
+                        let changed = serialize_base(&base, &[operation])
+                            .unwrap_or_else(|error| panic!("removal failed ({context}): {error}"));
+
+                        for index in 0..count {
+                            assert!(
+                                changed.contains(&format!("# KEEP_{index}")),
+                                "lost comment KEEP_{index} ({context}):\n{changed}"
+                            );
+                        }
+                        assert!(changed.contains("# KEEP_SUFFIX"), "{context}:\n{changed}");
+                        if newline == "\r\n" {
+                            assert!(
+                                !changed.replace("\r\n", "").contains('\n'),
+                                "introduced lone LF ({context}):\n{changed:?}"
+                            );
+                        } else {
+                            assert!(!changed.contains('\r'), "introduced CR ({context})");
+                        }
+                        let (reparsed, warnings) = parse_base(&changed);
+                        assert!(
+                            warnings.is_empty(),
+                            "result warnings ({context}): {warnings:#?}\n{changed}"
+                        );
+                        match collection {
+                            Collection::Formulas => {
+                                let names = reparsed
+                                    .formulas
+                                    .iter()
+                                    .map(|(name, _)| name.as_str())
+                                    .collect::<Vec<_>>();
+                                for index in 0..count {
+                                    assert_eq!(
+                                        names.contains(&format!("f{index}").as_str()),
+                                        index != remove,
+                                        "wrong formulas ({context}): {names:?}"
+                                    );
+                                }
+                            }
+                            Collection::Views => {
+                                let names = reparsed
+                                    .views
+                                    .iter()
+                                    .map(|view| view.name.as_str())
+                                    .collect::<Vec<_>>();
+                                for index in 0..count {
+                                    assert_eq!(
+                                        names.contains(&format!("V{index}").as_str()),
+                                        index != remove,
+                                        "wrong views ({context}): {names:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn add_view_rejects_scalar_fragment_atomically() {
+    let source = "views:\n  - type: table\n    name: Existing\n";
+    let (base, warnings) = parse_base(source);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+
+    let error = serialize_base(
+        &base,
+        &[BaseEdit::AddView {
+            yaml: "scalar-view".to_string(),
+        }],
+    )
+    .expect_err("AddView must reject non-mapping fragments");
+
+    assert!(matches!(error, SerializeError::InvalidEdit { .. }));
+    assert_eq!(base.raw, source);
+}
+
 #[test]
 fn add_view_creates_canonical_views_section() {
     let source = include_str!("fixtures/bases/filter_only.base");
@@ -1574,6 +2128,7 @@ enum GeneratedSerializerSemantic {
         expected_summary: String,
     },
     SlateDensity(String),
+    SlateSort(String),
 }
 
 #[derive(Debug)]
@@ -1595,6 +2150,7 @@ fn base_edit_discriminator(edit: &BaseEdit) -> &'static str {
         BaseEdit::SetDisplayName { .. } => "SetDisplayName",
         BaseEdit::SetSummaryAssignment { .. } => "SetSummaryAssignment",
         BaseEdit::SetSlateState { .. } => "SetSlateState",
+        BaseEdit::SetSlateSort { .. } => "SetSlateSort",
     }
 }
 
@@ -1699,7 +2255,7 @@ views:\n\
         unknown_sentinel_lf
     };
 
-    let (edit, expected) = match index % 13 {
+    let (edit, expected) = match index % 14 {
         0 => (
             BaseEdit::SetViewKey {
                 view: 0,
@@ -1823,6 +2379,15 @@ views:\n\
             )),
         ),
         12 => (
+            BaseEdit::SetSlateSort {
+                view: 0,
+                yaml: Some("- expr: status\n  direction: desc".to_string()),
+            },
+            GeneratedSerializerExpectation::Success(GeneratedSerializerSemantic::SlateSort(
+                "status".to_string(),
+            )),
+        ),
+        13 => (
             BaseEdit::SetViewKey {
                 view: 0,
                 key: "pluginKey".to_string(),
@@ -1971,6 +2536,27 @@ fn assert_generated_semantic(
                     .and_then(serde_json::Value::as_str),
                 Some(expected.as_str()),
                 "{context}"
+            );
+        }
+        GeneratedSerializerSemantic::SlateSort(expected) => {
+            let state = reparsed.views[0]
+                .slate_state
+                .as_ref()
+                .expect("generated SetSlateSort must retain slate state");
+            assert_eq!(
+                state
+                    .get("sort")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|sort| sort.first())
+                    .and_then(|sort| sort.get("expr"))
+                    .and_then(serde_json::Value::as_str),
+                Some(expected.as_str()),
+                "{context}"
+            );
+            assert_eq!(
+                state.get("density").and_then(serde_json::Value::as_str),
+                Some("compact"),
+                "SetSlateSort changed unrelated slate state ({context})"
             );
         }
     }
@@ -2298,6 +2884,7 @@ fn census_bases_serializer_generated_edits() {
             "RenameView",
             "SetDisplayName",
             "SetFormula",
+            "SetSlateSort",
             "SetSlateState",
             "SetSummaryAssignment",
             "SetTopLevelFilters",

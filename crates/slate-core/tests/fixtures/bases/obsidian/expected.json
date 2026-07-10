@@ -1,0 +1,98 @@
+{
+  "captures": [
+    {
+      "file": "obsidian-basic.base",
+      "sha256": "0ae6455a9b4c5a6e39e48aa3291bd80669ee8735254f3e0885b26178d3149fd5",
+      "views": [
+        {
+          "index": 0,
+          "name": "Table",
+          "columns": ["file.name", "category", "priority", "status"],
+          "rows": [
+            {
+              "path": "Notes/Gamma.md",
+              "cells": {
+                "file.name": "Gamma.md",
+                "category": "research",
+                "priority": "3",
+                "status": "active"
+              }
+            },
+            {
+              "path": "Notes/Alpha.md",
+              "cells": {
+                "file.name": "Alpha.md",
+                "category": "research",
+                "priority": "2",
+                "status": "active"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "obsidian-formulas.base",
+      "sha256": "8127ab360d98b05fb85eea33b76e93c5ad9f8b25c6efd9255a603ec6f81ccbf8",
+      "views": [
+        {
+          "index": 0,
+          "name": "Table",
+          "columns": ["file.name", "formula.weighted_total"],
+          "rows": [
+            {
+              "path": "Notes/Alpha.md",
+              "cells": {
+                "file.name": "Alpha.md",
+                "formula.weighted_total": "16"
+              }
+            },
+            {
+              "path": "Notes/Beta.md",
+              "cells": {
+                "file.name": "Beta.md",
+                "formula.weighted_total": "3"
+              }
+            },
+            {
+              "path": "Notes/Gamma.md",
+              "cells": {
+                "file.name": "Gamma.md",
+                "formula.weighted_total": "39"
+              }
+            },
+            {
+              "path": "obsidian-basic.base",
+              "cells": {
+                "file.name": "obsidian-basic.base",
+                "formula.weighted_total": ""
+              }
+            },
+            {
+              "path": "obsidian-formulas.base",
+              "cells": {
+                "file.name": "obsidian-formulas.base",
+                "formula.weighted_total": ""
+              }
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "name": "View",
+          "columns": [],
+          "rows": [
+            {
+              "path": "Notes/Alpha.md",
+              "cells": {}
+            },
+            {
+              "path": "Notes/Gamma.md",
+              "cells": {}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

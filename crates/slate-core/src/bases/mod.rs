@@ -61,6 +61,11 @@ pub struct ViewDef {
     pub filters: Option<FilterNode>,
     pub group_by: Option<GroupBy>,
     pub order: Vec<String>,
+    /// Read-only interpretation of Obsidian's native, undocumented view
+    /// `sort` state. The source region remains preserved verbatim because
+    /// Slate only writes its own namespaced `slate.sort` state.
+    #[serde(default)]
+    pub sort: Vec<SortKey>,
     pub summaries: Vec<(String, SummaryRef)>,
     pub source: RowSource,
     pub slate_state: Option<JsonValue>,
@@ -239,6 +244,10 @@ pub enum BaseEdit {
         summary: Option<String>,
     },
     SetSlateState {
+        view: usize,
+        yaml: Option<String>,
+    },
+    SetSlateSort {
         view: usize,
         yaml: Option<String>,
     },
@@ -474,11 +483,23 @@ fn view_query_with_filters(
         formulas: base.formulas.clone(),
         custom_summaries: base.summaries.clone(),
         group_by: view.group_by.clone(),
-        sort: slate_sort_keys(view.slate_state.as_ref()),
+        sort: view_sort_keys(view),
         columns,
         summaries: view.summaries.clone(),
         limit: view.limit,
         view: view_spec,
+    }
+}
+
+fn view_sort_keys(view: &ViewDef) -> Vec<SortKey> {
+    let has_slate_sort = matches!(
+        view.slate_state.as_ref(),
+        Some(JsonValue::Object(state)) if state.contains_key("sort")
+    );
+    if has_slate_sort {
+        slate_sort_keys(view.slate_state.as_ref())
+    } else {
+        view.sort.clone()
     }
 }
 
@@ -496,13 +517,66 @@ fn slate_sort_key(value: &JsonValue) -> Option<SortKey> {
     let JsonValue::Object(entry) = value else {
         return None;
     };
-    let source = entry
-        .get("expr")
-        .and_then(JsonValue::as_str)
-        .or_else(|| entry.get("property").and_then(JsonValue::as_str))?;
+    let expr = if let Some(source) = entry.get("expr").and_then(JsonValue::as_str) {
+        parse_expr(source).ok()?
+    } else {
+        property_id_expr(entry.get("property").and_then(JsonValue::as_str)?)?
+    };
     Some(SortKey {
-        expr: parse_expr(source).ok()?,
+        expr,
         ascending: slate_sort_ascending(entry)?,
+    })
+}
+
+fn property_id_expr(source: &str) -> Option<Expr> {
+    if source.is_empty() {
+        return None;
+    }
+    let span = Span {
+        start: 0,
+        end: source.len() as u32,
+    };
+
+    if let Some(name) = source.strip_prefix("formula.") {
+        return (!name.is_empty()).then(|| Expr {
+            span,
+            kind: ExprKind::Prop(PropertyRef::Formula(name.to_string())),
+        });
+    }
+    if let Some(name) = source.strip_prefix("note.") {
+        return (!name.is_empty()).then(|| Expr {
+            span,
+            kind: ExprKind::Prop(PropertyRef::Note(name.to_string())),
+        });
+    }
+    if let Some(name) = source.strip_prefix("this.")
+        && !name.starts_with("file.")
+    {
+        return (!name.is_empty()).then(|| Expr {
+            span,
+            kind: ExprKind::Prop(PropertyRef::ThisNote(name.to_string())),
+        });
+    }
+
+    // File/task/this fields and bracketed note/formula keys use expression
+    // namespace syntax. Everything else is an Obsidian property identifier,
+    // where punctuation such as `-` is literal rather than an operator.
+    let namespaced = ["file.", "task.", "this.file.", "this[", "note[", "formula["]
+        .iter()
+        .any(|prefix| source.starts_with(prefix));
+    if namespaced {
+        return Some(parse_expr(source).unwrap_or_else(|error| Expr {
+            span,
+            kind: ExprKind::Unsupported {
+                raw: source.to_string(),
+                reason: format!("invalid property identifier {source:?}: {error}"),
+            },
+        }));
+    }
+
+    Some(Expr {
+        span,
+        kind: ExprKind::Prop(PropertyRef::Note(source.to_string())),
     })
 }
 
@@ -622,7 +696,201 @@ fn collect_edit_splices(
         BaseEdit::SetSlateState { view, yaml } => {
             replace_or_remove_slate_state(base, *view, yaml.as_deref(), splices)
         }
+        BaseEdit::SetSlateSort { view, yaml } => {
+            replace_or_remove_slate_sort(base, *view, yaml.as_deref(), splices)
+        }
     }
+}
+
+fn replace_or_remove_slate_sort(
+    base: &BaseFile,
+    view: usize,
+    yaml: Option<&str>,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let view_spans = view_spans_for(base, view)?;
+    let slate_region = named_region(&view_spans.keys, "slate");
+    let Some(root) = source_document(&base.raw) else {
+        return Err(missing_span("document root"));
+    };
+    let Some(views) = mapping_value(&root, "views") else {
+        return Err(missing_span("views"));
+    };
+    let SourceNodeKind::Sequence { items, .. } = &views.kind else {
+        return Err(missing_span("views sequence"));
+    };
+    let view_node = items
+        .get(view)
+        .ok_or_else(|| missing_span(format!("view {view}")))?;
+    let slate_node = mapping_value(view_node, "slate");
+
+    let Some(slate_node) = slate_node else {
+        let Some(yaml) = yaml else {
+            return Ok(());
+        };
+        let sort = slate_sort_fragment(yaml)?;
+        let slate = format!("slate:\n{}", indent_fragment(&sort, 2));
+        return replace_or_remove_slate_state(base, view, Some(&slate), splices);
+    };
+
+    let SourceNodeKind::Mapping { flow, entries } = &slate_node.kind else {
+        return if yaml.is_none() {
+            Ok(())
+        } else {
+            Err(SerializeError::WouldClobber {
+                span: slate_region
+                    .map(|region| region.region.span)
+                    .unwrap_or(Span {
+                        start: slate_node.start as u32,
+                        end: slate_node.end as u32,
+                    }),
+                reason: "cannot add slate.sort without replacing non-mapping slate state"
+                    .to_string(),
+            })
+        };
+    };
+
+    let sort_index = entries.iter().position(
+        |entry| matches!(&entry.key.kind, SourceNodeKind::Scalar { value } if value == "sort"),
+    );
+    let child_regions = mapping_regions(&base.raw, slate_node);
+
+    match (yaml, sort_index) {
+        (Some(yaml), Some(_)) => {
+            let fragment = slate_sort_fragment(yaml)?;
+            let region = child_regions
+                .get("sort")
+                .ok_or_else(|| missing_span(format!("view {view} slate.sort")))?;
+            let replacement = if *flow {
+                flow_mapping_entry(&fragment)?
+            } else {
+                format_fragment_for_region(region, &fragment)
+            };
+            push_splice(splices, region.span, replacement);
+        }
+        (Some(yaml), None) => {
+            let fragment = slate_sort_fragment(yaml)?;
+            if *flow {
+                let close = slate_node
+                    .end
+                    .checked_sub(1)
+                    .ok_or_else(|| missing_span(format!("view {view} slate flow close")))?;
+                push_splice(
+                    splices,
+                    Span {
+                        start: close as u32,
+                        end: close as u32,
+                    },
+                    format!(
+                        "{}{}",
+                        if entries.is_empty() { "" } else { ", " },
+                        flow_mapping_entry(&fragment)?
+                    ),
+                );
+            } else {
+                let parent =
+                    slate_region.ok_or_else(|| missing_span(format!("view {view} slate state")))?;
+                let indent = child_mapping_indent(&parent.region).unwrap_or_else(|| {
+                    parent
+                        .region
+                        .text
+                        .lines()
+                        .next()
+                        .map(|line| line.len() - line.trim_start().len() + 2)
+                        .unwrap_or(2)
+                });
+                let offset = child_regions
+                    .values()
+                    .map(|region| region.span.end)
+                    .max()
+                    .unwrap_or(parent.region.span.end);
+                let prefix = " ".repeat(indent);
+                push_insertion_splice(
+                    splices,
+                    &base.raw,
+                    offset,
+                    format_yaml_fragment(&fragment, &prefix, &prefix),
+                );
+            }
+        }
+        (None, Some(index)) => {
+            if entries.len() == 1 {
+                return replace_or_remove_slate_state(base, view, None, splices);
+            }
+            let region = child_regions
+                .get("sort")
+                .ok_or_else(|| missing_span(format!("view {view} slate.sort")))?;
+            if *flow {
+                let spans = entries
+                    .iter()
+                    .map(|entry| Span {
+                        start: entry.key.start as u32,
+                        end: entry.value.end as u32,
+                    })
+                    .collect::<Vec<_>>();
+                push_flow_item_removal(
+                    &base.raw,
+                    &spans,
+                    index,
+                    slate_node.start,
+                    slate_node.end,
+                    splices,
+                )?;
+            } else {
+                push_block_removal_splice(splices, &base.raw, region.span);
+            }
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+fn slate_sort_fragment(yaml: &str) -> Result<String, SerializeError> {
+    let yaml = yaml.trim_end_matches(['\n', '\r']);
+    if yaml.trim().is_empty() {
+        return Err(SerializeError::InvalidEdit {
+            message: "slate.sort YAML cannot be empty; use None to clear it".to_string(),
+        });
+    }
+    let fragment = if fragment_starts_with_key(yaml, "sort") {
+        yaml.to_string()
+    } else if yaml.contains(['\n', '\r']) || yaml.trim_start().starts_with("- ") {
+        format!("sort:\n{}", indent_fragment(yaml, 2))
+    } else {
+        format!("sort: {}", yaml.trim())
+    };
+    let documents = yaml_rust2::YamlLoader::load_from_str(&fragment).map_err(|error| {
+        SerializeError::InvalidEdit {
+            message: format!("slate.sort YAML is invalid: {error}"),
+        }
+    })?;
+    let Some(Yaml::Hash(mapping)) = documents.first() else {
+        return Err(SerializeError::InvalidEdit {
+            message: "slate.sort YAML must be a mapping fragment".to_string(),
+        });
+    };
+    if mapping.len() != 1 || !mapping.contains_key(&Yaml::String("sort".to_string())) {
+        return Err(SerializeError::InvalidEdit {
+            message: "slate.sort YAML must contain exactly one sort entry".to_string(),
+        });
+    }
+    if !matches!(
+        mapping.get(&Yaml::String("sort".to_string())),
+        Some(Yaml::Array(_))
+    ) {
+        return Err(SerializeError::InvalidEdit {
+            message: "slate.sort must be a YAML sequence".to_string(),
+        });
+    }
+    Ok(fragment)
+}
+
+fn indent_fragment(fragment: &str, spaces: usize) -> String {
+    let prefix = " ".repeat(spaces);
+    fragment
+        .lines()
+        .map(|line| format!("{prefix}{line}\n"))
+        .collect()
 }
 
 fn replace_or_insert_top_level(
@@ -722,7 +990,9 @@ fn push_remove_formula_splice(
         .ok_or_else(|| missing_span(format!("formula {name:?}")))?;
     let formulas =
         named_region(&base.spans.top_level, "formulas").ok_or_else(|| missing_span("formulas"))?;
-    if flow_collection_close(&formulas.region, "formulas", FlowCollectionKind::Mapping).is_some() {
+    if let Some((collection_start, collection_end)) =
+        flow_collection_bounds(&formulas.region, "formulas", FlowCollectionKind::Mapping)
+    {
         let index = base
             .spans
             .formulas
@@ -735,7 +1005,14 @@ fn push_remove_formula_splice(
             .iter()
             .map(|formula| formula.region.span)
             .collect::<Vec<_>>();
-        return push_flow_item_removal(&base.raw, &spans, index, splices);
+        return push_flow_item_removal(
+            &base.raw,
+            &spans,
+            index,
+            collection_start as usize,
+            collection_end as usize,
+            splices,
+        );
     }
     if base.spans.formulas.len() == 1 {
         push_block_parent_collapse(
@@ -855,7 +1132,14 @@ fn replace_or_remove_display_name(
                         )
                     })
                     .ok_or_else(|| missing_span("flow displayName entry"))?;
-                push_flow_item_removal(&base.raw, &spans, index, splices)?;
+                push_flow_item_removal(
+                    &base.raw,
+                    &spans,
+                    index,
+                    property_node.start,
+                    property_node.end,
+                    splices,
+                )?;
             }
         } else if let Some(name) = display_name {
             let close = property_node
@@ -986,7 +1270,14 @@ fn replace_or_remove_summary_assignment(
                         )
                     })
                     .ok_or_else(|| missing_span(format!("summary assignment {property:?}")))?;
-                push_flow_item_removal(&base.raw, &spans, index, splices)?;
+                push_flow_item_removal(
+                    &base.raw,
+                    &spans,
+                    index,
+                    summaries_node.start,
+                    summaries_node.end,
+                    splices,
+                )?;
             }
         } else if let Some(summary) = summary {
             let close = summaries_node
@@ -1108,7 +1399,14 @@ fn replace_or_remove_slate_state(
                         )
                     })
                     .ok_or_else(|| missing_span("flow slate entry"))?;
-                push_flow_item_removal(&base.raw, &spans, index, splices)?;
+                push_flow_item_removal(
+                    &base.raw,
+                    &spans,
+                    index,
+                    view_node.start,
+                    view_node.end,
+                    splices,
+                )?;
             }
         } else if let Some(yaml) = yaml {
             let close = view_node
@@ -1352,16 +1650,25 @@ fn push_remove_view_splice(
     splices: &mut Vec<Splice>,
 ) -> Result<(), SerializeError> {
     let entry = view_spans_for(base, view)?.entry.clone();
-    if named_region(&base.spans.top_level, "views").is_some_and(|views| {
-        flow_collection_close(&views.region, "views", FlowCollectionKind::Sequence).is_some()
-    }) {
+    if let Some((collection_start, collection_end)) = named_region(&base.spans.top_level, "views")
+        .and_then(|views| {
+            flow_collection_bounds(&views.region, "views", FlowCollectionKind::Sequence)
+        })
+    {
         let spans = base
             .spans
             .views
             .iter()
             .map(|view| view.entry.span)
             .collect::<Vec<_>>();
-        return push_flow_item_removal(&base.raw, &spans, view, splices);
+        return push_flow_item_removal(
+            &base.raw,
+            &spans,
+            view,
+            collection_start as usize,
+            collection_end as usize,
+            splices,
+        );
     }
     if base.spans.views.len() == 1 {
         let views =
@@ -1405,7 +1712,14 @@ fn push_remove_view_key_splice(
                 |entry| matches!(&entry.key.kind, SourceNodeKind::Scalar { value } if value == key),
             )
             .ok_or_else(|| missing_span(format!("view {view} key {key:?}")))?;
-        return push_flow_item_removal(&base.raw, &spans, index, splices);
+        return push_flow_item_removal(
+            &base.raw,
+            &spans,
+            index,
+            view_node.start,
+            view_node.end,
+            splices,
+        );
     }
     push_block_removal_splice(splices, &base.raw, region.region.span);
     Ok(())
@@ -1415,26 +1729,87 @@ fn push_flow_item_removal(
     source: &str,
     item_spans: &[Span],
     item: usize,
+    collection_start: usize,
+    collection_end: usize,
     splices: &mut Vec<Splice>,
 ) -> Result<(), SerializeError> {
     let span = *item_spans
         .get(item)
         .ok_or_else(|| missing_span(format!("flow item {item}")))?;
-    if item_spans.len() > 1 {
-        let (between_start, between_end) = if let Some(next) = item_spans.get(item + 1) {
-            (span.end as usize, next.start as usize)
+    let close = collection_end
+        .checked_sub(1)
+        .ok_or_else(|| missing_span("flow collection close"))?;
+    let span_end = span.end as usize;
+    let following_boundary = item_spans
+        .get(item + 1)
+        .map_or(close, |next| next.start as usize);
+    let following_comma = flow_delimiter_comma(source, span_end, following_boundary)?;
+    if item + 1 < item_spans.len() && following_comma.is_none() {
+        return Err(SerializeError::InvalidEdit {
+            message: format!("missing flow delimiter after item {item}"),
+        });
+    }
+    let delimiter =
+        if let Some(comma) = following_comma {
+            Some((comma, true))
+        } else if item > 0 {
+            let previous_end = item_spans[item - 1].end as usize;
+            let comma = flow_delimiter_comma(source, previous_end, span.start as usize)?
+                .ok_or_else(|| SerializeError::InvalidEdit {
+                    message: format!("missing flow delimiter before item {item}"),
+                })?;
+            Some((comma, false))
         } else {
-            (item_spans[item - 1].end as usize, span.start as usize)
+            None
         };
-        let between = source
-            .get(between_start..between_end)
-            .ok_or_else(|| missing_span(format!("flow delimiter for item {item}")))?;
-        let comma = between
-            .find(',')
-            .ok_or_else(|| SerializeError::InvalidEdit {
-                message: format!("missing flow delimiter for item {item}"),
-            })?
-            + between_start;
+    let item_start = {
+        let start = span.start as usize;
+        let line = line_start(source, start);
+        if source[line..start]
+            .bytes()
+            .all(|byte| byte.is_ascii_whitespace())
+        {
+            line
+        } else {
+            start
+        }
+    };
+    let prefix_comment_normalized = if item_spans.len() == 1 {
+        push_sole_flow_prefix_comment_normalization(source, collection_start, item_start, splices)?
+    } else {
+        false
+    };
+    let removal_start = if prefix_comment_normalized {
+        span.start as usize
+    } else {
+        item_start
+    };
+    let content_end = if let Some((comma, true)) = delimiter {
+        flow_following_comma_removal_end(source, comma, following_boundary)
+    } else {
+        span_end
+    };
+    let item_end = flow_item_line_removal_end(source, content_end, following_boundary);
+    if item_spans.len() == 1 {
+        push_sole_flow_suffix_comment_normalization(
+            source,
+            collection_start,
+            content_end,
+            close,
+            splices,
+        )?;
+    }
+    push_splice(
+        splices,
+        Span {
+            start: removal_start as u32,
+            end: item_end as u32,
+        },
+        String::new(),
+    );
+    if let Some((comma, _)) = delimiter
+        && (comma < removal_start || comma >= item_end)
+    {
         push_splice(
             splices,
             Span {
@@ -1444,8 +1819,121 @@ fn push_flow_item_removal(
             String::new(),
         );
     }
-    push_splice(splices, span, String::new());
     Ok(())
+}
+
+fn push_sole_flow_prefix_comment_normalization(
+    source: &str,
+    collection_start: usize,
+    item_start: usize,
+    splices: &mut Vec<Splice>,
+) -> Result<bool, SerializeError> {
+    if !matches!(source.as_bytes().get(collection_start), Some(b'{' | b'[')) {
+        return Err(missing_span("flow collection open"));
+    }
+    let prefix_start = collection_start + 1;
+    let prefix = source
+        .get(prefix_start..item_start)
+        .ok_or_else(|| missing_span(format!("flow prefix trivia {prefix_start}..{item_start}")))?;
+    let Some(comment_offset) = prefix.find('#') else {
+        return Ok(false);
+    };
+    let comment_start = prefix_start + comment_offset;
+    let whitespace = &source[prefix_start..comment_start];
+    if !whitespace.bytes().all(|byte| byte.is_ascii_whitespace())
+        || !whitespace.contains(['\r', '\n'])
+    {
+        return Ok(false);
+    }
+    push_splice(
+        splices,
+        Span {
+            start: prefix_start as u32,
+            end: comment_start as u32,
+        },
+        " ".to_string(),
+    );
+    Ok(true)
+}
+
+fn flow_following_comma_removal_end(source: &str, comma: usize, boundary: usize) -> usize {
+    let mut cursor = comma + 1;
+    while cursor < boundary && matches!(source.as_bytes().get(cursor), Some(b' ' | b'\t')) {
+        cursor += 1;
+    }
+    if cursor == boundary {
+        cursor
+    } else {
+        comma + 1
+    }
+}
+
+fn push_sole_flow_suffix_comment_normalization(
+    source: &str,
+    collection_start: usize,
+    content_end: usize,
+    close: usize,
+    splices: &mut Vec<Splice>,
+) -> Result<(), SerializeError> {
+    let suffix = source
+        .get(content_end..close)
+        .ok_or_else(|| missing_span(format!("flow suffix trivia {content_end}..{close}")))?;
+    if !suffix.contains('#') || !suffix.contains(['\r', '\n']) {
+        return Ok(());
+    }
+    let padding = flow_continuation_padding(source, collection_start, close);
+    if padding == 0 {
+        return Ok(());
+    }
+    let close_line_start = line_start(source, close);
+    push_splice(
+        splices,
+        Span {
+            start: close_line_start as u32,
+            end: close_line_start as u32,
+        },
+        " ".repeat(padding),
+    );
+    Ok(())
+}
+
+fn flow_delimiter_comma(
+    source: &str,
+    start: usize,
+    end: usize,
+) -> Result<Option<usize>, SerializeError> {
+    let bytes = source
+        .get(start..end)
+        .ok_or_else(|| missing_span(format!("flow trivia {start}..{end}")))?
+        .as_bytes();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            byte if byte.is_ascii_whitespace() => offset += 1,
+            b'#' => {
+                offset += 1;
+                while offset < bytes.len() && bytes[offset] != b'\n' {
+                    offset += 1;
+                }
+            }
+            b',' => return Ok(Some(start + offset)),
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+fn flow_item_line_removal_end(source: &str, content_end: usize, close: usize) -> usize {
+    let Some(newline_offset) = source[content_end..close].find('\n') else {
+        return content_end;
+    };
+    let newline = content_end + newline_offset;
+    let tail = &source[content_end..newline];
+    if tail.trim().is_empty() {
+        newline + 1
+    } else {
+        content_end
+    }
 }
 
 fn push_view_key_insertion(
@@ -1916,23 +2404,33 @@ enum FlowCollectionKind {
     Sequence,
 }
 
-fn flow_collection_close(
+fn flow_collection_bounds(
     region: &PreservedRegion,
     key: &str,
     expected: FlowCollectionKind,
-) -> Option<u32> {
+) -> Option<(u32, u32)> {
     let root = source_document(&region.text)?;
     let value = mapping_value(&root, key)?;
-    let closing = match (&value.kind, expected) {
-        (SourceNodeKind::Mapping { flow: true, .. }, FlowCollectionKind::Mapping) => b'}',
-        (SourceNodeKind::Sequence { flow: true, .. }, FlowCollectionKind::Sequence) => b']',
+    let (opening, closing) = match (&value.kind, expected) {
+        (SourceNodeKind::Mapping { flow: true, .. }, FlowCollectionKind::Mapping) => (b'{', b'}'),
+        (SourceNodeKind::Sequence { flow: true, .. }, FlowCollectionKind::Sequence) => (b'[', b']'),
         _ => return None,
     };
     let close = value.end.checked_sub(1)?;
-    if region.text.as_bytes().get(close) != Some(&closing) {
+    if region.text.as_bytes().get(value.start) != Some(&opening)
+        || region.text.as_bytes().get(close) != Some(&closing)
+    {
         return None;
     }
-    region.span.start.checked_add(u32::try_from(close).ok()?)
+    let start = region
+        .span
+        .start
+        .checked_add(u32::try_from(value.start).ok()?)?;
+    let end = region
+        .span
+        .start
+        .checked_add(u32::try_from(value.end).ok()?)?;
+    Some((start, end))
 }
 
 fn flow_collection_append_point(
@@ -2155,6 +2653,16 @@ fn format_view_item_fragment(yaml: &str) -> Result<String, SerializeError> {
             message: "view YAML cannot be empty".to_string(),
         });
     }
+    let documents = yaml_rust2::YamlLoader::load_from_str(yaml).map_err(|error| {
+        SerializeError::InvalidEdit {
+            message: format!("view YAML is invalid: {error}"),
+        }
+    })?;
+    if !matches!(documents.first(), Some(Yaml::Hash(_))) {
+        return Err(SerializeError::InvalidEdit {
+            message: "view YAML must be a mapping fragment".to_string(),
+        });
+    }
     let Some((first, rest)) = yaml.split_once('\n') else {
         let first = yaml.trim_start();
         if first.starts_with("- ") {
@@ -2356,6 +2864,7 @@ fn parse_views(
             filters: None,
             group_by: None,
             order: Vec::new(),
+            sort: Vec::new(),
             summaries: Vec::new(),
             source: RowSource::Files,
             slate_state: None,
@@ -2413,6 +2922,25 @@ fn parse_views(
                 }
                 "order" => {
                     view.order = parse_string_list(value, warnings, "order");
+                }
+                "sort" => {
+                    view.sort = match yaml_to_json(value) {
+                        JsonValue::Array(items) => {
+                            items.iter().filter_map(slate_sort_key).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    // Obsidian's key is not part of the documented schema and
+                    // Slate never owns or rewrites it. Keep the exact source
+                    // region opaque even though execution can interpret the
+                    // currently observed shape.
+                    view.preserved.regions.push(
+                        item_key_regions
+                            .get(&key)
+                            .cloned()
+                            .or_else(|| item_region.clone())
+                            .unwrap_or_else(|| preserved_region(source, 0, source.len())),
+                    );
                 }
                 "summaries" => {
                     view.summaries = parse_view_summaries(value, &custom_summary_names, warnings);
@@ -2651,7 +3179,14 @@ fn parse_group_by(value: &Yaml, warnings: &mut Vec<BaseWarning>) -> Option<Group
 }
 
 fn parse_property_ref(source: &str, warnings: &mut Vec<BaseWarning>) -> Option<PropertyRef> {
-    let expr = parse_expression_string(source, BaseWarningKind::InvalidGroupBy, warnings);
+    let Some(expr) = property_id_expr(source) else {
+        warnings.push(BaseWarning {
+            kind: BaseWarningKind::InvalidGroupBy,
+            message: "groupBy.property must not be empty".to_string(),
+            span: None,
+        });
+        return None;
+    };
     match expr.kind {
         ExprKind::Prop(prop) => Some(prop),
         ExprKind::Unsupported { reason, .. } => {

@@ -804,8 +804,12 @@ fn inapplicable_and_unsupported_summaries_surface_correctly() {
     )];
     let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
         .expect("execute unsupported summary query");
-    let error = result.error.expect("unsupported summary fails loud");
-    assert!(error.construct.contains("summary.median"), "{error:?}");
+    assert_eq!(result.error, None);
+    assert!(!result.rows.is_empty());
+    assert!(matches!(
+        &result.summaries[0].value,
+        CellValue::Error(error) if error.contains("summary.median")
+    ));
 }
 
 #[test]
@@ -828,20 +832,57 @@ fn custom_summary_formulas_use_values_binding() {
 }
 
 #[test]
-fn custom_summary_unsupported_methods_fail_loud() {
+fn custom_summary_unsupported_methods_poison_only_the_summary_cell() {
     let conn = migrated_conn();
     seed_index(&conn);
     let mut query = query();
     query.columns = vec![column("rating")];
+    query.group_by = Some(GroupBy {
+        property: PropertyRef::Note("status".to_string()),
+        ascending: true,
+    });
+    let baseline = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute grouped summary baseline");
     query.custom_summaries = vec![("bad".to_string(), expr("values.mean()"))];
     query.summaries = vec![("rating".to_string(), SummaryRef::Custom("bad".to_string()))];
 
     let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
         .expect("execute custom summary query");
 
-    let error = result.error.expect("unsupported custom summary fails loud");
-    assert!(error.construct.contains("summary.bad"), "{error:?}");
-    assert!(error.construct.contains("mean"), "{error:?}");
+    assert_eq!(result.error, None);
+    assert_eq!(result.rows, baseline.rows);
+    assert_eq!(result.total_count, baseline.total_count);
+    assert_eq!(result.shown_count, baseline.shown_count);
+    assert_eq!(
+        result.unfiltered_shown_count,
+        baseline.unfiltered_shown_count
+    );
+    assert_eq!(result.audio_summary, baseline.audio_summary);
+    assert_eq!(
+        result
+            .groups
+            .iter()
+            .map(|group| (&group.key, group.label.as_str(), group.rows.clone()))
+            .collect::<Vec<_>>(),
+        baseline
+            .groups
+            .iter()
+            .map(|group| (&group.key, group.label.as_str(), group.rows.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(matches!(
+        &result.summaries[0].value,
+        CellValue::Error(error)
+            if error.contains("summary.bad") && error.contains("mean")
+    ));
+    assert_eq!(result.groups.len(), 2);
+    assert!(result.groups.iter().all(|group| {
+        matches!(
+            &group.summaries[0].value,
+            CellValue::Error(error)
+                if error.contains("summary.bad") && error.contains("mean")
+        )
+    }));
 }
 
 #[test]

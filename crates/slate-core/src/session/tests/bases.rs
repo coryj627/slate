@@ -9,6 +9,8 @@
 
 use super::common::*;
 use super::*;
+use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -89,6 +91,123 @@ const DETERMINISM_BASES: [&[u8]; 4] = [
       - status
 "#,
 ];
+
+const SESSION_BASE_CORPUS: [(&str, &[u8]); 10] = [
+    (
+        "brief_example.base",
+        include_bytes!("../../../tests/fixtures/bases/brief_example.base"),
+    ),
+    (
+        "comments_key_order.base",
+        include_bytes!("../../../tests/fixtures/bases/comments_key_order.base"),
+    ),
+    (
+        "edit_adversarial.base",
+        include_bytes!("../../../tests/fixtures/bases/edit_adversarial.base"),
+    ),
+    (
+        "every_documented_key.base",
+        include_bytes!("../../../tests/fixtures/bases/every_documented_key.base"),
+    ),
+    (
+        "filter_only.base",
+        include_bytes!("../../../tests/fixtures/bases/filter_only.base"),
+    ),
+    (
+        "plugin_view_state.base",
+        include_bytes!("../../../tests/fixtures/bases/plugin_view_state.base"),
+    ),
+    (
+        "quoted_unknown_keys.base",
+        include_bytes!("../../../tests/fixtures/bases/quoted_unknown_keys.base"),
+    ),
+    (
+        "tasks_and_comments.base",
+        include_bytes!("../../../tests/fixtures/bases/tasks_and_comments.base"),
+    ),
+    (
+        "obsidian/obsidian-basic.base",
+        include_bytes!("../../../tests/fixtures/bases/obsidian/obsidian-basic.base"),
+    ),
+    (
+        "obsidian/obsidian-formulas.base",
+        include_bytes!("../../../tests/fixtures/bases/obsidian/obsidian-formulas.base"),
+    ),
+];
+
+const SESSION_DQL_CORPORA: [(&str, &str); 3] = [
+    (
+        "closure",
+        include_str!("../../../tests/fixtures/dql/closure_corpus.json"),
+    ),
+    (
+        "field",
+        include_str!("../../../tests/fixtures/dql/field_corpus.json"),
+    ),
+    (
+        "function",
+        include_str!("../../../tests/fixtures/dql/function_corpus.json"),
+    ),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionDqlDisposition {
+    Supported,
+    Unsupported,
+    RuntimeFailLoud,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SessionDqlCase {
+    name: String,
+    disposition: SessionDqlDisposition,
+    source: String,
+    #[serde(default)]
+    this_path: Option<String>,
+    #[serde(default)]
+    warning_message: Option<String>,
+    #[serde(default)]
+    error_contains: Option<String>,
+}
+
+/// The N2 wave-gate's blanket "view_error" shorthand is refined by the
+/// earlier N1 engine contract: membership-affecting positions fail the view,
+/// while column/summary errors retain membership and render named markers.
+#[derive(Debug, Clone, Copy)]
+enum FailLoudMutation {
+    Source,
+    Filter,
+    FormulaInert,
+    Sort,
+    Group,
+    Columns,
+    Summary,
+}
+
+impl FailLoudMutation {
+    const ALL: [Self; 7] = [
+        Self::Source,
+        Self::Filter,
+        Self::FormulaInert,
+        Self::Sort,
+        Self::Group,
+        Self::Columns,
+        Self::Summary,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Filter => "filter",
+            Self::FormulaInert => "formula",
+            Self::Sort => "sort",
+            Self::Group => "group",
+            Self::Columns => "columns",
+            Self::Summary => "summary",
+        }
+    }
+}
 
 struct SplitMix64(u64);
 impl SplitMix64 {
@@ -173,6 +292,50 @@ impl crate::VaultProvider for UnlinkingTestProvider {
     }
 }
 
+struct CountingWriteProvider {
+    inner: FsVaultProvider,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl crate::VaultProvider for CountingWriteProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.inner.read_file(relative)
+    }
+
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.write_file(relative, contents)
+    }
+
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
 fn make_unlinking_vault(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
     let tmp = tempfile::tempdir().expect("create unlinking test vault");
     let root = tmp.path().to_path_buf();
@@ -184,6 +347,239 @@ fn make_unlinking_vault(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::Temp
     )
     .expect("open unlinking test vault");
     (tmp, session)
+}
+
+fn make_counting_write_vault(
+    setup: impl FnOnce(&FsVaultProvider),
+) -> (
+    tempfile::TempDir,
+    VaultSession,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let tmp = tempfile::tempdir().expect("create counting-write test vault");
+    let root = tmp.path().to_path_buf();
+    let setup_provider = FsVaultProvider::new(root.clone());
+    setup(&setup_provider);
+    let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let session = VaultSession::open(
+        Arc::new(CountingWriteProvider {
+            inner: FsVaultProvider::new(root.clone()),
+            writes: writes.clone(),
+        }),
+        SessionConfig::new(root.join(".slate")),
+    )
+    .expect("open counting-write test vault");
+    (tmp, session, writes)
+}
+
+fn session_dql_cases() -> Vec<SessionDqlCase> {
+    SESSION_DQL_CORPORA
+        .iter()
+        .flat_map(|(corpus, source)| {
+            serde_json::from_str::<Vec<SessionDqlCase>>(source)
+                .unwrap_or_else(|error| panic!("parse checked-in DQL {corpus} corpus: {error}"))
+        })
+        .collect()
+}
+
+fn make_dql_corpus_vault() -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|provider| {
+        provider
+            .write_file(
+                "Hub.md",
+                "---\ntags: [project/subtag]\nstatus: active\n---\n[[Target]]\n- [ ] Open task 📅 2099-01-02 ⏳ 2099-01-03\n- [x] Done task 📅 2099-01-02 ⏳ 2099-01-03\n"
+                    .as_bytes(),
+            )
+            .unwrap();
+        provider
+            .write_file(
+                "Target.md",
+                "- [/] Waiting task 📅 2099-01-04 ⏳ 2099-01-05\n".as_bytes(),
+            )
+            .unwrap();
+        provider.write_file("Other.md", b"[[Hub]]\n").unwrap();
+        provider
+            .write_file(
+                "123.md",
+                b"---\ntags: [reading]\naliases: [One,Two]\nstatus: reading\nscheduled: 2026-07-10\npages: 120\nminutesPerPage: 3\nrating: 4.5\nscores: [1,2]\nvalue: x\nindex: 10\nkey: name\n---\n",
+            )
+            .unwrap();
+        provider
+            .write_file("Notes/Hub.md", b"[[Target]]\n")
+            .unwrap();
+        provider
+            .write_file("Notes/Target.md", b"# Target\n")
+            .unwrap();
+        for (path, source) in [
+            (
+                "Notes/Alpha.md",
+                include_bytes!(
+                    "../../../tests/fixtures/bases/obsidian/companion-vault/Notes/Alpha.md"
+                )
+                .as_slice(),
+            ),
+            (
+                "Notes/Beta.md",
+                include_bytes!(
+                    "../../../tests/fixtures/bases/obsidian/companion-vault/Notes/Beta.md"
+                )
+                .as_slice(),
+            ),
+            (
+                "Notes/Gamma.md",
+                include_bytes!(
+                    "../../../tests/fixtures/bases/obsidian/companion-vault/Notes/Gamma.md"
+                )
+                .as_slice(),
+            ),
+        ] {
+            provider.write_file(path, source).unwrap();
+        }
+        provider
+            .write_file(
+                "Notes/View.base",
+                b"views:\n  - type: table\n    name: View\n",
+            )
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+fn unsupported_census_expr(reason: &str) -> crate::bases::expr::Expr {
+    crate::bases::expr::Expr {
+        span: crate::bases::expr::Span { start: 0, end: 0 },
+        kind: crate::bases::expr::ExprKind::Unsupported {
+            raw: reason.to_string(),
+            reason: reason.to_string(),
+        },
+    }
+}
+
+fn mutate_query_for_fail_loud(
+    query: &crate::bases::SlateQuery,
+    mutation: FailLoudMutation,
+) -> (crate::bases::SlateQuery, String) {
+    let mut mutated = query.clone();
+    let reason = format!("N2 census unsupported at {}", mutation.label());
+    match mutation {
+        FailLoudMutation::Source => {
+            mutated.source = crate::bases::QuerySource::Unsupported(reason.clone());
+        }
+        FailLoudMutation::Filter => {
+            mutated.filters = Some(crate::bases::FilterNode::Stmt(unsupported_census_expr(
+                &reason,
+            )));
+        }
+        FailLoudMutation::FormulaInert => {
+            mutated
+                .formulas
+                .push(("__n2_inert".to_string(), unsupported_census_expr(&reason)));
+        }
+        FailLoudMutation::Sort => {
+            mutated.sort.push(crate::bases::SortKey {
+                expr: unsupported_census_expr(&reason),
+                ascending: true,
+            });
+        }
+        FailLoudMutation::Group => {
+            mutated
+                .formulas
+                .push(("__n2_group".to_string(), unsupported_census_expr(&reason)));
+            mutated.group_by = Some(crate::bases::GroupBy {
+                property: crate::bases::expr::PropertyRef::Formula("__n2_group".to_string()),
+                ascending: true,
+            });
+        }
+        FailLoudMutation::Columns => {
+            mutated
+                .formulas
+                .push(("__n2_columns".to_string(), unsupported_census_expr(&reason)));
+            mutated.columns.push(crate::bases::ColumnSelection {
+                id: "formula.__n2_columns".to_string(),
+                display_name: Some("Unsupported census column".to_string()),
+            });
+        }
+        FailLoudMutation::Summary => {
+            let column = mutated
+                .columns
+                .first()
+                .map(|column| column.id.clone())
+                .unwrap_or_else(|| {
+                    mutated.columns.push(crate::bases::ColumnSelection {
+                        id: "file.path".to_string(),
+                        display_name: None,
+                    });
+                    "file.path".to_string()
+                });
+            mutated
+                .custom_summaries
+                .push(("__n2_summary".to_string(), unsupported_census_expr(&reason)));
+            mutated.summaries.push((
+                column,
+                crate::bases::SummaryRef::Custom("__n2_summary".to_string()),
+            ));
+        }
+    }
+    (mutated, reason)
+}
+
+fn result_membership(result: &BasesResultSet) -> Vec<(String, Option<u64>)> {
+    result
+        .rows
+        .iter()
+        .map(|row| (row.file_path.clone(), row.task_ordinal))
+        .collect()
+}
+
+fn assert_named_dql_failure(result: &BasesResultSet, expected: &str, context: &str) {
+    if let Some(error) = result.view_error.as_deref() {
+        assert!(
+            error.contains(expected),
+            "{context}: expected view error containing {expected:?}, got {error:?}"
+        );
+        assert!(
+            result.rows.is_empty(),
+            "{context}: filter/source failure leaked partial rows"
+        );
+        return;
+    }
+
+    assert!(
+        !result.rows.is_empty()
+            && result.rows.iter().all(|row| {
+                row.values.iter().any(|value| {
+                    value
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains(expected))
+                })
+            }),
+        "{context}: expected a named error marker containing {expected:?}, got {result:?}"
+    );
+}
+
+fn checked_in_base_fixture_names() -> BTreeSet<String> {
+    fn collect(root: &Path, dir: &Path, names: &mut BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect(root, &path, names);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("base") {
+                names.insert(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bases");
+    let mut names = BTreeSet::new();
+    collect(&root, &root, &mut names);
+    names
 }
 
 fn notes_query_json() -> String {
@@ -1207,6 +1603,110 @@ fn base_apply_edit_saves_base_file_and_refreshes_open_handle() {
 }
 
 #[test]
+fn base_apply_edits_rejects_stale_open_handle_without_clobbering_external_bytes() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Conflict.base",
+            br#"views:
+  - type: table
+    name: Original
+    order: [file.name]
+"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Conflict.base").unwrap();
+    session
+        .base_set_transient_sort(handle, 0, Some("file.name".to_string()), false)
+        .unwrap();
+    let view_before = session.base_views(handle).unwrap();
+    let query_before = session.base_view_edit_query_json(handle, 0).unwrap();
+    let external = b"views:\n  - type: table\n    name: External\n    order: [file.path]\n";
+    std::fs::write(tmp.path().join("Queries/Conflict.base"), external).unwrap();
+
+    let error = session
+        .base_apply_edits(
+            handle,
+            vec![crate::bases::BaseEdit::SetViewKey {
+                view: 0,
+                key: "order".to_string(),
+                value: "[file.path]".to_string(),
+            }],
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::WriteConflict { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read(tmp.path().join("Queries/Conflict.base")).unwrap(),
+        external
+    );
+    assert_eq!(session.base_views(handle).unwrap(), view_before);
+    assert_eq!(
+        session.base_view_edit_query_json(handle, 0).unwrap(),
+        query_before
+    );
+    assert!(
+        session
+            .bases
+            .lock()
+            .expect("base registry mutex")
+            .get(&handle)
+            .and_then(|state| state.transient_sort.as_ref())
+            .is_some(),
+        "a failed stale save must not clear ephemeral handle state"
+    );
+}
+
+#[test]
+fn base_apply_edits_refreshes_expected_hash_after_each_successful_save() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Sequential.base",
+            br#"views:
+  - type: table
+    name: Original
+    order: [file.name]
+"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Sequential.base").unwrap();
+    session
+        .base_apply_edit(
+            handle,
+            crate::bases::BaseEdit::RenameView {
+                view: 0,
+                name: "First".to_string(),
+            },
+        )
+        .unwrap();
+    session
+        .base_apply_edit(
+            handle,
+            crate::bases::BaseEdit::RenameView {
+                view: 0,
+                name: "Second".to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(session.base_views(handle).unwrap()[0].name, "Second");
+    assert!(
+        session
+            .read_text("Queries/Sequential.base")
+            .unwrap()
+            .contains("name: Second")
+    );
+}
+
+#[test]
 fn base_apply_edits_rejects_later_invalid_edit_without_mutating_session_or_disk() {
     let (tmp, session) = make_vault(|p| {
         p.write_file(
@@ -1544,6 +2044,344 @@ fn save_query_as_base_and_dql_as_base_write_canonical_executable_base() {
 }
 
 #[test]
+fn save_query_as_base_round_trips_unsafe_note_and_formula_property_references() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Notes/Alpha.md",
+            b"---\nproject-status: active\ntrue: yes\nbase-value: 2\n---\n# Alpha\n",
+        )
+        .unwrap();
+        p.write_file(
+            "Notes/Beta.md",
+            b"---\nproject-status: archived\ntrue: yes\nbase-value: 2\n---\n# Beta\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let query = crate::bases::SlateQuery {
+        source: crate::bases::QuerySource::Folder("Notes".to_string()),
+        row_source: crate::bases::RowSource::Files,
+        filters: Some(crate::bases::FilterNode::Stmt(
+            crate::bases::expr::parse_expr(
+                r#"note["project-status"] == "active" && note["true"] == "yes" && formula["score-total"] == 3 && formula["true"] == 7"#,
+            )
+            .unwrap(),
+        )),
+        formulas: vec![
+            (
+                "score-total".to_string(),
+                crate::bases::expr::parse_expr(r#"note["base-value"] + 1"#).unwrap(),
+            ),
+            (
+                "true".to_string(),
+                crate::bases::expr::parse_expr(r#"note["base-value"] + 5"#).unwrap(),
+            ),
+        ],
+        custom_summaries: Vec::new(),
+        group_by: None,
+        sort: Vec::new(),
+        columns: [
+            "note[\"project-status\"]",
+            "note[\"true\"]",
+            "formula[\"score-total\"]",
+            "formula[\"true\"]",
+        ]
+        .into_iter()
+        .map(|id| crate::bases::ColumnSelection {
+            id: id.to_string(),
+            display_name: None,
+        })
+        .collect(),
+        summaries: Vec::new(),
+        limit: None,
+        view: crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        },
+    };
+    let original_handle = session
+        .open_query(&serde_json::to_string(&query).unwrap(), None)
+        .unwrap();
+    let original = session
+        .base_execute(original_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+
+    session
+        .save_query_as_base(
+            &serde_json::to_string(&query).unwrap(),
+            "Queries/UnsafeNames.base",
+        )
+        .unwrap();
+    let exported = session.read_text("Queries/UnsafeNames.base").unwrap();
+    assert!(
+        exported.contains(r#"note[\"project-status\"]"#),
+        "{exported}"
+    );
+    assert!(exported.contains(r#"note[\"true\"]"#), "{exported}");
+    assert!(
+        exported.contains(r#"formula[\"score-total\"]"#),
+        "{exported}"
+    );
+    assert!(exported.contains(r#"formula[\"true\"]"#), "{exported}");
+
+    let reopened_handle = session.open_base("Queries/UnsafeNames.base").unwrap();
+    let reopened = session
+        .base_execute(reopened_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        result_matrix(&reopened),
+        result_matrix(&original),
+        "exported .base:\n{exported}\nreopened query:\n{}",
+        session.base_view_query_json(reopened_handle, 0).unwrap()
+    );
+}
+
+#[test]
+fn save_query_as_base_quotes_yaml_native_formula_expression_scalars() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Alpha.md", b"---\nnull: 11\nyes: 12\n---\n# Alpha\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let query = crate::bases::SlateQuery {
+        source: crate::bases::QuerySource::Folder("Notes".to_string()),
+        row_source: crate::bases::RowSource::Files,
+        filters: None,
+        formulas: [
+            ("integer", "7"),
+            ("decimal", "1.5"),
+            ("boolean", "true"),
+            ("nullLike", "null"),
+            ("yamlBooleanLike", "yes"),
+            ("dateLike", r#""2024-01-01""#),
+        ]
+        .into_iter()
+        .map(|(name, expression)| {
+            (
+                name.to_string(),
+                crate::bases::expr::parse_expr(expression).unwrap(),
+            )
+        })
+        .collect(),
+        custom_summaries: Vec::new(),
+        group_by: None,
+        sort: Vec::new(),
+        columns: [
+            "formula.integer",
+            "formula.decimal",
+            "formula.boolean",
+            "formula.nullLike",
+            "formula.yamlBooleanLike",
+            "formula.dateLike",
+        ]
+        .into_iter()
+        .map(|id| crate::bases::ColumnSelection {
+            id: id.to_string(),
+            display_name: None,
+        })
+        .collect(),
+        summaries: Vec::new(),
+        limit: None,
+        view: crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        },
+    };
+    let original_handle = session
+        .open_query(&serde_json::to_string(&query).unwrap(), None)
+        .unwrap();
+    let original = session
+        .base_execute(original_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+
+    session
+        .save_query_as_base(
+            &serde_json::to_string(&query).unwrap(),
+            "Queries/ScalarFormulas.base",
+        )
+        .unwrap();
+    let exported = session.read_text("Queries/ScalarFormulas.base").unwrap();
+    for expected in [
+        r#"  integer: "7""#,
+        r#"  decimal: "1.5""#,
+        r#"  boolean: "true""#,
+        r#"  nullLike: "null""#,
+        r#"  yamlBooleanLike: "yes""#,
+        r#"  dateLike: "\"2024-01-01\"""#,
+    ] {
+        assert!(
+            exported.contains(expected),
+            "missing {expected:?}:\n{exported}"
+        );
+    }
+
+    let reopened_handle = session.open_base("Queries/ScalarFormulas.base").unwrap();
+    let reopened = session
+        .base_execute(reopened_handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(result_matrix(&reopened), result_matrix(&original));
+}
+
+#[test]
+fn save_query_as_base_quotes_yaml_native_custom_summary_expression_scalars() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Alpha.md", b"# Alpha\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    for (name, expression, expected) in [
+        ("integer", "7", r#"  integer: "7""#),
+        ("boolean", "true", r#"  boolean: "true""#),
+        (
+            "dateLike",
+            r#""2024-01-01""#,
+            r#"  dateLike: "\"2024-01-01\"""#,
+        ),
+    ] {
+        let query = crate::bases::SlateQuery {
+            source: crate::bases::QuerySource::Folder("Notes".to_string()),
+            row_source: crate::bases::RowSource::Files,
+            filters: None,
+            formulas: Vec::new(),
+            custom_summaries: vec![(
+                name.to_string(),
+                crate::bases::expr::parse_expr(expression).unwrap(),
+            )],
+            group_by: None,
+            sort: Vec::new(),
+            columns: vec![crate::bases::ColumnSelection {
+                id: "file.name".to_string(),
+                display_name: None,
+            }],
+            summaries: vec![(
+                "file.name".to_string(),
+                crate::bases::SummaryRef::Custom(name.to_string()),
+            )],
+            limit: None,
+            view: crate::bases::ViewSpec::Table {
+                fallback_from: None,
+            },
+        };
+        let query_json = serde_json::to_string(&query).unwrap();
+        let original_handle = session.open_query(&query_json, None).unwrap();
+        let original = session
+            .base_execute(original_handle, 0, None, None, &CancelToken::new())
+            .unwrap();
+        let path = format!("Queries/{name}.base");
+
+        session.save_query_as_base(&query_json, &path).unwrap();
+        let exported = session.read_text(&path).unwrap();
+        assert!(
+            exported.contains(expected),
+            "missing {expected:?} in {name}:\n{exported}"
+        );
+
+        let reopened_handle = session.open_base(&path).unwrap();
+        let reopened = session
+            .base_execute(reopened_handle, 0, None, None, &CancelToken::new())
+            .unwrap();
+        assert_eq!(
+            reopened.summaries, original.summaries,
+            "custom summary {name} changed after export/reopen:\n{exported}"
+        );
+    }
+}
+
+#[test]
+fn save_query_as_base_round_trips_unsafe_and_safe_this_note_properties() {
+    use crate::bases::expr::{BinaryOp, Expr, ExprKind, Lit, PropertyRef, Span};
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Context.md",
+            b"---\nfoo-bar: active\nsafeName: ready\n---\n# Context\n",
+        )
+        .unwrap();
+        p.write_file("Notes/Alpha.md", b"# Alpha\n").unwrap();
+        p.write_file("Notes/Beta.md", b"# Beta\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let span = Span { start: 0, end: 0 };
+    let comparison = |property: PropertyRef, expected: &str| Expr {
+        span,
+        kind: ExprKind::Binary {
+            op: BinaryOp::Eq,
+            lhs: Box::new(Expr {
+                span,
+                kind: ExprKind::Prop(property),
+            }),
+            rhs: Box::new(Expr {
+                span,
+                kind: ExprKind::Lit(Lit::String(expected.to_string())),
+            }),
+        },
+    };
+    let query = crate::bases::SlateQuery {
+        source: crate::bases::QuerySource::Folder("Notes".to_string()),
+        row_source: crate::bases::RowSource::Files,
+        filters: Some(crate::bases::FilterNode::Stmt(Expr {
+            span,
+            kind: ExprKind::Binary {
+                op: BinaryOp::And,
+                lhs: Box::new(comparison(
+                    PropertyRef::ThisNote("foo-bar".to_string()),
+                    "active",
+                )),
+                rhs: Box::new(comparison(
+                    PropertyRef::ThisNote("safeName".to_string()),
+                    "ready",
+                )),
+            },
+        })),
+        formulas: Vec::new(),
+        custom_summaries: Vec::new(),
+        group_by: None,
+        sort: Vec::new(),
+        columns: vec![crate::bases::ColumnSelection {
+            id: "file.name".to_string(),
+            display_name: None,
+        }],
+        summaries: Vec::new(),
+        limit: None,
+        view: crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        },
+    };
+    let query_json = serde_json::to_string(&query).unwrap();
+    let original_handle = session.open_query(&query_json, None).unwrap();
+    let original = session
+        .base_execute(
+            original_handle,
+            0,
+            Some("Context.md".to_string()),
+            None,
+            &CancelToken::new(),
+        )
+        .unwrap();
+    assert_eq!(original.rows.len(), 2);
+
+    session
+        .save_query_as_base(&query_json, "Queries/ThisProperties.base")
+        .unwrap();
+    let exported = session.read_text("Queries/ThisProperties.base").unwrap();
+    assert!(exported.contains(r#"this[\"foo-bar\"]"#), "{exported}");
+    assert!(exported.contains("this.safeName"), "{exported}");
+
+    let reopened_handle = session.open_base("Queries/ThisProperties.base").unwrap();
+    let reopened = session
+        .base_execute(
+            reopened_handle,
+            0,
+            Some("Context.md".to_string()),
+            None,
+            &CancelToken::new(),
+        )
+        .unwrap();
+    assert_eq!(result_matrix(&reopened), result_matrix(&original));
+}
+
+#[test]
 fn session_column_kinds_skip_leading_nulls_and_errors() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(
@@ -1726,67 +2564,74 @@ fn recent_export_reopen_preserves_exact_cutoff_membership() {
 
 #[test]
 fn census_bases_roundtrip() {
-    let (_tmp, session) = make_vault(|p| {
-        p.write_file("Notes/Alpha.md", b"---\nstatus: active\n---\n# Alpha\n")
-            .unwrap();
-        p.write_file("Notes/Beta.md", b"---\nstatus: archived\n---\n# Beta\n")
-            .unwrap();
-        p.write_file("Notes/Gamma.md", b"---\nstatus: done\n---\n# Gamma\n")
-            .unwrap();
+    assert_eq!(
+        SESSION_BASE_CORPUS
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect::<BTreeSet<_>>(),
+        checked_in_base_fixture_names(),
+        "the session round-trip corpus must enumerate every checked-in .base fixture"
+    );
+    let (tmp, session, writes) = make_counting_write_vault(|provider| {
+        for (fixture, source) in SESSION_BASE_CORPUS {
+            provider
+                .write_file(&format!("Corpus/{fixture}"), source)
+                .unwrap_or_else(|error| panic!("write checked-in Base fixture {fixture}: {error}"));
+        }
     });
     session.scan_initial(&CancelToken::new()).unwrap();
+    writes.store(0, std::sync::atomic::Ordering::SeqCst);
 
-    let (base, warnings) = crate::bases::parse_base(
-        r#"filters:
-  and:
-    - "file.inFolder(\"Notes\")"
-    - or:
-        - "status == \"active\""
-        - "status == \"done\""
-properties:
-  status:
-    displayName: Status
-views:
-  - type: table
-    name: Roundtrip
-    order:
-      - file.name
-      - status
-"#,
-    );
-    assert!(warnings.is_empty(), "{warnings:?}");
-    let query = crate::bases::view_query(&base, 0);
-    let query_json = serde_json::to_string(&query).unwrap();
-
-    let query_handle = session.open_query(&query_json, None).unwrap();
-    let query_result = session
-        .base_execute(query_handle, 0, None, None, &CancelToken::new())
-        .unwrap();
-    session
-        .save_query_as_base(&query_json, "Queries/Roundtrip.base")
-        .unwrap();
-    let saved_handle = session.open_base("Queries/Roundtrip.base").unwrap();
-    let saved_result = session
-        .base_execute(saved_handle, 0, None, None, &CancelToken::new())
-        .unwrap();
-
-    assert_eq!(result_matrix(&saved_result), result_matrix(&query_result));
     assert_eq!(
-        saved_result
-            .columns
-            .iter()
-            .map(|column| column.label.as_str())
-            .collect::<Vec<_>>(),
-        vec!["file.name", "Status"]
+        session.bases_list().unwrap().len(),
+        SESSION_BASE_CORPUS.len(),
+        "the session/provider census must include every checked-in .base fixture"
     );
-    assert_eq!(
-        saved_result
-            .rows
-            .iter()
-            .map(|row| row.file_path.as_str())
-            .collect::<Vec<_>>(),
-        vec!["Notes/Alpha.md", "Notes/Gamma.md"]
-    );
+
+    for (fixture, source) in SESSION_BASE_CORPUS {
+        let path = format!("Corpus/{fixture}");
+        let before = vault_content_snapshot(tmp.path());
+        let writes_before = writes.load(std::sync::atomic::Ordering::SeqCst);
+        let handle = session
+            .open_base(&path)
+            .unwrap_or_else(|error| panic!("open checked-in Base fixture {fixture}: {error}"));
+        assert_eq!(
+            writes.load(std::sync::atomic::Ordering::SeqCst),
+            writes_before,
+            "opening checked-in fixture {fixture} must not write through the provider"
+        );
+        let views = session.base_views(handle).unwrap();
+        let edit = if let Some(view) = views.first() {
+            crate::bases::BaseEdit::RenameView {
+                view: 0,
+                name: view.name.clone(),
+            }
+        } else {
+            crate::bases::BaseEdit::SetTopLevelFilters {
+                yaml: String::from_utf8_lossy(source).trim_end().to_string(),
+            }
+        };
+        session
+            .base_apply_edit(handle, edit)
+            .unwrap_or_else(|error| panic!("save checked-in Base fixture {fixture}: {error}"));
+        session.close_base(handle);
+
+        assert_eq!(
+            writes.load(std::sync::atomic::Ordering::SeqCst),
+            writes_before + 1,
+            "open→save must traverse provider write I/O for {fixture}"
+        );
+        assert_eq!(
+            std::fs::read(tmp.path().join(&path)).unwrap(),
+            source,
+            "session open→save changed checked-in fixture bytes for {fixture}"
+        );
+        assert_eq!(
+            vault_content_snapshot(tmp.path()),
+            before,
+            "session open→save changed vault bytes for {fixture}"
+        );
+    }
 }
 
 #[test]
@@ -2165,10 +3010,29 @@ fn census_bases_warm_handle_matches_cold_after_generated_mutations() {
 
 #[test]
 fn census_bases_fail_loud() {
-    let (_tmp, session) = make_vault(|p| {
-        p.write_file("Notes/Alpha.md", b"# Alpha\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
+    let (tmp, session) = make_dql_corpus_vault();
+    let cases = session_dql_cases();
+    let unique_names = cases
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        unique_names.len(),
+        cases.len(),
+        "checked-in DQL corpus case names must be globally unique"
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.disposition == SessionDqlDisposition::Supported),
+        "session DQL corpus must include supported cases"
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.disposition == SessionDqlDisposition::Unsupported),
+        "session DQL corpus must include unsupported cases"
+    );
 
     let err = session.base_views(9_999).unwrap_err();
     assert!(err.to_string().contains("unknown base handle"), "{err}");
@@ -2234,73 +3098,268 @@ fn census_bases_fail_loud() {
         "{conversion_err}"
     );
 
-    for (source, expected) in [
-        ("TABLE upper(file.name)\nFROM \"Notes\"\n", "upper"),
-        ("TABLE file.name\nGROUP BY status\n", "GROUP BY"),
-        ("TASK\nWHERE line > 0\n", "task field line"),
-    ] {
-        let err = session.dql_as_base(source).unwrap_err();
-        assert!(err.to_string().contains(expected), "{err}");
-        let handle = session.open_dql(source, None).unwrap();
+    for case in &cases {
+        let context = format!("DQL corpus case {} source={:?}", case.name, case.source);
+        let before = vault_content_snapshot(tmp.path());
+        let handle = session
+            .open_dql(&case.source, case.this_path.clone())
+            .unwrap_or_else(|error| panic!("{context}: open_dql failed: {error}"));
         let result = session
             .base_execute(handle, 0, None, None, &CancelToken::new())
-            .unwrap();
-        assert!(
-            result.view_error.is_some()
-                || !result.warnings.is_empty()
-                || result
-                    .rows
-                    .iter()
-                    .flat_map(|row| row.values.iter())
-                    .any(|value| value.error.is_some()),
-            "unsupported DQL fixture should surface loudly: {source:?}"
+            .unwrap_or_else(|error| panic!("{context}: execute failed: {error}"));
+        session.close_base(handle);
+        assert_eq!(
+            vault_content_snapshot(tmp.path()),
+            before,
+            "{context}: execution changed vault bytes"
         );
+
+        match case.disposition {
+            SessionDqlDisposition::Supported => {
+                assert!(
+                    result.warnings.is_empty(),
+                    "{context}: conversion warnings: {:?}",
+                    result.warnings
+                );
+                assert_eq!(result.view_error, None, "{context}: failed loud");
+                assert!(
+                    result
+                        .rows
+                        .iter()
+                        .flat_map(|row| &row.values)
+                        .all(|value| value.error.is_none()),
+                    "{context}: supported query produced an error marker: {result:?}"
+                );
+                session
+                    .dql_as_base(&case.source)
+                    .unwrap_or_else(|error| panic!("{context}: conversion failed: {error}"));
+            }
+            SessionDqlDisposition::Unsupported => {
+                let warning = case.warning_message.as_deref().unwrap_or_else(|| {
+                    panic!("{context}: unsupported fixture lacks warning_message")
+                });
+                let expected = case.error_contains.as_deref().unwrap_or_else(|| {
+                    panic!("{context}: unsupported fixture lacks error_contains")
+                });
+                assert!(
+                    result.warnings.iter().any(|actual| actual == warning),
+                    "{context}: expected exact warning {warning:?}, got {:?}",
+                    result.warnings
+                );
+                assert_named_dql_failure(&result, expected, &context);
+                let error = session
+                    .dql_as_base(&case.source)
+                    .expect_err("unsupported DQL conversion must fail loud");
+                assert!(
+                    error.to_string().contains(warning),
+                    "{context}: converter error did not name {warning:?}: {error}"
+                );
+            }
+            SessionDqlDisposition::RuntimeFailLoud => {
+                assert!(
+                    result.warnings.is_empty(),
+                    "{context}: conversion warnings: {:?}",
+                    result.warnings
+                );
+                let expected = case.error_contains.as_deref().unwrap_or_else(|| {
+                    panic!("{context}: runtime fail-loud fixture lacks error_contains")
+                });
+                assert_named_dql_failure(&result, expected, &context);
+                session
+                    .dql_as_base(&case.source)
+                    .unwrap_or_else(|error| panic!("{context}: conversion failed: {error}"));
+            }
+        }
+    }
+
+    for case in cases
+        .iter()
+        .filter(|case| case.disposition == SessionDqlDisposition::Supported)
+    {
+        let baseline_handle = session
+            .open_dql(&case.source, case.this_path.clone())
+            .unwrap();
+        let baseline = session
+            .base_execute(baseline_handle, 0, None, None, &CancelToken::new())
+            .unwrap();
+        let query: crate::bases::SlateQuery =
+            serde_json::from_str(&session.base_view_query_json(baseline_handle, 0).unwrap())
+                .unwrap();
+        session.close_base(baseline_handle);
+        assert!(
+            !baseline.rows.is_empty(),
+            "supported DQL fixture {} must exercise row-position mutations",
+            case.name
+        );
+
+        for mutation in FailLoudMutation::ALL {
+            let (mutated, reason) = mutate_query_for_fail_loud(&query, mutation);
+            let context = format!(
+                "DQL mutation case={} position={} reason={reason:?}",
+                case.name,
+                mutation.label()
+            );
+            let before = vault_content_snapshot(tmp.path());
+            let handle = session
+                .open_query(
+                    &serde_json::to_string(&mutated).unwrap(),
+                    case.this_path.clone(),
+                )
+                .unwrap();
+            let result = session
+                .base_execute(handle, 0, None, None, &CancelToken::new())
+                .unwrap_or_else(|error| panic!("{context}: execute failed: {error}"));
+            session.close_base(handle);
+            assert_eq!(
+                vault_content_snapshot(tmp.path()),
+                before,
+                "{context}: query execution changed vault bytes"
+            );
+
+            match mutation {
+                FailLoudMutation::FormulaInert => {
+                    assert_eq!(
+                        result.view_error, None,
+                        "{context}: inert formula failed view"
+                    );
+                    assert_eq!(
+                        result_membership(&result),
+                        result_membership(&baseline),
+                        "{context}: unreferenced unsupported formula changed membership"
+                    );
+                    assert_eq!(
+                        result_matrix(&result),
+                        result_matrix(&baseline),
+                        "{context}: unreferenced unsupported formula changed visible values"
+                    );
+                }
+                FailLoudMutation::Columns => {
+                    assert_eq!(
+                        result.view_error, None,
+                        "{context}: column error must stay in its error-marker cells"
+                    );
+                    assert_eq!(
+                        result_membership(&result),
+                        result_membership(&baseline),
+                        "{context}: column error changed membership"
+                    );
+                    assert!(
+                        result.rows.iter().all(|row| {
+                            row.values
+                                .last()
+                                .and_then(|value| value.error.as_deref())
+                                .is_some_and(|error| error.contains(&reason))
+                        }),
+                        "{context}: referenced unsupported column lacked named markers: {result:?}"
+                    );
+                }
+                FailLoudMutation::Summary => {
+                    assert_eq!(
+                        result.view_error, None,
+                        "{context}: summary error must stay in its error-marker cell"
+                    );
+                    assert_eq!(
+                        result_membership(&result),
+                        result_membership(&baseline),
+                        "{context}: summary error changed membership"
+                    );
+                    assert!(
+                        result.summaries.iter().any(|summary| {
+                            summary
+                                .value
+                                .error
+                                .as_deref()
+                                .is_some_and(|error| error.contains(&reason))
+                        }),
+                        "{context}: unsupported summary lacked a named marker: {result:?}"
+                    );
+                }
+                FailLoudMutation::Source
+                | FailLoudMutation::Filter
+                | FailLoudMutation::Sort
+                | FailLoudMutation::Group => {
+                    let error = result.view_error.as_deref().unwrap_or_else(|| {
+                        panic!("{context}: membership-affecting error did not fail the view")
+                    });
+                    assert!(error.contains(&reason), "{context}: got {error:?}");
+                    assert!(result.rows.is_empty(), "{context}: leaked partial rows");
+                }
+            }
+        }
     }
 }
 
 #[test]
 fn census_bases_read_only() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file(
-            "Queries/Reading.base",
-            br#"views:
-  - type: table
-    name: Reading
-    filters: "file.inFolder(\"Notes\")"
-    order:
-      - file.name
-      - status
-"#,
-        )
-        .unwrap();
-        p.write_file("Notes/Alpha.md", b"---\nstatus: active\n---\n# Alpha\n")
-            .unwrap();
-        p.write_file("Notes/Beta.md", b"---\nstatus: done\n---\n# Beta\n")
-            .unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    let before = vault_content_snapshot(tmp.path());
+    let (tmp, session) = make_dql_corpus_vault();
+    for (fixture, source) in SESSION_BASE_CORPUS {
+        session
+            .save_text(
+                &format!("Corpus/{fixture}"),
+                &String::from_utf8_lossy(source),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("install Base fixture {fixture}: {error}"));
+    }
+    let cases = session_dql_cases();
+    assert_eq!(
+        session.bases_list().unwrap().len(),
+        SESSION_BASE_CORPUS.len() + 1,
+        "the read-only vault includes the Base corpus plus Notes/View.base"
+    );
 
-    let summaries = session.bases_list().unwrap();
-    assert_eq!(summaries.len(), 1);
-    let handle = session.open_base("Queries/Reading.base").unwrap();
-    session
-        .base_execute(handle, 0, None, None, &CancelToken::new())
-        .unwrap();
-    session
-        .base_export(handle, 0, ExportFormat::Markdown, Some("done".to_string()))
-        .unwrap();
-    let dql_handle = session
-        .open_dql(
-            "TABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n",
-            None,
-        )
-        .unwrap();
-    session
-        .base_execute(dql_handle, 0, None, None, &CancelToken::new())
-        .unwrap();
+    for (fixture, _) in SESSION_BASE_CORPUS {
+        let path = format!("Corpus/{fixture}");
+        let before_open = vault_content_snapshot(tmp.path());
+        let handle = session.open_base(&path).unwrap();
+        let views = session.base_views(handle).unwrap();
+        assert_eq!(
+            vault_content_snapshot(tmp.path()),
+            before_open,
+            "open_base changed vault bytes for {fixture}"
+        );
+        for view in 0..views.len() {
+            let before = vault_content_snapshot(tmp.path());
+            session
+                .base_execute(handle, view as u32, None, None, &CancelToken::new())
+                .unwrap_or_else(|error| {
+                    panic!("execute Base fixture {fixture} view {view}: {error}")
+                });
+            session
+                .base_export(handle, view as u32, ExportFormat::Markdown, None)
+                .unwrap_or_else(|error| {
+                    panic!("export Base fixture {fixture} view {view}: {error}")
+                });
+            assert_eq!(
+                vault_content_snapshot(tmp.path()),
+                before,
+                "Base fixture {fixture} view {view} changed vault bytes"
+            );
+        }
+        session.close_base(handle);
+        assert_eq!(
+            vault_content_snapshot(tmp.path()),
+            before_open,
+            "closing Base fixture {fixture} changed vault bytes"
+        );
+    }
 
-    assert_eq!(vault_content_snapshot(tmp.path()), before);
+    for case in &cases {
+        let context = format!("read-only DQL case {} source={:?}", case.name, case.source);
+        let before = vault_content_snapshot(tmp.path());
+        let handle = session
+            .open_dql(&case.source, case.this_path.clone())
+            .unwrap_or_else(|error| panic!("{context}: open_dql failed: {error}"));
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap_or_else(|error| panic!("{context}: execute failed: {error}"));
+        session.close_base(handle);
+        assert_eq!(
+            vault_content_snapshot(tmp.path()),
+            before,
+            "{context}: query changed vault bytes"
+        );
+    }
 }
 
 #[test]
@@ -2423,7 +3482,7 @@ fn n4_closeout_fixture_vault_e2e() {
         .unwrap();
     assert_eq!(
         converted,
-        "filters: \"file.file.inFolder(\\\"Notes\\\")\"\nformulas:\n  dql_column_1: file.name\nproperties:\n  formula.dql_column_1:\n    displayName: Name\nviews:\n  - type: table\n    name: Query\n    order:\n      - formula.dql_column_1\n"
+        "filters: \"file.file.inFolder(\\\"Notes\\\")\"\nformulas:\n  dql_column_1: \"file.name\"\nproperties:\n  formula.dql_column_1:\n    displayName: Name\nviews:\n  - type: table\n    name: Query\n    order:\n      - formula.dql_column_1\n"
     );
     let converted_handle = session.open_base_inline(&converted, None).unwrap();
     let converted_result = session

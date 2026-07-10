@@ -992,8 +992,8 @@ struct BaseQuerySortKey: Hashable {
 
     fileprivate var slateYAML: String {
         [
-            "    - expr: \(BaseQueryYAML.scalar(expressionLabel))",
-            "      direction: \(ascending ? "asc" : "desc")",
+            "- expr: \(BaseQueryYAML.scalar(expressionLabel))",
+            "  direction: \(ascending ? "asc" : "desc")",
         ].joined(separator: "\n")
     }
 }
@@ -1299,7 +1299,7 @@ struct BaseQueryBuilderDraft: Equatable {
         if previous?.sortKeys != sortKeys,
             !sortKeys.isEmpty || previous?.sortKeys.isEmpty == false
         {
-            edits.append(.setSlateState(view: view, yaml: slateStateYAML))
+            edits.append(.setSlateSort(view: view, yaml: slateSortYAML))
         }
         return edits
     }
@@ -1410,13 +1410,9 @@ struct BaseQueryBuilderDraft: Equatable {
         return lines.joined(separator: "\n")
     }
 
-    private var slateStateYAML: String? {
+    private var slateSortYAML: String? {
         guard !sortKeys.isEmpty else { return nil }
-        var lines = ["slate:", "  sort:"]
-        for sort in sortKeys {
-            lines.append(sort.slateYAML)
-        }
-        return lines.joined(separator: "\n")
+        return sortKeys.map(\.slateYAML).joined(separator: "\n")
     }
 
     private func normalizedDisplayName(_ value: String?) -> String? {

@@ -591,7 +591,7 @@ pub fn execute(
     let group_slices = group_rows(query, &mut rows);
     let total_count = rows.len();
     let mut result_warnings = warnings.messages();
-    let summaries = match compute_summaries(
+    let summaries = compute_summaries(
         query,
         &rows,
         0..rows.len(),
@@ -599,11 +599,8 @@ pub fn execute(
         &vault,
         &warnings,
         &mut result_warnings,
-    ) {
-        Ok(summaries) => summaries,
-        Err(error) => return Ok(error_result(query, ctx, error, "")),
-    };
-    let group_summaries = match group_slices
+    );
+    let group_summaries = group_slices
         .iter()
         .map(|group| {
             compute_summaries(
@@ -616,11 +613,7 @@ pub fn execute(
                 &mut result_warnings,
             )
         })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(summaries) => summaries,
-        Err(error) => return Ok(error_result(query, ctx, error, "")),
-    };
+        .collect::<Vec<_>>();
     let shown_count = query
         .limit
         .map(|limit| (limit as usize).min(total_count))
@@ -2087,12 +2080,18 @@ fn compute_summaries(
     vault: &dyn VaultLookup,
     warnings: &WarningSink,
     result_warnings: &mut Vec<String>,
-) -> Result<Vec<BasesSummaryCell>, String> {
+) -> Vec<BasesSummaryCell> {
     query
         .summaries
         .iter()
         .map(|(column_id, summary)| {
-            let (summary_name, kind) = summary_kind(summary)?;
+            let fallback_name = match summary {
+                SummaryRef::Builtin(name) | SummaryRef::Custom(name) => name.clone(),
+            };
+            let (summary_name, kind) = match summary_kind(summary) {
+                Ok(summary) => summary,
+                Err(error) => return summary_error_cell(column_id, &fallback_name, error),
+            };
             compute_summary(
                 query,
                 rows,
@@ -2105,8 +2104,17 @@ fn compute_summaries(
                 warnings,
                 result_warnings,
             )
+            .unwrap_or_else(|error| summary_error_cell(column_id, &summary_name, error))
         })
         .collect()
+}
+
+fn summary_error_cell(column_id: &str, summary_name: &str, error: String) -> BasesSummaryCell {
+    BasesSummaryCell {
+        column_id: column_id.to_string(),
+        summary: summary_name.to_string(),
+        value: CellValue::Error(error),
+    }
 }
 
 fn summary_kind(summary: &SummaryRef) -> Result<(String, SummaryKind), String> {
@@ -2660,7 +2668,16 @@ fn eval_column(
 }
 
 fn column_expr(id: &str) -> Expr {
-    super::expr::parse_expr(id).unwrap_or_else(|_| Expr {
+    // ColumnSelection IDs are property identifiers. Calls are the one explicit
+    // expression-shaped compatibility surface (`now()`, `date(when)`, method
+    // calls); every other non-namespaced string is a literal note-property ID.
+    // Native `sort[].expr` is parsed separately and is not constrained here.
+    if let Ok(expr) = super::expr::parse_expr(id)
+        && matches!(expr.kind, ExprKind::Call { .. })
+    {
+        return expr;
+    }
+    super::property_id_expr(id).unwrap_or_else(|| Expr {
         span: super::expr::Span { start: 0, end: 0 },
         kind: ExprKind::Prop(PropertyRef::Note(id.to_string())),
     })

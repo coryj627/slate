@@ -137,6 +137,13 @@ final class BaseQueryBuilderTests: XCTestCase {
         }
     }
 
+    private static func hasSlateSortEdit(_ edits: [BaseEdit]) -> Bool {
+        edits.contains { edit in
+            if case .setSlateSort = edit { return true }
+            return false
+        }
+    }
+
     private static func hasRemoveFormulaEdit(
         _ edits: [BaseEdit],
         named expectedName: String
@@ -2402,7 +2409,7 @@ final class BaseQueryBuilderTests: XCTestCase {
                     value: .text("Alpha"))))
         let unrelatedEdits = try filterEdited.baseEditsForView(0, replacing: previous)
         XCTAssertFalse(
-            Self.hasSlateStateEdit(unrelatedEdits),
+            Self.hasSlateSortEdit(unrelatedEdits),
             "an unrelated filter edit must not rewrite advanced sort source")
         for edit in unrelatedEdits {
             try session.baseApplyEdit(handle: handle, edit: edit)
@@ -2411,7 +2418,8 @@ final class BaseQueryBuilderTests: XCTestCase {
         var sortEdited = filterEdited
         sortEdited.sortKeys[0].ascending = false
         let sortEdits = try sortEdited.baseEditsForView(0, replacing: filterEdited)
-        XCTAssertTrue(Self.hasSlateStateEdit(sortEdits))
+        XCTAssertTrue(Self.hasSlateSortEdit(sortEdits))
+        XCTAssertFalse(Self.hasSlateStateEdit(sortEdits))
         for edit in sortEdits {
             try session.baseApplyEdit(handle: handle, edit: edit)
         }
@@ -2425,6 +2433,166 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertEqual(
             try Self.semanticJSON(reopenedExpression),
             try Self.semanticJSON(originalExpression))
+    }
+
+    func testBuilderSortSavePreservesUnknownSlateStateCommentsAndFormatting() throws {
+        let (vault, session) = try makeSession()
+        let source =
+            #"""
+            views:
+              - type: table
+                name: Preserve
+                order: [file.name, status]
+                slate:
+                  pluginState: {opaque: keep} # keep plugin formatting
+                  listMarker: dash
+                  secondaryProperties:
+                    - status
+                  # keep comment before sort
+                  sort:
+                    - expr: file.name
+                      direction: asc
+                  # keep comment after sort
+            """#
+        try session.saveText(
+            path: "Queries/BuilderPreserve.base",
+            contents: source,
+            expectedContentHash: nil)
+        let handle = try session.openBase(path: "Queries/BuilderPreserve.base")
+        let previous = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewEditQueryJson(handle: handle, view: 0))
+        var edited = previous
+        edited.sortKeys = [BaseQuerySortKey(property: .note("status"), ascending: false)]
+
+        let edits = try edited.baseEditsForView(0, replacing: previous)
+        XCTAssertEqual(edits.count, 1)
+        XCTAssertTrue(Self.hasSlateSortEdit(edits))
+        XCTAssertFalse(Self.hasSlateStateEdit(edits))
+        try session.baseApplyEdits(handle: handle, edits: edits)
+
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/BuilderPreserve.base"),
+            encoding: .utf8)
+        XCTAssertEqual(
+            saved,
+            #"""
+            views:
+              - type: table
+                name: Preserve
+                order: [file.name, status]
+                slate:
+                  pluginState: {opaque: keep} # keep plugin formatting
+                  listMarker: dash
+                  secondaryProperties:
+                    - status
+                  # keep comment before sort
+                  sort:
+                    - expr: status
+                      direction: desc
+                  # keep comment after sort
+            """#)
+    }
+
+    func testBuilderClearOnlySortRemovesEmptySlateParent() throws {
+        let (vault, session) = try makeSession()
+        let source =
+            #"""
+            views:
+              - type: table
+                name: Clear sort
+                order: [file.name, status]
+                # before slate
+                slate:
+                  sort:
+                    - expr: status
+                      direction: desc
+                # after slate
+            """#
+        try session.saveText(
+            path: "Queries/ClearOnlySort.base",
+            contents: source,
+            expectedContentHash: nil)
+        let handle = try session.openBase(path: "Queries/ClearOnlySort.base")
+        let previous = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewEditQueryJson(handle: handle, view: 0))
+        var edited = previous
+        edited.sortKeys = []
+
+        let edits = try edited.baseEditsForView(0, replacing: previous)
+        XCTAssertEqual(edits.count, 1)
+        XCTAssertTrue(Self.hasSlateSortEdit(edits))
+        try session.baseApplyEdits(handle: handle, edits: edits)
+
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/ClearOnlySort.base"),
+            encoding: .utf8)
+        XCTAssertEqual(
+            saved,
+            #"""
+            views:
+              - type: table
+                name: Clear sort
+                order: [file.name, status]
+                # before slate
+                # after slate
+            """#)
+    }
+
+    func testDirectSaveSortPreservesUnknownSlateStateCommentsAndFormatting() throws {
+        let (vault, session) = try makeSession()
+        let source =
+            #"""
+            views:
+              - type: table
+                name: Preserve
+                order: [file.name, status]
+                slate:
+                  pluginState: {opaque: keep} # keep plugin formatting
+                  listMarker: dash
+                  secondaryProperties:
+                    - status
+                  # keep comment before sort
+                  sort:
+                    - property: file.name
+                      direction: ASC
+                  # keep comment after sort
+            """#
+        try session.saveText(
+            path: "Queries/DirectPreserve.base",
+            contents: source,
+            expectedContentHash: nil)
+        let document = BaseDocument(path: "Queries/DirectPreserve.base")
+        document.load(session: session)
+        let result = try XCTUnwrap(document.result)
+        let statusColumn = try XCTUnwrap(result.columns.firstIndex { $0.id == "status" })
+        XCTAssertTrue(
+            document.setTransientSort(
+                DataGridSortState(columnIndex: statusColumn, ascending: false),
+                session: session))
+
+        XCTAssertNotNil(try document.saveSortToView(session: session))
+
+        let saved = try String(
+            contentsOf: vault.appendingPathComponent("Queries/DirectPreserve.base"),
+            encoding: .utf8)
+        XCTAssertEqual(
+            saved,
+            #"""
+            views:
+              - type: table
+                name: Preserve
+                order: [file.name, status]
+                slate:
+                  pluginState: {opaque: keep} # keep plugin formatting
+                  listMarker: dash
+                  secondaryProperties:
+                    - status
+                  # keep comment before sort
+                  sort:
+                    - property: "status"
+                      direction: DESC
+                  # keep comment after sort
+            """#)
     }
 
     func testOrderSpliceTracksEffectiveColumnIDsOnly() throws {
