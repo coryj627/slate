@@ -147,6 +147,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "bases: dashboards (Milestone N, #700)",
         sql: include_str!("../migrations/023_dashboards.sql"),
     },
+    Migration {
+        description: "file_tags: raw ordered projection for Dataview DQL compatibility",
+        sql: include_str!("../migrations/024_dql_file_tags.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -778,6 +782,63 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mtime, 0, "migration 018 must force the slow path");
+    }
+
+    #[test]
+    fn migration_024_creates_ordered_dql_tags_and_forces_one_rescan() {
+        let mut conn = fresh_db();
+        ensure_version_table(&conn).unwrap();
+        for (index, migration) in MIGRATIONS[..23].iter().enumerate() {
+            apply_migration(&conn, (index + 1) as u32, migration).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/tagged.md', 'tagged.md', 'md', 100, 1700000000000,
+               1700000000000, 'tagged', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        let table_before: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'dql_file_tags'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_before, 0);
+
+        assert_eq!(migrate(&mut conn).unwrap(), 24);
+
+        let table_after: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'dql_file_tags'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_after, 1);
+        let index_after: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_dql_file_tags_file'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_after, 1);
+        let mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'notes/tagged.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mtime, 0, "migration 024 must force one scanner slow path");
     }
 
     #[test]
