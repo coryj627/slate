@@ -73,6 +73,8 @@ Slate parses the documented Obsidian Bases function inventory, but v1 only evalu
 
 Built-in summary assignments supported in v1 are count-style, empty/filled/unique, numeric min/max/sum/average, date earliest/latest, and task checkbox checked/unchecked mappings.
 
+Summaries are computed after filtering and grouping, but before `limit` is applied. This keeps an average, count, or total representative of the complete matching set even when the view displays only its first few rows. In result metadata, `total_count` is the post-filter, pre-limit row count and `shown_count` is the number of rows actually displayed after the limit. A temporary quick filter narrows the displayed result without changing the saved summary contract.
+
 ## Slate Extensions And Interop
 
 Slate adds a few query capabilities that Obsidian does not currently execute:
@@ -128,33 +130,74 @@ views:
 
 Slate reads `dataview` block queries and can convert supported DQL to `.base` YAML. Slate never writes DQL and never executes DataviewJS.
 
-Converts:
+### DQL sources and commands
 
-| DQL | Bases equivalent |
-|---|---|
-| `TABLE WITHOUT ID a AS "A"` | Table columns with display names. |
-| `LIST expr` | List view with the expression as a column. |
-| `TASK` | `source: tasks` with task fields. |
-| `FROM "Folder"` | `file.inFolder("Folder")`. |
-| `FROM #tag` | `file.hasTag("tag")`. |
-| `WHERE expr` | Filter expression. Repeated `WHERE` clauses are ANDed. |
-| `SORT a ASC, b DESC` | Sort keys. |
-| `LIMIT n` | View limit. |
-| `file.cday`, `file.mday`, `file.link` | `file.ctime.date()`, `file.mtime.date()`, `link(file.path)`. |
+| DQL source or command | Slate conversion | Status / caveat |
+|---|---|---|
+| `TABLE WITHOUT ID a AS "A"` | Table columns with display names; omitting `WITHOUT ID` prepends the file link. | Converts. |
+| `LIST expr` | List view with the expression as its secondary property. | Converts. |
+| `TASK` | `source: tasks` with task fields. | Converts. |
+| `FROM #tag` | `file.hasTag("tag")`. | Converts, including nested tags. |
+| `FROM "Folder"` | `file.inFolder("Folder")`. | Converts recursively. |
+| `FROM "path/to/file.md"` | `file.path == "path/to/file.md"`. | A quoted source without `.md` is treated as a folder. |
+| `FROM [[note]]` | `file.hasLink("note")`. | Converts. |
+| `FROM outgoing([[note]])` | Linked source; durable `.base` export uses `link("note").linksTo(file.file)`. | Converts links and embeds. |
+| `FROM [[]]` / `FROM [[#]]` | The corresponding link or outgoing source over `this`. | Requires an embedded/docked context. |
+| Repeated `WHERE expr` | Filter expressions ANDed together. | Converts. |
+| `SORT a ASC, b DESC` | Ordered sort keys. | Converts all documented direction spellings. |
+| `LIMIT n` | View limit. | Converts non-negative integers. |
+| `CALENDAR` | No equivalent view. | Fails loud. |
+| `GROUP BY` | Dataview creates one row per key with a `rows` array; Slate grouping retains every row. | Fails loud to avoid changing membership. |
+| `FLATTEN` | Changes row cardinality. | Fails loud. |
+| Pipelines outside `WHERE* SORT? LIMIT?` order | Bases has a fixed filter/sort/limit model. | Fails loud. |
 
-Fails loud:
+Both source negations (`-source` and `!source`) convert to a `not` filter. `and`, `or`, and parentheses retain their authored grouping.
 
-| DQL construct | Why |
-|---|---|
-| `CALENDAR` | No calendar view in Bases v1. |
-| `GROUP BY` | Dataview creates one row per group with a `rows` array; Slate groupBy keeps rows and labels sections. Silent conversion would change membership. |
-| `FLATTEN` | Changes row cardinality; reserved for future work. |
-| Order-dependent command pipelines | Bases has a fixed filter/sort/limit model. |
-| Unmapped functions such as `upper`, `nonnull`, `hash`, formatting helpers, and many vectorized Dataview helpers | Not in the v1 Bases function set. |
-| Dataview task fields Slate does not index, such as `created`, `completion`, `start`, `fullyCompleted`, `children`, `section` | No backing data in Slate's v1 task index. |
-| DataviewJS and inline `$=` / `= expr` | No JavaScript runtime in Slate v1. Rewrite as Slate queries or wait for future plugin/WASM extension points. |
+### DQL file fields
+
+| DQL field | Slate target | Status |
+|---|---|---|
+| `file.name`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`, `file.tags`, `file.aliases` | Same-named `file.*` field. | Converts. |
+| `file.cday`, `file.mday` | `file.ctime.date()`, `file.mtime.date()`. | Converts. |
+| `file.link` | `link(file.path)`. | Converts. |
+| `file.inlinks` | `file.backlinks`. | Converts. |
+| `file.outlinks` | `file.links`. | Converts; embeds remain separately available as `file.embeds`. |
+| `file.etags`, `file.lists`, `file.frontmatter`, `file.day`, `file.starred` | No v1 field. | Fails loud. |
+
+### DQL task fields
+
+| DQL field | Slate target | Status / caveat |
+|---|---|---|
+| `text`, `status` | `task.text`, `task.status`. | Converts in `TASK` queries. |
+| `completed` | `task.status == "x"`. | Matches Dataview's lowercase-`x` rule exactly. |
+| `checked` | `task.status != " "`. | Converts. |
+| `due`, `scheduled` | `task.due`, `task.scheduled`. | Converts. |
+| `created`, `completion`, `start`, `fullyCompleted`, `children`, `section` | No indexed v1 task field. | Fails loud. |
+
+### DQL functions
+
+| DQL function or family | Slate conversion | Status / caveat |
+|---|---|---|
+| `contains`, `lower`, `replace`, `join`, `length` | Corresponding string/list method (`length` becomes `.length`). | Converts. `replace` is literal-all. |
+| `sort`, `reverse`, `unique`, `flat`, `slice`, `filter`, `map` | Corresponding list method. | Converts single-element lambdas for `filter` and `map`. |
+| `sum`, `average`, `min`, `max` | Corresponding aggregate when the input is list-shaped. | Converts. |
+| `startswith`, `endswith` | `.startsWith`, `.endsWith`. | Converts. |
+| `round`, `trunc`, `floor`, `ceil` | Corresponding numeric operation; `trunc` rounds toward zero. | Converts. |
+| `regextest`, `regexmatch`, `regexreplace` | Regex `.matches` / `.replace` forms. | Converts supported regex shapes. |
+| `split`, `substring` | `.split`, `.slice`. | Converts. |
+| `striptime` | `.date()`. | Converts. |
+| `choice`, `default` | `if(...)` forms. | Converts. |
+| `typeof` | `isType` rewrite in boolean comparisons. | Converts; use it to guard nullable fields. |
+| `number`, `string`, `date`, `dur`, `link`, `object`, `list`, `embed` | Corresponding Bases constructor (`dur` becomes `duration`; `embed` becomes `link`). | Converts. |
+| `upper`, `truncate`, `padleft`, `padright`, `containsword`, `econtains`, `icontains` | No v1 DQL conversion. | Fails loud. |
+| `dateformat`, `durationformat`, `currencyformat`, `localtime` | Formatting/local-time semantics are not portable to v1. | Fails loud. |
+| `hash`, `meta`, `minby`, `maxby`, `product`, `reduce`, `extract`, `firstvalue`, `nonnull`, `display`, `elink` | No v1 DQL conversion. | Fails loud. |
+
+### Failure behavior
 
 Null comparisons differ from Dataview's JavaScript-like behavior. When a migrated filter depended on `null <= date(...)`, make the intent explicit with `typeof`/presence checks or a condition such as `field && date(field) <= today()`.
+
+DataviewJS and inline `$=` / `= expr` have no JavaScript runtime in Slate v1. Rewrite them as Slate queries or wait for a future plugin/WASM extension point. Every unsupported conversion remains visible as a named warning or view error; Slate never silently broadens or narrows the query.
 
 ## CLI Querying
 
