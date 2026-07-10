@@ -5,6 +5,22 @@ import XCTest
 
 @testable import SlateMac
 
+private actor BasePreviewTestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        isReleased = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 /// N4-1 (#707): accessible Bases query-builder core. These tests stay at
 /// the draft/model boundary so keyboard and VoiceOver contracts are
 /// executable without depending on a fragile SwiftUI snapshot.
@@ -47,6 +63,32 @@ final class BaseQueryBuilderTests: XCTestCase {
         let session = try VaultSession.openFilesystem(rootPath: vault.path)
         try session.scanInitial(cancel: CancelToken())
         return (vault, session)
+    }
+
+    private func makeAppState() async throws -> (URL, AppState, VaultSession) {
+        let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Projects"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try Data(
+            """
+            ---
+            status: active
+            priority: 3
+            ---
+            # Alpha
+            """.utf8
+        ).write(to: vault.appendingPathComponent("Projects/Alpha.md"))
+        try Data("# Zeta\n".utf8).write(to: vault.appendingPathComponent("Zeta.md"))
+
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return (vault, state, try XCTUnwrap(state.currentSession))
     }
 
     private static func sourceFile(_ relativePath: String) throws -> String {
@@ -103,6 +145,11 @@ final class BaseQueryBuilderTests: XCTestCase {
             if case .removeFormula(let name) = edit, name == expectedName { return true }
             return false
         }
+    }
+
+    private static func readyResult(_ state: BaseQueryPreviewState) -> BasesResultSet? {
+        guard case .ready(let result) = state else { return nil }
+        return result
     }
 
     private static func semanticJSON(_ value: Any) throws -> String {
@@ -1627,7 +1674,7 @@ final class BaseQueryBuilderTests: XCTestCase {
 
         XCTAssertTrue(source.contains("basesBuilderSchedulePreview"))
         XCTAssertTrue(source.contains("openQuery"))
-        XCTAssertTrue(source.contains("baseApplyEdit"))
+        XCTAssertTrue(source.contains("session.baseApplyEdits("))
         XCTAssertTrue(source.contains("saveQueryAsBase"))
         XCTAssertTrue(source.contains("saveQuery("))
         XCTAssertTrue(source.contains("baseViewEditQueryJson("), source)
@@ -1635,9 +1682,13 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(source.contains("let cancelToken = CancelToken()"), source)
         XCTAssertTrue(source.contains("cancel: cancelToken"), source)
         XCTAssertFalse(source.contains("cancel: CancelToken()"), source)
+        XCTAssertTrue(source.contains("Task.detached"), source)
+        XCTAssertTrue(source.contains("baseQueryBuilderPreviewGeneration"), source)
 
         let appStateSource = try Self.sourceFile("Sources/SlateMac/AppState.swift")
         XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewCancelToken"), appStateSource)
+        XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewGeneration"), appStateSource)
+        XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewExecutionObserver"), appStateSource)
     }
 
     func testBuilderReorderKeysAreScopedToFocusedSortAndIncludedColumnRows() throws {
@@ -1802,10 +1853,8 @@ final class BaseQueryBuilderTests: XCTestCase {
                 modifiers: [.option, .command]))
     }
 
-    func testBuilderPreviewPublishRequiresCurrentModelAndCancelToken() throws {
-        let state = AppState(
-            recentsStore: RecentVaultsStore(fileURL: tempDir.appendingPathComponent("recents.json")),
-            externalOpener: { _ in true })
+    func testBuilderPreviewPublishRequiresCurrentSessionModelTokenAndGeneration() async throws {
+        let (_, state, session) = try await makeAppState()
         let result = BasesResultSet(
             columns: [],
             rows: [],
@@ -1824,8 +1873,14 @@ final class BaseQueryBuilderTests: XCTestCase {
         currentModel.previewState = .loading
         state.activeBaseQueryBuilder = currentModel
         state.baseQueryBuilderPreviewCancelToken = currentToken
+        let generation = state.baseQueryBuilderPreviewGeneration
 
-        state.basesBuilderPublishPreview(result: result, for: currentModel, cancelToken: currentToken)
+        state.basesBuilderPublishPreview(
+            result: result,
+            for: currentModel,
+            session: session,
+            cancelToken: currentToken,
+            generation: generation)
         XCTAssertEqual(currentModel.previewState, .ready(result))
 
         let staleTokenModel = BaseQueryBuilderModel()
@@ -1835,7 +1890,11 @@ final class BaseQueryBuilderTests: XCTestCase {
         state.baseQueryBuilderPreviewCancelToken = supersedingToken
 
         state.basesBuilderPublishPreview(
-            result: result, for: staleTokenModel, cancelToken: CancelToken())
+            result: result,
+            for: staleTokenModel,
+            session: session,
+            cancelToken: CancelToken(),
+            generation: generation)
         XCTAssertEqual(staleTokenModel.previewState, .loading)
 
         let replacedModel = BaseQueryBuilderModel()
@@ -1845,8 +1904,32 @@ final class BaseQueryBuilderTests: XCTestCase {
         state.baseQueryBuilderPreviewCancelToken = supersedingToken
 
         state.basesBuilderPublishPreview(
-            result: result, for: replacedModel, cancelToken: supersedingToken)
+            result: result,
+            for: replacedModel,
+            session: session,
+            cancelToken: supersedingToken,
+            generation: generation)
         XCTAssertEqual(replacedModel.previewState, .loading)
+
+        replacement.previewState = .loading
+        state.activeBaseQueryBuilder = replacement
+        state.baseQueryBuilderPreviewCancelToken = supersedingToken
+        state.basesBuilderPublishPreview(
+            result: result,
+            for: replacement,
+            session: session,
+            cancelToken: supersedingToken,
+            generation: generation + 1)
+        XCTAssertEqual(replacement.previewState, .loading)
+
+        let (_, staleSession) = try makeSession()
+        state.basesBuilderPublishPreview(
+            result: result,
+            for: replacement,
+            session: staleSession,
+            cancelToken: supersedingToken,
+            generation: generation)
+        XCTAssertEqual(replacement.previewState, .loading)
 
         supersedingToken.cancel()
         replacement.previewState = .loading
@@ -1854,8 +1937,217 @@ final class BaseQueryBuilderTests: XCTestCase {
         state.baseQueryBuilderPreviewCancelToken = supersedingToken
 
         state.basesBuilderPublishPreviewFailure(
-            message: "cancelled", for: replacement, cancelToken: supersedingToken)
+            message: "cancelled",
+            for: replacement,
+            session: session,
+            cancelToken: supersedingToken,
+            generation: generation)
         XCTAssertEqual(replacement.previewState, .loading)
+    }
+
+    func testBuilderPreviewNativeLifecycleRunsOffMainActorAndClosesHandle() async throws {
+        let (_, state, session) = try await makeAppState()
+        state.basesNewQuery()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        let (events, continuation) = AsyncStream.makeStream(
+            of: BaseQueryBuilderPreviewExecutionEvent.self)
+        state.baseQueryBuilderPreviewExecutionObserver = { event in
+            continuation.yield(event)
+        }
+
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        let previewTask = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        await previewTask.value
+        continuation.finish()
+
+        var recorded: [BaseQueryBuilderPreviewExecutionEvent] = []
+        for await event in events { recorded.append(event) }
+        XCTAssertEqual(recorded.map(\.phase), [.opened, .executed, .closed])
+        XCTAssertTrue(
+            recorded.allSatisfy { !$0.ranOnMainThread },
+            "openQuery, baseExecute, and closeBase must all execute away from MainActor")
+        XCTAssertEqual(
+            Self.readyResult(model.previewState)?.rows.map(\.filePath),
+            ["Projects/Alpha.md", "Zeta.md"])
+        let handle = try XCTUnwrap(recorded.last?.handle)
+        XCTAssertThrowsError(try session.baseViews(handle: handle), "the preview handle must be closed")
+        state.baseQueryBuilderPreviewExecutionObserver = nil
+    }
+
+    func testSupersededPreviewCancelsNativeTokenClosesOldHandleAndCannotPublishStaleResult()
+        async throws
+    {
+        let (_, state, session) = try await makeAppState()
+        state.basesNewQuery()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        let oldGeneration = state.baseQueryBuilderPreviewGeneration + 1
+        let oldGate = BasePreviewTestGate()
+        let (events, continuation) = AsyncStream.makeStream(
+            of: BaseQueryBuilderPreviewExecutionEvent.self)
+        state.baseQueryBuilderPreviewExecutionObserver = { event in
+            continuation.yield(event)
+            if event.phase == .executed, event.generation == oldGeneration {
+                await oldGate.wait()
+            }
+        }
+        var iterator = events.makeAsyncIterator()
+
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        let oldTask = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        let oldToken = try XCTUnwrap(state.baseQueryBuilderPreviewCancelToken)
+        let firstEvent = await iterator.next()
+        let oldOpened = try XCTUnwrap(firstEvent)
+        XCTAssertEqual(oldOpened.phase, .opened)
+        XCTAssertEqual(oldOpened.generation, oldGeneration)
+        let secondEvent = await iterator.next()
+        let oldExecuted = try XCTUnwrap(secondEvent)
+        XCTAssertEqual(oldExecuted.phase, .executed)
+        XCTAssertEqual(oldExecuted.generation, oldGeneration)
+
+        model.source = .folder("Projects")
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        let newTask = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        let newGeneration = state.baseQueryBuilderPreviewGeneration
+        var newEvents: [BaseQueryBuilderPreviewExecutionEvent] = []
+        while newEvents.last?.phase != .closed {
+            let nextEvent = await iterator.next()
+            let event = try XCTUnwrap(nextEvent)
+            if event.generation == newGeneration { newEvents.append(event) }
+        }
+        await newTask.value
+
+        XCTAssertTrue(oldTask.isCancelled, "superseding must cancel the Swift task")
+        XCTAssertTrue(oldToken.isCancelled(), "superseding must cancel the Rust token")
+        XCTAssertEqual(newEvents.map(\.phase), [.opened, .executed, .closed])
+        XCTAssertEqual(
+            Self.readyResult(model.previewState)?.rows.map(\.filePath),
+            ["Projects/Alpha.md"])
+
+        await oldGate.release()
+        var oldClosed: BaseQueryBuilderPreviewExecutionEvent?
+        while oldClosed == nil {
+            let nextEvent = await iterator.next()
+            let event = try XCTUnwrap(nextEvent)
+            if event.generation == oldGeneration, event.phase == .closed { oldClosed = event }
+        }
+        await oldTask.value
+        continuation.finish()
+
+        XCTAssertEqual(
+            Self.readyResult(model.previewState)?.rows.map(\.filePath),
+            ["Projects/Alpha.md"],
+            "the older all-files result must not overwrite the newer folder result")
+        XCTAssertThrowsError(try session.baseViews(handle: oldOpened.handle))
+        XCTAssertThrowsError(try session.baseViews(handle: try XCTUnwrap(oldClosed).handle))
+        state.baseQueryBuilderPreviewExecutionObserver = nil
+    }
+
+    func testStalePreviewCompletionCannotClearNewGenerationToken() async throws {
+        let (_, state, _) = try await makeAppState()
+        state.basesNewQuery()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        let oldGeneration = state.baseQueryBuilderPreviewGeneration + 1
+        let newGeneration = oldGeneration + 1
+        let oldGate = BasePreviewTestGate()
+        let newGate = BasePreviewTestGate()
+        let (events, continuation) = AsyncStream.makeStream(
+            of: BaseQueryBuilderPreviewExecutionEvent.self)
+        state.baseQueryBuilderPreviewExecutionObserver = { event in
+            continuation.yield(event)
+            if event.generation == oldGeneration, event.phase == .executed {
+                await oldGate.wait()
+            } else if event.generation == newGeneration, event.phase == .opened {
+                await newGate.wait()
+            }
+        }
+        var iterator = events.makeAsyncIterator()
+
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        let oldTask = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        let oldOpened = await iterator.next()
+        XCTAssertEqual(oldOpened?.phase, .opened)
+        let oldExecuted = await iterator.next()
+        XCTAssertEqual(oldExecuted?.phase, .executed)
+
+        model.source = .folder("Projects")
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        let newTask = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        let newToken = try XCTUnwrap(state.baseQueryBuilderPreviewCancelToken)
+        let nextNewEvent = await iterator.next()
+        let newOpened = try XCTUnwrap(nextNewEvent)
+        XCTAssertEqual(newOpened.generation, newGeneration)
+        XCTAssertEqual(newOpened.phase, .opened)
+
+        await oldGate.release()
+        let nextOldEvent = await iterator.next()
+        let oldClosed = try XCTUnwrap(nextOldEvent)
+        XCTAssertEqual(oldClosed.generation, oldGeneration)
+        XCTAssertEqual(oldClosed.phase, .closed)
+        await oldTask.value
+
+        XCTAssertTrue(state.baseQueryBuilderPreviewCancelToken === newToken)
+        XCTAssertFalse(newToken.isCancelled())
+        XCTAssertEqual(state.baseQueryBuilderPreviewGeneration, newGeneration)
+
+        await newGate.release()
+        let newExecuted = await iterator.next()
+        XCTAssertEqual(newExecuted?.phase, .executed)
+        let newClosed = await iterator.next()
+        XCTAssertEqual(newClosed?.phase, .closed)
+        await newTask.value
+        continuation.finish()
+
+        XCTAssertNil(state.baseQueryBuilderPreviewCancelToken)
+        state.baseQueryBuilderPreviewExecutionObserver = nil
+    }
+
+    func testPreviewGenerationAdvancesForScheduleBuilderCloseAndVaultClose() async throws {
+        let (_, state, _) = try await makeAppState()
+        state.basesNewQuery()
+        let initial = state.baseQueryBuilderPreviewGeneration
+
+        state.basesBuilderSchedulePreview(delayNanoseconds: 10_000_000_000)
+        XCTAssertEqual(state.baseQueryBuilderPreviewGeneration, initial + 1)
+        state.basesCloseQueryBuilder()
+        XCTAssertEqual(state.baseQueryBuilderPreviewGeneration, initial + 2)
+        state.closeVault()
+        XCTAssertEqual(state.baseQueryBuilderPreviewGeneration, initial + 3)
+    }
+
+    func testDirectBuilderSheetDismissalInvalidatesAndCancelsPreview() async throws {
+        let (_, state, _) = try await makeAppState()
+        state.basesNewQuery()
+        state.basesBuilderSchedulePreview(delayNanoseconds: 10_000_000_000)
+        let scheduledGeneration = state.baseQueryBuilderPreviewGeneration
+        let task = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        let token = try XCTUnwrap(state.baseQueryBuilderPreviewCancelToken)
+
+        state.activeBaseQueryBuilder = nil
+
+        XCTAssertEqual(state.baseQueryBuilderPreviewGeneration, scheduledGeneration + 1)
+        XCTAssertTrue(task.isCancelled, "interactive sheet dismissal must cancel the Swift task")
+        XCTAssertTrue(token.isCancelled(), "interactive sheet dismissal must cancel the Rust token")
+        XCTAssertNil(state.baseQueryBuilderPreviewTask)
+        XCTAssertNil(state.baseQueryBuilderPreviewCancelToken)
+    }
+
+    func testReplacingBuilderInvalidatesOldPreviewWithoutClearingReplacement() async throws {
+        let (_, state, _) = try await makeAppState()
+        state.basesNewQuery()
+        state.basesBuilderSchedulePreview(delayNanoseconds: 10_000_000_000)
+        let scheduledGeneration = state.baseQueryBuilderPreviewGeneration
+        let task = try XCTUnwrap(state.baseQueryBuilderPreviewTask)
+        let token = try XCTUnwrap(state.baseQueryBuilderPreviewCancelToken)
+        let replacement = BaseQueryBuilderModel()
+
+        state.activeBaseQueryBuilder = replacement
+
+        XCTAssertTrue(state.activeBaseQueryBuilder === replacement)
+        XCTAssertEqual(state.baseQueryBuilderPreviewGeneration, scheduledGeneration + 1)
+        XCTAssertTrue(task.isCancelled)
+        XCTAssertTrue(token.isCancelled())
+        XCTAssertNil(state.baseQueryBuilderPreviewTask)
+        XCTAssertNil(state.baseQueryBuilderPreviewCancelToken)
     }
 
     func testOrFolderFilterDoesNotBecomeSourcePickerScope() throws {
@@ -2255,6 +2547,90 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertFalse(
             Self.hasRemoveFormulaEdit(try model.baseEditsForView(0), named: "score"),
             "a successful save must make the saved draft the next comparison baseline")
+    }
+
+    func testSaveToViewUsesOneBatchAndRebasesBeforeARepeatedSave() async throws {
+        let (vault, state, _) = try await makeAppState()
+        let baseURL = vault.appendingPathComponent("Queries/Formula.base")
+        try Data(
+            #"""
+            formulas:
+              score: "number(priority)"
+            views:
+              - type: table
+                name: Formula
+                order:
+                  - file.name
+                  - formula.score
+            """#.utf8
+        ).write(to: baseURL)
+
+        state.openFile("Queries/Formula.base", target: .currentTab)
+        state.basesEditViewFilters()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        model.removeFormula(named: "score")
+        XCTAssertTrue(
+            Self.hasRemoveFormulaEdit(try model.baseEditsForView(0), named: "score"))
+
+        state.basesBuilderSaveToView()
+
+        XCTAssertFalse(
+            Self.hasRemoveFormulaEdit(try model.baseEditsForView(0), named: "score"),
+            "the successful AppState save must rebase before another save is allowed")
+        let afterFirstSave = try String(contentsOf: baseURL, encoding: .utf8)
+        XCTAssertFalse(afterFirstSave.contains("score:"), afterFirstSave)
+
+        state.basesBuilderSaveToView()
+
+        XCTAssertEqual(
+            try String(contentsOf: baseURL, encoding: .utf8),
+            afterFirstSave,
+            "an empty repeated save must be a safe single batch, not a replayed RemoveFormula")
+    }
+
+    func testFailedSaveToViewDoesNotRebasePendingEdits() async throws {
+        let (vault, state, session) = try await makeAppState()
+        try Data(
+            #"""
+            formulas:
+              score: "number(priority)"
+            views:
+              - type: table
+                name: Formula
+                order:
+                  - file.name
+                  - formula.score
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Formula.base"))
+
+        state.openFile("Queries/Formula.base", target: .currentTab)
+        state.basesEditViewFilters()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        model.removeFormula(named: "score")
+        let staleHandle = try XCTUnwrap(state.activeBaseDocument?.handle)
+        session.closeBase(handle: staleHandle)
+
+        state.basesBuilderSaveToView()
+
+        XCTAssertTrue(
+            Self.hasRemoveFormulaEdit(try model.baseEditsForView(0), named: "score"),
+            "a native save failure must leave the draft comparison baseline untouched")
+    }
+
+    func testSaveToViewOrchestrationHasOnePluralCallAndNoSingularLoop() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/AppState+Bases.swift")
+        let start = try XCTUnwrap(source.range(of: "func basesBuilderSaveToView()"))
+        let end = try XCTUnwrap(
+            source.range(of: "func basesBuilderSaveAsBase", range: start.upperBound..<source.endIndex))
+        let body = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertEqual(
+            body.components(separatedBy: "session.baseApplyEdits(").count - 1,
+            1,
+            body)
+        XCTAssertFalse(body.contains("session.baseApplyEdit("), body)
+        XCTAssertFalse(body.contains("for edit in"), body)
+        XCTAssertTrue(body.contains("model.rebaseAfterSuccessfulSave()"), body)
     }
 
     func testUnrebasedBuilderPreservesPendingRemovedFormulaEdit() throws {

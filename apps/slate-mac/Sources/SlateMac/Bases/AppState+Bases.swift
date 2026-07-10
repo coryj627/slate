@@ -4,6 +4,12 @@
 import AppKit
 import Foundation
 
+private enum BaseQueryBuilderPreviewThreadProbe {
+    nonisolated static func isMainThread() -> Bool {
+        Thread.isMainThread
+    }
+}
+
 struct BaseQueriesState: Equatable {
     var savedQueries: [SavedQuerySummary] = []
     var baseFiles: [BaseFileSummary] = []
@@ -1168,14 +1174,12 @@ extension AppState {
     }
 
     func basesCloseQueryBuilder() {
-        baseQueryBuilderPreviewTask?.cancel()
-        baseQueryBuilderPreviewTask = nil
-        baseQueryBuilderPreviewCancelToken?.cancel()
-        baseQueryBuilderPreviewCancelToken = nil
         activeBaseQueryBuilder = nil
     }
 
     func basesBuilderSchedulePreview(delayNanoseconds: UInt64 = 300_000_000) {
+        baseQueryBuilderPreviewGeneration += 1
+        let generation = baseQueryBuilderPreviewGeneration
         baseQueryBuilderPreviewTask?.cancel()
         baseQueryBuilderPreviewCancelToken?.cancel()
         baseQueryBuilderPreviewCancelToken = nil
@@ -1190,16 +1194,9 @@ extension AppState {
         }
         let cancelToken = CancelToken()
         baseQueryBuilderPreviewCancelToken = cancelToken
-        baseQueryBuilderPreviewTask = Task { [weak self, weak model, session, queryJSON, cancelToken] in
-            defer {
-                Task { @MainActor [weak self] in
-                    if let current = self?.baseQueryBuilderPreviewCancelToken,
-                        current === cancelToken
-                    {
-                        self?.baseQueryBuilderPreviewCancelToken = nil
-                    }
-                }
-            }
+        let executionObserver = baseQueryBuilderPreviewExecutionObserver
+        baseQueryBuilderPreviewTask = Task {
+            @MainActor [weak self, weak model, session, queryJSON, cancelToken, executionObserver] in
             do {
                 if delayNanoseconds > 0 {
                     try await Task.sleep(nanoseconds: delayNanoseconds)
@@ -1208,47 +1205,123 @@ extension AppState {
                     cancelToken.cancel()
                     return
                 }
-                let handle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
-                defer { session.closeBase(handle: handle) }
-                let result = try session.baseExecute(
-                    handle: handle,
-                    view: 0,
-                    thisPath: nil,
-                    quickFilter: nil,
-                    cancel: cancelToken)
-                if Task.isCancelled {
-                    cancelToken.cancel()
-                    return
-                }
-                await MainActor.run { [weak self] in
-                    self?.basesBuilderPublishPreview(
-                        result: result,
-                        for: model,
-                        cancelToken: cancelToken)
-                }
             } catch is CancellationError {
                 cancelToken.cancel()
                 return
             } catch {
-                if Task.isCancelled || cancelToken.isCancelled() {
-                    return
-                }
-                await MainActor.run { [weak self] in
-                    self?.basesBuilderPublishPreviewFailure(
-                        message: error.localizedDescription,
-                        for: model,
-                        cancelToken: cancelToken)
-                }
+                cancelToken.cancel()
+                return
             }
+
+            let nativeTask = Task.detached(priority: .userInitiated) {
+                () -> BaseQueryBuilderPreviewExecutionOutcome in
+                if Task.isCancelled || cancelToken.isCancelled() { return .cancelled }
+
+                let handle: UInt64
+                do {
+                    let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
+                    handle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
+                    await executionObserver?(
+                        BaseQueryBuilderPreviewExecutionEvent(
+                            phase: .opened,
+                            generation: generation,
+                            handle: handle,
+                            ranOnMainThread: ranOnMainThread))
+                } catch {
+                    if Task.isCancelled || cancelToken.isCancelled() { return .cancelled }
+                    return .failure(error.localizedDescription)
+                }
+
+                let outcome: BaseQueryBuilderPreviewExecutionOutcome
+                if Task.isCancelled || cancelToken.isCancelled() {
+                    outcome = .cancelled
+                } else {
+                    let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
+                    do {
+                        let result = try session.baseExecute(
+                            handle: handle,
+                            view: 0,
+                            thisPath: nil,
+                            quickFilter: nil,
+                            cancel: cancelToken)
+                        await executionObserver?(
+                            BaseQueryBuilderPreviewExecutionEvent(
+                                phase: .executed,
+                                generation: generation,
+                                handle: handle,
+                                ranOnMainThread: ranOnMainThread))
+                        outcome = Task.isCancelled || cancelToken.isCancelled()
+                            ? .cancelled : .success(result)
+                    } catch {
+                        await executionObserver?(
+                            BaseQueryBuilderPreviewExecutionEvent(
+                                phase: .executed,
+                                generation: generation,
+                                handle: handle,
+                                ranOnMainThread: ranOnMainThread))
+                        outcome = Task.isCancelled || cancelToken.isCancelled()
+                            ? .cancelled : .failure(error.localizedDescription)
+                    }
+                }
+
+                let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
+                session.closeBase(handle: handle)
+                await executionObserver?(
+                    BaseQueryBuilderPreviewExecutionEvent(
+                        phase: .closed,
+                        generation: generation,
+                        handle: handle,
+                        ranOnMainThread: ranOnMainThread))
+                return outcome
+            }
+            let outcome = await withTaskCancellationHandler {
+                await nativeTask.value
+            } onCancel: {
+                cancelToken.cancel()
+                nativeTask.cancel()
+            }
+            if Task.isCancelled {
+                cancelToken.cancel()
+                return
+            }
+            switch outcome {
+            case .success(let result):
+                self?.basesBuilderPublishPreview(
+                    result: result,
+                    for: model,
+                    session: session,
+                    cancelToken: cancelToken,
+                    generation: generation)
+            case .failure(let message):
+                self?.basesBuilderPublishPreviewFailure(
+                    message: message,
+                    for: model,
+                    session: session,
+                    cancelToken: cancelToken,
+                    generation: generation)
+            case .cancelled:
+                break
+            }
+            self?.basesBuilderClearPreviewToken(
+                for: model,
+                session: session,
+                cancelToken: cancelToken,
+                generation: generation)
         }
     }
 
     func basesBuilderPublishPreview(
         result: BasesResultSet,
         for model: BaseQueryBuilderModel?,
-        cancelToken: CancelToken
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
     ) {
-        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        guard let model = currentBaseQueryBuilderPreviewModel(
+            model,
+            session: session,
+            cancelToken: cancelToken,
+            generation: generation)
         else { return }
         model.previewState = .ready(result)
         postAccessibilityAnnouncement(
@@ -1259,9 +1332,15 @@ extension AppState {
     func basesBuilderPublishPreviewFailure(
         message: String,
         for model: BaseQueryBuilderModel?,
-        cancelToken: CancelToken
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
     ) {
-        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        guard let model = currentBaseQueryBuilderPreviewModel(
+            model,
+            session: session,
+            cancelToken: cancelToken,
+            generation: generation)
         else { return }
         model.previewState = .failed(message)
         postAccessibilityAnnouncement(
@@ -1271,15 +1350,34 @@ extension AppState {
 
     private func currentBaseQueryBuilderPreviewModel(
         _ model: BaseQueryBuilderModel?,
-        cancelToken: CancelToken
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
     ) -> BaseQueryBuilderModel? {
         guard let model,
+            currentSession === session,
             activeBaseQueryBuilder === model,
             let currentToken = baseQueryBuilderPreviewCancelToken,
             currentToken === cancelToken,
+            baseQueryBuilderPreviewGeneration == generation,
             !cancelToken.isCancelled()
         else { return nil }
         return model
+    }
+
+    private func basesBuilderClearPreviewToken(
+        for model: BaseQueryBuilderModel?,
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
+    ) {
+        guard currentBaseQueryBuilderPreviewModel(
+            model,
+            session: session,
+            cancelToken: cancelToken,
+            generation: generation) != nil
+        else { return }
+        baseQueryBuilderPreviewCancelToken = nil
     }
 
     func basesBuilderSaveToView() {
@@ -1292,9 +1390,9 @@ extension AppState {
         }
         guard let handle = doc.handle else { return }
         do {
-            for edit in try model.baseEditsForView(UInt32(doc.activeViewIndex)) {
-                try session.baseApplyEdit(handle: handle, edit: edit)
-            }
+            let edits = try model.baseEditsForView(UInt32(doc.activeViewIndex))
+            try session.baseApplyEdits(handle: handle, edits: edits)
+            model.rebaseAfterSuccessfulSave()
             refreshVisibleBasesAfterInAppWrite(
                 session: session,
                 changedPath: doc.source.filePath ?? doc.selectionKey)

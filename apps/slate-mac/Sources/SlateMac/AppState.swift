@@ -213,6 +213,28 @@ enum PendingTemplateFlow: Equatable {
     case needsName(TemplateSummary, [String: String])
 }
 
+enum BaseQueryBuilderPreviewExecutionPhase: Sendable, Equatable {
+    case opened
+    case executed
+    case closed
+}
+
+/// Nil-default preview lifecycle observation surface. The recorded thread bit
+/// is captured immediately before each synchronous native call; tests can also
+/// suspend the observer after `opened` to hold a real handle across generations.
+struct BaseQueryBuilderPreviewExecutionEvent: Sendable, Equatable {
+    let phase: BaseQueryBuilderPreviewExecutionPhase
+    let generation: Int
+    let handle: UInt64
+    let ranOnMainThread: Bool
+}
+
+enum BaseQueryBuilderPreviewExecutionOutcome: Sendable {
+    case success(BasesResultSet)
+    case failure(String)
+    case cancelled
+}
+
 /// Top-level app state.
 ///
 /// Owns the currently-open `VaultSession` (or none, on the welcome
@@ -1239,9 +1261,26 @@ final class AppState: ObservableObject {
     /// Active Bases query-builder draft (Milestone N4-1, #707).
     /// Non-nil presents `BaseQueryBuilderSheet`; the draft is in-memory
     /// only until N4-2 adds preview/save.
-    @Published var activeBaseQueryBuilder: BaseQueryBuilderModel?
+    @Published var activeBaseQueryBuilder: BaseQueryBuilderModel? {
+        didSet {
+            guard let previous = oldValue else { return }
+            if let current = activeBaseQueryBuilder, previous === current { return }
+            baseQueryBuilderPreviewGeneration += 1
+            baseQueryBuilderPreviewTask?.cancel()
+            baseQueryBuilderPreviewTask = nil
+            baseQueryBuilderPreviewCancelToken?.cancel()
+            baseQueryBuilderPreviewCancelToken = nil
+        }
+    }
     var baseQueryBuilderPreviewTask: Task<Void, Never>?
     var baseQueryBuilderPreviewCancelToken: CancelToken?
+    /// Monotonic freshness identity for builder preview publication. Every
+    /// schedule and builder/vault teardown invalidates all earlier work.
+    var baseQueryBuilderPreviewGeneration = 0
+    /// N4-02 deterministic execution seam. Always nil in production; tests
+    /// record native-call executor context and can park a real opened handle.
+    var baseQueryBuilderPreviewExecutionObserver:
+        (@Sendable (BaseQueryBuilderPreviewExecutionEvent) async -> Void)?
 
     /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
     /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file
@@ -3090,6 +3129,7 @@ final class AppState: ObservableObject {
         // U1-6: persist the layout FIRST — the teardown below clears
         // `currentVaultURL`, and the save is a no-op once it's gone.
         saveWorkspaceLayout()
+        baseQueryBuilderPreviewGeneration += 1
         scanTask?.cancel()
         scanTask = nil
         noteLoadTask?.cancel()
