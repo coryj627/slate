@@ -296,6 +296,10 @@ extension AppState {
         guard let session = currentSession else { return }
         do {
             try session.deleteSavedQuery(id: id)
+            reloadRegisteredSavedQueryEmbeds(
+                id: id,
+                session: session,
+                includeUnleasedHandles: true)
             baseQueries.pinnedSavedQueryIDs.removeAll { $0 == id }
             persistBaseQueryPinsIfNeeded(baseQueries.pinnedSavedQueryIDs)
             closeOpenSavedQueryTabs(id: id)
@@ -1504,6 +1508,24 @@ extension AppState {
             basesDock.rebaseMembership(document.membershipSignature)
         }
 
+        reloadRegisteredSavedQueryEmbeds(
+            id: id,
+            session: session,
+            includeUnleasedHandles: false)
+    }
+
+    /// Reopen every registry entry resolved to `id`, using stable saved-query
+    /// identity for both name- and ID-authored embeds. On deletion, reopening
+    /// intentionally fails through `BaseEmbedDocument`'s normal unknown-query
+    /// surface after `BaseEmbedHandle.reload` has closed the old native handle.
+    /// Updates retain the prior optimization of skipping handles with no live,
+    /// already-loaded document.
+    private func reloadRegisteredSavedQueryEmbeds(
+        id: String,
+        session: VaultSession,
+        includeUnleasedHandles: Bool
+    ) {
+        guard currentSession === session else { return }
         let registeredEmbeds = baseEmbedHandles.sorted { lhs, rhs in
             let left = "\(lhs.key.request.cacheKey)|\(lhs.key.thisPath ?? "")"
             let right = "\(rhs.key.request.cacheKey)|\(rhs.key.thisPath ?? "")"
@@ -1516,7 +1538,7 @@ extension AppState {
                 handle.resolvedSavedQueryID == id
             else { continue }
             let documents = handle.liveDocuments.filter { !$0.needsInitialLoad }
-            guard !documents.isEmpty else { continue }
+            guard includeUnleasedHandles || !documents.isEmpty else { continue }
             do {
                 try handle.reload(session: session)
                 documents.forEach { $0.refreshAfterSharedHandleReload(session: session) }

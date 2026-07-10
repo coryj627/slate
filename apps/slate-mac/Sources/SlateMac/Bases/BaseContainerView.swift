@@ -211,6 +211,7 @@ struct BaseContainerView: View {
                 gridEditRequest = nil
                 appState.postBaseActionAnnouncement("Edit canceled.")
             },
+            rowAccessibilityDescription: { $0.row.audioDescription },
             rowActions: gridRowActions(result: result),
             focusRequest: resultFocusToken)
     }

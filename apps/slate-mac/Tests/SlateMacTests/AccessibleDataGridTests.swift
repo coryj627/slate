@@ -75,8 +75,8 @@ final class AccessibleDataGridTests: XCTestCase {
             src.contains("NSTableColumn("),
             "v2 must use native NSTableColumn headers (AX header role + sort direction)")
         XCTAssertTrue(
-            src.contains("setAccessibilityLabel(\"\\(column.header): \\(text)\")"),
-            "body cells must announce \"Header: value\"")
+            src.contains("cellAccessibilityLabel(for: rowValue, columnIndex: columnIndex)"),
+            "native body cells must keep the pinned cell-only speech composer")
         XCTAssertTrue(
             src.contains(".accessibilityAddTraits(.isSummaryElement)"),
             "the summary must be a focusable summary element")
@@ -103,6 +103,7 @@ final class AccessibleDataGridTests: XCTestCase {
         onCancelEdit: (() -> Void)? = nil,
         cellNavigation: Bool = false,
         groups: [AccessibleDataGrid<Row>.Group] = [],
+        rowAccessibilityDescription: ((Row) -> String?)? = nil,
         announce: @escaping (String) -> Void = { _ in }
     ) -> AccessibleDataGrid<Row> {
         AccessibleDataGrid(
@@ -123,6 +124,7 @@ final class AccessibleDataGridTests: XCTestCase {
             editRequest: editRequest,
             onCommitEdit: onCommitEdit,
             onCancelEdit: onCancelEdit,
+            rowAccessibilityDescription: rowAccessibilityDescription,
             announce: announce)
     }
 
@@ -305,6 +307,139 @@ final class AccessibleDataGridTests: XCTestCase {
 
         coordinator.moveCell(.end, in: nil)
         XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+    }
+
+    @MainActor
+    func testCellNavigationKeepsGenericCallerAnnouncementUnchanged() {
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 1)
+        var announced: [String] = []
+        let grid = makeGrid(
+            rows: Self.people,
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            cellNavigation: true,
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.moveCell(.down, in: nil)
+
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+        XCTAssertEqual(announced, ["Role: Engineer"])
+    }
+
+    @MainActor
+    func testVerticalNavigationUsesCompleteRowAudioWithoutRepeatingFocusedCell() {
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 1)
+        var announced: [String] = []
+        let grid = makeGrid(
+            rows: Self.people,
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            cellNavigation: true,
+            rowAccessibilityDescription: { row in
+                "\(row.a). Role: \(row.b)"
+            },
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.moveCell(.down, in: nil)
+
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 1))
+        XCTAssertEqual(
+            announced,
+            ["Ada. Role: Engineer"],
+            "engine row audio already containing the focused cell must not repeat it")
+    }
+
+    @MainActor
+    func testVerticalNavigationComposesPartialRowContextWithFocusedCell() {
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 0, columnIndex: 1)
+        var announced: [String] = []
+        let grid = makeGrid(
+            rows: Self.people,
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            cellNavigation: true,
+            rowAccessibilityDescription: { "\($0.a) row" },
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.moveCell(.down, in: nil)
+
+        XCTAssertEqual(announced, ["Ada row. Role: Engineer"])
+    }
+
+    @MainActor
+    func testHorizontalHomeAndEndNavigationKeepPinnedCellOnlyGrammar() {
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)
+        var announced: [String] = []
+        let grid = makeGrid(
+            rows: Self.people,
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            cellNavigation: true,
+            rowAccessibilityDescription: { row in
+                "\(row.a). Role: \(row.b)"
+            },
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+
+        coordinator.moveCell(.left, in: nil)
+        coordinator.moveCell(.end, in: nil)
+        coordinator.moveCell(.home, in: nil)
+
+        XCTAssertEqual(selectedCell, .init(rowID: 1, columnIndex: 0))
+        XCTAssertEqual(announced, ["Name: Ada", "Role: Engineer", "Name: Ada"])
+    }
+
+    @MainActor
+    func testNativeCellLabelsStayCellOnlyWhenRowAudioIsAvailable() {
+        let grid = makeGrid(
+            rows: Self.people,
+            rowAccessibilityDescription: { row in
+                "\(row.a). Role: \(row.b)"
+            })
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+
+        let roleCell = coordinator.tableView(
+            table,
+            viewFor: table.tableColumns[1],
+            row: 1) as? NSTableCellView
+
+        XCTAssertEqual(roleCell?.textField?.accessibilityLabel(), "Role: Engineer")
+    }
+
+    @MainActor
+    func testGroupedPageNavigationUsesCompleteRowAudioAndSkipsHeadingRows() {
+        let rows = (0..<12).map { Row(id: $0, a: "Row \($0)", b: "value") }
+        var selectedCell: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 4, columnIndex: 1)
+        var announced: [String] = []
+        let grid = makeGrid(
+            rows: rows,
+            cellSelection: Binding(get: { selectedCell }, set: { selectedCell = $0 }),
+            cellNavigation: true,
+            groups: [
+                .init(label: "All", rowStart: 0, rowCount: rows.count)
+            ],
+            rowAccessibilityDescription: { "\($0.a). Role: \($0.b)" },
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+        let table = VisibleRowsTableView()
+        table.reportedVisibleRows = NSRange(location: 0, length: 4)
+
+        coordinator.moveCell(.pageDown, in: table)
+        coordinator.moveCell(.pageUp, in: table)
+
+        XCTAssertEqual(selectedCell, .init(rowID: 4, columnIndex: 1))
+        XCTAssertEqual(announced, ["Row 7. Role: value", "Row 4. Role: value"])
+        XCTAssertEqual(
+            coordinator.accessibilityLabelForDisplayRow(0),
+            "Group: All, 12 rows",
+            "group headings must keep their own list semantics")
     }
 
     @MainActor
@@ -595,6 +730,7 @@ final class AccessibleDataGridTests: XCTestCase {
             viewFor: table.tableColumns[1],
             row: 0) as? NSTableCellView
 
+        XCTAssertEqual(roleCell?.textField?.accessibilityLabel(), "Role: Ops")
         XCTAssertEqual(roleCell?.textField?.accessibilityHelp(), "read-only: computed")
     }
 

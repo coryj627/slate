@@ -281,6 +281,7 @@ struct BaseReadOnlyResultView: View {
             sortState: $sortState,
             cellNavigation: true,
             onActivate: { _ in },
+            rowAccessibilityDescription: { $0.row.audioDescription },
             rowActions: [])
     }
 

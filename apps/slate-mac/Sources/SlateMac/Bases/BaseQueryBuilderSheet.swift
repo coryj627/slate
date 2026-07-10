@@ -588,7 +588,8 @@ struct BaseQueryBuilderSheet: View {
                     sortState: Binding(
                         get: { previewSortState },
                         set: { previewSortState = $0 }),
-                    cellNavigation: true)
+                    cellNavigation: true,
+                    rowAccessibilityDescription: { $0.row.audioDescription })
                     .frame(minHeight: 220)
             }
         case .idle, .loading, .failed:
@@ -970,7 +971,7 @@ struct BaseQueryBuilderSheet: View {
                 let message = expressionValidationMessage(
                     validation, fallback: "Expression invalid")
                 SlateSymbol.warning.label(message)
-                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
                     .accessibilityLabel(message)
             }
             Spacer()

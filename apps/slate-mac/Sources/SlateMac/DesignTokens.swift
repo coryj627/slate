@@ -170,8 +170,10 @@ extension NSColor {
         light: srgb(0.72, 0.00, 0.05), dark: srgb(0.80, 0.20, 0.22))
     static let tokenOnDestructiveFill = tokenDynamic(
         light: srgb(1.00, 1.00, 1.00), dark: srgb(1.00, 1.00, 1.00))
+    // The light value also clears the builder's blue selected-row wash; the
+    // brighter system red and the former #A80014 token both missed that carrier.
     static let tokenDestructiveText = tokenDynamic(
-        light: srgb(0.659, 0.00, 0.078), dark: srgb(0.960, 0.800, 0.810))
+        light: srgb(0.470, 0.00, 0.078), dark: srgb(0.960, 0.800, 0.810))
 
     // Warning/attention TEXT — dark amber-brown in light, pale amber in dark.
     // Measured APCA (both surfaces, both appearances) all clear |Lc| > 78 —

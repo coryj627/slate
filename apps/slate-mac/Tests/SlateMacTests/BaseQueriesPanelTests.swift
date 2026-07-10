@@ -685,6 +685,71 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertTrue(dockedDashboard.sections[0].result?.rows.isEmpty == true)
     }
 
+    func testDeletingSavedQueryInvalidatesVisibleNameAndIDEmbedsButPreservesUnrelatedEmbed()
+        async throws
+    {
+        let (state, session) = try await makeState()
+        let deletedID = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        _ = try session.saveQuery(
+            name: "Backlog",
+            description: nil,
+            queryJson: queryJSON(folder: "Backlog"),
+            sourceSyntax: .builder)
+
+        func makeEmbed(reference: String, thisPath: String) throws -> BaseEmbedDocument {
+            let request = try XCTUnwrap(
+                BaseEmbedRequest.codeFence(
+                    language: "slate-query",
+                    source: "```slate-query\nquery: \(reference)\n```"))
+            return BaseEmbedDocument(
+                request: request,
+                thisPath: thisPath,
+                sharedHandle: state.baseEmbedHandle(for: request, thisPath: thisPath))
+        }
+
+        let nameEmbed = try makeEmbed(
+            reference: "Active projects",
+            thisPath: "Projects/Alpha.md")
+        let idEmbed = try makeEmbed(
+            reference: deletedID,
+            thisPath: "Projects/Beta.md")
+        let unrelatedEmbed = try makeEmbed(
+            reference: "Backlog",
+            thisPath: "Projects/Gamma.md")
+        [nameEmbed, idEmbed, unrelatedEmbed].forEach { $0.load(session: session) }
+
+        XCTAssertEqual(nameEmbed.state, .ready)
+        XCTAssertEqual(idEmbed.state, .ready)
+        XCTAssertEqual(unrelatedEmbed.state, .ready)
+        let nameHandle = try XCTUnwrap(nameEmbed.handle)
+        let idHandle = try XCTUnwrap(idEmbed.handle)
+        let unrelatedHandle = try XCTUnwrap(unrelatedEmbed.handle)
+
+        state.deleteSavedQuery(id: deletedID)
+
+        for document in [nameEmbed, idEmbed] {
+            guard case .failed(let message) = document.state else {
+                XCTFail("deleted saved-query embed remained visible: \(document.state)")
+                continue
+            }
+            XCTAssertTrue(
+                message.localizedCaseInsensitiveContains("saved query"),
+                "the existing unknown-query surface must explain the missing saved query: \(message)")
+            XCTAssertNil(document.result)
+            XCTAssertNil(document.handle)
+        }
+        XCTAssertThrowsError(try session.baseViews(handle: nameHandle))
+        XCTAssertThrowsError(try session.baseViews(handle: idHandle))
+
+        XCTAssertEqual(unrelatedEmbed.state, .ready)
+        XCTAssertEqual(unrelatedEmbed.handle, unrelatedHandle)
+        XCTAssertNoThrow(try session.baseViews(handle: unrelatedHandle))
+    }
+
     func testDeletingSavedQueryClosesOpenTabsAndDocument() async throws {
         let (state, session) = try await makeState()
         let id = try session.saveQuery(

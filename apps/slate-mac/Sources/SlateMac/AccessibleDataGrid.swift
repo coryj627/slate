@@ -134,6 +134,11 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var editRequest: Binding<EditRequest?>?
     var onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)?
     var onCancelEdit: (() -> Void)?
+    /// Optional engine-authored row context (for example, Bases'
+    /// `audioDescription`). It augments vertical moves into a new row only;
+    /// native labels and within-row navigation keep "Header: value" speech.
+    /// Generic grids keep their existing cell-only speech when this is nil.
+    var rowAccessibilityDescription: ((Row) -> String?)?
     var rowActions: [RowAction]
     var focusRequest: Int
     /// Sort (and other grid-owned) announcements route here. Defaults
@@ -155,6 +160,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         editRequest: Binding<EditRequest?>? = nil,
         onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)? = nil,
         onCancelEdit: (() -> Void)? = nil,
+        rowAccessibilityDescription: ((Row) -> String?)? = nil,
         rowActions: [RowAction] = [],
         focusRequest: Int = 0,
         announce: @escaping (String) -> Void = {
@@ -175,6 +181,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.editRequest = editRequest
         self.onCommitEdit = onCommitEdit
         self.onCancelEdit = onCancelEdit
+        self.rowAccessibilityDescription = rowAccessibilityDescription
         self.rowActions = rowActions
         self.focusRequest = focusRequest
         self.announce = announce
@@ -538,7 +545,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             // (WCAG 1.4.4); the row height follows via rowSizeStyle.
             cell.textField?.font = NSFont.preferredFont(forTextStyle: .body)
             // "Header: value" — the v1 AX contract, now on the AppKit cell.
-            cell.textField?.setAccessibilityLabel("\(column.header): \(text)")
+            cell.textField?.setAccessibilityLabel(
+                cellAccessibilityLabel(for: rowValue, columnIndex: columnIndex))
             cell.textField?.setAccessibilityHelp(column.accessibilityHint?(rowValue))
             // Named row actions surface as AX custom actions on every
             // cell (Switch Control / Voice Control reachable).
@@ -871,8 +879,16 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             table.selectRowIndexes([displayIndex], byExtendingSelection: false)
             table.scrollRowToVisible(displayIndex)
         }
-        let column = grid.columns[columnIndex]
-        grid.announce("\(column.header): \(column.cell(row))")
+        let movedToDifferentRow = row.id != current?.rowID
+        switch move {
+        case .up, .down, .pageUp, .pageDown:
+            grid.announce(
+                movedToDifferentRow
+                    ? rowMoveAnnouncement(for: row, columnIndex: columnIndex)
+                    : cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+        default:
+            grid.announce(cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+        }
     }
 
     private func visibleDataRowCount(in table: NSTableView?) -> Int {
@@ -894,8 +910,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         case .group(let group):
             return accessibilityLabel(for: group)
         case .row(let rowValue):
-            guard let column = grid.columns.first else { return nil }
-            return "\(column.header): \(column.cell(rowValue))"
+            guard !grid.columns.isEmpty else { return nil }
+            return rowMoveAnnouncement(for: rowValue, columnIndex: 0)
         }
     }
 
@@ -928,6 +944,28 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             return "Group: \(group.label), \(rowText). Summary: \(summary)"
         }
         return "Group: \(group.label), \(rowText)"
+    }
+
+    private func cellAccessibilityLabel(for row: Row, columnIndex: Int) -> String {
+        guard grid.columns.indices.contains(columnIndex) else { return "" }
+        let column = grid.columns[columnIndex]
+        return "\(column.header): \(column.cell(row))"
+    }
+
+    private func rowMoveAnnouncement(for row: Row, columnIndex: Int) -> String {
+        let focusedCell = cellAccessibilityLabel(for: row, columnIndex: columnIndex)
+        guard let rawDescription = grid.rowAccessibilityDescription?(row) else {
+            return focusedCell
+        }
+        let description = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !description.isEmpty else { return focusedCell }
+        if description.range(
+            of: focusedCell,
+            options: [.caseInsensitive, .diacriticInsensitive]
+        ) != nil {
+            return description
+        }
+        return description + (description.hasSuffix(".") ? " " : ". ") + focusedCell
     }
 
     @objc func doubleClicked(_ sender: Any?) {

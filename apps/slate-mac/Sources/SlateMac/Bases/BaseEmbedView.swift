@@ -175,7 +175,8 @@ struct BaseEmbedView: View {
                     guard let session else { return }
                     document.setTransientSort(sort, session: session)
                 }),
-            cellNavigation: true)
+            cellNavigation: true,
+            rowAccessibilityDescription: { $0.row.audioDescription })
     }
 
     private func resultList(_ result: BasesResultSet) -> some View {
