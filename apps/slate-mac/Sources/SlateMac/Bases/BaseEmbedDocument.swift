@@ -10,6 +10,43 @@ enum BaseEmbedKind: Equatable, Hashable {
     case dataview
 }
 
+enum BaseEmbedOpenDestination: Equatable, Hashable {
+    case baseFile(path: String)
+    case savedQuery(reference: String)
+    case sourceNote(path: String)
+
+    static func == (lhs: BaseEmbedOpenDestination, rhs: BaseEmbedOpenDestination) -> Bool {
+        switch (lhs, rhs) {
+        case (.baseFile(let lhs), .baseFile(let rhs)),
+            (.savedQuery(let lhs), .savedQuery(let rhs)),
+            (.sourceNote(let lhs), .sourceNote(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .baseFile(let path):
+            hasher.combine(0)
+            BaseExactIdentity.hash(path, into: &hasher)
+        case .savedQuery(let reference):
+            hasher.combine(1)
+            BaseExactIdentity.hash(reference, into: &hasher)
+        case .sourceNote(let path):
+            hasher.combine(2)
+            BaseExactIdentity.hash(path, into: &hasher)
+        }
+    }
+}
+
+struct BaseEmbedRecoveryAction: Equatable {
+    let title: String
+    let destination: BaseEmbedOpenDestination
+    let accessibilityHint: String
+}
+
 /// A normalized embedded-Base source. Parsing is intentionally small:
 /// Rust owns Bases/DQL semantics; this type only recognizes which FFI
 /// opener to call and preserves the source text that opener must parse.
@@ -19,6 +56,51 @@ struct BaseEmbedRequest: Equatable, Hashable {
         case inlineBase(source: String)
         case savedQuery(reference: String, viewName: String?)
         case dataview(source: String)
+        case invalidSlateQuery(source: String, message: String)
+
+        static func == (lhs: Source, rhs: Source) -> Bool {
+            switch (lhs, rhs) {
+            case (.file(let lhsPath, let lhsView), .file(let rhsPath, let rhsView)):
+                return BaseExactIdentity.matches(lhsPath, rhsPath)
+                    && BaseExactIdentity.matches(lhsView, rhsView)
+            case (.inlineBase(let lhs), .inlineBase(let rhs)),
+                (.dataview(let lhs), .dataview(let rhs)):
+                return BaseExactIdentity.matches(lhs, rhs)
+            case (.invalidSlateQuery(let lhsSource, let lhsMessage),
+                .invalidSlateQuery(let rhsSource, let rhsMessage)):
+                return BaseExactIdentity.matches(lhsSource, rhsSource)
+                    && BaseExactIdentity.matches(lhsMessage, rhsMessage)
+            case (.savedQuery(let lhsReference, let lhsView),
+                .savedQuery(let rhsReference, let rhsView)):
+                return BaseExactIdentity.matches(lhsReference, rhsReference)
+                    && BaseExactIdentity.matches(lhsView, rhsView)
+            default:
+                return false
+            }
+        }
+
+        func hash(into hasher: inout Hasher) {
+            switch self {
+            case .file(let path, let viewName):
+                hasher.combine(0)
+                BaseExactIdentity.hash(path, into: &hasher)
+                BaseExactIdentity.hash(viewName, into: &hasher)
+            case .inlineBase(let source):
+                hasher.combine(1)
+                BaseExactIdentity.hash(source, into: &hasher)
+            case .savedQuery(let reference, let viewName):
+                hasher.combine(2)
+                BaseExactIdentity.hash(reference, into: &hasher)
+                BaseExactIdentity.hash(viewName, into: &hasher)
+            case .dataview(let source):
+                hasher.combine(3)
+                BaseExactIdentity.hash(source, into: &hasher)
+            case .invalidSlateQuery(let source, let message):
+                hasher.combine(4)
+                BaseExactIdentity.hash(source, into: &hasher)
+                BaseExactIdentity.hash(message, into: &hasher)
+            }
+        }
     }
 
     private let source: Source
@@ -29,6 +111,7 @@ struct BaseEmbedRequest: Equatable, Hashable {
         case .inlineBase: return .inlineBase
         case .savedQuery: return .savedQuery
         case .dataview: return .dataview
+        case .invalidSlateQuery: return .inlineBase
         }
     }
 
@@ -41,14 +124,15 @@ struct BaseEmbedRequest: Equatable, Hashable {
         switch source {
         case .file(_, let viewName), .savedQuery(_, let viewName):
             return viewName
-        case .inlineBase, .dataview:
+        case .inlineBase, .dataview, .invalidSlateQuery:
             return nil
         }
     }
 
     var inlineSource: String {
         switch source {
-        case .inlineBase(let source), .dataview(let source):
+        case .inlineBase(let source), .dataview(let source),
+            .invalidSlateQuery(let source, _):
             return source
         case .file, .savedQuery:
             return ""
@@ -72,20 +156,69 @@ struct BaseEmbedRequest: Equatable, Hashable {
             label = "Embedded base: saved query \(reference)" + viewSuffix(viewName)
         case .dataview:
             label = "Embedded base: Dataview"
+        case .invalidSlateQuery:
+            label = "Embedded base: invalid slate-query"
         }
         return label
+    }
+
+    func recoveryAction(thisPath: String?) -> BaseEmbedRecoveryAction? {
+        switch source {
+        case .file(let path, _):
+            return BaseEmbedRecoveryAction(
+                title: "Open base in tab",
+                destination: .baseFile(path: path),
+                accessibilityHint: "Opens the base file in a tab where editing is available.")
+        case .savedQuery(let reference, _):
+            return BaseEmbedRecoveryAction(
+                title: "Open saved query in tab",
+                destination: .savedQuery(reference: reference),
+                accessibilityHint: "Opens the saved query in a tab where its query can be edited.")
+        case .inlineBase, .dataview, .invalidSlateQuery:
+            guard let thisPath else { return nil }
+            return BaseEmbedRecoveryAction(
+                title: "Edit source note",
+                destination: .sourceNote(path: thisPath),
+                accessibilityHint: "Switches the source note containing this query to editing mode.")
+        }
+    }
+
+    func readOnlyHint(thisPath: String?) -> String {
+        switch source {
+        case .file:
+            return "read-only in embeds — open the base file in a tab to edit"
+        case .savedQuery:
+            return "read-only in embeds — open the saved query in a tab to edit"
+        case .inlineBase:
+            return thisPath == nil
+                ? "read-only in embeds — edit the source block to change this query"
+                : "read-only in embeds — open the source note to edit this query block"
+        case .dataview:
+            return thisPath == nil
+                ? "read-only in embeds — convert this Dataview block to a .base file to edit"
+                : "read-only in embeds — open the source note to edit or convert this Dataview block"
+        case .invalidSlateQuery:
+            return thisPath == nil
+                ? "invalid slate-query — edit the source block"
+                : "invalid slate-query — open the source note to correct the query block"
+        }
     }
 
     var cacheKey: String {
         switch source {
         case .file(let path, let viewName):
-            return "file:\(path)#\(viewName ?? "")"
+            return BaseExactIdentity.key(
+                prefix: "embed-file", components: [path, viewName])
         case .inlineBase(let source):
-            return "inline:\(source)"
+            return BaseExactIdentity.key(prefix: "embed-inline", components: [source])
         case .savedQuery(let reference, let viewName):
-            return "saved:\(reference)#\(viewName ?? "")"
+            return BaseExactIdentity.key(
+                prefix: "embed-saved-query", components: [reference, viewName])
         case .dataview(let source):
-            return "dql:\(source)"
+            return BaseExactIdentity.key(prefix: "embed-dql", components: [source])
+        case .invalidSlateQuery(let source, let message):
+            return BaseExactIdentity.key(
+                prefix: "embed-invalid-slate-query", components: [source, message])
         }
     }
 
@@ -99,18 +232,27 @@ struct BaseEmbedRequest: Equatable, Hashable {
 
     static func codeFence(language: String, source: String) -> BaseEmbedRequest? {
         let tag = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let body = ReadingBlockSource.fenceInterior(source)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = ReadingBlockSource.fenceInteriorVerbatim(source)
         switch tag {
         case "base":
             return BaseEmbedRequest(source: .inlineBase(source: body))
         case "slate-query":
-            let fields = topLevelFields(in: body)
-            if let query = fields["query"], !query.isEmpty {
+            do {
+                let classification = try classifySlateQueryFence(source: body)
+                if let query = classification.query {
+                    return BaseEmbedRequest(
+                        source: .savedQuery(
+                            reference: query, viewName: classification.view))
+                }
+                return BaseEmbedRequest(source: .inlineBase(source: body))
+            } catch let VaultError.InvalidQuery(message) {
                 return BaseEmbedRequest(
-                    source: .savedQuery(reference: query, viewName: fields["view"]))
+                    source: .invalidSlateQuery(source: body, message: message))
+            } catch {
+                return BaseEmbedRequest(
+                    source: .invalidSlateQuery(
+                        source: body, message: error.localizedDescription))
             }
-            return BaseEmbedRequest(source: .inlineBase(source: body))
         case "dataview":
             return BaseEmbedRequest(source: .dataview(source: body))
         default:
@@ -149,6 +291,8 @@ struct BaseEmbedRequest: Equatable, Hashable {
             return OpenedBaseEmbedHandle(
                 handle: try session.openDql(source: source, thisPath: thisPath),
                 savedQueryID: nil)
+        case .invalidSlateQuery(_, let message):
+            throw BaseEmbedDocumentError.message(message)
         }
     }
 
@@ -170,9 +314,17 @@ struct BaseEmbedRequest: Equatable, Hashable {
         ]
     }
 
+    static func savedQuerySummary(
+        reference: String,
+        in summaries: [SavedQuerySummary]
+    ) -> SavedQuerySummary? {
+        summaries.first(where: { BaseExactIdentity.matches($0.id, reference) })
+            ?? summaries.first(where: { BaseExactIdentity.matches($0.name, reference) })
+    }
+
     fileprivate static func savedQueryID(reference: String, session: VaultSession) throws -> String {
         let summaries = try session.listSavedQueries()
-        if let match = summaries.first(where: { $0.id == reference || $0.name == reference }) {
+        if let match = savedQuerySummary(reference: reference, in: summaries) {
             return match.id
         }
         let available = summaries.map(\.name)
@@ -188,33 +340,6 @@ struct BaseEmbedRequest: Equatable, Hashable {
         let view = String(target[target.index(after: hash)...])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (path, view.isEmpty ? nil : view)
-    }
-
-    private static func topLevelFields(in body: String) -> [String: String] {
-        var fields: [String: String] = [:]
-        for rawLine in body.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
-            guard line.first?.isWhitespace != true,
-                let colon = line.firstIndex(of: ":")
-            else { continue }
-            let key = line[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            let rawValue = line[line.index(after: colon)...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard key == "query" || key == "view" else { continue }
-            fields[key] = unquote(rawValue)
-        }
-        return fields
-    }
-
-    private static func unquote(_ value: String) -> String {
-        guard value.count >= 2 else { return value }
-        if (value.hasPrefix("\"") && value.hasSuffix("\""))
-            || (value.hasPrefix("'") && value.hasSuffix("'"))
-        {
-            return String(value.dropFirst().dropLast())
-        }
-        return value
     }
 
     private static func savedQueryJSON(
@@ -255,6 +380,20 @@ fileprivate struct OpenedBaseEmbedHandle {
 struct BaseEmbedCacheKey: Equatable, Hashable {
     let request: BaseEmbedRequest
     let thisPath: String?
+
+    static func == (lhs: BaseEmbedCacheKey, rhs: BaseEmbedCacheKey) -> Bool {
+        lhs.request == rhs.request && BaseExactIdentity.matches(lhs.thisPath, rhs.thisPath)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(request)
+        BaseExactIdentity.hash(thisPath, into: &hasher)
+    }
+
+    var exactIdentityKey: String {
+        BaseExactIdentity.key(
+            prefix: "embed-cache", components: [request.cacheKey, thisPath])
+    }
 }
 
 struct BaseEmbedPreview: Equatable {
@@ -314,6 +453,7 @@ final class BaseEmbedHandle {
     private(set) var resolvedSavedQueryID: String?
     private(set) weak var session: VaultSession?
     private var documents: [ObjectIdentifier: WeakBaseEmbedDocument] = [:]
+    private var mountedLeaseCount = 0
 
     init(request: BaseEmbedRequest, thisPath: String?) {
         self.request = request
@@ -356,9 +496,27 @@ final class BaseEmbedHandle {
     func unregister(_ document: BaseEmbedDocument) {
         documents[ObjectIdentifier(document)] = nil
         pruneDocuments()
-        if documents.isEmpty, let session {
-            close(session: session)
-        }
+        closeIfUnleased()
+    }
+
+    func acquireMountedLease() {
+        mountedLeaseCount += 1
+    }
+
+    func releaseMountedLease() {
+        guard mountedLeaseCount > 0 else { return }
+        mountedLeaseCount -= 1
+        closeIfUnleased()
+    }
+
+    var hasLiveLease: Bool {
+        pruneDocuments()
+        return mountedLeaseCount > 0 || !documents.isEmpty
+    }
+
+    private func closeIfUnleased() {
+        guard mountedLeaseCount == 0, documents.isEmpty, let session else { return }
+        close(session: session)
     }
 
     var liveDocuments: [BaseEmbedDocument] {
@@ -401,8 +559,6 @@ final class BaseEmbedDocument: ObservableObject {
         case failed(String)
     }
 
-    static let readOnlyHint = "read-only in embeds — open in tab to edit"
-
     let request: BaseEmbedRequest
     let thisPath: String?
     private let sharedHandle: BaseEmbedHandle
@@ -412,7 +568,8 @@ final class BaseEmbedDocument: ObservableObject {
     @Published private(set) var result: BasesResultSet?
     @Published private(set) var activeViewIndex: Int = 0
     @Published var quickFilterText = ""
-    @Published var sortState: DataGridSortState?
+    @Published private(set) var sortSelection: BaseGridSortSelection?
+    private var appliedQuickFilterText: String?
 
     var handle: UInt64? { sharedHandle.handle }
 
@@ -437,10 +594,26 @@ final class BaseEmbedDocument: ObservableObject {
         return views[activeViewIndex].name
     }
 
-    var cellEditingAccessibilityHint: String { Self.readOnlyHint }
+    var cellEditingAccessibilityHint: String { request.readOnlyHint(thisPath: thisPath) }
+
+    var recoveryAction: BaseEmbedRecoveryAction? {
+        guard let action = request.recoveryAction(thisPath: thisPath) else { return nil }
+        guard case .savedQuery(_) = action.destination,
+            let resolvedSavedQueryID = sharedHandle.resolvedSavedQueryID
+        else { return action }
+        return BaseEmbedRecoveryAction(
+            title: action.title,
+            destination: .savedQuery(reference: resolvedSavedQueryID),
+            accessibilityHint: action.accessibilityHint)
+    }
+
+    var sortState: DataGridSortState? {
+        guard let result else { return nil }
+        return sortSelection?.sortState(in: result)
+    }
 
     var quickFilterActive: Bool {
-        !quickFilterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        editedQuickFilterArgument != nil || appliedQuickFilterText != nil
     }
 
     var quickFilterResultAnnouncement: String {
@@ -454,7 +627,7 @@ final class BaseEmbedDocument: ObservableObject {
         result = nil
         views = []
         activeViewIndex = 0
-        sortState = nil
+        sortSelection = nil
         do {
             try sharedHandle.loadIfNeeded(session: session)
             views = request.displayViews(from: sharedHandle.views)
@@ -482,7 +655,8 @@ final class BaseEmbedDocument: ObservableObject {
             }
         }
         activeViewIndex = index
-        sortState = nil
+        sortSelection = nil
+        clearQuickFilterState()
         executeActiveView(session: session)
     }
 
@@ -492,16 +666,12 @@ final class BaseEmbedDocument: ObservableObject {
             return
         }
         do {
-            let columnID = sortState.flatMap { sort in
-                result?.columns.indices.contains(sort.columnIndex) == true
-                    ? result?.columns[sort.columnIndex].id
-                    : nil
-            }
             try session.baseSetTransientSort(
                 handle: handle,
                 view: UInt32(activeViewIndex),
-                columnId: columnID,
-                ascending: sortState?.ascending ?? true)
+                columnId: sortSelection?.columnID,
+                ascending: sortSelection?.ascending ?? true)
+            let appliedFilter = quickFilterArgument
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
@@ -509,6 +679,10 @@ final class BaseEmbedDocument: ObservableObject {
                 quickFilter: quickFilterArgument,
                 cancel: CancelToken())
             result = executed
+            appliedQuickFilterText = appliedFilter
+            if sortSelection?.sortState(in: executed) == nil {
+                sortSelection = nil
+            }
             let view = views[activeViewIndex]
             if view.status == .fallback {
                 state = .degraded("Using fallback view for \(view.name).")
@@ -538,16 +712,13 @@ final class BaseEmbedDocument: ObservableObject {
         guard !needsInitialLoad, sharedHandle.session === session else { return }
         let previousViewName = activeViewName
         let previousViewIndex = activeViewIndex
-        let previousSortColumnID = sortState.flatMap { sort in
-            result?.columns.indices.contains(sort.columnIndex) == true
-                ? result?.columns[sort.columnIndex].id
-                : nil
-        }
-        let previousSortAscending = sortState?.ascending ?? true
+        let previousSortSelection = sortSelection
 
         views = request.displayViews(from: sharedHandle.views)
         if let requested = request.requestedViewName {
-            guard let requestedIndex = views.firstIndex(where: { $0.name == requested }) else {
+            guard let requestedIndex = views.firstIndex(where: {
+                BaseExactIdentity.matches($0.name, requested)
+            }) else {
                 fail(
                     "Unknown base view \(requested). Available views: "
                         + "\(availableList(views.map(\.name))).")
@@ -555,7 +726,9 @@ final class BaseEmbedDocument: ObservableObject {
             }
             activeViewIndex = requestedIndex
         } else if let previousViewName,
-            let matchingIndex = views.firstIndex(where: { $0.name == previousViewName })
+            let matchingIndex = views.firstIndex(where: {
+                BaseExactIdentity.matches($0.name, previousViewName)
+            })
         {
             activeViewIndex = matchingIndex
         } else {
@@ -564,14 +737,13 @@ final class BaseEmbedDocument: ObservableObject {
 
         // Establish the reopened view first, then remap transient sort by its
         // stable column id before executing the sorted result.
-        sortState = nil
+        sortSelection = nil
         executeActiveView(session: session)
-        if let previousSortColumnID,
-            let columnIndex = result?.columns.firstIndex(where: { $0.id == previousSortColumnID })
+        if let previousSortSelection,
+            let result,
+            previousSortSelection.sortState(in: result) != nil
         {
-            sortState = DataGridSortState(
-                columnIndex: columnIndex,
-                ascending: previousSortAscending)
+            sortSelection = previousSortSelection
             executeActiveView(session: session)
         }
     }
@@ -598,11 +770,20 @@ final class BaseEmbedDocument: ObservableObject {
     }
 
     func setTransientSort(_ newSort: DataGridSortState?, session: VaultSession) {
-        if let newSort {
-            guard let result, result.columns.indices.contains(newSort.columnIndex) else { return }
+        guard let result else { return }
+        sortSelection = newSort.flatMap {
+            BaseGridSortSelection(sortState: $0, result: result)
         }
-        sortState = newSort
         executeActiveView(session: session)
+    }
+
+    @discardableResult
+    func clearQuickFilter(session: VaultSession?) -> String? {
+        guard quickFilterActive else { return nil }
+        clearQuickFilterState()
+        guard let session else { return "Quick filter cleared." }
+        executeActiveView(session: session)
+        return quickFilterResultAnnouncement
     }
 
     func close(session: VaultSession) {
@@ -610,12 +791,28 @@ final class BaseEmbedDocument: ObservableObject {
     }
 
     private var quickFilterArgument: String? {
-        quickFilterActive ? quickFilterText : nil
+        editedQuickFilterArgument
+    }
+
+    private var editedQuickFilterArgument: String? {
+        guard !quickFilterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return quickFilterText
+    }
+
+    private func clearQuickFilterState() {
+        if !quickFilterText.isEmpty {
+            quickFilterText = ""
+        }
+        appliedQuickFilterText = nil
     }
 
     private func selectRequestedView() throws {
         guard let requested = request.requestedViewName else { return }
-        guard let index = views.firstIndex(where: { $0.name == requested }) else {
+        guard let index = views.firstIndex(where: {
+            BaseExactIdentity.matches($0.name, requested)
+        }) else {
             throw BaseEmbedDocumentError.message(
                 "Unknown base view \(requested). Available views: \(availableList(views.map(\.name))).")
         }

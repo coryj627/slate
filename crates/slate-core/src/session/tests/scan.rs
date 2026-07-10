@@ -11,6 +11,7 @@ use super::common::*;
 use super::*;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::SystemTime;
 
 #[test]
 fn open_creates_cache_database() {
@@ -28,6 +29,84 @@ fn open_is_idempotent() {
     drop(_s1);
     let _s2 = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
     // Should not panic or fail — schema is at v1 and stays there.
+}
+
+#[test]
+fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file("Note.md", b"---\ndates: [2026-01-02]\n---\n# Epoch mtime\n")
+        .unwrap();
+    std::fs::File::open(tmp.path().join("Note.md"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH)
+        .unwrap();
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let first = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(first.files_indexed, 1);
+    {
+        let conn = session.conn.lock().unwrap();
+        let cached_mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'Note.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            cached_mtime, 0,
+            "the regression requires a real epoch-mtime file"
+        );
+    }
+    drop(session);
+
+    let db_path = tmp.path().join(".slate").join("cache.sqlite");
+    let conn = crate::db::open_database(&db_path, 512).unwrap();
+    conn.execute(
+        "UPDATE properties SET value_text = ?1, value_text_norm = '' WHERE key = 'dates'",
+        rusqlite::params![r#"["2026-01-02"]"#],
+    )
+    .unwrap();
+    conn.execute("DELETE FROM schema_version WHERE version = 26", [])
+        .unwrap();
+    let version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        version, 25,
+        "fixture must represent the pre-migration cache"
+    );
+    drop(conn);
+
+    let upgraded = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let report = upgraded.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        report.files_indexed, 1,
+        "migration 026 must force a slow path"
+    );
+    assert_eq!(report.files_skipped, 0);
+
+    let conn = upgraded.conn.lock().unwrap();
+    let encoded: String = conn
+        .query_row(
+            "SELECT value_text FROM properties WHERE key = 'dates'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    let decoded = crate::properties_db::tagged_list_element_to_property_value(&encoded[0]);
+    assert_eq!(
+        decoded,
+        Some(crate::frontmatter::PropertyValue::Date(
+            "2026-01-02".to_string()
+        )),
+        "the forced scan must rewrite the erased list element type"
+    );
 }
 
 #[test]

@@ -4,6 +4,39 @@
 import AppKit
 import SwiftUI
 
+struct BaseEmbedQuickFilterSelectionState: Equatable {
+    private(set) var anchorRowID: String? = nil
+    private(set) var isActive = false
+
+    mutating func beginIfNeeded(currentRowID: String?) {
+        guard !isActive else { return }
+        isActive = true
+        anchorRowID = currentRowID
+    }
+
+    func preferredRowID(currentRowID: String?) -> String? {
+        isActive ? anchorRowID : currentRowID
+    }
+
+    mutating func finish(currentRowID: String?) -> String? {
+        let preferred = preferredRowID(currentRowID: currentRowID)
+        reset()
+        return preferred
+    }
+
+    mutating func reset() {
+        anchorRowID = nil
+        isActive = false
+    }
+
+    mutating func finishAfterApplying(filterText: String) {
+        guard filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        reset()
+    }
+}
+
 /// Read-only embedded Bases renderer for reading and editor surfaces.
 /// Source forms differ, but every request lands here after it has an
 /// executable Bases handle.
@@ -11,19 +44,21 @@ struct BaseEmbedView: View {
     let request: BaseEmbedRequest
     let session: VaultSession?
     let thisPath: String?
-    let onOpenInTab: (String) -> Void
+    let onOpenInTab: (BaseEmbedOpenDestination) -> Void
 
     @StateObject private var document: BaseEmbedDocument
-    @State private var selectedRow: String?
-    @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
+    @State private var interaction = BaseGridInteractionState()
+    @State private var quickFilterSelection = BaseEmbedQuickFilterSelectionState()
     @State private var quickFilterTask: Task<Void, Never>?
+    @State private var resultFocusToken = 0
+    @FocusState private var quickFilterFocused: Bool
 
     @MainActor init(
         request: BaseEmbedRequest,
         session: VaultSession?,
         thisPath: String?,
         sharedHandle: BaseEmbedHandle,
-        onOpenInTab: @escaping (String) -> Void
+        onOpenInTab: @escaping (BaseEmbedOpenDestination) -> Void
     ) {
         self.request = request
         self.session = session
@@ -47,6 +82,11 @@ struct BaseEmbedView: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(request.accessibilityLabel)
+        .onKeyPress(.escape) {
+            guard quickFilterFocused || document.quickFilterActive else { return .ignored }
+            clearQuickFilter()
+            return .handled
+        }
         .onAppear {
             document.acquireRefreshLease()
             guard let session,
@@ -60,7 +100,19 @@ struct BaseEmbedView: View {
             quickFilterTask = nil
         }
         .onChange(of: document.quickFilterText) { _, _ in
+            guard quickFilterFocused else { return }
+            if document.quickFilterActive {
+                quickFilterSelection.beginIfNeeded(currentRowID: interaction.selectedRowID)
+            }
             scheduleQuickFilterExecution()
+        }
+        .onChange(of: document.result) { _, result in
+            interaction.reconcile(with: result)
+        }
+        .onChange(of: document.activeViewIndex) { _, _ in
+            quickFilterTask?.cancel()
+            quickFilterTask = nil
+            quickFilterSelection.reset()
         }
     }
 
@@ -93,14 +145,15 @@ struct BaseEmbedView: View {
                 TextField("Quick filter", text: $document.quickFilterText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 160)
+                    .focused($quickFilterFocused)
                     .accessibilityLabel(
                         "Quick filter — temporary, does not change the embedded base")
             }
-            if let path = request.targetPath {
-                Button("Open in tab") {
-                    onOpenInTab(path)
+            if let recovery = document.recoveryAction {
+                Button(recovery.title) {
+                    onOpenInTab(recovery.destination)
                 }
-                .accessibilityHint("Opens the base file in a tab where editing is available.")
+                .accessibilityHint(recovery.accessibilityHint)
             }
             if request.kind == .dataview {
                 Button("Convert to .base") {
@@ -171,11 +224,11 @@ struct BaseEmbedView: View {
             accessibilityLabel: "Embedded base table",
             groups: groups(from: result),
             selection: Binding(
-                get: { selectedRow },
-                set: { selectedRow = $0 }),
+                get: { interaction.selectedRowID },
+                set: { interaction.setSelectedRowID($0, in: result) }),
             cellSelection: Binding(
-                get: { selectedCell },
-                set: { selectedCell = $0 }),
+                get: { interaction.cellPosition(in: result) },
+                set: { interaction.setCellPosition($0, in: result) }),
             sortState: Binding(
                 get: { document.sortState },
                 set: { sort in
@@ -183,7 +236,9 @@ struct BaseEmbedView: View {
                     document.setTransientSort(sort, session: session)
                 }),
             cellNavigation: true,
-            rowAccessibilityDescription: { $0.row.audioDescription })
+            sortsRowsLocally: false,
+            rowAccessibilityDescription: { $0.row.audioDescription },
+            focusRequest: resultFocusToken)
     }
 
     private func resultList(_ result: BasesResultSet) -> some View {
@@ -194,8 +249,9 @@ struct BaseEmbedView: View {
         return BaseListView(
             projection: projection,
             selection: Binding(
-                get: { selectedRow },
-                set: { selectedRow = $0 }),
+                get: { interaction.selectedRowID },
+                set: { interaction.setSelectedRowID($0, in: result) }),
+            focusRequest: resultFocusToken,
             onActivate: { _ in },
             rowActions: [])
     }
@@ -205,12 +261,7 @@ struct BaseEmbedView: View {
             AccessibleDataGrid<BaseGridRow>.Column(
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
-                sort: { lhs, rhs in
-                    let ascending = document.sortState?.ascending ?? true
-                    return ascending
-                        ? lhs.sortsBefore(rhs, at: columnIndex, ascending: true)
-                        : rhs.sortsBefore(lhs, at: columnIndex, ascending: false)
-                },
+                sort: { lhs, rhs in lhs.sortsBefore(rhs, at: columnIndex) },
                 accessibilityHint: { _ in document.cellEditingAccessibilityHint })
         }
     }
@@ -234,6 +285,9 @@ struct BaseEmbedView: View {
 
     private func scheduleQuickFilterExecution() {
         quickFilterTask?.cancel()
+        let preferredSelection = quickFilterSelection.preferredRowID(
+            currentRowID: interaction.selectedRowID)
+        let filterText = document.quickFilterText
         quickFilterTask = Task { @MainActor in
             do {
                 try await Task.sleep(nanoseconds: 150_000_000)
@@ -241,9 +295,36 @@ struct BaseEmbedView: View {
                 return
             }
             guard !Task.isCancelled, let session else { return }
-            let announcement = document.applyQuickFilter(document.quickFilterText, session: session)
+            let announcement = document.applyQuickFilter(filterText, session: session)
+            restoreSelection(previous: preferredSelection)
+            quickFilterSelection.finishAfterApplying(filterText: filterText)
             postAccessibilityAnnouncement(announcement, priority: .medium)
         }
+    }
+
+    private func clearQuickFilter() {
+        quickFilterTask?.cancel()
+        quickFilterTask = nil
+        quickFilterFocused = false
+        let preferredSelection = quickFilterSelection.finish(
+            currentRowID: interaction.selectedRowID)
+        if let announcement = document.clearQuickFilter(session: session) {
+            restoreSelection(previous: preferredSelection)
+            postAccessibilityAnnouncement(announcement, priority: .medium)
+        }
+        resultFocusToken &+= 1
+    }
+
+    private func restoreSelection(previous: String?) {
+        guard let result = document.result else {
+            interaction.reconcile(with: nil)
+            return
+        }
+        let restored = BaseSelectionRestorer.restoredSelection(
+            previous: previous,
+            current: interaction.selectedRowID,
+            availableIDs: result.rows.map { BaseGridRow.id(for: $0) })
+        interaction.setSelectedRowID(restored, in: result)
     }
 
     private func convertDataview() {
@@ -316,11 +397,88 @@ struct BaseEmbedView: View {
 
 }
 
+/// Keeps the lightweight embed landmark in the non-lazy reading tree so
+/// VoiceOver can enumerate document structure, while deferring the native
+/// query handle and result grid until the landmark reaches the scroll viewport.
+struct BaseEmbedVisibilityState: Equatable {
+    private(set) var hasBecomeVisible = false
+
+    mutating func observe(isVisible: Bool) {
+        if isVisible {
+            hasBecomeVisible = true
+        }
+    }
+}
+
+struct VisibilityGatedBaseEmbed: View {
+    let request: BaseEmbedRequest
+    let session: VaultSession?
+    let thisPath: String?
+    let sharedHandle: BaseEmbedHandle
+    let onOpenInTab: (BaseEmbedOpenDestination) -> Void
+
+    @State private var visibility = BaseEmbedVisibilityState()
+    @State private var ownsMountedLease = false
+
+    var body: some View {
+        Group {
+            if visibility.hasBecomeVisible {
+                BaseEmbedView(
+                    request: request,
+                    session: session,
+                    thisPath: thisPath,
+                    sharedHandle: sharedHandle,
+                    onOpenInTab: onOpenInTab)
+            } else {
+                deferredPlaceholder
+            }
+        }
+        .onScrollVisibilityChange(threshold: 0.01) { isVisible in
+            visibility.observe(isVisible: isVisible)
+        }
+        .onAppear {
+            guard !ownsMountedLease else { return }
+            sharedHandle.acquireMountedLease()
+            ownsMountedLease = true
+        }
+        .onDisappear {
+            guard ownsMountedLease else { return }
+            sharedHandle.releaseMountedLease()
+            ownsMountedLease = false
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var deferredPlaceholder: some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            SlateSymbol.base.decorative
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+                Text(request.accessibilityLabel)
+                    .font(Tokens.Typography.callout.weight(.semibold))
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+                Text("Deferred embedded base — scroll into view to load.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+        }
+        .padding(Tokens.Spacing.sm)
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Tokens.ColorRole.surfaceSecondary)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(request.accessibilityLabel). Deferred embedded base; scroll into view to load.")
+    }
+}
+
 struct BaseEmbedPreviewList: View {
     let text: String
     let session: VaultSession?
     let thisPath: String?
-    let onOpenInTab: (String) -> Void
+    let onOpenInTab: (BaseEmbedOpenDestination) -> Void
     let onJumpToSource: (Int) -> Void
     let handleProvider: @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle
 
@@ -328,7 +486,7 @@ struct BaseEmbedPreviewList: View {
         text: String,
         session: VaultSession?,
         thisPath: String?,
-        onOpenInTab: @escaping (String) -> Void,
+        onOpenInTab: @escaping (BaseEmbedOpenDestination) -> Void,
         onJumpToSource: @escaping (Int) -> Void = { _ in },
         handleProvider: @escaping @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
             { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
@@ -362,14 +520,19 @@ struct BaseEmbedPreviewList: View {
                                 .accessibilityLabel(
                                     "Jump to source — line \(preview.sourceLine). Embedded base.")
                             }
-                            BaseEmbedView(
+                            VisibilityGatedBaseEmbed(
                                 request: preview.request,
                                 session: session,
                                 thisPath: thisPath,
                                 sharedHandle: handleProvider(preview.request, thisPath),
                                 onOpenInTab: onOpenInTab)
                         }
-                        .id("\(index)|\(preview.request.cacheKey)|\(thisPath ?? "")")
+                        .id(
+                            BaseExactIdentity.key(
+                                prefix: "editor-base-embed",
+                                components: [
+                                    String(index), preview.request.cacheKey, thisPath,
+                                ]))
                     }
                 }
                 .padding(Tokens.Spacing.sm)

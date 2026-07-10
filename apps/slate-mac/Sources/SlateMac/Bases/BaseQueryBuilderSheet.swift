@@ -167,9 +167,7 @@ struct BaseQueryBuilderSheet: View {
     @State private var formulaName = ""
     @State private var formulaExpression = ""
     @State private var formulaValidation: BaseExpressionValidation?
-    @State private var previewSelectedRow: String?
-    @State private var previewSelectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
-    @State private var previewSortState: DataGridSortState?
+    @State private var previewInteraction = BaseGridInteractionState()
     @State private var saveAsBasePath = "Queries/New Query.base"
     @State private var savedQueryName = "New query"
     @State private var savedQueryDescription = ""
@@ -213,6 +211,16 @@ struct BaseQueryBuilderSheet: View {
             appState.basesBuilderSchedulePreview(delayNanoseconds: 0)
         }
         .onChange(of: model.draft) { _, _ in appState.basesBuilderSchedulePreview() }
+        .onChange(of: model.previewState) { _, state in
+            switch state {
+            case .ready(let result):
+                previewInteraction.reconcile(with: result)
+            case .idle, .failed:
+                previewInteraction.reconcile(with: nil)
+            case .loading:
+                break
+            }
+        }
         .onExitCommand { appState.basesCloseQueryBuilder() }
     }
 
@@ -452,7 +460,7 @@ struct BaseQueryBuilderSheet: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Column \(property.accessibilityName)")
                 .focusable()
-                .focused($focusedColumnRowID, equals: property.sourceExpression)
+                .focused($focusedColumnRowID, equals: property.exactIdentityKey)
                 .onKeyPress(.upArrow, phases: .down) { press in
                     handleColumnReorder(
                         property: property, direction: .up, modifiers: press.modifiers)
@@ -514,14 +522,17 @@ struct BaseQueryBuilderSheet: View {
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
-                        ForEach(formulaCompletionNames, id: \.self) { name in
-                            Button("\(name)()") {
+                        ForEach(
+                            BaseExactStringChoice.make(
+                                formulaCompletionNames, prefix: "formula-completion")
+                        ) { choice in
+                            Button("\(choice.value)()") {
                                 formulaExpression = BaseFormulaCompletion.inserting(
-                                    name,
+                                    choice.value,
                                     into: formulaExpression)
                             }
                             .buttonStyle(.bordered)
-                            .accessibilityLabel("\(name)(), insert function")
+                            .accessibilityLabel("\(choice.value)(), insert function")
                         }
                     }
                 }
@@ -579,8 +590,8 @@ struct BaseQueryBuilderSheet: View {
                         result: result,
                         options: BaseListOptions(slateStateJson: nil)),
                     selection: Binding(
-                        get: { previewSelectedRow },
-                        set: { previewSelectedRow = $0 }),
+                        get: { previewInteraction.selectedRowID },
+                        set: { previewInteraction.setSelectedRowID($0, in: result) }),
                     onActivate: { _ in },
                     rowActions: [])
                     .frame(minHeight: 220)
@@ -592,19 +603,36 @@ struct BaseQueryBuilderSheet: View {
                     accessibilityLabel: "Builder preview table",
                     groups: previewGroups(from: result),
                     selection: Binding(
-                        get: { previewSelectedRow },
-                        set: { previewSelectedRow = $0 }),
+                        get: { previewInteraction.selectedRowID },
+                        set: { previewInteraction.setSelectedRowID($0, in: result) }),
                     cellSelection: Binding(
-                        get: { previewSelectedCell },
-                        set: { previewSelectedCell = $0 }),
+                        get: { previewInteraction.cellPosition(in: result) },
+                        set: { previewInteraction.setCellPosition($0, in: result) }),
                     sortState: Binding(
-                        get: { previewSortState },
-                        set: { previewSortState = $0 }),
+                        get: { previewInteraction.sortState(in: result) },
+                        set: { previewInteraction.setSortState($0, in: result) }),
                     cellNavigation: true,
                     rowAccessibilityDescription: { $0.row.audioDescription })
                     .frame(minHeight: 220)
             }
-        case .idle, .loading, .failed:
+        case .failed(let message):
+            HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
+                SlateSymbol.warning.decorative
+                VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+                    Text("Preview error")
+                        .font(Tokens.Typography.callout.weight(.semibold))
+                    Text(message)
+                        .font(Tokens.Typography.caption)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Tokens.ColorRole.destructiveText)
+            .padding(Tokens.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.ColorRole.surfaceSecondary)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Preview error: \(message)")
+        case .idle, .loading:
             EmptyView()
         }
     }
@@ -616,9 +644,8 @@ struct BaseQueryBuilderSheet: View {
             AccessibleDataGrid<BaseGridRow>.Column(
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
-                sort: { lhs, rhs in
-                    lhs.value(at: columnIndex).localizedCaseInsensitiveCompare(
-                        rhs.value(at: columnIndex)) == .orderedAscending
+                directionalSort: { lhs, rhs, ascending in
+                    lhs.sortsBefore(rhs, at: columnIndex, ascending: ascending)
                 },
                 accessibilityHint: { _ in "Builder preview table is read-only." })
         }
@@ -721,8 +748,13 @@ struct BaseQueryBuilderSheet: View {
                     .frame(minWidth: 105)
                     .accessibilityLabel("Condition note path")
                 Menu("Pick…") {
-                    ForEach(Array(notePaths.prefix(100)), id: \.self) { path in
-                        Button(path) { value.wrappedValue = linkValue(path, kind: kind) }
+                    ForEach(
+                        BaseExactStringChoice.make(
+                            Array(notePaths.prefix(100)), prefix: "link-operand")
+                    ) { choice in
+                        Button(choice.value) {
+                            value.wrappedValue = linkValue(choice.value, kind: kind)
+                        }
                     }
                 }
                 .accessibilityLabel("Pick… condition note path")
@@ -1062,7 +1094,9 @@ struct BaseQueryBuilderSheet: View {
                 Text(model.conditionsListAccessibilityValue)
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 Spacer()
-                Button("Save to view") { appState.basesBuilderSaveToView() }
+                if model.editingBaseView != nil {
+                    Button("Save to view") { appState.basesBuilderSaveToView() }
+                }
                 Button("Done") { appState.basesCloseQueryBuilder() }
                     .keyboardShortcut(.defaultAction)
             }
@@ -1078,22 +1112,25 @@ struct BaseQueryBuilderSheet: View {
         saveAsBasePath = "Queries/\(editingSavedQuery.name).base"
     }
 
-    private func selectableList<Row: Hashable>(
-        rows: [Row],
-        selected: Row?,
-        label: @escaping (Row) -> String,
-        action: @escaping (Row) -> Void
+    private func selectableList(
+        rows: [String],
+        selected: String?,
+        label: @escaping (String) -> String,
+        action: @escaping (String) -> Void
     ) -> some View {
-        let visible = Array(rows.prefix(8))
+        let visible = BaseExactStringChoice.make(
+            Array(rows.prefix(8)), prefix: "source-choice")
         return VStack(alignment: .leading, spacing: 4) {
-            ForEach(visible, id: \.self) { row in
+            ForEach(visible) { choice in
+                let row = choice.value
+                let isSelected = choice.matches(selected)
                 Button {
                     action(row)
                 } label: {
                     HStack {
                         Text(label(row))
                         Spacer()
-                        if selected == row {
+                        if isSelected {
                             SlateSymbol.checkmark.decorative
                         }
                     }
@@ -1103,12 +1140,12 @@ struct BaseQueryBuilderSheet: View {
                 .padding(.vertical, 4)
                 .padding(.horizontal, 8)
                 .background(
-                    selected == row
+                    isSelected
                         ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.22)
                         : Color.clear
                 )
                 .accessibilityLabel(label(row))
-                .accessibilityIsSelected(selected == row)
+                .accessibilityIsSelected(isSelected)
             }
         }
     }
@@ -1192,7 +1229,9 @@ struct BaseQueryBuilderSheet: View {
                         model.columns.append(BaseQueryColumn(property: property, displayName: nil))
                     }
                 } else {
-                    model.columns.removeAll { $0.id == property.sourceExpression }
+                    model.columns.removeAll {
+                        BaseExactIdentity.matches($0.id, property.sourceExpression)
+                    }
                 }
             })
     }
@@ -1200,10 +1239,12 @@ struct BaseQueryBuilderSheet: View {
     private func columnDisplayNameBinding(property: BaseQueryProperty) -> Binding<String> {
         Binding(
             get: {
-                model.columns.first { $0.id == property.sourceExpression }?.displayName ?? ""
+                model.columns.first {
+                    BaseExactIdentity.matches($0.id, property.sourceExpression)
+                }?.displayName ?? ""
             },
             set: { value in
-                if let index = model.columns.firstIndex(where: { $0.id == property.sourceExpression }) {
+                if let index = model.columnIndex(for: property) {
                     model.columns[index].displayName = value
                 } else if !value.isEmpty {
                     model.columns.append(BaseQueryColumn(property: property, displayName: value))
@@ -1226,17 +1267,17 @@ struct BaseQueryBuilderSheet: View {
     }
 
     private func isColumnIncluded(_ property: BaseQueryProperty) -> Bool {
-        model.columns.contains { $0.id == property.sourceExpression }
+        model.columnIndex(for: property) != nil
     }
 
     private func canMoveColumn(_ property: BaseQueryProperty, delta: Int) -> Bool {
-        guard let index = model.columns.firstIndex(where: { $0.id == property.sourceExpression })
+        guard let index = model.columnIndex(for: property)
         else { return false }
         return model.columns.indices.contains(index + delta)
     }
 
     private func moveColumn(property: BaseQueryProperty, delta: Int) {
-        guard let index = model.columns.firstIndex(where: { $0.id == property.sourceExpression })
+        guard let index = model.columnIndex(for: property)
         else { return }
         let destination = index + delta
         guard model.columns.indices.contains(destination) else { return }
@@ -1277,12 +1318,10 @@ struct BaseQueryBuilderSheet: View {
         direction: BaseRowReorderCommand.Direction,
         modifiers: EventModifiers
     ) -> KeyPress.Result {
-        guard let index = model.columns.firstIndex(where: {
-            $0.id == property.sourceExpression
-        })
+        guard let index = model.columnIndex(for: property)
         else { return .ignored }
         guard BaseRowReorderCommand.route(
-            isFocused: focusedColumnRowID == property.sourceExpression,
+            isFocused: focusedColumnRowID == property.exactIdentityKey,
             direction: direction,
             modifiers: modifiers,
             index: index,
@@ -1291,7 +1330,7 @@ struct BaseQueryBuilderSheet: View {
             move: { destination in
                 moveColumn(property: property, delta: destination - index)
             },
-            retainFocus: { _ in focusedColumnRowID = property.sourceExpression },
+            retainFocus: { _ in focusedColumnRowID = property.exactIdentityKey },
             announce: { postAccessibilityAnnouncement($0, priority: .medium) })
         else { return .ignored }
         return .handled
@@ -1307,9 +1346,9 @@ struct BaseQueryBuilderSheet: View {
                 name: formulaName,
                 expression: formulaExpression,
                 expressionJSON: exprJSON)
-            model.formulas.removeAll { $0.name == formula.name }
+            model.formulas.removeAll { BaseExactIdentity.matches($0.name, formula.name) }
             model.formulas.append(formula)
-            if !model.columns.contains(where: { $0.id == "formula.\(formula.name)" }) {
+            if model.columnIndex(for: .formula(formula.name)) == nil {
                 model.columns.append(
                     BaseQueryColumn(property: .formula(formula.name), displayName: nil))
             }
@@ -1619,6 +1658,25 @@ struct BaseQueryBuilderSheet: View {
         mutate(&condition)
         group.rows[childIndex] = .condition(condition)
         model.rows[groupIndex] = .group(group)
+    }
+}
+
+struct BaseExactStringChoice: Identifiable {
+    let value: String
+    let id: String
+
+    static func make(_ values: [String], prefix: String) -> [Self] {
+        values.enumerated().map { ordinal, value in
+            Self(
+                value: value,
+                id: BaseExactIdentity.key(
+                    prefix: prefix,
+                    components: [value, String(ordinal)]))
+        }
+    }
+
+    func matches(_ selected: String?) -> Bool {
+        BaseExactIdentity.matches(value, selected)
     }
 }
 

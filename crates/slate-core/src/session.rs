@@ -603,6 +603,10 @@ struct OpenBaseState {
     /// inline/query handles have no persistence identity and keep `None`.
     content_hash: Option<String>,
     source: OpenBaseSource,
+    /// Execution queries compiled once at open/edit time. Building a view
+    /// query parses every expression in the YAML model, so repeating it on
+    /// cache hits would make the session cache pay parser cost unnecessarily.
+    queries: Vec<crate::bases::SlateQuery>,
     warnings: Vec<String>,
     default_this_path: Option<String>,
     cache: crate::bases::engine::BasesQueryCache,
@@ -3203,21 +3207,20 @@ fn index_file(
     // still refresh `indexed_at_ms` so a future stale-row sweep can
     // tell "the scanner has visited this" from "this row is orphaned."
     let existing: Option<(i64, i64, i64)> = tx
-        .query_row(
-            "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1",
-            rusqlite::params![path],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )
+        .prepare_cached("SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1")?
+        .query_row(rusqlite::params![path], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
         .optional()?;
+    let replacing_existing_file = existing.is_some();
     if let Some((db_mtime_ms, db_size_bytes, db_ctime_ms)) = existing {
-        let mtime_size_match =
-            db_mtime_ms == stat.mtime_ms && db_size_bytes == stat.size_bytes as i64;
+        let mtime_size_match = i64::try_from(stat.size_bytes).is_ok_and(|stat_size_bytes| {
+            db_mtime_ms == stat.mtime_ms && db_size_bytes == stat_size_bytes
+        });
         // ctime is an additional axis when both sides have it: it
         // catches mtime-preserving writes (`cp -p`, `rsync -a`) that
         // the mtime+size pair alone can't see. When either side is 0
@@ -3338,7 +3341,7 @@ fn index_file(
         String::new()
     };
 
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO files
             (path, name, extension, size_bytes, mtime_ms, ctime_ms,
              content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
@@ -3354,20 +3357,20 @@ fn index_file(
             indexed_at_ms  = excluded.indexed_at_ms,
             is_markdown    = excluded.is_markdown,
             body_text      = excluded.body_text",
-        rusqlite::params![
-            path,
-            name,
-            extension,
-            stat.size_bytes as i64,
-            stat.mtime_ms,
-            stat.ctime_ms,
-            hash,
-            parser_version,
-            now,
-            is_markdown as i64,
-            body_text,
-        ],
-    )?;
+    )?
+    .execute(rusqlite::params![
+        path,
+        name,
+        extension,
+        stat.size_bytes as i64,
+        stat.mtime_ms,
+        stat.ctime_ms,
+        hash,
+        parser_version,
+        now,
+        is_markdown as i64,
+        body_text,
+    ])?;
 
     // For Markdown files, parse + persist headings, links, and
     // frontmatter properties in the same transaction as the files
@@ -3379,20 +3382,23 @@ fn index_file(
         // Need the file_id for the foreign keys. INSERT … ON CONFLICT
         // DO UPDATE doesn't expose the row id directly, so query it
         // back — cheap given we just touched the row.
-        let file_id: i64 = tx.query_row(
-            "SELECT id FROM files WHERE path = ?1",
-            rusqlite::params![path],
-            |row| row.get(0),
-        )?;
+        let file_id: i64 = tx
+            .prepare_cached("SELECT id FROM files WHERE path = ?1")?
+            .query_row(rusqlite::params![path], |row| row.get(0))?;
         // Reuse the already-decoded `body_text` so we don't pay the
         // utf8_lossy cost twice (once for FTS, once for parsers).
-        index_markdown_derivatives(tx, file_id, path, body_text.as_str(), vault_index)?;
-    } else if is_base {
-        let file_id: i64 = tx.query_row(
-            "SELECT id FROM files WHERE path = ?1",
-            rusqlite::params![path],
-            |row| row.get(0),
+        index_markdown_derivatives(
+            tx,
+            file_id,
+            path,
+            body_text.as_str(),
+            vault_index,
+            replacing_existing_file,
         )?;
+    } else if is_base {
+        let file_id: i64 = tx
+            .prepare_cached("SELECT id FROM files WHERE path = ?1")?
+            .query_row(rusqlite::params![path], |row| row.get(0))?;
         let source = String::from_utf8_lossy(&content);
         crate::bases_db::replace_base_file_for_file(
             tx,
@@ -3454,12 +3460,18 @@ fn index_markdown_derivatives(
     path: &str,
     body_text: &str,
     vault_index: &crate::InMemoryVaultIndex,
+    replacing_existing_file: bool,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, body_text)?;
     crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
-    crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, body_text)?;
-    crate::tags_db::replace_tags_for_file(tx, file_id, body_text)?;
+    if replacing_existing_file {
+        crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, body_text)?;
+        crate::tags_db::replace_tags_for_file(tx, file_id, body_text)?;
+    } else {
+        crate::dql_inline_fields_db::insert_dql_inline_fields_for_new_file(tx, file_id, body_text)?;
+        crate::tags_db::insert_tags_for_new_file(tx, file_id, body_text)?;
+    }
     crate::tasks_db::replace_tasks_for_file(tx, file_id, body_text)?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, body_text)?;
     crate::citations_db::replace_citations_for_file(tx, file_id, body_text)?;
@@ -4188,7 +4200,7 @@ fn refresh_text_derived_indexes_after_reclassification(
     let source = String::from_utf8_lossy(&content);
     if is_markdown {
         write_body(tx, source.as_ref())?;
-        index_markdown_derivatives(tx, file_id, path, source.as_ref(), &vault_index)?;
+        index_markdown_derivatives(tx, file_id, path, source.as_ref(), &vault_index, true)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
     } else {
         write_body(tx, "")?;
@@ -5306,6 +5318,7 @@ pub struct BasesColumn {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasesValue {
     pub raw_kind: String,
+    pub sort_key: String,
     pub display: String,
     pub text: Option<String>,
     pub number: Option<f64>,
@@ -5429,15 +5442,15 @@ fn bad_base_handle(handle: u64) -> VaultError {
 fn base_query_for_view(
     state: &OpenBaseState,
     view: u32,
-) -> Result<crate::bases::SlateQuery, VaultError> {
+) -> Result<&crate::bases::SlateQuery, VaultError> {
     match &state.source {
-        OpenBaseSource::Base(base) => {
-            if base.views.get(view as usize).is_none() {
-                return Err(VaultError::InvalidArgument {
+        OpenBaseSource::Base(_) => {
+            state
+                .queries
+                .get(view as usize)
+                .ok_or_else(|| VaultError::InvalidArgument {
                     message: format!("base view {view} is out of range"),
-                });
-            }
-            Ok(crate::bases::view_query(base, view as usize))
+                })
         }
         OpenBaseSource::Query(query) => {
             if view != 0 {
@@ -5445,9 +5458,15 @@ fn base_query_for_view(
                     message: format!("query handle has one view; got {view}"),
                 });
             }
-            Ok(query.clone())
+            Ok(state.queries.first().unwrap_or(query))
         }
     }
+}
+
+fn compiled_base_queries(base: &crate::bases::BaseFile) -> Vec<crate::bases::SlateQuery> {
+    (0..base.views.len())
+        .map(|view| crate::bases::view_query(base, view))
+        .collect()
 }
 
 fn base_edits_invalidate_transient_sort(
@@ -5514,9 +5533,58 @@ impl VaultSession {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Heal the narrow watcher race where a readable `.base` is opened after
+    /// the latest vault scan but before its filesystem event is indexed.
+    ///
+    /// `base_execute` resolves `this` through the `files` table. A file-backed
+    /// handle therefore needs its own path represented there before the handle
+    /// records that path as its default context. Existing rows stay on the
+    /// scanner fast path; only a genuinely missing row pays the targeted read
+    /// and Bases-index update below.
+    fn ensure_open_base_indexed(&self, path: &str) -> Result<(), VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let indexed = conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if indexed {
+            return Ok(());
+        }
+
+        let tx = conn.transaction()?;
+        let mut indexed_paths = tx
+            .prepare("SELECT path FROM files")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        indexed_paths.push(path.to_string());
+        let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
+        let mut report = ScanReport::default();
+        let (name, _, _) = classify_path(path);
+        index_file(
+            &tx,
+            self.provider.as_ref(),
+            path,
+            &name,
+            self.config.parser_version,
+            now_ms(),
+            &mut report,
+            &vault_index,
+            self.config.large_file_refuse_bytes,
+        )?;
+        tx.commit()?;
+        self.bump_bases_generation();
+        Ok(())
+    }
+
     pub fn open_base(&self, path: &str) -> Result<u64, VaultError> {
         let source = self.read_text(path)?;
+        self.ensure_open_base_indexed(path)?;
         let (base, warnings) = crate::bases::parse_base(&source);
+        let queries = compiled_base_queries(&base);
         let handle = self
             .next_base_handle
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -5526,6 +5594,7 @@ impl VaultSession {
                 path: Some(path.to_string()),
                 content_hash: Some(content_hash(source.as_bytes())),
                 source: OpenBaseSource::Base(base),
+                queries,
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: Some(path.to_string()),
                 cache: crate::bases::engine::BasesQueryCache::default(),
@@ -5541,6 +5610,7 @@ impl VaultSession {
         this_path: Option<String>,
     ) -> Result<u64, VaultError> {
         let (base, warnings) = crate::bases::parse_base(source);
+        let queries = compiled_base_queries(&base);
         let handle = self
             .next_base_handle
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -5550,6 +5620,7 @@ impl VaultSession {
                 path: None,
                 content_hash: None,
                 source: OpenBaseSource::Base(base),
+                queries,
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: this_path,
                 cache: crate::bases::engine::BasesQueryCache::default(),
@@ -5578,6 +5649,7 @@ impl VaultSession {
             OpenBaseState {
                 path: None,
                 content_hash: None,
+                queries: vec![query.clone()],
                 source: OpenBaseSource::Query(query),
                 warnings: Vec::new(),
                 default_this_path: this_path,
@@ -5602,6 +5674,7 @@ impl VaultSession {
             OpenBaseState {
                 path: None,
                 content_hash: None,
+                queries: vec![query.clone()],
                 source: OpenBaseSource::Query(query),
                 warnings: Vec::new(),
                 default_this_path: None,
@@ -5761,6 +5834,38 @@ impl VaultSession {
         load_dashboard(&conn, id)
     }
 
+    /// Update a dashboard's user-editable fields as one durable operation.
+    ///
+    /// Name and section writes deliberately remain separate statements inside
+    /// one transaction: any failure while persisting the sections rolls the
+    /// preceding name write back instead of exposing a partially saved editor
+    /// state.
+    pub fn update_dashboard(
+        &self,
+        id: &str,
+        name: &str,
+        sections: Vec<DashboardSection>,
+    ) -> Result<(), VaultError> {
+        validate_saved_name("dashboard", name)?;
+        let sections_json = dashboard_sections_json(&sections)?;
+        let now = now_ms();
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+        ensure_name_available(&tx, NameTable::Dashboards, name, Some(id))?;
+        let changed = tx.execute(
+            "UPDATE dashboards SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, id],
+        )?;
+        ensure_changed(changed, "dashboard", id)?;
+        let changed = tx.execute(
+            "UPDATE dashboards SET sections_json = ?1, modified_at_ms = ?2 WHERE id = ?3",
+            rusqlite::params![sections_json, now, id],
+        )?;
+        ensure_changed(changed, "dashboard", id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn rename_dashboard(&self, id: &str, name: &str) -> Result<(), VaultError> {
         validate_saved_name("dashboard", name)?;
         let now = now_ms();
@@ -5807,6 +5912,7 @@ impl VaultSession {
             OpenBaseState {
                 path: None,
                 content_hash: None,
+                queries: vec![query.clone()],
                 source: OpenBaseSource::Query(query),
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
                 default_this_path: this_path,
@@ -5949,30 +6055,36 @@ impl VaultSession {
     ) -> Result<BasesResultSet, VaultError> {
         let bases = self.bases.lock().expect("base registry mutex");
         let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
-        let mut query = base_query_for_view(state, view)?;
-        if let Some((sort_view, sort)) = &state.transient_sort
+        let compiled_query = base_query_for_view(state, view)?;
+        let transient_query;
+        let query = if let Some((sort_view, sort)) = &state.transient_sort
             && *sort_view == view
         {
-            query.sort = vec![sort.clone()];
-        }
+            transient_query = {
+                let mut query = compiled_query.clone();
+                query.sort = vec![sort.clone()];
+                query
+            };
+            &transient_query
+        } else {
+            compiled_query
+        };
         let default_this_path = state.default_this_path.clone();
         let warnings = state.warnings.clone();
         let quick_filter = quick_filter
             .as_deref()
             .map(str::trim)
             .filter(|filter| !filter.is_empty());
-        let use_cache = quick_filter.is_none();
-        let cache = use_cache.then_some(&state.cache);
         let conn = self.conn.lock().expect("session connection mutex");
         let ctx = crate::bases::engine::EngineCtx {
             now_ms: execution_now_ms,
             generation: self.bases_generation(),
             this_path: this_path.or(default_this_path),
-            cache,
+            cache: Some(&state.cache),
             quick_filter,
             ..crate::bases::engine::EngineCtx::default()
         };
-        let engine_result = crate::bases::engine::execute(&query, &conn, &ctx, cancel)?;
+        let engine_result = crate::bases::engine::execute(query, &conn, &ctx, cancel)?;
         Ok(bases_result_from_engine(engine_result, warnings))
     }
 
@@ -6036,6 +6148,7 @@ impl VaultSession {
                 })?;
         let report = self.save_text(&path, &new_text, Some(expected_hash))?;
         let (base, warnings) = crate::bases::parse_base(&new_text);
+        state.queries = compiled_base_queries(&base);
         state.source = OpenBaseSource::Base(base);
         state.content_hash = Some(report.new_content_hash);
         state.warnings = warnings.into_iter().map(|w| w.message).collect();
@@ -7145,9 +7258,13 @@ fn bases_result_from_engine(
         .collect();
     BasesResultSet {
         columns,
-        rows: result.rows.iter().map(bases_row_from_engine).collect(),
-        groups: result.groups.iter().map(group_from_engine).collect(),
-        summaries: result.summaries.iter().map(summary_from_engine).collect(),
+        rows: result.rows.into_iter().map(bases_row_from_engine).collect(),
+        groups: result.groups.into_iter().map(group_from_engine).collect(),
+        summaries: result
+            .summaries
+            .into_iter()
+            .map(summary_from_engine)
+            .collect(),
         total_count: result.total_count as u64,
         shown_count: result.shown_count as u64,
         unfiltered_shown_count: result.unfiltered_shown_count as u64,
@@ -7164,29 +7281,33 @@ fn bases_result_from_engine(
     }
 }
 
-fn bases_row_from_engine(row: &crate::bases::engine::BasesRow) -> BasesRow {
+fn bases_row_from_engine(row: crate::bases::engine::BasesRow) -> BasesRow {
     BasesRow {
-        file_path: row.path.clone(),
+        file_path: row.path,
         task_ordinal: row.task_ordinal,
-        values: row.cells.iter().map(bases_value_from_cell).collect(),
-        audio_description: row.audio_description.clone(),
+        values: row.cells.into_iter().map(bases_value_from_cell).collect(),
+        audio_description: row.audio_description,
     }
 }
 
-fn group_from_engine(group: &crate::bases::engine::ResultGroup) -> BasesGroup {
+fn group_from_engine(group: crate::bases::engine::ResultGroup) -> BasesGroup {
     BasesGroup {
-        label: group.label.clone(),
+        label: group.label,
         row_start: group.rows.start as u64,
         row_count: group.rows.len() as u64,
-        summaries: group.summaries.iter().map(summary_from_engine).collect(),
+        summaries: group
+            .summaries
+            .into_iter()
+            .map(summary_from_engine)
+            .collect(),
     }
 }
 
-fn summary_from_engine(summary: &crate::bases::engine::BasesSummaryCell) -> BasesSummaryCell {
+fn summary_from_engine(summary: crate::bases::engine::BasesSummaryCell) -> BasesSummaryCell {
     BasesSummaryCell {
-        column_id: summary.column_id.clone(),
-        summary: summary.summary.clone(),
-        value: bases_value_from_cell(&summary.value),
+        column_id: summary.column_id,
+        summary: summary.summary,
+        value: bases_value_from_cell(summary.value),
     }
 }
 
@@ -7213,11 +7334,12 @@ fn column_role(index: usize, id: &str) -> ColumnRole {
     }
 }
 
-fn bases_value_from_cell(cell: &crate::bases::engine::CellValue) -> BasesValue {
+fn bases_value_from_cell(cell: crate::bases::engine::CellValue) -> BasesValue {
     match cell {
         crate::bases::engine::CellValue::Value(value) => bases_value_from_value(value),
         crate::bases::engine::CellValue::Error(error) => BasesValue {
             raw_kind: "error".to_string(),
+            sort_key: format!("fe:{error}"),
             display: format!("Error: {error}"),
             text: None,
             number: None,
@@ -7227,22 +7349,24 @@ fn bases_value_from_cell(cell: &crate::bases::engine::CellValue) -> BasesValue {
             link_target: None,
             link_display: None,
             list: Vec::new(),
-            error: Some(error.clone()),
+            error: Some(error),
         },
     }
 }
 
-fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
+fn bases_value_from_value(value: crate::bases::eval::Value) -> BasesValue {
     use crate::bases::eval::Value;
-    let display = crate::bases::engine::value_display(value);
+    let display = crate::bases::engine::value_display(&value);
+    let sort_key = crate::bases::engine::value_sort_key(&value);
     match value {
-        Value::Null => base_value("null", display),
+        Value::Null => base_value("null", sort_key, display),
         Value::Bool(value) => BasesValue {
             raw_kind: "bool".to_string(),
+            sort_key,
             display,
             text: None,
             number: None,
-            bool_value: Some(*value),
+            bool_value: Some(value),
             date_epoch_ms: None,
             date_has_time: false,
             link_target: None,
@@ -7252,9 +7376,10 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
         },
         Value::Number(value) => BasesValue {
             raw_kind: "number".to_string(),
+            sort_key,
             display,
             text: None,
-            number: Some(*value),
+            number: Some(value),
             bool_value: None,
             date_epoch_ms: None,
             date_has_time: false,
@@ -7265,8 +7390,9 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
         },
         Value::Text(text) => BasesValue {
             raw_kind: "text".to_string(),
+            sort_key,
             display,
-            text: Some(text.clone()),
+            text: Some(text),
             number: None,
             bool_value: None,
             date_epoch_ms: None,
@@ -7278,6 +7404,7 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
         },
         Value::Date(value) => BasesValue {
             raw_kind: "date".to_string(),
+            sort_key,
             display,
             text: None,
             number: None,
@@ -7291,6 +7418,7 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
         },
         Value::DqlDate(value) => BasesValue {
             raw_kind: "date".to_string(),
+            sort_key,
             display,
             text: None,
             number: None,
@@ -7302,9 +7430,10 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
             list: Vec::new(),
             error: None,
         },
-        Value::Duration(_) | Value::DqlDuration(_) => base_value("duration", display),
+        Value::Duration(_) | Value::DqlDuration(_) => base_value("duration", sort_key, display),
         Value::List(values) => BasesValue {
             raw_kind: "list".to_string(),
+            sort_key,
             display,
             text: None,
             number: None,
@@ -7319,40 +7448,43 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
                 .collect(),
             error: None,
         },
-        Value::Object(_) => base_value("object", display),
+        Value::Object(_) => base_value("object", sort_key, display),
         Value::Link(link) => BasesValue {
             raw_kind: "link".to_string(),
+            sort_key,
             display,
             text: None,
             number: None,
             bool_value: None,
             date_epoch_ms: None,
             date_has_time: false,
-            link_target: Some(link.target.clone()),
-            link_display: link.display.clone(),
+            link_target: Some(link.target),
+            link_display: link.display,
             list: Vec::new(),
             error: None,
         },
         Value::File(file) => BasesValue {
             raw_kind: "file".to_string(),
+            sort_key,
             display,
             text: Some(file.path.clone()),
             number: None,
             bool_value: None,
             date_epoch_ms: None,
             date_has_time: false,
-            link_target: Some(file.path.clone()),
+            link_target: Some(file.path),
             link_display: None,
             list: Vec::new(),
             error: None,
         },
-        Value::Regex(_, _) => base_value("regex", display),
+        Value::Regex(_, _) => base_value("regex", sort_key, display),
     }
 }
 
-fn base_value(raw_kind: &str, display: String) -> BasesValue {
+fn base_value(raw_kind: &str, sort_key: String, display: String) -> BasesValue {
     BasesValue {
         raw_kind: raw_kind.to_string(),
+        sort_key,
         display,
         text: None,
         number: None,

@@ -26,6 +26,11 @@ pub mod dql;
 pub mod engine;
 pub mod eval;
 pub mod expr;
+mod slate_query_fence;
+
+pub use slate_query_fence::{
+    SlateQueryFenceClassification, SlateQueryFenceError, classify_slate_query_fence,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BaseFile {

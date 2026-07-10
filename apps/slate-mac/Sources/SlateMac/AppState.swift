@@ -5855,7 +5855,15 @@ final class AppState: ObservableObject {
         } else {
             loadedFilePath = nil
         }
-        if selectedFilePath != newPath { selectedFilePath = newPath }
+        let selectionMatches: Bool
+        if case .base = workspace.activeTab?.item {
+            selectionMatches = BaseExactIdentity.matches(selectedFilePath, newPath)
+        } else {
+            selectionMatches = selectedFilePath == newPath
+        }
+        if !selectionMatches {
+            selectedFilePath = newPath
+        }
     }
 
     /// After a successful delete, flip open tabs pointing at the removed path

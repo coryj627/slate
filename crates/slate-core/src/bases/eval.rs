@@ -43,6 +43,7 @@ const DQL_SUBSTRING_OBJECT_KEY: &str = "\u{f8ff}slate.dql.substring";
 const DQL_LIST_METHOD_OBJECT_KEY: &str = "\u{f8ff}slate.dql.list-method";
 const DQL_JOIN_OBJECT_KEY: &str = "\u{f8ff}slate.dql.join";
 const DQL_SORT_OBJECT_KEY: &str = "\u{f8ff}slate.dql.sort";
+const DQL_COMMAND_SORT_OBJECT_KEY: &str = "\u{f8ff}slate.dql.command-sort";
 const DQL_CONTAINS_OBJECT_KEY: &str = "\u{f8ff}slate.dql.contains";
 const DQL_REVERSE_OBJECT_KEY: &str = "\u{f8ff}slate.dql.reverse";
 const DQL_MULTIPLY_OBJECT_KEY: &str = "\u{f8ff}slate.dql.multiply";
@@ -3742,6 +3743,17 @@ fn dql_ordering_cmp(lhs: &Value, rhs: &Value, function: &str) -> Result<Ordering
         }
         _ => Ok(Ordering::Equal),
     }
+}
+
+pub(crate) fn dql_command_sort_value(value: &Value) -> Option<&Value> {
+    dql_object_value(value, DQL_COMMAND_SORT_OBJECT_KEY)
+}
+
+pub(crate) fn compare_dql_command_sort_values(
+    lhs: &Value,
+    rhs: &Value,
+) -> Result<Ordering, EvalError> {
+    dql_ordering_cmp(lhs, rhs, "DQL SORT")
 }
 
 fn dql_locale_cmp(lhs: &str, rhs: &str, function: &str) -> Result<Ordering, EvalError> {

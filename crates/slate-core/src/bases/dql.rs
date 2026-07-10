@@ -113,6 +113,7 @@ const DQL_SUBSTRING_OBJECT_KEY: &str = "\u{f8ff}slate.dql.substring";
 const DQL_LIST_METHOD_OBJECT_KEY: &str = "\u{f8ff}slate.dql.list-method";
 const DQL_JOIN_OBJECT_KEY: &str = "\u{f8ff}slate.dql.join";
 const DQL_SORT_OBJECT_KEY: &str = "\u{f8ff}slate.dql.sort";
+const DQL_COMMAND_SORT_OBJECT_KEY: &str = "\u{f8ff}slate.dql.command-sort";
 const DQL_CONTAINS_OBJECT_KEY: &str = "\u{f8ff}slate.dql.contains";
 const DQL_REVERSE_OBJECT_KEY: &str = "\u{f8ff}slate.dql.reverse";
 const DQL_MULTIPLY_OBJECT_KEY: &str = "\u{f8ff}slate.dql.multiply";
@@ -557,8 +558,10 @@ fn parse_sort(
         let (expr_source, ascending) = split_sort_direction(part);
         let expression = expr_source.trim();
         let start = offset + subslice_offset(source, raw) + subslice_offset(raw, expression);
+        let expr = convert_expr_or_unsupported(expression, task_context, start, warnings);
+        let expr_span = expr.span;
         query.sort.push(SortKey {
-            expr: convert_expr_or_unsupported(expression, task_context, start, warnings),
+            expr: dql_marker_expr(DQL_COMMAND_SORT_OBJECT_KEY, expr, expr_span),
             ascending,
         });
     }

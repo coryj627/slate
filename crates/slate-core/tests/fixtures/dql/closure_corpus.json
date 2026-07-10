@@ -2,7 +2,7 @@
   {
     "name": "query-table-pipeline",
     "operation": "query_commands",
-    "disposition": "supported",
+    "disposition": "runtime_fail_loud",
     "coverage": [
       "query.table.with_id",
       "query.table.alias",
@@ -28,16 +28,9 @@
     ],
     "source": "TABLE file.name AS \"Name\", lower(file.name) AS \"Lower\"\nWHERE file.path = \"123.md\"\nWHERE file.size >= 0 AND file.size > -1 AND file.size <= 10000 AND file.size < 10001 AND file.name != \"never\" AND !(false) OR false\nSORT file.name ASC, file.path ASCENDING, file.size DESC, file.mtime DESCENDING\nLIMIT 1\n",
     "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=and(call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]),call(method({\"slate.dql.truthy\":binary(Or,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":prop(File(Size))},0.0)},{\"slate.dql.truthy\":binary(Gt,{\"slate.dql.ordering\":prop(File(Size))},unary(Neg,1.0))})},{\"slate.dql.truthy\":binary(Lte,{\"slate.dql.ordering\":prop(File(Size))},10000.0)})},{\"slate.dql.truthy\":binary(Lt,{\"slate.dql.ordering\":prop(File(Size))},10001.0)})},{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[])},\"never\")})},{\"slate.dql.truthy\":unary(Not,{\"slate.dql.truthy\":false})})},{\"slate.dql.truthy\":false})},IsTruthy),[]));formulas=[dql_column_1=call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]),dql_column_2=call(method(call(global(Object),[\"slate.dql.text-method\",call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[])]),Lower),[])];custom=[];group=None;sort=[call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]):asc,prop(File(Path)):asc,prop(File(Size)):desc,prop(File(Mtime)):desc];columns=[file.file:-,formula.dql_column_1:Name,formula.dql_column_2:Lower];summaries=[];limit=Some(1)",
-    "expected_rows": [
-      "123.md#-"
-    ],
-    "expected_cells": [
-      [
-        "file:123.md",
-        "text:123",
-        "text:123"
-      ]
-    ]
+    "error_contains": "DQL locale collation is unsupported outside lowercase ASCII letters and digits",
+    "expected_rows": [],
+    "expected_cells": []
   },
   {
     "name": "query-table-without-id",
@@ -112,7 +105,7 @@
   {
     "name": "query-task-fields",
     "operation": "query_type",
-    "disposition": "supported",
+    "disposition": "runtime_fail_loud",
     "coverage": [
       "query.task",
       "field.task.text",
@@ -124,14 +117,9 @@
     ],
     "source": "TASK\nWHERE text != \"\" AND status != \"never\" AND !completed AND due >= date(today) AND scheduled >= date(today)\nWHERE checked OR status = \" \"\nSORT text ASC\n",
     "expected_semantics": "source=All;rows=Tasks;view=List { fallback_from: None };filters=and(call(method({\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Text))},\"\")},{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Status))},\"never\")})},{\"slate.dql.truthy\":unary(Not,{\"slate.dql.truthy\":prop(TaskField(Completed))})})},{\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":prop(TaskField(Due))},call(global(Date),[call(global(Object),[\"slate.dql.date\",\"today\"])]))})},{\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":prop(TaskField(Scheduled))},call(global(Date),[call(global(Object),[\"slate.dql.date\",\"today\"])]))})},IsTruthy),[]),call(method({\"slate.dql.truthy\":binary(Or,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Status))},\"\")},{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Status))},\" \")})},{\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(TaskField(Status))},\" \")})},IsTruthy),[]));formulas=[];custom=[];group=None;sort=[prop(TaskField(Text)):asc];columns=[];summaries=[];limit=None",
-    "expected_rows": [
-      "Hub.md#0",
-      "Target.md#0"
-    ],
-    "expected_cells": [
-      [],
-      []
-    ]
+    "error_contains": "DQL locale collation is unsupported outside lowercase ASCII letters and digits",
+    "expected_rows": [],
+    "expected_cells": []
   },
   {
     "name": "source-tag-boolean-and-negations",
@@ -437,20 +425,15 @@
   {
     "name": "idiom-felker-status-table",
     "operation": "field_report_idiom",
-    "disposition": "supported",
+    "disposition": "runtime_fail_loud",
     "coverage": [
       "idiom.felker.status_table"
     ],
     "source": "TABLE WITHOUT ID status AS \"Status\"\nFROM #project\nWHERE status = \"active\"\nSORT file.name ASC\n",
     "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=and(call(method(prop(File(File)),HasTag),[\"project\"]),call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":index({\"slate.dql.row-property\":false},\"status\")},\"active\")},IsTruthy),[]));formulas=[dql_column_1=index({\"slate.dql.row-property\":false},\"status\")];custom=[];group=None;sort=[call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]):asc];columns=[formula.dql_column_1:Status];summaries=[];limit=None",
-    "expected_rows": [
-      "Hub.md#-"
-    ],
-    "expected_cells": [
-      [
-        "text:active"
-      ]
-    ]
+    "error_contains": "DQL locale collation is unsupported outside lowercase ASCII letters and digits",
+    "expected_rows": [],
+    "expected_cells": []
   },
   {
     "name": "idiom-felker-schedule-table",

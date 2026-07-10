@@ -21,9 +21,33 @@ enum BaseDocumentSource: Hashable {
     var key: String {
         switch self {
         case .file(let path):
-            return path
+            return BaseExactIdentity.registryKey(prefix: "base-file", value: path)
         case .savedQuery(let id, _):
-            return "saved-query:\(id)"
+            return BaseExactIdentity.registryKey(prefix: "saved-query", value: id)
+        }
+    }
+
+    static func == (lhs: BaseDocumentSource, rhs: BaseDocumentSource) -> Bool {
+        switch (lhs, rhs) {
+        case (.file(let lhs), .file(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.savedQuery(let lhsID, let lhsName), .savedQuery(let rhsID, let rhsName)):
+            return BaseExactIdentity.matches(lhsID, rhsID)
+                && BaseExactIdentity.matches(lhsName, rhsName)
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .file(let path):
+            hasher.combine(0)
+            BaseExactIdentity.hash(path, into: &hasher)
+        case .savedQuery(let id, let name):
+            hasher.combine(1)
+            BaseExactIdentity.hash(id, into: &hasher)
+            BaseExactIdentity.hash(name, into: &hasher)
         }
     }
 
@@ -75,6 +99,7 @@ final class BaseDocument: ObservableObject {
     @Published private(set) var focusedColumnIndex: Int = 0
 
     private(set) var handle: UInt64?
+    private var appliedQuickFilterText: String?
 
     init(path: String) {
         self.source = .file(path: path)
@@ -102,10 +127,11 @@ final class BaseDocument: ObservableObject {
     }
 
     var quickFilterActive: Bool {
-        !quickFilterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        editedQuickFilterArgument != nil || appliedQuickFilterText != nil
     }
 
     func load(session: VaultSession, thisPath: String? = nil) {
+        let previousViewName = activeViewName
         if let stale = handle {
             session.closeBase(handle: stale)
             handle = nil
@@ -122,7 +148,15 @@ final class BaseDocument: ObservableObject {
             }
             handle = opened
             views = try session.baseViews(handle: opened)
-            activeViewIndex = views.isEmpty ? 0 : min(activeViewIndex, views.count - 1)
+            if let previousViewName,
+                let matchingIndex = views.firstIndex(where: {
+                    BaseExactIdentity.matches($0.name, previousViewName)
+                })
+            {
+                activeViewIndex = matchingIndex
+            } else {
+                activeViewIndex = views.isEmpty ? 0 : min(activeViewIndex, views.count - 1)
+            }
             sortState = nil
             focusedColumnIndex = 0
             executeActiveView(session: session, thisPath: thisPath)
@@ -178,6 +212,7 @@ final class BaseDocument: ObservableObject {
             return
         }
         do {
+            let appliedFilter = quickFilterArgument
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
@@ -185,6 +220,7 @@ final class BaseDocument: ObservableObject {
                 quickFilter: quickFilterArgument,
                 cancel: CancelToken())
             result = executed
+            appliedQuickFilterText = appliedFilter
             let view = views[activeViewIndex]
             if view.status == .fallback {
                 state = .degraded("Using fallback view for \(view.name).")
@@ -229,7 +265,7 @@ final class BaseDocument: ObservableObject {
 
     @discardableResult
     func clearQuickFilter(session: VaultSession?) -> String? {
-        guard quickFilterActive || !quickFilterText.isEmpty else { return nil }
+        guard quickFilterActive else { return nil }
         clearQuickFilterState()
         if let session {
             executeActiveView(session: session)
@@ -351,7 +387,14 @@ final class BaseDocument: ObservableObject {
     }
 
     private var quickFilterArgument: String? {
-        quickFilterActive ? quickFilterText : nil
+        editedQuickFilterArgument
+    }
+
+    private var editedQuickFilterArgument: String? {
+        guard !quickFilterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return quickFilterText
     }
 
     var quickFilterResultAnnouncement: String {
@@ -366,7 +409,7 @@ final class BaseDocument: ObservableObject {
             parts.append("view: \(activeViewName)")
         }
         if quickFilterActive {
-            parts.append("quick filter: \(quickFilterText)")
+            parts.append("quick filter: \(editedQuickFilterArgument ?? appliedQuickFilterText ?? "")")
         }
         return parts.joined(separator: ", ")
     }
@@ -375,6 +418,7 @@ final class BaseDocument: ObservableObject {
         if !quickFilterText.isEmpty {
             quickFilterText = ""
         }
+        appliedQuickFilterText = nil
     }
 
     private enum BaseDocumentError: LocalizedError {

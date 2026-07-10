@@ -54,17 +54,38 @@ pub(crate) fn replace_tags_for_file(
     file_id: i64,
     markdown_source: &str,
 ) -> Result<(), VaultError> {
+    write_tags_for_file(tx, file_id, markdown_source, true)
+}
+
+/// Populate both tag projections for a freshly inserted `files` row without
+/// deleting rows that cannot exist yet.
+pub(crate) fn insert_tags_for_new_file(
+    tx: &Transaction,
+    file_id: i64,
+    markdown_source: &str,
+) -> Result<(), VaultError> {
+    write_tags_for_file(tx, file_id, markdown_source, false)
+}
+
+fn write_tags_for_file(
+    tx: &Transaction,
+    file_id: i64,
+    markdown_source: &str,
+    clear_existing: bool,
+) -> Result<(), VaultError> {
     // The native and DQL projections intentionally have different value
     // contracts, but they must be derived from the same parser pass and land
     // in the same transaction. That keeps one edit from exposing mixed-era
     // tag state to either query surface.
     let projections = collect_tag_projections(markdown_source);
 
-    tx.execute("DELETE FROM file_tags WHERE file_id = ?1", params![file_id])?;
-    tx.execute(
-        "DELETE FROM dql_file_tags WHERE file_id = ?1",
-        params![file_id],
-    )?;
+    if clear_existing {
+        tx.execute("DELETE FROM file_tags WHERE file_id = ?1", params![file_id])?;
+        tx.execute(
+            "DELETE FROM dql_file_tags WHERE file_id = ?1",
+            params![file_id],
+        )?;
+    }
 
     // BTreeSet: dedup a tag that appears both inline and in
     // frontmatter (or twice inline) down to one row, and give the
@@ -425,6 +446,28 @@ mod tests {
         write_tags(&conn, 1, "");
         assert!(rows_for(&conn, 1).is_empty());
         assert!(raw_rows_for(&conn, 1).is_empty());
+    }
+
+    #[test]
+    fn new_file_writer_does_not_issue_redundant_deletes() {
+        let conn = migrated_conn();
+        seed_file(&conn, 1);
+        conn.execute_batch(
+            "CREATE TRIGGER reject_new_file_native_tag_delete
+             BEFORE DELETE ON file_tags
+             BEGIN SELECT RAISE(ABORT, 'unexpected native tag delete'); END;
+             CREATE TRIGGER reject_new_file_dql_tag_delete
+             BEFORE DELETE ON dql_file_tags
+             BEGIN SELECT RAISE(ABORT, 'unexpected dql tag delete'); END;",
+        )
+        .unwrap();
+
+        let tx = conn.unchecked_transaction().unwrap();
+        insert_tags_for_new_file(&tx, 1, "#One #Two\n").unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(rows_for(&conn, 1), vec!["one", "two"]);
+        assert_eq!(raw_rows_for(&conn, 1), vec!["One", "Two"]);
     }
 
     #[test]

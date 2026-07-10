@@ -69,6 +69,71 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.allTabs.count, 1)
     }
 
+    @MainActor
+    func testOpenAndLookupKeepCanonicallyEquivalentPathsDistinct() {
+        let composed = "Queries/é.base"
+        let decomposed = "Queries/e\u{301}.base"
+        let workspace = WorkspaceState()
+        let composedID = workspace.openTab(.base(path: composed))
+        let decomposedID = workspace.openTab(.base(path: decomposed))
+
+        XCTAssertNotEqual(EditorItem.base(path: composed), .base(path: decomposed))
+        XCTAssertNotEqual(composedID, decomposedID)
+        XCTAssertEqual(workspace.model.activeGroup.tabs.count, 2)
+        XCTAssertEqual(workspace.activeGroupBaseTab(forPath: composed)?.id, composedID)
+        XCTAssertEqual(workspace.activeGroupBaseTab(forPath: decomposed)?.id, decomposedID)
+    }
+
+    func testMarkdownAndCanvasKeepNativeCanonicalPathIdentity() {
+        let composed = "Notes/é.md"
+        let decomposed = "Notes/e\u{301}.md"
+
+        XCTAssertEqual(EditorItem.markdown(path: composed), .markdown(path: decomposed))
+        XCTAssertEqual(
+            EditorItem.canvas(path: composed + ".canvas"),
+            .canvas(path: decomposed + ".canvas"))
+        XCTAssertEqual(
+            Set([EditorItem.markdown(path: composed), .markdown(path: decomposed)]).count,
+            1)
+    }
+
+    @MainActor
+    func testMarkdownBufferRegistryKeepsNativeCanonicalPathIdentity() throws {
+        let composed = "Notes/é.md"
+        let decomposed = "Notes/e\u{301}.md"
+        let workspace = WorkspaceState()
+        let tabID = workspace.openTab(.markdown(path: composed))
+
+        workspace.snapshotActiveTab(
+            text: "draft", baseline: "saved", contentHash: "hash",
+            hasUnsavedChanges: true, saveError: nil, saveConflict: nil,
+            loadedFilePath: decomposed)
+        XCTAssertEqual(workspace.document(for: tabID)?.text, "draft")
+
+        workspace.mirrorEdit(
+            path: decomposed, text: "new draft", hasUnsavedChanges: true)
+        XCTAssertEqual(workspace.document(for: tabID)?.text, "new draft")
+
+        XCTAssertEqual(workspace.invalidateParkedDocuments(forPath: decomposed), [tabID])
+        XCTAssertNil(workspace.document(for: tabID))
+    }
+
+    @MainActor
+    func testRetargetTreatsCanonicallyEquivalentPathsAsDistinctMoves() {
+        let composed = "Queries/é.base"
+        let decomposed = "Queries/e\u{301}.base"
+        let workspace = WorkspaceState()
+        let tabID = workspace.openTab(.base(path: composed))
+
+        let changed = workspace.retarget(old: composed, new: decomposed)
+
+        XCTAssertEqual(changed, [tabID])
+        guard case .base(let path) = workspace.activeTab?.item else {
+            return XCTFail("retargeted tab must remain a base")
+        }
+        XCTAssertTrue(BaseExactIdentity.matches(path, decomposed))
+    }
+
     func testOpenAllowDuplicateBypassesDedupWithinGroup() {
         var model = WorkspaceModel()
         let first = model.openTab(md("a.md"))

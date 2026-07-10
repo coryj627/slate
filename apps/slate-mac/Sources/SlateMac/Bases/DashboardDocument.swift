@@ -11,6 +11,16 @@ struct BaseRowMembership: Equatable {
     struct Identity: Hashable {
         let path: String
         let taskOrdinal: UInt64?
+
+        static func == (lhs: Identity, rhs: Identity) -> Bool {
+            BaseExactIdentity.matches(lhs.path, rhs.path)
+                && lhs.taskOrdinal == rhs.taskOrdinal
+        }
+
+        func hash(into hasher: inout Hasher) {
+            BaseExactIdentity.hash(path, into: &hasher)
+            hasher.combine(taskOrdinal)
+        }
     }
 
     static let empty = BaseRowMembership(rows: [])
@@ -43,6 +53,17 @@ enum BasesDockTarget: Equatable {
         case base(String)
         case savedQuery(String)
         case dashboard(String)
+
+        static func == (lhs: StableIdentity, rhs: StableIdentity) -> Bool {
+            switch (lhs, rhs) {
+            case (.base(let lhs), .base(let rhs)),
+                (.savedQuery(let lhs), .savedQuery(let rhs)),
+                (.dashboard(let lhs), .dashboard(let rhs)):
+                return BaseExactIdentity.matches(lhs, rhs)
+            default:
+                return false
+            }
+        }
     }
 
     fileprivate var stableIdentity: StableIdentity {
@@ -50,6 +71,20 @@ enum BasesDockTarget: Equatable {
         case .base(let path, _): return .base(path)
         case .savedQuery(let id, _): return .savedQuery(id)
         case .dashboard(let id, _): return .dashboard(id)
+        }
+    }
+
+    static func == (lhs: BasesDockTarget, rhs: BasesDockTarget) -> Bool {
+        switch (lhs, rhs) {
+        case (.base(let lhsPath, let lhsName), .base(let rhsPath, let rhsName)):
+            return BaseExactIdentity.matches(lhsPath, rhsPath)
+                && BaseExactIdentity.matches(lhsName, rhsName)
+        case (.savedQuery(let lhsID, let lhsName), .savedQuery(let rhsID, let rhsName)),
+            (.dashboard(let lhsID, let lhsName), .dashboard(let rhsID, let rhsName)):
+            return BaseExactIdentity.matches(lhsID, rhsID)
+                && BaseExactIdentity.matches(lhsName, rhsName)
+        default:
+            return false
         }
     }
 }
@@ -200,6 +235,7 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
     @Published private(set) var status: DashboardSectionStatus
     @Published private(set) var state: LoadState = .loading
     @Published private(set) var result: BasesResultSet?
+    @Published private(set) var authoredRenderer: BaseRendererMode? = nil
 
     private var handle: UInt64?
     private var activeViewIndex = 0
@@ -228,21 +264,42 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
         status.missing
     }
 
+    var rendererOverride: BaseRendererMode? {
+        guard let value = normalizedViewOverride else { return nil }
+        return BaseRendererMode(rawValue: value.lowercased())
+    }
+
+    var resolvedRenderer: BaseRendererMode? {
+        rendererOverride ?? authoredRenderer
+    }
+
     func load(session: VaultSession, thisPath: String? = nil) {
         close(session: session)
         result = nil
+        authoredRenderer = nil
         guard !status.missing else {
             state = .missing
             return
         }
         state = .loading
+        if let value = normalizedViewOverride,
+            rendererOverride == nil
+        {
+            state = .failed(
+                "Unsupported dashboard view override \"\(value)\". "
+                    + "Choose Default, Table, or List.")
+            return
+        }
         do {
             let opened = try session.openSavedQuery(id: status.savedQueryId)
             handle = opened
-            activeViewIndex = viewIndex(session: session, handle: opened)
+            activeViewIndex = 0
+            if let view = try session.baseViews(handle: opened).first {
+                authoredRenderer = view.viewType == "list" ? .list : .table
+            }
             execute(session: session, thisPath: thisPath)
         } catch {
-            handle = nil
+            close(session: session)
             state = .failed("Section could not be opened: \(error.localizedDescription)")
         }
     }
@@ -276,15 +333,11 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
         BaseRowMembership(rows: result?.rows ?? [])
     }
 
-    private func viewIndex(session: VaultSession, handle: UInt64) -> Int {
-        guard let override = status.viewOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !override.isEmpty,
-            let views = try? session.baseViews(handle: handle),
-            let index = views.firstIndex(where: {
-                $0.name.localizedCaseInsensitiveCompare(override) == .orderedSame
-            })
-        else { return 0 }
-        return index
+    private var normalizedViewOverride: String? {
+        guard let value = status.viewOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        else { return nil }
+        return value
     }
 
     private func execute(session: VaultSession, thisPath: String? = nil) {
@@ -294,13 +347,20 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
             return
         }
         do {
-            result = try session.baseExecute(
+            let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 thisPath: thisPath,
                 quickFilter: nil,
                 cancel: CancelToken())
-            state = .ready
+            result = executed
+            if let message = executed.viewError,
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                state = .failed(message)
+            } else {
+                state = .ready
+            }
         } catch {
             result = nil
             state = .failed("Section could not run: \(error.localizedDescription)")

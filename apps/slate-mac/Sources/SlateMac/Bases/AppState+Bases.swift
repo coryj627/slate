@@ -40,10 +40,31 @@ extension AppState {
         return handle
     }
 
+    func openBaseEmbedDestination(_ destination: BaseEmbedOpenDestination) {
+        switch destination {
+        case .baseFile(let path):
+            openFile(path, target: .newTab)
+        case .sourceNote(let path):
+            openFile(path, target: .newTab)
+            setViewMode(.editing)
+        case .savedQuery(let reference):
+            let summaries = currentSession.flatMap { try? $0.listSavedQueries() }
+                ?? baseQueries.savedQueries
+            let resolved = BaseEmbedRequest.savedQuerySummary(
+                reference: reference,
+                in: summaries)
+            guard let resolved else {
+                postBaseActionAnnouncement("Saved query \(reference) is no longer available.")
+                return
+            }
+            openSavedQuery(resolved, target: .newTab)
+        }
+    }
+
     func openBaseFile(_ path: String, target: OpenTarget = .currentTab) {
         switch target {
         case .currentTab:
-            if let existing = workspace.activeGroupTab(forPath: path) {
+            if let existing = workspace.activeGroupBaseTab(forPath: path) {
                 activateTab(existing.id)
                 return
             }
@@ -64,7 +85,7 @@ extension AppState {
                 activateTab(id)
             }
         case .newTab:
-            if let existing = workspace.activeGroupTab(forPath: path) {
+            if let existing = workspace.activeGroupBaseTab(forPath: path) {
                 activateTab(existing.id)
                 return
             }
@@ -371,16 +392,16 @@ extension AppState {
         }
     }
 
-    func updateDashboard(id: String, name: String, sections: [DashboardSection]) {
-        guard let session = currentSession else { return }
+    @discardableResult
+    func updateDashboard(id: String, name: String, sections: [DashboardSection]) -> Bool {
+        guard let session = currentSession else { return false }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             postBaseActionAnnouncement("Enter a dashboard name before saving.")
-            return
+            return false
         }
         do {
-            try session.renameDashboard(id: id, name: trimmed)
-            try session.updateDashboardSections(id: id, sections: sections)
+            try session.updateDashboard(id: id, name: trimmed, sections: sections)
             dashboardDocuments[id]?.load(session: session, thisPath: nil)
             if case .dashboard(let dockedID, _) = basesDock.target, dockedID == id {
                 basesDockDashboardDocument?.load(session: session, thisPath: basesDockActiveNotePath)
@@ -390,8 +411,10 @@ extension AppState {
             }
             refreshBaseQueries()
             postBaseActionAnnouncement("Updated dashboard \(trimmed).")
+            return true
         } catch {
             postBaseActionAnnouncement("Dashboard could not be updated: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -533,6 +556,12 @@ extension AppState {
             _ = workspace.retargetSavedQuery(id: summary.id, name: summary.name)
             baseDocuments[BaseDocumentSource.savedQuery(id: summary.id, name: summary.name).key]?
                 .retargetSavedQueryName(summary.name)
+            if case .savedQuery(let id, _) = basesDock.target,
+                BaseExactIdentity.matches(id, summary.id)
+            {
+                basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
+                basesDockDocument?.retargetSavedQueryName(summary.name)
+            }
         }
     }
 
@@ -540,7 +569,9 @@ extension AppState {
         for summary in dashboards {
             _ = workspace.retargetDashboard(id: summary.id, name: summary.name)
             dashboardDocuments[summary.id]?.retargetName(summary.name)
-            if case .dashboard(let id, _) = basesDock.target, id == summary.id {
+            if case .dashboard(let id, _) = basesDock.target,
+                BaseExactIdentity.matches(id, summary.id)
+            {
                 basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
             }
         }
@@ -549,7 +580,7 @@ extension AppState {
     private func closeOpenSavedQueryTabs(id: String) {
         let matchingTabs = workspace.model.allTabs.filter { tab in
             if case .savedQuery(let queryID, _) = tab.item {
-                return queryID == id
+                return BaseExactIdentity.matches(queryID, id)
             }
             return false
         }
@@ -658,7 +689,7 @@ extension AppState {
         selectedPath: String?
     ) {
         if id == workspace.model.activeGroup.activeTabID,
-            selectedFilePath == selectedPath,
+            BaseExactIdentity.matches(selectedFilePath, selectedPath),
             baseDocuments[source.key]?.handle != nil
         {
             return
@@ -678,10 +709,10 @@ extension AppState {
         if doc.handle == nil, let session = currentSession {
             doc.load(session: session)
         }
-        if selectedFilePath != selectedPath {
+        if !BaseExactIdentity.matches(selectedFilePath, selectedPath) {
             selectedFilePath = selectedPath
         }
-        if activeBaseSelectionPath != source.selectionKey {
+        if !BaseExactIdentity.matches(activeBaseSelectionPath, source.selectionKey) {
             clearActiveBaseSelection()
         }
     }
@@ -811,7 +842,7 @@ extension AppState {
             basesDockDashboardDocument = nil
             let doc = basesDockDocument ?? BaseDocument(source: .file(path: path))
             basesDockDocument = doc
-            if doc.selectionKey != path {
+            if !BaseExactIdentity.matches(doc.selectionKey, path) {
                 doc.close(session: session)
                 doc.retarget(to: .file(path: path), session: nil)
             }
@@ -829,7 +860,7 @@ extension AppState {
             let source = BaseDocumentSource.savedQuery(id: id, name: name)
             let doc = basesDockDocument ?? BaseDocument(source: source)
             basesDockDocument = doc
-            if doc.selectionKey != source.selectionKey {
+            if !BaseExactIdentity.matches(doc.selectionKey, source.selectionKey) {
                 doc.close(session: session)
                 doc.retarget(to: source, session: nil)
             }
@@ -914,7 +945,9 @@ extension AppState {
             guard currentSession === session, baseDocuments[key] === document else { continue }
             if let changedBasePath,
                 document === alreadyRefreshedDefinitionOwner,
-                document.source.filePath == changedBasePath
+                document.source.filePath.map({
+                    BaseExactIdentity.matches($0, changedBasePath)
+                }) == true
             {
                 // `BaseDocument.saveSortToView` already refreshes this exact
                 // handle's view metadata and result while preserving its
@@ -969,7 +1002,9 @@ extension AppState {
         if document.handle == nil {
             document.load(session: session, thisPath: thisPath)
         } else if let changedBasePath,
-            document.source.filePath == changedBasePath
+            document.source.filePath.map({
+                BaseExactIdentity.matches($0, changedBasePath)
+            }) == true
         {
             // `.base` definition edits reopen so view summaries and every
             // separate native handle observe the new parsed definition.
@@ -986,9 +1021,7 @@ extension AppState {
         appendMembershipChange: (BaseRowMembership, BasesResultSet?) -> Void
     ) {
         let registeredHandles = baseEmbedHandles.sorted { lhs, rhs in
-            let left = "\(lhs.key.request.cacheKey)|\(lhs.key.thisPath ?? "")"
-            let right = "\(rhs.key.request.cacheKey)|\(rhs.key.thisPath ?? "")"
-            return left < right
+            BaseExactIdentity.lessThan(lhs.key.exactIdentityKey, rhs.key.exactIdentityKey)
         }
         for (key, handle) in registeredHandles {
             guard currentSession === session,
@@ -1002,7 +1035,11 @@ extension AppState {
                     (ObjectIdentifier($0), BaseRowMembership(rows: $0.result?.rows ?? []))
                 })
 
-            if let changedBasePath, handle.request.targetPath == changedBasePath {
+            if let changedBasePath,
+                handle.request.targetPath.map({
+                    BaseExactIdentity.matches($0, changedBasePath)
+                }) == true
+            {
                 do {
                     try handle.reload(session: session)
                     documents.forEach { $0.refreshAfterSharedHandleReload(session: session) }
@@ -1033,7 +1070,9 @@ extension AppState {
         switch target {
         case .base(let path, _):
             let document: BaseDocument
-            if let existing = basesDockDocument, existing.source.filePath == path {
+            if let existing = basesDockDocument,
+                existing.source.filePath.map({ BaseExactIdentity.matches($0, path) }) == true
+            {
                 document = existing
             } else {
                 basesDockDocument?.close(session: session)
@@ -1056,7 +1095,9 @@ extension AppState {
         case .savedQuery(let id, let name):
             let source = BaseDocumentSource.savedQuery(id: id, name: name)
             let document: BaseDocument
-            if let existing = basesDockDocument, existing.selectionKey == source.selectionKey {
+            if let existing = basesDockDocument,
+                BaseExactIdentity.matches(existing.selectionKey, source.selectionKey)
+            {
                 document = existing
             } else {
                 basesDockDocument?.close(session: session)
@@ -1101,10 +1142,13 @@ extension AppState {
         columnID: String?
     ) {
         guard let path, let identity,
-            let document = baseDocuments.values.first(where: { $0.selectionKey == path }),
+            let document = baseDocuments.values.first(where: {
+                BaseExactIdentity.matches($0.selectionKey, path)
+            }),
             let result = document.result,
             let row = result.rows.first(where: {
-                $0.filePath == identity.path && $0.taskOrdinal == identity.taskOrdinal
+                BaseExactIdentity.matches($0.filePath, identity.path)
+                    && $0.taskOrdinal == identity.taskOrdinal
             })
         else {
             if path != nil { clearActiveBaseSelection() }
@@ -1113,7 +1157,7 @@ extension AppState {
         activeBaseSelectionPath = path
         activeBaseSelectedRow = row
         activeBaseSelectedColumn = columnID.flatMap { id in
-            result.columns.first { $0.id == id }
+            result.columns.first { BaseExactIdentity.matches($0.id, id) }
         }
     }
 
@@ -1153,6 +1197,10 @@ extension AppState {
 
     func basesEditViewFilters() {
         guard let doc = activeBaseDocument, let session = currentSession else { return }
+        if case .savedQuery(let id, _) = doc.source {
+            editSavedQueryInBuilder(id: id)
+            return
+        }
         if doc.handle == nil {
             doc.load(session: session)
         }
@@ -1167,7 +1215,10 @@ extension AppState {
             activeBaseQueryBuilder = try BaseQueryBuilderModel(
                 draft: BaseQueryBuilderDraft(
                     effectiveQueryJSON: effectiveQueryJSON,
-                    localQueryJSON: localQueryJSON))
+                    localQueryJSON: localQueryJSON),
+                editingBaseView: EditingBaseView(
+                    source: doc.source,
+                    viewIndex: UInt32(doc.activeViewIndex)))
             let viewName = doc.activeViewName ?? "active view"
             postAccessibilityAnnouncement("Editing filters for \(viewName).", priority: .medium)
         } catch {
@@ -1199,8 +1250,12 @@ extension AppState {
         let cancelToken = CancelToken()
         baseQueryBuilderPreviewCancelToken = cancelToken
         let executionObserver = baseQueryBuilderPreviewExecutionObserver
+        let previewThisPath = model.previewThisPath
         baseQueryBuilderPreviewTask = Task {
-            @MainActor [weak self, weak model, session, queryJSON, cancelToken, executionObserver] in
+            @MainActor [
+                weak self, weak model, session, queryJSON, cancelToken,
+                executionObserver, previewThisPath,
+            ] in
             do {
                 if delayNanoseconds > 0 {
                     try await Task.sleep(nanoseconds: delayNanoseconds)
@@ -1224,7 +1279,8 @@ extension AppState {
                 let handle: UInt64
                 do {
                     let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
-                    handle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
+                    handle = try session.openQuery(
+                        queryJson: queryJSON, thisPath: previewThisPath)
                     await executionObserver?(
                         BaseQueryBuilderPreviewExecutionEvent(
                             phase: .opened,
@@ -1245,7 +1301,7 @@ extension AppState {
                         let result = try session.baseExecute(
                             handle: handle,
                             view: 0,
-                            thisPath: nil,
+                            thisPath: previewThisPath,
                             quickFilter: nil,
                             cancel: cancelToken)
                         await executionObserver?(
@@ -1327,7 +1383,13 @@ extension AppState {
             cancelToken: cancelToken,
             generation: generation)
         else { return }
-        model.previewState = .ready(result)
+        if let message = result.viewError,
+            !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            model.previewState = .failed(message)
+        } else {
+            model.previewState = .ready(result)
+        }
         postAccessibilityAnnouncement(
             model.previewState.accessibilityAnnouncement,
             priority: .medium)
@@ -1386,20 +1448,21 @@ extension AppState {
 
     func basesBuilderSaveToView() {
         guard let model = activeBaseQueryBuilder,
-            let doc = activeBaseDocument,
+            let editingView = model.editingBaseView,
             let session = currentSession
         else { return }
+        let doc = baseDocument(for: editingView.source)
         if doc.handle == nil {
-            doc.load(session: session)
+            doc.load(session: session, thisPath: editingView.previewThisPath)
         }
         guard let handle = doc.handle else { return }
         do {
-            let edits = try model.baseEditsForView(UInt32(doc.activeViewIndex))
+            let edits = try model.baseEditsForView(editingView.viewIndex)
             try session.baseApplyEdits(handle: handle, edits: edits)
             model.rebaseAfterSuccessfulSave()
             refreshVisibleBasesAfterInAppWrite(
                 session: session,
-                changedPath: doc.source.filePath ?? doc.selectionKey)
+                changedPath: editingView.source.filePath ?? doc.selectionKey)
             postAccessibilityAnnouncement("Saved builder changes to view.", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
@@ -1527,9 +1590,7 @@ extension AppState {
     ) {
         guard currentSession === session else { return }
         let registeredEmbeds = baseEmbedHandles.sorted { lhs, rhs in
-            let left = "\(lhs.key.request.cacheKey)|\(lhs.key.thisPath ?? "")"
-            let right = "\(rhs.key.request.cacheKey)|\(rhs.key.thisPath ?? "")"
-            return left < right
+            BaseExactIdentity.lessThan(lhs.key.exactIdentityKey, rhs.key.exactIdentityKey)
         }
         for (key, handle) in registeredEmbeds {
             guard currentSession === session,
@@ -1765,6 +1826,10 @@ extension AppState {
             postBaseActionAnnouncement("Select a base row first.")
             return
         }
+        guard activeBaseSelectedColumn != nil else {
+            postBaseActionAnnouncement("No editable property is available for the selected row.")
+            return
+        }
         baseEditPropertyRequestToken &+= 1
     }
 
@@ -1835,22 +1900,46 @@ extension AppState {
         let oldKey = BaseDocumentSource.file(path: oldPath).key
         let newSource = BaseDocumentSource.file(path: newPath)
         let newKey = newSource.key
-        guard oldPath != newPath,
-            changed.contains(where: { id in
-                workspace.model.allTabs.contains {
-                    $0.id == id && $0.item == .base(path: newPath)
-                }
-            }),
-            let doc = baseDocuments.removeValue(forKey: oldKey)
-        else { return }
-        if let existing = baseDocuments[newKey] {
-            if existing !== doc, let session = currentSession {
-                doc.close(session: session)
+        guard !BaseExactIdentity.matches(oldPath, newPath) else { return }
+
+        let retargetedBaseTab = changed.contains(where: { id in
+            workspace.model.allTabs.contains {
+                guard $0.id == id, case .base(let path) = $0.item else { return false }
+                return BaseExactIdentity.matches(path, newPath)
             }
-            return
+        })
+        if retargetedBaseTab, let doc = baseDocuments.removeValue(forKey: oldKey) {
+            if let existing = baseDocuments[newKey] {
+                if existing !== doc, let session = currentSession {
+                    doc.close(session: session)
+                }
+            } else {
+                doc.retarget(to: newPath, session: currentSession)
+                baseDocuments[newKey] = doc
+            }
         }
-        doc.retarget(to: newPath, session: currentSession)
-        baseDocuments[newKey] = doc
+
+        if case .base(let dockPath, _) = basesDock.target,
+            BaseExactIdentity.matches(dockPath, oldPath)
+        {
+            basesDockRefreshTask?.cancel()
+            basesDockRefreshTask = nil
+            let target = BasesDockTarget.base(
+                path: newPath, name: newSource.displayName)
+            basesDock.setTarget(target)
+            if let session = currentSession {
+                if let dock = basesDockDocument {
+                    dock.close(session: session)
+                    dock.retarget(to: newPath, session: nil)
+                }
+                // Also covers a rename landing during the initial dock
+                // debounce, before a document has been created.
+                refreshBasesDockTarget(
+                    target, session: session, thisPath: basesDock.thisPath)
+            } else {
+                basesDockDocument?.retarget(to: newPath, session: nil)
+            }
+        }
     }
 
     func invalidateBaseDocument(path: String) {
@@ -1904,7 +1993,7 @@ extension AppState {
             baseEmbedHandles = [:]
             return
         }
-        let unleased = baseEmbedHandles.filter { $0.value.liveDocuments.isEmpty }
+        let unleased = baseEmbedHandles.filter { !$0.value.hasLiveLease }
         for (key, handle) in unleased {
             handle.close(session: session)
             baseEmbedHandles[key] = nil
@@ -1969,7 +2058,8 @@ extension AppState {
             refreshVisibleBasesAfterInAppWrite(session: session, changedPath: row.filePath)
             let stillRegistered = baseDocuments[doc.source.key] === doc
             let stillPresent = stillRegistered && (doc.result?.rows.contains {
-                $0.filePath == row.filePath && $0.taskOrdinal == row.taskOrdinal
+                BaseExactIdentity.matches($0.filePath, row.filePath)
+                    && $0.taskOrdinal == row.taskOrdinal
             } ?? false)
             let text: String
             if stillPresent {
@@ -2049,7 +2139,9 @@ extension AppState {
 
     private func activeBaseSelectedRowForCommand() -> BasesRow? {
         guard let doc = activeBaseDocument,
-            activeBaseSelectionPath == doc.selectionKey,
+            activeBaseSelectionPath.map({
+                BaseExactIdentity.matches($0, doc.selectionKey)
+            }) == true,
             let row = activeBaseSelectedRow,
             doc.result?.rows.contains(where: { $0.hasSameBaseIdentity(as: row) }) == true
         else { return nil }
@@ -2080,6 +2172,7 @@ extension AppState {
 
 extension BasesRow {
     func hasSameBaseIdentity(as other: BasesRow) -> Bool {
-        filePath == other.filePath && taskOrdinal == other.taskOrdinal
+        BaseExactIdentity.matches(filePath, other.filePath)
+            && taskOrdinal == other.taskOrdinal
     }
 }

@@ -3850,6 +3850,7 @@ impl From<core::BasesColumn> for BasesColumn {
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct BasesValue {
     pub raw_kind: String,
+    pub sort_key: String,
     pub display: String,
     pub text: Option<String>,
     pub number: Option<f64>,
@@ -3866,6 +3867,7 @@ impl From<core::BasesValue> for BasesValue {
     fn from(v: core::BasesValue) -> Self {
         BasesValue {
             raw_kind: v.raw_kind,
+            sort_key: v.sort_key,
             display: v.display,
             text: v.text,
             number: v.number,
@@ -4134,6 +4136,34 @@ pub struct BaseExpressionValidation {
     pub message: Option<String>,
     pub span_start: u32,
     pub span_end: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SlateQueryFenceClassification {
+    pub query: Option<String>,
+    pub view: Option<String>,
+}
+
+impl From<core::bases::SlateQueryFenceClassification> for SlateQueryFenceClassification {
+    fn from(value: core::bases::SlateQueryFenceClassification) -> Self {
+        Self {
+            query: value.query,
+            view: value.view,
+        }
+    }
+}
+
+/// Decode the routing fields of a dual-mode `slate-query` fence with the
+/// same full YAML parser used by Core's Bases implementation.
+#[uniffi::export]
+pub fn classify_slate_query_fence(
+    source: String,
+) -> Result<SlateQueryFenceClassification, VaultError> {
+    core::bases::classify_slate_query_fence(&source)
+        .map(Into::into)
+        .map_err(|error| VaultError::InvalidQuery {
+            message: error.to_string(),
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -4435,6 +4465,19 @@ impl VaultSession {
 
     pub fn get_dashboard(&self, id: String) -> Result<Dashboard, VaultError> {
         Ok(self.inner.get_dashboard(&id)?.into())
+    }
+
+    pub fn update_dashboard(
+        &self,
+        id: String,
+        name: String,
+        sections: Vec<DashboardSection>,
+    ) -> Result<(), VaultError> {
+        Ok(self.inner.update_dashboard(
+            &id,
+            &name,
+            sections.into_iter().map(Into::into).collect(),
+        )?)
     }
 
     pub fn rename_dashboard(&self, id: String, name: String) -> Result<(), VaultError> {
@@ -5689,6 +5732,18 @@ mod tests {
     }
 
     #[test]
+    fn slate_query_fence_classifier_crosses_ffi_boundary() {
+        let classified =
+            classify_slate_query_fence(r#"{query: "Saved Notes", view: 'Main'}"#.to_string())
+                .unwrap();
+        assert_eq!(classified.query.as_deref(), Some("Saved Notes"));
+        assert_eq!(classified.view.as_deref(), Some("Main"));
+
+        let error = classify_slate_query_fence("query: [not, scalar]".to_string()).unwrap_err();
+        assert!(matches!(error, VaultError::InvalidQuery { .. }));
+    }
+
+    #[test]
     fn bases_api_drives_over_the_ffi_wrapper() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("Queries")).unwrap();
@@ -5733,6 +5788,10 @@ mod tests {
         assert_eq!(result.total_count, 1);
         assert_eq!(result.unfiltered_shown_count, 2);
         assert_eq!(result.rows[0].values[0].display, "Beta.md");
+        assert!(
+            !result.rows[0].values[0].sort_key.is_empty(),
+            "the Core sort key must cross the UniFFI record mirror"
+        );
 
         let csv = session
             .base_export(handle, 0, ExportFormat::Csv, Some("done".into()))
@@ -5825,6 +5884,28 @@ mod tests {
             Some("Saved reading")
         );
         assert!(!dashboard.sections[0].missing);
+
+        session
+            .update_dashboard(
+                dashboard.id.clone(),
+                "Updated dashboard".into(),
+                vec![DashboardSection {
+                    saved_query_id: saved_id.clone(),
+                    heading_override: Some("Updated heading".into()),
+                    view_override: Some("Reading".into()),
+                }],
+            )
+            .unwrap();
+        let updated_dashboard = session.get_dashboard(dashboard.id).unwrap();
+        assert_eq!(updated_dashboard.name, "Updated dashboard");
+        assert_eq!(
+            updated_dashboard.sections[0].heading_override.as_deref(),
+            Some("Updated heading")
+        );
+        assert_eq!(
+            updated_dashboard.sections[0].view_override.as_deref(),
+            Some("Reading")
+        );
 
         session
             .base_apply_edit(

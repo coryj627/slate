@@ -685,6 +685,121 @@ status: done
 }
 
 #[test]
+fn frontmatter_typed_lists_and_links_keep_query_semantics_after_indexing() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("Projects/Target.md", b"# Project target\n")
+            .unwrap();
+        provider
+            .write_file("Elsewhere/Target.md", b"# Elsewhere target\n")
+            .unwrap();
+        provider
+            .write_file("Elsewhere/Host.md", b"# Query host\n")
+            .unwrap();
+        provider
+            .write_file(
+                "Projects/Note.md",
+                br#"---
+author: "[[Target#Project target!|Project lead]]"
+refs: ["[[Target#^project-block|Project reference]]"]
+dates: ["2026-01-01", "2026-01-02"]
+moments: ["2026-01-01T03:04:05Z", "2026-01-02T03:04:05Z"]
+---
+# Note
+"#,
+            )
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let base = r#"views:
+  - type: table
+    name: Scalar link
+    filters: "author == this"
+    order:
+      - file.path
+      - author
+  - type: table
+    name: List link
+    filters: "refs.contains(this)"
+    order:
+      - file.path
+      - refs
+  - type: table
+    name: Date list
+    filters: "dates.contains(date(\"2026-01-02\"))"
+    order:
+      - file.path
+  - type: table
+    name: Datetime list
+    filters: "moments.contains(date(\"2026-01-02T03:04:05Z\"))"
+    order:
+      - file.path
+  - type: table
+    name: Owner-relative scalar link
+    filters: "author == file(\"Projects/Target.md\")"
+    order:
+      - file.path
+  - type: table
+    name: Owner-relative list link
+    filters: "refs.contains(file(\"Projects/Target.md\"))"
+    order:
+      - file.path
+"#;
+    let handle = session
+        .open_base_inline(base, Some("Projects/Target.md".to_string()))
+        .unwrap();
+
+    for (view, name, this_path) in [
+        (0, "scalar wikilink", None),
+        (1, "wikilink list", None),
+        (2, "date list", None),
+        (3, "datetime list", None),
+        (
+            4,
+            "owner-relative scalar wikilink",
+            Some("Elsewhere/Host.md".to_string()),
+        ),
+        (
+            5,
+            "owner-relative wikilink list",
+            Some("Elsewhere/Host.md".to_string()),
+        ),
+    ] {
+        let result = session
+            .base_execute(handle, view, this_path, None, &CancelToken::new())
+            .unwrap();
+        assert_eq!(result.view_error, None, "{name}: {result:?}");
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.file_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Projects/Note.md"],
+            "{name} must retain its typed frontmatter semantics"
+        );
+    }
+
+    let scalar = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        scalar.rows[0].values[1].link_target.as_deref(),
+        Some("Target")
+    );
+    assert_eq!(
+        scalar.rows[0].values[1].link_display.as_deref(),
+        Some("Project lead")
+    );
+
+    let list = session
+        .base_execute(handle, 1, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(list.rows[0].values[1].list, ["Project reference"]);
+}
+
+#[test]
 fn base_execute_quick_filter_and_export_use_displayed_values() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(
@@ -1313,6 +1428,42 @@ views:
             .collect::<Vec<_>>(),
         vec!["Alpha", "Beta"]
     );
+}
+
+#[test]
+fn open_base_indexes_post_scan_file_for_default_this_context() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.create_dir("Queries").unwrap();
+        provider.write_file("Notes/Alpha.md", b"# Alpha\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Reproduce a file watcher/editor race: the `.base` is readable by the
+    // time it is opened, but the initial scan completed before it existed.
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file(
+            "Queries/Context.base",
+            br#"formulas:
+  selfName: "this.file.name"
+views:
+  - type: table
+    name: Preview
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+      - formula.selfName
+"#,
+        )
+        .unwrap();
+
+    let handle = session.open_base("Queries/Context.base").unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+
+    assert_eq!(result.view_error, None);
+    assert_eq!(result.rows[0].values[1].display, "Context.base");
 }
 
 #[test]
@@ -2532,6 +2683,26 @@ fn session_column_kinds_skip_leading_nulls_and_errors() {
             .iter()
             .all(|row| row.values[3].raw_kind == "error")
     );
+
+    let null_score = &result.rows[0].values[0];
+    let number_score = &result.rows[1].values[0];
+    let text_score = &result.rows[2].values[0];
+    assert!(
+        number_score.sort_key < text_score.sort_key,
+        "sort keys must preserve the native number-before-text type rank"
+    );
+    assert!(
+        text_score.sort_key < null_score.sort_key,
+        "sort keys must preserve the native nulls-last ordering"
+    );
+    assert!(
+        result
+            .rows
+            .iter()
+            .flat_map(|row| &row.values)
+            .all(|value| !value.sort_key.is_empty()),
+        "every mirrored cell needs a complete local-grid sort key"
+    );
 }
 
 #[test]
@@ -2820,6 +2991,90 @@ fn census_bases_cache_fresh() {
         .unwrap();
     assert_eq!(renamed.rows[0].file_path, "Notes/Omega.md");
     assert_eq!(renamed.rows[0].values[0].display, "Omega.md");
+}
+
+#[test]
+fn quick_filtered_session_execution_prunes_stale_cache_without_caching_filter() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file(
+                "Queries/Reading.base",
+                br#"views:
+  - type: table
+    name: Reading
+    filters: "file.inFolder(\"Notes\")"
+    order:
+      - file.name
+      - status
+"#,
+            )
+            .unwrap();
+        provider
+            .write_file("Notes/Alpha.md", b"---\nstatus: active\n---\n# Alpha\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/Reading.base").unwrap();
+
+    session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+
+    let stale_generation = session.bases_generation();
+    let cached_generations = session
+        .bases
+        .lock()
+        .expect("base registry mutex")
+        .get(&handle)
+        .expect("open base handle")
+        .cache
+        .test_entry_generations();
+    assert_eq!(cached_generations, [stale_generation]);
+
+    session
+        .save_text("Notes/Alpha.md", "---\nstatus: done\n---\n# Alpha\n", None)
+        .unwrap();
+    assert_eq!(session.bases_generation(), stale_generation + 1);
+
+    let filtered = session
+        .base_execute(
+            handle,
+            0,
+            None,
+            Some("done".to_string()),
+            &CancelToken::new(),
+        )
+        .unwrap();
+    assert_eq!(filtered.rows.len(), 1);
+    assert_eq!(filtered.rows[0].values[1].display, "done");
+    assert!(
+        session
+            .bases
+            .lock()
+            .expect("base registry mutex")
+            .get(&handle)
+            .expect("open base handle")
+            .cache
+            .test_entry_generations()
+            .is_empty(),
+        "quick-filtered execution must prune stale generations without caching its result"
+    );
+
+    session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    let current_generation = session.bases_generation();
+    assert_eq!(
+        session
+            .bases
+            .lock()
+            .expect("base registry mutex")
+            .get(&handle)
+            .expect("open base handle")
+            .cache
+            .test_entry_generations(),
+        [current_generation]
+    );
 }
 
 #[test]
@@ -3924,6 +4179,94 @@ fn dashboards_preserve_dangling_refs_and_do_not_own_saved_queries() {
         session.get_saved_query(&query_id).unwrap().name,
         "Live query"
     );
+}
+
+#[test]
+fn update_dashboard_changes_name_and_sections_together() {
+    let (_tmp, session) = make_vault(|_| {});
+    let dashboard_id = session
+        .save_dashboard(
+            "Before",
+            vec![DashboardSection {
+                saved_query_id: "before-query".to_string(),
+                heading_override: Some("Before heading".to_string()),
+                view_override: None,
+            }],
+        )
+        .unwrap();
+
+    session
+        .update_dashboard(
+            &dashboard_id,
+            "After",
+            vec![DashboardSection {
+                saved_query_id: "after-query".to_string(),
+                heading_override: Some("After heading".to_string()),
+                view_override: Some("List".to_string()),
+            }],
+        )
+        .unwrap();
+
+    let dashboard = session.get_dashboard(&dashboard_id).unwrap();
+    assert_eq!(dashboard.name, "After");
+    assert_eq!(dashboard.sections.len(), 1);
+    assert_eq!(dashboard.sections[0].saved_query_id, "after-query");
+    assert_eq!(
+        dashboard.sections[0].heading_override.as_deref(),
+        Some("After heading")
+    );
+    assert_eq!(dashboard.sections[0].view_override.as_deref(), Some("List"));
+}
+
+#[test]
+fn update_dashboard_rolls_back_name_when_sections_write_fails() {
+    let (_tmp, session) = make_vault(|_| {});
+    let dashboard_id = session
+        .save_dashboard(
+            "Before",
+            vec![DashboardSection {
+                saved_query_id: "before-query".to_string(),
+                heading_override: Some("Before heading".to_string()),
+                view_override: None,
+            }],
+        )
+        .unwrap();
+    let before = session.get_dashboard(&dashboard_id).unwrap();
+    session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .execute_batch(
+            "CREATE TRIGGER force_dashboard_sections_failure
+             BEFORE UPDATE OF sections_json ON dashboards
+             BEGIN
+               SELECT RAISE(ABORT, 'forced dashboard sections failure');
+             END;",
+        )
+        .unwrap();
+
+    let error = session
+        .update_dashboard(
+            &dashboard_id,
+            "After",
+            vec![DashboardSection {
+                saved_query_id: "after-query".to_string(),
+                heading_override: Some("After heading".to_string()),
+                view_override: Some("List".to_string()),
+            }],
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("forced dashboard sections failure"),
+        "{error}"
+    );
+
+    let after = session.get_dashboard(&dashboard_id).unwrap();
+    assert_eq!(after.name, before.name);
+    assert_eq!(after.sections, before.sections);
+    assert_eq!(after.modified_at_ms, before.modified_at_ms);
 }
 
 #[test]

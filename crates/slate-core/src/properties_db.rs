@@ -24,6 +24,13 @@ const KIND_WIKILINK: &str = "wikilink";
 const KIND_LIST: &str = "list";
 const KIND_TAG_LIST: &str = "tag_list";
 
+// List elements do not have their own `value_kind` column. Preserve the
+// three string-backed typed variants in a private tagged JSON object so a
+// list can survive the SQLite cache without becoming a list of plain text.
+// Old untagged arrays remain valid and continue to decode as text.
+const TYPED_LIST_KIND_KEY: &str = "\u{f8ff}slate.property-kind";
+const TYPED_LIST_VALUE_KEY: &str = "value";
+
 /// Atomically replace the property rows for `file_id` with the
 /// frontmatter parsed from `markdown_source`. Called by the
 /// scanner's slow path.
@@ -547,9 +554,9 @@ fn property_value_to_json(value: &PropertyValue) -> JsonValue {
             }
         }
         PropertyValue::Boolean(b) => JsonValue::Bool(*b),
-        PropertyValue::Date(s) | PropertyValue::Datetime(s) | PropertyValue::Wikilink(s) => {
-            JsonValue::String(s.clone())
-        }
+        PropertyValue::Date(s) => tagged_list_element(KIND_DATE, s),
+        PropertyValue::Datetime(s) => tagged_list_element(KIND_DATETIME, s),
+        PropertyValue::Wikilink(s) => tagged_list_element(KIND_WIKILINK, s),
         PropertyValue::List(items) => {
             JsonValue::Array(items.iter().map(property_value_to_json).collect())
         }
@@ -557,6 +564,19 @@ fn property_value_to_json(value: &PropertyValue) -> JsonValue {
             JsonValue::Array(tags.iter().cloned().map(JsonValue::String).collect())
         }
     }
+}
+
+fn tagged_list_element(kind: &str, value: &str) -> JsonValue {
+    JsonValue::Object(serde_json::Map::from_iter([
+        (
+            TYPED_LIST_KIND_KEY.to_string(),
+            JsonValue::String(kind.to_string()),
+        ),
+        (
+            TYPED_LIST_VALUE_KEY.to_string(),
+            JsonValue::String(value.to_string()),
+        ),
+    ]))
 }
 
 /// Decode `(kind, value_text)` back into a `PropertyValue`. Returns
@@ -596,6 +616,9 @@ fn deserialize_value(kind: &str, value_text: &str) -> Option<PropertyValue> {
 }
 
 fn json_to_property_value(value: &JsonValue) -> PropertyValue {
+    if let Some(value) = tagged_list_element_to_property_value(value) {
+        return value;
+    }
     match value {
         JsonValue::String(s) => PropertyValue::Text(s.clone()),
         JsonValue::Bool(b) => PropertyValue::Boolean(*b),
@@ -610,6 +633,23 @@ fn json_to_property_value(value: &JsonValue) -> PropertyValue {
         }
         JsonValue::Null => PropertyValue::Text(String::new()),
         other => PropertyValue::Text(other.to_string()),
+    }
+}
+
+pub(crate) fn tagged_list_element_to_property_value(value: &JsonValue) -> Option<PropertyValue> {
+    let object = value.as_object()?;
+    // Exact shape keeps this private representation unambiguous even if a
+    // future parser admits authored mappings as list elements.
+    if object.len() != 2 {
+        return None;
+    }
+    let kind = object.get(TYPED_LIST_KIND_KEY)?.as_str()?;
+    let value = object.get(TYPED_LIST_VALUE_KEY)?.as_str()?.to_string();
+    match kind {
+        KIND_DATE => Some(PropertyValue::Date(value)),
+        KIND_DATETIME => Some(PropertyValue::Datetime(value)),
+        KIND_WIKILINK => Some(PropertyValue::Wikilink(value)),
+        _ => None,
     }
 }
 
@@ -679,6 +719,77 @@ mod tests {
             PropertyValue::Text("beta".to_string()),
         ]);
         assert_eq!(round_trip(v.clone()), v);
+    }
+
+    #[test]
+    fn typed_list_elements_survive_sqlite_storage_round_trip() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE properties (
+                file_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value_kind TEXT NOT NULL,
+                value_text TEXT NOT NULL,
+                value_text_norm TEXT NOT NULL,
+                PRIMARY KEY (file_id, ordinal)
+            );
+            CREATE TABLE properties_list_values (
+                file_id INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value_norm TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        let source = r#"---
+refs: ["[[Target]]", "[[Other]]"]
+dates: ["2026-01-01", "2026-01-02"]
+moments: ["2026-01-01T03:04:05Z", "2026-01-02T03:04:05Z"]
+---
+"#;
+        let tx = conn.transaction().unwrap();
+        replace_properties_for_file(&tx, 1, source).unwrap();
+        tx.commit().unwrap();
+
+        let stored = properties_for_file(&conn, 1).unwrap();
+        assert_eq!(
+            stored,
+            vec![
+                Property {
+                    key: "refs".to_string(),
+                    value: PropertyValue::List(vec![
+                        PropertyValue::Wikilink("Target".to_string()),
+                        PropertyValue::Wikilink("Other".to_string()),
+                    ]),
+                },
+                Property {
+                    key: "dates".to_string(),
+                    value: PropertyValue::List(vec![
+                        PropertyValue::Date("2026-01-01".to_string()),
+                        PropertyValue::Date("2026-01-02".to_string()),
+                    ]),
+                },
+                Property {
+                    key: "moments".to_string(),
+                    value: PropertyValue::List(vec![
+                        PropertyValue::Datetime("2026-01-01T03:04:05Z".to_string()),
+                        PropertyValue::Datetime("2026-01-02T03:04:05Z".to_string()),
+                    ]),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_untagged_list_strings_remain_backward_compatible_text() {
+        assert_eq!(
+            deserialize_value(KIND_LIST, r#"["Target","2026-01-02"]"#),
+            Some(PropertyValue::List(vec![
+                PropertyValue::Text("Target".to_string()),
+                PropertyValue::Text("2026-01-02".to_string()),
+            ]))
+        );
     }
 
     #[test]

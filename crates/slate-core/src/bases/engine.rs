@@ -11,7 +11,7 @@
 use std::{
     cell::{Cell, RefCell},
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ops::Range,
 };
 
@@ -22,7 +22,8 @@ use super::{
     ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SortKey, SummaryRef,
     eval::{
         DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext,
-        TaskRow, Value, VaultLookup, WarningSink, eval,
+        TaskRow, Value, VaultLookup, WarningSink, compare_dql_command_sort_values,
+        dql_command_sort_value, eval,
     },
     expr::{
         BinaryOp, Callee, Expr, ExprKind, FileField, GlobalFn, Lit, MethodName, PropertyRef,
@@ -120,7 +121,10 @@ impl Default for EngineCtx<'_> {
 #[derive(Debug, Default)]
 pub struct BasesQueryCache {
     entries: RefCell<BTreeMap<CacheKey, BasesResultSet>>,
+    recency: RefCell<VecDeque<CacheKey>>,
 }
+
+const BASES_QUERY_CACHE_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheKey {
@@ -128,6 +132,53 @@ struct CacheKey {
     generation: u64,
     this_path: Option<String>,
     today_key: Option<i64>,
+}
+
+impl BasesQueryCache {
+    #[cfg(test)]
+    pub(crate) fn test_entry_generations(&self) -> Vec<u64> {
+        self.entries
+            .borrow()
+            .keys()
+            .map(|key| key.generation)
+            .collect()
+    }
+
+    fn get(&self, key: &CacheKey) -> Option<BasesResultSet> {
+        self.evict_stale_generations(key.generation);
+        let result = self.entries.borrow().get(key).cloned()?;
+        self.touch(key);
+        Some(result)
+    }
+
+    fn insert(&self, key: CacheKey, result: BasesResultSet) {
+        self.evict_stale_generations(key.generation);
+        self.entries.borrow_mut().insert(key.clone(), result);
+        self.touch(&key);
+        while self.entries.borrow().len() > BASES_QUERY_CACHE_CAPACITY {
+            let Some(oldest) = self.recency.borrow_mut().pop_front() else {
+                break;
+            };
+            self.entries.borrow_mut().remove(&oldest);
+        }
+    }
+
+    fn evict_stale_generations(&self, generation: u64) {
+        self.entries
+            .borrow_mut()
+            .retain(|key, _| key.generation == generation);
+        self.recency
+            .borrow_mut()
+            .retain(|key| key.generation == generation);
+    }
+
+    fn touch(&self, key: &CacheKey) {
+        let mut recency = self.recency.borrow_mut();
+        if let Some(index) = recency.iter().position(|candidate| candidate == key) {
+            recency.remove(index);
+        }
+        recency.push_back(key.clone());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -458,9 +509,13 @@ pub fn execute(
         ));
     }
 
+    if let Some(cache) = ctx.cache {
+        cache.evict_stale_generations(ctx.generation);
+    }
+
     let cache_key = cache_key(query, ctx);
     if let (Some(cache), Some(key)) = (ctx.cache, cache_key.as_ref())
-        && let Some(mut cached) = cache.entries.borrow().get(key).cloned()
+        && let Some(mut cached) = cache.get(key)
     {
         cached.cache_hit = true;
         return Ok(cached);
@@ -498,7 +553,7 @@ pub fn execute(
     let this = ctx
         .this_path
         .as_deref()
-        .and_then(|path| assemble_row_for_path(conn, path).transpose())
+        .and_then(|path| assemble_row_for_path(conn, path, &vault).transpose())
         .transpose()?;
 
     let mut rows = Vec::new();
@@ -508,7 +563,7 @@ pub fn execute(
         if cancel.is_cancelled() {
             return Err(VaultError::Cancelled);
         }
-        let batch = match load_candidates(query, conn, ctx, page_size, offset, &load_deps) {
+        let batch = match load_candidates(query, conn, ctx, page_size, offset, &load_deps, &vault) {
             Ok(batch) => batch,
             Err(CandidateLoadError::Vault(error)) => return Err(error),
             Err(CandidateLoadError::View(error)) => {
@@ -587,7 +642,9 @@ pub fn execute(
 
     let unfiltered_total_count = rows.len();
     apply_quick_filter(&mut rows, ctx.quick_filter);
-    sort_rows(query, &mut rows);
+    if let Err(error) = sort_rows(query, &mut rows) {
+        return Ok(error_result(query, ctx, format!("sort: {error}"), ""));
+    }
     let group_slices = group_rows(query, &mut rows);
     let total_count = rows.len();
     let mut result_warnings = warnings.messages();
@@ -645,7 +702,7 @@ pub fn execute(
         audio_summary,
     };
     if let (Some(cache), Some(key)) = (ctx.cache, cache_key) {
-        cache.entries.borrow_mut().insert(key, result.clone());
+        cache.insert(key, result.clone());
     }
     result.cache_hit = false;
     Ok(result)
@@ -662,10 +719,11 @@ fn load_candidates(
     limit: usize,
     offset: usize,
     deps: &CandidateLoadDeps<'_>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<Vec<Candidate>, CandidateLoadError> {
     match query.row_source {
-        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset, deps),
-        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset, deps),
+        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset, deps, vault),
+        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset, deps, vault),
     }
 }
 
@@ -676,6 +734,7 @@ fn load_file_candidates(
     limit: usize,
     offset: usize,
     deps: &CandidateLoadDeps<'_>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<Vec<Candidate>, CandidateLoadError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
@@ -736,7 +795,7 @@ fn load_file_candidates(
     rows.into_iter()
         .map(|file| {
             let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-            assemble_row(conn, &file, task_counts, None)
+            assemble_row(conn, &file, task_counts, None, vault)
                 .map(|row| Candidate { row })
                 .map_err(CandidateLoadError::from)
         })
@@ -750,6 +809,7 @@ fn load_task_candidates(
     limit: usize,
     offset: usize,
     deps: &CandidateLoadDeps<'_>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<Vec<Candidate>, CandidateLoadError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
@@ -818,7 +878,7 @@ fn load_task_candidates(
     rows.into_iter()
         .map(|(file, task)| {
             let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-            assemble_row(conn, &file, task_counts, Some(task))
+            assemble_row(conn, &file, task_counts, Some(task), vault)
                 .map(|row| Candidate { row })
                 .map_err(CandidateLoadError::from)
         })
@@ -1338,6 +1398,7 @@ fn assemble_row(
     file: &IndexedFileRow,
     task_counts: TaskCounts,
     task: Option<IndexedTaskRow>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<RowContext, VaultError> {
     let mut file_fields = FileFields::for_path(&file.path);
     file_fields.name = file.name.clone();
@@ -1358,7 +1419,10 @@ fn assemble_row(
     file_fields.backlinks = load_backlinks(conn, &file.path)?;
     file_fields.out_degree = (file_fields.links.len() + file_fields.embeds.len()) as u64;
     file_fields.in_degree = file_fields.backlinks.len() as u64;
-    let properties = load_properties(conn, file.id)?;
+    let mut properties = load_properties(conn, file.id)?;
+    for (_, value) in &mut properties {
+        resolve_property_links(value, &file.path, vault);
+    }
     for (key, value) in &properties {
         file_fields.properties.insert(key.clone(), value.clone());
     }
@@ -1393,7 +1457,11 @@ fn assemble_row(
     })
 }
 
-fn assemble_row_for_path(conn: &Connection, path: &str) -> Result<Option<RowContext>, VaultError> {
+fn assemble_row_for_path(
+    conn: &Connection,
+    path: &str,
+    vault: &SqlVaultLookup<'_>,
+) -> Result<Option<RowContext>, VaultError> {
     let row = conn
         .query_row(
             "SELECT id, path, name, extension, size_bytes, mtime_ms, ctime_ms FROM files WHERE path = ?1",
@@ -1415,7 +1483,7 @@ fn assemble_row_for_path(conn: &Connection, path: &str) -> Result<Option<RowCont
     row.map(|file| {
         let counts = load_task_counts(conn, &[file.id])?;
         let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-        assemble_row(conn, &file, task_counts, None)
+        assemble_row(conn, &file, task_counts, None, vault)
     })
     .transpose()
 }
@@ -1473,7 +1541,7 @@ fn load_task_counts(
 
 fn load_properties(conn: &Connection, file_id: i64) -> Result<Vec<(String, Value)>, VaultError> {
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT key, value_kind, value_text
              FROM properties
              WHERE file_id = ?1
@@ -1517,16 +1585,7 @@ fn decode_property_value(kind: &str, value_text: &str) -> Value {
             .unwrap_or(Value::Null),
         "wikilink" => json
             .as_str()
-            .map(|target| {
-                Value::Link(LinkValue {
-                    target: target.to_string(),
-                    display: None,
-                    resolved_path: None,
-                    subpath: None,
-                    link_type: "file".to_string(),
-                    embed: false,
-                })
-            })
+            .map(|target| property_wikilink_to_bases_value(target.to_string()))
             .unwrap_or(Value::Null),
         "list" | "tag_list" => Value::List(
             json.as_array()
@@ -1537,7 +1596,77 @@ fn decode_property_value(kind: &str, value_text: &str) -> Value {
     }
 }
 
+fn property_value_to_bases_value(value: crate::frontmatter::PropertyValue) -> Value {
+    use crate::frontmatter::PropertyValue;
+
+    match value {
+        PropertyValue::Text(value) => Value::Text(value),
+        PropertyValue::Integer(value) => Value::Number(value as f64),
+        PropertyValue::Float(value) => Value::Number(value),
+        PropertyValue::Boolean(value) => Value::Bool(value),
+        PropertyValue::Date(value) => parse_date_value(&value)
+            .map(Value::Date)
+            .unwrap_or(Value::Null),
+        PropertyValue::Datetime(value) => parse_datetime_value(&value)
+            .map(Value::Date)
+            .unwrap_or(Value::Null),
+        PropertyValue::Wikilink(target) => property_wikilink_to_bases_value(target),
+        PropertyValue::List(values) => Value::List(
+            values
+                .into_iter()
+                .map(property_value_to_bases_value)
+                .collect(),
+        ),
+        PropertyValue::TagList(values) => {
+            Value::List(values.into_iter().map(Value::Text).collect())
+        }
+    }
+}
+
+fn property_wikilink_to_bases_value(authored: String) -> Value {
+    let source = format!("[[{authored}]]");
+    let mut parsed = crate::extract_links(&source);
+    if parsed.len() == 1 {
+        let link = parsed.pop().expect("length checked");
+        if link.kind == crate::LinkKind::Wikilink
+            && link.span_start == 0
+            && link.span_end == source.len()
+            && !link.is_embed
+        {
+            let (link_type, subpath) = match link.anchor {
+                Some(crate::LinkAnchor::Heading(header)) => {
+                    ("header", Some(normalize_header_for_link(&header)))
+                }
+                Some(crate::LinkAnchor::Block(block)) => ("block", Some(block)),
+                None => ("file", None),
+            };
+            return Value::Link(LinkValue {
+                target: link.target_raw,
+                display: link.display_text,
+                resolved_path: None,
+                subpath,
+                link_type: link_type.to_string(),
+                embed: false,
+            });
+        }
+    }
+
+    // Preserve the previous behavior for malformed cached rows. Valid
+    // frontmatter wikilinks take the shared scanner path above.
+    Value::Link(LinkValue {
+        target: authored,
+        display: None,
+        resolved_path: None,
+        subpath: None,
+        link_type: "file".to_string(),
+        embed: false,
+    })
+}
+
 fn json_to_value(value: &serde_json::Value) -> Value {
+    if let Some(value) = crate::properties_db::tagged_list_element_to_property_value(value) {
+        return property_value_to_bases_value(value);
+    }
     match value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(value) => Value::Bool(*value),
@@ -1551,6 +1680,36 @@ fn json_to_value(value: &serde_json::Value) -> Value {
                 .map(|(key, value)| (key.clone(), json_to_value(value)))
                 .collect(),
         ),
+    }
+}
+
+fn resolve_property_links(value: &mut Value, owner_path: &str, vault: &SqlVaultLookup<'_>) {
+    match value {
+        Value::Link(link) => {
+            if link.resolved_path.is_none() {
+                link.resolved_path = vault.resolve_link_from(&link.target, owner_path);
+            }
+        }
+        Value::List(values) => {
+            for value in values {
+                resolve_property_links(value, owner_path, vault);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                resolve_property_links(value, owner_path, vault);
+            }
+        }
+        Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::Text(_)
+        | Value::Date(_)
+        | Value::DqlDate(_)
+        | Value::Duration(_)
+        | Value::DqlDuration(_)
+        | Value::File(_)
+        | Value::Regex(_, _) => {}
     }
 }
 
@@ -1579,7 +1738,7 @@ fn parse_datetime_value(text: &str) -> Option<DateValue> {
 
 fn load_tags(conn: &Connection, file_id: i64) -> Result<Vec<String>, VaultError> {
     let mut stmt = conn
-        .prepare("SELECT tag_norm FROM file_tags WHERE file_id = ?1 ORDER BY tag_norm")
+        .prepare_cached("SELECT tag_norm FROM file_tags WHERE file_id = ?1 ORDER BY tag_norm")
         .map_err(DbError::from)?;
     stmt.query_map(params![file_id], |row| row.get::<_, String>(0))
         .map_err(DbError::from)?
@@ -1596,7 +1755,7 @@ struct OutgoingLinks {
 
 fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks, VaultError> {
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT target_raw, target_path, target_anchor, is_embed, display_text
              FROM links
              WHERE source_file_id = ?1
@@ -1632,9 +1791,17 @@ fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks,
         ))
     })?;
     let mut outgoing = OutgoingLinks::default();
+    let mut seen_pages = BTreeSet::new();
     for row in rows {
         let (link, is_embed) = row.map_err(DbError::from)?;
-        outgoing.all.push(link.clone());
+        let page_identity = link
+            .resolved_path
+            .as_deref()
+            .unwrap_or(link.target.as_str())
+            .to_string();
+        if seen_pages.insert(page_identity) {
+            outgoing.all.push(link.clone());
+        }
         if is_embed {
             outgoing.embeds.push(link);
         } else {
@@ -1664,7 +1831,7 @@ fn normalize_header_for_link(header: &str) -> String {
 
 fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, VaultError> {
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT src.path
              FROM links l
              JOIN files src ON src.id = l.source_file_id
@@ -1938,25 +2105,97 @@ fn property_expr(property: &PropertyRef) -> Expr {
     }
 }
 
-fn sort_rows(query: &SlateQuery, rows: &mut [MaterializedRow]) {
-    rows.sort_by(|lhs, rhs| compare_rows(query, lhs, rhs));
+fn sort_rows(query: &SlateQuery, rows: &mut [MaterializedRow]) -> Result<(), EvalError> {
+    for row in rows.iter() {
+        for value in &row.sort_values {
+            if let Some(value) = dql_command_sort_value(value) {
+                compare_dql_command_sort_values(value, value)?;
+            }
+        }
+    }
+
+    let mut first_error = None;
+    rows.sort_by(|lhs, rhs| {
+        if first_error.is_some() {
+            return Ordering::Equal;
+        }
+        match compare_rows(query, lhs, rhs) {
+            Ok(ordering) => ordering,
+            Err(error) => {
+                first_error = Some(error);
+                Ordering::Equal
+            }
+        }
+    });
+    if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
-fn compare_rows(query: &SlateQuery, lhs: &MaterializedRow, rhs: &MaterializedRow) -> Ordering {
+fn compare_rows(
+    query: &SlateQuery,
+    lhs: &MaterializedRow,
+    rhs: &MaterializedRow,
+) -> Result<Ordering, EvalError> {
     for (index, sort) in query.sort.iter().enumerate() {
-        let ordering = compare_sort_key(
+        let ordering = compare_row_sort_value(
             &lhs.sort_values[index],
             &rhs.sort_values[index],
             sort.ascending,
-        );
+        )?;
         if ordering != Ordering::Equal {
-            return ordering;
+            return Ok(ordering);
         }
     }
-    match lhs.path.cmp(&rhs.path) {
+    Ok(match lhs.path.cmp(&rhs.path) {
         Ordering::Equal => lhs.ordinal.cmp(&rhs.ordinal),
         ordering => ordering,
+    })
+}
+
+fn compare_row_sort_value(
+    lhs: &Value,
+    rhs: &Value,
+    ascending: bool,
+) -> Result<Ordering, EvalError> {
+    let ordering = match (dql_command_sort_value(lhs), dql_command_sort_value(rhs)) {
+        (Some(lhs), Some(rhs)) => compare_dql_command_sort_values_total(lhs, rhs)?,
+        (None, None) => return Ok(compare_sort_key(lhs, rhs, ascending)),
+        _ => {
+            return Err(EvalError::InvalidArgument {
+                function: "DQL SORT".to_string(),
+                message: "inconsistent command-sort provenance".to_string(),
+            });
+        }
+    };
+    Ok(if ascending {
+        ordering
+    } else {
+        ordering.reverse()
+    })
+}
+
+fn compare_dql_command_sort_values_total(lhs: &Value, rhs: &Value) -> Result<Ordering, EvalError> {
+    let lhs_reflexive = compare_dql_command_sort_values(lhs, lhs)?;
+    let rhs_reflexive = compare_dql_command_sort_values(rhs, rhs)?;
+    let forward = compare_dql_command_sort_values(lhs, rhs)?;
+    let reverse = compare_dql_command_sort_values(rhs, lhs)?;
+    if lhs_reflexive == Ordering::Equal
+        && rhs_reflexive == Ordering::Equal
+        && forward == reverse.reverse()
+    {
+        return Ok(forward);
     }
+
+    // Dataview's expression comparator deliberately exposes source behavior
+    // such as NaN > NaN and distinct duration structures with equal casual
+    // milliseconds comparing greater in both directions. Keep those expression
+    // semantics intact, but never pass a non-total comparator to Rust's sort.
+    // Native Bases already has a deterministic total value order, so use it
+    // only for the inconsistent pair.
+    Ok(compare_sort_key(lhs, rhs, true))
 }
 
 fn compare_sort_key(lhs: &Value, rhs: &Value, ascending: bool) -> Ordering {
@@ -1983,7 +2222,9 @@ fn compare_non_null_values(lhs: &Value, rhs: &Value) -> Ordering {
     }
     match (lhs, rhs) {
         (Value::Bool(lhs), Value::Bool(rhs)) => lhs.cmp(rhs),
-        (Value::Number(lhs), Value::Number(rhs)) => lhs.partial_cmp(rhs).unwrap_or(Ordering::Equal),
+        (Value::Number(lhs), Value::Number(rhs)) => {
+            numeric_order_key(*lhs).cmp(&numeric_order_key(*rhs))
+        }
         (Value::Date(lhs), Value::Date(rhs)) => lhs.epoch_ms.cmp(&rhs.epoch_ms),
         (Value::Text(lhs), Value::Text(rhs)) => lhs.to_lowercase().cmp(&rhs.to_lowercase()),
         _ => value_key(lhs).cmp(&value_key(rhs)),
@@ -2483,6 +2724,84 @@ fn value_key(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+    }
+}
+
+/// ASCII key whose lexicographic order matches the native ascending value
+/// comparator. UI-only grids use it without reimplementing Rust value rules.
+pub(crate) fn value_sort_key(value: &Value) -> String {
+    match value {
+        Value::Null => "ff".to_string(),
+        Value::Bool(false) => "00:0".to_string(),
+        Value::Bool(true) => "00:1".to_string(),
+        Value::Number(value) => fixed_width_u64_sort_key("01:", numeric_order_key(*value)),
+        Value::Date(value) => {
+            let ordered = (value.epoch_ms as u64) ^ (1_u64 << 63);
+            fixed_width_u64_sort_key("02:00:", ordered)
+        }
+        Value::DqlDate(_) => hex_sort_key("02:01:", &value_key(value)),
+        Value::Duration(_) | Value::DqlDuration(_) => hex_sort_key("03:", &value_key(value)),
+        Value::Text(value) => lowercase_text_sort_key(value),
+        Value::Link(_) => hex_sort_key("05:", &value_key(value)),
+        Value::File(_) => hex_sort_key("06:", &value_key(value)),
+        Value::Regex(_, _) => hex_sort_key("07:", &value_key(value)),
+        Value::List(_) => hex_sort_key("08:", &value_key(value)),
+        Value::Object(_) => hex_sort_key("09:", &value_key(value)),
+    }
+}
+
+/// Total numeric order shared by native row sorting and mirrored UI keys:
+/// -Infinity < finite values < +Infinity < NaN. Signed zeroes compare equal,
+/// and all NaN signs/payloads collapse to one canonical position.
+fn numeric_order_key(value: f64) -> u64 {
+    const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+
+    let bits = if value.is_nan() {
+        CANONICAL_NAN_BITS
+    } else if value == 0.0 {
+        0.0_f64.to_bits()
+    } else {
+        value.to_bits()
+    };
+    if bits & (1_u64 << 63) == 0 {
+        bits ^ (1_u64 << 63)
+    } else {
+        !bits
+    }
+}
+
+fn fixed_width_u64_sort_key(prefix: &str, value: u64) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(prefix.len() + 16);
+    encoded.push_str(prefix);
+    for shift in (0..64).step_by(4).rev() {
+        encoded.push(HEX[((value >> shift) & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn hex_sort_key(prefix: &str, value: &str) -> String {
+    let mut encoded = String::with_capacity(prefix.len() + value.len() * 2);
+    encoded.push_str(prefix);
+    push_sort_key_hex(&mut encoded, value.as_bytes());
+    encoded
+}
+
+fn lowercase_text_sort_key(value: &str) -> String {
+    let mut encoded = String::with_capacity(3 + value.len() * 2);
+    encoded.push_str("04:");
+    let mut utf8 = [0_u8; 4];
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        push_sort_key_hex(&mut encoded, ch.encode_utf8(&mut utf8).as_bytes());
+    }
+    encoded
+}
+
+fn push_sort_key_hex(encoded: &mut String, value: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &byte in value {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
 }
 
@@ -3136,7 +3455,7 @@ impl VaultLookup for SqlVaultLookup<'_> {
     }
 
     fn row_for_path(&self, path: &str) -> Option<RowContext> {
-        assemble_row_for_path(self.conn, path).ok().flatten()
+        assemble_row_for_path(self.conn, path, self).ok().flatten()
     }
 
     fn links_for(&self, path: &str) -> Vec<LinkValue> {
@@ -3392,6 +3711,272 @@ mod tests {
             tx.commit().expect("commit cancellation seed");
         }
         conn
+    }
+
+    fn empty_cache_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open cache database");
+        crate::db::migrate(&mut conn).expect("migrate cache database");
+        conn
+    }
+
+    #[test]
+    fn mirrored_value_sort_keys_match_the_native_engine_comparator() {
+        use super::super::eval::{DqlDateValue, DqlDurationValue, FileHandleValue};
+
+        let link = |target: &str, display: Option<&str>| {
+            Value::Link(LinkValue {
+                target: target.to_string(),
+                display: display.map(str::to_string),
+                resolved_path: Some(format!("Resolved/{target}.md")),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: false,
+            })
+        };
+        let values = vec![
+            Value::Bool(false),
+            Value::Bool(true),
+            Value::Number(f64::NEG_INFINITY),
+            Value::Number(-10.0),
+            Value::Number(-0.0),
+            Value::Number(0.0),
+            Value::Number(2.0),
+            Value::Number(10.0),
+            Value::Number(f64::INFINITY),
+            Value::Number(f64::NAN),
+            Value::Number(f64::from_bits(0xfff8_0000_0000_0001)),
+            Value::Date(DateValue {
+                epoch_ms: -1,
+                has_time: false,
+            }),
+            Value::Date(DateValue {
+                epoch_ms: 1,
+                has_time: true,
+            }),
+            Value::DqlDate(DqlDateValue {
+                epoch_ms: -1,
+                has_time: false,
+                offset_minutes: 0,
+                is_local: true,
+            }),
+            Value::DqlDate(DqlDateValue {
+                epoch_ms: 1,
+                has_time: true,
+                offset_minutes: -300,
+                is_local: false,
+            }),
+            Value::Duration(-2),
+            Value::Duration(10),
+            Value::DqlDuration(DqlDurationValue::default()),
+            Value::DqlDuration(DqlDurationValue {
+                days: 1.0,
+                ..DqlDurationValue::default()
+            }),
+            Value::Text("Alpha".to_string()),
+            Value::Text("alpha".to_string()),
+            Value::Text("beta".to_string()),
+            link("Alpha", Some("First display")),
+            link("Alpha", Some("Different display")),
+            link("Beta", None),
+            Value::File(FileHandleValue {
+                path: "Alpha.md".to_string(),
+            }),
+            Value::Regex("a+".to_string(), "i".to_string()),
+            Value::List(vec![Value::Number(2.0), Value::Number(10.0)]),
+            Value::List(vec![Value::Number(2.0), Value::Number(2.0)]),
+            Value::Object(BTreeMap::from([(
+                "key".to_string(),
+                Value::Text("value".to_string()),
+            )])),
+        ];
+
+        for lhs in &values {
+            for rhs in &values {
+                assert_eq!(
+                    value_sort_key(lhs).cmp(&value_sort_key(rhs)),
+                    compare_non_null_values(lhs, rhs),
+                    "sort-key mismatch for lhs={lhs:?}, rhs={rhs:?}"
+                );
+            }
+        }
+
+        let mut with_null = values;
+        with_null.push(Value::Null);
+        for lhs in &with_null {
+            for rhs in &with_null {
+                assert_eq!(
+                    value_sort_key(lhs).cmp(&value_sort_key(rhs)),
+                    compare_sort_key(lhs, rhs, true),
+                    "null-aware sort-key mismatch for lhs={lhs:?}, rhs={rhs:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_sort_order_is_total_for_non_finite_values_and_signed_zero() {
+        let number = Value::Number;
+        let ordered = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+
+        for pair in ordered.windows(2) {
+            let expected = if pair == [-0.0, 0.0] {
+                Ordering::Equal
+            } else {
+                Ordering::Less
+            };
+            assert_eq!(
+                compare_non_null_values(&number(pair[0]), &number(pair[1])),
+                expected,
+                "unexpected numeric order for {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+            assert_eq!(
+                value_sort_key(&number(pair[0])).cmp(&value_sort_key(&number(pair[1]))),
+                expected,
+                "sort-key order disagrees for {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+
+        let negative_payload_nan = f64::from_bits(0xfff8_0000_0000_0001);
+        assert_eq!(
+            compare_non_null_values(&number(f64::NAN), &number(negative_payload_nan)),
+            Ordering::Equal,
+            "all NaN payloads and signs share one canonical order position"
+        );
+        assert_eq!(
+            value_sort_key(&number(f64::NAN)),
+            value_sort_key(&number(negative_payload_nan)),
+            "all NaN payloads and signs share one canonical sort key"
+        );
+    }
+
+    #[test]
+    fn decorated_frontmatter_wikilinks_keep_shared_parser_metadata() {
+        let scalar_json = serde_json::to_string("Target#Project target!|Project lead").unwrap();
+        let Value::Link(scalar) = decode_property_value("wikilink", &scalar_json) else {
+            panic!("scalar wikilink must decode as a link");
+        };
+        assert_eq!(scalar.target, "Target");
+        assert_eq!(scalar.display.as_deref(), Some("Project lead"));
+        assert_eq!(scalar.subpath.as_deref(), Some("Project target"));
+        assert_eq!(scalar.link_type, "header");
+
+        let tagged_list_json = serde_json::json!([{
+            "\u{f8ff}slate.property-kind": "wikilink",
+            "value": "Target#^project-block|Project reference"
+        }])
+        .to_string();
+        let Value::List(values) = decode_property_value("list", &tagged_list_json) else {
+            panic!("wikilink list must decode as a list");
+        };
+        let [Value::Link(list_link)] = values.as_slice() else {
+            panic!("tagged wikilink list element must decode as a link");
+        };
+        assert_eq!(list_link.target, "Target");
+        assert_eq!(list_link.display.as_deref(), Some("Project reference"));
+        assert_eq!(list_link.subpath.as_deref(), Some("project-block"));
+        assert_eq!(list_link.link_type, "block");
+    }
+
+    #[test]
+    fn query_cache_discards_every_stale_generation() {
+        let conn = empty_cache_vault();
+        let query = cancellation_query();
+        let cache = BasesQueryCache::default();
+
+        for generation in 0..=3 {
+            let result = execute(
+                &query,
+                &conn,
+                &EngineCtx {
+                    generation,
+                    cache: Some(&cache),
+                    ..EngineCtx::default()
+                },
+                &CancelToken::new(),
+            )
+            .expect("execute cache generation");
+            assert!(!result.cache_hit, "a new generation cannot hit stale state");
+        }
+
+        let entries = cache.entries.borrow();
+        assert_eq!(entries.len(), 1, "all stale generations must be evicted");
+        assert!(entries.keys().all(|key| key.generation == 3));
+        drop(entries);
+
+        execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                generation: 4,
+                cache: Some(&cache),
+                quick_filter: Some("uncached"),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .expect("execute uncacheable current generation");
+        assert!(
+            cache.entries.borrow().is_empty(),
+            "an uncacheable execution must still evict every stale generation"
+        );
+    }
+
+    #[test]
+    fn query_cache_is_a_bounded_lru_within_one_generation() {
+        const EXPECTED_CAPACITY: usize = 16;
+
+        let conn = empty_cache_vault();
+        let query = cancellation_query();
+        let cache = BasesQueryCache::default();
+        let execute_for = |this_path: &str| {
+            execute(
+                &query,
+                &conn,
+                &EngineCtx {
+                    generation: 7,
+                    this_path: Some(this_path.to_string()),
+                    cache: Some(&cache),
+                    ..EngineCtx::default()
+                },
+                &CancelToken::new(),
+            )
+            .expect("execute cache variant")
+        };
+
+        for index in 0..EXPECTED_CAPACITY {
+            assert!(!execute_for(&format!("Context-{index}.md")).cache_hit);
+        }
+        assert!(
+            execute_for("Context-0.md").cache_hit,
+            "refresh oldest entry"
+        );
+        assert!(
+            !execute_for("Context-16.md").cache_hit,
+            "insert one beyond capacity"
+        );
+
+        assert_eq!(cache.entries.borrow().len(), EXPECTED_CAPACITY);
+        assert!(
+            execute_for("Context-0.md").cache_hit,
+            "recently used entry must survive"
+        );
+        assert!(
+            !execute_for("Context-1.md").cache_hit,
+            "least-recently-used entry must be evicted"
+        );
+        assert_eq!(cache.entries.borrow().len(), EXPECTED_CAPACITY);
     }
 
     #[test]

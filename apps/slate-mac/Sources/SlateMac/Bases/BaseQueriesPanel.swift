@@ -164,8 +164,8 @@ struct BaseQueriesPanel: View {
         if appState.baseQueries.baseFiles.isEmpty {
             emptyRow("No base files")
         } else {
-            ForEach(appState.baseQueries.baseFiles, id: \.path) { file in
-                baseFileRow(file)
+            ForEach(BaseFileListEntry.make(appState.baseQueries.baseFiles)) { entry in
+                baseFileRow(entry.summary)
             }
         }
     }
@@ -356,12 +356,31 @@ struct BaseQueriesPanel: View {
     }
 
     private func saveDashboard(_ draft: DashboardEditorDraft) {
+        let didSave: Bool
         if let id = draft.dashboardID {
-            appState.updateDashboard(id: id, name: draft.name, sections: draft.dashboardSections)
+            didSave = appState.updateDashboard(
+                id: id, name: draft.name, sections: draft.dashboardSections)
         } else {
-            _ = appState.saveDashboard(name: draft.name, sections: draft.dashboardSections)
+            didSave = appState.saveDashboard(
+                name: draft.name, sections: draft.dashboardSections) != nil
         }
-        dashboardDraft = nil
+        if didSave {
+            dashboardDraft = nil
+        }
+    }
+}
+
+struct BaseFileListEntry: Identifiable {
+    let summary: BaseFileSummary
+    let id: String
+
+    static func make(_ summaries: [BaseFileSummary]) -> [Self] {
+        summaries.map { summary in
+            Self(
+                summary: summary,
+                id: BaseExactIdentity.key(
+                    prefix: "base-file-row", components: [summary.path]))
+        }
     }
 }
 

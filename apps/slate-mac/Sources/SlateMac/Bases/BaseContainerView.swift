@@ -42,7 +42,7 @@ struct BaseContainerView: View {
             quickFilterTask = nil
         }
         .onChange(of: appState.baseQuickFilterFocusToken) { _, _ in
-            guard appState.workspace.model.activeGroup.activeTabID == tabID else { return }
+            guard handlesActiveTabActions else { return }
             quickFilterFocused = true
         }
         .onChange(of: document.quickFilterText) { _, _ in
@@ -54,7 +54,12 @@ struct BaseContainerView: View {
             updateActiveBaseSelection()
         }
         .onChange(of: appState.baseEditPropertyRequestToken) { _, _ in
+            guard handlesActiveTabActions else { return }
             beginSelectedPropertyEdit()
+        }
+        .onChange(of: appState.workspace.model.activeGroup.activeTabID) { _, _ in
+            guard handlesActiveTabActions else { return }
+            updateActiveBaseSelection()
         }
     }
 
@@ -194,6 +199,7 @@ struct BaseContainerView: View {
                     document.setTransientSort(sort, session: session)
                 }),
             cellNavigation: true,
+            sortsRowsLocally: false,
             onActivate: { _ = appState.basesOpen(row: $0.row) },
             onEditCell: { row, columnIndex in
                 beginEdit(row: row.row, columnIndex: columnIndex, result: result)
@@ -244,10 +250,13 @@ struct BaseContainerView: View {
     private func gridRowActions(
         result: BasesResultSet
     ) -> [AccessibleDataGrid<BaseGridRow>.RowAction] {
-        [
+        var actions: [AccessibleDataGrid<BaseGridRow>.RowAction] = [
             .init("Open") { row in _ = appState.basesOpen(row: row.row) },
             .init("Copy link") { row in _ = appState.basesCopyLink(for: row.row) },
             .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
+        ]
+        if BaseGridRowActionPolicy.canEditProperty(in: result) {
+            actions.append(
             .init("Edit property") { row in
                 let columnIndex = selectedCell?.rowID == row.id
                     ? selectedCell?.columnIndex(in: result)
@@ -256,23 +265,28 @@ struct BaseContainerView: View {
                     row: row.row,
                     columnIndex: columnIndex ?? firstEditableColumnIndex(result: result),
                     result: result)
-            },
-        ]
+            })
+        }
+        return actions
     }
 
     private func listRowActions(result: BasesResultSet) -> [BaseListRowAction] {
-        [
+        var actions: [BaseListRowAction] = [
             .init("Open") { row in _ = appState.basesOpen(row: row.row) },
             .init("Copy link") { row in _ = appState.basesCopyLink(for: row.row) },
             .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
+        ]
+        if BaseGridRowActionPolicy.canEditProperty(in: result) {
+            actions.append(
             .init("Edit property") { row in
                 appState.basesViewAsTable()
                 beginEdit(
                     row: row.row,
                     columnIndex: firstEditableColumnIndex(result: result),
                     result: result)
-            },
-        ]
+            })
+        }
+        return actions
     }
 
     private func columns(from result: BasesResultSet) -> [AccessibleDataGrid<BaseGridRow>.Column] {
@@ -280,12 +294,7 @@ struct BaseContainerView: View {
             AccessibleDataGrid<BaseGridRow>.Column(
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
-                sort: { lhs, rhs in
-                    let ascending = document.sortState?.ascending ?? true
-                    return ascending
-                        ? lhs.sortsBefore(rhs, at: columnIndex, ascending: true)
-                        : rhs.sortsBefore(lhs, at: columnIndex, ascending: false)
-                },
+                sort: { lhs, rhs in lhs.sortsBefore(rhs, at: columnIndex) },
                 accessibilityHint: { _ in
                     BaseCellEditPolicy.propertyKey(for: column) == nil
                         ? BaseCellEditPolicy.readOnlyHint(for: column)
@@ -356,11 +365,18 @@ struct BaseContainerView: View {
     }
 
     private func updateActiveBaseSelection() {
+        guard handlesActiveTabActions else { return }
         appState.updateActiveBaseSelection(
             path: document.selectionKey,
             rowID: selectedRow,
             columnIndex: document.result.flatMap { selectedCell?.columnIndex(in: $0) },
             result: document.result)
+    }
+
+    private var handlesActiveTabActions: Bool {
+        BaseContainerTabRouting.handles(
+            tabID: tabID,
+            activeTabID: appState.workspace.model.activeGroup.activeTabID)
     }
 
     private func reconcileSelectedCell(with result: BasesResultSet?) {
@@ -398,12 +414,11 @@ struct BaseContainerView: View {
         }
         let columnIndex: Int
         if selectedCell?.rowID == BaseGridRow.id(for: row),
-            let column = selectedCell?.column(in: result),
-            let index = result.columns.firstIndex(of: column)
+            let index = selectedCell?.columnIndex(in: result)
         {
             columnIndex = index
         } else if let column = appState.activeBaseSelectedColumn,
-            let index = result.columns.firstIndex(of: column)
+            let index = result.exactColumnIndex(forID: column.id)
         {
             columnIndex = index
         } else {
@@ -551,6 +566,18 @@ struct BaseContainerView: View {
     }
 }
 
+enum BaseContainerTabRouting {
+    static func handles(tabID: TabID, activeTabID: TabID?) -> Bool {
+        tabID == activeTabID
+    }
+}
+
+extension BasesResultSet {
+    func exactColumnIndex(forID columnID: String) -> Int? {
+        columns.firstIndex { BaseExactIdentity.matches($0.id, columnID) }
+    }
+}
+
 struct BaseGridRow: Identifiable {
     let row: BasesRow
     let ordinal: Int
@@ -560,8 +587,9 @@ struct BaseGridRow: Identifiable {
     }
 
     static func id(for row: BasesRow) -> String {
-        let task = row.taskOrdinal.map { "#\($0)" } ?? ""
-        return "\(row.filePath)\(task)"
+        let pathBytes = row.filePath.utf8.map { String($0) }.joined(separator: ".")
+        let task = row.taskOrdinal.map { String($0) } ?? "file"
+        return "\(pathBytes)#\(task)"
     }
 
     func value(at columnIndex: Int) -> String {
@@ -588,8 +616,8 @@ struct BaseGridRow: Identifiable {
     }
 
     private func pathTiebreaksBefore(_ other: BaseGridRow) -> Bool {
-        if row.filePath != other.row.filePath {
-            return row.filePath < other.row.filePath
+        if !row.filePath.utf8.elementsEqual(other.row.filePath.utf8) {
+            return row.filePath.utf8.lexicographicallyPrecedes(other.row.filePath.utf8)
         }
         switch (row.taskOrdinal, other.row.taskOrdinal) {
         case (nil, nil): return false
@@ -609,6 +637,11 @@ struct BaseGridCellSelection: Equatable {
         self.columnID = columnID
     }
 
+    static func == (lhs: BaseGridCellSelection, rhs: BaseGridCellSelection) -> Bool {
+        BaseExactIdentity.matches(lhs.rowID, rhs.rowID)
+            && BaseExactIdentity.matches(lhs.columnID, rhs.columnID)
+    }
+
     init?(
         position: AccessibleDataGrid<BaseGridRow>.CellPosition,
         result: BasesResultSet
@@ -625,7 +658,7 @@ struct BaseGridCellSelection: Equatable {
         guard result.rows.contains(where: { BaseGridRow.id(for: $0) == rowID }) else {
             return nil
         }
-        return result.columns.firstIndex { $0.id == columnID }
+        return result.columns.firstIndex { BaseExactIdentity.matches($0.id, columnID) }
     }
 
     func position(
@@ -675,7 +708,7 @@ struct BaseGridSelectionReconciliation: Equatable {
 
         selectedRowID = selectedCell.rowID
         guard let columnIndex = result.columns.firstIndex(where: {
-            $0.id == selectedCell.columnID
+            BaseExactIdentity.matches($0.id, selectedCell.columnID)
         }) else {
             self.selectedCell = nil
             self.columnIndex = nil
@@ -689,46 +722,116 @@ struct BaseGridSelectionReconciliation: Equatable {
     }
 }
 
-private enum BaseValueOrdering {
-    static func compare(_ lhs: BasesValue, _ rhs: BasesValue) -> Int {
-        let lhsNull = lhs.rawKind == "null"
-        let rhsNull = rhs.rawKind == "null"
-        if lhsNull || rhsNull {
-            if lhsNull == rhsNull { return 0 }
-            return lhsNull ? 1 : -1
+struct BaseGridSortSelection: Equatable {
+    let columnID: String
+    let ascending: Bool
+
+    init(columnID: String, ascending: Bool) {
+        self.columnID = columnID
+        self.ascending = ascending
+    }
+
+    static func == (lhs: BaseGridSortSelection, rhs: BaseGridSortSelection) -> Bool {
+        BaseExactIdentity.matches(lhs.columnID, rhs.columnID)
+            && lhs.ascending == rhs.ascending
+    }
+
+    init?(sortState: DataGridSortState, result: BasesResultSet) {
+        guard result.columns.indices.contains(sortState.columnIndex) else { return nil }
+        self.init(
+            columnID: result.columns[sortState.columnIndex].id,
+            ascending: sortState.ascending)
+    }
+
+    func sortState(in result: BasesResultSet) -> DataGridSortState? {
+        guard let columnIndex = result.columns.firstIndex(where: {
+            BaseExactIdentity.matches($0.id, columnID)
+        }) else {
+            return nil
         }
-        let lhsRank = rank(lhs.rawKind)
-        let rhsRank = rank(rhs.rawKind)
-        if lhsRank != rhsRank { return lhsRank < rhsRank ? -1 : 1 }
-        switch (lhs.rawKind, rhs.rawKind) {
-        case ("bool", "bool"):
-            return compare(lhs.boolValue == true ? 1 : 0, rhs.boolValue == true ? 1 : 0)
-        case ("number", "number"):
-            return compare(lhs.number ?? 0, rhs.number ?? 0)
-        case ("date", "date"):
-            return compare(lhs.dateEpochMs ?? 0, rhs.dateEpochMs ?? 0)
-        case ("text", "text"):
-            return compare(
-                (lhs.text ?? lhs.display).lowercased(),
-                (rhs.text ?? rhs.display).lowercased())
-        default:
-            return compare(lhs.display, rhs.display)
+        return DataGridSortState(columnIndex: columnIndex, ascending: ascending)
+    }
+}
+
+/// View-local row, cell, and sort state stored by stable result identity.
+/// SwiftUI keeps this value alive while a builder/dashboard/embed republishes
+/// result snapshots, so reconciliation must eagerly discard disappeared IDs
+/// instead of letting a former array offset resurrect later.
+struct BaseGridInteractionState: Equatable {
+    private(set) var selectedRowID: String? = nil
+    private(set) var selectedCell: BaseGridCellSelection? = nil
+    private(set) var sortSelection: BaseGridSortSelection? = nil
+
+    mutating func setSelectedRowID(_ rowID: String?, in result: BasesResultSet) {
+        guard let rowID else {
+            selectedRowID = nil
+            selectedCell = nil
+            return
+        }
+        guard result.rows.contains(where: { BaseGridRow.id(for: $0) == rowID }) else {
+            selectedRowID = nil
+            selectedCell = nil
+            return
+        }
+        selectedRowID = rowID
+        if selectedCell?.rowID != rowID {
+            selectedCell = nil
         }
     }
 
-    private static func rank(_ kind: String) -> Int {
-        switch kind {
-        case "bool": 0
-        case "number": 1
-        case "date": 2
-        case "duration": 3
-        case "text": 4
-        case "link": 5
-        case "file": 6
-        case "regex": 7
-        case "list": 8
-        default: 9
+    mutating func setCellPosition(
+        _ position: AccessibleDataGrid<BaseGridRow>.CellPosition?,
+        in result: BasesResultSet
+    ) {
+        selectedCell = position.flatMap { BaseGridCellSelection(position: $0, result: result) }
+        if let selectedCell {
+            selectedRowID = selectedCell.rowID
         }
+    }
+
+    mutating func setSortState(_ sortState: DataGridSortState?, in result: BasesResultSet) {
+        sortSelection = sortState.flatMap { BaseGridSortSelection(sortState: $0, result: result) }
+    }
+
+    func cellPosition(
+        in result: BasesResultSet
+    ) -> AccessibleDataGrid<BaseGridRow>.CellPosition? {
+        selectedCell?.position(in: result)
+    }
+
+    func sortState(in result: BasesResultSet) -> DataGridSortState? {
+        sortSelection?.sortState(in: result)
+    }
+
+    mutating func reconcile(with result: BasesResultSet?) {
+        guard let result else {
+            selectedRowID = nil
+            selectedCell = nil
+            sortSelection = nil
+            return
+        }
+        let availableRows = Set(result.rows.map { BaseGridRow.id(for: $0) })
+        if let selectedRowID, !availableRows.contains(selectedRowID) {
+            self.selectedRowID = nil
+        }
+        if selectedCell?.position(in: result) == nil {
+            selectedCell = nil
+        }
+        if sortSelection?.sortState(in: result) == nil {
+            sortSelection = nil
+        }
+    }
+}
+
+enum BaseGridRowActionPolicy {
+    static func canEditProperty(in result: BasesResultSet) -> Bool {
+        result.columns.contains { BaseCellEditPolicy.propertyKey(for: $0) != nil }
+    }
+}
+
+enum BaseValueOrdering {
+    static func compare(_ lhs: BasesValue, _ rhs: BasesValue) -> Int {
+        compare(lhs.sortKey, rhs.sortKey)
     }
 
     private static func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> Int {
@@ -754,9 +857,16 @@ enum BaseSummaryFormatter {
         summaries: [BasesSummaryCell], columns: [BasesColumn]
     ) -> String? {
         guard !summaries.isEmpty else { return nil }
-        let labelsByID = Dictionary(uniqueKeysWithValues: columns.map { ($0.id, $0.label) })
+        var labelsByID: [String: String] = [:]
+        for column in columns {
+            let key = BaseExactIdentity.registryKey(prefix: "column", value: column.id)
+            if labelsByID[key] == nil {
+                labelsByID[key] = column.label
+            }
+        }
         let cells = summaries.map { summary in
-            let label = labelsByID[summary.columnId] ?? summary.columnId
+            let key = BaseExactIdentity.registryKey(prefix: "column", value: summary.columnId)
+            let label = labelsByID[key] ?? summary.columnId
             let value = summary.value.display.isEmpty ? "empty" : summary.value.display
             return "\(label) \(summary.summary): \(value)"
         }

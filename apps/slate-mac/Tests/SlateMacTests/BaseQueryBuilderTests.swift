@@ -1468,6 +1468,147 @@ final class BaseQueryBuilderTests: XCTestCase {
             "representation-only fail-closed conversion must not rewrite an unchanged filter")
     }
 
+    func testBuilderKeepsCanonicallyEquivalentPropertyIDsDistinct() {
+        let composed = "é"
+        let decomposed = "e\u{301}"
+        let composedProperty = BaseQueryProperty.note(composed)
+        let decomposedProperty = BaseQueryProperty.note(decomposed)
+        var draft = BaseQueryBuilderDraft()
+        draft.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: composedProperty,
+                    operator: .contains,
+                    value: .text("x"))),
+            .condition(
+                BaseQueryCondition(
+                    property: decomposedProperty,
+                    operator: .contains,
+                    value: .text("x"))),
+        ]
+        draft.columns = [
+            BaseQueryColumn(property: composedProperty, displayName: "Composed"),
+            BaseQueryColumn(property: decomposedProperty, displayName: "Decomposed"),
+        ]
+        let model = BaseQueryBuilderModel(draft: draft)
+
+        XCTAssertNotEqual(composedProperty, decomposedProperty)
+        XCTAssertEqual(Set([composedProperty, decomposedProperty]).count, 2)
+        XCTAssertEqual(model.columnIndex(for: composedProperty), 0)
+        XCTAssertEqual(model.columnIndex(for: decomposedProperty), 1)
+
+        model.applyPropertyChoices([
+            BaseQueryPropertyChoice(property: composedProperty, kind: .text),
+            BaseQueryPropertyChoice(property: decomposedProperty, kind: .number),
+        ])
+
+        guard case .condition = model.rows[0], case .advanced = model.rows[1] else {
+            return XCTFail("each exact property must receive its own inventory kind")
+        }
+    }
+
+    func testBuilderStringInventoriesKeepCanonicalUTF8ChoicesDistinct() {
+        let composed = "é"
+        let decomposed = "e\u{301}"
+        let choices = BaseExactStringChoice.make(
+            [composed, decomposed], prefix: "test-choice")
+
+        XCTAssertNotEqual(choices[0].id, choices[1].id)
+        XCTAssertTrue(choices[0].matches(composed))
+        XCTAssertFalse(choices[0].matches(decomposed))
+        XCTAssertFalse(choices[1].matches(composed))
+        XCTAssertTrue(choices[1].matches(decomposed))
+    }
+
+    func testBuilderSaveDiffKeepsCanonicallyEquivalentUTF8Changes() throws {
+        let (_, session) = try makeSession()
+        let composed = "é"
+        let decomposed = "e\u{301}"
+
+        var previousFilter = BaseQueryBuilderDraft()
+        previousFilter.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .note(composed),
+                    operator: .equals,
+                    value: .text(composed)))
+        ]
+        var editedFilter = previousFilter
+        editedFilter.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .note(decomposed),
+                    operator: .equals,
+                    value: .text(decomposed)))
+        ]
+        XCTAssertTrue(
+            Self.hasViewFilterEdit(
+                try editedFilter.baseEditsForView(0, replacing: previousFilter)))
+
+        var previousGroup = BaseQueryBuilderDraft()
+        previousGroup.groupBy = BaseQueryGroupBy(
+            property: .note(composed), ascending: true)
+        var editedGroup = previousGroup
+        editedGroup.groupBy = BaseQueryGroupBy(
+            property: .note(decomposed), ascending: true)
+        XCTAssertTrue(
+            Self.hasViewKeyEdit(
+                try editedGroup.baseEditsForView(0, replacing: previousGroup),
+                key: "groupBy"))
+
+        // Canonically reordered combining marks have identical UTF-8 lengths,
+        // so Core emits the same spans and the JSON strings differ only in the
+        // scalar byte order Swift's native equality intentionally collapses.
+        let orderedExpressionValue = "a\u{327}\u{301}"
+        let reorderedExpressionValue = "a\u{301}\u{327}"
+        XCTAssertEqual(orderedExpressionValue, reorderedExpressionValue)
+        XCTAssertFalse(
+            BaseExactIdentity.matches(orderedExpressionValue, reorderedExpressionValue))
+        let composedExpressionSource = "\"\(orderedExpressionValue)\""
+        let decomposedExpressionSource = "\"\(reorderedExpressionValue)\""
+        let composedExpression = session.validateBaseExpression(source: composedExpressionSource)
+        let decomposedExpression = session.validateBaseExpression(source: decomposedExpressionSource)
+        let composedExpressionJSON = try XCTUnwrap(composedExpression.exprJson)
+        let decomposedExpressionJSON = try XCTUnwrap(decomposedExpression.exprJson)
+        XCTAssertEqual(composedExpressionJSON, decomposedExpressionJSON)
+        XCTAssertFalse(
+            BaseExactIdentity.matches(composedExpressionJSON, decomposedExpressionJSON))
+        var previousFormula = BaseQueryBuilderDraft()
+        previousFormula.formulas = [
+            try BaseQueryFormula(
+                name: "label",
+                expression: composedExpressionSource,
+                expressionJSON: composedExpressionJSON)
+        ]
+        var editedFormula = previousFormula
+        editedFormula.formulas = [
+            try BaseQueryFormula(
+                name: "label",
+                expression: decomposedExpressionSource,
+                expressionJSON: decomposedExpressionJSON)
+        ]
+        XCTAssertTrue(
+            try editedFormula.baseEditsForView(0, replacing: previousFormula).contains {
+                if case .setFormula(let name, _) = $0 { return name == "label" }
+                return false
+            })
+
+        var previousDisplay = BaseQueryBuilderDraft()
+        previousDisplay.columns = [
+            BaseQueryColumn(property: .note("status"), displayName: composed)
+        ]
+        var editedDisplay = previousDisplay
+        editedDisplay.columns[0].displayName = decomposed
+        XCTAssertTrue(
+            try editedDisplay.baseEditsForView(0, replacing: previousDisplay).contains {
+                if case .setDisplayName(let property, let displayName) = $0 {
+                    return property == "status"
+                        && BaseExactIdentity.matches(displayName, decomposed)
+                }
+                return false
+            })
+    }
+
     func testTasksRowSourcePreservesIndependentUnsupportedQuerySource() throws {
         var root = try Self.jsonObject(BaseQueryBuilderDraft().queryJSON())
         root["row_source"] = "Tasks"
@@ -1709,12 +1850,12 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(source.contains("BaseRowReorderCommand.route("))
         XCTAssertTrue(source.contains("isFocused: focusedSortRow == index"))
         XCTAssertTrue(
-            source.contains(
-                "isFocused: focusedColumnRowID == property.sourceExpression"))
+                source.contains(
+                "isFocused: focusedColumnRowID == property.exactIdentityKey"))
         XCTAssertTrue(source.contains(".focused($focusedSortRow, equals: index)"))
         XCTAssertTrue(
-            source.contains(
-                ".focused($focusedColumnRowID, equals: property.sourceExpression)"))
+                source.contains(
+                ".focused($focusedColumnRowID, equals: property.exactIdentityKey)"))
         XCTAssertGreaterThanOrEqual(
             source.components(separatedBy: ".focusable()").count - 1,
             2,
@@ -1735,8 +1876,8 @@ final class BaseQueryBuilderTests: XCTestCase {
                 "property: property, direction: .down, modifiers: press.modifiers"))
         XCTAssertTrue(source.contains("retainFocus: { focusedSortRow = $0 }"))
         XCTAssertTrue(
-            source.contains(
-                "retainFocus: { _ in focusedColumnRowID = property.sourceExpression }"))
+                source.contains(
+                "retainFocus: { _ in focusedColumnRowID = property.exactIdentityKey }"))
         XCTAssertGreaterThanOrEqual(
             source.components(
                 separatedBy: "announce: { postAccessibilityAnnouncement($0, priority: .medium) }")
@@ -1979,6 +2120,74 @@ final class BaseQueryBuilderTests: XCTestCase {
         let handle = try XCTUnwrap(recorded.last?.handle)
         XCTAssertThrowsError(try session.baseViews(handle: handle), "the preview handle must be closed")
         state.baseQueryBuilderPreviewExecutionObserver = nil
+    }
+
+    func testBaseViewBuilderPreviewPreservesOriginatingThisPath() async throws {
+        let (vault, state, _) = try await makeAppState()
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Context
+                filters: "file.path == this.path"
+                order: [file.name]
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Context.base"))
+
+        state.openFile("Queries/Context.base", target: .currentTab)
+        state.basesEditViewFilters()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+
+        XCTAssertEqual(model.previewThisPath, "Queries/Context.base")
+        XCTAssertNotNil(model.editingBaseView)
+
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        await state.baseQueryBuilderPreviewTask?.value
+
+        guard case .ready = model.previewState else {
+            return XCTFail("base-context preview failed: \(model.previewState)")
+        }
+    }
+
+    func testContextlessBuilderPreviewSurfacesEngineViewError() async throws {
+        let (_, state, session) = try await makeAppState()
+        state.basesNewQuery()
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        let expressionJSON = try XCTUnwrap(
+            session.validateBaseExpression(source: "file.hasLink(this)").exprJson)
+        model.rows = [
+            .advanced(
+                rawExpression: "file.hasLink(this)",
+                filterJSON: #"{"Stmt":\#(expressionJSON)}"#)
+        ]
+
+        state.basesBuilderSchedulePreview(delayNanoseconds: 0)
+        await state.baseQueryBuilderPreviewTask?.value
+
+        guard case .failed(let message) = model.previewState else {
+            return XCTFail("contextless engine error must fail loud: \(model.previewState)")
+        }
+        XCTAssertTrue(message.contains("this is unavailable in this evaluation context"), message)
+
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/BaseQueryBuilderSheet.swift")
+        XCTAssertTrue(source.contains("Preview error"), source)
+    }
+
+    func testSavedQueryTabRoutesBuilderToUpdateTargetNotViewSplice() async throws {
+        let (_, state, session) = try await makeAppState()
+        let id = try session.saveQuery(
+            name: "Open saved query",
+            description: nil,
+            queryJson: BaseQueryBuilderDraft().queryJSON(),
+            sourceSyntax: .builder)
+        state.openSavedQuery(id: id, name: "Open saved query")
+
+        state.basesEditViewFilters()
+
+        let model = try XCTUnwrap(state.activeBaseQueryBuilder)
+        XCTAssertEqual(model.editingSavedQuery?.id, id)
+        XCTAssertNil(model.editingBaseView)
+        XCTAssertNil(model.previewThisPath)
     }
 
     func testSupersededPreviewCancelsNativeTokenClosesOldHandleAndCannotPublishStaleResult()
@@ -2660,6 +2869,45 @@ final class BaseQueryBuilderTests: XCTestCase {
     }
 
     @MainActor
+    func testRemovingFormulaTargetsExactUTF8Name() throws {
+        let (_, session) = try makeSession()
+        let composed = "é"
+        let decomposed = "e\u{301}"
+        let expressionJSON = try XCTUnwrap(
+            session.validateBaseExpression(source: "number(priority)").exprJson)
+        let model = BaseQueryBuilderModel()
+        model.formulas = [
+            try BaseQueryFormula(
+                name: composed,
+                expression: "number(priority)",
+                expressionJSON: expressionJSON),
+            try BaseQueryFormula(
+                name: decomposed,
+                expression: "number(priority)",
+                expressionJSON: expressionJSON),
+        ]
+        model.columns = [
+            BaseQueryColumn(property: .formula(composed), displayName: nil),
+            BaseQueryColumn(property: .formula(decomposed), displayName: nil),
+        ]
+        model.sortKeys = [
+            BaseQuerySortKey(property: .formula(composed), ascending: true),
+            BaseQuerySortKey(property: .formula(decomposed), ascending: false),
+        ]
+        model.groupBy = BaseQueryGroupBy(property: .formula(composed), ascending: true)
+
+        model.removeFormula(named: decomposed)
+
+        XCTAssertEqual(model.formulas.count, 1)
+        XCTAssertTrue(BaseExactIdentity.matches(try XCTUnwrap(model.formulas.first?.name), composed))
+        XCTAssertEqual(model.columns.count, 1)
+        XCTAssertTrue(BaseExactIdentity.matches(try XCTUnwrap(model.columns.first?.id), "formula.\(composed)"))
+        XCTAssertEqual(model.sortKeys.count, 1)
+        XCTAssertEqual(model.sortKeys.first?.property, .formula(composed))
+        XCTAssertEqual(model.groupBy?.property, .formula(composed))
+    }
+
+    @MainActor
     func testRemovingFormulaPrunesAdvancedSortExpressionReferences() throws {
         let (_, session) = try makeSession()
         let formulaValidation = session.validateBaseExpression(source: "number(priority)")
@@ -2966,5 +3214,127 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(preview.accessibilityAnnouncement.contains(result.audioSummary))
         XCTAssertTrue(preview.accessibilityAnnouncement.contains("First result:"))
         XCTAssertTrue(preview.accessibilityAnnouncement.contains("Alpha"))
+    }
+
+    func testPreviewNumericHeaderSortUsesTypedOrdering() throws {
+        let vault = tempDir.appendingPathComponent("numeric-sort-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("---\npriority: 10\n---\n# Ten\n".utf8)
+            .write(to: vault.appendingPathComponent("Ten.md"))
+        try Data("---\npriority: 2\n---\n# Two\n".utf8)
+            .write(to: vault.appendingPathComponent("Two.md"))
+        try Data("# Missing\n".utf8)
+            .write(to: vault.appendingPathComponent("Missing.md"))
+        let session = try VaultSession.openFilesystem(rootPath: vault.path)
+        try session.scanInitial(cancel: CancelToken())
+        var draft = BaseQueryBuilderDraft()
+        draft.columns = [
+            BaseQueryColumn(property: .note("priority"), displayName: nil)
+        ]
+        let handle = try session.openQuery(queryJson: draft.queryJSON(), thisPath: nil)
+        let result = try session.baseExecute(
+            handle: handle,
+            view: 0,
+            thisPath: nil,
+            quickFilter: nil,
+            cancel: CancelToken())
+        let rows = result.rows.enumerated().map {
+            BaseGridRow(row: $0.element, ordinal: $0.offset)
+        }
+
+        XCTAssertEqual(
+            rows.sorted { $0.sortsBefore($1, at: 0) }.map { $0.value(at: 0) },
+            ["2", "10", ""],
+            "builder preview sorting must use the engine-authored typed sort key, not display text")
+        XCTAssertEqual(
+            rows.sorted { $0.sortsBefore($1, at: 0, ascending: false) }
+                .map { $0.value(at: 0) },
+            ["10", "2", ""],
+            "null values remain last when the user reverses typed preview sorting")
+    }
+
+    func testPreviewEqualSortKeysUseRustUTF8PathTiebreak() {
+        func value() -> BasesValue {
+            BasesValue(
+                rawKind: "text",
+                sortKey: "04:73616d65",
+                display: "same",
+                text: "same",
+                number: nil,
+                boolValue: nil,
+                dateEpochMs: nil,
+                dateHasTime: false,
+                linkTarget: nil,
+                linkDisplay: nil,
+                list: [],
+                error: nil)
+        }
+        let composed = BasesRow(
+            filePath: "é.md",
+            taskOrdinal: nil,
+            values: [value()],
+            audioDescription: "composed")
+        let decomposed = BasesRow(
+            filePath: "e\u{301}.md",
+            taskOrdinal: nil,
+            values: [value()],
+            audioDescription: "decomposed")
+        let rows = [
+            BaseGridRow(row: composed, ordinal: 0),
+            BaseGridRow(row: decomposed, ordinal: 1),
+        ]
+        let expected = [composed.filePath, decomposed.filePath].sorted {
+            $0.utf8.lexicographicallyPrecedes($1.utf8)
+        }
+
+        XCTAssertEqual(
+            rows.sorted { $0.sortsBefore($1, at: 0) }.map { $0.row.filePath },
+            expected)
+        XCTAssertNotEqual(
+            BaseGridRow.id(for: composed),
+            BaseGridRow.id(for: decomposed),
+            "selection identity must not canonically collapse distinct UTF-8 paths")
+    }
+
+    func testPreviewSelectionAndSortFollowColumnIdentityAfterReorder() throws {
+        let (_, session) = try makeSession()
+        var draft = BaseQueryBuilderDraft()
+        draft.columns = [
+            BaseQueryColumn(property: .file(.name), displayName: nil),
+            BaseQueryColumn(property: .note("priority"), displayName: nil),
+        ]
+        let handle = try session.openQuery(queryJson: draft.queryJSON(), thisPath: nil)
+        let initial = try session.baseExecute(
+            handle: handle,
+            view: 0,
+            thisPath: nil,
+            quickFilter: nil,
+            cancel: CancelToken())
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
+        var interaction = BaseGridInteractionState()
+        interaction.setCellPosition(.init(rowID: rowID, columnIndex: 1), in: initial)
+        interaction.setSortState(
+            DataGridSortState(columnIndex: 1, ascending: false),
+            in: initial)
+
+        var reordered = initial
+        reordered.columns.swapAt(0, 1)
+        for index in reordered.rows.indices { reordered.rows[index].values.swapAt(0, 1) }
+        interaction.reconcile(with: reordered)
+
+        XCTAssertEqual(interaction.cellPosition(in: reordered)?.columnIndex, 0)
+        XCTAssertEqual(
+            interaction.sortState(in: reordered),
+            DataGridSortState(columnIndex: 0, ascending: false))
+
+        reordered.columns = []
+        reordered.rows = reordered.rows.map { row in
+            var row = row
+            row.values = []
+            return row
+        }
+        interaction.reconcile(with: reordered)
+        XCTAssertNil(interaction.selectedCell)
+        XCTAssertNil(interaction.sortSelection)
     }
 }

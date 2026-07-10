@@ -48,18 +48,27 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     struct Column {
         let header: String
         let cell: (Row) -> String
-        let sort: ((Row, Row) -> Bool)?
+        let sort: ((Row, Row, Bool) -> Bool)?
         let accessibilityHint: ((Row) -> String?)?
 
         init(
             _ header: String,
             cell: @escaping (Row) -> String,
             sort: ((Row, Row) -> Bool)? = nil,
+            directionalSort: ((Row, Row, Bool) -> Bool)? = nil,
             accessibilityHint: ((Row) -> String?)? = nil
         ) {
             self.header = header
             self.cell = cell
-            self.sort = sort
+            if let directionalSort {
+                self.sort = directionalSort
+            } else if let sort {
+                self.sort = { lhs, rhs, ascending in
+                    ascending ? sort(lhs, rhs) : sort(rhs, lhs)
+                }
+            } else {
+                self.sort = nil
+            }
             self.accessibilityHint = accessibilityHint
         }
     }
@@ -129,6 +138,10 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var cellSelection: Binding<CellPosition?>?
     var sortState: Binding<DataGridSortState?>?
     var cellNavigation: Bool
+    /// When false, the binding owner supplies rows in authoritative sort order.
+    /// Header interaction still updates `sortState`, but the grid does not
+    /// re-sort the stale row snapshot before that owner publishes its result.
+    var sortsRowsLocally: Bool
     var onActivate: ((Row) -> Void)?
     var onEditCell: ((Row, Int) -> Void)?
     var editRequest: Binding<EditRequest?>?
@@ -155,6 +168,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         cellSelection: Binding<CellPosition?>? = nil,
         sortState: Binding<DataGridSortState?>? = nil,
         cellNavigation: Bool = false,
+        sortsRowsLocally: Bool = true,
         onActivate: ((Row) -> Void)? = nil,
         onEditCell: ((Row, Int) -> Void)? = nil,
         editRequest: Binding<EditRequest?>? = nil,
@@ -176,6 +190,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.cellSelection = cellSelection
         self.sortState = sortState
         self.cellNavigation = cellNavigation
+        self.sortsRowsLocally = sortsRowsLocally
         self.onActivate = onActivate
         self.onEditCell = onEditCell
         self.editRequest = editRequest
@@ -373,13 +388,14 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
 
     private func resortPreservingDescriptor() {
         displayRows = grid.rows
+        guard grid.sortsRowsLocally else { return }
         guard let sort = activeSort,
             grid.columns.indices.contains(sort.columnIndex),
             let comparator = grid.columns[sort.columnIndex].sort
         else { return }
 
         let ordered: (Row, Row) -> Bool = {
-            sort.ascending ? comparator($0, $1) : comparator($1, $0)
+            comparator($0, $1, sort.ascending)
         }
         guard !grid.groups.isEmpty else {
             displayRows.sort {

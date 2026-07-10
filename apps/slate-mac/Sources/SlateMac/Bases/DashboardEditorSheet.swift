@@ -32,7 +32,8 @@ struct DashboardEditorDraft: Equatable {
                 savedQueryID: status.savedQueryId,
                 savedQueryName: status.savedQueryName ?? savedByID[status.savedQueryId],
                 headingOverride: status.headingOverride ?? "",
-                viewOverride: status.viewOverride ?? "",
+                viewOverride: DashboardEditorSectionDraft.pickerViewOverride(
+                    fromStored: status.viewOverride),
                 missing: status.missing)
         }
         self.init(
@@ -121,6 +122,16 @@ struct DashboardEditorSectionDraft: Identifiable, Equatable {
 
     var normalizedViewOverride: String? {
         nilIfBlank(viewOverride)
+    }
+
+    static func pickerViewOverride(fromStored value: String?) -> String {
+        guard let value else { return "" }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "": return ""
+        case "table": return "Table"
+        case "list": return "List"
+        default: return value
+        }
     }
 
     private func nilIfBlank(_ value: String) -> String? {
@@ -282,9 +293,16 @@ struct DashboardEditorSheet: View {
             TextField("Section title override", text: section.headingOverride)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Section title override")
-            TextField("View override", text: section.viewOverride)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("View override")
+            Picker("Section view", selection: section.viewOverride) {
+                Text("Default").tag("")
+                Text("Table").tag("Table")
+                Text("List").tag("List")
+                if !["", "Table", "List"].contains(section.wrappedValue.viewOverride) {
+                    Text("Unsupported: \(section.wrappedValue.viewOverride)")
+                        .tag(section.wrappedValue.viewOverride)
+                }
+            }
+            .accessibilityLabel("Section view")
         }
         .padding(Tokens.Spacing.sm)
         .background(Tokens.ColorRole.surface)

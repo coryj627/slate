@@ -155,6 +155,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "inline_fields: ordered body projection for Dataview DQL compatibility",
         sql: include_str!("../migrations/025_dql_inline_fields.sql"),
     },
+    Migration {
+        description: "properties: reindex typed list elements after tagged encoding",
+        sql: include_str!("../migrations/026_reindex_typed_property_lists.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -853,7 +857,7 @@ mod tests {
 
     #[test]
     fn migration_025_creates_inline_field_projection_and_forces_one_rescan() {
-        let mut conn = fresh_db();
+        let conn = fresh_db();
         ensure_version_table(&conn).unwrap();
         for (index, migration) in MIGRATIONS[..24].iter().enumerate() {
             apply_migration(&conn, (index + 1) as u32, migration).unwrap();
@@ -869,7 +873,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(migrate(&mut conn).unwrap(), 25);
+        apply_migration(&conn, 25, &MIGRATIONS[24]).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), 25);
 
         for table in ["dql_inline_fields", "dql_inline_field_state"] {
             let exists: u32 = conn
@@ -898,6 +903,59 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mtime, 0, "migration 025 must force one scanner slow path");
+    }
+
+    #[test]
+    fn migration_026_forces_typed_property_list_reindex() {
+        let mut conn = fresh_db();
+        ensure_version_table(&conn).unwrap();
+        for (index, migration) in MIGRATIONS[..25].iter().enumerate() {
+            apply_migration(&conn, (index + 1) as u32, migration).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/typed-lists.md', 'typed-lists.md', 'md', 100, 1700000000000,
+               1700000000000, 'typed-lists', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO properties
+              (file_id, ordinal, key, value_kind, value_text, value_text_norm)
+             SELECT id, 0, 'refs', 'list', '[\"Target\"]', ''
+             FROM files WHERE path = 'notes/typed-lists.md'",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(MIGRATIONS.len(), 26, "migration 026 must be registered");
+        assert_eq!(migrate(&mut conn).unwrap(), 26);
+
+        let size: i64 = conn
+            .query_row(
+                "SELECT size_bytes FROM files WHERE path = 'notes/typed-lists.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            size, -1,
+            "migration 026 must use a size sentinel no filesystem stat can match"
+        );
+        let cached_value: String = conn
+            .query_row(
+                "SELECT value_text FROM properties WHERE key = 'refs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            cached_value, "[\"Target\"]",
+            "the migration invalidates the regenerable cache without guessing erased types"
+        );
     }
 
     #[test]

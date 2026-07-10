@@ -15,6 +15,11 @@ use crate::VaultError;
 
 const MAX_INLINE_FIELD_LINE_UTF16: usize = 32_768;
 
+#[cfg(test)]
+thread_local! {
+    static MARKDOWN_STRUCTURE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 static UNICODE_LETTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\p{Letter}$").expect("Unicode Letter is a valid regex property")
 });
@@ -76,15 +81,33 @@ pub(crate) fn replace_dql_inline_fields_for_file(
     file_id: i64,
     markdown_source: &str,
 ) -> Result<(), VaultError> {
+    write_dql_inline_fields_for_file(tx, file_id, markdown_source, true)
+}
+
+/// Populate the projection immediately after inserting its owning `files`
+/// row. No derived rows can exist yet, so issuing DELETEs only adds SQLite
+/// B-tree work to cold scans.
+pub(crate) fn insert_dql_inline_fields_for_new_file(
+    tx: &Transaction,
+    file_id: i64,
+    markdown_source: &str,
+) -> Result<(), VaultError> {
+    write_dql_inline_fields_for_file(tx, file_id, markdown_source, false)
+}
+
+fn write_dql_inline_fields_for_file(
+    tx: &Transaction,
+    file_id: i64,
+    markdown_source: &str,
+    clear_existing: bool,
+) -> Result<(), VaultError> {
     let projection = parse_inline_projection(markdown_source);
-    tx.execute(
-        "DELETE FROM dql_inline_fields WHERE file_id = ?1",
-        params![file_id],
-    )?;
-    tx.execute(
-        "DELETE FROM dql_inline_field_state WHERE file_id = ?1",
-        params![file_id],
-    )?;
+    if clear_existing {
+        tx.execute(
+            "DELETE FROM dql_inline_fields WHERE file_id = ?1",
+            params![file_id],
+        )?;
+    }
 
     if !projection.fields.is_empty() {
         let mut insert = tx.prepare_cached(
@@ -96,10 +119,18 @@ pub(crate) fn replace_dql_inline_fields_for_file(
             insert.execute(params![file_id, ordinal as i64, field.key, value_json])?;
         }
     }
-    tx.execute(
-        "INSERT INTO dql_inline_field_state (file_id, incomplete) VALUES (?1, ?2)",
-        params![file_id, i64::from(projection.incomplete)],
-    )?;
+    if clear_existing {
+        tx.prepare_cached(
+            "INSERT INTO dql_inline_field_state (file_id, incomplete) VALUES (?1, ?2)
+             ON CONFLICT(file_id) DO UPDATE SET incomplete = excluded.incomplete",
+        )?
+        .execute(params![file_id, i64::from(projection.incomplete)])?;
+    } else {
+        tx.prepare_cached(
+            "INSERT INTO dql_inline_field_state (file_id, incomplete) VALUES (?1, ?2)",
+        )?
+        .execute(params![file_id, i64::from(projection.incomplete)])?;
+    }
     Ok(())
 }
 
@@ -114,14 +145,11 @@ pub(crate) fn mark_dql_inline_fields_incomplete_for_file(
         "DELETE FROM dql_inline_fields WHERE file_id = ?1",
         params![file_id],
     )?;
-    tx.execute(
-        "DELETE FROM dql_inline_field_state WHERE file_id = ?1",
-        params![file_id],
-    )?;
-    tx.execute(
-        "INSERT INTO dql_inline_field_state (file_id, incomplete) VALUES (?1, 1)",
-        params![file_id],
-    )?;
+    tx.prepare_cached(
+        "INSERT INTO dql_inline_field_state (file_id, incomplete) VALUES (?1, 1)
+         ON CONFLICT(file_id) DO UPDATE SET incomplete = excluded.incomplete",
+    )?
+    .execute(params![file_id])?;
     Ok(())
 }
 
@@ -234,6 +262,13 @@ enum AtomParse {
 }
 
 pub(crate) fn parse_inline_projection(source: &str) -> DqlInlineProjection {
+    // Most notes have no Dataview inline metadata. Avoid a full CommonMark
+    // structure pass and line-index allocation when neither ordinary `::`
+    // fields nor task emoji fields can possibly be present.
+    if !has_inline_candidate(source, true) {
+        return DqlInlineProjection::default();
+    }
+
     let structure = markdown_structure(source);
     let lines = source_lines(source);
     let mut projection = DqlInlineProjection::default();
@@ -1036,6 +1071,9 @@ fn split_inline_list(value: &str) -> Option<Vec<String>> {
 }
 
 fn markdown_structure(source: &str) -> MarkdownStructure {
+    #[cfg(test)]
+    MARKDOWN_STRUCTURE_CALLS.with(|calls| calls.set(calls.get() + 1));
+
     let mut structure = MarkdownStructure::default();
     let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
     if fm_end > 0 {
@@ -1265,6 +1303,18 @@ mod tests {
             key: key.to_string(),
             value,
         }
+    }
+
+    #[test]
+    fn candidate_free_pages_skip_markdown_structure() {
+        MARKDOWN_STRUCTURE_CALLS.with(|calls| calls.set(0));
+        let source = "ordinary prose without inline metadata\n\n".repeat(256);
+
+        assert_eq!(
+            parse_inline_projection(&source),
+            DqlInlineProjection::default()
+        );
+        assert_eq!(MARKDOWN_STRUCTURE_CALLS.with(std::cell::Cell::get), 0);
     }
 
     #[test]
@@ -1644,6 +1694,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(incomplete, 0);
+    }
+
+    #[test]
+    fn new_file_writer_does_not_issue_redundant_deletes() {
+        let conn = migrated_conn();
+        seed_file(&conn, 1);
+        conn.execute_batch(
+            "CREATE TRIGGER reject_new_file_field_delete
+             BEFORE DELETE ON dql_inline_fields
+             BEGIN SELECT RAISE(ABORT, 'unexpected field delete'); END;
+             CREATE TRIGGER reject_new_file_state_delete
+             BEFORE DELETE ON dql_inline_field_state
+             BEGIN SELECT RAISE(ABORT, 'unexpected state delete'); END;",
+        )
+        .unwrap();
+
+        let tx = conn.unchecked_transaction().unwrap();
+        insert_dql_inline_fields_for_new_file(&tx, 1, "field:: 1\n").unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(raw_keys(&conn, 1), vec!["field"]);
+        assert!(
+            !load_dql_inline_fields_for_path(&conn, "n1.md")
+                .unwrap()
+                .incomplete
+        );
     }
 
     #[test]

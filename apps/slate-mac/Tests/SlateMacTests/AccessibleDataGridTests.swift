@@ -102,6 +102,7 @@ final class AccessibleDataGridTests: XCTestCase {
             nil,
         onCancelEdit: (() -> Void)? = nil,
         cellNavigation: Bool = false,
+        sortsRowsLocally: Bool = true,
         groups: [AccessibleDataGrid<Row>.Group] = [],
         rowAccessibilityDescription: ((Row) -> String?)? = nil,
         announce: @escaping (String) -> Void = { _ in }
@@ -119,6 +120,7 @@ final class AccessibleDataGridTests: XCTestCase {
             cellSelection: cellSelection,
             sortState: sortState,
             cellNavigation: cellNavigation,
+            sortsRowsLocally: sortsRowsLocally,
             onActivate: onActivate,
             onEditCell: onEditCell,
             editRequest: editRequest,
@@ -151,6 +153,30 @@ final class AccessibleDataGridTests: XCTestCase {
         // Unsortable column: no-op, no announcement.
         XCTAssertNil(coordinator.applySort(column: 1, ascending: true))
         XCTAssertEqual(announced.count, 2)
+    }
+
+    @MainActor
+    func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState },
+            set: { sortState = $0 })
+        let engineOrder = Self.people
+        let grid = makeGrid(
+            rows: engineOrder,
+            sortState: binding,
+            sortsRowsLocally: false)
+        let coordinator = GridCoordinator(grid: grid)
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertEqual(sortState, DataGridSortState(columnIndex: 0, ascending: true))
+        XCTAssertEqual(
+            coordinator.displayRows.map(\.a),
+            engineOrder.map(\.a),
+            "an engine-backed grid must wait for the externally reordered rows instead of "
+                + "re-sorting the stale result with a Swift display-value comparator")
     }
 
     @MainActor

@@ -23,6 +23,13 @@ struct EditingSavedQuery: Equatable {
     var description: String?
 }
 
+struct EditingBaseView: Equatable {
+    let source: BaseDocumentSource
+    let viewIndex: UInt32
+
+    var previewThisPath: String? { source.filePath }
+}
+
 enum BaseQuerySource: Hashable {
     case allNotes
     case folder(String)
@@ -31,6 +38,50 @@ enum BaseQuerySource: Hashable {
     case linked(fromPath: String)
     case tasks
     case unsupported(label: String, queryJSON: String)
+
+    static func == (lhs: BaseQuerySource, rhs: BaseQuerySource) -> Bool {
+        switch (lhs, rhs) {
+        case (.allNotes, .allNotes), (.tasks, .tasks):
+            return true
+        case (.folder(let lhs), .folder(let rhs)),
+            (.tag(let lhs), .tag(let rhs)),
+            (.linked(let lhs), .linked(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.recent(let lhs), .recent(let rhs)):
+            return lhs == rhs
+        case (.unsupported(let lhsLabel, let lhsJSON),
+            .unsupported(let rhsLabel, let rhsJSON)):
+            return BaseExactIdentity.matches(lhsLabel, rhsLabel)
+                && BaseExactIdentity.matches(lhsJSON, rhsJSON)
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .allNotes:
+            hasher.combine(0)
+        case .folder(let path):
+            hasher.combine(1)
+            BaseExactIdentity.hash(path, into: &hasher)
+        case .tag(let tag):
+            hasher.combine(2)
+            BaseExactIdentity.hash(tag, into: &hasher)
+        case .recent(let days):
+            hasher.combine(3)
+            hasher.combine(days)
+        case .linked(let path):
+            hasher.combine(4)
+            BaseExactIdentity.hash(path, into: &hasher)
+        case .tasks:
+            hasher.combine(5)
+        case .unsupported(let label, let queryJSON):
+            hasher.combine(6)
+            BaseExactIdentity.hash(label, into: &hasher)
+            BaseExactIdentity.hash(queryJSON, into: &hasher)
+        }
+    }
 
     var accessibilityLabel: String {
         switch self {
@@ -118,6 +169,50 @@ enum BaseQueryProperty: Hashable {
     case file(BaseQueryFileField)
     case formula(String)
     case task(BaseQueryTaskField)
+
+    static func == (lhs: BaseQueryProperty, rhs: BaseQueryProperty) -> Bool {
+        switch (lhs, rhs) {
+        case (.note(let lhs), .note(let rhs)),
+            (.formula(let lhs), .formula(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.file(let lhs), .file(let rhs)):
+            return lhs == rhs
+        case (.task(let lhs), .task(let rhs)):
+            return lhs == rhs
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .note(let name):
+            hasher.combine(0)
+            BaseExactIdentity.hash(name, into: &hasher)
+        case .file(let field):
+            hasher.combine(1)
+            hasher.combine(field)
+        case .formula(let name):
+            hasher.combine(2)
+            BaseExactIdentity.hash(name, into: &hasher)
+        case .task(let field):
+            hasher.combine(3)
+            hasher.combine(field)
+        }
+    }
+
+    var exactIdentityKey: String {
+        switch self {
+        case .note(let name):
+            return BaseExactIdentity.key(prefix: "note-property", components: [name])
+        case .file(let field):
+            return BaseExactIdentity.key(prefix: "file-property", components: [field.rawValue])
+        case .formula(let name):
+            return BaseExactIdentity.key(prefix: "formula-property", components: [name])
+        case .task(let field):
+            return BaseExactIdentity.key(prefix: "task-property", components: [field.rawValue])
+        }
+    }
 
     var accessibilityName: String {
         switch self {
@@ -471,6 +566,59 @@ enum BaseQueryValue: Hashable {
     case tokens([String])
     case wikilink(String)
     case file(String)
+
+    static func == (lhs: BaseQueryValue, rhs: BaseQueryValue) -> Bool {
+        switch (lhs, rhs) {
+        case (.text(let lhs), .text(let rhs)),
+            (.absoluteDate(let lhs), .absoluteDate(let rhs)),
+            (.wikilink(let lhs), .wikilink(let rhs)),
+            (.file(let lhs), .file(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.number(let lhs), .number(let rhs)):
+            return lhs == rhs
+        case (.bool(let lhs), .bool(let rhs)):
+            return lhs == rhs
+        case (.relativeDays(let lhs), .relativeDays(let rhs)):
+            return lhs == rhs
+        case (.tokens(let lhs), .tokens(let rhs)):
+            return lhs.count == rhs.count
+                && zip(lhs, rhs).allSatisfy {
+                    BaseExactIdentity.matches($0.0, $0.1)
+                }
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .text(let value):
+            hasher.combine(0)
+            BaseExactIdentity.hash(value, into: &hasher)
+        case .number(let value):
+            hasher.combine(1)
+            hasher.combine(value)
+        case .bool(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        case .absoluteDate(let value):
+            hasher.combine(3)
+            BaseExactIdentity.hash(value, into: &hasher)
+        case .relativeDays(let value):
+            hasher.combine(4)
+            hasher.combine(value)
+        case .tokens(let values):
+            hasher.combine(5)
+            hasher.combine(values.count)
+            values.forEach { BaseExactIdentity.hash($0, into: &hasher) }
+        case .wikilink(let value):
+            hasher.combine(6)
+            BaseExactIdentity.hash(value, into: &hasher)
+        case .file(let value):
+            hasher.combine(7)
+            BaseExactIdentity.hash(value, into: &hasher)
+        }
+    }
 
     var accessibilityName: String {
         editingText
@@ -887,11 +1035,39 @@ enum BaseQueryViewType: Hashable, Identifiable {
     case list
     case unsupported(label: String, queryJSON: String)
 
+    static func == (lhs: BaseQueryViewType, rhs: BaseQueryViewType) -> Bool {
+        switch (lhs, rhs) {
+        case (.table, .table), (.list, .list):
+            return true
+        case (.unsupported(let lhsLabel, let lhsJSON),
+            .unsupported(let rhsLabel, let rhsJSON)):
+            return BaseExactIdentity.matches(lhsLabel, rhsLabel)
+                && BaseExactIdentity.matches(lhsJSON, rhsJSON)
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .table:
+            hasher.combine(0)
+        case .list:
+            hasher.combine(1)
+        case .unsupported(let label, let queryJSON):
+            hasher.combine(2)
+            BaseExactIdentity.hash(label, into: &hasher)
+            BaseExactIdentity.hash(queryJSON, into: &hasher)
+        }
+    }
+
     var id: String {
         switch self {
         case .table: return "table"
         case .list: return "list"
-        case .unsupported(let label, let queryJSON): return "unsupported-\(label)-\(queryJSON)"
+        case .unsupported(let label, let queryJSON):
+            return BaseExactIdentity.key(
+                prefix: "unsupported-builder-view", components: [label, queryJSON])
         }
     }
 
@@ -948,6 +1124,20 @@ struct BaseQuerySortKey: Hashable {
     var expressionLabel: String
     var ascending: Bool
 
+    static func == (lhs: BaseQuerySortKey, rhs: BaseQuerySortKey) -> Bool {
+        lhs.property == rhs.property
+            && BaseExactIdentity.matches(lhs.expressionJSON, rhs.expressionJSON)
+            && BaseExactIdentity.matches(lhs.expressionLabel, rhs.expressionLabel)
+            && lhs.ascending == rhs.ascending
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(property)
+        BaseExactIdentity.hash(expressionJSON, into: &hasher)
+        BaseExactIdentity.hash(expressionLabel, into: &hasher)
+        hasher.combine(ascending)
+    }
+
     init(property: BaseQueryProperty, ascending: Bool) {
         self.property = property
         self.expressionJSON = BaseQueryJSON.canonicalJSONString(property.expressionJSON) ?? ""
@@ -970,7 +1160,9 @@ struct BaseQuerySortKey: Hashable {
     }
 
     fileprivate func referencesFormula(named name: String) -> Bool {
-        if property == .formula(name) || expressionLabel == "formula.\(name)" {
+        if property == .formula(name)
+            || BaseExactIdentity.matches(expressionLabel, "formula.\(name)")
+        {
             return true
         }
         guard let expr = BaseQueryJSON.decode(expressionJSON) else { return false }
@@ -979,7 +1171,9 @@ struct BaseQuerySortKey: Hashable {
 
     private static func jsonValue(_ value: Any, containsFormulaReference name: String) -> Bool {
         if let object = value as? [String: Any] {
-            if object["Formula"] as? String == name {
+            if let formula = object["Formula"] as? String,
+                BaseExactIdentity.matches(formula, name)
+            {
                 return true
             }
             return object.values.contains { jsonValue($0, containsFormulaReference: name) }
@@ -998,7 +1192,7 @@ struct BaseQuerySortKey: Hashable {
     }
 }
 
-struct BaseQueryColumn: Hashable, Identifiable {
+struct BaseQueryColumn: Hashable {
     var id: String
     var property: BaseQueryProperty?
     var displayName: String?
@@ -1021,6 +1215,18 @@ struct BaseQueryColumn: Hashable, Identifiable {
             "display_name": displayName ?? NSNull(),
         ]
     }
+
+    static func == (lhs: BaseQueryColumn, rhs: BaseQueryColumn) -> Bool {
+        BaseExactIdentity.matches(lhs.id, rhs.id)
+            && lhs.property == rhs.property
+            && BaseExactIdentity.matches(lhs.displayName, rhs.displayName)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        BaseExactIdentity.hash(id, into: &hasher)
+        hasher.combine(property)
+        BaseExactIdentity.hash(displayName, into: &hasher)
+    }
 }
 
 struct BaseQueryFormula: Hashable, Identifiable {
@@ -1028,7 +1234,21 @@ struct BaseQueryFormula: Hashable, Identifiable {
     var expression: String
     var expressionJSON: String
 
-    var id: String { name }
+    var id: String {
+        BaseExactIdentity.key(prefix: "builder-formula", components: [name])
+    }
+
+    static func == (lhs: BaseQueryFormula, rhs: BaseQueryFormula) -> Bool {
+        BaseExactIdentity.matches(lhs.name, rhs.name)
+            && BaseExactIdentity.matches(lhs.expression, rhs.expression)
+            && BaseExactIdentity.matches(lhs.expressionJSON, rhs.expressionJSON)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        BaseExactIdentity.hash(name, into: &hasher)
+        BaseExactIdentity.hash(expression, into: &hasher)
+        BaseExactIdentity.hash(expressionJSON, into: &hasher)
+    }
 
     init(name: String, expression: String, expressionJSON: String) throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1238,7 +1458,8 @@ struct BaseQueryBuilderDraft: Equatable {
         var edits: [BaseEdit] = []
         let filtersChanged = previous.map {
             source != $0.source
-                || localFilterSemanticSignature != $0.localFilterSemanticSignature
+                || !BaseExactIdentity.matches(
+                    localFilterSemanticSignature, $0.localFilterSemanticSignature)
         } ?? true
         if filtersChanged {
             if let viewFilterYAML = try encodedViewFilterYAML() {
@@ -1260,29 +1481,36 @@ struct BaseQueryBuilderDraft: Equatable {
         } else if previous?.source == .tasks {
             edits.append(.removeViewKey(view: view, key: "source"))
         }
-        if previous?.groupBySignature != groupBySignature || previous == nil {
+        if previous == nil
+            || !BaseExactIdentity.matches(previous?.groupBySignature, groupBySignature)
+        {
             if let groupBy {
                 edits.append(.setViewKey(view: view, key: "groupBy", value: groupBy.yamlFragment))
             } else if opaqueGroupByJSON != nil {
-                guard previous?.opaqueGroupByJSON == opaqueGroupByJSON else {
+                guard BaseExactIdentity.matches(
+                    previous?.opaqueGroupByJSON, opaqueGroupByJSON)
+                else {
                     throw BaseQueryBuilderError.cannotEncodeQuery
                 }
             } else if previous?.groupBySignature != nil {
                 edits.append(.removeViewKey(view: view, key: "groupBy"))
             }
         }
-        if previous?.effectiveOrderIDs != effectiveOrderIDs || previous == nil {
+        if previous?.effectiveOrderIdentityKeys != effectiveOrderIdentityKeys || previous == nil {
             edits.append(.setViewKey(view: view, key: "order", value: orderYAMLFragment))
         }
         if let previous {
-            let currentFormulaNames = Set(formulas.map(\.name))
-            for formula in previous.formulas where !currentFormulaNames.contains(formula.name) {
+            let currentFormulaNames = Set(formulas.map(\.id))
+            for formula in previous.formulas where !currentFormulaNames.contains(formula.id) {
                 edits.append(.removeFormula(name: formula.name))
             }
         }
         let previousFormulaJSON = previous.map { Self.formulaJSONMap(for: $0.formulas) } ?? [:]
         for formula in formulas
-        where previous == nil || previousFormulaJSON[formula.name] != formula.expressionJSON {
+        where previous == nil
+            || !BaseExactIdentity.matches(
+                previousFormulaJSON[formula.id], formula.expressionJSON)
+        {
             edits.append(.setFormula(name: formula.name, expression: formula.expression))
         }
         let previousDisplayNames = previous.map { displayNameMap(for: $0.columns) } ?? [:]
@@ -1292,7 +1520,9 @@ struct BaseQueryBuilderDraft: Equatable {
                 if let displayName {
                     edits.append(.setDisplayName(property: column.id, displayName: displayName))
                 }
-            } else if previousDisplayNames[column.id] != displayName {
+            } else if !BaseExactIdentity.matches(
+                previousDisplayNames[Self.columnIdentityKey(column.id)], displayName)
+            {
                 edits.append(.setDisplayName(property: column.id, displayName: displayName))
             }
         }
@@ -1352,8 +1582,10 @@ struct BaseQueryBuilderDraft: Equatable {
         return selected.map(\.queryJSON)
     }
 
-    private var effectiveOrderIDs: [String] {
-        (columns.isEmpty ? defaultColumnSelections : columns).map(\.id)
+    private var effectiveOrderIdentityKeys: [String] {
+        (columns.isEmpty ? defaultColumnSelections : columns).map {
+            Self.columnIdentityKey($0.id)
+        }
     }
 
     private var defaultColumnSelections: [BaseQueryColumn] {
@@ -1423,15 +1655,19 @@ struct BaseQueryBuilderDraft: Equatable {
     private func displayNameMap(for columns: [BaseQueryColumn]) -> [String: String] {
         var names: [String: String] = [:]
         for column in columns {
-            names[column.id] = normalizedDisplayName(column.displayName)
+            names[Self.columnIdentityKey(column.id)] = normalizedDisplayName(column.displayName)
         }
         return names
+    }
+
+    private static func columnIdentityKey(_ id: String) -> String {
+        BaseExactIdentity.key(prefix: "builder-column", components: [id])
     }
 
     private static func formulaJSONMap(for formulas: [BaseQueryFormula]) -> [String: String] {
         var map: [String: String] = [:]
         for formula in formulas {
-            map[formula.name] = formula.expressionJSON
+            map[formula.id] = formula.expressionJSON
         }
         return map
     }
@@ -2104,16 +2340,21 @@ final class BaseQueryBuilderModel: ObservableObject {
     @Published var editingRowIndex: Int?
     @Published var previewState: BaseQueryPreviewState = .idle
     let editingSavedQuery: EditingSavedQuery?
+    let editingBaseView: EditingBaseView?
     private var comparisonBaseline: BaseQueryBuilderDraft
 
     init(
         draft: BaseQueryBuilderDraft = BaseQueryBuilderDraft(),
-        editingSavedQuery: EditingSavedQuery? = nil
+        editingSavedQuery: EditingSavedQuery? = nil,
+        editingBaseView: EditingBaseView? = nil
     ) {
         self.draft = draft
         self.editingSavedQuery = editingSavedQuery
+        self.editingBaseView = editingBaseView
         self.comparisonBaseline = draft
     }
+
+    var previewThisPath: String? { editingBaseView?.previewThisPath }
 
     var source: BaseQuerySource {
         get { draft.source }
@@ -2168,8 +2409,17 @@ final class BaseQueryBuilderModel: ObservableObject {
     }
 
     func applyPropertyChoices(_ choices: [BaseQueryPropertyChoice]) {
-        let kinds = Dictionary(uniqueKeysWithValues: choices.map { ($0.property, $0.kind) })
+        var kinds: [BaseQueryProperty: BaseQueryValueKind] = [:]
+        for choice in choices {
+            kinds[choice.property] = choice.kind
+        }
         draft.rows = draft.rows.map { Self.failClosedRow($0, kinds: kinds) }
+    }
+
+    func columnIndex(for property: BaseQueryProperty) -> Int? {
+        draft.columns.firstIndex {
+            BaseExactIdentity.matches($0.id, property.sourceExpression)
+        }
     }
 
     private static func failClosedRow(
@@ -2197,8 +2447,8 @@ final class BaseQueryBuilderModel: ObservableObject {
 
     func removeFormula(named name: String) {
         let columnID = "formula.\(name)"
-        draft.formulas.removeAll { $0.name == name }
-        draft.columns.removeAll { $0.id == columnID }
+        draft.formulas.removeAll { BaseExactIdentity.matches($0.name, name) }
+        draft.columns.removeAll { BaseExactIdentity.matches($0.id, columnID) }
         draft.sortKeys.removeAll { sortKey in
             sortKey.referencesFormula(named: name)
         }

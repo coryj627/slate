@@ -126,10 +126,20 @@ final class WorkspaceState: ObservableObject {
         model.activeGroup.tabs.first { $0.item.path == path }
     }
 
+    /// The `.base` tab in the active group whose path has the exact UTF-8
+    /// identity used by SQLite. Base paths must not use Swift's canonical
+    /// Unicode equivalence because Core can store both byte-distinct names.
+    func activeGroupBaseTab(forPath path: String) -> WorkspaceTab? {
+        model.activeGroup.tabs.first {
+            guard case .base(let candidate) = $0.item else { return false }
+            return BaseExactIdentity.matches(candidate, path)
+        }
+    }
+
     func activeGroupSavedQueryTab(id: String) -> WorkspaceTab? {
         model.activeGroup.tabs.first {
             if case .savedQuery(let queryID, _) = $0.item {
-                return queryID == id
+                return BaseExactIdentity.matches(queryID, id)
             }
             return false
         }
@@ -138,7 +148,7 @@ final class WorkspaceState: ObservableObject {
     func activeGroupDashboardTab(id: String) -> WorkspaceTab? {
         model.activeGroup.tabs.first {
             if case .dashboard(let dashboardID, _) = $0.item {
-                return dashboardID == id
+                return BaseExactIdentity.matches(dashboardID, id)
             }
             return false
         }
@@ -253,7 +263,12 @@ final class WorkspaceState: ObservableObject {
     /// A no-op (`old == new`, or the file isn't open anywhere) returns `[]`.
     @discardableResult
     func retarget(old: String, new: String) -> [TabID] {
-        guard old != new else { return [] }
+        let crossesBaseBoundary = old.lowercased().hasSuffix(".base")
+            || new.lowercased().hasSuffix(".base")
+        let isSamePath = crossesBaseBoundary
+            ? BaseExactIdentity.matches(old, new)
+            : old == new
+        guard !isSamePath else { return [] }
         var changed = model.retargetItem(
             from: .markdown(path: old), to: .markdown(path: new))
         changed += model.retargetItem(

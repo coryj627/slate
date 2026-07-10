@@ -217,6 +217,29 @@ final class RightPaneViewTests: XCTestCase {
             "nonempty-to-empty is a membership change")
     }
 
+    func testBaseRowIdentityKeepsCanonicallyEquivalentUTF8PathsDistinct() {
+        let composed = BasesRow(
+            filePath: "é.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "composed")
+        let decomposed = BasesRow(
+            filePath: "e\u{301}.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "decomposed")
+
+        XCTAssertFalse(BaseExactIdentity.matches(composed.filePath, decomposed.filePath))
+        XCTAssertFalse(composed.hasSameBaseIdentity(as: decomposed))
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: [composed]),
+            BaseRowMembership(rows: [decomposed]),
+            "membership announcements must use Rust/filesystem byte identity")
+        XCTAssertNotEqual(
+            BaseRowMembership.Identity(path: composed.filePath, taskOrdinal: nil),
+            BaseRowMembership.Identity(path: decomposed.filePath, taskOrdinal: nil))
+    }
+
     func testBasesDockBaselinePublishesEmptyThenDetectsMultisetChanges() {
         let alpha = BasesRow(
             filePath: "Notes/Alpha.md",

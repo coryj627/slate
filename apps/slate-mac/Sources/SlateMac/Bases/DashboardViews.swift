@@ -76,6 +76,7 @@ private struct DashboardSectionView: View {
     let onRemove: () -> Void
     let onReplace: (String) -> Void
     @State private var showingReplacementPicker = false
+    @State private var gridInteraction = BaseGridInteractionState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
@@ -97,7 +98,7 @@ private struct DashboardSectionView: View {
         case .missing:
             missingSection
         case .failed(let message):
-            placeholder(message)
+            failureBanner(message)
         case .ready:
             if let result = section.result {
                 switch BaseResultContentState(result: result) {
@@ -106,7 +107,9 @@ private struct DashboardSectionView: View {
                 case .rowOnly, .tabular:
                     BaseReadOnlyResultView(
                         result: result,
-                        accessibilityLabel: "\(section.title) grid")
+                        accessibilityLabel: "\(section.title) grid",
+                        rendererOverride: section.resolvedRenderer,
+                        interaction: $gridInteraction)
                         .frame(minHeight: 160)
                 }
             } else {
@@ -166,6 +169,21 @@ private struct DashboardSectionView: View {
         }
     }
 
+    private func failureBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
+            SlateSymbol.warning.decorative
+            Text(message)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
+            Spacer(minLength: 0)
+        }
+        .padding(Tokens.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.ColorRole.surfaceSecondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Dashboard section error: \(message)")
+    }
+
     private func placeholder(_ text: String) -> some View {
         Text(text)
             .font(Tokens.Typography.caption)
@@ -177,6 +195,7 @@ private struct DashboardSectionView: View {
 
 struct BasesDockPanel: View {
     @EnvironmentObject private var appState: AppState
+    @State private var gridInteraction = BaseGridInteractionState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -189,6 +208,9 @@ struct BasesDockPanel: View {
         }
         .onChange(of: appState.selectedFilePath) {
             appState.scheduleBasesDockFollowActiveRefresh()
+        }
+        .onChange(of: appState.basesDock.target) {
+            gridInteraction.reconcile(with: nil)
         }
     }
 
@@ -256,7 +278,8 @@ struct BasesDockPanel: View {
                             .accessibilityAddTraits(.isHeader)
                         BaseReadOnlyResultView(
                             result: result,
-                            accessibilityLabel: "\(doc.displayName) grid")
+                            accessibilityLabel: "\(doc.displayName) grid",
+                            interaction: $gridInteraction)
                     }
                     .padding(Tokens.Spacing.md)
                 }
@@ -279,38 +302,91 @@ struct BasesDockPanel: View {
 struct BaseReadOnlyResultView: View {
     let result: BasesResultSet
     let accessibilityLabel: String
-    @State private var selectedRow: String?
-    @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
-    @State private var sortState: DataGridSortState?
+    let rendererOverride: BaseRendererMode?
+    let interaction: Binding<BaseGridInteractionState>
+
+    init(
+        result: BasesResultSet,
+        accessibilityLabel: String,
+        rendererOverride: BaseRendererMode? = nil,
+        interaction: Binding<BaseGridInteractionState> = .constant(BaseGridInteractionState())
+    ) {
+        self.result = result
+        self.accessibilityLabel = accessibilityLabel
+        self.rendererOverride = rendererOverride
+        self.interaction = interaction
+    }
 
     @ViewBuilder
     var body: some View {
-        switch BaseResultContentState(result: result) {
-        case .empty:
-            EmptyView()
-        case .rowOnly:
-            BaseListView(
-                projection: BaseListProjection(
-                    result: result,
-                    options: BaseListOptions(slateStateJson: nil)),
-                selection: $selectedRow,
-                onActivate: { _ in },
-                rowActions: [])
-        case .tabular:
-            AccessibleDataGrid(
-                columns: columns,
-                rows: rows,
-                summary: BaseSummaryFormatter.summaryText(result),
-                accessibilityLabel: accessibilityLabel,
-                groups: groups,
-                selection: $selectedRow,
-                cellSelection: $selectedCell,
-                sortState: $sortState,
-                cellNavigation: true,
-                onActivate: { _ in },
-                rowAccessibilityDescription: { $0.row.audioDescription },
-                rowActions: [])
+        Group {
+            switch BaseResultContentState(result: result) {
+            case .empty:
+                EmptyView()
+            case .rowOnly:
+                resultList
+            case .tabular:
+                if rendererOverride == .list {
+                    resultList
+                } else {
+                    resultGrid
+                }
+            }
         }
+        .onAppear { updateInteraction { $0.reconcile(with: result) } }
+        .onChange(of: result) { _, result in
+            updateInteraction { $0.reconcile(with: result) }
+        }
+    }
+
+    private var resultList: some View {
+        BaseListView(
+            projection: BaseListProjection(
+                result: result,
+                options: BaseListOptions(slateStateJson: nil)),
+            selection: Binding(
+                get: { interaction.wrappedValue.selectedRowID },
+                set: { rowID in
+                    updateInteraction { $0.setSelectedRowID(rowID, in: result) }
+                }),
+            onActivate: { _ in },
+            rowActions: [])
+    }
+
+    private var resultGrid: some View {
+        AccessibleDataGrid(
+            columns: columns,
+            rows: rows,
+            summary: BaseSummaryFormatter.summaryText(result),
+            accessibilityLabel: accessibilityLabel,
+            groups: groups,
+            selection: Binding(
+                get: { interaction.wrappedValue.selectedRowID },
+                set: { rowID in
+                    updateInteraction { $0.setSelectedRowID(rowID, in: result) }
+                }),
+            cellSelection: Binding(
+                get: { interaction.wrappedValue.cellPosition(in: result) },
+                set: { position in
+                    updateInteraction { $0.setCellPosition(position, in: result) }
+                }),
+            sortState: Binding(
+                get: { interaction.wrappedValue.sortState(in: result) },
+                set: { sortState in
+                    updateInteraction { $0.setSortState(sortState, in: result) }
+                }),
+            cellNavigation: true,
+            onActivate: { _ in },
+            rowAccessibilityDescription: { $0.row.audioDescription },
+            rowActions: [])
+    }
+
+    private func updateInteraction(
+        _ update: (inout BaseGridInteractionState) -> Void
+    ) {
+        var value = interaction.wrappedValue
+        update(&value)
+        interaction.wrappedValue = value
     }
 
     private var columns: [AccessibleDataGrid<BaseGridRow>.Column] {
@@ -318,11 +394,8 @@ struct BaseReadOnlyResultView: View {
             AccessibleDataGrid<BaseGridRow>.Column(
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
-                sort: { lhs, rhs in
-                    let ascending = sortState?.ascending ?? true
-                    return ascending
-                        ? lhs.sortsBefore(rhs, at: columnIndex, ascending: true)
-                        : rhs.sortsBefore(lhs, at: columnIndex, ascending: false)
+                directionalSort: { lhs, rhs, ascending in
+                    lhs.sortsBefore(rhs, at: columnIndex, ascending: ascending)
                 })
         }
     }

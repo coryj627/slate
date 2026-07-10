@@ -523,7 +523,7 @@ SORT status ASC
         query.filters.as_ref().expect("task filters")
     ));
     assert!(matches!(
-        query.sort[0].expr.kind,
+        dql_sort_expr(&query.sort[0].expr).kind,
         ExprKind::Prop(PropertyRef::TaskField(TaskField::Status))
     ));
 }
@@ -728,8 +728,9 @@ fn dql_file_link_fields_recombine_embeds_and_deduplicate_incoming_pages() {
         None,
     );
     assert!(matches!(first_value(&outgoing, 0), Value::List(values)
-        if matches!(&values[..], [Value::Link(first), Value::Link(second), Value::Link(third)]
-            if first.target == "Target" && second.target == "Other" && third.target == "Target")));
+        if matches!(&values[..], [Value::Link(first), Value::Link(second)]
+            if first.target == "Target" && first.embed
+                && second.target == "Other" && !second.embed)));
 
     let incoming = execute_dql(
         &conn,
@@ -773,6 +774,116 @@ fn dql_file_link_fields_recombine_embeds_and_deduplicate_incoming_pages() {
         target.cells.first(),
         Some(CellValue::Value(Value::Number(3.0)))
     ));
+}
+
+#[test]
+fn dql_command_sort_uses_dql_null_ordering() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(
+        &conn,
+        "TABLE WITHOUT ID file.path AS \"Path\"\nSORT priority ASC\n",
+        None,
+    );
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result.rows.last().map(|row| row.path.as_str()),
+        Some("Hub.md"),
+        "DQL nulls sort before the one numeric priority value"
+    );
+}
+
+#[test]
+fn dql_command_sort_totalizes_mixed_finite_and_nan_keys() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(
+        &conn,
+        r#"TABLE WITHOUT ID file.path AS "Path"
+WHERE file.path = "123.md" OR file.path = "Hub.md" OR file.path = "Target.md"
+SORT choice(file.path = "123.md", 0 / 0, 1) ASC
+"#,
+        None,
+    );
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        row_paths(&result),
+        ["Hub.md", "Target.md", "123.md"],
+        "finite keys must use their representable DQL order and NaN must use the deterministic total fallback"
+    );
+}
+
+#[test]
+fn dql_command_sort_totalizes_equal_casual_durations_by_structure() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(
+        &conn,
+        r#"TABLE WITHOUT ID file.path AS "Path"
+WHERE file.path = "123.md" OR file.path = "Hub.md"
+SORT choice(file.path = "123.md", dur("1month"), dur("30days")) ASC
+"#,
+        None,
+    );
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        row_paths(&result),
+        ["Hub.md", "123.md"],
+        "equal casual milliseconds with distinct duration structure need one stable order"
+    );
+}
+
+#[test]
+fn dql_command_sort_totalizes_inconsistent_nested_values() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(
+        &conn,
+        r#"TABLE WITHOUT ID file.path AS "Path"
+WHERE file.path = "123.md" OR file.path = "Hub.md"
+SORT choice(file.path = "123.md", [0 / 0], [1]) ASC
+"#,
+        None,
+    );
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        row_paths(&result),
+        ["Hub.md", "123.md"],
+        "nested DQL keys must inherit the same deterministic total fallback"
+    );
+}
+
+#[test]
+fn dql_command_sort_fails_loud_when_locale_collation_is_unrepresentable() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(
+        &conn,
+        "TABLE WITHOUT ID file.path AS \"Path\"\nSORT file.path ASC\n",
+        None,
+    );
+
+    let error = result.error.expect("DQL SORT must fail the view loudly");
+    assert!(
+        error.construct.contains("DQL SORT") && error.construct.contains("locale collation"),
+        "unexpected DQL SORT failure: {error:?}"
+    );
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn dql_command_sort_validates_unrepresentable_keys_even_for_one_row() {
+    let conn = dql_fixture_conn();
+    let result = execute_dql(
+        &conn,
+        "TABLE WITHOUT ID file.path AS \"Path\"\nWHERE file.path = \"123.md\"\nSORT file.path ASC\n",
+        None,
+    );
+
+    assert_fail_loud(
+        &result,
+        "DQL locale collation",
+        "single-row DQL command sort",
+    );
 }
 
 #[test]
@@ -1418,7 +1529,6 @@ fn dql_inline_links_resolve_from_the_owning_row_without_changing_query_link_cont
         &conn,
         r#"TABLE WITHOUT ID sibling AS "Stored", link("Target") AS "Query"
 WHERE file.path = "A/Owner.md" OR file.path = "B/Owner.md"
-SORT file.path ASC
 "#,
         Some("B/View.base"),
     );
@@ -2313,12 +2423,10 @@ WHERE file.path = "123.md"
     assert!(matches!(
         first_value(&outlinks, 0),
         Value::List(values)
-            if values.iter().any(|value| matches!(
-                value,
-                Value::Link(link)
-                    if link.link_type == "header"
-                        && link.subpath.as_deref() == Some("Hello world")
-            ))
+            if matches!(values.as_slice(), [Value::Link(link)]
+                if link.target == "Target"
+                    && link.link_type == "file"
+                    && link.subpath.is_none())
     ));
 
     let (source, warnings) = parse_dql("LIST\nFROM [[A\\|B|shown]]\n");
@@ -3938,7 +4046,7 @@ fn census_bases_dql_golden_corpus_executes_or_fails_loud() {
     );
     assert_eq!(
         disposition_counts,
-        (48, 117, 5),
+        (45, 117, 8),
         "checked-in DQL disposition census changed; review and bless the inventory explicitly"
     );
     let case_names = cases
@@ -4268,14 +4376,14 @@ fn generated_dql_case(seed: u64, case_index: usize) -> GeneratedDqlCase {
                 vec!["Hub.md#1".to_string(), "Hub.md#2".to_string()]
             } else {
                 vec![
-                    "Target.md#1".to_string(),
                     "Hub.md#0".to_string(),
                     "Target.md#0".to_string(),
+                    "Target.md#1".to_string(),
                 ]
             };
             GeneratedDqlCase {
                 operation: "tasks",
-                source: format!("TASK\nWHERE {predicate}\nSORT text ASC\n"),
+                source: format!("TASK\nWHERE {predicate}\nSORT due ASC\n"),
                 this_path: None,
                 expectation: GeneratedExpectation::Supported {
                     cells: vec![Vec::new(); rows.len()],
@@ -4516,7 +4624,7 @@ fn dql_query_semantic_signature(query: &SlateQuery) -> String {
         .map(|key| {
             format!(
                 "{}:{}",
-                dql_expr_semantic_signature(&key.expr),
+                dql_expr_semantic_signature(dql_sort_expr(&key.expr)),
                 if key.ascending { "asc" } else { "desc" }
             )
         })
@@ -4539,6 +4647,20 @@ fn dql_query_semantic_signature(query: &SlateQuery) -> String {
         "source={:?};rows={:?};view={:?};filters={filters};formulas=[{formulas}];custom=[{custom_summaries}];group={:?};sort=[{sort}];columns=[{columns}];summaries={:?};limit={:?}",
         query.source, query.row_source, query.view, query.group_by, query.summaries, query.limit
     )
+}
+
+fn dql_sort_expr(expr: &Expr) -> &Expr {
+    let ExprKind::Lit(Lit::Object(entries)) = &expr.kind else {
+        return expr;
+    };
+    let [(key, value)] = entries.as_slice() else {
+        return expr;
+    };
+    if key == "\u{f8ff}slate.dql.command-sort" {
+        value
+    } else {
+        expr
+    }
 }
 
 fn dql_filter_semantic_signature(filter: &FilterNode) -> String {

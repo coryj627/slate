@@ -130,8 +130,8 @@ struct BaseListProjection: Equatable {
 }
 
 struct BaseListDisplayModel: Equatable {
-    struct Row: Equatable {
-        enum Kind: Equatable {
+    struct Row: Equatable, Hashable {
+        enum Kind: Equatable, Hashable {
             case section
             case item
             case detail
