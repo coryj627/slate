@@ -450,7 +450,7 @@ fn split_wikilink_body(body: &str) -> (String, Option<String>, Option<LinkAnchor
 
     // Normalize empty display to None so downstream callers don't have
     // to distinguish "no pipe" from "empty after pipe".
-    let display = display.and_then(|d| if d.is_empty() { None } else { Some(d) });
+    let display = display.filter(|d| !d.is_empty());
     (target, display, anchor)
 }
 

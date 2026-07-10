@@ -3886,7 +3886,7 @@ fn dql_sort_values(values: &mut [Value], function: &str) -> Result<(), EvalError
     Ok(())
 }
 
-fn link_identity(link: &LinkValue) -> &str {
+pub(super) fn link_identity(link: &LinkValue) -> &str {
     link.resolved_path
         .as_deref()
         .unwrap_or(link.target.as_str())

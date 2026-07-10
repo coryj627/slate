@@ -23,7 +23,7 @@ use super::{
     eval::{
         DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext,
         TaskRow, Value, VaultLookup, WarningSink, compare_dql_command_sort_values,
-        dql_command_sort_value, eval,
+        dql_command_sort_value, eval, link_identity,
     },
     expr::{
         BinaryOp, Callee, Expr, ExprKind, FileField, GlobalFn, Lit, MethodName, PropertyRef,
@@ -2709,7 +2709,7 @@ fn value_key(value: &Value) -> String {
             )
         }
         Value::Text(value) => format!("text:{value}"),
-        Value::Link(value) => format!("link:{}:{:?}", value.target, value.resolved_path),
+        Value::Link(value) => format!("link:{}", link_identity(value)),
         Value::File(value) => format!("file:{}", value.path),
         Value::Regex(pattern, flags) => format!("regex:{pattern}/{flags}"),
         Value::List(values) => format!(
@@ -3811,6 +3811,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn resolved_equivalent_links_share_native_semantic_keys() {
+        let link = |target: &str| {
+            Value::Link(LinkValue {
+                target: target.to_string(),
+                display: None,
+                resolved_path: Some("Notes/Target.md".to_string()),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: false,
+            })
+        };
+        let authored = link("Target");
+        let canonical = link("Notes/Target.md");
+
+        assert_eq!(
+            compare_non_null_values(&authored, &canonical),
+            Ordering::Equal,
+            "authored and canonical targets resolving to one file must sort equally"
+        );
+        assert_eq!(
+            value_sort_key(&authored),
+            value_sort_key(&canonical),
+            "mirrored sort keys must use the same resolved-first identity"
+        );
+        let unique_keys = [authored, canonical]
+            .iter()
+            .map(value_key)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique_keys.len(),
+            1,
+            "resolved-equivalent links must count as one unique value"
+        );
     }
 
     #[test]
