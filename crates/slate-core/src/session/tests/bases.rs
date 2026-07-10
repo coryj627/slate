@@ -1311,7 +1311,7 @@ views:
             .iter()
             .map(|r| r.values[0].display.as_str())
             .collect::<Vec<_>>(),
-        vec!["Alpha.md", "Beta.md"]
+        vec!["Alpha", "Beta"]
     );
 }
 
@@ -2042,7 +2042,7 @@ fn save_query_as_base_and_dql_as_base_write_canonical_executable_base() {
             .iter()
             .map(|r| r.values[0].display.as_str())
             .collect::<Vec<_>>(),
-        vec!["Alpha.md", "Beta.md"]
+        vec!["Alpha", "Beta"]
     );
 
     let converted = session.dql_as_base(dql).unwrap();
@@ -3562,7 +3562,7 @@ fn n4_closeout_fixture_vault_e2e() {
         .unwrap();
     assert_eq!(
         converted,
-        "filters: \"file.file.inFolder(\\\"Notes\\\")\"\nformulas:\n  dql_column_1: \"file.name\"\nproperties:\n  formula.dql_column_1:\n    displayName: Name\nviews:\n  - type: table\n    name: Query\n    order:\n      - formula.dql_column_1\n"
+        "filters: \"file.file.inFolder(\\\"Notes\\\")\"\nformulas:\n  dql_column_1: \"object(\\\"\u{f8ff}slate.dql.file-name\\\", file.path).toString()\"\nproperties:\n  formula.dql_column_1:\n    displayName: Name\nviews:\n  - type: table\n    name: Query\n    order:\n      - formula.dql_column_1\n"
     );
     let converted_handle = session.open_base_inline(&converted, None).unwrap();
     let converted_result = session
