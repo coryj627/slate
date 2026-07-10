@@ -289,6 +289,98 @@ struct FormulaEval {
 }
 
 #[derive(Debug, Clone, Default)]
+struct FormulaPlan {
+    dependencies: Vec<BTreeSet<String>>,
+    circular: BTreeSet<String>,
+    unresolvable: BTreeSet<usize>,
+    order: Vec<usize>,
+}
+
+impl FormulaPlan {
+    fn new(query: &SlateQuery) -> Self {
+        let known_names = query
+            .formulas
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<BTreeSet<_>>();
+        let dependencies = query
+            .formulas
+            .iter()
+            .map(|(_, expr)| {
+                let mut dependencies = BTreeSet::new();
+                collect_formula_dependencies(expr, &mut dependencies);
+                dependencies.retain(|name| known_names.contains(name));
+                dependencies
+            })
+            .collect::<Vec<_>>();
+        let dependency_graph = query
+            .formulas
+            .iter()
+            .zip(&dependencies)
+            .map(|((name, _), dependencies)| (name.clone(), dependencies.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let circular = known_names
+            .iter()
+            .filter(|name| formula_reaches(name, name, &dependency_graph, &mut BTreeSet::new()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let mut resolved = circular.clone();
+        let mut pending = query
+            .formulas
+            .iter()
+            .map(|(name, _)| !circular.contains(name))
+            .collect::<Vec<_>>();
+        let mut order = query
+            .formulas
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (name, _))| circular.contains(name).then_some(index))
+            .collect::<Vec<_>>();
+        let mut unresolvable = BTreeSet::new();
+        while pending.iter().any(|pending| *pending) {
+            let mut progressed = false;
+            for (index, (name, _)) in query.formulas.iter().enumerate() {
+                if pending[index]
+                    && dependencies[index]
+                        .iter()
+                        .all(|dependency| resolved.contains(dependency))
+                {
+                    order.push(index);
+                    resolved.insert(name.clone());
+                    pending[index] = false;
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                order.extend(
+                    pending
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(index, pending)| {
+                            if *pending {
+                                *pending = false;
+                                unresolvable.insert(index);
+                                Some(index)
+                            } else {
+                                None
+                            }
+                        }),
+                );
+                break;
+            }
+        }
+
+        Self {
+            dependencies,
+            circular,
+            unresolvable,
+            order,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 struct SqlPlan {
     clauses: Vec<String>,
     params: Vec<String>,
@@ -397,6 +489,7 @@ pub fn execute(
         resolved_query = Some(canonical);
     }
     let query = resolved_query.as_ref().unwrap_or(query);
+    let formula_plan = FormulaPlan::new(query);
     let load_deps = CandidateLoadDeps {
         fts: &fts,
         warnings: &warnings,
@@ -429,8 +522,15 @@ pub fn execute(
             if cancel.is_cancelled() {
                 return Err(VaultError::Cancelled);
             }
-            let formulas =
-                eval_formulas(query, &candidate.row, this.as_ref(), ctx, &vault, &warnings);
+            let formulas = eval_formulas(
+                query,
+                &formula_plan,
+                &candidate.row,
+                this.as_ref(),
+                ctx,
+                &vault,
+                &warnings,
+            );
             if let Some(filters) = &query.filters {
                 if let Some((name, error)) = first_formula_error(filters, &formulas.errors) {
                     return Ok(error_result(
@@ -738,7 +838,9 @@ fn source_predicates(source: &QuerySource, ctx: &EngineCtx<'_>, plan: &mut SqlPl
         QuerySource::Folder(folder) => push_folder_clause(plan, folder),
         QuerySource::Tag(tag) => push_tag_clause(plan, tag),
         QuerySource::Recent { days } => {
-            let cutoff = ctx.now_ms.saturating_sub(*days as i64 * 86_400_000);
+            let lookback_ms = i128::from(*days).saturating_mul(86_400_000);
+            let cutoff = i128::from(ctx.now_ms).saturating_sub(lookback_ms);
+            let cutoff = i64::try_from(cutoff).unwrap_or(i64::MIN);
             plan.clauses.push("mtime_ms >= ?".to_string());
             plan.params.push(cutoff.to_string());
         }
@@ -1554,6 +1656,7 @@ fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, Vault
 
 fn eval_formulas(
     query: &SlateQuery,
+    plan: &FormulaPlan,
     row: &RowContext,
     this: Option<&RowContext>,
     ctx: &EngineCtx<'_>,
@@ -1561,18 +1664,115 @@ fn eval_formulas(
     warnings: &WarningSink,
 ) -> FormulaEval {
     let mut state = FormulaEval::default();
-    for (name, expr) in &query.formulas {
-        let eval_ctx = eval_ctx(row, this, &state.values, ctx, vault, warnings);
-        match eval(expr, &eval_ctx) {
-            Ok(value) => {
-                state.values.insert(name.clone(), value);
-            }
-            Err(error) => {
-                state.errors.insert(name.clone(), error);
+    for index in &plan.order {
+        let (name, expr) = &query.formulas[*index];
+        if plan.circular.contains(name) {
+            state.errors.insert(
+                name.clone(),
+                EvalError::Unsupported {
+                    reason: format!("formula.{name} participates in a circular formula reference"),
+                },
+            );
+            continue;
+        }
+        if plan.unresolvable.contains(index) {
+            state.errors.insert(
+                name.clone(),
+                EvalError::Unsupported {
+                    reason: "unresolvable formula dependency".to_string(),
+                },
+            );
+            continue;
+        }
+
+        if let Some((dependency, error)) = plan.dependencies[*index].iter().find_map(|dependency| {
+            state
+                .errors
+                .get(dependency)
+                .map(|error| (dependency, error))
+        }) {
+            state.errors.insert(
+                name.clone(),
+                EvalError::Unsupported {
+                    reason: format!("formula.{dependency}: {error}"),
+                },
+            );
+        } else {
+            let eval_ctx = eval_ctx(row, this, &state.values, ctx, vault, warnings);
+            match eval(expr, &eval_ctx) {
+                Ok(value) => {
+                    state.values.insert(name.clone(), value);
+                }
+                Err(error) => {
+                    state.errors.insert(name.clone(), error);
+                }
             }
         }
     }
     state
+}
+
+fn formula_reaches(
+    current: &str,
+    target: &str,
+    graph: &BTreeMap<String, BTreeSet<String>>,
+    seen: &mut BTreeSet<String>,
+) -> bool {
+    let Some(dependencies) = graph.get(current) else {
+        return false;
+    };
+    dependencies.iter().any(|dependency| {
+        dependency == target
+            || seen.insert(dependency.clone()) && formula_reaches(dependency, target, graph, seen)
+    })
+}
+
+fn collect_formula_dependencies(expr: &Expr, dependencies: &mut BTreeSet<String>) {
+    match &expr.kind {
+        ExprKind::Prop(PropertyRef::Formula(name)) => {
+            dependencies.insert(name.clone());
+        }
+        ExprKind::Index { base, index }
+        | ExprKind::Binary {
+            lhs: base,
+            rhs: index,
+            ..
+        } => {
+            collect_formula_dependencies(base, dependencies);
+            collect_formula_dependencies(index, dependencies);
+        }
+        ExprKind::Field { base, .. } | ExprKind::Unary { rhs: base, .. } => {
+            collect_formula_dependencies(base, dependencies);
+        }
+        ExprKind::Call { callee, args } => {
+            if let Callee::Method { receiver, .. } = callee {
+                collect_formula_dependencies(receiver, dependencies);
+            }
+            for arg in args {
+                collect_formula_dependencies(arg, dependencies);
+            }
+        }
+        ExprKind::ListExpr {
+            base, body, init, ..
+        } => {
+            collect_formula_dependencies(base, dependencies);
+            collect_formula_dependencies(body, dependencies);
+            if let Some(init) = init {
+                collect_formula_dependencies(init, dependencies);
+            }
+        }
+        ExprKind::Lit(Lit::List(items)) => {
+            for item in items {
+                collect_formula_dependencies(item, dependencies);
+            }
+        }
+        ExprKind::Lit(Lit::Object(items)) => {
+            for (_, value) in items {
+                collect_formula_dependencies(value, dependencies);
+            }
+        }
+        ExprKind::Lit(_) | ExprKind::Prop(_) | ExprKind::Unsupported { .. } => {}
+    }
 }
 
 fn eval_filter(node: &FilterNode, ctx: &EvalCtx<'_>) -> Result<bool, EvalError> {

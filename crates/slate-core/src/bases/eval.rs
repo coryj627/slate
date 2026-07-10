@@ -1977,6 +1977,8 @@ fn format_date(date: DateValue, format: &str) -> Result<String, EvalError> {
             ("MMM", dt.format("%b").to_string())
         } else if rest.starts_with("ddd") {
             ("ddd", dt.format("%a").to_string())
+        } else if rest.starts_with('E') {
+            ("E", dt.weekday().number_from_monday().to_string())
         } else if rest.starts_with("MM") {
             ("MM", format!("{:02}", dt.month()))
         } else if rest.starts_with("DD") {

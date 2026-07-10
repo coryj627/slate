@@ -99,7 +99,8 @@ fn from_sources_support_outgoing_and_boolean_negation() {
     let (linked, linked_warnings) = parse_dql("LIST\nFROM outgoing([[Hub]])\n");
     let (filtered, filtered_warnings) = parse_dql("LIST\nFROM [[Inbox]] or !#done\n");
     let (nested, nested_warnings) = parse_dql("LIST\nFROM (#project and [[Hub]])\n");
-    let (invalid, _invalid_warnings) = parse_dql("LIST\nFROM #tag trailing\n");
+    let invalid_source = "LIST\nFROM #tag trailing\n";
+    let (invalid, invalid_warnings) = parse_dql(invalid_source);
 
     assert_eq!(linked_warnings, []);
     assert_eq!(
@@ -118,6 +119,35 @@ fn from_sources_support_outgoing_and_boolean_negation() {
         invalid.filters.as_ref().expect("invalid source filter"),
         "invalid FROM source"
     ));
+    assert_eq!(invalid_warnings.len(), 1);
+    assert_eq!(invalid_warnings[0].kind, DqlWarningKind::InvalidExpression);
+    assert!(invalid_warnings[0].message.contains("invalid FROM source"));
+    assert!(invalid_warnings[0].message.contains("#tag trailing"));
+    assert_eq!(invalid_warnings[0].span.start, 10);
+    assert_eq!(invalid_warnings[0].span.end, 23);
+
+    let (unknown, unknown_warnings) = parse_dql("LIST\nFROM mystery(\"x\")\n");
+    assert!(filter_has_unsupported_reason(
+        unknown.filters.as_ref().expect("unknown source filter"),
+        "invalid FROM source"
+    ));
+    assert_eq!(unknown_warnings.len(), 1);
+    assert_eq!(unknown_warnings[0].kind, DqlWarningKind::InvalidExpression);
+    assert!(unknown_warnings[0].message.contains("mystery(\"x\")"));
+    assert_eq!(unknown_warnings[0].span.start, 10);
+    assert_eq!(unknown_warnings[0].span.end, 22);
+
+    let (empty_tag, empty_tag_warnings) = parse_dql("LIST\nFROM #\n");
+    assert!(filter_has_unsupported_reason(
+        empty_tag.filters.as_ref().expect("empty tag source filter"),
+        "invalid FROM source"
+    ));
+    assert_eq!(empty_tag_warnings.len(), 1);
+    assert!(
+        empty_tag_warnings[0]
+            .message
+            .contains("invalid FROM source")
+    );
 }
 
 #[test]
@@ -435,6 +465,47 @@ WHERE file.mtime >= date(sow) AND file.mtime <= date(eoy)
         null_query.filters.as_ref().expect("null filter"),
         "DQL null literal is unsupported; guard with typeof"
     ));
+}
+
+#[test]
+fn week_shorthands_execute_with_monday_through_sunday_boundaries() {
+    const PREVIOUS_SUNDAY_MS: i64 = 1_783_209_600_000;
+    const MONDAY_MS: i64 = 1_783_296_000_000;
+    const WEDNESDAY_MS: i64 = 1_783_468_800_000;
+    const SUNDAY_MS: i64 = 1_783_814_400_000;
+    const NEXT_MONDAY_MS: i64 = 1_783_900_800_000;
+
+    let conn = dql_fixture_conn();
+    for (path, mtime_ms) in [
+        ("Hub.md", MONDAY_MS),
+        ("Target.md", SUNDAY_MS),
+        ("Other.md", PREVIOUS_SUNDAY_MS),
+        ("123.md", NEXT_MONDAY_MS),
+    ] {
+        conn.execute(
+            "UPDATE files SET mtime_ms = ?1 WHERE path = ?2",
+            params![mtime_ms, path],
+        )
+        .expect("set week-boundary fixture mtime");
+    }
+
+    let (query, warnings) = parse_dql(
+        "TABLE WITHOUT ID file.path\nWHERE file.mtime >= date(sow) AND file.mtime <= date(eow)\n",
+    );
+    let result = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            now_ms: WEDNESDAY_MS,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute DQL week shorthand query");
+
+    assert_eq!(warnings, []);
+    assert_eq!(result.error, None);
+    assert_eq!(row_paths(&result), ["Hub.md", "Target.md"]);
 }
 
 #[test]

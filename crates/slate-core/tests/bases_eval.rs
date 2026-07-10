@@ -106,9 +106,25 @@ fn structural_problems_fail_loud() {
         Err(EvalError::InvalidArgument { .. })
     ));
     assert!(matches!(
-        eval_src("today().format(\"E\")", &ctx),
+        eval_src("today().format(\"Q\")", &ctx),
         Err(EvalError::UnsupportedFormatToken { .. })
     ));
+}
+
+#[test]
+fn date_format_supports_iso_weekdays() {
+    assert_eq!(
+        value(r#"date("2026-07-06").format("E")"#),
+        Value::Text("1".to_string())
+    );
+    assert_eq!(
+        value(r#"date("2026-07-08").format("E")"#),
+        Value::Text("3".to_string())
+    );
+    assert_eq!(
+        value(r#"date("2026-07-12").format("E")"#),
+        Value::Text("7".to_string())
+    );
 }
 
 #[test]

@@ -159,7 +159,11 @@ pub fn parse_dql(source: &str) -> (SlateQuery, Vec<DqlWarning>) {
                 continue;
             }
             from_seen = true;
-            let parsed = parse_source(rest.trim(), line.start + line.text.len() - rest.len());
+            let parsed = parse_source(
+                rest.trim(),
+                line.start + line.text.len() - rest.len(),
+                &mut warnings,
+            );
             query.source = parsed.source.unwrap_or(QuerySource::All);
             if let Some(filter) = parsed.filter {
                 filters.push(filter);
@@ -506,7 +510,7 @@ fn parse_limit(
     }
 }
 
-fn parse_source(source: &str, offset: usize) -> SourceParse {
+fn parse_source(source: &str, offset: usize, warnings: &mut Vec<DqlWarning>) -> SourceParse {
     if let Some(link) =
         parse_standalone_outgoing(source).filter(|link| !link.is_empty() && link != "#")
     {
@@ -530,14 +534,23 @@ fn parse_source(source: &str, offset: usize) -> SourceParse {
             source: None,
             filter: Some(filter),
         },
-        _ => SourceParse {
-            source: None,
-            filter: Some(unsupported_filter(
-                source,
-                "invalid FROM source",
-                span(offset, offset + source.len()),
-            )),
-        },
+        _ => {
+            let source_span = span(offset, offset + source.len());
+            push_warning(
+                warnings,
+                DqlWarningKind::InvalidExpression,
+                format!("invalid FROM source: {source}"),
+                source_span,
+            );
+            SourceParse {
+                source: None,
+                filter: Some(unsupported_filter(
+                    source,
+                    "invalid FROM source",
+                    source_span,
+                )),
+            }
+        }
     }
 }
 
@@ -609,6 +622,9 @@ impl<'a> SourceParser<'a> {
                 self.pos += 1;
             }
             let tag = &self.source[start + 1..self.pos];
+            if tag.is_empty() {
+                return None;
+            }
             return Some(expr_filter(
                 &format!("file.hasTag({})", quote_expr_string(tag)),
                 self.offset + start,

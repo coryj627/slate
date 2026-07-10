@@ -1009,6 +1009,94 @@ fn column_formula_errors_poison_cells_without_failing_view() {
 }
 
 #[test]
+fn formulas_evaluate_in_dependency_order_not_declaration_order() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.formulas = vec![
+        ("visible".to_string(), expr("formula.adjusted_rating > 5")),
+        (
+            "adjusted_rating".to_string(),
+            expr("formula.base_rating + 1"),
+        ),
+        ("base_rating".to_string(), expr("rating + 1")),
+    ];
+    query.filters = Some(stmt("formula.visible"));
+    query.columns = vec![
+        column("formula.base_rating"),
+        column("formula.adjusted_rating"),
+        column("formula.visible"),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute forward formula dependency query");
+    let mut dependency_first = query.clone();
+    dependency_first.formulas.reverse();
+    let dependency_first_result = execute(
+        &dependency_first,
+        &conn,
+        &EngineCtx::default(),
+        &CancelToken::new(),
+    )
+    .expect("execute dependency-first formula query");
+
+    assert_eq!(result.error, None);
+    assert!(result.warnings.is_empty());
+    assert_eq!(result.rows, dependency_first_result.rows);
+    assert_eq!(result.warnings, dependency_first_result.warnings);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| (row.path.as_str(), row.cells.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "Notes/Gamma.md",
+                vec![
+                    CellValue::Value(Value::Number(6.0)),
+                    CellValue::Value(Value::Number(7.0)),
+                    CellValue::Value(Value::Bool(true)),
+                ],
+            ),
+            (
+                "Projects/Alpha.md",
+                vec![
+                    CellValue::Value(Value::Number(5.5)),
+                    CellValue::Value(Value::Number(6.5)),
+                    CellValue::Value(Value::Bool(true)),
+                ],
+            ),
+        ]
+    );
+}
+
+#[test]
+fn circular_formula_dependencies_fail_loudly_and_deterministically() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.formulas = vec![
+        ("a".to_string(), expr("formula.b + 1")),
+        ("b".to_string(), expr("formula.a + 1")),
+    ];
+    query.filters = Some(stmt("formula.a > 0"));
+    query.columns = vec![column("file.path")];
+
+    let first = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute first circular formula query");
+    let second = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute second circular formula query");
+
+    let error = first.error.as_ref().expect("circular formula fails view");
+    assert!(error.construct.contains("formula.a"), "{error:?}");
+    assert!(error.construct.contains("circular formula"), "{error:?}");
+    assert!(first.rows.is_empty());
+    assert_eq!(first.error, second.error);
+    assert_eq!(first.warnings, second.warnings);
+}
+
+#[test]
 fn aliases_are_loaded_from_the_indexed_property() {
     let conn = migrated_conn();
     seed_index(&conn);
@@ -1182,6 +1270,33 @@ fn temporal_sources_and_custom_summaries_never_cache() {
     ));
     assert!(!first_summary.cache_hit);
     assert!(!second_summary.cache_hit);
+}
+
+#[test]
+fn recent_source_saturates_extreme_day_cutoffs() {
+    const DAY_MS: u64 = 86_400_000;
+    let conn = migrated_conn();
+    seed_index(&conn);
+
+    for days in [(i64::MAX as u64 / DAY_MS) + 1, u64::MAX] {
+        let mut recent = query();
+        recent.source = QuerySource::Recent { days };
+        recent.columns = vec![column("file.path")];
+
+        let result = execute(
+            &recent,
+            &conn,
+            &EngineCtx {
+                now_ms: 10_000,
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("execute Recent({days}) source: {error}"));
+
+        assert_eq!(result.error, None, "days={days}");
+        assert_eq!(result.total_count, 3, "days={days}");
+    }
 }
 
 #[test]
