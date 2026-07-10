@@ -274,6 +274,27 @@ final class RightPaneViewTests: XCTestCase {
             source)
     }
 
+    func testDashboardUsesExplicitH1AndH2HeadingLevelsAlongsideHeaderTraits() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/DashboardViews.swift")
+        let titleStart = try XCTUnwrap(source.range(of: "Text(document.name)"))
+        let titleEnd = try XCTUnwrap(
+            source.range(
+                of: "                content",
+                range: titleStart.upperBound..<source.endIndex))
+        let titleBlock = String(source[titleStart.lowerBound..<titleEnd.lowerBound])
+        XCTAssertTrue(titleBlock.contains(".accessibilityAddTraits(.isHeader)"))
+        XCTAssertTrue(titleBlock.contains(".accessibilityHeading(.h1)"))
+
+        let sectionStart = try XCTUnwrap(source.range(of: "Text(section.title)"))
+        let sectionEnd = try XCTUnwrap(
+            source.range(
+                of: "            content",
+                range: sectionStart.upperBound..<source.endIndex))
+        let sectionBlock = String(source[sectionStart.lowerBound..<sectionEnd.lowerBound])
+        XCTAssertTrue(sectionBlock.contains(".accessibilityAddTraits(.isHeader)"))
+        XCTAssertTrue(sectionBlock.contains(".accessibilityHeading(.h2)"))
+    }
+
     // MARK: - Persistence
 
     /// Unknown / absent tokens fall back to `.outline`; every known token

@@ -11,7 +11,7 @@ struct BaseContainerView: View {
     let tabID: TabID
 
     @State private var selectedRow: String?
-    @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
+    @State private var selectedCell: BaseGridCellSelection?
     @State private var quickFilterTask: Task<Void, Never>?
     @State private var resultFocusToken = 0
     @State private var gridEditRequest: AccessibleDataGrid<BaseGridRow>.EditRequest?
@@ -49,7 +49,8 @@ struct BaseContainerView: View {
             guard quickFilterFocused else { return }
             scheduleQuickFilterExecution(previousSelection: selectedRow)
         }
-        .onChange(of: document.result) { _, _ in
+        .onChange(of: document.result) { _, result in
+            reconcileSelectedCell(with: result)
             updateActiveBaseSelection()
         }
         .onChange(of: appState.baseEditPropertyRequestToken) { _, _ in
@@ -169,10 +170,12 @@ struct BaseContainerView: View {
                     updateActiveBaseSelection()
                 }),
             cellSelection: Binding(
-                get: { selectedCell },
-                set: {
-                    selectedCell = $0
-                    if let columnIndex = $0?.columnIndex {
+                get: { selectedCell?.position(in: result) },
+                set: { position in
+                    selectedCell = position.flatMap {
+                        BaseGridCellSelection(position: $0, result: result)
+                    }
+                    if let columnIndex = selectedCell?.columnIndex(in: result) {
                         document.focusColumn(columnIndex)
                     }
                     updateActiveBaseSelection()
@@ -189,7 +192,11 @@ struct BaseContainerView: View {
                 beginEdit(row: row.row, columnIndex: columnIndex, result: result)
             },
             editRequest: Binding(
-                get: { gridEditRequest },
+                get: {
+                    gridEditRequest.flatMap { request in
+                        selectedCell?.reconciledEditRequest(request, in: result)
+                    }
+                },
                 set: { gridEditRequest = $0 }),
             onCommitEdit: { row, columnIndex, draft, navigation in
                 commitEdit(
@@ -235,7 +242,7 @@ struct BaseContainerView: View {
             .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
             .init("Edit property") { row in
                 let columnIndex = selectedCell?.rowID == row.id
-                    ? selectedCell?.columnIndex
+                    ? selectedCell?.columnIndex(in: result)
                     : nil
                 beginEdit(
                     row: row.row,
@@ -344,8 +351,26 @@ struct BaseContainerView: View {
         appState.updateActiveBaseSelection(
             path: document.selectionKey,
             rowID: selectedRow,
-            columnIndex: selectedCell?.columnIndex,
+            columnIndex: document.result.flatMap { selectedCell?.columnIndex(in: $0) },
             result: document.result)
+    }
+
+    private func reconcileSelectedCell(with result: BasesResultSet?) {
+        guard let selectedCell else { return }
+        guard let result, let columnIndex = selectedCell.columnIndex(in: result) else {
+            self.selectedCell = nil
+            selectedRow = nil
+            gridEditRequest = nil
+            if let result, !result.columns.isEmpty {
+                document.focusColumn(firstEditableColumnIndex(result: result))
+            }
+            return
+        }
+        document.focusColumn(columnIndex)
+        if let gridEditRequest {
+            self.gridEditRequest = selectedCell.reconciledEditRequest(
+                gridEditRequest, in: result)
+        }
     }
 
     private func beginSelectedPropertyEdit() {
@@ -359,7 +384,12 @@ struct BaseContainerView: View {
             appState.basesViewAsTable()
         }
         let columnIndex: Int
-        if let column = appState.activeBaseSelectedColumn,
+        if selectedCell?.rowID == BaseGridRow.id(for: row),
+            let column = selectedCell?.column(in: result),
+            let index = result.columns.firstIndex(of: column)
+        {
+            columnIndex = index
+        } else if let column = appState.activeBaseSelectedColumn,
             let index = result.columns.firstIndex(of: column)
         {
             columnIndex = index
@@ -380,7 +410,7 @@ struct BaseContainerView: View {
         }
         let rowID = BaseGridRow.id(for: row)
         selectedRow = rowID
-        selectedCell = .init(rowID: rowID, columnIndex: columnIndex)
+        selectedCell = BaseGridCellSelection(rowID: rowID, columnID: column.id)
         gridEditRequest = .init(
             rowID: rowID,
             columnIndex: columnIndex,
@@ -449,7 +479,9 @@ struct BaseContainerView: View {
         let nextRow = gridRows[nextLinearIndex / result.columns.count]
         let nextColumnIndex = nextLinearIndex % result.columns.count
         selectedRow = nextRow.id
-        selectedCell = .init(rowID: nextRow.id, columnIndex: nextColumnIndex)
+        selectedCell = BaseGridCellSelection(
+            rowID: nextRow.id,
+            columnID: result.columns[nextColumnIndex].id)
         updateActiveBaseSelection()
         resultFocusToken &+= 1
     }
@@ -552,6 +584,57 @@ struct BaseGridRow: Identifiable {
         case (.some, nil): return false
         case (.some(let lhs), .some(let rhs)): return lhs < rhs
         }
+    }
+}
+
+struct BaseGridCellSelection: Equatable {
+    let rowID: String
+    let columnID: String
+
+    init(rowID: String, columnID: String) {
+        self.rowID = rowID
+        self.columnID = columnID
+    }
+
+    init?(
+        position: AccessibleDataGrid<BaseGridRow>.CellPosition,
+        result: BasesResultSet
+    ) {
+        guard result.columns.indices.contains(position.columnIndex),
+            result.rows.contains(where: { BaseGridRow.id(for: $0) == position.rowID })
+        else { return nil }
+        self.init(
+            rowID: position.rowID,
+            columnID: result.columns[position.columnIndex].id)
+    }
+
+    func columnIndex(in result: BasesResultSet) -> Int? {
+        guard result.rows.contains(where: { BaseGridRow.id(for: $0) == rowID }) else {
+            return nil
+        }
+        return result.columns.firstIndex { $0.id == columnID }
+    }
+
+    func position(
+        in result: BasesResultSet
+    ) -> AccessibleDataGrid<BaseGridRow>.CellPosition? {
+        guard let columnIndex = columnIndex(in: result) else { return nil }
+        return .init(rowID: rowID, columnIndex: columnIndex)
+    }
+
+    func column(in result: BasesResultSet) -> BasesColumn? {
+        guard let columnIndex = columnIndex(in: result) else { return nil }
+        return result.columns[columnIndex]
+    }
+
+    func reconciledEditRequest(
+        _ request: AccessibleDataGrid<BaseGridRow>.EditRequest,
+        in result: BasesResultSet
+    ) -> AccessibleDataGrid<BaseGridRow>.EditRequest? {
+        guard request.rowID == rowID, let columnIndex = columnIndex(in: result) else {
+            return nil
+        }
+        return .init(rowID: rowID, columnIndex: columnIndex, text: request.text)
     }
 }
 

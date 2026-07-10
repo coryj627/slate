@@ -30,6 +30,18 @@ final class BaseQueriesPanelTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    private static func sourceFile(_ relativePath: String) throws -> String {
+        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while cursor.path != "/" {
+            let candidate = cursor.appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor.deleteLastPathComponent()
+        }
+        throw CocoaError(.fileNoSuchFile)
+    }
+
     func testSavedQueriesListPinsAndBaseFilesRefreshFromVault() async throws {
         let (state, session) = try await makeState()
         let active = try session.saveQuery(
@@ -143,6 +155,112 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertEqual(updated.name, "Renamed overview")
         XCTAssertEqual(updated.sections.map(\.savedQueryId), [activeID, backlogID])
         XCTAssertEqual(updated.sections[0].headingOverride, "Still pinned")
+    }
+
+    func testDashboardSectionReorderKeysAreScopedToTheFocusedSection() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/DashboardEditorSheet.swift")
+
+        XCTAssertTrue(source.contains("@FocusState private var focusedSectionID"))
+        XCTAssertTrue(source.contains("handleSectionReorder("))
+        XCTAssertTrue(source.contains("BaseRowReorderCommand"))
+        XCTAssertTrue(source.contains("BaseRowReorderCommand.route("))
+        XCTAssertTrue(source.contains("isFocused: focusedSectionID == sectionID"))
+        XCTAssertTrue(source.contains(".focusable()"))
+        XCTAssertTrue(
+            source.contains(
+                ".focused($focusedSectionID, equals: section.wrappedValue.id)"))
+        XCTAssertTrue(source.contains(".onKeyPress(.upArrow, phases: .down)"))
+        XCTAssertTrue(source.contains(".onKeyPress(.downArrow, phases: .down)"))
+        XCTAssertTrue(
+            source.contains(
+                "sectionID: section.wrappedValue.id,\n                direction: .up,"))
+        XCTAssertTrue(
+            source.contains(
+                "sectionID: section.wrappedValue.id,\n                direction: .down,"))
+        XCTAssertTrue(source.contains("retainFocus: { _ in focusedSectionID = sectionID }"))
+        XCTAssertTrue(
+            source.contains(
+                "announce: { postAccessibilityAnnouncement($0, priority: .medium) }"))
+    }
+
+    func testOptionArrowReordersFocusedDashboardSectionOnceAndRetainsItsIdentity() throws {
+        let first = DashboardEditorSectionDraft(
+            savedQueryID: "first",
+            savedQueryName: "First",
+            headingOverride: "",
+            viewOverride: "",
+            missing: false)
+        let second = DashboardEditorSectionDraft(
+            savedQueryID: "second",
+            savedQueryName: "Second",
+            headingOverride: "",
+            viewOverride: "",
+            missing: false)
+        var draft = DashboardEditorDraft(sections: [first, second])
+        var moveCount = 0
+        var moveDestination: Int?
+        var focusedSectionID: DashboardEditorSectionDraft.ID?
+        var announcements: [String] = []
+
+        let handled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .up,
+            modifiers: .option,
+            index: 1,
+            count: draft.sections.count,
+            label: "Dashboard section 2",
+            move: { destination in
+                moveCount += 1
+                moveDestination = destination
+                draft.moveSection(from: 1, to: destination)
+            },
+            retainFocus: { _ in focusedSectionID = second.id },
+            announce: { announcements.append($0) })
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(draft.sections.map(\.id), [second.id, first.id])
+        XCTAssertEqual(moveCount, 1)
+        XCTAssertEqual(focusedSectionID, second.id)
+        XCTAssertEqual(moveDestination, 0)
+        XCTAssertEqual(
+            announcements,
+            ["Dashboard section 2 moved up to position 1 of 2."])
+
+        var boundaryMoves = 0
+        var boundaryFocus: Int?
+        var boundaryAnnouncements: [String] = []
+        let boundaryHandled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .up,
+            modifiers: .option,
+            index: 0,
+            count: draft.sections.count,
+            label: "Dashboard section 1",
+            move: { _ in boundaryMoves += 1 },
+            retainFocus: { boundaryFocus = $0 },
+            announce: { boundaryAnnouncements.append($0) })
+
+        XCTAssertTrue(boundaryHandled)
+        XCTAssertEqual(boundaryMoves, 0)
+        XCTAssertEqual(boundaryFocus, 0)
+        XCTAssertEqual(
+            boundaryAnnouncements,
+            ["Dashboard section 1 is already first."])
+        var ignoredCallbacks = 0
+        let voiceOverHandled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .up,
+            modifiers: [.control, .option],
+            index: 1,
+            count: draft.sections.count,
+            label: "Dashboard section 2",
+            move: { _ in ignoredCallbacks += 1 },
+            retainFocus: { _ in ignoredCallbacks += 1 },
+            announce: { _ in ignoredCallbacks += 1 })
+        XCTAssertFalse(
+            voiceOverHandled,
+            "Control-Option-Up belongs to VoiceOver Quick Nav")
+        XCTAssertEqual(ignoredCallbacks, 0)
     }
 
     func testDockedSavedQueryUsesActiveNoteThisPathAndRefreshesOnNoteSwitch() async throws {

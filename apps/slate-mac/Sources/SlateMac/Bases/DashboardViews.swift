@@ -14,6 +14,7 @@ struct DashboardContainerView: View {
                     .font(Tokens.Typography.title)
                     .foregroundStyle(Tokens.ColorRole.textPrimary)
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilityHeading(.h1)
                 content
             }
             .padding(Tokens.Spacing.md)
@@ -82,6 +83,7 @@ private struct DashboardSectionView: View {
                 .font(Tokens.Typography.sectionHeader)
                 .foregroundStyle(Tokens.ColorRole.textPrimary)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityHeading(.h2)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)

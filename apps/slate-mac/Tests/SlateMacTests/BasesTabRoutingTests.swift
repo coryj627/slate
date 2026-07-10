@@ -1010,6 +1010,189 @@ final class BasesTabRoutingTests: XCTestCase {
                 availableIDs: []))
     }
 
+    func testGridCellSelectionStoresStableColumnIdentityInsteadOfResultOffset() throws {
+        let source = try sourceFile("Bases/BaseContainerView.swift")
+
+        XCTAssertTrue(
+            source.contains("@State private var selectedCell: BaseGridCellSelection?"),
+            "editable grid selection must store a stable column identifier")
+        XCTAssertTrue(
+            source.contains("selectedCell?.columnIndex(in:"),
+            "every grid/AppState boundary must resolve the stable identifier in the current result")
+        XCTAssertTrue(
+            source.contains("selectedCell.reconciledEditRequest("),
+            "an in-flight editor must remap its index from the same stable column identity")
+        XCTAssertTrue(
+            source.contains("gridEditRequest.flatMap { request in")
+                && source.contains(
+                    "selectedCell?.reconciledEditRequest(request, in: result)"),
+            "the edit-request Binding getter must derive the current index before the first "
+                + "AppKit reload; onChange runs too late for that render boundary")
+        XCTAssertFalse(
+            source.contains(
+                "@State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?"),
+            "an index-backed @State selection can edit the wrong property after columns reorder")
+    }
+
+    func testGridCellSelectionKeepsReturnF2EditTargetAcrossColumnReorder() throws {
+        let columnA = BasesColumn(
+            id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
+        let columnB = BasesColumn(
+            id: "property-b", label: "Property B", valueKind: "text", role: .metadata)
+        let initial = Self.selectionResult(columns: [columnA, columnB])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
+        let selection = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: initial))
+
+        let reordered = Self.selectionResult(columns: [columnB, columnA])
+
+        XCTAssertEqual(selection.columnID, "property-b")
+        XCTAssertEqual(selection.columnIndex(in: reordered), 0)
+        XCTAssertEqual(selection.position(in: reordered)?.columnIndex, 0)
+        XCTAssertEqual(
+            selection.column(in: reordered)?.id,
+            "property-b",
+            "Return/F2 must still target B, not the property now at B's former offset")
+        let editRequest = AccessibleDataGrid<BaseGridRow>.EditRequest(
+            rowID: rowID,
+            columnIndex: 1,
+            text: "unsaved draft")
+        let remappedRequest = try XCTUnwrap(
+            selection.reconciledEditRequest(editRequest, in: reordered))
+        XCTAssertEqual(remappedRequest.rowID, rowID)
+        XCTAssertEqual(remappedRequest.columnIndex, 0)
+        XCTAssertEqual(remappedRequest.text, "unsaved draft")
+
+        let missingB = Self.selectionResult(columns: [columnA])
+        XCTAssertNil(selection.position(in: missingB))
+        XCTAssertNil(selection.column(in: missingB))
+        XCTAssertNil(selection.reconciledEditRequest(editRequest, in: missingB))
+    }
+
+    func testGridReturnAndF2DispatchStableColumnAfterResultReorder() throws {
+        let columnA = BasesColumn(
+            id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
+        let columnB = BasesColumn(
+            id: "property-b", label: "Property B", valueKind: "text", role: .metadata)
+        var result = Self.selectionResult(columns: [columnA, columnB])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(result.rows.first))
+        var stableSelection = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: result))
+        var editedColumnIDs: [String] = []
+
+        func makeGrid() -> AccessibleDataGrid<BaseGridRow> {
+            let snapshot = result
+            return AccessibleDataGrid(
+                columns: snapshot.columns.enumerated().map { columnIndex, column in
+                    AccessibleDataGrid<BaseGridRow>.Column(
+                        column.label,
+                        cell: { $0.value(at: columnIndex) })
+                },
+                rows: snapshot.rows.enumerated().map {
+                    BaseGridRow(row: $0.element, ordinal: $0.offset)
+                },
+                summary: "1 row",
+                accessibilityLabel: "Stable selection test grid",
+                cellSelection: Binding(
+                    get: { stableSelection.position(in: snapshot) },
+                    set: { position in
+                        guard let position else { return }
+                        stableSelection = BaseGridCellSelection(
+                            position: position,
+                            result: snapshot) ?? stableSelection
+                    }),
+                cellNavigation: true,
+                onEditCell: { _, columnIndex in
+                    guard snapshot.columns.indices.contains(columnIndex) else { return }
+                    editedColumnIDs.append(snapshot.columns[columnIndex].id)
+                })
+        }
+
+        let coordinator = GridCoordinator(grid: makeGrid())
+        let table = NSTableView()
+        let returnEvent = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "\r",
+                charactersIgnoringModifiers: "\r",
+                isARepeat: false,
+                keyCode: 36))
+        let f2Event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.function],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                isARepeat: false,
+                keyCode: 120))
+
+        result = Self.selectionResult(columns: [columnB, columnA])
+        coordinator.reload(grid: makeGrid())
+
+        XCTAssertTrue(coordinator.handleKeyDown(returnEvent, in: table))
+        XCTAssertTrue(coordinator.handleKeyDown(f2Event, in: table))
+        XCTAssertEqual(
+            editedColumnIDs,
+            ["property-b", "property-b"],
+            "native Return and F2 dispatch must resolve the stable ID in the reordered result")
+
+        result = Self.selectionResult(columns: [columnA])
+        coordinator.reload(grid: makeGrid())
+
+        XCTAssertFalse(coordinator.handleKeyDown(returnEvent, in: table))
+        XCTAssertFalse(coordinator.handleKeyDown(f2Event, in: table))
+        XCTAssertEqual(
+            editedColumnIDs,
+            ["property-b", "property-b"],
+            "a disappeared selected column must not dispatch an edit to its former offset")
+    }
+
+    func testF2CommandReceivesTheStableSelectedColumnAfterResultReorder() async throws {
+        let state = try await makeAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let document = try XCTUnwrap(state.activeBaseDocument)
+        let initial = try XCTUnwrap(document.result)
+        let statusIndex = try XCTUnwrap(initial.columns.firstIndex { $0.id == "status" })
+        let row = try XCTUnwrap(initial.rows.first)
+        let rowID = BaseGridRow.id(for: row)
+        let selection = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: statusIndex),
+                result: initial))
+        var reordered = initial
+        reordered.columns.swapAt(0, statusIndex)
+        reordered.rows = initial.rows.map { row in
+            var row = row
+            row.values.swapAt(0, statusIndex)
+            return row
+        }
+        let reorderedIndex = try XCTUnwrap(selection.columnIndex(in: reordered))
+
+        state.updateActiveBaseSelection(
+            path: document.selectionKey,
+            rowID: rowID,
+            columnIndex: reorderedIndex,
+            result: reordered)
+        let requestToken = state.baseEditPropertyRequestToken
+        state.basesEditSelectedProperty()
+
+        XCTAssertEqual(state.activeBaseSelectedColumn?.id, "status")
+        XCTAssertEqual(state.baseEditPropertyRequestToken, requestToken + 1)
+    }
+
     func testBaseQuickFilterEscapeRestoresNativeResultFocus() throws {
         let baseContainer = try sourceFile("Bases/BaseContainerView.swift")
         let grid = try sourceFile("AccessibleDataGrid.swift")
@@ -1395,6 +1578,27 @@ final class BasesTabRoutingTests: XCTestCase {
             warnings: [],
             viewError: nil,
             audioSummary: "2 notes.")
+    }
+
+    private static func selectionResult(columns: [BasesColumn]) -> BasesResultSet {
+        BasesResultSet(
+            columns: columns,
+            rows: [
+                BasesRow(
+                    filePath: "Notes/Selected.md",
+                    taskOrdinal: nil,
+                    values: columns.map { textValue($0.id) },
+                    audioDescription: "Selected row")
+            ],
+            groups: [],
+            summaries: [],
+            totalCount: 1,
+            shownCount: 1,
+            unfilteredShownCount: 1,
+            executedAtMs: 0,
+            warnings: [],
+            viewError: nil,
+            audioSummary: "1 note.")
     }
 
     private static func textValue(_ value: String) -> BasesValue {

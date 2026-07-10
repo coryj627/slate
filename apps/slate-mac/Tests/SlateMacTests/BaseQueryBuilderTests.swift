@@ -1410,6 +1410,168 @@ final class BaseQueryBuilderTests: XCTestCase {
         XCTAssertTrue(appStateSource.contains("baseQueryBuilderPreviewCancelToken"), appStateSource)
     }
 
+    func testBuilderReorderKeysAreScopedToFocusedSortAndIncludedColumnRows() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/BaseQueryBuilderSheet.swift")
+
+        XCTAssertTrue(source.contains("@FocusState private var focusedSortRow"))
+        XCTAssertTrue(source.contains("@FocusState private var focusedColumnRowID"))
+        XCTAssertTrue(source.contains("handleSortReorder("))
+        XCTAssertTrue(source.contains("handleColumnReorder("))
+        XCTAssertTrue(source.contains("BaseRowReorderCommand"))
+        XCTAssertTrue(source.contains("BaseRowReorderCommand.route("))
+        XCTAssertTrue(source.contains("isFocused: focusedSortRow == index"))
+        XCTAssertTrue(
+            source.contains(
+                "isFocused: focusedColumnRowID == property.sourceExpression"))
+        XCTAssertTrue(source.contains(".focused($focusedSortRow, equals: index)"))
+        XCTAssertTrue(
+            source.contains(
+                ".focused($focusedColumnRowID, equals: property.sourceExpression)"))
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: ".focusable()").count - 1,
+            2,
+            "both builder row families must be keyboard-focusable")
+        XCTAssertTrue(source.contains(".onKeyPress(.upArrow, phases: .down)"))
+        XCTAssertTrue(source.contains(".onKeyPress(.downArrow, phases: .down)"))
+        XCTAssertTrue(
+            source.contains(
+                "index: index, direction: .up, modifiers: press.modifiers"))
+        XCTAssertTrue(
+            source.contains(
+                "index: index, direction: .down, modifiers: press.modifiers"))
+        XCTAssertTrue(
+            source.contains(
+                "property: property, direction: .up, modifiers: press.modifiers"))
+        XCTAssertTrue(
+            source.contains(
+                "property: property, direction: .down, modifiers: press.modifiers"))
+        XCTAssertTrue(source.contains("retainFocus: { focusedSortRow = $0 }"))
+        XCTAssertTrue(
+            source.contains(
+                "retainFocus: { _ in focusedColumnRowID = property.sourceExpression }"))
+        XCTAssertGreaterThanOrEqual(
+            source.components(
+                separatedBy: "announce: { postAccessibilityAnnouncement($0, priority: .medium) }")
+                .count - 1,
+            2,
+            "both builder reorder handlers must announce through the shared funnel")
+    }
+
+    func testOptionArrowsReorderFocusedBuilderRowsOnceAndPreserveFocus() throws {
+        var sorts = ["status", "priority"]
+        var sortMoveCount = 0
+        var sortDestination: Int?
+        var focusedSortIndex: Int?
+        var sortAnnouncements: [String] = []
+
+        let sortHandled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .up,
+            modifiers: .option,
+            index: 1,
+            count: sorts.count,
+            label: "Sort 2",
+            move: { destination in
+                sortMoveCount += 1
+                sortDestination = destination
+                sorts.swapAt(1, destination)
+            },
+            retainFocus: { focusedSortIndex = $0 },
+            announce: { sortAnnouncements.append($0) })
+
+        XCTAssertTrue(sortHandled)
+        XCTAssertEqual(sorts, ["priority", "status"])
+        XCTAssertEqual(sortMoveCount, 1)
+        XCTAssertEqual(focusedSortIndex, 0)
+        XCTAssertEqual(sortDestination, 0)
+        XCTAssertEqual(sortAnnouncements, ["Sort 2 moved up to position 1 of 2."])
+
+        var columns = ["status", "priority"]
+        let focusedColumnID = columns[0]
+        var columnMoveCount = 0
+        var columnDestination: Int?
+        var retainedColumnID: String?
+        var columnAnnouncements: [String] = []
+
+        let columnHandled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .down,
+            modifiers: .option,
+            index: 0,
+            count: columns.count,
+            label: "status column",
+            move: { destination in
+                columnMoveCount += 1
+                columnDestination = destination
+                columns.swapAt(0, destination)
+            },
+            retainFocus: { _ in retainedColumnID = focusedColumnID },
+            announce: { columnAnnouncements.append($0) })
+
+        XCTAssertTrue(columnHandled)
+        XCTAssertEqual(columns, ["priority", "status"])
+        XCTAssertEqual(columnMoveCount, 1)
+        XCTAssertEqual(retainedColumnID, "status")
+        XCTAssertEqual(columnDestination, 1)
+        XCTAssertEqual(
+            columnAnnouncements,
+            ["status column moved down to position 2 of 2."])
+
+        var boundaryMoves = 0
+        var boundaryFocus: Int?
+        var boundaryAnnouncements: [String] = []
+        let boundaryHandled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .up,
+            modifiers: .option,
+            index: 0,
+            count: 2,
+            label: "Sort 1",
+            move: { _ in boundaryMoves += 1 },
+            retainFocus: { boundaryFocus = $0 },
+            announce: { boundaryAnnouncements.append($0) })
+
+        XCTAssertTrue(boundaryHandled)
+        XCTAssertEqual(boundaryMoves, 0)
+        XCTAssertEqual(boundaryFocus, 0)
+        XCTAssertEqual(boundaryAnnouncements, ["Sort 1 is already first."])
+        var ignoredCallbacks = 0
+        let voiceOverHandled = BaseRowReorderCommand.route(
+            isFocused: true,
+            direction: .down,
+            modifiers: [.control, .option],
+            index: 0,
+            count: 2,
+            label: "Sort 1",
+            move: { _ in ignoredCallbacks += 1 },
+            retainFocus: { _ in ignoredCallbacks += 1 },
+            announce: { _ in ignoredCallbacks += 1 })
+        XCTAssertFalse(
+            voiceOverHandled,
+            "Control-Option-Down belongs to VoiceOver Quick Nav")
+        let unfocusedHandled = BaseRowReorderCommand.route(
+            isFocused: false,
+            direction: .down,
+            modifiers: .option,
+            index: 0,
+            count: 2,
+            label: "Sort 1",
+            move: { _ in ignoredCallbacks += 1 },
+            retainFocus: { _ in ignoredCallbacks += 1 },
+            announce: { _ in ignoredCallbacks += 1 })
+        XCTAssertFalse(unfocusedHandled)
+        XCTAssertEqual(ignoredCallbacks, 0)
+        XCTAssertNil(BaseRowReorderCommand(direction: .down, modifiers: []))
+        XCTAssertNil(
+            BaseRowReorderCommand(
+                direction: .down,
+                modifiers: [.option, .shift]))
+        XCTAssertNil(
+            BaseRowReorderCommand(
+                direction: .down,
+                modifiers: [.option, .command]))
+    }
+
     func testBuilderPreviewPublishRequiresCurrentModelAndCancelToken() throws {
         let state = AppState(
             recentsStore: RecentVaultsStore(fileURL: tempDir.appendingPathComponent("recents.json")),

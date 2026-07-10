@@ -134,6 +134,7 @@ struct DashboardEditorSheet: View {
     let savedQueries: [SavedQuerySummary]
     let onCancel: () -> Void
     let onSave: (DashboardEditorDraft) -> Void
+    @FocusState private var focusedSectionID: DashboardEditorSectionDraft.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -291,6 +292,43 @@ struct DashboardEditorSheet: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Dashboard section \(index + 1)")
         .accessibilityValue(section.wrappedValue.displayName)
+        .focusable()
+        .focused($focusedSectionID, equals: section.wrappedValue.id)
+        .onKeyPress(.upArrow, phases: .down) { press in
+            handleSectionReorder(
+                sectionID: section.wrappedValue.id,
+                direction: .up,
+                modifiers: press.modifiers)
+        }
+        .onKeyPress(.downArrow, phases: .down) { press in
+            handleSectionReorder(
+                sectionID: section.wrappedValue.id,
+                direction: .down,
+                modifiers: press.modifiers)
+        }
+    }
+
+    private func handleSectionReorder(
+        sectionID: DashboardEditorSectionDraft.ID,
+        direction: BaseRowReorderCommand.Direction,
+        modifiers: EventModifiers
+    ) -> KeyPress.Result {
+        guard let index = draft.sectionIndex(id: sectionID)
+        else { return .ignored }
+        guard BaseRowReorderCommand.route(
+            isFocused: focusedSectionID == sectionID,
+            direction: direction,
+            modifiers: modifiers,
+            index: index,
+            count: draft.sections.count,
+            label: "Dashboard section \(index + 1)",
+            move: { destination in
+                draft.moveSection(from: index, to: destination)
+            },
+            retainFocus: { _ in focusedSectionID = sectionID },
+            announce: { postAccessibilityAnnouncement($0, priority: .medium) })
+        else { return .ignored }
+        return .handled
     }
 
     private func savedQuerySelection(

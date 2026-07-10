@@ -3,6 +3,118 @@
 
 import SwiftUI
 
+struct BaseRowReorderCommand {
+    enum Direction {
+        case up
+        case down
+    }
+
+    struct Outcome: Equatable {
+        let destination: Int?
+        let announcement: String
+    }
+
+    private static let actionModifierMask: EventModifiers =
+        [.shift, .control, .option, .command]
+
+    let direction: Direction
+
+    init?(direction: Direction, modifiers: EventModifiers) {
+        // Arrow-key events may carry device flags such as numeric-pad or
+        // function. Among action modifiers, accept Option alone. In
+        // particular, Control-Option must pass through for VoiceOver Quick Nav.
+        guard modifiers.intersection(Self.actionModifierMask) == .option else {
+            return nil
+        }
+        self.direction = direction
+    }
+
+    @discardableResult
+    static func route(
+        isFocused: Bool,
+        direction: Direction,
+        modifiers: EventModifiers,
+        index: Int,
+        count: Int,
+        label: String,
+        move: (Int) -> Void,
+        retainFocus: (Int) -> Void,
+        announce: (String) -> Void
+    ) -> Bool {
+        guard isFocused,
+            let command = BaseRowReorderCommand(
+                direction: direction, modifiers: modifiers)
+        else { return false }
+        command.perform(
+            index: index,
+            count: count,
+            label: label,
+            move: move,
+            retainFocus: retainFocus,
+            announce: announce)
+        return true
+    }
+
+    @discardableResult
+    func perform(
+        index: Int,
+        count: Int,
+        label: String,
+        move: (Int) -> Void,
+        retainFocus: (Int) -> Void,
+        announce: (String) -> Void
+    ) -> Outcome {
+        guard index >= 0, index < count else {
+            let outcome = Outcome(
+                destination: nil,
+                announcement: "\(label) cannot be moved.")
+            announce(outcome.announcement)
+            return outcome
+        }
+        let destination = index + direction.delta
+        guard destination >= 0, destination < count else {
+            let outcome = Outcome(
+                destination: nil,
+                announcement: "\(label) is already \(direction.boundaryName).")
+            retainFocus(index)
+            announce(outcome.announcement)
+            return outcome
+        }
+        move(destination)
+        retainFocus(destination)
+        let outcome = Outcome(
+            destination: destination,
+            announcement:
+                "\(label) moved \(direction.announcementName) to position "
+                + "\(destination + 1) of \(count).")
+        announce(outcome.announcement)
+        return outcome
+    }
+}
+
+private extension BaseRowReorderCommand.Direction {
+    var delta: Int {
+        switch self {
+        case .up: -1
+        case .down: 1
+        }
+    }
+
+    var announcementName: String {
+        switch self {
+        case .up: "up"
+        case .down: "down"
+        }
+    }
+
+    var boundaryName: String {
+        switch self {
+        case .up: "first"
+        case .down: "last"
+        }
+    }
+}
+
 enum BaseQueryDateCodec {
     static func date(from value: String, timeZone: TimeZone) -> Date? {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
@@ -61,6 +173,8 @@ struct BaseQueryBuilderSheet: View {
     @State private var saveAsBasePath = "Queries/New Query.base"
     @State private var savedQueryName = "New query"
     @State private var savedQueryDescription = ""
+    @FocusState private var focusedSortRow: Int?
+    @FocusState private var focusedColumnRowID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -263,6 +377,16 @@ struct BaseQueryBuilderSheet: View {
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Sort \(index + 1)")
+                .focusable()
+                .focused($focusedSortRow, equals: index)
+                .onKeyPress(.upArrow, phases: .down) { press in
+                    handleSortReorder(
+                        index: index, direction: .up, modifiers: press.modifiers)
+                }
+                .onKeyPress(.downArrow, phases: .down) { press in
+                    handleSortReorder(
+                        index: index, direction: .down, modifiers: press.modifiers)
+                }
             }
 
             Divider()
@@ -324,6 +448,18 @@ struct BaseQueryBuilderSheet: View {
                         SlateSymbol.moveDown.image(label: "Move column down")
                     }
                     .disabled(!canMoveColumn(property, delta: 1))
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Column \(property.accessibilityName)")
+                .focusable()
+                .focused($focusedColumnRowID, equals: property.sourceExpression)
+                .onKeyPress(.upArrow, phases: .down) { press in
+                    handleColumnReorder(
+                        property: property, direction: .up, modifiers: press.modifiers)
+                }
+                .onKeyPress(.downArrow, phases: .down) { press in
+                    handleColumnReorder(
+                        property: property, direction: .down, modifiers: press.modifiers)
                 }
             }
         }
@@ -1100,6 +1236,52 @@ struct BaseQueryBuilderSheet: View {
             model.sortKeys.indices.contains(destination)
         else { return }
         model.sortKeys.swapAt(index, destination)
+    }
+
+    private func handleSortReorder(
+        index: Int,
+        direction: BaseRowReorderCommand.Direction,
+        modifiers: EventModifiers
+    ) -> KeyPress.Result {
+        guard BaseRowReorderCommand.route(
+            isFocused: focusedSortRow == index,
+            direction: direction,
+            modifiers: modifiers,
+            index: index,
+            count: model.sortKeys.count,
+            label: "Sort \(index + 1)",
+            move: { destination in
+                moveSort(index: index, delta: destination - index)
+            },
+            retainFocus: { focusedSortRow = $0 },
+            announce: { postAccessibilityAnnouncement($0, priority: .medium) })
+        else { return .ignored }
+        return .handled
+    }
+
+    private func handleColumnReorder(
+        property: BaseQueryProperty,
+        direction: BaseRowReorderCommand.Direction,
+        modifiers: EventModifiers
+    ) -> KeyPress.Result {
+        guard let index = model.columns.firstIndex(where: {
+            $0.id == property.sourceExpression
+        })
+        else { return .ignored }
+        guard BaseRowReorderCommand.route(
+            isFocused: focusedColumnRowID == property.sourceExpression,
+            direction: direction,
+            modifiers: modifiers,
+            index: index,
+            count: model.columns.count,
+            label: "\(property.accessibilityName) column",
+            move: { destination in
+                moveColumn(property: property, delta: destination - index)
+            },
+            retainFocus: { _ in focusedColumnRowID = property.sourceExpression },
+            announce: { postAccessibilityAnnouncement($0, priority: .medium) })
+        else { return .ignored }
+        return .handled
     }
 
     private func addFormula() {
