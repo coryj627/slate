@@ -1,5 +1,11 @@
 # Milestone N Remediation Implementation Plan
 
+**Execution status (2026-07-09):** All automatable audit findings are complete
+on `codex/milestone-n-gap-fixes`; code and test remediation is committed through
+`526b615`, independently re-reviewed, and this close-out update records matched
+p50 performance evidence. The manual VoiceOver checklist remains intentionally
+open and is the sole operational closure blocker.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close every automatable Milestone N code, regression-test, and performance-evidence gap identified by the 2026-07-09 adversarial audit while leaving the human VoiceOver checklist honestly open.

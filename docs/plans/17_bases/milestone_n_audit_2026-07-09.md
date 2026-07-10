@@ -1,8 +1,10 @@
 # Milestone N audit — 2026-07-09
 
-Milestone N (Bases v1) is operationally incomplete against the executable
-specifications in this directory. The focused suites were green at audit start,
-but direct counterexamples and contract tracing found the gaps below.
+Milestone N (Bases v1) had material gaps despite green focused suites at audit
+start. Direct counterexamples and contract tracing found the issues below. The
+automatable code, regression-test, and performance-evidence findings are now
+remediated on `codex/milestone-n-gap-fixes`; operational closure remains blocked
+only by the human VoiceOver checklist.
 
 ## Verification baseline
 
@@ -48,12 +50,37 @@ defective behavior or omitted the required adversarial case.
 | N-VER-01 | Medium | Required adversarial censuses and under-load cancellation gate are materially absent. | “Census” tests are small fixed smoke cases; no DQL corpus or generated pushdown equivalence test exists; cancellation is pre-cancel only. | N0/N1/N2 specs and `02_milestone_brief.md` |
 | N-VER-02 | Medium | Close-out performance evidence records Criterion means, not p50, and omits the N scan regression comparison. | `BENCHMARKS.md` labels the values as mean estimates and contains no N before/after scan diff. | `00_program.md` decision 16 |
 
-## Manual-only blocker
+## Remediation result
+
+Every confirmed automated finding above is closed on the remediation branch.
+The fixes were implemented with focused RED→GREEN regressions, independently
+reviewed, and re-reviewed after each actionable counterexample wave.
+
+| Finding IDs | Result | Evidence commits |
+|---|---|---|
+| N0-01, N0-02 | Lossless block/flow YAML edits now preserve quoting, comments, CRLF/LF, final-newline policy, unknown bytes, dependent edit batches, and valid empty parents. | `6a35e90`, `9d1310f`, `aa9d512`, `526b615` |
+| N0-03..N0-06 | DQL outgoing/regex/trunc semantics and verbatim fence indexing repaired. | `16316f5`, `1c90089`, `72d311d` |
+| N1-02, N1-03 | Pinned evaluator compatibility completed. | `c53256c`, `dde821e` |
+| N1-01, N1-04, N2-01, N2-02 | Temporal cache safety, aliases/embeds, non-null kind inference, and inclusive Recent export repaired. | `49eba67`, `b86fedd` |
+| N3-01, N3-04 | Quick-filter counts and typed transient sort unified across render/export paths. | `bc47b47` |
+| N3-02, N3-03, N3-05, N3-06 | Grid selection/editing/navigation/group/header accessibility made safe. | `ec45a21`, `846289b`, `0d61645` |
+| N3-07 | Successful note writes now refresh visible Bases surfaces without duplicate sort refreshes. | `501b55b`, `e3a7f0b` |
+| N4-01..N4-04 | Typed lossless builder, complete expression regeneration, dashboard actions, and membership announcements completed. | `3a3004f`, `1b6620c` |
+| N-VER-01 | Generated serializer/DQL/engine/session/scanner censuses, real under-load cancellation, public-delete cache coverage, and CLI-overridable Criterion runners added. | `526b615` |
+| N-VER-02 | Criterion p50s and matched pre/post scan evidence recorded. 10k scan is +3.403%; 50k is +2.390%; both pass the 5% gate. | `BENCHMARKS.md` close-out entry in this evidence update |
+
+Key closure gates include 39 serializer tests, 2,048 generated serializer
+cases, 4,096 generated DQL statements, 3,072 pushdown/interpreter query
+comparisons, 10,000-row parked-under-load cancellation, generated warm/cold
+session interleavings, and the 10,000-file + 1,000-mutation scanner census. The
+Task 8 Swift matrix passed 130 tests and `a11y-check` remained 100.0/100.
+
+## Remaining manual-only blocker
 
 `at_smoke_checklist.md` is entirely unchecked. This audit will not manufacture a
 VoiceOver PASS from static checks. Code, automated tests, and benchmark evidence
-can be remediated here; the GitHub milestone must remain open until a human runs
-the checklist and records PASS or follow-up issues for failures.
+are remediated; the GitHub milestone must remain open until a human runs the
+checklist and records PASS or follow-up issues for failures.
 
 ## Checked and found correct
 
@@ -73,4 +100,3 @@ the checklist and records PASS or follow-up issues for failures.
 
 The implementation plan is
 [`docs/superpowers/plans/2026-07-09-milestone-n-remediation.md`](../../superpowers/plans/2026-07-09-milestone-n-remediation.md).
-

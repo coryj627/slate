@@ -27,13 +27,13 @@ Full-suite walltime is roughly **10–15 minutes** on a modern Apple Silicon lap
 
 | Benchmark group | What each iteration does | Sample size |
 |---|---|---|
-| `first_open_and_scan` | `fs::remove_dir_all(.slate)` (setup, excluded) → `VaultSession::from_filesystem` → `scan_initial`. Each measurement is a true cold start. | 10 |
-| `reopen_with_cache` | Cache primed once outside the loop. Each iteration re-opens + re-scans (scanner upserts on path, so this is the steady-state warm re-open). | 20 |
-| `list_files_paged` | Cache primed once. Each iteration pages through `list_files` 1 000 rows at a time until exhausted. | 20 |
-| `tasks_cold_scan` | Cold scan of a 1 000-file vault carrying 10 000 task lines (10 per file). Same setup discipline as `first_open_and_scan`; measures the scanner + tasks-pipeline cost. | 10 |
-| `tasks_in_vault_first_page` | Cache primed; each iteration runs `tasks_in_vault(All, first(200))` against the 10 000-task fixture. Drives the Mac TasksReviewView's initial render. | 20 |
+| `first_open_and_scan` | `fs::remove_dir_all(.slate)` (setup, excluded) → `VaultSession::from_filesystem` → `scan_initial`. Each measurement is a true cold start. | 10 default; CLI-overridable |
+| `reopen_with_cache` | Cache primed once outside the loop. Each iteration re-opens + re-scans (scanner upserts on path, so this is the steady-state warm re-open). | 10 default; CLI-overridable |
+| `list_files_paged` | Cache primed once. Each iteration pages through `list_files` 1 000 rows at a time until exhausted. | 10 default; CLI-overridable |
+| `tasks_cold_scan` | Cold scan of the realistic 1 000-file Tasks fixture: ~70% zero-task, ~25% with 1–3 tasks, and ~5% with 10–15 tasks. Same setup discipline as `first_open_and_scan`; measures the scanner + tasks pipeline. | 10 default; CLI-overridable |
+| `tasks_in_vault_first_page` | Cache primed; each iteration runs `tasks_in_vault(All, first(200))` against that realistic 1 000-file fixture. Drives the Mac TasksReviewView's initial render. | 10 default; CLI-overridable |
 
-The first three groups run for three vault sizes: **1 000**, **10 000**, **50 000** Markdown files. The Tasks groups run a single shape (1 000 files × 10 tasks).
+The first three groups run for three vault sizes: **1 000**, **10 000**, **50 000** Markdown files. The Tasks groups run the single realistic 1 000-file distribution described above.
 
 ## V1 release-gate targets
 
@@ -61,7 +61,12 @@ first_open_and_scan/10000
                         time:   [287.28 ms 288.48 ms 293.27 ms]
 ```
 
-The three numbers are the **lower bound**, **estimate**, and **upper bound** of the 95 % confidence interval. Use the middle value as the headline number; if the bounds are far apart relative to the estimate, the measurement is noisy and either the system has background load or the sample size should be bumped.
+The three console numbers are the **lower bound**, **estimate**, and **upper
+bound** of Criterion's default timing estimate. They are not the p50. When a
+gate is specified as p50, read `median.point_estimate` and
+`median.confidence_interval` from that benchmark's `new/estimates.json`. Wide
+bounds indicate noise and should trigger a quieter rerun or a larger CLI sample
+size.
 
 Criterion writes HTML reports (with violin plots, distribution histograms, and regression-versus-baseline comparisons) to `target/criterion/`. Open `target/criterion/report/index.html` to browse.
 
@@ -379,27 +384,74 @@ recorded values show the headroom):
 | Per-pan window hop | **2.8 ms** | Ten viewport jumps averaged — window churn, edge rebuild, AX re-frame. |
 | Per-step navigator traversal | **0.18 ms** | Reading-order selection moves incl. announcement assembly. |
 
-## Milestone N close-out — 2026-07-08 (Bases session API, #699 / #711)
+## Milestone N close-out — 2026-07-09 (remediation branch)
 
 New bench file `crates/slate-core/benches/bases_bench.rs` drives the public
 `VaultSession` Bases API against deterministic 1k / 10k / 50k Markdown vaults
 with frontmatter properties. The measured path includes handle lookup,
 SQLite-backed query execution, result mirroring for UniFFI/UI callers, quick
 filter projection, cache-hit replay, parse/serialize, and CSV export
-formatting. Criterion release run on macOS 26.5.1 arm64 with
-`rustc 1.95.0`. The release-gate query filters to one indexed folder and limits
-the grid to 100 displayed rows; the full-export diagnostic row below is the
-intentionally unbounded "dump everything" stress path. Numbers are Criterion
-mean point estimates from `target/criterion/`.
+formatting. Criterion release run at `526b615` on a MacBook Pro (Apple M5 Pro,
+18 cores, 48 GB), macOS 26.5.1 (25F80), arm64, with rustc 1.95.0
+(59807616e 2026-04-14). The release-gate query filters to one indexed folder
+and limits the grid to 100 displayed rows; the full-export diagnostic row below
+is the intentionally unbounded "dump everything" stress path. Every number is
+the Criterion median point estimate (p50); parenthesized ranges are the median's
+95% confidence interval from `new/estimates.json`.
 
 | Bench (criterion, release) | 1k files | 10k files | 50k files | Meaning |
 |---|---:|---:|---:|---|
-| `bases_session/indexed_query_gate_uncached` | **1.34 ms** | **3.29 ms** | **16.16 ms** | Fresh handle, indexed folder filter, result mirror, 100-row grid limit. Gate target: <50 ms @10k / <200 ms @50k. |
-| `bases_session/cache_hit_reexecute` | **36.71 µs** | **37.19 µs** | **36.79 µs** | Same handle/query/generation after priming the session cache. Gate target: <2 ms. |
-| `bases_session/quick_filter_display_values` | **1.34 ms** | **3.36 ms** | **16.53 ms** | Same gate query with accent-insensitive displayed-value quick filter before sort/group/summary/limit. |
-| `bases_session/export_csv_gate` | **1.35 ms** | **3.35 ms** | **16.29 ms** | Gate query through `base_export`, formatting exactly the displayed rows as CSV. |
-| `bases_session/export_csv_full_diagnostic` | **12.68 ms** | **135.70 ms** | **772.30 ms** | Deliberately unbounded full-vault CSV export diagnostic; not the interactive grid gate. |
+| `bases_session/indexed_query_gate_uncached` | **1.322 ms** (1.318–1.328) | **3.158 ms** (3.143–3.198) | **15.253 ms** (15.128–15.335) | Fresh handle, indexed folder filter, result mirror, 100-row grid limit. Gate target: <50 ms @10k / <200 ms @50k. |
+| `bases_session/cache_hit_reexecute` | **35.370 µs** (34.989–35.561) | **35.003 µs** (34.810–35.176) | **34.430 µs** (34.376–34.509) | Same handle/query/generation after priming the session cache. Gate target: <2 ms. |
+| `bases_session/quick_filter_display_values` | **1.302 ms** (1.287–1.317) | **3.203 ms** (3.154–3.299) | **15.541 ms** (15.426–15.698) | Same gate query with accent-insensitive displayed-value quick filter before sort/group/summary/limit. |
+| `bases_session/export_csv_gate` | **1.321 ms** (1.317–1.340) | **3.161 ms** (3.145–3.178) | **15.557 ms** (15.412–15.647) | Gate query through `base_export`, formatting exactly the displayed rows as CSV. |
+| `bases_session/export_csv_full_diagnostic` | **12.253 ms** (12.168–12.447) | **128.990 ms** (126.894–129.816) | **729.208 ms** (726.499–732.643) | Deliberately unbounded full-vault CSV export diagnostic; not the interactive grid gate. |
 
-| Bench (criterion, release) | 2026-07 mean | Meaning |
+| Bench (criterion, release) | 2026-07 p50 (95% CI) | Meaning |
 |---|---:|---|
-| `bases_format/parse_serialize_roundtrip` | **29.63 µs** | Parse the gate `.base` file and serialize it byte-equally. Gate target: <5 ms per file. |
+| `bases_format/parse_serialize_roundtrip` | **22.019 µs** (21.985–22.183) | Parse the gate `.base` file and serialize it byte-equally. Gate target: <5 ms per file. |
+
+Command:
+
+```sh
+cargo bench -p slate-core --bench bases_bench --target-dir target/milestone-n-bench-post -- --sample-size 20
+```
+
+The release-gate rows pass with substantial headroom: 10k/50k indexed queries
+are 3.158/15.253 ms against 50/200 ms, cache replay is about 0.035 ms against
+2 ms, and format round-trip is 0.022 ms against 5 ms. Raw Bases estimates are
+under `target/criterion/bases_session/` and
+`target/criterion/bases_format_parse_serialize_roundtrip/`. Cargo placed the
+compiled benchmark under the explicit `target/milestone-n-bench-post/` target;
+Criterion's report root remained `target/criterion/` for this invocation.
+
+### Matched N scanner regression
+
+The same `first_open_and_scan` measurement body and synthetic fixture ran
+sequentially at pre-N `b05f86f` and post-remediation `526b615`, 20 true cold
+samples per size. The historical runner had a group-level `sample_size(10)`
+that overrides Criterion's CLI; the temporary detached worktree removed only
+that runner line so both sides honored `--sample-size 20`. No measured function,
+fixture, or production source was changed for the historical run. Both detached
+worktrees resolved 333 packages afresh under the same toolchain; the scan
+benchmark compiled matching dependency versions (the two lock-only version
+differences, `bytes` and `rustversion`, were not built by this target).
+
+| Vault | Pre-N p50 (95% CI) | Post-N p50 (95% CI) | Delta | 5% gate |
+|---|---:|---:|---:|---|
+| 10k files | **1.795 s** (1.779–1.830) | **1.856 s** (1.840–1.870) | **+3.403%** | PASS |
+| 50k files | **10.721 s** (10.636–11.240) | **10.977 s** (10.886–11.050) | **+2.390%** | PASS |
+
+Commands (run one at a time from the corresponding detached worktree; target
+paths below are rooted in the primary checkout):
+
+```sh
+CARGO_TARGET_DIR=/path/to/slate/target/milestone-n-scan-pre cargo bench --offline -p slate-core --bench scan_bench -- 'first_open_and_scan/(10000|50000)$' --sample-size 20
+CARGO_TARGET_DIR=/path/to/slate/target/milestone-n-scan-post-fresh cargo bench --offline -p slate-core --bench scan_bench -- 'first_open_and_scan/(10000|50000)$' --sample-size 20
+```
+
+Raw median estimates and confidence intervals live at
+`target/milestone-n-scan-pre/criterion/first_open_and_scan/` and
+`target/milestone-n-scan-post-fresh/criterion/first_open_and_scan/`. The p50 delta is
+`(post - pre) / pre * 100`; both sizes remain inside decision 16's no-worse-than
+5% regression budget.

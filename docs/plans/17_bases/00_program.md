@@ -78,4 +78,17 @@ Wave 5 (author)    N4-1 builder core ─▶ N4-2 builder preview/save ─ N4-3 s
 - **§N-F (read-only query path):** census — executing every corpus query over a fixture vault leaves every vault byte identical (hash before/after). Writes happen only via the three decision-1 paths.
 - **§N-G (projection & authoring equivalence):** table and list expose the same rows/data/actions per view; builder → AST → `.base` → AST round-trips to the same query; every builder-expressible query renders identically when re-opened from its saved `.base`.
 
+**Automated close-out evidence — 2026-07-09.** Code and test remediation is
+committed through `526b615`; this evidence update closes the remaining N-VER-02
+performance finding. Generated default/full censuses cover serializer edits,
+DQL, pushdown equivalence,
+cancellation under real load, warm/cold mutation interleavings, scanner
+incrementality, read-only execution, and fail-loud behavior. The recorded p50
+query/cache/format gates pass, and matched first-open scan p50 changed +3.403%
+at 10k and +2.390% at 50k, both within decision 16's 5% ceiling; see
+[`BENCHMARKS.md`](../../../BENCHMARKS.md) and the
+[`milestone audit`](milestone_n_audit_2026-07-09.md). This does **not** mark
+manual AT complete: [`at_smoke_checklist.md`](at_smoke_checklist.md) remains the
+sole operational blocker.
+
 Specs: [n0](specs/n0_spec.md) · [n1](specs/n1_spec.md) · [n2](specs/n2_spec.md) · [n3](specs/n3_spec.md) · [n4](specs/n4_spec.md) · [gap analysis](specs/gap_analysis.md).
