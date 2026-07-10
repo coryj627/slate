@@ -577,6 +577,279 @@ fn transient_sort_validates_and_clears_on_reset_save_and_close() {
 }
 
 #[test]
+fn transient_sort_clears_when_removing_sorted_view_reuses_view_zero() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/RemoveView.base",
+            br#"views:
+  - type: table
+    name: Sorted view
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+  - type: table
+    name: New view zero
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/RemoveView.base").unwrap();
+
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Two.md"
+    );
+
+    session
+        .base_apply_edit(handle, crate::bases::BaseEdit::RemoveView { view: 0 })
+        .unwrap();
+
+    assert_eq!(session.base_views(handle).unwrap()[0].name, "New view zero");
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Ten.md",
+        "the removed view's numeric-index sort must not leak into the replacement view 0"
+    );
+}
+
+#[test]
+fn transient_sort_clears_when_saved_order_hides_sorted_column() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/HiddenColumn.base",
+            br#"views:
+  - type: table
+    name: Columns
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/HiddenColumn.base").unwrap();
+
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    session
+        .base_apply_edit(
+            handle,
+            crate::bases::BaseEdit::SetViewKey {
+                view: 0,
+                key: "order".to_string(),
+                value: "[file.name]".to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Ten.md",
+        "a transient key for a now-hidden column must not keep sorting the view"
+    );
+}
+
+fn assert_structural_edit_clears_transient_sort(edit: crate::bases::BaseEdit) {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Structural.base",
+            br#"views:
+  - type: table
+    name: Structural
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/Structural.base").unwrap();
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+
+    session.base_apply_edit(handle, edit.clone()).unwrap();
+
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Ten.md",
+        "structural edit must clear the transient sort: {edit:?}"
+    );
+}
+
+#[test]
+fn transient_sort_clears_when_a_view_is_added() {
+    assert_structural_edit_clears_transient_sort(crate::bases::BaseEdit::AddView {
+        yaml: "type: table\nname: Added\norder: [file.name]".to_string(),
+    });
+}
+
+#[test]
+fn transient_sort_clears_when_the_same_view_type_changes() {
+    assert_structural_edit_clears_transient_sort(crate::bases::BaseEdit::SetViewKey {
+        view: 0,
+        key: "type".to_string(),
+        value: "list".to_string(),
+    });
+}
+
+#[test]
+fn transient_sort_clears_when_the_same_view_source_changes() {
+    assert_structural_edit_clears_transient_sort(crate::bases::BaseEdit::SetViewKey {
+        view: 0,
+        key: "source".to_string(),
+        value: "files".to_string(),
+    });
+}
+
+#[test]
+fn transient_sort_clears_when_the_same_view_slate_state_changes() {
+    assert_structural_edit_clears_transient_sort(crate::bases::BaseEdit::SetSlateState {
+        view: 0,
+        yaml: Some("slate:\n  density: compact".to_string()),
+    });
+}
+
+#[test]
+fn transient_sort_clears_when_formula_is_removed_and_readded() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/FormulaSort.base",
+            br#"formulas:
+  rank: score
+views:
+  - type: table
+    name: Formula sort
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, formula.rank]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/FormulaSort.base").unwrap();
+
+    session
+        .base_set_transient_sort(handle, 0, Some("formula.rank".to_string()), true)
+        .unwrap();
+    session
+        .base_apply_edits(
+            handle,
+            vec![
+                crate::bases::BaseEdit::RemoveFormula {
+                    name: "rank".to_string(),
+                },
+                crate::bases::BaseEdit::SetFormula {
+                    name: "rank".to_string(),
+                    expression: "score".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Ten.md"
+    );
+}
+
+#[test]
+fn transient_sort_survives_unrelated_scalar_and_filter_edits() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/PreserveSort.base",
+            br#"views:
+  - type: table
+    name: Original
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session.open_base("Queries/PreserveSort.base").unwrap();
+
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    session
+        .base_apply_edits(
+            handle,
+            vec![
+                crate::bases::BaseEdit::RenameView {
+                    view: 0,
+                    name: "Renamed".to_string(),
+                },
+                crate::bases::BaseEdit::SetViewFilters {
+                    view: 0,
+                    yaml: "filters: 'file.inFolder(\"Notes\")'".to_string(),
+                },
+                crate::bases::BaseEdit::SetTopLevelFilters {
+                    yaml: "filters: 'score > 0'".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(session.base_views(handle).unwrap()[0].name, "Renamed");
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Two.md"
+    );
+}
+
+#[test]
 fn open_query_and_open_dql_execute_ephemeral_handles_with_this_precedence() {
     let (_tmp, session) = make_vault(|p| {
         p.create_dir("Queries").unwrap();
@@ -930,6 +1203,249 @@ fn base_apply_edit_saves_base_file_and_refreshes_open_handle() {
             .unwrap()
             .view_count,
         1
+    );
+}
+
+#[test]
+fn base_apply_edits_rejects_later_invalid_edit_without_mutating_session_or_disk() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Atomic.base",
+            br#"views:
+  - type: table
+    name: Original
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Atomic.base").unwrap();
+    let disk_before = std::fs::read(tmp.path().join("Queries/Atomic.base")).unwrap();
+    let views_before = session.base_views(handle).unwrap();
+    let query_before = session.base_view_edit_query_json(handle, 0).unwrap();
+    let result_before = result_matrix(
+        &session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap(),
+    );
+    let indexed_before: String = session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .query_row(
+            "SELECT bf.parsed_query_json
+             FROM bases_files bf
+             JOIN files f ON f.id = bf.file_id
+             WHERE f.path = ?1",
+            ["Queries/Atomic.base"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let generation_before = session.bases_generation();
+    let oplog_before = session.read_oplog("Queries/Atomic.base").unwrap().len();
+
+    let error = session
+        .base_apply_edits(
+            handle,
+            vec![
+                crate::bases::BaseEdit::RenameView {
+                    view: 0,
+                    name: "Must not persist".to_string(),
+                },
+                crate::bases::BaseEdit::RenameView {
+                    view: 99,
+                    name: "Invalid".to_string(),
+                },
+            ],
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("base edit rejected"), "{error}");
+
+    assert_eq!(
+        std::fs::read(tmp.path().join("Queries/Atomic.base")).unwrap(),
+        disk_before
+    );
+    assert_eq!(session.base_views(handle).unwrap(), views_before);
+    assert_eq!(
+        session.base_view_edit_query_json(handle, 0).unwrap(),
+        query_before
+    );
+    assert_eq!(
+        result_matrix(
+            &session
+                .base_execute(handle, 0, None, None, &CancelToken::new())
+                .unwrap()
+        ),
+        result_before
+    );
+    let indexed_after: String = session
+        .conn
+        .lock()
+        .expect("session connection mutex")
+        .query_row(
+            "SELECT bf.parsed_query_json
+             FROM bases_files bf
+             JOIN files f ON f.id = bf.file_id
+             WHERE f.path = ?1",
+            ["Queries/Atomic.base"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed_after, indexed_before);
+    assert_eq!(session.bases_generation(), generation_before);
+    assert_eq!(
+        session.read_oplog("Queries/Atomic.base").unwrap().len(),
+        oplog_before
+    );
+
+    let fresh = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    fresh.scan_initial(&CancelToken::new()).unwrap();
+    let fresh_handle = fresh.open_base("Queries/Atomic.base").unwrap();
+    assert_eq!(fresh.base_views(fresh_handle).unwrap(), views_before);
+    assert_eq!(
+        fresh.base_view_edit_query_json(fresh_handle, 0).unwrap(),
+        query_before
+    );
+    assert_eq!(
+        result_matrix(
+            &fresh
+                .base_execute(fresh_handle, 0, None, None, &CancelToken::new())
+                .unwrap()
+        ),
+        result_before
+    );
+}
+
+#[test]
+fn base_apply_edits_applies_dependent_edits_with_one_save_and_final_handle_refresh() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Dependent.base",
+            br#"views:
+  - type: table
+    name: Original
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Alpha.md", b"# Alpha\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Dependent.base").unwrap();
+    let generation_before = session.bases_generation();
+    assert!(
+        session
+            .read_oplog("Queries/Dependent.base")
+            .unwrap()
+            .is_empty()
+    );
+
+    session
+        .base_apply_edits(
+            handle,
+            vec![
+                crate::bases::BaseEdit::AddView {
+                    yaml: "type: table\nname: Added\nfilters: 'file.inFolder(\"Notes\")'\norder: [file.name]"
+                        .to_string(),
+                },
+                crate::bases::BaseEdit::RenameView {
+                    view: 1,
+                    name: "Final".to_string(),
+                },
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(session.bases_generation(), generation_before + 1);
+    assert_eq!(
+        session.read_oplog("Queries/Dependent.base").unwrap().len(),
+        1
+    );
+    assert_eq!(
+        session
+            .base_views(handle)
+            .unwrap()
+            .into_iter()
+            .map(|view| view.name)
+            .collect::<Vec<_>>(),
+        ["Original", "Final"]
+    );
+    assert_eq!(
+        session
+            .base_execute(handle, 1, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Alpha.md"
+    );
+    assert_eq!(
+        session
+            .bases_list()
+            .unwrap()
+            .into_iter()
+            .find(|summary| summary.path == "Queries/Dependent.base")
+            .unwrap()
+            .view_count,
+        2
+    );
+}
+
+#[test]
+fn base_apply_edits_empty_batch_is_a_true_no_op() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file(
+            "Queries/Empty.base",
+            br#"views:
+  - type: table
+    name: Empty
+    filters: "file.inFolder(\"Notes\")"
+    order: [file.name, score]
+"#,
+        )
+        .unwrap();
+        p.write_file("Notes/Ten.md", b"---\nscore: 10\n---\n# Ten\n")
+            .unwrap();
+        p.write_file("Notes/Two.md", b"---\nscore: 2\n---\n# Two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let handle = session.open_base("Queries/Empty.base").unwrap();
+    session
+        .base_set_transient_sort(handle, 0, Some("score".to_string()), true)
+        .unwrap();
+    let disk_before = std::fs::read(tmp.path().join("Queries/Empty.base")).unwrap();
+    let generation_before = session.bases_generation();
+    let query_before = session.base_view_edit_query_json(handle, 0).unwrap();
+
+    session.base_apply_edits(handle, Vec::new()).unwrap();
+
+    assert_eq!(
+        std::fs::read(tmp.path().join("Queries/Empty.base")).unwrap(),
+        disk_before
+    );
+    assert_eq!(session.bases_generation(), generation_before);
+    assert!(session.read_oplog("Queries/Empty.base").unwrap().is_empty());
+    assert_eq!(
+        session.base_view_edit_query_json(handle, 0).unwrap(),
+        query_before
+    );
+    assert_eq!(
+        session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap()
+            .rows[0]
+            .file_path,
+        "Notes/Two.md"
     );
 }
 

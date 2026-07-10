@@ -5441,6 +5441,37 @@ fn base_query_for_view(
     }
 }
 
+fn base_edits_invalidate_transient_sort(
+    transient_sort: Option<&(u32, crate::bases::SortKey)>,
+    edits: &[crate::bases::BaseEdit],
+) -> bool {
+    let Some((sort_view, _)) = transient_sort else {
+        return false;
+    };
+    edits.iter().any(|edit| match edit {
+        // View indices are positional. Collection edits can change which view
+        // a saved index identifies, so the contract clears rather than remaps.
+        crate::bases::BaseEdit::AddView { .. } | crate::bases::BaseEdit::RemoveView { .. } => true,
+        crate::bases::BaseEdit::SetViewKey { view, key, .. } => {
+            *view as u32 == *sort_view && matches!(key.as_str(), "order" | "source" | "type")
+        }
+        crate::bases::BaseEdit::RemoveViewKey { view, key } => {
+            *view as u32 == *sort_view && matches!(key.as_str(), "order" | "slate" | "source")
+        }
+        crate::bases::BaseEdit::SetSlateState { view, .. } => *view as u32 == *sort_view,
+        // A removed formula can be the transient column itself or a dependency
+        // of that column. Clearing conservatively avoids retaining a key that
+        // becomes meaningful again after a later formula edit.
+        crate::bases::BaseEdit::RemoveFormula { .. } => true,
+        crate::bases::BaseEdit::RenameView { .. }
+        | crate::bases::BaseEdit::SetViewFilters { .. }
+        | crate::bases::BaseEdit::SetTopLevelFilters { .. }
+        | crate::bases::BaseEdit::SetFormula { .. }
+        | crate::bases::BaseEdit::SetDisplayName { .. }
+        | crate::bases::BaseEdit::SetSummaryAssignment { .. } => false,
+    })
+}
+
 impl VaultSession {
     pub fn bases_list(&self) -> Result<Vec<BaseFileSummary>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
@@ -5934,6 +5965,16 @@ impl VaultSession {
         handle: u64,
         edit: crate::bases::BaseEdit,
     ) -> Result<(), VaultError> {
+        self.base_apply_edits(handle, vec![edit])
+    }
+
+    /// Apply an ordered batch to one open `.base`, validating and serializing
+    /// the complete batch before the single persistence operation.
+    pub fn base_apply_edits(
+        &self,
+        handle: u64,
+        edits: Vec<crate::bases::BaseEdit>,
+    ) -> Result<(), VaultError> {
         let mut bases = self.bases.lock().expect("base registry mutex");
         let state = bases
             .get_mut(&handle)
@@ -5949,11 +5990,12 @@ impl VaultSession {
                 message: "ephemeral query handles cannot be edited as .base files".to_string(),
             });
         };
-        let edited_slate_view = match &edit {
-            crate::bases::BaseEdit::SetSlateState { view, .. } => Some(*view as u32),
-            _ => None,
-        };
-        let new_text = crate::bases::serialize_base(base, &[edit]).map_err(|err| {
+        if edits.is_empty() {
+            return Ok(());
+        }
+        let clear_transient_sort =
+            base_edits_invalidate_transient_sort(state.transient_sort.as_ref(), &edits);
+        let new_text = crate::bases::serialize_base(base, &edits).map_err(|err| {
             VaultError::InvalidArgument {
                 message: format!("base edit rejected: {err}"),
             }
@@ -5963,12 +6005,7 @@ impl VaultSession {
         state.source = OpenBaseSource::Base(base);
         state.warnings = warnings.into_iter().map(|w| w.message).collect();
         state.cache = crate::bases::engine::BasesQueryCache::default();
-        if edited_slate_view.is_some_and(|view| {
-            state
-                .transient_sort
-                .as_ref()
-                .is_some_and(|(sort_view, _)| *sort_view == view)
-        }) {
+        if clear_transient_sort {
             state.transient_sort = None;
         }
         Ok(())

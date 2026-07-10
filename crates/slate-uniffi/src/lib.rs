@@ -4455,6 +4455,12 @@ impl VaultSession {
         Ok(self.inner.base_apply_edit(handle, edit.into())?)
     }
 
+    pub fn base_apply_edits(&self, handle: u64, edits: Vec<BaseEdit>) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .base_apply_edits(handle, edits.into_iter().map(Into::into).collect())?)
+    }
+
     pub fn save_query_as_base(&self, query_json: String, path: String) -> Result<(), VaultError> {
         Ok(self.inner.save_query_as_base(&query_json, &path)?)
     }
@@ -5822,6 +5828,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(session.base_views(handle).unwrap()[0].name, "Renamed");
+        session
+            .base_apply_edits(
+                handle,
+                vec![
+                    BaseEdit::RenameView {
+                        view: 0,
+                        name: "Batch draft".into(),
+                    },
+                    BaseEdit::RenameView {
+                        view: 0,
+                        name: "Batched".into(),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(session.base_views(handle).unwrap()[0].name, "Batched");
 
         let converted = session
             .dql_as_base("TABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n".into())
