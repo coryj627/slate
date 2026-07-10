@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 use slate_core::bases::eval::{
-    DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext, Value,
-    VaultLookup, WarningSink, eval,
+    DateValue, DqlDateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas,
+    RowContext, Value, VaultLookup, WarningSink, eval,
 };
 use slate_core::bases::expr::parse_expr;
 
@@ -461,10 +461,10 @@ fn join_rejects_multiple_arguments() {
 }
 
 #[test]
-fn flat_rejects_arguments() {
+fn flat_rejects_more_than_one_depth_argument() {
     assert_eq!(
-        error_message("[[1], [2]].flat(1)"),
-        "flat expected 0, got 1"
+        error_message("[[1], [2]].flat(1, 2)"),
+        "flat expected 0..=1, got 2"
     );
 }
 
@@ -603,6 +603,423 @@ fn evaluates_methods_and_list_expressions() {
 }
 
 #[test]
+fn dql_runtime_markers_preserve_javascript_semantics() {
+    let vault = TestVault::default();
+    let warnings = WarningSink::default();
+    let file = fixture_row("Projects/Alpha.md");
+    let formulas = ResolvedFormulas::default();
+    let ctx = ctx(&file, None, &formulas, &vault, &warnings);
+
+    assert_eq!(
+        eval_src(
+            r#"number(object("slate.dql.number", "abc -12.5 xyz"))"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Number(-12.5)
+    );
+    assert_eq!(
+        eval_src(r#"object("slate.dql.length", "😀").length"#, &ctx).unwrap(),
+        Value::Number(2.0)
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.length", object("a", 1, "b", 2)).length"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Number(2.0)
+    );
+    assert_eq!(
+        eval_src(r#"object("slate.dql.length", null).length"#, &ctx).unwrap(),
+        Value::Number(0.0)
+    );
+    assert_eq!(
+        eval_src(
+            r#""ab".replace(object("slate.dql.literal-replace", ""), "-")"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("a-b".into())
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.substring", "abcd").slice(3, 1)"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("bc".into())
+    );
+    assert_eq!(
+        eval_src("(-1.5).round()", &ctx).unwrap(),
+        Value::Number(-1.0)
+    );
+    assert_eq!(
+        eval_src("(-1.25).round(1)", &ctx).unwrap(),
+        Value::Number(-1.3)
+    );
+    assert_eq!(
+        eval_src("123.4.round(-1)", &ctx).unwrap(),
+        Value::Number(123.0)
+    );
+    assert_eq!(eval_src("2.55.round(1)", &ctx).unwrap(), Value::Number(2.5));
+    assert_eq!(
+        eval_src(r#"number(object("slate.dql.number", ".5"))"#, &ctx).unwrap(),
+        Value::Number(5.0)
+    );
+    assert_eq!(
+        eval_src(r#"number(object("slate.dql.number", "1e2"))"#, &ctx,).unwrap(),
+        Value::Number(1.0)
+    );
+
+    assert_eq!(
+        eval_src(r#"sum(object("slate.dql.list-aggregate", [1, 2]))"#, &ctx,).unwrap(),
+        Value::Number(3.0)
+    );
+    assert_eq!(
+        eval_src(
+            r#"min(object("slate.dql.list-aggregate", ["b", "a"]))"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("a".into())
+    );
+    assert_eq!(
+        eval_src(r#"min(object("slate.dql.list-aggregate", [2, 10]))"#, &ctx,).unwrap(),
+        Value::Number(2.0)
+    );
+    assert_eq!(
+        eval_src(r#"max(object("slate.dql.list-aggregate", [2, 10]))"#, &ctx,).unwrap(),
+        Value::Number(10.0)
+    );
+    assert_eq!(
+        eval_src(
+            r#"min(object("slate.dql.list-aggregate", [null, 5]))"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Number(5.0)
+    );
+    assert_eq!(
+        eval_src(
+            r#"max(object("slate.dql.list-aggregate", [5, null]))"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Number(5.0)
+    );
+    assert_eq!(
+        eval_src(r#"min(object("slate.dql.list-aggregate", [null]))"#, &ctx,).unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        eval_src(
+            r#"max(object("slate.dql.list-aggregate", [date("2026-07-01"), date("2026-07-02")]))"#,
+            &ctx,
+        )
+        .unwrap(),
+        eval_src(r#"date("2026-07-02")"#, &ctx).unwrap()
+    );
+    assert!(
+        eval_src(r#"sum(object("slate.dql.list-aggregate", 1))"#, &ctx,)
+            .unwrap_err()
+            .to_string()
+            .contains("DQL aggregate requires a list")
+    );
+    assert_eq!(
+        eval_src(r#"object("slate.dql.join", [1, 2]).join(",")"#, &ctx,).unwrap(),
+        Value::Text("1,2".into())
+    );
+    assert!(
+        eval_src(r#"object("slate.dql.list-method", 1).flat()"#, &ctx,)
+            .unwrap_err()
+            .to_string()
+            .contains("DQL flat requires a list")
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.list-method", [1, 2]).filter(value > 1)"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::List(vec![Value::Number(2.0)])
+    );
+    assert!(
+        eval_src(r#"object("slate.dql.list-method", 1).map(value)"#, &ctx,)
+            .unwrap_err()
+            .to_string()
+            .contains("DQL map requires a list")
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.list-method", [2, 1, 2]).unique()"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::List(vec![Value::Number(1.0), Value::Number(2.0)])
+    );
+    assert!(
+        eval_src(
+            r#"object("slate.dql.list-method", "abc").slice(0, 1)"#,
+            &ctx,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("DQL slice requires a list")
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.list-method", [1, 2, 3]).slice(-1)"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::List(vec![Value::Number(3.0)])
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.list-method", [1, 2, 3]).slice(0, -1)"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::List(vec![Value::Number(1.0), Value::Number(2.0)])
+    );
+    assert_eq!(
+        eval_src("[2, 10].sort()", &ctx).unwrap(),
+        Value::List(vec![Value::Number(2.0), Value::Number(10.0)])
+    );
+    assert_eq!(
+        eval_src(r#"[["a, b"], ["a", "b"]].unique()"#, &ctx).unwrap(),
+        Value::List(vec![
+            Value::List(vec![Value::Text("a, b".into())]),
+            Value::List(vec![Value::Text("a".into()), Value::Text("b".into()),]),
+        ])
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.contains", [[[1]]]).contains(1)"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_src(r#"object("slate.dql.contains", 1).contains(1)"#, &ctx,).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.contains", object("a", 1)).contains(object("a", 1))"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.contains", [[1]]).contains([1])"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval_src("[[[1]]].contains(1)", &ctx).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval_src(r#"object("slate.dql.reverse", "aé").reverse()"#, &ctx,).unwrap(),
+        Value::Text("éa".into())
+    );
+    assert_eq!(
+        eval_src(r#"object("slate.dql.reverse", 7).reverse()"#, &ctx,).unwrap(),
+        Value::Number(7.0)
+    );
+    assert!(
+        eval_src(r#"object("slate.dql.reverse", "😀").reverse()"#, &ctx,)
+            .unwrap_err()
+            .to_string()
+            .contains("UTF-16 surrogate")
+    );
+}
+
+#[test]
+fn dql_date_only_bridge_preserves_calendar_days_in_non_utc_provenance() {
+    let vault = TestVault::default();
+    let warnings = WarningSink::default();
+    let file = fixture_row("Projects/Alpha.md");
+    let native_date = Value::Date(DateValue {
+        epoch_ms: 1_783_641_600_000,
+        has_time: false,
+    });
+    let native_datetime = Value::Date(DateValue {
+        epoch_ms: 1_783_641_600_000,
+        has_time: true,
+    });
+    let dql_date = Value::DqlDate(DqlDateValue {
+        epoch_ms: 1_783_656_000_000,
+        has_time: false,
+        offset_minutes: -240,
+        is_local: false,
+    });
+    let dql_next = Value::DqlDate(DqlDateValue {
+        epoch_ms: 1_783_742_400_000,
+        has_time: false,
+        offset_minutes: -240,
+        is_local: false,
+    });
+    let formulas = ResolvedFormulas::from([
+        ("native_date".to_string(), native_date.clone()),
+        ("native_datetime".to_string(), native_datetime),
+        ("dql_date".to_string(), dql_date.clone()),
+        ("dql_next".to_string(), dql_next.clone()),
+    ]);
+    let ctx = ctx(&file, None, &formulas, &vault, &warnings);
+
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.equality", formula.native_date) == formula.dql_date"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.ordering", formula.native_date) >= formula.dql_date"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.ordering", formula.native_datetime) < formula.dql_date"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::Bool(true),
+        "date-times remain instant-based"
+    );
+    assert_eq!(
+        eval_src(
+            r#"object("slate.dql.sort", [formula.dql_next, formula.native_date, formula.dql_date]).sort()"#,
+            &ctx,
+        )
+        .unwrap(),
+        Value::List(vec![native_date, dql_date, dql_next])
+    );
+
+    let converted = eval_src(
+        r#"date(object("slate.dql.date", formula.native_date))"#,
+        &ctx,
+    )
+    .unwrap();
+    let Value::DqlDate(converted) = converted else {
+        panic!("date(native date-only) must produce a DQL date")
+    };
+    let local_coordinate_ms =
+        converted.epoch_ms + i64::from(converted.offset_minutes).saturating_mul(60_000);
+    assert!(
+        (1_783_641_600_000..1_783_728_000_000).contains(&local_coordinate_ms),
+        "coercion must retain the authored 2026-07-10 calendar day"
+    );
+    assert!(!converted.has_time);
+}
+
+#[test]
+fn dql_regex_markers_use_javascript_replacement_and_character_classes() {
+    let vault = TestVault::default();
+    let warnings = WarningSink::default();
+    let file = fixture_row("Projects/Alpha.md");
+    let formulas = ResolvedFormulas::default();
+    let ctx = ctx(&file, None, &formulas, &vault, &warnings);
+
+    let regex = |pattern: &str, mode: &str| {
+        format!("object(\"slate.dql.regex\", {pattern:?}, \"slate.dql.regex.mode\", {mode:?})")
+    };
+
+    assert_eq!(
+        eval_src(
+            &format!(r#""a".replace({}, "$<x>")"#, regex("a", "global")),
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("$<x>".into())
+    );
+    assert_eq!(
+        eval_src(
+            &format!(r#""a".replace({}, "$<x>")"#, regex("(?<x>a)", "global")),
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("a".into())
+    );
+    assert_eq!(
+        eval_src(
+            &format!(r#""a".replace({}, "$01")"#, regex("(a)", "global")),
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("a".into())
+    );
+    assert_eq!(
+        eval_src(
+            &format!(r#""a".replace({}, "$0")"#, regex("a", "global")),
+            &ctx,
+        )
+        .unwrap(),
+        Value::Text("$0".into())
+    );
+    assert_eq!(
+        eval_src(&format!(r#"{}.matches("é")"#, regex(r"\w", "search")), &ctx).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval_src(&format!(r#"{}.matches("a")"#, regex(r"\w", "search")), &ctx).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_src(&format!(r#"{}.matches("١")"#, regex(r"\d", "search")), &ctx).unwrap(),
+        Value::Bool(false)
+    );
+    for pattern in [
+        r"\W", r"\s", r"\p{L}", r"\Afoo\z", r"\G", r"\u0061", ".", "é", "[^a]", "(?P<x>a)",
+        "(?i)a", "(?R)a", "(?-i:a)", "[a&&b]", "[[a]]",
+    ] {
+        assert!(matches!(
+            eval_src(
+                &format!(r#"{}.matches("a")"#, regex(pattern, "search")),
+                &ctx,
+            ),
+            Err(EvalError::InvalidArgument { .. })
+        ));
+    }
+    assert!(matches!(
+        eval_src(&format!(r#""😀".split({})"#, regex("", "search")), &ctx),
+        Err(EvalError::InvalidArgument { .. })
+    ));
+    assert_eq!(
+        eval_src(&format!(r#""é".split({})"#, regex("", "search")), &ctx).unwrap(),
+        Value::List(vec![Value::Text("é".into())])
+    );
+    assert_eq!(
+        eval_src(&format!(r#""ab".split({})"#, regex("a*", "search")), &ctx).unwrap(),
+        Value::List(vec![Value::Text(String::new()), Value::Text("b".into())])
+    );
+    assert!(matches!(
+        eval_src(&format!(r#""😀".split({})"#, regex("a*", "search")), &ctx),
+        Err(EvalError::InvalidArgument { .. })
+    ));
+    assert!(matches!(
+        eval_src(
+            &format!(r#""😀".replace({}, "x")"#, regex("a*", "global")),
+            &ctx,
+        ),
+        Err(EvalError::InvalidArgument { .. })
+    ));
+}
+
+#[test]
 fn file_and_link_methods_use_vault_lookup() {
     let mut vault = TestVault::default();
     vault
@@ -614,6 +1031,9 @@ fn file_and_link_methods_use_vault_lookup() {
             target: "Beta".into(),
             display: None,
             resolved_path: Some("Projects/Beta.md".into()),
+            subpath: None,
+            link_type: "file".into(),
+            embed: false,
         }],
     );
     let warnings = WarningSink::default();

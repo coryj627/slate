@@ -170,27 +170,30 @@ fn push_dql_frontmatter_value(value: &Yaml, out: &mut Vec<String>, seen: &mut Ha
             }
         }
         Yaml::String(value) if !value.is_empty() => push_dql_tag_tokens(value, out, seen),
-        Yaml::Integer(value) if *value != 0 => {
+        Yaml::Integer(value) => {
             push_dql_tag_tokens(&value.to_string(), out, seen);
         }
         Yaml::Real(value) => {
-            if let Ok(number) = value.parse::<f64>()
-                && number != 0.0
-                && !number.is_nan()
-            {
-                push_dql_tag_tokens(&number.to_string(), out, seen);
+            if let Ok(number) = value.parse::<f64>() {
+                let text = if number.is_nan() {
+                    "NaN".to_string()
+                } else if number == f64::INFINITY {
+                    "Infinity".to_string()
+                } else if number == f64::NEG_INFINITY {
+                    "-Infinity".to_string()
+                } else {
+                    number.to_string()
+                };
+                push_dql_tag_tokens(&text, out, seen);
             }
         }
-        Yaml::Boolean(true) => push_dql_tag_tokens("true", out, seen),
-        // Dataview filters falsy array/scalar values before coercion. YAML
-        // objects and unresolved aliases are not scalar tag inputs.
-        Yaml::String(_)
-        | Yaml::Integer(_)
-        | Yaml::Boolean(false)
-        | Yaml::Null
-        | Yaml::BadValue
-        | Yaml::Hash(_)
-        | Yaml::Alias(_) => {}
+        Yaml::Boolean(value) => {
+            push_dql_tag_tokens(if *value { "true" } else { "false" }, out, seen)
+        }
+        // JavaScript string coercion for a frontmatter object is
+        // "[object Object]"; feed that through the same DQL tag tokenizer.
+        Yaml::Hash(_) => push_dql_tag_tokens("[object Object]", out, seen),
+        Yaml::String(_) | Yaml::Null | Yaml::BadValue | Yaml::Alias(_) => {}
     }
 }
 
@@ -335,16 +338,23 @@ mod tests {
     }
 
     #[test]
-    fn dql_tags_flatten_nested_frontmatter_arrays_and_skip_falsy_values() {
+    fn dql_tags_flatten_nested_frontmatter_arrays_and_coerce_non_null_scalars() {
         let src = "---\ntags: [[A, B], [C, [D]], 0, false, null, '', E F, '0']\n---\n";
-        assert_eq!(raw_tags_for(src), vec!["A", "B", "C", "D", "E", "F", "0"]);
+        assert_eq!(
+            raw_tags_for(src),
+            vec!["A", "B", "C", "D", "0", "false", "E", "F"]
+        );
     }
 
     #[test]
-    fn dql_tags_skip_falsy_scalar_frontmatter_values() {
-        assert!(raw_tags_for("---\ntag: 0\n---\n").is_empty());
-        assert!(raw_tags_for("---\nTAG: false\n---\n").is_empty());
+    fn dql_tags_coerce_zero_false_and_objects_but_skip_null() {
+        assert_eq!(raw_tags_for("---\ntag: 0\n---\n"), vec!["0"]);
+        assert_eq!(raw_tags_for("---\nTAG: false\n---\n"), vec!["false"]);
         assert!(raw_tags_for("---\ntags: null\n---\n").is_empty());
+        assert_eq!(
+            raw_tags_for("---\ntags: { key: value }\n---\n"),
+            vec!["[object", "Object]"]
+        );
     }
 
     #[test]

@@ -47,6 +47,7 @@ pub mod db;
 pub mod diagram;
 pub mod diff;
 pub mod doc_buffer;
+mod dql_inline_fields_db;
 pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;

@@ -47,6 +47,60 @@ fn scan_initial_indexes_markdown_and_non_markdown() {
 }
 
 #[test]
+fn scan_and_save_rebuild_dql_inline_fields_without_changing_frontmatter_properties() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "note.md",
+            b"---\nfront: keep\n---\npage:: 1\n\n- list:: 2\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        let keys: Vec<String> = conn
+            .prepare(
+                "SELECT i.key FROM dql_inline_fields i
+                 JOIN files f ON f.id = i.file_id
+                 WHERE f.path = 'note.md' ORDER BY i.ordinal",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(keys, ["list", "page"]);
+        let property_keys: Vec<String> = conn
+            .prepare(
+                "SELECT p.key FROM properties p JOIN files f ON f.id = p.file_id
+                 WHERE f.path = 'note.md' ORDER BY p.ordinal",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(property_keys, ["front"]);
+    }
+
+    session.save_text("note.md", "updated:: 3\n", None).unwrap();
+    let conn = session.conn.lock().unwrap();
+    let keys: Vec<String> = conn
+        .prepare(
+            "SELECT i.key FROM dql_inline_fields i
+             JOIN files f ON f.id = i.file_id
+             WHERE f.path = 'note.md' ORDER BY i.ordinal",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(keys, ["updated"]);
+}
+
+#[test]
 fn scan_indexes_base_files_without_markdown_derivatives() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(
@@ -1799,7 +1853,7 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
     // Small source file with one heading, one outgoing link, and
     // one frontmatter property. Total is well under the 300-byte
     // cap configured below.
-    let small_body = "---\ntag: important\n---\n# H1\nSee [[target]]\n";
+    let small_body = "---\ntag: important\n---\n# H1\nSee [[target]]\nbody:: 1\n";
     provider
         .write_file("src.md", small_body.as_bytes())
         .unwrap();
@@ -1826,6 +1880,23 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
         !outgoing_before.is_empty(),
         "outgoing link should be indexed: {outgoing_before:?}"
     );
+    {
+        let conn = session.conn.lock().unwrap();
+        let (field_count, incomplete): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                   (SELECT COUNT(*) FROM dql_inline_fields i WHERE i.file_id = f.id),
+                   s.incomplete
+                 FROM files f
+                 JOIN dql_inline_field_state s ON s.file_id = f.id
+                 WHERE f.path = 'src.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(field_count, 1, "body inline field should be indexed");
+        assert_eq!(incomplete, 0, "small-file projection should be complete");
+    }
 
     // Grow the file past the cap. Use the FsVaultProvider directly
     // so we don't have to thread the session's provider out.
@@ -1863,6 +1934,24 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
     assert!(
         outgoing_after.is_empty(),
         "stale outgoing link rows must be purged, got {outgoing_after:?}"
+    );
+    let conn = session.conn.lock().unwrap();
+    let (field_count, incomplete): (i64, i64) = conn
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM dql_inline_fields i WHERE i.file_id = f.id),
+               s.incomplete
+             FROM files f
+             JOIN dql_inline_field_state s ON s.file_id = f.id
+             WHERE f.path = 'src.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(field_count, 0, "stale body inline fields must be purged");
+    assert_eq!(
+        incomplete, 1,
+        "large-file projection must fail loud instead of claiming an empty body"
     );
 }
 

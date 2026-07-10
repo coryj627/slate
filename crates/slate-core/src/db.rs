@@ -151,6 +151,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "file_tags: raw ordered projection for Dataview DQL compatibility",
         sql: include_str!("../migrations/024_dql_file_tags.sql"),
     },
+    Migration {
+        description: "inline_fields: ordered body projection for Dataview DQL compatibility",
+        sql: include_str!("../migrations/025_dql_inline_fields.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -786,7 +790,7 @@ mod tests {
 
     #[test]
     fn migration_024_creates_ordered_dql_tags_and_forces_one_rescan() {
-        let mut conn = fresh_db();
+        let conn = fresh_db();
         ensure_version_table(&conn).unwrap();
         for (index, migration) in MIGRATIONS[..23].iter().enumerate() {
             apply_migration(&conn, (index + 1) as u32, migration).unwrap();
@@ -811,7 +815,13 @@ mod tests {
             .unwrap();
         assert_eq!(table_before, 0);
 
-        assert_eq!(migrate(&mut conn).unwrap(), 24);
+        apply_migration(&conn, 24, &MIGRATIONS[23]).unwrap();
+        let version: u32 = conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 24);
 
         let table_after: u32 = conn
             .query_row(
@@ -839,6 +849,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mtime, 0, "migration 024 must force one scanner slow path");
+    }
+
+    #[test]
+    fn migration_025_creates_inline_field_projection_and_forces_one_rescan() {
+        let mut conn = fresh_db();
+        ensure_version_table(&conn).unwrap();
+        for (index, migration) in MIGRATIONS[..24].iter().enumerate() {
+            apply_migration(&conn, (index + 1) as u32, migration).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/inline.md', 'inline.md', 'md', 100, 1700000000000,
+               1700000000000, 'inline', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(migrate(&mut conn).unwrap(), 25);
+
+        for table in ["dql_inline_fields", "dql_inline_field_state"] {
+            let exists: u32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{table}");
+        }
+        let index_exists: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_dql_inline_fields_file'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_exists, 1);
+        let mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'notes/inline.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mtime, 0, "migration 025 must force one scanner slow path");
     }
 
     #[test]

@@ -21,6 +21,8 @@ type BasesResultSignature = (
     u64,
 );
 
+const DQL_CENSUS_NOW_MS: i64 = 1_783_656_000_000;
+
 fn bases_census_seed_count() -> u64 {
     if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
         128
@@ -401,7 +403,7 @@ fn make_dql_corpus_vault() -> (tempfile::TempDir, VaultSession) {
         provider
             .write_file(
                 "123.md",
-                b"---\ntags: [reading]\naliases: [One,Two]\nstatus: reading\nscheduled: 2026-07-10\npages: 120\nminutesPerPage: 3\nrating: 4.5\nscores: [1,2]\nvalue: x\nindex: 10\nkey: name\n---\n",
+                b"---\ntags: [reading, a/b]\naliases: [One,Two]\nstatus: reading\nscheduled: 2026-07-10\npages: 120\nminutesPerPage: 3\nrating: 4.5\nscores: [1,2]\nvalue: x\nindex: 10\nkey: name\n---\n",
             )
             .unwrap();
         provider
@@ -1311,6 +1313,70 @@ views:
             .collect::<Vec<_>>(),
         vec!["Alpha.md", "Beta.md"]
     );
+}
+
+#[test]
+fn dql_date_shorthand_session_cache_does_not_cross_new_york_midnight() {
+    const CHILD: &str = "SLATE_DQL_SESSION_CACHE_TZ_CHILD";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let test_name = std::thread::current()
+            .name()
+            .expect("session test thread has a name")
+            .to_string();
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("locate Slate core test binary"),
+        )
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TZ", "America/New_York")
+        .env(CHILD, "1")
+        .status()
+        .expect("run DQL session-cache test in America/New_York");
+        assert!(status.success(), "DQL session-cache timezone child failed");
+        return;
+    }
+
+    // 2026-07-10T04:00:00Z is local midnight in America/New_York.
+    const LOCAL_MIDNIGHT_MS: i64 = 1_783_656_000_000;
+    let before_midnight_ms = LOCAL_MIDNIGHT_MS - 1;
+    let after_midnight_ms = LOCAL_MIDNIGHT_MS + 1;
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("Notes/Alpha.md", b"# Alpha\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let handle = session
+        .open_dql(
+            "TABLE WITHOUT ID string(date(today)) AS \"Day\"\nWHERE file.path = \"Notes/Alpha.md\"\n",
+            None,
+        )
+        .unwrap();
+
+    let before = session
+        .base_execute_at(
+            handle,
+            0,
+            None,
+            None,
+            before_midnight_ms,
+            &CancelToken::new(),
+        )
+        .unwrap();
+    let after = session
+        .base_execute_at(
+            handle,
+            0,
+            None,
+            None,
+            after_midnight_ms,
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+    assert_eq!(before.rows[0].values[0].display, "July 09, 2026");
+    assert_eq!(after.rows[0].values[0].display, "July 10, 2026");
+    assert_eq!(before.executed_at_ms, before_midnight_ms);
+    assert_eq!(after.executed_at_ms, after_midnight_ms);
 }
 
 #[test]
@@ -3180,7 +3246,14 @@ fn census_bases_fail_loud() {
             .open_dql(&case.source, case.this_path.clone())
             .unwrap();
         let baseline = session
-            .base_execute(baseline_handle, 0, None, None, &CancelToken::new())
+            .base_execute_at(
+                baseline_handle,
+                0,
+                None,
+                None,
+                DQL_CENSUS_NOW_MS,
+                &CancelToken::new(),
+            )
             .unwrap();
         let query: crate::bases::SlateQuery =
             serde_json::from_str(&session.base_view_query_json(baseline_handle, 0).unwrap())
@@ -3207,7 +3280,14 @@ fn census_bases_fail_loud() {
                 )
                 .unwrap();
             let result = session
-                .base_execute(handle, 0, None, None, &CancelToken::new())
+                .base_execute_at(
+                    handle,
+                    0,
+                    None,
+                    None,
+                    DQL_CENSUS_NOW_MS,
+                    &CancelToken::new(),
+                )
                 .unwrap_or_else(|error| panic!("{context}: execute failed: {error}"));
             session.close_base(handle);
             assert_eq!(

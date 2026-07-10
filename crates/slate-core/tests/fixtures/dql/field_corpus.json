@@ -1,0 +1,811 @@
+[
+  {
+    "name": "supported-file-fields",
+    "operation": "file_fields",
+    "disposition": "supported",
+    "coverage": [
+      "field.file.name",
+      "field.file.path",
+      "field.file.folder",
+      "field.file.ext",
+      "field.file.size",
+      "field.file.ctime",
+      "field.file.mtime",
+      "field.file.tags",
+      "field.file.aliases",
+      "field.file.cday",
+      "field.file.mday",
+      "field.file.link",
+      "field.file.inlinks",
+      "field.file.outlinks"
+    ],
+    "source": "TABLE WITHOUT ID file.name AS \"Name\", file.path AS \"Path\", file.folder AS \"Folder\", file.ext AS \"Extension\", file.size AS \"Size\", file.ctime AS \"Created\", file.mtime AS \"Modified\", file.tags AS \"Tags\", file.aliases AS \"Aliases\", file.cday AS \"Created day\", file.mday AS \"Modified day\", file.link AS \"Link\", file.inlinks AS \"Incoming\", file.outlinks AS \"Outgoing\"\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]),dql_column_2=prop(File(Path)),dql_column_3=prop(File(Folder)),dql_column_4=prop(File(Ext)),dql_column_5=prop(File(Size)),dql_column_6=prop(File(Ctime)),dql_column_7=prop(File(Mtime)),dql_column_8=call(method(call(global(Object),[\"slate.dql.tags\",prop(File(Path))]),Values),[]),dql_column_9=call(method(call(global(Object),[\"slate.dql.aliases\",prop(File(Path))]),Values),[]),dql_column_10=call(method(prop(File(Ctime)),Date),[]),dql_column_11=call(method(prop(File(Mtime)),Date),[]),dql_column_12=call(global(Link),[prop(File(Path))]),dql_column_13=call(method(call(global(Object),[\"slate.dql.inlinks\",prop(File(Path))]),Values),[]),dql_column_14=call(method(call(global(Object),[\"slate.dql.outlinks\",prop(File(Path))]),Values),[])];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Name,formula.dql_column_2:Path,formula.dql_column_3:Folder,formula.dql_column_4:Extension,formula.dql_column_5:Size,formula.dql_column_6:Created,formula.dql_column_7:Modified,formula.dql_column_8:Tags,formula.dql_column_9:Aliases,formula.dql_column_10:Created day,formula.dql_column_11:Modified day,formula.dql_column_12:Link,formula.dql_column_13:Incoming,formula.dql_column_14:Outgoing];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:123",
+        "text:123.md",
+        "text:",
+        "text:md",
+        "number:123",
+        "date:1767225600000:true",
+        "date:1767312000000:true",
+        "list:[text:#Reading,text:#A/B,text:#A]",
+        "list:[text:One,text:Two,text:A,B,text:0,text:false,text:,text:Three]",
+        "date:1767225600000:false",
+        "date:1767312000000:false",
+        "link:123.md|-|123.md|-|file|false",
+        "list:[]",
+        "list:[]"
+      ]
+    ]
+  },
+  {
+    "name": "supported-this-file-special-fields",
+    "operation": "file_fields",
+    "disposition": "supported",
+    "coverage": [
+      "field.this.file.cday",
+      "field.this.file.mday",
+      "field.this.file.link",
+      "field.this.file.inlinks",
+      "field.this.file.outlinks"
+    ],
+    "source": "TABLE WITHOUT ID this.file.cday AS \"Created day\", this.file.mday AS \"Modified day\", this.file.link AS \"Link\", this.file.inlinks AS \"Incoming\", this.file.outlinks AS \"Outgoing\"\nWHERE file.path = \"123.md\"\n",
+    "this_path": "123.md",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=call(method(prop(ThisFile(Ctime)),Date),[]),dql_column_2=call(method(prop(ThisFile(Mtime)),Date),[]),dql_column_3=call(global(Link),[prop(ThisFile(Path))]),dql_column_4=call(method(call(global(Object),[\"slate.dql.inlinks\",prop(ThisFile(Path))]),Values),[]),dql_column_5=call(method(call(global(Object),[\"slate.dql.outlinks\",prop(ThisFile(Path))]),Values),[])];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Created day,formula.dql_column_2:Modified day,formula.dql_column_3:Link,formula.dql_column_4:Incoming,formula.dql_column_5:Outgoing];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "date:1767225600000:false",
+        "date:1767312000000:false",
+        "link:123.md|-|123.md|-|file|false",
+        "list:[]",
+        "list:[]"
+      ]
+    ]
+  },
+  {
+    "name": "unsupported-file-etags",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.etags.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.etags AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.etags",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.etags"
+  },
+  {
+    "name": "unsupported-file-lists",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.lists.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.lists AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.lists",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.lists"
+  },
+  {
+    "name": "unsupported-file-frontmatter",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.frontmatter.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.frontmatter AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.frontmatter",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.frontmatter"
+  },
+  {
+    "name": "unsupported-file-day",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.day.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.day AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.day",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.day"
+  },
+  {
+    "name": "unsupported-file-starred",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.starred.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.starred AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.starred",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.starred"
+  },
+  {
+    "name": "unsupported-file-tasks",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.tasks.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.tasks AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.tasks",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.tasks"
+  },
+  {
+    "name": "unsupported-this-file-etags",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.etags.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.etags AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.etags",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.etags"
+  },
+  {
+    "name": "unsupported-this-file-lists",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.lists.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.lists AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.lists",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.lists"
+  },
+  {
+    "name": "unsupported-this-file-frontmatter",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.frontmatter.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.frontmatter AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.frontmatter",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.frontmatter"
+  },
+  {
+    "name": "unsupported-this-file-day",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.day.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.day AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.day",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.day"
+  },
+  {
+    "name": "unsupported-this-file-starred",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.starred.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.starred AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.starred",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.starred"
+  },
+  {
+    "name": "unsupported-this-file-tasks",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.tasks.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.tasks AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.tasks",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.tasks"
+  },
+  {
+    "name": "unsupported-task-created",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.created.unsupported"
+    ],
+    "source": "TASK\nWHERE created\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field created",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field created"
+  },
+  {
+    "name": "unsupported-task-completion",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.completion.unsupported"
+    ],
+    "source": "TASK\nWHERE completion\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field completion",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field completion"
+  },
+  {
+    "name": "unsupported-task-start",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.start.unsupported"
+    ],
+    "source": "TASK\nWHERE start\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field start",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field start"
+  },
+  {
+    "name": "unsupported-task-fully-completed",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.fully_completed.unsupported"
+    ],
+    "source": "TASK\nWHERE fullyCompleted\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field fullyCompleted",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field fullyCompleted"
+  },
+  {
+    "name": "unsupported-task-children",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.children.unsupported"
+    ],
+    "source": "TASK\nWHERE children\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field children",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field children"
+  },
+  {
+    "name": "unsupported-task-section",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.section.unsupported"
+    ],
+    "source": "TASK\nWHERE section\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field section",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field section"
+  },
+  {
+    "name": "unsupported-task-visual",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.visual.unsupported"
+    ],
+    "source": "TASK\nWHERE visual\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field visual",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field visual"
+  },
+  {
+    "name": "unsupported-task-line",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.line.unsupported"
+    ],
+    "source": "TASK\nWHERE line\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field line",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field line"
+  },
+  {
+    "name": "unsupported-task-line-count",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.line_count.unsupported"
+    ],
+    "source": "TASK\nWHERE lineCount\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field lineCount",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field lineCount"
+  },
+  {
+    "name": "unsupported-task-path",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.path.unsupported"
+    ],
+    "source": "TASK\nWHERE path\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field path",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field path"
+  },
+  {
+    "name": "unsupported-task-tags",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.tags.unsupported"
+    ],
+    "source": "TASK\nWHERE tags\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field tags",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field tags"
+  },
+  {
+    "name": "unsupported-task-outlinks",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.outlinks.unsupported"
+    ],
+    "source": "TASK\nWHERE outlinks\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field outlinks",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field outlinks"
+  },
+  {
+    "name": "unsupported-task-link",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.link.unsupported"
+    ],
+    "source": "TASK\nWHERE link\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field link",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field link"
+  },
+  {
+    "name": "unsupported-task-parent",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.parent.unsupported"
+    ],
+    "source": "TASK\nWHERE parent\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field parent",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field parent"
+  },
+  {
+    "name": "unsupported-task-annotated",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.annotated.unsupported"
+    ],
+    "source": "TASK\nWHERE annotated\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field annotated",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field annotated"
+  },
+  {
+    "name": "unsupported-task-task",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.task.unsupported"
+    ],
+    "source": "TASK\nWHERE task\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field task",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field task"
+  },
+  {
+    "name": "unsupported-task-block-id",
+    "operation": "task_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.task.block_id.unsupported"
+    ],
+    "source": "TASK\nWHERE blockId\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL task field blockId",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL task field blockId"
+  },
+  {
+    "name": "unsupported-file-basename",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.basename.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.basename AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.basename",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.basename"
+  },
+  {
+    "name": "unsupported-file-properties",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.properties.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.properties AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.properties",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.properties"
+  },
+  {
+    "name": "unsupported-file-links",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.links.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.links AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.links",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.links"
+  },
+  {
+    "name": "unsupported-file-backlinks",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.backlinks.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.backlinks AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.backlinks",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.backlinks"
+  },
+  {
+    "name": "unsupported-file-embeds",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.embeds.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.embeds AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.embeds",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.embeds"
+  },
+  {
+    "name": "unsupported-file-file",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.file.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.file AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.file",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.file"
+  },
+  {
+    "name": "unsupported-file-in-degree",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.in_degree.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.inDegree AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.inDegree",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.inDegree"
+  },
+  {
+    "name": "unsupported-file-out-degree",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.file.out_degree.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file.outDegree AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.outDegree",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.outDegree"
+  },
+  {
+    "name": "unsupported-this-file-basename",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.basename.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.basename AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.basename",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.basename"
+  },
+  {
+    "name": "unsupported-this-file-properties",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.properties.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.properties AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.properties",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.properties"
+  },
+  {
+    "name": "unsupported-this-file-links",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.links.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.links AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.links",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.links"
+  },
+  {
+    "name": "unsupported-this-file-backlinks",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.backlinks.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.backlinks AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.backlinks",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.backlinks"
+  },
+  {
+    "name": "unsupported-this-file-embeds",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.embeds.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.embeds AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.embeds",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.embeds"
+  },
+  {
+    "name": "unsupported-this-file-file",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.file.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.file AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.file",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.file"
+  },
+  {
+    "name": "unsupported-this-file-in-degree",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.in_degree.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.inDegree AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.inDegree",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.inDegree"
+  },
+  {
+    "name": "unsupported-this-file-out-degree",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "field.this.file.out_degree.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file.outDegree AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field this.file.outDegree",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field this.file.outDegree"
+  },
+  {
+    "name": "supported-this-file-ordinary-fields",
+    "operation": "file_fields",
+    "disposition": "supported",
+    "coverage": [
+      "field.this.file.name",
+      "field.this.file.path",
+      "field.this.file.folder",
+      "field.this.file.ext",
+      "field.this.file.size",
+      "field.this.file.ctime",
+      "field.this.file.mtime",
+      "field.this.file.tags",
+      "field.this.file.aliases"
+    ],
+    "source": "TABLE WITHOUT ID this.file.name AS \"Name\", this.file.path AS \"Path\", this.file.folder AS \"Folder\", this.file.ext AS \"Ext\", this.file.size AS \"Size\", this.file.ctime AS \"Ctime\", this.file.mtime AS \"Mtime\", this.file.tags AS \"Tags\", this.file.aliases AS \"Aliases\"\nWHERE file.path = \"123.md\"\n",
+    "this_path": "123.md",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=call(method(call(global(Object),[\"slate.dql.file-name\",prop(ThisFile(Path))]),ToString),[]),dql_column_2=prop(ThisFile(Path)),dql_column_3=prop(ThisFile(Folder)),dql_column_4=prop(ThisFile(Ext)),dql_column_5=prop(ThisFile(Size)),dql_column_6=prop(ThisFile(Ctime)),dql_column_7=prop(ThisFile(Mtime)),dql_column_8=call(method(call(global(Object),[\"slate.dql.tags\",prop(ThisFile(Path))]),Values),[]),dql_column_9=call(method(call(global(Object),[\"slate.dql.aliases\",prop(ThisFile(Path))]),Values),[])];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Name,formula.dql_column_2:Path,formula.dql_column_3:Folder,formula.dql_column_4:Ext,formula.dql_column_5:Size,formula.dql_column_6:Ctime,formula.dql_column_7:Mtime,formula.dql_column_8:Tags,formula.dql_column_9:Aliases];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:123",
+        "text:123.md",
+        "text:",
+        "text:md",
+        "number:123",
+        "date:1767225600000:true",
+        "date:1767312000000:true",
+        "list:[text:#Reading,text:#A/B,text:#A]",
+        "list:[text:One,text:Two,text:A,B,text:0,text:false,text:,text:Three]"
+      ]
+    ]
+  },
+  {
+    "name": "supported-file-literal-index-mapping",
+    "operation": "file_fields",
+    "disposition": "supported",
+    "coverage": [
+      "expression.field.file_literal_index",
+      "expression.field.file_special_literal_index",
+      "expression.field.this_file_literal_index",
+      "expression.field.member_this_file_collision"
+    ],
+    "source": "TABLE WITHOUT ID file[\"name\"] AS \"Name\", file[\"link\"] AS \"Link\", this.file[\"name\"] AS \"This\", {this: {file: {day: \"ok\"}}}.this.file[\"day\"] AS \"Member\"\nWHERE file.path = \"123.md\"\n",
+    "this_path": "123.md",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]),dql_column_2=call(global(Link),[prop(File(Path))]),dql_column_3=call(method(call(global(Object),[\"slate.dql.file-name\",prop(ThisFile(Path))]),ToString),[]),dql_column_4=index(field({\"slate.dql.data-array\":field({\"slate.dql.data-array\":{\"this\":{\"file\":{\"day\":\"ok\"}}}},\"this\")},\"file\"),\"day\")];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Name,formula.dql_column_2:Link,formula.dql_column_3:This,formula.dql_column_4:Member];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:123",
+        "link:123.md|-|123.md|-|file|false",
+        "text:123",
+        "text:ok"
+      ]
+    ]
+  },
+  {
+    "name": "unsupported-dynamic-file-index",
+    "operation": "unsupported_functions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.field.file_dynamic_index.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID file[key] AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "dynamic DQL file bracket access is unsupported",
+    "warning_span_class": "expression",
+    "error_contains": "dynamic DQL file bracket access is unsupported"
+  },
+  {
+    "name": "unsupported-dynamic-this-file-index",
+    "operation": "unsupported_functions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.field.this_file_dynamic_index.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID this.file[key] AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "dynamic DQL file bracket access is unsupported",
+    "warning_span_class": "expression",
+    "error_contains": "dynamic DQL file bracket access is unsupported"
+  },
+  {
+    "name": "unsupported-file-literal-index-field",
+    "operation": "unsupported_functions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.field.file_literal_index.unsupported_field"
+    ],
+    "source": "TABLE WITHOUT ID file[\"day\"] AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.day",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.day"
+  },
+  {
+    "name": "unsupported-where-leading-space-span",
+    "operation": "unsupported_functions",
+    "disposition": "unsupported",
+    "coverage": [
+      "span.where.trimmed_expression"
+    ],
+    "source": "TABLE WITHOUT ID file.name\nWHERE   file.day\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.day",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.day"
+  },
+  {
+    "name": "unsupported-table-second-column-span",
+    "operation": "unsupported_functions",
+    "disposition": "unsupported",
+    "coverage": [
+      "span.table.second_column",
+      "span.table.duplicate_column"
+    ],
+    "source": "TABLE WITHOUT ID file.day AS \"First\", file.day AS \"Second\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.day",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.day"
+  },
+  {
+    "name": "unsupported-sort-repeated-key-span",
+    "operation": "unsupported_functions",
+    "disposition": "unsupported",
+    "coverage": [
+      "span.sort.header_collision",
+      "span.sort.repeated_key"
+    ],
+    "source": "TABLE WITHOUT ID file.name\nSORT SORT, file.day, file.day\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL field file.day",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL field file.day"
+  },
+  {
+    "name": "unsupported-from-leading-space-span",
+    "operation": "file_fields",
+    "disposition": "unsupported",
+    "coverage": [
+      "span.from.trimmed_expression"
+    ],
+    "source": "TABLE WITHOUT ID file.name\nFROM   madeup()\n",
+    "warning_kind": "invalid_expression",
+    "warning_message": "invalid FROM source: madeup()",
+    "warning_span_class": "expression",
+    "error_contains": "invalid FROM source"
+  }
+]

@@ -74,12 +74,11 @@ yaml-rust2 = "0.11"
 # alphabetical iteration order.
 serde_json = { version = "1", features = ["preserve_order"] }
 serde = { version = "1", features = ["derive"] }
-# chrono powers `{{date}}` / `{{time}}` / `{{date:FMT}}` / `{{time:FMT}}`
-# substitution in the templates engine. `default-features = false`
-# drops the system-clock plumbing (`Utc::now`, `Local`) — templates
-# get the timestamp from the caller (`TemplateContext::now_ms`), so
-# pulling in the OS timezone database would be dead weight.
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+# Chrono powers caller-timestamped template date/time substitution and DQL date
+# semantics. We keep default features off and opt into `std` + `clock`: templates
+# still use `TemplateContext::now_ms`, while DQL needs `Local`/system-timezone
+# support for local shorthands, offset provenance, and DST-safe calendar arithmetic.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # unicode-normalization gives the file-tree API a deterministic NFC sort
 # key (#459): `list_dir_children` sorts each level case-insensitively on
 # `name`'s NFC form, so a decomposed (NFD) and precomposed (NFC) spelling

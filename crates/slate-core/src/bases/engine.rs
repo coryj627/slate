@@ -1522,6 +1522,9 @@ fn decode_property_value(kind: &str, value_text: &str) -> Value {
                     target: target.to_string(),
                     display: None,
                     resolved_path: None,
+                    subpath: None,
+                    link_type: "file".to_string(),
+                    embed: false,
                 })
             })
             .unwrap_or(Value::Null),
@@ -1586,6 +1589,7 @@ fn load_tags(conn: &Connection, file_id: i64) -> Result<Vec<String>, VaultError>
 
 #[derive(Debug, Default)]
 struct OutgoingLinks {
+    all: Vec<LinkValue>,
     links: Vec<LinkValue>,
     embeds: Vec<LinkValue>,
 }
@@ -1593,21 +1597,36 @@ struct OutgoingLinks {
 fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks, VaultError> {
     let mut stmt = conn
         .prepare(
-            "SELECT target_raw, target_path, is_embed
+            "SELECT target_raw, target_path, target_anchor, is_embed, display_text
              FROM links
              WHERE source_file_id = ?1
+               AND is_external = 0
+               AND (target_anchor IS NULL OR target_anchor LIKE 'h:%' OR target_anchor LIKE 'b:%')
              ORDER BY ordinal",
         )
         .map_err(DbError::from)?;
     let rows = stmt.query_map(params![file_id], |row| {
         let target: String = row.get(0)?;
         let resolved_path: Option<String> = row.get(1)?;
-        let is_embed = row.get::<_, i64>(2)? != 0;
+        let anchor: Option<String> = row.get(2)?;
+        let is_embed = row.get::<_, i64>(3)? != 0;
+        let display: Option<String> = row.get(4)?;
+        let (link_type, subpath) = match anchor.as_deref() {
+            Some(anchor) if anchor.starts_with("h:") => {
+                ("header", Some(normalize_header_for_link(&anchor[2..])))
+            }
+            Some(anchor) if anchor.starts_with("b:") => ("block", Some(anchor[2..].to_string())),
+            Some(_) => unreachable!("SQL filters unknown serialized anchor prefixes"),
+            None => ("file", None),
+        };
         Ok((
             LinkValue {
                 target,
-                display: None,
+                display,
                 resolved_path,
+                subpath,
+                link_type: link_type.to_string(),
+                embed: is_embed,
             },
             is_embed,
         ))
@@ -1615,6 +1634,7 @@ fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks,
     let mut outgoing = OutgoingLinks::default();
     for row in rows {
         let (link, is_embed) = row.map_err(DbError::from)?;
+        outgoing.all.push(link.clone());
         if is_embed {
             outgoing.embeds.push(link);
         } else {
@@ -1622,6 +1642,24 @@ fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks,
         }
     }
     Ok(outgoing)
+}
+
+fn normalize_header_for_link(header: &str) -> String {
+    let mut normalized = String::new();
+    let mut pending_space = false;
+    for ch in header.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '_' | '-') || !ch.is_ascii() && !ch.is_whitespace()
+        {
+            if pending_space && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            pending_space = false;
+            normalized.push(ch);
+        } else {
+            pending_space = true;
+        }
+    }
+    normalized
 }
 
 fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, VaultError> {
@@ -1640,6 +1678,9 @@ fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, Vault
             target: source.clone(),
             display: None,
             resolved_path: Some(source),
+            subpath: None,
+            link_type: "file".to_string(),
+            embed: false,
         })
     })
     .map_err(DbError::from)?
@@ -1954,8 +1995,8 @@ fn value_type_rank(value: &Value) -> u8 {
         Value::Null => 9,
         Value::Bool(_) => 0,
         Value::Number(_) => 1,
-        Value::Date(_) => 2,
-        Value::Duration(_) => 3,
+        Value::Date(_) | Value::DqlDate(_) => 2,
+        Value::Duration(_) | Value::DqlDuration(_) => 3,
         Value::Text(_) => 4,
         Value::Link(_) => 5,
         Value::File(_) => 6,
@@ -2408,7 +2449,24 @@ fn value_key(value: &Value) -> String {
         Value::Bool(value) => format!("bool:{value}"),
         Value::Number(value) => format!("number:{value:?}"),
         Value::Date(value) => format!("date:{}:{}", value.epoch_ms, value.has_time),
+        Value::DqlDate(value) => format!(
+            "dql-date:{}:{}:{}:{}",
+            value.epoch_ms, value.has_time, value.offset_minutes, value.is_local
+        ),
         Value::Duration(value) => format!("duration:{value}"),
+        Value::DqlDuration(value) => {
+            format!(
+                "dql-duration:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+                value.years,
+                value.months,
+                value.weeks,
+                value.days,
+                value.hours,
+                value.minutes,
+                value.seconds,
+                value.milliseconds
+            )
+        }
         Value::Text(value) => format!("text:{value}"),
         Value::Link(value) => format!("link:{}:{:?}", value.target, value.resolved_path),
         Value::File(value) => format!("file:{}", value.path),
@@ -2615,7 +2673,9 @@ pub(crate) fn value_display(value: &Value) -> String {
                 }
             })
             .unwrap_or_else(|| value.epoch_ms.to_string()),
+        Value::DqlDate(value) => crate::bases::eval::dql_date_display(*value),
         Value::Duration(value) => value.to_string(),
+        Value::DqlDuration(value) => crate::bases::eval::dql_format_duration_parts(*value),
         Value::Text(value) => value.clone(),
         Value::Link(value) => value.display.clone().unwrap_or_else(|| {
             value
@@ -2810,7 +2870,7 @@ fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
     {
         return None;
     }
-    if query_mentions_global(query, GlobalFn::Now) {
+    if query_mentions_global(query, GlobalFn::Now) || query_mentions_dql_date_shorthand(query) {
         return None;
     }
     let bytes = serde_json::to_vec(query).ok()?;
@@ -2825,75 +2885,159 @@ fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
 }
 
 fn query_mentions_global(query: &SlateQuery, needle: GlobalFn) -> bool {
+    query_matches_expr(query, &|expr| {
+        matches!(
+            &expr.kind,
+            ExprKind::Call {
+                callee: Callee::Global(function),
+                ..
+            } if *function == needle
+        )
+    })
+}
+
+fn query_mentions_dql_date_shorthand(query: &SlateQuery) -> bool {
+    query_matches_expr(query, &expr_is_dql_date_shorthand)
+}
+
+fn query_matches_expr(query: &SlateQuery, predicate: &impl Fn(&Expr) -> bool) -> bool {
     matches!(query.source, QuerySource::Recent { .. })
         || query
             .filters
             .as_ref()
-            .is_some_and(|filter| filter_mentions_global(filter, needle))
+            .is_some_and(|filter| filter_matches_expr(filter, predicate))
         || query
             .formulas
             .iter()
-            .any(|(_, expr)| expr_mentions_global(expr, needle))
+            .any(|(_, expr)| expr_or_descendant_matches(expr, predicate))
         || query
             .custom_summaries
             .iter()
-            .any(|(_, expr)| expr_mentions_global(expr, needle))
+            .any(|(_, expr)| expr_or_descendant_matches(expr, predicate))
         || query
             .sort
             .iter()
-            .any(|sort| expr_mentions_global(&sort.expr, needle))
+            .any(|sort| expr_or_descendant_matches(&sort.expr, predicate))
         || query
             .columns
             .iter()
-            .any(|column| expr_mentions_global(&column_expr(&column.id), needle))
+            .any(|column| expr_or_descendant_matches(&column_expr(&column.id), predicate))
         || query
             .summaries
             .iter()
-            .any(|(column_id, _)| expr_mentions_global(&column_expr(column_id), needle))
+            .any(|(column_id, _)| expr_or_descendant_matches(&column_expr(column_id), predicate))
 }
 
-fn filter_mentions_global(filter: &FilterNode, needle: GlobalFn) -> bool {
+fn filter_matches_expr(filter: &FilterNode, predicate: &impl Fn(&Expr) -> bool) -> bool {
     match filter {
-        FilterNode::Stmt(expr) => expr_mentions_global(expr, needle),
+        FilterNode::Stmt(expr) => expr_or_descendant_matches(expr, predicate),
         FilterNode::And(nodes) | FilterNode::Or(nodes) | FilterNode::Not(nodes) => nodes
             .iter()
-            .any(|node| filter_mentions_global(node, needle)),
+            .any(|node| filter_matches_expr(node, predicate)),
     }
 }
 
-fn expr_mentions_global(expr: &Expr, needle: GlobalFn) -> bool {
+fn expr_or_descendant_matches(expr: &Expr, predicate: &impl Fn(&Expr) -> bool) -> bool {
+    if predicate(expr) {
+        return true;
+    }
     match &expr.kind {
         ExprKind::Call { callee, args } => {
-            matches!(callee, Callee::Global(function) if *function == needle)
-                || matches!(callee, Callee::Method { receiver, .. } if expr_mentions_global(receiver, needle))
-                || args.iter().any(|arg| expr_mentions_global(arg, needle))
+            matches!(callee, Callee::Method { receiver, .. } if expr_or_descendant_matches(receiver, predicate))
+                || args
+                    .iter()
+                    .any(|arg| expr_or_descendant_matches(arg, predicate))
         }
         ExprKind::Index { base, index }
         | ExprKind::Binary {
             lhs: base,
             rhs: index,
             ..
-        } => expr_mentions_global(base, needle) || expr_mentions_global(index, needle),
+        } => {
+            expr_or_descendant_matches(base, predicate)
+                || expr_or_descendant_matches(index, predicate)
+        }
         ExprKind::Field { base, .. } | ExprKind::Unary { rhs: base, .. } => {
-            expr_mentions_global(base, needle)
+            expr_or_descendant_matches(base, predicate)
         }
         ExprKind::ListExpr {
             base, body, init, ..
         } => {
-            expr_mentions_global(base, needle)
-                || expr_mentions_global(body, needle)
+            expr_or_descendant_matches(base, predicate)
+                || expr_or_descendant_matches(body, predicate)
                 || init
                     .as_deref()
-                    .is_some_and(|expr| expr_mentions_global(expr, needle))
+                    .is_some_and(|expr| expr_or_descendant_matches(expr, predicate))
         }
-        ExprKind::Lit(Lit::List(items)) => {
-            items.iter().any(|item| expr_mentions_global(item, needle))
-        }
+        ExprKind::Lit(Lit::List(items)) => items
+            .iter()
+            .any(|item| expr_or_descendant_matches(item, predicate)),
         ExprKind::Lit(Lit::Object(items)) => items
             .iter()
-            .any(|(_, value)| expr_mentions_global(value, needle)),
+            .any(|(_, value)| expr_or_descendant_matches(value, predicate)),
         ExprKind::Lit(_) | ExprKind::Prop(_) | ExprKind::Unsupported { .. } => false,
     }
+}
+
+fn expr_is_dql_date_shorthand(expr: &Expr) -> bool {
+    const DQL_DATE_OBJECT_KEY: &str = "\u{f8ff}slate.dql.date";
+
+    let ExprKind::Call {
+        callee: Callee::Global(GlobalFn::Date),
+        args,
+    } = &expr.kind
+    else {
+        return false;
+    };
+    let [
+        Expr {
+            kind:
+                ExprKind::Call {
+                    callee: Callee::Global(GlobalFn::Object),
+                    args: marker_args,
+                },
+            ..
+        },
+    ] = args.as_slice()
+    else {
+        return false;
+    };
+    let [
+        Expr {
+            kind: ExprKind::Lit(Lit::String(marker)),
+            ..
+        },
+        payload,
+    ] = marker_args.as_slice()
+    else {
+        return false;
+    };
+    if marker != DQL_DATE_OBJECT_KEY {
+        return false;
+    }
+    let ExprKind::Lit(Lit::String(value)) = &payload.kind else {
+        // Dynamic DQL date inputs can evaluate to a shorthand at runtime.
+        return true;
+    };
+    matches!(
+        value.as_str(),
+        "now"
+            | "today"
+            | "tomorrow"
+            | "yesterday"
+            | "sow"
+            | "eow"
+            | "som"
+            | "eom"
+            | "soy"
+            | "eoy"
+            | "start-of-week"
+            | "end-of-week"
+            | "start-of-month"
+            | "end-of-month"
+            | "start-of-year"
+            | "end-of-year"
+    )
 }
 
 struct SqlVaultLookup<'a> {
@@ -2902,12 +3046,53 @@ struct SqlVaultLookup<'a> {
     cancel: &'a CancelToken,
     source_path: &'a str,
     link_index: RefCell<Option<crate::InMemoryVaultIndex>>,
-    link_resolutions: RefCell<BTreeMap<String, Option<String>>>,
+    link_resolutions: RefCell<BTreeMap<(String, String), Option<String>>>,
 }
 
-impl VaultLookup for SqlVaultLookup<'_> {
-    fn resolve_link(&self, target: &str) -> Option<String> {
-        if let Some(resolved) = self.link_resolutions.borrow().get(target) {
+impl SqlVaultLookup<'_> {
+    fn dql_inline_value(
+        &self,
+        value: &crate::dql_inline_fields_db::DqlInlineValue,
+        owner_path: &str,
+        now_ms: i64,
+    ) -> Result<Value, EvalError> {
+        use crate::dql_inline_fields_db::{DqlInlineLinkType, DqlInlineValue};
+        match value {
+            DqlInlineValue::Null => Ok(Value::Null),
+            DqlInlineValue::Boolean(value) => Ok(Value::Bool(*value)),
+            DqlInlineValue::Number(value) => Ok(Value::Number(*value)),
+            DqlInlineValue::Text(value) | DqlInlineValue::Tag(value) => {
+                Ok(Value::Text(value.clone()))
+            }
+            DqlInlineValue::Date(value) => crate::bases::eval::dql_inline_date_value(value, now_ms),
+            DqlInlineValue::Duration(value) => crate::bases::eval::dql_inline_duration_value(value),
+            DqlInlineValue::Link(link) => {
+                let resolved_path = self.resolve_link_from(&link.target, owner_path);
+                Ok(Value::Link(LinkValue {
+                    target: resolved_path.clone().unwrap_or_else(|| link.target.clone()),
+                    display: link.display.clone(),
+                    resolved_path,
+                    subpath: link.subpath.clone(),
+                    link_type: match link.link_type {
+                        DqlInlineLinkType::File => "file",
+                        DqlInlineLinkType::Header => "header",
+                        DqlInlineLinkType::Block => "block",
+                    }
+                    .to_string(),
+                    embed: link.embed,
+                }))
+            }
+            DqlInlineValue::List(values) => values
+                .iter()
+                .map(|value| self.dql_inline_value(value, owner_path, now_ms))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::List),
+        }
+    }
+
+    fn resolve_link_from(&self, target: &str, source_path: &str) -> Option<String> {
+        let cache_key = (source_path.to_string(), target.to_string());
+        if let Some(resolved) = self.link_resolutions.borrow().get(&cache_key) {
             return resolved.clone();
         }
         if self.link_index.borrow().is_none() {
@@ -2923,14 +3108,20 @@ impl VaultLookup for SqlVaultLookup<'_> {
             *self.link_index.borrow_mut() = Some(crate::InMemoryVaultIndex::new(paths));
         }
         let index = self.link_index.borrow();
-        let resolved = match crate::resolve_link(target, None, self.source_path, index.as_ref()?) {
+        let resolved = match crate::resolve_link(target, None, source_path, index.as_ref()?) {
             crate::ResolvedLink::Resolved { target_path, .. } => Some(target_path),
             crate::ResolvedLink::Unresolved { .. } | crate::ResolvedLink::External => None,
         };
         self.link_resolutions
             .borrow_mut()
-            .insert(target.to_string(), resolved.clone());
+            .insert(cache_key, resolved.clone());
         resolved
+    }
+}
+
+impl VaultLookup for SqlVaultLookup<'_> {
+    fn resolve_link(&self, target: &str) -> Option<String> {
+        self.resolve_link_from(target, self.source_path)
     }
 
     fn file_matches(&self, path: &str, query: &str) -> Result<bool, EvalError> {
@@ -2978,8 +3169,50 @@ impl VaultLookup for SqlVaultLookup<'_> {
             .unwrap_or_default()
     }
 
+    fn outlinks_for(&self, path: &str) -> Vec<LinkValue> {
+        self.conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|id| load_outgoing_links(self.conn, id).ok())
+            .map(|outgoing| outgoing.all)
+            .unwrap_or_default()
+    }
+
     fn backlinks_for(&self, path: &str) -> Vec<LinkValue> {
         load_backlinks(self.conn, path).unwrap_or_default()
+    }
+
+    fn dql_tags_for(&self, path: &str) -> Vec<String> {
+        crate::tags_db::load_dql_tags_for_path(self.conn, path).unwrap_or_default()
+    }
+
+    fn dql_inline_fields_for(
+        &self,
+        path: &str,
+        now_ms: i64,
+    ) -> Result<(Vec<(String, Value)>, bool), EvalError> {
+        let projection = crate::dql_inline_fields_db::load_dql_inline_fields_for_path(
+            self.conn, path,
+        )
+        .map_err(|error| EvalError::InvalidArgument {
+            function: "DQL inline fields".to_string(),
+            message: error.to_string(),
+        })?;
+        let fields = projection
+            .fields
+            .iter()
+            .map(|field| {
+                self.dql_inline_value(&field.value, path, now_ms)
+                    .map(|value| (field.key.clone(), value))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((fields, projection.incomplete))
     }
 }
 

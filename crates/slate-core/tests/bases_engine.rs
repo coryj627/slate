@@ -7,6 +7,7 @@ use slate_core::{
     bases::{
         ColumnSelection, FilterNode, GroupBy, QuerySource, RowSource, SlateQuery, SortKey,
         SummaryRef, ViewSpec,
+        dql::parse_dql,
         engine::{BasesQueryCache, BasesSummaryCell, CellValue, EngineCtx, execute},
         eval::{LinkValue, Value},
         expr::{BinaryOp, Expr, ExprKind, PropertyRef, TaskField, parse_expr},
@@ -1199,6 +1200,9 @@ fn links_and_embeds_are_complete_and_partitioned() {
                 target: "Gamma".to_string(),
                 display: None,
                 resolved_path: Some("Notes/Gamma.md".to_string()),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: false,
             })])),
             CellValue::Value(Value::List(vec![])),
             CellValue::Value(Value::Number(1.0)),
@@ -1217,6 +1221,9 @@ fn links_and_embeds_are_complete_and_partitioned() {
                 target: "Target".to_string(),
                 display: None,
                 resolved_path: Some("Notes/Target.md".to_string()),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: true,
             })])),
             CellValue::Value(Value::Number(1.0)),
         ]
@@ -1619,6 +1626,89 @@ fn cache_keys_stable_queries_by_generation_and_today_queries_by_day() {
     assert!(!quick_first.cache_hit);
     assert!(!quick_second.cache_hit);
     assert_eq!(quick_second.executed_at_ms, 8_000);
+}
+
+#[test]
+fn dql_date_shorthands_never_reuse_engine_cache_across_new_york_midnight() {
+    const CHILD: &str = "SLATE_DQL_ENGINE_CACHE_TZ_CHILD";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("locate Bases engine test binary"),
+        )
+        .arg("dql_date_shorthands_never_reuse_engine_cache_across_new_york_midnight")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TZ", "America/New_York")
+        .env(CHILD, "1")
+        .status()
+        .expect("run DQL engine-cache test in America/New_York");
+        assert!(status.success(), "DQL engine-cache timezone child failed");
+        return;
+    }
+
+    // 2026-07-10T04:00:00Z is local midnight in America/New_York.
+    const LOCAL_MIDNIGHT_MS: i64 = 1_783_656_000_000;
+    let before_midnight_ms = LOCAL_MIDNIGHT_MS - 1;
+    let after_midnight_ms = LOCAL_MIDNIGHT_MS + 1;
+    let conn = migrated_conn();
+    seed_index(&conn);
+
+    for shorthand in [
+        "now",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "sow",
+        "eow",
+        "som",
+        "eom",
+        "soy",
+        "eoy",
+        "start-of-week",
+        "end-of-week",
+        "start-of-month",
+        "end-of-month",
+        "start-of-year",
+        "end-of-year",
+    ] {
+        let source = format!(
+            "TABLE WITHOUT ID string(date({shorthand})) AS \"Value\"\nWHERE file.path = \"Projects/Alpha.md\"\n"
+        );
+        let (query, warnings) = parse_dql(&source);
+        assert!(warnings.is_empty(), "shorthand={shorthand}: {warnings:?}");
+        let cache = BasesQueryCache::default();
+        let first = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                now_ms: before_midnight_ms,
+                generation: 7,
+                cache: Some(&cache),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("first shorthand={shorthand}: {error}"));
+        let second = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                now_ms: after_midnight_ms,
+                generation: 7,
+                cache: Some(&cache),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("second shorthand={shorthand}: {error}"));
+
+        assert!(!first.cache_hit, "first shorthand={shorthand}");
+        assert!(!second.cache_hit, "second shorthand={shorthand}");
+        assert_eq!(
+            second.executed_at_ms, after_midnight_ms,
+            "shorthand={shorthand} reused a stale result"
+        );
+    }
 }
 
 #[test]

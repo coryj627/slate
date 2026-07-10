@@ -1072,6 +1072,9 @@ impl VaultSession {
             replace_headings(&tx, file_id, contents)?;
             crate::links_db::replace_links_for_file(&tx, file_id, path, contents, &vault_index)?;
             crate::properties_db::replace_properties_for_file(&tx, file_id, contents)?;
+            crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(
+                &tx, file_id, contents,
+            )?;
             crate::tags_db::replace_tags_for_file(&tx, file_id, contents)?;
             crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(&tx, file_id, contents)?;
@@ -3455,6 +3458,7 @@ fn index_markdown_derivatives(
     replace_headings(tx, file_id, body_text)?;
     crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
+    crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, body_text)?;
     crate::tags_db::replace_tags_for_file(tx, file_id, body_text)?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, body_text)?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, body_text)?;
@@ -3519,6 +3523,7 @@ fn purge_markdown_derivatives(
     replace_headings(tx, file_id, "")?;
     crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
+    crate::dql_inline_fields_db::mark_dql_inline_fields_incomplete_for_file(tx, file_id)?;
     crate::tags_db::replace_tags_for_file(tx, file_id, "")?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
     crate::blocks_db::replace_blocks_for_file(tx, file_id, "")?;
@@ -5930,6 +5935,18 @@ impl VaultSession {
         quick_filter: Option<String>,
         cancel: &CancelToken,
     ) -> Result<BasesResultSet, VaultError> {
+        self.base_execute_at(handle, view, this_path, quick_filter, now_ms(), cancel)
+    }
+
+    fn base_execute_at(
+        &self,
+        handle: u64,
+        view: u32,
+        this_path: Option<String>,
+        quick_filter: Option<String>,
+        execution_now_ms: i64,
+        cancel: &CancelToken,
+    ) -> Result<BasesResultSet, VaultError> {
         let bases = self.bases.lock().expect("base registry mutex");
         let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
         let mut query = base_query_for_view(state, view)?;
@@ -5948,7 +5965,7 @@ impl VaultSession {
         let cache = use_cache.then_some(&state.cache);
         let conn = self.conn.lock().expect("session connection mutex");
         let ctx = crate::bases::engine::EngineCtx {
-            now_ms: now_ms(),
+            now_ms: execution_now_ms,
             generation: self.bases_generation(),
             this_path: this_path.or(default_this_path),
             cache,
@@ -7272,7 +7289,20 @@ fn bases_value_from_value(value: &crate::bases::eval::Value) -> BasesValue {
             list: Vec::new(),
             error: None,
         },
-        Value::Duration(_) => base_value("duration", display),
+        Value::DqlDate(value) => BasesValue {
+            raw_kind: "date".to_string(),
+            display,
+            text: None,
+            number: None,
+            bool_value: None,
+            date_epoch_ms: Some(value.epoch_ms),
+            date_has_time: value.has_time,
+            link_target: None,
+            link_display: None,
+            list: Vec::new(),
+            error: None,
+        },
+        Value::Duration(_) | Value::DqlDuration(_) => base_value("duration", display),
         Value::List(values) => BasesValue {
             raw_kind: "list".to_string(),
             display,
@@ -7342,8 +7372,10 @@ fn value_kind(value: &crate::bases::eval::Value) -> &'static str {
         crate::bases::eval::Value::Bool(_) => "bool",
         crate::bases::eval::Value::Number(_) => "number",
         crate::bases::eval::Value::Text(_) => "text",
-        crate::bases::eval::Value::Date(_) => "date",
-        crate::bases::eval::Value::Duration(_) => "duration",
+        crate::bases::eval::Value::Date(_) | crate::bases::eval::Value::DqlDate(_) => "date",
+        crate::bases::eval::Value::Duration(_) | crate::bases::eval::Value::DqlDuration(_) => {
+            "duration"
+        }
         crate::bases::eval::Value::List(_) => "list",
         crate::bases::eval::Value::Object(_) => "object",
         crate::bases::eval::Value::Link(_) => "link",

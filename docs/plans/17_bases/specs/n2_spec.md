@@ -77,7 +77,7 @@ impl Session {
 1. `census_bases_roundtrip` (from N0-3) runs against the session-level open→save path too (provider I/O included) — §N-A end-to-end.
 2. `census_bases_determinism` (§N-B): corpus queries × permuted-insertion fixture vaults ⇒ identical `BasesResultSet` (serialize + compare).
 3. `census_bases_cache_fresh` (§N-C) at session level (edits via session write APIs, not raw conn).
-4. `census_bases_fail_loud` (§N-D): corpus × mutation set — every `Unsupported` construct either inert (unreferenced) or `view_error` naming it; membership never silently differs from the un-mutated baseline except via that error. The DQL golden corpus (N0-5) runs through `open_dql` here too: every converted query executes without panic, and every expected-`Unsupported` fixture surfaces its named error.
+4. `census_bases_fail_loud` (§N-D): corpus × mutation set — every `Unsupported` construct is either inert when unreferenced, a named error-marker cell when referenced only by a column/summary (membership identical to the un-mutated baseline), or a `view_error` naming it when used in source/filter/sort/group positions. The DQL golden corpus (N0-5) runs through `open_dql` here too: every converted query executes without panic, and every expected-`Unsupported` fixture surfaces its named error.
 5. `census_bases_read_only` (§N-F): every corpus query leaves vault bytes hash-identical.
 
 ### Benches
