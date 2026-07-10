@@ -1,0 +1,13 @@
+filters:
+  and:
+    - file.inFolder("bases/pizza toppings")
+    - favorite == true
+
+views:
+  - type: table
+    name: "Favorite toppings"
+    order:
+      - file.name
+      - note.category
+      - note.rating
+      - note.goes_with
