@@ -187,6 +187,137 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertTrue(source.contains("BasesDockPanel()"))
     }
 
+    func testBaseRowMembershipUsesStableIdentityMultisetSemantics() {
+        let alpha = BasesRow(
+            filePath: "Notes/Alpha.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "Alpha")
+        let task = BasesRow(
+            filePath: "Notes/Tasks.md",
+            taskOrdinal: 2,
+            values: [],
+            audioDescription: "Task")
+
+        XCTAssertEqual(
+            BaseRowMembership(rows: [alpha, task, alpha]),
+            BaseRowMembership(rows: [alpha, alpha, task]),
+            "reordering alone is not a membership change")
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: [alpha, task, alpha]),
+            BaseRowMembership(rows: [alpha, task]),
+            "duplicate row identities are counted, not collapsed like a set")
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: []),
+            BaseRowMembership(rows: [alpha]),
+            "empty-to-nonempty is a membership change")
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: [task]),
+            BaseRowMembership(rows: []),
+            "nonempty-to-empty is a membership change")
+    }
+
+    func testBaseRowIdentityKeepsCanonicallyEquivalentUTF8PathsDistinct() {
+        let composed = BasesRow(
+            filePath: "é.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "composed")
+        let decomposed = BasesRow(
+            filePath: "e\u{301}.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "decomposed")
+
+        XCTAssertFalse(BaseExactIdentity.matches(composed.filePath, decomposed.filePath))
+        XCTAssertFalse(composed.hasSameBaseIdentity(as: decomposed))
+        XCTAssertNotEqual(
+            BaseRowMembership(rows: [composed]),
+            BaseRowMembership(rows: [decomposed]),
+            "membership announcements must use Rust/filesystem byte identity")
+        XCTAssertNotEqual(
+            BaseRowMembership.Identity(path: composed.filePath, taskOrdinal: nil),
+            BaseRowMembership.Identity(path: decomposed.filePath, taskOrdinal: nil))
+    }
+
+    func testBasesDockBaselinePublishesEmptyThenDetectsMultisetChanges() {
+        let alpha = BasesRow(
+            filePath: "Notes/Alpha.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "Alpha")
+        let beta = BasesRow(
+            filePath: "Notes/Beta.md",
+            taskOrdinal: nil,
+            values: [],
+            audioDescription: "Beta")
+        var dock = BasesDockState()
+        dock.setTarget(.base(path: "Queries/One.base", name: "One"))
+
+        XCTAssertFalse(
+            dock.publishMembership(.empty),
+            "the first settled empty result publishes a baseline without announcing")
+        XCTAssertTrue(
+            dock.publishMembership(BaseRowMembership(rows: [alpha])),
+            "empty-to-nonempty after a published baseline must announce")
+        XCTAssertTrue(dock.hasPublishedBaseline)
+        XCTAssertFalse(
+            dock.publishMembership(BaseRowMembership(rows: [alpha])),
+            "identical membership must not announce")
+        dock.setTarget(.base(path: "Queries/One.base", name: "Renamed"))
+        XCTAssertTrue(
+            dock.hasPublishedBaseline,
+            "display-name retargeting must not reset the same underlying dock identity")
+
+        dock.rebaseMembership(BaseRowMembership(rows: [alpha, beta]))
+        XCTAssertFalse(
+            dock.publishMembership(BaseRowMembership(rows: [beta, alpha])),
+            "reorder-only refreshes must not announce")
+        XCTAssertTrue(
+            dock.publishMembership(BaseRowMembership(rows: [alpha, alpha, beta])),
+            "duplicate cardinality is part of membership")
+
+        dock.setTarget(.savedQuery(id: "new-query", name: "New"))
+        XCTAssertFalse(dock.hasPublishedBaseline)
+        XCTAssertFalse(
+            dock.publishMembership(BaseRowMembership(rows: [alpha])),
+            "a new target's first settled result establishes a fresh baseline")
+    }
+
+    func testMissingDashboardSectionsExposeButtonsAndEquivalentNamedAXActions() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/DashboardViews.swift")
+
+        XCTAssertTrue(source.contains(#"Button("Remove section")"#), source)
+        XCTAssertTrue(source.contains(#"Button("Pick replacement")"#), source)
+        XCTAssertTrue(
+            source.contains(#".accessibilityAction(named: Text("Remove section"))"#),
+            source)
+        XCTAssertTrue(
+            source.contains(#".accessibilityAction(named: Text("Pick replacement"))"#),
+            source)
+    }
+
+    func testDashboardUsesExplicitH1AndH2HeadingLevelsAlongsideHeaderTraits() throws {
+        let source = try Self.sourceFile("Sources/SlateMac/Bases/DashboardViews.swift")
+        let titleStart = try XCTUnwrap(source.range(of: "Text(document.name)"))
+        let titleEnd = try XCTUnwrap(
+            source.range(
+                of: "                content",
+                range: titleStart.upperBound..<source.endIndex))
+        let titleBlock = String(source[titleStart.lowerBound..<titleEnd.lowerBound])
+        XCTAssertTrue(titleBlock.contains(".accessibilityAddTraits(.isHeader)"))
+        XCTAssertTrue(titleBlock.contains(".accessibilityHeading(.h1)"))
+
+        let sectionStart = try XCTUnwrap(source.range(of: "Text(section.title)"))
+        let sectionEnd = try XCTUnwrap(
+            source.range(
+                of: "            content",
+                range: sectionStart.upperBound..<source.endIndex))
+        let sectionBlock = String(source[sectionStart.lowerBound..<sectionEnd.lowerBound])
+        XCTAssertTrue(sectionBlock.contains(".accessibilityAddTraits(.isHeader)"))
+        XCTAssertTrue(sectionBlock.contains(".accessibilityHeading(.h2)"))
+    }
+
     // MARK: - Persistence
 
     /// Unknown / absent tokens fall back to `.outline`; every known token

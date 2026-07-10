@@ -219,6 +219,25 @@ fn string_and_regex_literals_preserve_unicode() {
 }
 
 #[test]
+fn string_literals_decode_only_listed_escapes() {
+    for (source, expected) in [
+        (r#""\r""#, r"\r"),
+        (r#""\q""#, r"\q"),
+        (r#""\"""#, "\""),
+        (r#""\'""#, "'"),
+        (r#""\\""#, "\\"),
+        (r#""\n""#, "\n"),
+        (r#""\t""#, "\t"),
+    ] {
+        let expr = parse_expr(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        let ExprKind::Lit(Lit::String(value)) = expr.kind else {
+            panic!("expected string literal for {source}, got {expr:#?}");
+        };
+        assert_eq!(value, expected, "source was {source}");
+    }
+}
+
+#[test]
 fn unsupported_regex_flags_preserve_raw_literal() {
     let expr = parse_expr("name.matches(/abc/i)").expect("unsupported regex flag preserves");
 

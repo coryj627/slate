@@ -32,7 +32,8 @@ struct DashboardEditorDraft: Equatable {
                 savedQueryID: status.savedQueryId,
                 savedQueryName: status.savedQueryName ?? savedByID[status.savedQueryId],
                 headingOverride: status.headingOverride ?? "",
-                viewOverride: status.viewOverride ?? "",
+                viewOverride: DashboardEditorSectionDraft.pickerViewOverride(
+                    fromStored: status.viewOverride),
                 missing: status.missing)
         }
         self.init(
@@ -123,6 +124,16 @@ struct DashboardEditorSectionDraft: Identifiable, Equatable {
         nilIfBlank(viewOverride)
     }
 
+    static func pickerViewOverride(fromStored value: String?) -> String {
+        guard let value else { return "" }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "": return ""
+        case "table": return "Table"
+        case "list": return "List"
+        default: return value
+        }
+    }
+
     private func nilIfBlank(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -134,6 +145,7 @@ struct DashboardEditorSheet: View {
     let savedQueries: [SavedQuerySummary]
     let onCancel: () -> Void
     let onSave: (DashboardEditorDraft) -> Void
+    @FocusState private var focusedSectionID: DashboardEditorSectionDraft.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -281,9 +293,16 @@ struct DashboardEditorSheet: View {
             TextField("Section title override", text: section.headingOverride)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Section title override")
-            TextField("View override", text: section.viewOverride)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("View override")
+            Picker("Section view", selection: section.viewOverride) {
+                Text("Default").tag("")
+                Text("Table").tag("Table")
+                Text("List").tag("List")
+                if !["", "Table", "List"].contains(section.wrappedValue.viewOverride) {
+                    Text("Unsupported: \(section.wrappedValue.viewOverride)")
+                        .tag(section.wrappedValue.viewOverride)
+                }
+            }
+            .accessibilityLabel("Section view")
         }
         .padding(Tokens.Spacing.sm)
         .background(Tokens.ColorRole.surface)
@@ -291,6 +310,43 @@ struct DashboardEditorSheet: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Dashboard section \(index + 1)")
         .accessibilityValue(section.wrappedValue.displayName)
+        .focusable()
+        .focused($focusedSectionID, equals: section.wrappedValue.id)
+        .onKeyPress(.upArrow, phases: .down) { press in
+            handleSectionReorder(
+                sectionID: section.wrappedValue.id,
+                direction: .up,
+                modifiers: press.modifiers)
+        }
+        .onKeyPress(.downArrow, phases: .down) { press in
+            handleSectionReorder(
+                sectionID: section.wrappedValue.id,
+                direction: .down,
+                modifiers: press.modifiers)
+        }
+    }
+
+    private func handleSectionReorder(
+        sectionID: DashboardEditorSectionDraft.ID,
+        direction: BaseRowReorderCommand.Direction,
+        modifiers: EventModifiers
+    ) -> KeyPress.Result {
+        guard let index = draft.sectionIndex(id: sectionID)
+        else { return .ignored }
+        guard BaseRowReorderCommand.route(
+            isFocused: focusedSectionID == sectionID,
+            direction: direction,
+            modifiers: modifiers,
+            index: index,
+            count: draft.sections.count,
+            label: "Dashboard section \(index + 1)",
+            move: { destination in
+                draft.moveSection(from: index, to: destination)
+            },
+            retainFocus: { _ in focusedSectionID = sectionID },
+            announce: { postAccessibilityAnnouncement($0, priority: .medium) })
+        else { return .ignored }
+        return .handled
     }
 
     private func savedQuerySelection(

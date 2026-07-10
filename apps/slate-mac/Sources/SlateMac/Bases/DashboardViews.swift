@@ -14,6 +14,7 @@ struct DashboardContainerView: View {
                     .font(Tokens.Typography.title)
                     .foregroundStyle(Tokens.ColorRole.textPrimary)
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilityHeading(.h1)
                 content
             }
             .padding(Tokens.Spacing.md)
@@ -37,8 +38,24 @@ struct DashboardContainerView: View {
             if document.sections.isEmpty {
                 placeholder("No dashboard sections. Add a saved query section to show results.")
             } else {
+                let expectedSections = document.editableSectionsSnapshot
                 ForEach(document.sections) { section in
-                    DashboardSectionView(section: section)
+                    DashboardSectionView(
+                        section: section,
+                        replacementChoices: appState.baseQueries.savedQueries,
+                        onRemove: {
+                            appState.removeMissingDashboardSection(
+                                dashboardID: document.id,
+                                index: section.index,
+                                expectedSections: expectedSections)
+                        },
+                        onReplace: { replacementID in
+                            appState.replaceMissingDashboardSection(
+                                dashboardID: document.id,
+                                index: section.index,
+                                expectedSections: expectedSections,
+                                replacementSavedQueryID: replacementID)
+                        })
                 }
             }
         }
@@ -55,6 +72,11 @@ struct DashboardContainerView: View {
 
 private struct DashboardSectionView: View {
     @ObservedObject var section: DashboardSectionDocument
+    let replacementChoices: [SavedQuerySummary]
+    let onRemove: () -> Void
+    let onReplace: (String) -> Void
+    @State private var showingReplacementPicker = false
+    @State private var gridInteraction = BaseGridInteractionState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
@@ -62,6 +84,7 @@ private struct DashboardSectionView: View {
                 .font(Tokens.Typography.sectionHeader)
                 .foregroundStyle(Tokens.ColorRole.textPrimary)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityHeading(.h2)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,17 +96,92 @@ private struct DashboardSectionView: View {
         case .loading:
             placeholder("Loading section...")
         case .missing:
-            placeholder("Missing saved query. Remove section or pick replacement.")
+            missingSection
         case .failed(let message):
-            placeholder(message)
+            failureBanner(message)
         case .ready:
-            if let result = section.result, !result.columns.isEmpty {
-                BaseReadOnlyResultView(result: result, accessibilityLabel: "\(section.title) grid")
-                    .frame(minHeight: 160)
+            if let result = section.result {
+                switch BaseResultContentState(result: result) {
+                case .empty:
+                    placeholder("No results in this section.")
+                case .rowOnly, .tabular:
+                    BaseReadOnlyResultView(
+                        result: result,
+                        accessibilityLabel: "\(section.title) grid",
+                        rendererOverride: section.resolvedRenderer,
+                        interaction: $gridInteraction)
+                        .frame(minHeight: 160)
+                }
             } else {
                 placeholder("No results in this section.")
             }
         }
+    }
+
+    private var missingSection: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+            placeholder("Missing saved query. Remove this section or pick a replacement.")
+            HStack(spacing: Tokens.Spacing.sm) {
+                Button("Remove section") { onRemove() }
+                    .buttonStyle(.bordered)
+                Button("Pick replacement") { showingReplacementPicker = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: Text("Remove section")) { onRemove() }
+        .accessibilityAction(named: Text("Pick replacement")) {
+            showingReplacementPicker = true
+        }
+        .sheet(isPresented: $showingReplacementPicker) {
+            VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
+                Text("Pick replacement")
+                    .font(Tokens.Typography.sectionHeader)
+                    .accessibilityAddTraits(.isHeader)
+                if replacementChoices.isEmpty {
+                    Text("No saved queries are available.")
+                        .font(Tokens.Typography.callout)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+                            ForEach(replacementChoices, id: \.id) { choice in
+                                Button(choice.name) {
+                                    showingReplacementPicker = false
+                                    onReplace(choice.id)
+                                }
+                                .buttonStyle(.plain)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Replace with \(choice.name)")
+                            }
+                        }
+                    }
+                    .frame(minHeight: 180)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showingReplacementPicker = false }
+                        .keyboardShortcut(.cancelAction)
+                }
+            }
+            .padding(Tokens.Spacing.md)
+            .frame(minWidth: 360, minHeight: 260)
+        }
+    }
+
+    private func failureBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
+            SlateSymbol.warning.decorative
+            Text(message)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
+            Spacer(minLength: 0)
+        }
+        .padding(Tokens.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.ColorRole.surfaceSecondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Dashboard section error: \(message)")
     }
 
     private func placeholder(_ text: String) -> some View {
@@ -97,6 +195,7 @@ private struct DashboardSectionView: View {
 
 struct BasesDockPanel: View {
     @EnvironmentObject private var appState: AppState
+    @State private var gridInteraction = BaseGridInteractionState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -109,6 +208,9 @@ struct BasesDockPanel: View {
         }
         .onChange(of: appState.selectedFilePath) {
             appState.scheduleBasesDockFollowActiveRefresh()
+        }
+        .onChange(of: appState.basesDock.target) {
+            gridInteraction.reconcile(with: nil)
         }
     }
 
@@ -164,15 +266,23 @@ struct BasesDockPanel: View {
             }
             .padding(Tokens.Spacing.md)
         case .ready:
-            if let result = doc.result, !result.columns.isEmpty {
-                VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-                    Text(doc.displayName)
-                        .font(Tokens.Typography.sectionHeader)
-                        .foregroundStyle(Tokens.ColorRole.textPrimary)
-                        .accessibilityAddTraits(.isHeader)
-                    BaseReadOnlyResultView(result: result, accessibilityLabel: "\(doc.displayName) grid")
+            if let result = doc.result {
+                switch BaseResultContentState(result: result) {
+                case .empty:
+                    placeholder("No base results.")
+                case .rowOnly, .tabular:
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+                        Text(doc.displayName)
+                            .font(Tokens.Typography.sectionHeader)
+                            .foregroundStyle(Tokens.ColorRole.textPrimary)
+                            .accessibilityAddTraits(.isHeader)
+                        BaseReadOnlyResultView(
+                            result: result,
+                            accessibilityLabel: "\(doc.displayName) grid",
+                            interaction: $gridInteraction)
+                    }
+                    .padding(Tokens.Spacing.md)
                 }
-                .padding(Tokens.Spacing.md)
             } else {
                 placeholder("No base results.")
             }
@@ -192,23 +302,91 @@ struct BasesDockPanel: View {
 struct BaseReadOnlyResultView: View {
     let result: BasesResultSet
     let accessibilityLabel: String
-    @State private var selectedRow: String?
-    @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
-    @State private var sortState: DataGridSortState?
+    let rendererOverride: BaseRendererMode?
+    let interaction: Binding<BaseGridInteractionState>
 
+    init(
+        result: BasesResultSet,
+        accessibilityLabel: String,
+        rendererOverride: BaseRendererMode? = nil,
+        interaction: Binding<BaseGridInteractionState> = .constant(BaseGridInteractionState())
+    ) {
+        self.result = result
+        self.accessibilityLabel = accessibilityLabel
+        self.rendererOverride = rendererOverride
+        self.interaction = interaction
+    }
+
+    @ViewBuilder
     var body: some View {
+        Group {
+            switch BaseResultContentState(result: result) {
+            case .empty:
+                EmptyView()
+            case .rowOnly:
+                resultList
+            case .tabular:
+                if rendererOverride == .list {
+                    resultList
+                } else {
+                    resultGrid
+                }
+            }
+        }
+        .onAppear { updateInteraction { $0.reconcile(with: result) } }
+        .onChange(of: result) { _, result in
+            updateInteraction { $0.reconcile(with: result) }
+        }
+    }
+
+    private var resultList: some View {
+        BaseListView(
+            projection: BaseListProjection(
+                result: result,
+                options: BaseListOptions(slateStateJson: nil)),
+            selection: Binding(
+                get: { interaction.wrappedValue.selectedRowID },
+                set: { rowID in
+                    updateInteraction { $0.setSelectedRowID(rowID, in: result) }
+                }),
+            onActivate: { _ in },
+            rowActions: [])
+    }
+
+    private var resultGrid: some View {
         AccessibleDataGrid(
             columns: columns,
             rows: rows,
             summary: BaseSummaryFormatter.summaryText(result),
             accessibilityLabel: accessibilityLabel,
             groups: groups,
-            selection: $selectedRow,
-            cellSelection: $selectedCell,
-            sortState: $sortState,
+            selection: Binding(
+                get: { interaction.wrappedValue.selectedRowID },
+                set: { rowID in
+                    updateInteraction { $0.setSelectedRowID(rowID, in: result) }
+                }),
+            cellSelection: Binding(
+                get: { interaction.wrappedValue.cellPosition(in: result) },
+                set: { position in
+                    updateInteraction { $0.setCellPosition(position, in: result) }
+                }),
+            sortState: Binding(
+                get: { interaction.wrappedValue.sortState(in: result) },
+                set: { sortState in
+                    updateInteraction { $0.setSortState(sortState, in: result) }
+                }),
             cellNavigation: true,
             onActivate: { _ in },
+            rowAccessibilityDescription: { $0.row.audioDescription },
             rowActions: [])
+    }
+
+    private func updateInteraction(
+        _ update: (inout BaseGridInteractionState) -> Void
+    ) {
+        var value = interaction.wrappedValue
+        update(&value)
+        interaction.wrappedValue = value
     }
 
     private var columns: [AccessibleDataGrid<BaseGridRow>.Column] {
@@ -216,9 +394,8 @@ struct BaseReadOnlyResultView: View {
             AccessibleDataGrid<BaseGridRow>.Column(
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
-                sort: { lhs, rhs in
-                    lhs.value(at: columnIndex).localizedCaseInsensitiveCompare(
-                        rhs.value(at: columnIndex)) == .orderedAscending
+                directionalSort: { lhs, rhs, ascending in
+                    lhs.sortsBefore(rhs, at: columnIndex, ascending: ascending)
                 })
         }
     }

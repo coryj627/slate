@@ -568,8 +568,9 @@ impl VaultSession {
     }
 
     /// Every distinct frontmatter property key in the vault, key-sorted,
-    /// each with the count of files that carry it (m_spec §M-5). For the
-    /// app's future property browser.
+    /// each with the count of files that carry it and the sorted distinct
+    /// value kinds observed for it (m_spec §M-5). For the app's future
+    /// property browser.
     pub fn list_property_keys(&self) -> Result<Vec<PropertyKeySummary>, VaultError> {
         let keys = self.inner.list_property_keys()?;
         Ok(keys.into_iter().map(Into::into).collect())
@@ -1375,13 +1376,15 @@ impl From<core::FileSummary> for FileSummary {
     }
 }
 
-/// One distinct property key + the count of files that carry it
-/// (m_spec §M-5). Mirrors `core::PropertyKeySummary` across the FFI
-/// boundary for the app's future property browser.
+/// One distinct property key, the count of files that carry it, and its
+/// sorted distinct value kinds (m_spec §M-5). Mirrors
+/// `core::PropertyKeySummary` across the FFI boundary for the app's
+/// future property browser.
 #[derive(uniffi::Record)]
 pub struct PropertyKeySummary {
     pub key: String,
     pub file_count: u64,
+    pub value_kinds: Vec<String>,
 }
 
 impl From<core::PropertyKeySummary> for PropertyKeySummary {
@@ -1389,6 +1392,7 @@ impl From<core::PropertyKeySummary> for PropertyKeySummary {
         Self {
             key: s.key,
             file_count: s.file_count,
+            value_kinds: s.value_kinds,
         }
     }
 }
@@ -3846,6 +3850,7 @@ impl From<core::BasesColumn> for BasesColumn {
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct BasesValue {
     pub raw_kind: String,
+    pub sort_key: String,
     pub display: String,
     pub text: Option<String>,
     pub number: Option<f64>,
@@ -3862,6 +3867,7 @@ impl From<core::BasesValue> for BasesValue {
     fn from(v: core::BasesValue) -> Self {
         BasesValue {
             raw_kind: v.raw_kind,
+            sort_key: v.sort_key,
             display: v.display,
             text: v.text,
             number: v.number,
@@ -3939,6 +3945,7 @@ pub struct BasesResultSet {
     pub summaries: Vec<BasesSummaryCell>,
     pub total_count: u64,
     pub shown_count: u64,
+    pub unfiltered_shown_count: u64,
     pub executed_at_ms: i64,
     pub warnings: Vec<String>,
     pub view_error: Option<String>,
@@ -3954,6 +3961,7 @@ impl From<core::BasesResultSet> for BasesResultSet {
             summaries: r.summaries.into_iter().map(Into::into).collect(),
             total_count: r.total_count,
             shown_count: r.shown_count,
+            unfiltered_shown_count: r.unfiltered_shown_count,
             executed_at_ms: r.executed_at_ms,
             warnings: r.warnings,
             view_error: r.view_error,
@@ -4130,6 +4138,34 @@ pub struct BaseExpressionValidation {
     pub span_end: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SlateQueryFenceClassification {
+    pub query: Option<String>,
+    pub view: Option<String>,
+}
+
+impl From<core::bases::SlateQueryFenceClassification> for SlateQueryFenceClassification {
+    fn from(value: core::bases::SlateQueryFenceClassification) -> Self {
+        Self {
+            query: value.query,
+            view: value.view,
+        }
+    }
+}
+
+/// Decode the routing fields of a dual-mode `slate-query` fence with the
+/// same full YAML parser used by Core's Bases implementation.
+#[uniffi::export]
+pub fn classify_slate_query_fence(
+    source: String,
+) -> Result<SlateQueryFenceClassification, VaultError> {
+    core::bases::classify_slate_query_fence(&source)
+        .map(Into::into)
+        .map_err(|error| VaultError::InvalidQuery {
+            message: error.to_string(),
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum BaseEdit {
     SetViewKey {
@@ -4175,6 +4211,10 @@ pub enum BaseEdit {
         summary: Option<String>,
     },
     SetSlateState {
+        view: u32,
+        yaml: Option<String>,
+    },
+    SetSlateSort {
         view: u32,
         yaml: Option<String>,
     },
@@ -4228,6 +4268,10 @@ impl From<BaseEdit> for core::bases::BaseEdit {
                 summary,
             },
             BaseEdit::SetSlateState { view, yaml } => core::bases::BaseEdit::SetSlateState {
+                view: view as usize,
+                yaml,
+            },
+            BaseEdit::SetSlateSort { view, yaml } => core::bases::BaseEdit::SetSlateSort {
                 view: view as usize,
                 yaml,
             },
@@ -4321,6 +4365,18 @@ impl VaultSession {
             .into())
     }
 
+    pub fn base_set_transient_sort(
+        &self,
+        handle: u64,
+        view: u32,
+        column_id: Option<String>,
+        ascending: bool,
+    ) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .base_set_transient_sort(handle, view, column_id, ascending)?)
+    }
+
     pub fn open_query(
         &self,
         query_json: String,
@@ -4411,6 +4467,19 @@ impl VaultSession {
         Ok(self.inner.get_dashboard(&id)?.into())
     }
 
+    pub fn update_dashboard(
+        &self,
+        id: String,
+        name: String,
+        sections: Vec<DashboardSection>,
+    ) -> Result<(), VaultError> {
+        Ok(self.inner.update_dashboard(
+            &id,
+            &name,
+            sections.into_iter().map(Into::into).collect(),
+        )?)
+    }
+
     pub fn rename_dashboard(&self, id: String, name: String) -> Result<(), VaultError> {
         Ok(self.inner.rename_dashboard(&id, &name)?)
     }
@@ -4435,6 +4504,12 @@ impl VaultSession {
 
     pub fn base_apply_edit(&self, handle: u64, edit: BaseEdit) -> Result<(), VaultError> {
         Ok(self.inner.base_apply_edit(handle, edit.into())?)
+    }
+
+    pub fn base_apply_edits(&self, handle: u64, edits: Vec<BaseEdit>) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .base_apply_edits(handle, edits.into_iter().map(Into::into).collect())?)
     }
 
     pub fn save_query_as_base(&self, query_json: String, path: String) -> Result<(), VaultError> {
@@ -5657,6 +5732,18 @@ mod tests {
     }
 
     #[test]
+    fn slate_query_fence_classifier_crosses_ffi_boundary() {
+        let classified =
+            classify_slate_query_fence(r#"{query: "Saved Notes", view: 'Main'}"#.to_string())
+                .unwrap();
+        assert_eq!(classified.query.as_deref(), Some("Saved Notes"));
+        assert_eq!(classified.view.as_deref(), Some("Main"));
+
+        let error = classify_slate_query_fence("query: [not, scalar]".to_string()).unwrap_err();
+        assert!(matches!(error, VaultError::InvalidQuery { .. }));
+    }
+
+    #[test]
     fn bases_api_drives_over_the_ffi_wrapper() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("Queries")).unwrap();
@@ -5699,12 +5786,35 @@ mod tests {
             .base_execute(handle, 0, None, Some("done".into()), CancelToken::new())
             .unwrap();
         assert_eq!(result.total_count, 1);
+        assert_eq!(result.unfiltered_shown_count, 2);
         assert_eq!(result.rows[0].values[0].display, "Beta.md");
+        assert!(
+            !result.rows[0].values[0].sort_key.is_empty(),
+            "the Core sort key must cross the UniFFI record mirror"
+        );
 
         let csv = session
             .base_export(handle, 0, ExportFormat::Csv, Some("done".into()))
             .unwrap();
         assert_eq!(csv, "file.name,status\r\nBeta.md,done\r\n");
+
+        session
+            .base_set_transient_sort(handle, 0, Some("status".into()), false)
+            .unwrap();
+        let sorted = session
+            .base_execute(handle, 0, None, None, CancelToken::new())
+            .unwrap();
+        assert_eq!(
+            sorted
+                .rows
+                .iter()
+                .map(|row| row.file_path.as_str())
+                .collect::<Vec<_>>(),
+            ["Notes/Beta.md", "Notes/Alpha.md"]
+        );
+        session
+            .base_set_transient_sort(handle, 0, None, false)
+            .unwrap();
 
         let (base, warnings) = core::bases::parse_base(
             r#"views:
@@ -5776,6 +5886,28 @@ mod tests {
         assert!(!dashboard.sections[0].missing);
 
         session
+            .update_dashboard(
+                dashboard.id.clone(),
+                "Updated dashboard".into(),
+                vec![DashboardSection {
+                    saved_query_id: saved_id.clone(),
+                    heading_override: Some("Updated heading".into()),
+                    view_override: Some("Reading".into()),
+                }],
+            )
+            .unwrap();
+        let updated_dashboard = session.get_dashboard(dashboard.id).unwrap();
+        assert_eq!(updated_dashboard.name, "Updated dashboard");
+        assert_eq!(
+            updated_dashboard.sections[0].heading_override.as_deref(),
+            Some("Updated heading")
+        );
+        assert_eq!(
+            updated_dashboard.sections[0].view_override.as_deref(),
+            Some("Reading")
+        );
+
+        session
             .base_apply_edit(
                 handle,
                 BaseEdit::RenameView {
@@ -5785,6 +5917,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(session.base_views(handle).unwrap()[0].name, "Renamed");
+        session
+            .base_apply_edits(
+                handle,
+                vec![
+                    BaseEdit::RenameView {
+                        view: 0,
+                        name: "Batch draft".into(),
+                    },
+                    BaseEdit::RenameView {
+                        view: 0,
+                        name: "Batched".into(),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(session.base_views(handle).unwrap()[0].name, "Batched");
+        session
+            .base_apply_edit(
+                handle,
+                BaseEdit::SetSlateSort {
+                    view: 0,
+                    yaml: Some("- expr: status\n  direction: desc".into()),
+                },
+            )
+            .unwrap();
+        let saved_base = std::fs::read_to_string(tmp.path().join("Queries/Reading.base")).unwrap();
+        assert!(saved_base.contains("    slate:\n      sort:\n        - expr: status"));
 
         let converted = session
             .dql_as_base("TABLE WITHOUT ID file.name AS \"Name\"\nFROM \"Notes\"\n".into())
@@ -5902,6 +6061,22 @@ mod tests {
             Err(other) => panic!("expected Cancelled, got error {other:?}"),
             Ok(_) => panic!("expected Cancelled, scan returned Ok"),
         }
+    }
+
+    #[test]
+    fn list_property_keys_carries_sorted_kinds_through_ffi_conversion() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), "---\nmixed: 42\n---\n").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "---\nmixed: true\n---\n").unwrap();
+        std::fs::write(tmp.path().join("c.md"), "---\nmixed: 7\n---\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let keys = session.list_property_keys().unwrap();
+        let mixed = keys.iter().find(|summary| summary.key == "mixed").unwrap();
+        assert_eq!(mixed.file_count, 3);
+        assert_eq!(mixed.value_kinds, vec!["boolean", "number"]);
     }
 
     #[test]

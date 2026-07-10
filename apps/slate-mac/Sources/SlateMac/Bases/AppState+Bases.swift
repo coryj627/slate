@@ -4,6 +4,12 @@
 import AppKit
 import Foundation
 
+private enum BaseQueryBuilderPreviewThreadProbe {
+    nonisolated static func isMainThread() -> Bool {
+        Thread.isMainThread
+    }
+}
+
 struct BaseQueriesState: Equatable {
     var savedQueries: [SavedQuerySummary] = []
     var baseFiles: [BaseFileSummary] = []
@@ -34,10 +40,31 @@ extension AppState {
         return handle
     }
 
+    func openBaseEmbedDestination(_ destination: BaseEmbedOpenDestination) {
+        switch destination {
+        case .baseFile(let path):
+            openFile(path, target: .newTab)
+        case .sourceNote(let path):
+            openFile(path, target: .newTab)
+            setViewMode(.editing)
+        case .savedQuery(let reference):
+            let summaries = currentSession.flatMap { try? $0.listSavedQueries() }
+                ?? baseQueries.savedQueries
+            let resolved = BaseEmbedRequest.savedQuerySummary(
+                reference: reference,
+                in: summaries)
+            guard let resolved else {
+                postBaseActionAnnouncement("Saved query \(reference) is no longer available.")
+                return
+            }
+            openSavedQuery(resolved, target: .newTab)
+        }
+    }
+
     func openBaseFile(_ path: String, target: OpenTarget = .currentTab) {
         switch target {
         case .currentTab:
-            if let existing = workspace.activeGroupTab(forPath: path) {
+            if let existing = workspace.activeGroupBaseTab(forPath: path) {
                 activateTab(existing.id)
                 return
             }
@@ -58,7 +85,7 @@ extension AppState {
                 activateTab(id)
             }
         case .newTab:
-            if let existing = workspace.activeGroupTab(forPath: path) {
+            if let existing = workspace.activeGroupBaseTab(forPath: path) {
                 activateTab(existing.id)
                 return
             }
@@ -290,6 +317,10 @@ extension AppState {
         guard let session = currentSession else { return }
         do {
             try session.deleteSavedQuery(id: id)
+            reloadRegisteredSavedQueryEmbeds(
+                id: id,
+                session: session,
+                includeUnleasedHandles: true)
             baseQueries.pinnedSavedQueryIDs.removeAll { $0 == id }
             persistBaseQueryPinsIfNeeded(baseQueries.pinnedSavedQueryIDs)
             closeOpenSavedQueryTabs(id: id)
@@ -361,24 +392,96 @@ extension AppState {
         }
     }
 
-    func updateDashboard(id: String, name: String, sections: [DashboardSection]) {
-        guard let session = currentSession else { return }
+    @discardableResult
+    func updateDashboard(id: String, name: String, sections: [DashboardSection]) -> Bool {
+        guard let session = currentSession else { return false }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             postBaseActionAnnouncement("Enter a dashboard name before saving.")
-            return
+            return false
         }
         do {
-            try session.renameDashboard(id: id, name: trimmed)
-            try session.updateDashboardSections(id: id, sections: sections)
+            try session.updateDashboard(id: id, name: trimmed, sections: sections)
             dashboardDocuments[id]?.load(session: session, thisPath: nil)
             if case .dashboard(let dockedID, _) = basesDock.target, dockedID == id {
                 basesDockDashboardDocument?.load(session: session, thisPath: basesDockActiveNotePath)
+                if let docked = basesDockDashboardDocument {
+                    basesDock.rebaseMembership(docked.membershipSignature)
+                }
             }
             refreshBaseQueries()
             postBaseActionAnnouncement("Updated dashboard \(trimmed).")
+            return true
         } catch {
             postBaseActionAnnouncement("Dashboard could not be updated: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func removeMissingDashboardSection(
+        dashboardID: String,
+        index: Int,
+        expectedSections: [DashboardSection]
+    ) {
+        guard let session = currentSession else { return }
+        do {
+            let dashboard = try session.getDashboard(id: dashboardID)
+            let freshSections = editableDashboardSections(dashboard.sections)
+            guard freshSections == expectedSections,
+                dashboard.sections.indices.contains(index),
+                dashboard.sections[index].missing
+            else {
+                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                return
+            }
+            var sections = freshSections
+            sections.remove(at: index)
+            updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
+        } catch {
+            postBaseActionAnnouncement(
+                "Dashboard section could not be removed: \(error.localizedDescription)")
+        }
+    }
+
+    func replaceMissingDashboardSection(
+        dashboardID: String,
+        index: Int,
+        expectedSections: [DashboardSection],
+        replacementSavedQueryID: String
+    ) {
+        guard let session = currentSession else { return }
+        do {
+            _ = try session.getSavedQuery(id: replacementSavedQueryID)
+            let dashboard = try session.getDashboard(id: dashboardID)
+            let freshSections = editableDashboardSections(dashboard.sections)
+            guard freshSections == expectedSections,
+                dashboard.sections.indices.contains(index),
+                dashboard.sections[index].missing
+            else {
+                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                return
+            }
+            var sections = freshSections
+            let current = sections[index]
+            sections[index] = DashboardSection(
+                savedQueryId: replacementSavedQueryID,
+                headingOverride: current.headingOverride,
+                viewOverride: current.viewOverride)
+            updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
+        } catch {
+            postBaseActionAnnouncement(
+                "Dashboard section could not be replaced: \(error.localizedDescription)")
+        }
+    }
+
+    private func editableDashboardSections(
+        _ statuses: [DashboardSectionStatus]
+    ) -> [DashboardSection] {
+        statuses.map {
+            DashboardSection(
+                savedQueryId: $0.savedQueryId,
+                headingOverride: $0.headingOverride,
+                viewOverride: $0.viewOverride)
         }
     }
 
@@ -453,6 +556,12 @@ extension AppState {
             _ = workspace.retargetSavedQuery(id: summary.id, name: summary.name)
             baseDocuments[BaseDocumentSource.savedQuery(id: summary.id, name: summary.name).key]?
                 .retargetSavedQueryName(summary.name)
+            if case .savedQuery(let id, _) = basesDock.target,
+                BaseExactIdentity.matches(id, summary.id)
+            {
+                basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
+                basesDockDocument?.retargetSavedQueryName(summary.name)
+            }
         }
     }
 
@@ -460,8 +569,10 @@ extension AppState {
         for summary in dashboards {
             _ = workspace.retargetDashboard(id: summary.id, name: summary.name)
             dashboardDocuments[summary.id]?.retargetName(summary.name)
-            if case .dashboard(let id, _) = basesDock.target, id == summary.id {
-                basesDock.target = .dashboard(id: summary.id, name: summary.name)
+            if case .dashboard(let id, _) = basesDock.target,
+                BaseExactIdentity.matches(id, summary.id)
+            {
+                basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
             }
         }
     }
@@ -469,7 +580,7 @@ extension AppState {
     private func closeOpenSavedQueryTabs(id: String) {
         let matchingTabs = workspace.model.allTabs.filter { tab in
             if case .savedQuery(let queryID, _) = tab.item {
-                return queryID == id
+                return BaseExactIdentity.matches(queryID, id)
             }
             return false
         }
@@ -578,7 +689,7 @@ extension AppState {
         selectedPath: String?
     ) {
         if id == workspace.model.activeGroup.activeTabID,
-            selectedFilePath == selectedPath,
+            BaseExactIdentity.matches(selectedFilePath, selectedPath),
             baseDocuments[source.key]?.handle != nil
         {
             return
@@ -598,10 +709,10 @@ extension AppState {
         if doc.handle == nil, let session = currentSession {
             doc.load(session: session)
         }
-        if selectedFilePath != selectedPath {
+        if !BaseExactIdentity.matches(selectedFilePath, selectedPath) {
             selectedFilePath = selectedPath
         }
-        if activeBaseSelectionPath != source.selectionKey {
+        if !BaseExactIdentity.matches(activeBaseSelectionPath, source.selectionKey) {
             clearActiveBaseSelection()
         }
     }
@@ -660,9 +771,9 @@ extension AppState {
     }
 
     func dockBaseFileToSidebar(path: String, name: String? = nil, refreshDelayNanoseconds: UInt64 = 500_000_000) {
-        basesDock.target = .base(
+        basesDock.setTarget(.base(
             path: path,
-            name: name ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension)
+            name: name ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension))
         workspace.activeLeaf = .basesDock
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
@@ -672,7 +783,7 @@ extension AppState {
             postBaseActionAnnouncement("Saved query is no longer available.")
             return
         }
-        basesDock.target = .savedQuery(id: summary.id, name: summary.name)
+        basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
         workspace.activeLeaf = .basesDock
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
@@ -682,7 +793,7 @@ extension AppState {
             postBaseActionAnnouncement("Dashboard is no longer available.")
             return
         }
-        basesDock.target = .dashboard(id: summary.id, name: summary.name)
+        basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
         workspace.activeLeaf = .basesDock
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
@@ -722,16 +833,16 @@ extension AppState {
         session: VaultSession,
         thisPath: String?
     ) {
-        let previous = basesDock.lastMembershipSignature
+        let membership: BaseRowMembership
         switch target {
-        case .base(let path, let name):
+        case .base(let path, _):
             if let dashboardDoc = basesDockDashboardDocument {
                 dashboardDoc.close(session: session)
             }
             basesDockDashboardDocument = nil
             let doc = basesDockDocument ?? BaseDocument(source: .file(path: path))
             basesDockDocument = doc
-            if doc.selectionKey != path {
+            if !BaseExactIdentity.matches(doc.selectionKey, path) {
                 doc.close(session: session)
                 doc.retarget(to: .file(path: path), session: nil)
             }
@@ -740,8 +851,7 @@ extension AppState {
             } else {
                 doc.executeActiveView(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = doc.result?.rows.map(baseRowMembership) ?? []
-            basesDock.target = .base(path: path, name: name)
+            membership = BaseRowMembership(rows: doc.result?.rows ?? [])
         case .savedQuery(let id, let name):
             if let dashboardDoc = basesDockDashboardDocument {
                 dashboardDoc.close(session: session)
@@ -750,7 +860,7 @@ extension AppState {
             let source = BaseDocumentSource.savedQuery(id: id, name: name)
             let doc = basesDockDocument ?? BaseDocument(source: source)
             basesDockDocument = doc
-            if doc.selectionKey != source.selectionKey {
+            if !BaseExactIdentity.matches(doc.selectionKey, source.selectionKey) {
                 doc.close(session: session)
                 doc.retarget(to: source, session: nil)
             }
@@ -759,7 +869,7 @@ extension AppState {
             } else {
                 doc.executeActiveView(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = doc.result?.rows.map(baseRowMembership) ?? []
+            membership = BaseRowMembership(rows: doc.result?.rows ?? [])
         case .dashboard(let id, let name):
             if let baseDoc = basesDockDocument {
                 baseDoc.close(session: session)
@@ -776,15 +886,12 @@ extension AppState {
             } else {
                 doc.refresh(session: session, thisPath: thisPath)
             }
-            basesDock.lastMembershipSignature = doc.membershipSignature
+            membership = doc.membershipSignature
         }
-        if !previous.isEmpty, previous != basesDock.lastMembershipSignature {
+        basesDock.setTarget(target)
+        if basesDock.publishMembership(membership) {
             postBaseActionAnnouncement("Base dock updated for active note.")
         }
-    }
-
-    private func baseRowMembership(_ row: BasesRow) -> String {
-        row.taskOrdinal.map { "\(row.filePath)#\($0)" } ?? row.filePath
     }
 
     private var basesDockActiveNotePath: String? {
@@ -797,6 +904,263 @@ extension AppState {
         return selectedFilePath
     }
 
+    /// The single N3-07 post-write funnel. It re-executes every registered
+    /// Bases consumer against the exact session that committed the write,
+    /// compares counted stable row identities, restores a surviving active
+    /// selection, and posts each distinct membership announcement once.
+    @discardableResult
+    func refreshVisibleBasesAfterInAppWrite(
+        session: VaultSession,
+        changedPath: String,
+        alreadyRefreshedDefinitionOwner: BaseDocument? = nil
+    ) -> [String] {
+        guard currentSession === session else { return [] }
+
+        let selectedPath = activeBaseSelectionPath
+        let selectedIdentity = activeBaseSelectedRow.map {
+            BaseRowMembership.Identity(path: $0.filePath, taskOrdinal: $0.taskOrdinal)
+        }
+        let selectedColumnID = activeBaseSelectedColumn?.id
+        let changedBasePath = changedPath.lowercased().hasSuffix(".base")
+            ? changedPath
+            : nil
+        var announcements: [String] = []
+
+        func append(_ message: String) {
+            guard !announcements.contains(message) else { return }
+            announcements.append(message)
+        }
+
+        func appendMembershipChange(
+            previous: BaseRowMembership,
+            result: BasesResultSet?
+        ) {
+            let current = BaseRowMembership(rows: result?.rows ?? [])
+            guard previous != current, let summary = result?.audioSummary else { return }
+            append("Updated: \(summary)")
+        }
+
+        let registeredBases = baseDocuments.sorted { $0.key < $1.key }
+        for (key, document) in registeredBases {
+            guard currentSession === session, baseDocuments[key] === document else { continue }
+            if let changedBasePath,
+                document === alreadyRefreshedDefinitionOwner,
+                document.source.filePath.map({
+                    BaseExactIdentity.matches($0, changedBasePath)
+                }) == true
+            {
+                // `BaseDocument.saveSortToView` already refreshes this exact
+                // handle's view metadata and result while preserving its
+                // transient UI state. Sibling/dock handles still reload below.
+                continue
+            }
+            let previous = BaseRowMembership(rows: document.result?.rows ?? [])
+            refreshLiveBaseDocument(
+                document,
+                session: session,
+                thisPath: nil,
+                changedBasePath: changedBasePath)
+            guard currentSession === session, baseDocuments[key] === document else { continue }
+            appendMembershipChange(previous: previous, result: document.result)
+        }
+
+        let registeredDashboards = dashboardDocuments.sorted { $0.key < $1.key }
+        for (id, document) in registeredDashboards {
+            guard currentSession === session, dashboardDocuments[id] === document else { continue }
+            let updates = document.refreshAfterInAppWrite(session: session)
+            guard currentSession === session, dashboardDocuments[id] === document else { continue }
+            updates.forEach(append)
+        }
+
+        refreshBaseEmbedDocumentsAfterInAppWrite(
+            session: session,
+            changedBasePath: changedBasePath,
+            appendMembershipChange: appendMembershipChange)
+
+        refreshBasesDockAfterInAppWrite(
+            session: session,
+            changedBasePath: changedBasePath,
+            appendMembershipChange: appendMembershipChange,
+            append: append)
+
+        guard currentSession === session else { return [] }
+        restoreActiveBaseSelection(
+            path: selectedPath,
+            identity: selectedIdentity,
+            columnID: selectedColumnID)
+        lastBaseRefreshAnnouncements = announcements
+        announcements.forEach(postBaseActionAnnouncement)
+        return announcements
+    }
+
+    private func refreshLiveBaseDocument(
+        _ document: BaseDocument,
+        session: VaultSession,
+        thisPath: String?,
+        changedBasePath: String?
+    ) {
+        if document.handle == nil {
+            document.load(session: session, thisPath: thisPath)
+        } else if let changedBasePath,
+            document.source.filePath.map({
+                BaseExactIdentity.matches($0, changedBasePath)
+            }) == true
+        {
+            // `.base` definition edits reopen so view summaries and every
+            // separate native handle observe the new parsed definition.
+            // Indexed note/property writes never enter this lane.
+            document.load(session: session, thisPath: thisPath)
+        } else {
+            document.executeActiveView(session: session, thisPath: thisPath)
+        }
+    }
+
+    private func refreshBaseEmbedDocumentsAfterInAppWrite(
+        session: VaultSession,
+        changedBasePath: String?,
+        appendMembershipChange: (BaseRowMembership, BasesResultSet?) -> Void
+    ) {
+        let registeredHandles = baseEmbedHandles.sorted { lhs, rhs in
+            BaseExactIdentity.lessThan(lhs.key.exactIdentityKey, rhs.key.exactIdentityKey)
+        }
+        for (key, handle) in registeredHandles {
+            guard currentSession === session,
+                baseEmbedHandles[key] === handle,
+                handle.session === session
+            else { continue }
+            let documents = handle.liveDocuments.filter { !$0.needsInitialLoad }
+            guard !documents.isEmpty else { continue }
+            let previous = Dictionary(
+                uniqueKeysWithValues: documents.map {
+                    (ObjectIdentifier($0), BaseRowMembership(rows: $0.result?.rows ?? []))
+                })
+
+            if let changedBasePath,
+                handle.request.targetPath.map({
+                    BaseExactIdentity.matches($0, changedBasePath)
+                }) == true
+            {
+                do {
+                    try handle.reload(session: session)
+                    documents.forEach { $0.refreshAfterSharedHandleReload(session: session) }
+                } catch {
+                    documents.forEach { $0.failRefresh(error) }
+                }
+            } else {
+                documents.forEach { $0.refreshAfterInAppWrite(session: session) }
+            }
+
+            guard currentSession === session, baseEmbedHandles[key] === handle else { continue }
+            for document in documents {
+                appendMembershipChange(
+                    previous[ObjectIdentifier(document)] ?? .empty,
+                    document.result)
+            }
+        }
+    }
+
+    private func refreshBasesDockAfterInAppWrite(
+        session: VaultSession,
+        changedBasePath: String?,
+        appendMembershipChange: (BaseRowMembership, BasesResultSet?) -> Void,
+        append: (String) -> Void
+    ) {
+        guard currentSession === session, let target = basesDock.target else { return }
+        let thisPath = basesDock.thisPath
+        switch target {
+        case .base(let path, _):
+            let document: BaseDocument
+            if let existing = basesDockDocument,
+                existing.source.filePath.map({ BaseExactIdentity.matches($0, path) }) == true
+            {
+                document = existing
+            } else {
+                basesDockDocument?.close(session: session)
+                document = BaseDocument(source: .file(path: path))
+                basesDockDocument = document
+            }
+            let previous = BaseRowMembership(rows: document.result?.rows ?? [])
+            refreshLiveBaseDocument(
+                document,
+                session: session,
+                thisPath: thisPath,
+                changedBasePath: changedBasePath)
+            guard currentSession === session,
+                basesDock.target == target,
+                basesDockDocument === document
+            else { return }
+            basesDock.rebaseMembership(BaseRowMembership(rows: document.result?.rows ?? []))
+            appendMembershipChange(previous, document.result)
+
+        case .savedQuery(let id, let name):
+            let source = BaseDocumentSource.savedQuery(id: id, name: name)
+            let document: BaseDocument
+            if let existing = basesDockDocument,
+                BaseExactIdentity.matches(existing.selectionKey, source.selectionKey)
+            {
+                document = existing
+            } else {
+                basesDockDocument?.close(session: session)
+                document = BaseDocument(source: source)
+                basesDockDocument = document
+            }
+            let previous = BaseRowMembership(rows: document.result?.rows ?? [])
+            refreshLiveBaseDocument(
+                document,
+                session: session,
+                thisPath: thisPath,
+                changedBasePath: changedBasePath)
+            guard currentSession === session,
+                basesDock.target == target,
+                basesDockDocument === document
+            else { return }
+            basesDock.rebaseMembership(BaseRowMembership(rows: document.result?.rows ?? []))
+            appendMembershipChange(previous, document.result)
+
+        case .dashboard(let id, let name):
+            let document: DashboardDocument
+            if let existing = basesDockDashboardDocument, existing.id == id {
+                document = existing
+            } else {
+                basesDockDashboardDocument?.close(session: session)
+                document = DashboardDocument(id: id, name: name)
+                basesDockDashboardDocument = document
+            }
+            let updates = document.refreshAfterInAppWrite(session: session, thisPath: thisPath)
+            guard currentSession === session,
+                basesDock.target == target,
+                basesDockDashboardDocument === document
+            else { return }
+            basesDock.rebaseMembership(document.membershipSignature)
+            updates.forEach(append)
+        }
+    }
+
+    private func restoreActiveBaseSelection(
+        path: String?,
+        identity: BaseRowMembership.Identity?,
+        columnID: String?
+    ) {
+        guard let path, let identity,
+            let document = baseDocuments.values.first(where: {
+                BaseExactIdentity.matches($0.selectionKey, path)
+            }),
+            let result = document.result,
+            let row = result.rows.first(where: {
+                BaseExactIdentity.matches($0.filePath, identity.path)
+                    && $0.taskOrdinal == identity.taskOrdinal
+            })
+        else {
+            if path != nil { clearActiveBaseSelection() }
+            return
+        }
+        activeBaseSelectionPath = path
+        activeBaseSelectedRow = row
+        activeBaseSelectedColumn = columnID.flatMap { id in
+            result.columns.first { BaseExactIdentity.matches($0.id, id) }
+        }
+    }
+
     private func reloadDashboardDocumentsAfterSavedQueryChange() {
         guard let session = currentSession else { return }
         for doc in dashboardDocuments.values {
@@ -804,7 +1168,7 @@ extension AppState {
         }
         if let docked = basesDockDashboardDocument {
             docked.load(session: session, thisPath: basesDockActiveNotePath)
-            basesDock.lastMembershipSignature = docked.membershipSignature
+            basesDock.rebaseMembership(docked.membershipSignature)
         }
     }
 
@@ -833,16 +1197,28 @@ extension AppState {
 
     func basesEditViewFilters() {
         guard let doc = activeBaseDocument, let session = currentSession else { return }
+        if case .savedQuery(let id, _) = doc.source {
+            editSavedQueryInBuilder(id: id)
+            return
+        }
         if doc.handle == nil {
             doc.load(session: session)
         }
         guard let handle = doc.handle else { return }
         do {
-            let queryJSON = try session.baseViewEditQueryJson(
+            let effectiveQueryJSON = try session.baseViewQueryJson(
+                handle: handle,
+                view: UInt32(doc.activeViewIndex))
+            let localQueryJSON = try session.baseViewEditQueryJson(
                 handle: handle,
                 view: UInt32(doc.activeViewIndex))
             activeBaseQueryBuilder = try BaseQueryBuilderModel(
-                draft: BaseQueryBuilderDraft(queryJSON: queryJSON))
+                draft: BaseQueryBuilderDraft(
+                    effectiveQueryJSON: effectiveQueryJSON,
+                    localQueryJSON: localQueryJSON),
+                editingBaseView: EditingBaseView(
+                    source: doc.source,
+                    viewIndex: UInt32(doc.activeViewIndex)))
             let viewName = doc.activeViewName ?? "active view"
             postAccessibilityAnnouncement("Editing filters for \(viewName).", priority: .medium)
         } catch {
@@ -853,14 +1229,12 @@ extension AppState {
     }
 
     func basesCloseQueryBuilder() {
-        baseQueryBuilderPreviewTask?.cancel()
-        baseQueryBuilderPreviewTask = nil
-        baseQueryBuilderPreviewCancelToken?.cancel()
-        baseQueryBuilderPreviewCancelToken = nil
         activeBaseQueryBuilder = nil
     }
 
     func basesBuilderSchedulePreview(delayNanoseconds: UInt64 = 300_000_000) {
+        baseQueryBuilderPreviewGeneration += 1
+        let generation = baseQueryBuilderPreviewGeneration
         baseQueryBuilderPreviewTask?.cancel()
         baseQueryBuilderPreviewCancelToken?.cancel()
         baseQueryBuilderPreviewCancelToken = nil
@@ -875,16 +1249,13 @@ extension AppState {
         }
         let cancelToken = CancelToken()
         baseQueryBuilderPreviewCancelToken = cancelToken
-        baseQueryBuilderPreviewTask = Task { [weak self, weak model, session, queryJSON, cancelToken] in
-            defer {
-                Task { @MainActor [weak self] in
-                    if let current = self?.baseQueryBuilderPreviewCancelToken,
-                        current === cancelToken
-                    {
-                        self?.baseQueryBuilderPreviewCancelToken = nil
-                    }
-                }
-            }
+        let executionObserver = baseQueryBuilderPreviewExecutionObserver
+        let previewThisPath = model.previewThisPath
+        baseQueryBuilderPreviewTask = Task {
+            @MainActor [
+                weak self, weak model, session, queryJSON, cancelToken,
+                executionObserver, previewThisPath,
+            ] in
             do {
                 if delayNanoseconds > 0 {
                     try await Task.sleep(nanoseconds: delayNanoseconds)
@@ -893,49 +1264,132 @@ extension AppState {
                     cancelToken.cancel()
                     return
                 }
-                let handle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
-                defer { session.closeBase(handle: handle) }
-                let result = try session.baseExecute(
-                    handle: handle,
-                    view: 0,
-                    thisPath: nil,
-                    quickFilter: nil,
-                    cancel: cancelToken)
-                if Task.isCancelled {
-                    cancelToken.cancel()
-                    return
-                }
-                await MainActor.run { [weak self] in
-                    self?.basesBuilderPublishPreview(
-                        result: result,
-                        for: model,
-                        cancelToken: cancelToken)
-                }
             } catch is CancellationError {
                 cancelToken.cancel()
                 return
             } catch {
-                if Task.isCancelled || cancelToken.isCancelled() {
-                    return
-                }
-                await MainActor.run { [weak self] in
-                    self?.basesBuilderPublishPreviewFailure(
-                        message: error.localizedDescription,
-                        for: model,
-                        cancelToken: cancelToken)
-                }
+                cancelToken.cancel()
+                return
             }
+
+            let nativeTask = Task.detached(priority: .userInitiated) {
+                () -> BaseQueryBuilderPreviewExecutionOutcome in
+                if Task.isCancelled || cancelToken.isCancelled() { return .cancelled }
+
+                let handle: UInt64
+                do {
+                    let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
+                    handle = try session.openQuery(
+                        queryJson: queryJSON, thisPath: previewThisPath)
+                    await executionObserver?(
+                        BaseQueryBuilderPreviewExecutionEvent(
+                            phase: .opened,
+                            generation: generation,
+                            handle: handle,
+                            ranOnMainThread: ranOnMainThread))
+                } catch {
+                    if Task.isCancelled || cancelToken.isCancelled() { return .cancelled }
+                    return .failure(error.localizedDescription)
+                }
+
+                let outcome: BaseQueryBuilderPreviewExecutionOutcome
+                if Task.isCancelled || cancelToken.isCancelled() {
+                    outcome = .cancelled
+                } else {
+                    let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
+                    do {
+                        let result = try session.baseExecute(
+                            handle: handle,
+                            view: 0,
+                            thisPath: previewThisPath,
+                            quickFilter: nil,
+                            cancel: cancelToken)
+                        await executionObserver?(
+                            BaseQueryBuilderPreviewExecutionEvent(
+                                phase: .executed,
+                                generation: generation,
+                                handle: handle,
+                                ranOnMainThread: ranOnMainThread))
+                        outcome = Task.isCancelled || cancelToken.isCancelled()
+                            ? .cancelled : .success(result)
+                    } catch {
+                        await executionObserver?(
+                            BaseQueryBuilderPreviewExecutionEvent(
+                                phase: .executed,
+                                generation: generation,
+                                handle: handle,
+                                ranOnMainThread: ranOnMainThread))
+                        outcome = Task.isCancelled || cancelToken.isCancelled()
+                            ? .cancelled : .failure(error.localizedDescription)
+                    }
+                }
+
+                let ranOnMainThread = BaseQueryBuilderPreviewThreadProbe.isMainThread()
+                session.closeBase(handle: handle)
+                await executionObserver?(
+                    BaseQueryBuilderPreviewExecutionEvent(
+                        phase: .closed,
+                        generation: generation,
+                        handle: handle,
+                        ranOnMainThread: ranOnMainThread))
+                return outcome
+            }
+            let outcome = await withTaskCancellationHandler {
+                await nativeTask.value
+            } onCancel: {
+                cancelToken.cancel()
+                nativeTask.cancel()
+            }
+            if Task.isCancelled {
+                cancelToken.cancel()
+                return
+            }
+            switch outcome {
+            case .success(let result):
+                self?.basesBuilderPublishPreview(
+                    result: result,
+                    for: model,
+                    session: session,
+                    cancelToken: cancelToken,
+                    generation: generation)
+            case .failure(let message):
+                self?.basesBuilderPublishPreviewFailure(
+                    message: message,
+                    for: model,
+                    session: session,
+                    cancelToken: cancelToken,
+                    generation: generation)
+            case .cancelled:
+                break
+            }
+            self?.basesBuilderClearPreviewToken(
+                for: model,
+                session: session,
+                cancelToken: cancelToken,
+                generation: generation)
         }
     }
 
     func basesBuilderPublishPreview(
         result: BasesResultSet,
         for model: BaseQueryBuilderModel?,
-        cancelToken: CancelToken
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
     ) {
-        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        guard let model = currentBaseQueryBuilderPreviewModel(
+            model,
+            session: session,
+            cancelToken: cancelToken,
+            generation: generation)
         else { return }
-        model.previewState = .ready(result)
+        if let message = result.viewError,
+            !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            model.previewState = .failed(message)
+        } else {
+            model.previewState = .ready(result)
+        }
         postAccessibilityAnnouncement(
             model.previewState.accessibilityAnnouncement,
             priority: .medium)
@@ -944,9 +1398,15 @@ extension AppState {
     func basesBuilderPublishPreviewFailure(
         message: String,
         for model: BaseQueryBuilderModel?,
-        cancelToken: CancelToken
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
     ) {
-        guard let model = currentBaseQueryBuilderPreviewModel(model, cancelToken: cancelToken)
+        guard let model = currentBaseQueryBuilderPreviewModel(
+            model,
+            session: session,
+            cancelToken: cancelToken,
+            generation: generation)
         else { return }
         model.previewState = .failed(message)
         postAccessibilityAnnouncement(
@@ -956,31 +1416,53 @@ extension AppState {
 
     private func currentBaseQueryBuilderPreviewModel(
         _ model: BaseQueryBuilderModel?,
-        cancelToken: CancelToken
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
     ) -> BaseQueryBuilderModel? {
         guard let model,
+            currentSession === session,
             activeBaseQueryBuilder === model,
             let currentToken = baseQueryBuilderPreviewCancelToken,
             currentToken === cancelToken,
+            baseQueryBuilderPreviewGeneration == generation,
             !cancelToken.isCancelled()
         else { return nil }
         return model
     }
 
+    private func basesBuilderClearPreviewToken(
+        for model: BaseQueryBuilderModel?,
+        session: VaultSession,
+        cancelToken: CancelToken,
+        generation: Int
+    ) {
+        guard currentBaseQueryBuilderPreviewModel(
+            model,
+            session: session,
+            cancelToken: cancelToken,
+            generation: generation) != nil
+        else { return }
+        baseQueryBuilderPreviewCancelToken = nil
+    }
+
     func basesBuilderSaveToView() {
         guard let model = activeBaseQueryBuilder,
-            let doc = activeBaseDocument,
+            let editingView = model.editingBaseView,
             let session = currentSession
         else { return }
+        let doc = baseDocument(for: editingView.source)
         if doc.handle == nil {
-            doc.load(session: session)
+            doc.load(session: session, thisPath: editingView.previewThisPath)
         }
         guard let handle = doc.handle else { return }
         do {
-            for edit in try model.baseEditsForView(UInt32(doc.activeViewIndex)) {
-                try session.baseApplyEdit(handle: handle, edit: edit)
-            }
-            doc.refresh(session: session)
+            let edits = try model.baseEditsForView(editingView.viewIndex)
+            try session.baseApplyEdits(handle: handle, edits: edits)
+            model.rebaseAfterSuccessfulSave()
+            refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: editingView.source.filePath ?? doc.selectionKey)
             postAccessibilityAnnouncement("Saved builder changes to view.", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
@@ -999,6 +1481,7 @@ extension AppState {
         do {
             try session.saveQueryAsBase(queryJson: model.draft.queryJSON(), path: trimmed)
             refreshBaseQueries()
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: trimmed)
             postAccessibilityAnnouncement("Saved query as \(trimmed).", priority: .medium)
         } catch {
             postAccessibilityAnnouncement(
@@ -1041,7 +1524,7 @@ extension AppState {
                 queryJson: model.draft.queryJSON(),
                 sourceSyntax: .builder)
             refreshBaseQueries()
-            refreshOpenSavedQueryDocument(id: editingSavedQuery.id, name: editingSavedQuery.name)
+            refreshSavedQueryConsumers(id: editingSavedQuery.id, session: session)
             postAccessibilityAnnouncement(
                 "Updated saved query \(editingSavedQuery.name).",
                 priority: .medium)
@@ -1052,10 +1535,78 @@ extension AppState {
         }
     }
 
-    private func refreshOpenSavedQueryDocument(id: String, name: String) {
-        guard let session = currentSession else { return }
-        let key = BaseDocumentSource.savedQuery(id: id, name: name).key
-        baseDocuments[key]?.refresh(session: session)
+    private func refreshSavedQueryConsumers(id: String, session: VaultSession) {
+        guard currentSession === session else { return }
+
+        let registeredBases = baseDocuments.sorted { $0.key < $1.key }
+        for (key, document) in registeredBases {
+            guard currentSession === session, baseDocuments[key] === document else { continue }
+            guard case .savedQuery(let documentID, _) = document.source,
+                documentID == id
+            else { continue }
+            document.load(session: session)
+        }
+
+        let registeredDashboards = dashboardDocuments.sorted { $0.key < $1.key }
+        for (dashboardID, document) in registeredDashboards {
+            guard currentSession === session,
+                dashboardDocuments[dashboardID] === document
+            else { continue }
+            document.reloadSavedQuery(id: id, session: session)
+        }
+
+        if case .savedQuery(let dockedID, _) = basesDock.target,
+            dockedID == id,
+            let document = basesDockDocument
+        {
+            document.load(session: session, thisPath: basesDock.thisPath)
+            basesDock.rebaseMembership(BaseRowMembership(rows: document.result?.rows ?? []))
+        } else if case .dashboard = basesDock.target,
+            let document = basesDockDashboardDocument
+        {
+            document.reloadSavedQuery(
+                id: id,
+                session: session,
+                thisPath: basesDock.thisPath)
+            basesDock.rebaseMembership(document.membershipSignature)
+        }
+
+        reloadRegisteredSavedQueryEmbeds(
+            id: id,
+            session: session,
+            includeUnleasedHandles: false)
+    }
+
+    /// Reopen every registry entry resolved to `id`, using stable saved-query
+    /// identity for both name- and ID-authored embeds. On deletion, reopening
+    /// intentionally fails through `BaseEmbedDocument`'s normal unknown-query
+    /// surface after `BaseEmbedHandle.reload` has closed the old native handle.
+    /// Updates retain the prior optimization of skipping handles with no live,
+    /// already-loaded document.
+    private func reloadRegisteredSavedQueryEmbeds(
+        id: String,
+        session: VaultSession,
+        includeUnleasedHandles: Bool
+    ) {
+        guard currentSession === session else { return }
+        let registeredEmbeds = baseEmbedHandles.sorted { lhs, rhs in
+            BaseExactIdentity.lessThan(lhs.key.exactIdentityKey, rhs.key.exactIdentityKey)
+        }
+        for (key, handle) in registeredEmbeds {
+            guard currentSession === session,
+                baseEmbedHandles[key] === handle,
+                handle.session === session,
+                handle.resolvedSavedQueryID == id
+            else { continue }
+            let documents = handle.liveDocuments.filter { !$0.needsInitialLoad }
+            guard includeUnleasedHandles || !documents.isEmpty else { continue }
+            do {
+                try handle.reload(session: session)
+                documents.forEach { $0.refreshAfterSharedHandleReload(session: session) }
+            } catch {
+                documents.forEach { $0.failRefresh(error) }
+            }
+        }
     }
 
     func basesBuilderAddCondition() {
@@ -1082,10 +1633,10 @@ extension AppState {
         model.perform(.removeCondition(index: index))
     }
 
-    func basesLoadPropertyKeys() async -> [String] {
+    func basesLoadPropertyKeys() async -> [PropertyKeySummary] {
         guard let session = currentSession else { return [] }
         return await Task.detached(priority: .userInitiated) {
-            (try? session.listPropertyKeys().map(\.key)) ?? []
+            (try? session.listPropertyKeys()) ?? []
         }.value
     }
 
@@ -1131,7 +1682,9 @@ extension AppState {
     }
 
     func basesSortByColumn() {
-        guard let text = activeBaseDocument?.sortFocusedColumn() else { return }
+        guard let session = currentSession,
+            let text = activeBaseDocument?.sortFocusedColumn(session: session)
+        else { return }
         postAccessibilityAnnouncement(text, priority: .medium)
     }
 
@@ -1139,6 +1692,10 @@ extension AppState {
         guard let doc = activeBaseDocument, let session = currentSession else { return }
         do {
             if let text = try doc.saveSortToView(session: session) {
+                refreshVisibleBasesAfterInAppWrite(
+                    session: session,
+                    changedPath: doc.source.filePath ?? doc.selectionKey,
+                    alreadyRefreshedDefinitionOwner: doc)
                 postAccessibilityAnnouncement(text, priority: .medium)
             }
         } catch {
@@ -1269,6 +1826,10 @@ extension AppState {
             postBaseActionAnnouncement("Select a base row first.")
             return
         }
+        guard activeBaseSelectedColumn != nil else {
+            postBaseActionAnnouncement("No editable property is available for the selected row.")
+            return
+        }
         baseEditPropertyRequestToken &+= 1
     }
 
@@ -1339,22 +1900,46 @@ extension AppState {
         let oldKey = BaseDocumentSource.file(path: oldPath).key
         let newSource = BaseDocumentSource.file(path: newPath)
         let newKey = newSource.key
-        guard oldPath != newPath,
-            changed.contains(where: { id in
-                workspace.model.allTabs.contains {
-                    $0.id == id && $0.item == .base(path: newPath)
-                }
-            }),
-            let doc = baseDocuments.removeValue(forKey: oldKey)
-        else { return }
-        if let existing = baseDocuments[newKey] {
-            if existing !== doc, let session = currentSession {
-                doc.close(session: session)
+        guard !BaseExactIdentity.matches(oldPath, newPath) else { return }
+
+        let retargetedBaseTab = changed.contains(where: { id in
+            workspace.model.allTabs.contains {
+                guard $0.id == id, case .base(let path) = $0.item else { return false }
+                return BaseExactIdentity.matches(path, newPath)
             }
-            return
+        })
+        if retargetedBaseTab, let doc = baseDocuments.removeValue(forKey: oldKey) {
+            if let existing = baseDocuments[newKey] {
+                if existing !== doc, let session = currentSession {
+                    doc.close(session: session)
+                }
+            } else {
+                doc.retarget(to: newPath, session: currentSession)
+                baseDocuments[newKey] = doc
+            }
         }
-        doc.retarget(to: newPath, session: currentSession)
-        baseDocuments[newKey] = doc
+
+        if case .base(let dockPath, _) = basesDock.target,
+            BaseExactIdentity.matches(dockPath, oldPath)
+        {
+            basesDockRefreshTask?.cancel()
+            basesDockRefreshTask = nil
+            let target = BasesDockTarget.base(
+                path: newPath, name: newSource.displayName)
+            basesDock.setTarget(target)
+            if let session = currentSession {
+                if let dock = basesDockDocument {
+                    dock.close(session: session)
+                    dock.retarget(to: newPath, session: nil)
+                }
+                // Also covers a rename landing during the initial dock
+                // debounce, before a document has been created.
+                refreshBasesDockTarget(
+                    target, session: session, thisPath: basesDock.thisPath)
+            } else {
+                basesDockDocument?.retarget(to: newPath, session: nil)
+            }
+        }
     }
 
     func invalidateBaseDocument(path: String) {
@@ -1398,6 +1983,21 @@ extension AppState {
             }
         }
         baseEmbedHandles = [:]
+    }
+
+    /// Active-note transitions must not tear down embeds still rendered in a
+    /// sibling editor/reading surface. Weak document leases identify handles
+    /// with no visible owner; those are the only entries safe to release here.
+    func releaseUnleasedBaseEmbedDocuments() {
+        guard let session = currentSession else {
+            baseEmbedHandles = [:]
+            return
+        }
+        let unleased = baseEmbedHandles.filter { !$0.value.hasLiveLease }
+        for (key, handle) in unleased {
+            handle.close(session: session)
+            baseEmbedHandles[key] = nil
+        }
     }
 
     private enum BasePropertyAction: Equatable {
@@ -1451,12 +2051,16 @@ extension AppState {
             }
         }.value
 
+        guard currentSession === session else { return nil }
+
         switch outcome {
         case .success:
-            doc.executeActiveView(session: session)
-            let stillPresent = doc.result?.rows.contains {
-                $0.filePath == row.filePath && $0.taskOrdinal == row.taskOrdinal
-            } ?? false
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: row.filePath)
+            let stillRegistered = baseDocuments[doc.source.key] === doc
+            let stillPresent = stillRegistered && (doc.result?.rows.contains {
+                BaseExactIdentity.matches($0.filePath, row.filePath)
+                    && $0.taskOrdinal == row.taskOrdinal
+            } ?? false)
             let text: String
             if stillPresent {
                 switch action {
@@ -1513,7 +2117,7 @@ extension AppState {
         alert.messageText = "\(verb) quick-filtered base view?"
         alert.informativeText =
             "Quick filter \"\(doc.quickFilterText)\" is active. Choose filtered rows "
-            + "(\(result.shownCount)) or all rows (\(result.totalCount))."
+            + "(\(result.shownCount)) or all rows (\(result.unfilteredShownCount))."
         alert.addButton(withTitle: "\(verb) Filtered Rows")
         alert.addButton(withTitle: "\(verb) All Rows")
         alert.addButton(withTitle: "Cancel")
@@ -1535,7 +2139,9 @@ extension AppState {
 
     private func activeBaseSelectedRowForCommand() -> BasesRow? {
         guard let doc = activeBaseDocument,
-            activeBaseSelectionPath == doc.selectionKey,
+            activeBaseSelectionPath.map({
+                BaseExactIdentity.matches($0, doc.selectionKey)
+            }) == true,
             let row = activeBaseSelectedRow,
             doc.result?.rows.contains(where: { $0.hasSameBaseIdentity(as: row) }) == true
         else { return nil }
@@ -1566,6 +2172,7 @@ extension AppState {
 
 extension BasesRow {
     func hasSameBaseIdentity(as other: BasesRow) -> Bool {
-        filePath == other.filePath && taskOrdinal == other.taskOrdinal
+        BaseExactIdentity.matches(filePath, other.filePath)
+            && taskOrdinal == other.taskOrdinal
     }
 }

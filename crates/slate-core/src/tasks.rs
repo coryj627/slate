@@ -827,10 +827,10 @@ mod tests {
             );
         }
         // Negative cases — bytes that are NOT bullets or separators.
-        for b in [b'[', b']', b'a', b'\n', b'\r', b'.'] {
+        for &b in b"[]a\n\r." {
             assert!(!is_task_bullet_byte(b), "{b:?} should not be a bullet");
         }
-        for b in [b'[', b']', b'a', b'\n', b'\r', b'.'] {
+        for &b in b"[]a\n\r." {
             assert!(
                 !is_task_bullet_separator_byte(b),
                 "{b:?} should not be a separator"

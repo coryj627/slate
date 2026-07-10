@@ -463,9 +463,26 @@ fn strip_opening_delimiter(source: &str) -> Option<&str> {
 /// Always returns: never panics, never errors. Bad YAML produces an
 /// empty (or partial) properties vec + a warning entry.
 pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWarning>) {
+    let (properties, warnings, _) = extract_frontmatter_with_root(source, |_| ());
+    (properties, warnings)
+}
+
+/// Parse frontmatter once while allowing another crate-internal projection to
+/// inspect the same raw YAML root before it is converted to Slate's typed,
+/// flattened [`Property`] model.
+///
+/// This is intentionally crate-visible rather than public API. Most callers
+/// should use [`extract_frontmatter`]; scanner projections whose source
+/// contract cannot be recovered from `PropertyValue` (for example, recursively
+/// nested Dataview tag arrays) can supply a bounded `project` closure and avoid
+/// reparsing the document. `None` means there was no parseable YAML document.
+pub(crate) fn extract_frontmatter_with_root<T>(
+    source: &str,
+    project: impl FnOnce(&Yaml) -> T,
+) -> (Vec<Property>, Vec<PropertyParseWarning>, Option<T>) {
     let range = match frontmatter_range(source) {
         Some(r) => r,
-        None => return (Vec::new(), Vec::new()),
+        None => return (Vec::new(), Vec::new(), None),
     };
     let yaml_src = &source[range];
 
@@ -478,13 +495,15 @@ pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWar
                     key_path: None,
                     message: format!("YAML parse error: {e}"),
                 }],
+                None,
             );
         }
     };
 
     let Some(root) = docs.into_iter().next() else {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), None);
     };
+    let projected = Some(project(&root));
 
     let mut props = Vec::new();
     let mut warnings = Vec::new();
@@ -510,7 +529,7 @@ pub fn extract_frontmatter(source: &str) -> (Vec<Property>, Vec<PropertyParseWar
         }
     }
 
-    (props, warnings)
+    (props, warnings, projected)
 }
 
 /// Recursively walk one YAML value, emitting flat `Property` rows for

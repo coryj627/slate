@@ -802,7 +802,12 @@ struct FileTreeSidebar: View {
             // announcing the rollback on top of the prompt is chatter the user
             // didn't ask for.
             guard appState.pendingNavigation == nil else { return }
-            guard let file = appState.files.first(where: { $0.path == newPath }) else { return }
+            let isBasePath = newPath.lowercased().hasSuffix(".base")
+            guard let file = appState.files.first(where: {
+                isBasePath
+                    ? BaseExactIdentity.matches($0.path, newPath)
+                    : $0.path == newPath
+            }) else { return }
             postAccessibilityAnnouncement(
                 "Selected: \(file.name)",
                 priority: .medium

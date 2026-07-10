@@ -1,0 +1,5 @@
+formulas:
+    score: '1 + 1' # keep formula style
+views:
+    - type: table # keep view style
+      name: 'Old' # keep name style

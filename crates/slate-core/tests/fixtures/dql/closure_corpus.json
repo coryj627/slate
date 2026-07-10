@@ -1,0 +1,738 @@
+[
+  {
+    "name": "query-table-pipeline",
+    "operation": "query_commands",
+    "disposition": "runtime_fail_loud",
+    "coverage": [
+      "query.table.with_id",
+      "query.table.alias",
+      "query.table.column_order",
+      "command.where",
+      "command.where.repeated",
+      "command.sort.asc",
+      "command.sort.ascending",
+      "command.sort.desc",
+      "command.sort.descending",
+      "command.sort.multi_key",
+      "command.limit",
+      "pipeline.safe",
+      "expression.operator.eq",
+      "expression.operator.ne",
+      "expression.operator.gt",
+      "expression.operator.gte",
+      "expression.operator.lt",
+      "expression.operator.lte",
+      "expression.boolean.and",
+      "expression.boolean.or",
+      "expression.prefix_not"
+    ],
+    "source": "TABLE file.name AS \"Name\", lower(file.name) AS \"Lower\"\nWHERE file.path = \"123.md\"\nWHERE file.size >= 0 AND file.size > -1 AND file.size <= 10000 AND file.size < 10001 AND file.name != \"never\" AND !(false) OR false\nSORT file.name ASC, file.path ASCENDING, file.size DESC, file.mtime DESCENDING\nLIMIT 1\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=and(call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]),call(method({\"slate.dql.truthy\":binary(Or,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":prop(File(Size))},0.0)},{\"slate.dql.truthy\":binary(Gt,{\"slate.dql.ordering\":prop(File(Size))},unary(Neg,1.0))})},{\"slate.dql.truthy\":binary(Lte,{\"slate.dql.ordering\":prop(File(Size))},10000.0)})},{\"slate.dql.truthy\":binary(Lt,{\"slate.dql.ordering\":prop(File(Size))},10001.0)})},{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[])},\"never\")})},{\"slate.dql.truthy\":unary(Not,{\"slate.dql.truthy\":false})})},{\"slate.dql.truthy\":false})},IsTruthy),[]));formulas=[dql_column_1=call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]),dql_column_2=call(method(call(global(Object),[\"slate.dql.text-method\",call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[])]),Lower),[])];custom=[];group=None;sort=[call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]):asc,prop(File(Path)):asc,prop(File(Size)):desc,prop(File(Mtime)):desc];columns=[file.file:-,formula.dql_column_1:Name,formula.dql_column_2:Lower];summaries=[];limit=Some(1)",
+    "error_contains": "DQL locale collation is unsupported outside lowercase ASCII letters and digits",
+    "expected_rows": [],
+    "expected_cells": []
+  },
+  {
+    "name": "query-table-without-id",
+    "operation": "query_type",
+    "disposition": "supported",
+    "coverage": [
+      "query.table.without_id",
+      "expression.string_repeat",
+      "expression.string_repeat.field",
+      "expression.string_repeat.computed",
+      "expression.numeric_multiply.dispatch",
+      "expression.operator.mul.precedence",
+      "expression.string_repeat.left_precedence",
+      "expression.string_repeat.right_precedence",
+      "expression.operator.mul.linear_rewrite"
+    ],
+    "source": "TABLE WITHOUT ID \"x\" * 3 AS \"Repeated\", file.name * 2 AS \"Field\", lower(\"A\") * 3 AS \"Computed\", 6 * 7 AS \"Number\", 1 + 2 * 3 AS \"Precedence\", \"a\" * 2 + \"b\" AS \"Repeat left\", \"a\" + \"b\" * 2 AS \"Repeat right\"\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=binary(Mul,{\"slate.dql.multiply\":\"x\"},3.0),dql_column_2=binary(Mul,{\"slate.dql.multiply\":call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[])},2.0),dql_column_3=binary(Mul,{\"slate.dql.multiply\":call(method(call(global(Object),[\"slate.dql.text-method\",\"A\"]),Lower),[])},3.0),dql_column_4=binary(Mul,{\"slate.dql.multiply\":6.0},7.0),dql_column_5=binary(Add,{\"slate.dql.arithmetic\":1.0},binary(Mul,{\"slate.dql.multiply\":2.0},3.0)),dql_column_6=binary(Add,{\"slate.dql.arithmetic\":binary(Mul,{\"slate.dql.multiply\":\"a\"},2.0)},\"b\"),dql_column_7=binary(Add,{\"slate.dql.arithmetic\":\"a\"},binary(Mul,{\"slate.dql.multiply\":\"b\"},2.0))];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Repeated,formula.dql_column_2:Field,formula.dql_column_3:Computed,formula.dql_column_4:Number,formula.dql_column_5:Precedence,formula.dql_column_6:Repeat left,formula.dql_column_7:Repeat right];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:xxx",
+        "text:123123",
+        "text:aaa",
+        "number:42",
+        "number:7",
+        "text:aab",
+        "text:abb"
+      ]
+    ]
+  },
+  {
+    "name": "query-list-with-id",
+    "operation": "query_type",
+    "disposition": "supported",
+    "coverage": [
+      "query.list.with_id",
+      "query.list.secondary"
+    ],
+    "source": "LIST file.name\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_list_value=call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[])];custom=[];group=None;sort=[];columns=[file.file:-,formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "file:123.md",
+        "text:123"
+      ]
+    ]
+  },
+  {
+    "name": "query-list-without-id",
+    "operation": "query_type",
+    "disposition": "supported",
+    "coverage": [
+      "query.list.without_id"
+    ],
+    "source": "LIST WITHOUT ID file.path\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:123.md"
+      ]
+    ]
+  },
+  {
+    "name": "query-task-fields",
+    "operation": "query_type",
+    "disposition": "runtime_fail_loud",
+    "coverage": [
+      "query.task",
+      "field.task.text",
+      "field.task.status",
+      "field.task.completed.x_or_uppercase",
+      "field.task.checked.nonempty_nonspace",
+      "field.task.due",
+      "field.task.scheduled"
+    ],
+    "source": "TASK\nWHERE text != \"\" AND status != \"never\" AND !completed AND due >= date(today) AND scheduled >= date(today)\nWHERE checked OR status = \" \"\nSORT text ASC\n",
+    "expected_semantics": "source=All;rows=Tasks;view=List { fallback_from: None };filters=and(call(method({\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Text))},\"\")},{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Status))},\"never\")})},{\"slate.dql.truthy\":unary(Not,{\"slate.dql.truthy\":prop(TaskField(Completed))})})},{\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":prop(TaskField(Due))},call(global(Date),[call(global(Object),[\"slate.dql.date\",\"today\"])]))})},{\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":prop(TaskField(Scheduled))},call(global(Date),[call(global(Object),[\"slate.dql.date\",\"today\"])]))})},IsTruthy),[]),call(method({\"slate.dql.truthy\":binary(Or,{\"slate.dql.truthy\":binary(And,{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Status))},\"\")},{\"slate.dql.truthy\":binary(Ne,{\"slate.dql.equality\":prop(TaskField(Status))},\" \")})},{\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(TaskField(Status))},\" \")})},IsTruthy),[]));formulas=[];custom=[];group=None;sort=[prop(TaskField(Text)):asc];columns=[];summaries=[];limit=None",
+    "error_contains": "DQL locale collation is unsupported outside lowercase ASCII letters and digits",
+    "expected_rows": [],
+    "expected_cells": []
+  },
+  {
+    "name": "source-tag-boolean-and-negations",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.tag",
+      "source.tag.subtags",
+      "source.and",
+      "source.or",
+      "source.parentheses",
+      "source.negation.dash",
+      "source.negation.bang",
+      "source.boolean.case_insensitive"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM (#project/subtag AnD -#archive) oR (#never aNd !#blocked)\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=or(and(call(method(prop(File(File)),HasTag),[\"project/subtag\"]),not(call(method(prop(File(File)),HasTag),[\"archive\"]))),and(call(method(prop(File(File)),HasTag),[\"never\"]),not(call(method(prop(File(File)),HasTag),[\"blocked\"]))));formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Hub.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Hub.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-folder-recursive-and-folder-wins",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.folder",
+      "source.folder.recursive",
+      "source.path.folder_wins"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM \"Notes\"\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method(prop(File(File)),InFolder),[\"Notes\"]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Notes/Hub.md#-",
+      "Notes/Target.md#-",
+      "Notes/View.base#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Notes/Hub.md"
+      ],
+      [
+        "text:Notes/Target.md"
+      ],
+      [
+        "text:Notes/View.base"
+      ]
+    ]
+  },
+  {
+    "name": "source-path",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.path"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM \"Target.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=binary(Eq,prop(File(Path)),\"Target.md\");formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Target.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Target.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-incoming-link",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.incoming_link"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM [[Target]]\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method(prop(File(File)),HasLink),[\"Target\"]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Hub.md#-",
+      "Notes/Hub.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Hub.md"
+      ],
+      [
+        "text:Notes/Hub.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-outgoing-link",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.outgoing_link.query_source",
+      "source.outgoing_link.serialized_filter"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM outgoing([[Hub]])\n",
+    "expected_base": "filters: \"link(\\\"Hub\\\").linksTo(file.file)\"\nformulas:\n  dql_list_value: \"file.path\"\nviews:\n  - type: list\n    name: Query\n    order:\n      - formula.dql_list_value\n",
+    "expected_semantics": "source=Linked { from_path: \"Hub\", depth: 1 };rows=Files;view=List { fallback_from: None };filters=-;formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Target.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Target.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-current-outgoing",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.this_empty.outgoing"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM outgoing([[]])\n",
+    "this_path": "Hub.md",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method(call(global(Link),[prop(This)]),LinksTo),[prop(File(File))]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Target.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Target.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-current-empty-incoming",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.this_empty.incoming"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM [[]]\n",
+    "this_path": "Hub.md",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method(prop(File(File)),HasLink),[prop(This)]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Other.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Other.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-current-anchor-incoming",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.this_anchor.incoming"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM [[#]]\n",
+    "this_path": "Hub.md",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method(prop(File(File)),HasLink),[prop(This)]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Other.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Other.md"
+      ]
+    ]
+  },
+  {
+    "name": "source-current-anchor-outgoing",
+    "operation": "sources",
+    "disposition": "supported",
+    "coverage": [
+      "source.this_anchor.outgoing"
+    ],
+    "source": "LIST WITHOUT ID file.path\nFROM outgoing([[#]])\n",
+    "this_path": "Hub.md",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method(call(global(Link),[prop(This)]),LinksTo),[prop(File(File))]);formulas=[dql_list_value=prop(File(Path))];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "Target.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:Target.md"
+      ]
+    ]
+  },
+  {
+    "name": "expression-literals-operators-and-fields",
+    "operation": "expressions",
+    "disposition": "supported",
+    "coverage": [
+      "expression.literal.number",
+      "expression.literal.boolean",
+      "expression.literal.string",
+      "expression.literal.list",
+      "expression.literal.object",
+      "expression.operator.add",
+      "expression.operator.sub",
+      "expression.operator.mul",
+      "expression.operator.div",
+      "expression.operator.mod",
+      "expression.string_concat",
+      "expression.field.bare",
+      "expression.field.member",
+      "expression.field.index",
+      "expression.field.keyword_index"
+    ],
+    "source": "TABLE WITHOUT ID 1 AS \"Number\", true AS \"Boolean\", \"x\" AS \"String\", [1, 2] AS \"List\", {\"a\": 1} AS \"Object\", 1 + 2 AS \"Add\", 3 - 1 AS \"Sub\", 2 * 3 AS \"Mul\", 8 / 2 AS \"Div\", 5 % 2 AS \"Mod\", \"a\" + \"b\" AS \"Concat\", status AS \"Bare\", {\"nested\": {\"value\": 2}}.nested.value AS \"Member\", [7, 8][1] AS \"Index\", {\"where\": \"ok\"}[\"where\"] AS \"Keyword\"\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=1.0,dql_column_2=true,dql_column_3=\"x\",dql_column_4=[1.0,2.0],dql_column_5={\"a\":1.0},dql_column_6=binary(Add,{\"slate.dql.arithmetic\":1.0},2.0),dql_column_7=binary(Sub,{\"slate.dql.arithmetic\":3.0},1.0),dql_column_8=binary(Mul,{\"slate.dql.multiply\":2.0},3.0),dql_column_9=binary(Div,{\"slate.dql.arithmetic\":8.0},2.0),dql_column_10=binary(Mod,{\"slate.dql.arithmetic\":5.0},2.0),dql_column_11=binary(Add,{\"slate.dql.arithmetic\":\"a\"},\"b\"),dql_column_12=index({\"slate.dql.row-property\":false},\"status\"),dql_column_13=field({\"slate.dql.data-array\":field({\"slate.dql.data-array\":{\"nested\":{\"value\":2.0}}},\"nested\")},\"value\"),dql_column_14=index([7.0,8.0],1.0),dql_column_15=index({\"where\":\"ok\"},\"where\")];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Number,formula.dql_column_2:Boolean,formula.dql_column_3:String,formula.dql_column_4:List,formula.dql_column_5:Object,formula.dql_column_6:Add,formula.dql_column_7:Sub,formula.dql_column_8:Mul,formula.dql_column_9:Div,formula.dql_column_10:Mod,formula.dql_column_11:Concat,formula.dql_column_12:Bare,formula.dql_column_13:Member,formula.dql_column_14:Index,formula.dql_column_15:Keyword];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "number:1",
+        "bool:true",
+        "text:x",
+        "list:[number:1,number:2]",
+        "object:{a=number:1}",
+        "number:3",
+        "number:2",
+        "number:6",
+        "number:4",
+        "number:1",
+        "text:ab",
+        "text:reading",
+        "number:2",
+        "number:8",
+        "text:ok"
+      ]
+    ]
+  },
+  {
+    "name": "expression-date-shorthands-and-duration-aliases",
+    "operation": "expressions",
+    "disposition": "supported",
+    "coverage": [
+      "expression.date.today",
+      "expression.date.now",
+      "expression.date.tomorrow",
+      "expression.date.yesterday",
+      "expression.date.sow",
+      "expression.date.eow",
+      "expression.date.som",
+      "expression.date.eom",
+      "expression.date.soy",
+      "expression.date.eoy",
+      "expression.date.iso",
+      "expression.duration.unit_aliases"
+    ],
+    "source": "TABLE WITHOUT ID date(today) AS \"Today\", date(now) AS \"Now\", date(tomorrow) AS \"Tomorrow\", date(yesterday) AS \"Yesterday\", date(sow) AS \"SOW\", date(eow) AS \"EOW\", date(som) AS \"SOM\", date(eom) AS \"EOM\", date(soy) AS \"SOY\", date(eoy) AS \"EOY\", date(2026-07-10) AS \"ISO\", dur(1 sec) AS \"Seconds\", dur(2 mins) AS \"Minutes\", dur(3 hours) AS \"Hours\", dur(4 days) AS \"Days\", dur(1 week) AS \"Weeks\", dur(2 months) AS \"Months\", dur(1 year) AS \"Years\"\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"today\"])]),dql_column_2=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"now\"])]),dql_column_3=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"tomorrow\"])]),dql_column_4=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"yesterday\"])]),dql_column_5=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"sow\"])]),dql_column_6=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"eow\"])]),dql_column_7=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"som\"])]),dql_column_8=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"eom\"])]),dql_column_9=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"soy\"])]),dql_column_10=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"eoy\"])]),dql_column_11=call(global(Date),[call(global(Object),[\"slate.dql.date\",\"2026-07-10\"])]),dql_column_12=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"1 sec\"])]),dql_column_13=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"2 mins\"])]),dql_column_14=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"3 hours\"])]),dql_column_15=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"4 days\"])]),dql_column_16=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"1 week\"])]),dql_column_17=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"2 months\"])]),dql_column_18=call(global(Duration),[call(global(Object),[\"slate.dql.duration\",\"1 year\"])])];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Today,formula.dql_column_2:Now,formula.dql_column_3:Tomorrow,formula.dql_column_4:Yesterday,formula.dql_column_5:SOW,formula.dql_column_6:EOW,formula.dql_column_7:SOM,formula.dql_column_8:EOM,formula.dql_column_9:SOY,formula.dql_column_10:EOY,formula.dql_column_11:ISO,formula.dql_column_12:Seconds,formula.dql_column_13:Minutes,formula.dql_column_14:Hours,formula.dql_column_15:Days,formula.dql_column_16:Weeks,formula.dql_column_17:Months,formula.dql_column_18:Years];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "dql-date:1969-12-31:false:local",
+        "dql-date:1969-12-31T19:00:00.000:true:local",
+        "dql-date:1970-01-01:false:local",
+        "dql-date:1969-12-30:false:local",
+        "dql-date:1969-12-29:false:local",
+        "dql-date:1970-01-04T23:59:59.999:true:local",
+        "dql-date:1969-12-01:false:local",
+        "dql-date:1969-12-31T23:59:59.999:true:local",
+        "dql-date:1969-01-01:false:local",
+        "dql-date:1969-12-31T23:59:59.999:true:local",
+        "dql-date:2026-07-10:false:local",
+        "dql-duration:0.0:0.0:0.0:0.0:0.0:0.0:1.0:0.0",
+        "dql-duration:0.0:0.0:0.0:0.0:0.0:2.0:0.0:0.0",
+        "dql-duration:0.0:0.0:0.0:0.0:3.0:0.0:0.0:0.0",
+        "dql-duration:0.0:0.0:0.0:4.0:0.0:0.0:0.0:0.0",
+        "dql-duration:0.0:0.0:1.0:0.0:0.0:0.0:0.0:0.0",
+        "dql-duration:0.0:2.0:0.0:0.0:0.0:0.0:0.0:0.0",
+        "dql-duration:1.0:0.0:0.0:0.0:0.0:0.0:0.0:0.0"
+      ]
+    ]
+  },
+  {
+    "name": "expression-this-context",
+    "operation": "expressions",
+    "disposition": "supported",
+    "coverage": [
+      "field.this.note"
+    ],
+    "source": "TABLE WITHOUT ID this.status AS \"Status\", this.file.name AS \"Name\"\nWHERE file.path = \"123.md\"\n",
+    "this_path": "123.md",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_column_1=index({\"slate.dql.row-property\":true},\"status\"),dql_column_2=call(method(call(global(Object),[\"slate.dql.file-name\",prop(ThisFile(Path))]),ToString),[])];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Status,formula.dql_column_2:Name];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "text:reading",
+        "text:123"
+      ]
+    ]
+  },
+  {
+    "name": "idiom-felker-status-table",
+    "operation": "field_report_idiom",
+    "disposition": "runtime_fail_loud",
+    "coverage": [
+      "idiom.felker.status_table"
+    ],
+    "source": "TABLE WITHOUT ID status AS \"Status\"\nFROM #project\nWHERE status = \"active\"\nSORT file.name ASC\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=and(call(method(prop(File(File)),HasTag),[\"project\"]),call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":index({\"slate.dql.row-property\":false},\"status\")},\"active\")},IsTruthy),[]));formulas=[dql_column_1=index({\"slate.dql.row-property\":false},\"status\")];custom=[];group=None;sort=[call(method(call(global(Object),[\"slate.dql.file-name\",prop(File(Path))]),ToString),[]):asc];columns=[formula.dql_column_1:Status];summaries=[];limit=None",
+    "error_contains": "DQL locale collation is unsupported outside lowercase ASCII letters and digits",
+    "expected_rows": [],
+    "expected_cells": []
+  },
+  {
+    "name": "idiom-felker-schedule-table",
+    "operation": "field_report_idiom",
+    "disposition": "supported",
+    "coverage": [
+      "idiom.felker.schedule_table"
+    ],
+    "source": "TABLE WITHOUT ID scheduled AS \"Scheduled\"\nFROM #reading\nWHERE scheduled >= date(2026-07-10)\nSORT scheduled ASC\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=and(call(method(prop(File(File)),HasTag),[\"reading\"]),call(method({\"slate.dql.truthy\":binary(Gte,{\"slate.dql.ordering\":index({\"slate.dql.row-property\":false},\"scheduled\")},call(global(Date),[call(global(Object),[\"slate.dql.date\",\"2026-07-10\"])]))},IsTruthy),[]));formulas=[dql_column_1=index({\"slate.dql.row-property\":false},\"scheduled\")];custom=[];group=None;sort=[index({\"slate.dql.row-property\":false},\"scheduled\"):asc];columns=[formula.dql_column_1:Scheduled];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "date:1783641600000:false"
+      ]
+    ]
+  },
+  {
+    "name": "idiom-reading-duration-math",
+    "operation": "field_report_idiom",
+    "disposition": "supported",
+    "coverage": [
+      "idiom.reading_duration_math"
+    ],
+    "source": "TABLE WITHOUT ID round((pages * minutesPerPage) / 60, 1) AS \"Reading hours\"\nFROM #reading\n",
+    "expected_semantics": "source=All;rows=Files;view=Table { fallback_from: None };filters=call(method(prop(File(File)),HasTag),[\"reading\"]);formulas=[dql_column_1=call(method(call(global(Object),[\"slate.dql.number-method\",binary(Div,{\"slate.dql.arithmetic\":binary(Mul,{\"slate.dql.multiply\":index({\"slate.dql.row-property\":false},\"pages\")},index({\"slate.dql.row-property\":false},\"minutesPerPage\"))},60.0)]),Round),[1.0])];custom=[];group=None;sort=[];columns=[formula.dql_column_1:Reading hours];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "number:6"
+      ]
+    ]
+  },
+  {
+    "name": "unsupported-calendar",
+    "operation": "query_type",
+    "disposition": "unsupported",
+    "coverage": [
+      "query.calendar.unsupported"
+    ],
+    "source": "CALENDAR file.mtime\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL CALENDAR has no Slate v1 view",
+    "warning_span_class": "line",
+    "error_contains": "calendar view"
+  },
+  {
+    "name": "unsupported-repeated-from",
+    "operation": "sources",
+    "disposition": "unsupported",
+    "coverage": [
+      "command.from.repeated.unsupported"
+    ],
+    "source": "LIST\nFROM #project\nFROM #reading\n",
+    "warning_kind": "invalid_command",
+    "warning_message": "DQL query contains more than one FROM command",
+    "warning_span_class": "line",
+    "error_contains": "repeated FROM command"
+  },
+  {
+    "name": "unsupported-late-from",
+    "operation": "sources",
+    "disposition": "unsupported",
+    "coverage": [
+      "command.from.late.unsupported"
+    ],
+    "source": "LIST\nWHERE true\nFROM #project\n",
+    "warning_kind": "invalid_command",
+    "warning_message": "FROM must appear immediately after the query type",
+    "warning_span_class": "line",
+    "error_contains": "FROM after data commands"
+  },
+  {
+    "name": "unsupported-function-in-from",
+    "operation": "sources",
+    "disposition": "unsupported",
+    "coverage": [
+      "source.function.unsupported"
+    ],
+    "source": "LIST\nFROM contains(file.tags, \"project\")\n",
+    "warning_kind": "invalid_expression",
+    "warning_message": "invalid FROM source: contains(file.tags, \"project\")",
+    "warning_span_class": "expression",
+    "error_contains": "invalid FROM source"
+  },
+  {
+    "name": "unsupported-group-by",
+    "operation": "data_command",
+    "disposition": "unsupported",
+    "coverage": [
+      "command.group_by.unsupported"
+    ],
+    "source": "TABLE file.name\nGROUP BY file.folder\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL GROUP BY changes row membership via rows aggregation",
+    "warning_span_class": "line",
+    "error_contains": "rows aggregation"
+  },
+  {
+    "name": "unsupported-flatten",
+    "operation": "data_command",
+    "disposition": "unsupported",
+    "coverage": [
+      "command.flatten.unsupported"
+    ],
+    "source": "TABLE file.name\nFLATTEN file.tags\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL FLATTEN changes row membership",
+    "warning_span_class": "line",
+    "error_contains": "flatten"
+  },
+  {
+    "name": "unsupported-limit-before-sort",
+    "operation": "pipeline",
+    "disposition": "unsupported",
+    "coverage": [
+      "pipeline.limit_before_sort.unsupported"
+    ],
+    "source": "TABLE file.name\nLIMIT 1\nSORT file.name ASC\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL command order is order-dependent",
+    "warning_span_class": "query",
+    "error_contains": "order-dependent commands"
+  },
+  {
+    "name": "unsupported-repeated-sort",
+    "operation": "pipeline",
+    "disposition": "unsupported",
+    "coverage": [
+      "pipeline.repeated_sort.unsupported"
+    ],
+    "source": "TABLE file.name\nSORT file.name ASC\nSORT file.path DESC\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL command order is order-dependent",
+    "warning_span_class": "query",
+    "error_contains": "order-dependent commands"
+  },
+  {
+    "name": "unsupported-repeated-limit",
+    "operation": "pipeline",
+    "disposition": "unsupported",
+    "coverage": [
+      "pipeline.repeated_limit.unsupported"
+    ],
+    "source": "TABLE file.name\nLIMIT 3\nLIMIT 1\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL command order is order-dependent",
+    "warning_span_class": "query",
+    "error_contains": "order-dependent commands"
+  },
+  {
+    "name": "unsupported-where-after-sort",
+    "operation": "pipeline",
+    "disposition": "unsupported",
+    "coverage": [
+      "pipeline.where_after_sort.unsupported"
+    ],
+    "source": "TABLE file.name\nSORT file.name ASC\nWHERE true\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL command order is order-dependent",
+    "warning_span_class": "query",
+    "error_contains": "order-dependent commands"
+  },
+  {
+    "name": "unsupported-where-after-limit",
+    "operation": "pipeline",
+    "disposition": "unsupported",
+    "coverage": [
+      "pipeline.where_after_limit.unsupported"
+    ],
+    "source": "TABLE file.name\nLIMIT 1\nWHERE true\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL command order is order-dependent",
+    "warning_span_class": "query",
+    "error_contains": "order-dependent commands"
+  },
+  {
+    "name": "unsupported-multi-arg-lambda",
+    "operation": "expressions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.lambda.multi_arg.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID map([1, 2], (x, i) => x + i) AS \"Mapped\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "unsupported DQL lambda in map",
+    "warning_span_class": "expression",
+    "error_contains": "unsupported DQL lambda in map"
+  },
+  {
+    "name": "unsupported-null-delta",
+    "operation": "expressions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.null_delta.unsupported",
+      "expression.literal.null.unsupported"
+    ],
+    "source": "TABLE file.name\nWHERE null <= date(today)\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL null literal is unsupported; guard with typeof",
+    "warning_span_class": "expression",
+    "error_contains": "DQL null literal is unsupported; guard with typeof"
+  },
+  {
+    "name": "unsupported-wikilink-literal",
+    "operation": "expressions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.literal.wikilink.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID [[Target]] AS \"Link\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL wikilink expression literals are unsupported",
+    "warning_span_class": "expression",
+    "error_contains": "DQL wikilink expression literals are unsupported"
+  },
+  {
+    "name": "unsupported-link-index",
+    "operation": "expressions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.field.link_index.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID [[Target]].status AS \"Status\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL wikilink expression literals are unsupported",
+    "warning_span_class": "expression",
+    "error_contains": "DQL wikilink expression literals are unsupported"
+  },
+  {
+    "name": "unsupported-numeric-wikilink-literal",
+    "operation": "expressions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.literal.wikilink.numeric.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID [[123]] AS \"Link\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL wikilink expression literals are unsupported",
+    "warning_span_class": "expression",
+    "error_contains": "DQL wikilink expression literals are unsupported"
+  },
+  {
+    "name": "unsupported-link-shaped-compact-flat-input",
+    "operation": "expressions",
+    "disposition": "unsupported",
+    "coverage": [
+      "expression.literal.wikilink.compact_flat.unsupported"
+    ],
+    "source": "TABLE WITHOUT ID flat([[[1]], [[2]]], 2) AS \"Value\"\n",
+    "warning_kind": "unsupported_construct",
+    "warning_message": "DQL wikilink expression literals are unsupported",
+    "warning_span_class": "expression",
+    "error_contains": "DQL wikilink expression literals are unsupported"
+  },
+  {
+    "name": "supported-task-object-literal-keys",
+    "operation": "expressions",
+    "disposition": "supported",
+    "coverage": [
+      "expression.object.task_field_keys"
+    ],
+    "source": "TASK\nWHERE {status: 1, line: 2}[\"status\"] = 1\n",
+    "expected_semantics": "source=All;rows=Tasks;view=List { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":index({\"status\":1.0,\"line\":2.0},\"status\")},1.0)},IsTruthy),[]);formulas=[];custom=[];group=None;sort=[];columns=[];summaries=[];limit=None",
+    "expected_rows": [
+      "Hub.md#0",
+      "Hub.md#1",
+      "Hub.md#2",
+      "Target.md#0",
+      "Target.md#1"
+    ],
+    "expected_cells": [
+      [],
+      [],
+      [],
+      [],
+      []
+    ]
+  },
+  {
+    "name": "query-list-without-id-duplicate-token-span",
+    "operation": "query_type",
+    "disposition": "supported",
+    "coverage": [
+      "query.list.without_id.duplicate_token_span"
+    ],
+    "source": "LIST WITHOUT ID ID\nWHERE file.path = \"123.md\"\n",
+    "expected_semantics": "source=All;rows=Files;view=List { fallback_from: None };filters=call(method({\"slate.dql.truthy\":binary(Eq,{\"slate.dql.equality\":prop(File(Path))},\"123.md\")},IsTruthy),[]);formulas=[dql_list_value=index({\"slate.dql.row-property\":false},\"ID\")];custom=[];group=None;sort=[];columns=[formula.dql_list_value:-];summaries=[];limit=None",
+    "expected_rows": [
+      "123.md#-"
+    ],
+    "expected_cells": [
+      [
+        "null"
+      ]
+    ]
+  }
+]

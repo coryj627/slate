@@ -11,7 +11,7 @@
 use std::{
     cell::{Cell, RefCell},
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ops::Range,
 };
 
@@ -19,10 +19,11 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use super::{
-    ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SummaryRef,
+    ColumnSelection, FilterNode, QuerySource, RowSource, SlateQuery, SortKey, SummaryRef,
     eval::{
         DateValue, EvalCtx, EvalError, FileFields, LinkValue, ResolvedFormulas, RowContext,
-        TaskRow, Value, VaultLookup, WarningSink, eval,
+        TaskRow, Value, VaultLookup, WarningSink, compare_dql_command_sort_values,
+        dql_command_sort_value, eval, link_identity,
     },
     expr::{
         BinaryOp, Callee, Expr, ExprKind, FileField, GlobalFn, Lit, MethodName, PropertyRef,
@@ -43,6 +44,7 @@ pub struct BasesResultSet {
     pub summaries: Vec<BasesSummaryCell>,
     pub total_count: usize,
     pub shown_count: usize,
+    pub unfiltered_shown_count: usize,
     pub warnings: Vec<String>,
     pub error: Option<ViewError>,
     pub executed_at_ms: i64,
@@ -119,7 +121,10 @@ impl Default for EngineCtx<'_> {
 #[derive(Debug, Default)]
 pub struct BasesQueryCache {
     entries: RefCell<BTreeMap<CacheKey, BasesResultSet>>,
+    recency: RefCell<VecDeque<CacheKey>>,
 }
+
+const BASES_QUERY_CACHE_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheKey {
@@ -127,6 +132,53 @@ struct CacheKey {
     generation: u64,
     this_path: Option<String>,
     today_key: Option<i64>,
+}
+
+impl BasesQueryCache {
+    #[cfg(test)]
+    pub(crate) fn test_entry_generations(&self) -> Vec<u64> {
+        self.entries
+            .borrow()
+            .keys()
+            .map(|key| key.generation)
+            .collect()
+    }
+
+    fn get(&self, key: &CacheKey) -> Option<BasesResultSet> {
+        self.evict_stale_generations(key.generation);
+        let result = self.entries.borrow().get(key).cloned()?;
+        self.touch(key);
+        Some(result)
+    }
+
+    fn insert(&self, key: CacheKey, result: BasesResultSet) {
+        self.evict_stale_generations(key.generation);
+        self.entries.borrow_mut().insert(key.clone(), result);
+        self.touch(&key);
+        while self.entries.borrow().len() > BASES_QUERY_CACHE_CAPACITY {
+            let Some(oldest) = self.recency.borrow_mut().pop_front() else {
+                break;
+            };
+            self.entries.borrow_mut().remove(&oldest);
+        }
+    }
+
+    fn evict_stale_generations(&self, generation: u64) {
+        self.entries
+            .borrow_mut()
+            .retain(|key, _| key.generation == generation);
+        self.recency
+            .borrow_mut()
+            .retain(|key| key.generation == generation);
+    }
+
+    fn touch(&self, key: &CacheKey) {
+        let mut recency = self.recency.borrow_mut();
+        if let Some(index) = recency.iter().position(|candidate| candidate == key) {
+            recency.remove(index);
+        }
+        recency.push_back(key.clone());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -288,9 +340,150 @@ struct FormulaEval {
 }
 
 #[derive(Debug, Clone, Default)]
+struct FormulaPlan {
+    dependencies: Vec<BTreeSet<String>>,
+    circular: BTreeSet<String>,
+    unresolvable: BTreeSet<usize>,
+    order: Vec<usize>,
+}
+
+impl FormulaPlan {
+    fn new(query: &SlateQuery) -> Self {
+        let known_names = query
+            .formulas
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<BTreeSet<_>>();
+        let dependencies = query
+            .formulas
+            .iter()
+            .map(|(_, expr)| {
+                let mut dependencies = BTreeSet::new();
+                collect_formula_dependencies(expr, &mut dependencies);
+                dependencies.retain(|name| known_names.contains(name));
+                dependencies
+            })
+            .collect::<Vec<_>>();
+        let dependency_graph = query
+            .formulas
+            .iter()
+            .zip(&dependencies)
+            .map(|((name, _), dependencies)| (name.clone(), dependencies.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let circular = known_names
+            .iter()
+            .filter(|name| formula_reaches(name, name, &dependency_graph, &mut BTreeSet::new()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let mut resolved = circular.clone();
+        let mut pending = query
+            .formulas
+            .iter()
+            .map(|(name, _)| !circular.contains(name))
+            .collect::<Vec<_>>();
+        let mut order = query
+            .formulas
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (name, _))| circular.contains(name).then_some(index))
+            .collect::<Vec<_>>();
+        let mut unresolvable = BTreeSet::new();
+        while pending.iter().any(|pending| *pending) {
+            let mut progressed = false;
+            for (index, (name, _)) in query.formulas.iter().enumerate() {
+                if pending[index]
+                    && dependencies[index]
+                        .iter()
+                        .all(|dependency| resolved.contains(dependency))
+                {
+                    order.push(index);
+                    resolved.insert(name.clone());
+                    pending[index] = false;
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                order.extend(
+                    pending
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(index, pending)| {
+                            if *pending {
+                                *pending = false;
+                                unresolvable.insert(index);
+                                Some(index)
+                            } else {
+                                None
+                            }
+                        }),
+                );
+                break;
+            }
+        }
+
+        Self {
+            dependencies,
+            circular,
+            unresolvable,
+            order,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 struct SqlPlan {
     clauses: Vec<String>,
     params: Vec<String>,
+}
+
+#[cfg(test)]
+struct TestMaterializationProbe {
+    after_rows: usize,
+    reached: std::sync::mpsc::Sender<usize>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_MATERIALIZATION_PROBE: RefCell<Option<TestMaterializationProbe>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn install_test_materialization_probe(probe: TestMaterializationProbe) {
+    TEST_MATERIALIZATION_PROBE.with(|slot| {
+        let previous = slot.replace(Some(probe));
+        assert!(
+            previous.is_none(),
+            "materialization probe already installed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn park_on_test_materialization_probe(materialized_rows: usize) {
+    let probe = TEST_MATERIALIZATION_PROBE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|probe| probe.after_rows == materialized_rows)
+        {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some(probe) = probe {
+        probe
+            .reached
+            .send(materialized_rows)
+            .expect("cancellation test receives materialization signal");
+        probe
+            .release
+            .recv()
+            .expect("cancellation test releases engine worker");
+    }
 }
 
 pub fn execute(
@@ -316,9 +509,13 @@ pub fn execute(
         ));
     }
 
+    if let Some(cache) = ctx.cache {
+        cache.evict_stale_generations(ctx.generation);
+    }
+
     let cache_key = cache_key(query, ctx);
     if let (Some(cache), Some(key)) = (ctx.cache, cache_key.as_ref())
-        && let Some(mut cached) = cache.entries.borrow().get(key).cloned()
+        && let Some(mut cached) = cache.get(key)
     {
         cached.cache_hit = true;
         return Ok(cached);
@@ -326,20 +523,37 @@ pub fn execute(
 
     let warnings = WarningSink::default();
     let fts = FtsMatchCache::default();
+    let vault = SqlVaultLookup {
+        conn,
+        fts: &fts,
+        cancel,
+        source_path: ctx.this_path.as_deref().unwrap_or_default(),
+        link_index: RefCell::new(None),
+        link_resolutions: RefCell::new(BTreeMap::new()),
+    };
+    let mut resolved_query = None;
+    if let QuerySource::Linked { from_path, depth } = &query.source
+        && authored_link_path_is_extensionless(from_path)
+        && let Some(resolved_path) = vault.resolve_link(from_path)
+    {
+        let mut canonical = query.clone();
+        canonical.source = QuerySource::Linked {
+            from_path: resolved_path,
+            depth: *depth,
+        };
+        resolved_query = Some(canonical);
+    }
+    let query = resolved_query.as_ref().unwrap_or(query);
+    let formula_plan = FormulaPlan::new(query);
     let load_deps = CandidateLoadDeps {
         fts: &fts,
         warnings: &warnings,
         cancel,
     };
-    let vault = SqlVaultLookup {
-        conn,
-        fts: &fts,
-        cancel,
-    };
     let this = ctx
         .this_path
         .as_deref()
-        .and_then(|path| assemble_row_for_path(conn, path).transpose())
+        .and_then(|path| assemble_row_for_path(conn, path, &vault).transpose())
         .transpose()?;
 
     let mut rows = Vec::new();
@@ -349,7 +563,7 @@ pub fn execute(
         if cancel.is_cancelled() {
             return Err(VaultError::Cancelled);
         }
-        let batch = match load_candidates(query, conn, ctx, page_size, offset, &load_deps) {
+        let batch = match load_candidates(query, conn, ctx, page_size, offset, &load_deps, &vault) {
             Ok(batch) => batch,
             Err(CandidateLoadError::Vault(error)) => return Err(error),
             Err(CandidateLoadError::View(error)) => {
@@ -363,8 +577,15 @@ pub fn execute(
             if cancel.is_cancelled() {
                 return Err(VaultError::Cancelled);
             }
-            let formulas =
-                eval_formulas(query, &candidate.row, this.as_ref(), ctx, &vault, &warnings);
+            let formulas = eval_formulas(
+                query,
+                &formula_plan,
+                &candidate.row,
+                this.as_ref(),
+                ctx,
+                &vault,
+                &warnings,
+            );
             if let Some(filters) = &query.filters {
                 if let Some((name, error)) = first_formula_error(filters, &formulas.errors) {
                     return Ok(error_result(
@@ -406,7 +627,11 @@ pub fn execute(
                 &vault,
                 &warnings,
             ) {
-                Ok(row) => rows.push(row),
+                Ok(row) => {
+                    rows.push(row);
+                    #[cfg(test)]
+                    park_on_test_materialization_probe(rows.len());
+                }
                 Err(error) => {
                     return Ok(error_result(query, ctx, error, &candidate.row.file_path));
                 }
@@ -415,12 +640,15 @@ pub fn execute(
         offset += page_size;
     }
 
+    let unfiltered_total_count = rows.len();
     apply_quick_filter(&mut rows, ctx.quick_filter);
-    sort_rows(query, &mut rows);
+    if let Err(error) = sort_rows(query, &mut rows) {
+        return Ok(error_result(query, ctx, format!("sort: {error}"), ""));
+    }
     let group_slices = group_rows(query, &mut rows);
     let total_count = rows.len();
     let mut result_warnings = warnings.messages();
-    let summaries = match compute_summaries(
+    let summaries = compute_summaries(
         query,
         &rows,
         0..rows.len(),
@@ -428,11 +656,8 @@ pub fn execute(
         &vault,
         &warnings,
         &mut result_warnings,
-    ) {
-        Ok(summaries) => summaries,
-        Err(error) => return Ok(error_result(query, ctx, error, "")),
-    };
-    let group_summaries = match group_slices
+    );
+    let group_summaries = group_slices
         .iter()
         .map(|group| {
             compute_summaries(
@@ -445,15 +670,15 @@ pub fn execute(
                 &mut result_warnings,
             )
         })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(summaries) => summaries,
-        Err(error) => return Ok(error_result(query, ctx, error, "")),
-    };
+        .collect::<Vec<_>>();
     let shown_count = query
         .limit
         .map(|limit| (limit as usize).min(total_count))
         .unwrap_or(total_count);
+    let unfiltered_shown_count = query
+        .limit
+        .map(|limit| (limit as usize).min(unfiltered_total_count))
+        .unwrap_or(unfiltered_total_count);
     let audio_summary = audio_summary(query, total_count, shown_count, &group_slices);
     let groups = visible_groups(group_slices, group_summaries, shown_count);
     let columns = result_columns(query);
@@ -466,6 +691,7 @@ pub fn execute(
         columns,
         shown_count,
         total_count,
+        unfiltered_shown_count,
         rows,
         groups,
         summaries,
@@ -476,10 +702,14 @@ pub fn execute(
         audio_summary,
     };
     if let (Some(cache), Some(key)) = (ctx.cache, cache_key) {
-        cache.entries.borrow_mut().insert(key, result.clone());
+        cache.insert(key, result.clone());
     }
     result.cache_hit = false;
     Ok(result)
+}
+
+fn authored_link_path_is_extensionless(path: &str) -> bool {
+    !path.rsplit('/').next().unwrap_or(path).contains('.')
 }
 
 fn load_candidates(
@@ -489,10 +719,11 @@ fn load_candidates(
     limit: usize,
     offset: usize,
     deps: &CandidateLoadDeps<'_>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<Vec<Candidate>, CandidateLoadError> {
     match query.row_source {
-        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset, deps),
-        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset, deps),
+        RowSource::Files => load_file_candidates(query, conn, ctx, limit, offset, deps, vault),
+        RowSource::Tasks => load_task_candidates(query, conn, ctx, limit, offset, deps, vault),
     }
 }
 
@@ -503,6 +734,7 @@ fn load_file_candidates(
     limit: usize,
     offset: usize,
     deps: &CandidateLoadDeps<'_>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<Vec<Candidate>, CandidateLoadError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
@@ -563,7 +795,7 @@ fn load_file_candidates(
     rows.into_iter()
         .map(|file| {
             let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-            assemble_row(conn, &file, task_counts, None)
+            assemble_row(conn, &file, task_counts, None, vault)
                 .map(|row| Candidate { row })
                 .map_err(CandidateLoadError::from)
         })
@@ -577,6 +809,7 @@ fn load_task_candidates(
     limit: usize,
     offset: usize,
     deps: &CandidateLoadDeps<'_>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<Vec<Candidate>, CandidateLoadError> {
     let mut plan = SqlPlan::default();
     source_predicates(&query.source, ctx, &mut plan);
@@ -645,7 +878,7 @@ fn load_task_candidates(
     rows.into_iter()
         .map(|(file, task)| {
             let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-            assemble_row(conn, &file, task_counts, Some(task))
+            assemble_row(conn, &file, task_counts, Some(task), vault)
                 .map(|row| Candidate { row })
                 .map_err(CandidateLoadError::from)
         })
@@ -658,7 +891,9 @@ fn source_predicates(source: &QuerySource, ctx: &EngineCtx<'_>, plan: &mut SqlPl
         QuerySource::Folder(folder) => push_folder_clause(plan, folder),
         QuerySource::Tag(tag) => push_tag_clause(plan, tag),
         QuerySource::Recent { days } => {
-            let cutoff = ctx.now_ms.saturating_sub(*days as i64 * 86_400_000);
+            let lookback_ms = i128::from(*days).saturating_mul(86_400_000);
+            let cutoff = i128::from(ctx.now_ms).saturating_sub(lookback_ms);
+            let cutoff = i64::try_from(cutoff).unwrap_or(i64::MIN);
             plan.clauses.push("mtime_ms >= ?".to_string());
             plan.params.push(cutoff.to_string());
         }
@@ -962,15 +1197,31 @@ fn task_field_pushdown(field: TaskField, op: BinaryOp, value: &Expr) -> Option<S
             task_comparison_clause("t.status_char", op, literal_text(value)?, false)
         }
         TaskField::Priority => {
-            task_comparison_clause("t.priority", op, numeric_literal_string(value)?, true)
+            nullable_task_comparison_clause("t.priority", op, numeric_literal_string(value)?)
         }
         TaskField::Due => {
-            task_comparison_clause("t.due_ms", op, date_literal_ms_string(value)?, true)
+            nullable_task_comparison_clause("t.due_ms", op, date_literal_ms_string(value)?)
         }
         TaskField::Scheduled => {
-            task_comparison_clause("t.scheduled_ms", op, date_literal_ms_string(value)?, true)
+            nullable_task_comparison_clause("t.scheduled_ms", op, date_literal_ms_string(value)?)
         }
         TaskField::Text | TaskField::File => None,
+    }
+}
+
+fn nullable_task_comparison_clause(
+    column: &str,
+    op: BinaryOp,
+    value: String,
+) -> Option<SqlPredicate> {
+    // Ordering a missing task field is false *and emits a view warning*.
+    // SQL could reproduce the membership but would discard the Null rows
+    // before Rust can preserve that observable warning, so only the
+    // warning-free equality family is safe to push down.
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        task_comparison_clause(column, op, value, true)
+    } else {
+        None
     }
 }
 
@@ -1147,6 +1398,7 @@ fn assemble_row(
     file: &IndexedFileRow,
     task_counts: TaskCounts,
     task: Option<IndexedTaskRow>,
+    vault: &SqlVaultLookup<'_>,
 ) -> Result<RowContext, VaultError> {
     let mut file_fields = FileFields::for_path(&file.path);
     file_fields.name = file.name.clone();
@@ -1161,14 +1413,30 @@ fn assemble_row(
         has_time: true,
     });
     file_fields.tags = load_tags(conn, file.id)?;
-    file_fields.links = load_links(conn, file.id)?;
+    let outgoing = load_outgoing_links(conn, file.id)?;
+    file_fields.links = outgoing.links;
+    file_fields.embeds = outgoing.embeds;
     file_fields.backlinks = load_backlinks(conn, &file.path)?;
-    file_fields.out_degree = file_fields.links.len() as u64;
+    file_fields.out_degree = (file_fields.links.len() + file_fields.embeds.len()) as u64;
     file_fields.in_degree = file_fields.backlinks.len() as u64;
-    let properties = load_properties(conn, file.id)?;
+    let mut properties = load_properties(conn, file.id)?;
+    for (_, value) in &mut properties {
+        resolve_property_links(value, &file.path, vault);
+    }
     for (key, value) in &properties {
         file_fields.properties.insert(key.clone(), value.clone());
     }
+    file_fields.aliases = match file_fields.properties.get("aliases") {
+        Some(Value::Text(alias)) => vec![alias.clone()],
+        Some(Value::List(aliases)) => aliases
+            .iter()
+            .filter_map(|alias| match alias {
+                Value::Text(alias) => Some(alias.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     file_fields
         .properties
         .insert("tasks".to_string(), task_counts_value(task_counts));
@@ -1189,7 +1457,11 @@ fn assemble_row(
     })
 }
 
-fn assemble_row_for_path(conn: &Connection, path: &str) -> Result<Option<RowContext>, VaultError> {
+fn assemble_row_for_path(
+    conn: &Connection,
+    path: &str,
+    vault: &SqlVaultLookup<'_>,
+) -> Result<Option<RowContext>, VaultError> {
     let row = conn
         .query_row(
             "SELECT id, path, name, extension, size_bytes, mtime_ms, ctime_ms FROM files WHERE path = ?1",
@@ -1211,7 +1483,7 @@ fn assemble_row_for_path(conn: &Connection, path: &str) -> Result<Option<RowCont
     row.map(|file| {
         let counts = load_task_counts(conn, &[file.id])?;
         let task_counts = counts.get(&file.id).copied().unwrap_or_default();
-        assemble_row(conn, &file, task_counts, None)
+        assemble_row(conn, &file, task_counts, None, vault)
     })
     .transpose()
 }
@@ -1269,7 +1541,7 @@ fn load_task_counts(
 
 fn load_properties(conn: &Connection, file_id: i64) -> Result<Vec<(String, Value)>, VaultError> {
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT key, value_kind, value_text
              FROM properties
              WHERE file_id = ?1
@@ -1313,13 +1585,7 @@ fn decode_property_value(kind: &str, value_text: &str) -> Value {
             .unwrap_or(Value::Null),
         "wikilink" => json
             .as_str()
-            .map(|target| {
-                Value::Link(LinkValue {
-                    target: target.to_string(),
-                    display: None,
-                    resolved_path: None,
-                })
-            })
+            .map(|target| property_wikilink_to_bases_value(target.to_string()))
             .unwrap_or(Value::Null),
         "list" | "tag_list" => Value::List(
             json.as_array()
@@ -1330,7 +1596,77 @@ fn decode_property_value(kind: &str, value_text: &str) -> Value {
     }
 }
 
+fn property_value_to_bases_value(value: crate::frontmatter::PropertyValue) -> Value {
+    use crate::frontmatter::PropertyValue;
+
+    match value {
+        PropertyValue::Text(value) => Value::Text(value),
+        PropertyValue::Integer(value) => Value::Number(value as f64),
+        PropertyValue::Float(value) => Value::Number(value),
+        PropertyValue::Boolean(value) => Value::Bool(value),
+        PropertyValue::Date(value) => parse_date_value(&value)
+            .map(Value::Date)
+            .unwrap_or(Value::Null),
+        PropertyValue::Datetime(value) => parse_datetime_value(&value)
+            .map(Value::Date)
+            .unwrap_or(Value::Null),
+        PropertyValue::Wikilink(target) => property_wikilink_to_bases_value(target),
+        PropertyValue::List(values) => Value::List(
+            values
+                .into_iter()
+                .map(property_value_to_bases_value)
+                .collect(),
+        ),
+        PropertyValue::TagList(values) => {
+            Value::List(values.into_iter().map(Value::Text).collect())
+        }
+    }
+}
+
+fn property_wikilink_to_bases_value(authored: String) -> Value {
+    let source = format!("[[{authored}]]");
+    let mut parsed = crate::extract_links(&source);
+    if parsed.len() == 1 {
+        let link = parsed.pop().expect("length checked");
+        if link.kind == crate::LinkKind::Wikilink
+            && link.span_start == 0
+            && link.span_end == source.len()
+            && !link.is_embed
+        {
+            let (link_type, subpath) = match link.anchor {
+                Some(crate::LinkAnchor::Heading(header)) => {
+                    ("header", Some(normalize_header_for_link(&header)))
+                }
+                Some(crate::LinkAnchor::Block(block)) => ("block", Some(block)),
+                None => ("file", None),
+            };
+            return Value::Link(LinkValue {
+                target: link.target_raw,
+                display: link.display_text,
+                resolved_path: None,
+                subpath,
+                link_type: link_type.to_string(),
+                embed: false,
+            });
+        }
+    }
+
+    // Preserve the previous behavior for malformed cached rows. Valid
+    // frontmatter wikilinks take the shared scanner path above.
+    Value::Link(LinkValue {
+        target: authored,
+        display: None,
+        resolved_path: None,
+        subpath: None,
+        link_type: "file".to_string(),
+        embed: false,
+    })
+}
+
 fn json_to_value(value: &serde_json::Value) -> Value {
+    if let Some(value) = crate::properties_db::tagged_list_element_to_property_value(value) {
+        return property_value_to_bases_value(value);
+    }
     match value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(value) => Value::Bool(*value),
@@ -1344,6 +1680,36 @@ fn json_to_value(value: &serde_json::Value) -> Value {
                 .map(|(key, value)| (key.clone(), json_to_value(value)))
                 .collect(),
         ),
+    }
+}
+
+fn resolve_property_links(value: &mut Value, owner_path: &str, vault: &SqlVaultLookup<'_>) {
+    match value {
+        Value::Link(link) => {
+            if link.resolved_path.is_none() {
+                link.resolved_path = vault.resolve_link_from(&link.target, owner_path);
+            }
+        }
+        Value::List(values) => {
+            for value in values {
+                resolve_property_links(value, owner_path, vault);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                resolve_property_links(value, owner_path, vault);
+            }
+        }
+        Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::Text(_)
+        | Value::Date(_)
+        | Value::DqlDate(_)
+        | Value::Duration(_)
+        | Value::DqlDuration(_)
+        | Value::File(_)
+        | Value::Regex(_, _) => {}
     }
 }
 
@@ -1372,7 +1738,7 @@ fn parse_datetime_value(text: &str) -> Option<DateValue> {
 
 fn load_tags(conn: &Connection, file_id: i64) -> Result<Vec<String>, VaultError> {
     let mut stmt = conn
-        .prepare("SELECT tag_norm FROM file_tags WHERE file_id = ?1 ORDER BY tag_norm")
+        .prepare_cached("SELECT tag_norm FROM file_tags WHERE file_id = ?1 ORDER BY tag_norm")
         .map_err(DbError::from)?;
     stmt.query_map(params![file_id], |row| row.get::<_, String>(0))
         .map_err(DbError::from)?
@@ -1380,29 +1746,92 @@ fn load_tags(conn: &Connection, file_id: i64) -> Result<Vec<String>, VaultError>
         .map_err(|err| DbError::from(err).into())
 }
 
-fn load_links(conn: &Connection, file_id: i64) -> Result<Vec<LinkValue>, VaultError> {
+#[derive(Debug, Default)]
+struct OutgoingLinks {
+    all: Vec<LinkValue>,
+    links: Vec<LinkValue>,
+    embeds: Vec<LinkValue>,
+}
+
+fn load_outgoing_links(conn: &Connection, file_id: i64) -> Result<OutgoingLinks, VaultError> {
     let mut stmt = conn
-        .prepare(
-            "SELECT target_raw, target_path FROM links WHERE source_file_id = ?1 ORDER BY ordinal",
+        .prepare_cached(
+            "SELECT target_raw, target_path, target_anchor, is_embed, display_text
+             FROM links
+             WHERE source_file_id = ?1
+               AND is_external = 0
+               AND (target_anchor IS NULL OR target_anchor LIKE 'h:%' OR target_anchor LIKE 'b:%')
+             ORDER BY ordinal",
         )
         .map_err(DbError::from)?;
-    stmt.query_map(params![file_id], |row| {
+    let rows = stmt.query_map(params![file_id], |row| {
         let target: String = row.get(0)?;
         let resolved_path: Option<String> = row.get(1)?;
-        Ok(LinkValue {
-            target,
-            display: None,
-            resolved_path,
-        })
-    })
-    .map_err(DbError::from)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|err| DbError::from(err).into())
+        let anchor: Option<String> = row.get(2)?;
+        let is_embed = row.get::<_, i64>(3)? != 0;
+        let display: Option<String> = row.get(4)?;
+        let (link_type, subpath) = match anchor.as_deref() {
+            Some(anchor) if anchor.starts_with("h:") => {
+                ("header", Some(normalize_header_for_link(&anchor[2..])))
+            }
+            Some(anchor) if anchor.starts_with("b:") => ("block", Some(anchor[2..].to_string())),
+            Some(_) => unreachable!("SQL filters unknown serialized anchor prefixes"),
+            None => ("file", None),
+        };
+        Ok((
+            LinkValue {
+                target,
+                display,
+                resolved_path,
+                subpath,
+                link_type: link_type.to_string(),
+                embed: is_embed,
+            },
+            is_embed,
+        ))
+    })?;
+    let mut outgoing = OutgoingLinks::default();
+    let mut seen_pages = BTreeSet::new();
+    for row in rows {
+        let (link, is_embed) = row.map_err(DbError::from)?;
+        let page_identity = link
+            .resolved_path
+            .as_deref()
+            .unwrap_or(link.target.as_str())
+            .to_string();
+        if seen_pages.insert(page_identity) {
+            outgoing.all.push(link.clone());
+        }
+        if is_embed {
+            outgoing.embeds.push(link);
+        } else {
+            outgoing.links.push(link);
+        }
+    }
+    Ok(outgoing)
+}
+
+fn normalize_header_for_link(header: &str) -> String {
+    let mut normalized = String::new();
+    let mut pending_space = false;
+    for ch in header.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '_' | '-') || !ch.is_ascii() && !ch.is_whitespace()
+        {
+            if pending_space && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            pending_space = false;
+            normalized.push(ch);
+        } else {
+            pending_space = true;
+        }
+    }
+    normalized
 }
 
 fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, VaultError> {
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT src.path
              FROM links l
              JOIN files src ON src.id = l.source_file_id
@@ -1416,6 +1845,9 @@ fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, Vault
             target: source.clone(),
             display: None,
             resolved_path: Some(source),
+            subpath: None,
+            link_type: "file".to_string(),
+            embed: false,
         })
     })
     .map_err(DbError::from)?
@@ -1425,6 +1857,7 @@ fn load_backlinks(conn: &Connection, path: &str) -> Result<Vec<LinkValue>, Vault
 
 fn eval_formulas(
     query: &SlateQuery,
+    plan: &FormulaPlan,
     row: &RowContext,
     this: Option<&RowContext>,
     ctx: &EngineCtx<'_>,
@@ -1432,18 +1865,115 @@ fn eval_formulas(
     warnings: &WarningSink,
 ) -> FormulaEval {
     let mut state = FormulaEval::default();
-    for (name, expr) in &query.formulas {
-        let eval_ctx = eval_ctx(row, this, &state.values, ctx, vault, warnings);
-        match eval(expr, &eval_ctx) {
-            Ok(value) => {
-                state.values.insert(name.clone(), value);
-            }
-            Err(error) => {
-                state.errors.insert(name.clone(), error);
+    for index in &plan.order {
+        let (name, expr) = &query.formulas[*index];
+        if plan.circular.contains(name) {
+            state.errors.insert(
+                name.clone(),
+                EvalError::Unsupported {
+                    reason: format!("formula.{name} participates in a circular formula reference"),
+                },
+            );
+            continue;
+        }
+        if plan.unresolvable.contains(index) {
+            state.errors.insert(
+                name.clone(),
+                EvalError::Unsupported {
+                    reason: "unresolvable formula dependency".to_string(),
+                },
+            );
+            continue;
+        }
+
+        if let Some((dependency, error)) = plan.dependencies[*index].iter().find_map(|dependency| {
+            state
+                .errors
+                .get(dependency)
+                .map(|error| (dependency, error))
+        }) {
+            state.errors.insert(
+                name.clone(),
+                EvalError::Unsupported {
+                    reason: format!("formula.{dependency}: {error}"),
+                },
+            );
+        } else {
+            let eval_ctx = eval_ctx(row, this, &state.values, ctx, vault, warnings);
+            match eval(expr, &eval_ctx) {
+                Ok(value) => {
+                    state.values.insert(name.clone(), value);
+                }
+                Err(error) => {
+                    state.errors.insert(name.clone(), error);
+                }
             }
         }
     }
     state
+}
+
+fn formula_reaches(
+    current: &str,
+    target: &str,
+    graph: &BTreeMap<String, BTreeSet<String>>,
+    seen: &mut BTreeSet<String>,
+) -> bool {
+    let Some(dependencies) = graph.get(current) else {
+        return false;
+    };
+    dependencies.iter().any(|dependency| {
+        dependency == target
+            || seen.insert(dependency.clone()) && formula_reaches(dependency, target, graph, seen)
+    })
+}
+
+fn collect_formula_dependencies(expr: &Expr, dependencies: &mut BTreeSet<String>) {
+    match &expr.kind {
+        ExprKind::Prop(PropertyRef::Formula(name)) => {
+            dependencies.insert(name.clone());
+        }
+        ExprKind::Index { base, index }
+        | ExprKind::Binary {
+            lhs: base,
+            rhs: index,
+            ..
+        } => {
+            collect_formula_dependencies(base, dependencies);
+            collect_formula_dependencies(index, dependencies);
+        }
+        ExprKind::Field { base, .. } | ExprKind::Unary { rhs: base, .. } => {
+            collect_formula_dependencies(base, dependencies);
+        }
+        ExprKind::Call { callee, args } => {
+            if let Callee::Method { receiver, .. } = callee {
+                collect_formula_dependencies(receiver, dependencies);
+            }
+            for arg in args {
+                collect_formula_dependencies(arg, dependencies);
+            }
+        }
+        ExprKind::ListExpr {
+            base, body, init, ..
+        } => {
+            collect_formula_dependencies(base, dependencies);
+            collect_formula_dependencies(body, dependencies);
+            if let Some(init) = init {
+                collect_formula_dependencies(init, dependencies);
+            }
+        }
+        ExprKind::Lit(Lit::List(items)) => {
+            for item in items {
+                collect_formula_dependencies(item, dependencies);
+            }
+        }
+        ExprKind::Lit(Lit::Object(items)) => {
+            for (_, value) in items {
+                collect_formula_dependencies(value, dependencies);
+            }
+        }
+        ExprKind::Lit(_) | ExprKind::Prop(_) | ExprKind::Unsupported { .. } => {}
+    }
 }
 
 fn eval_filter(node: &FilterNode, ctx: &EvalCtx<'_>) -> Result<bool, EvalError> {
@@ -1575,25 +2105,97 @@ fn property_expr(property: &PropertyRef) -> Expr {
     }
 }
 
-fn sort_rows(query: &SlateQuery, rows: &mut [MaterializedRow]) {
-    rows.sort_by(|lhs, rhs| compare_rows(query, lhs, rhs));
+fn sort_rows(query: &SlateQuery, rows: &mut [MaterializedRow]) -> Result<(), EvalError> {
+    for row in rows.iter() {
+        for value in &row.sort_values {
+            if let Some(value) = dql_command_sort_value(value) {
+                compare_dql_command_sort_values(value, value)?;
+            }
+        }
+    }
+
+    let mut first_error = None;
+    rows.sort_by(|lhs, rhs| {
+        if first_error.is_some() {
+            return Ordering::Equal;
+        }
+        match compare_rows(query, lhs, rhs) {
+            Ok(ordering) => ordering,
+            Err(error) => {
+                first_error = Some(error);
+                Ordering::Equal
+            }
+        }
+    });
+    if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
-fn compare_rows(query: &SlateQuery, lhs: &MaterializedRow, rhs: &MaterializedRow) -> Ordering {
+fn compare_rows(
+    query: &SlateQuery,
+    lhs: &MaterializedRow,
+    rhs: &MaterializedRow,
+) -> Result<Ordering, EvalError> {
     for (index, sort) in query.sort.iter().enumerate() {
-        let ordering = compare_sort_key(
+        let ordering = compare_row_sort_value(
             &lhs.sort_values[index],
             &rhs.sort_values[index],
             sort.ascending,
-        );
+        )?;
         if ordering != Ordering::Equal {
-            return ordering;
+            return Ok(ordering);
         }
     }
-    match lhs.path.cmp(&rhs.path) {
+    Ok(match lhs.path.cmp(&rhs.path) {
         Ordering::Equal => lhs.ordinal.cmp(&rhs.ordinal),
         ordering => ordering,
+    })
+}
+
+fn compare_row_sort_value(
+    lhs: &Value,
+    rhs: &Value,
+    ascending: bool,
+) -> Result<Ordering, EvalError> {
+    let ordering = match (dql_command_sort_value(lhs), dql_command_sort_value(rhs)) {
+        (Some(lhs), Some(rhs)) => compare_dql_command_sort_values_total(lhs, rhs)?,
+        (None, None) => return Ok(compare_sort_key(lhs, rhs, ascending)),
+        _ => {
+            return Err(EvalError::InvalidArgument {
+                function: "DQL SORT".to_string(),
+                message: "inconsistent command-sort provenance".to_string(),
+            });
+        }
+    };
+    Ok(if ascending {
+        ordering
+    } else {
+        ordering.reverse()
+    })
+}
+
+fn compare_dql_command_sort_values_total(lhs: &Value, rhs: &Value) -> Result<Ordering, EvalError> {
+    let lhs_reflexive = compare_dql_command_sort_values(lhs, lhs)?;
+    let rhs_reflexive = compare_dql_command_sort_values(rhs, rhs)?;
+    let forward = compare_dql_command_sort_values(lhs, rhs)?;
+    let reverse = compare_dql_command_sort_values(rhs, lhs)?;
+    if lhs_reflexive == Ordering::Equal
+        && rhs_reflexive == Ordering::Equal
+        && forward == reverse.reverse()
+    {
+        return Ok(forward);
     }
+
+    // Dataview's expression comparator deliberately exposes source behavior
+    // such as NaN > NaN and distinct duration structures with equal casual
+    // milliseconds comparing greater in both directions. Keep those expression
+    // semantics intact, but never pass a non-total comparator to Rust's sort.
+    // Native Bases already has a deterministic total value order, so use it
+    // only for the inconsistent pair.
+    Ok(compare_sort_key(lhs, rhs, true))
 }
 
 fn compare_sort_key(lhs: &Value, rhs: &Value, ascending: bool) -> Ordering {
@@ -1620,7 +2222,9 @@ fn compare_non_null_values(lhs: &Value, rhs: &Value) -> Ordering {
     }
     match (lhs, rhs) {
         (Value::Bool(lhs), Value::Bool(rhs)) => lhs.cmp(rhs),
-        (Value::Number(lhs), Value::Number(rhs)) => lhs.partial_cmp(rhs).unwrap_or(Ordering::Equal),
+        (Value::Number(lhs), Value::Number(rhs)) => {
+            numeric_order_key(*lhs).cmp(&numeric_order_key(*rhs))
+        }
         (Value::Date(lhs), Value::Date(rhs)) => lhs.epoch_ms.cmp(&rhs.epoch_ms),
         (Value::Text(lhs), Value::Text(rhs)) => lhs.to_lowercase().cmp(&rhs.to_lowercase()),
         _ => value_key(lhs).cmp(&value_key(rhs)),
@@ -1632,8 +2236,8 @@ fn value_type_rank(value: &Value) -> u8 {
         Value::Null => 9,
         Value::Bool(_) => 0,
         Value::Number(_) => 1,
-        Value::Date(_) => 2,
-        Value::Duration(_) => 3,
+        Value::Date(_) | Value::DqlDate(_) => 2,
+        Value::Duration(_) | Value::DqlDuration(_) => 3,
         Value::Text(_) => 4,
         Value::Link(_) => 5,
         Value::File(_) => 6,
@@ -1758,12 +2362,18 @@ fn compute_summaries(
     vault: &dyn VaultLookup,
     warnings: &WarningSink,
     result_warnings: &mut Vec<String>,
-) -> Result<Vec<BasesSummaryCell>, String> {
+) -> Vec<BasesSummaryCell> {
     query
         .summaries
         .iter()
         .map(|(column_id, summary)| {
-            let (summary_name, kind) = summary_kind(summary)?;
+            let fallback_name = match summary {
+                SummaryRef::Builtin(name) | SummaryRef::Custom(name) => name.clone(),
+            };
+            let (summary_name, kind) = match summary_kind(summary) {
+                Ok(summary) => summary,
+                Err(error) => return summary_error_cell(column_id, &fallback_name, error),
+            };
             compute_summary(
                 query,
                 rows,
@@ -1776,8 +2386,17 @@ fn compute_summaries(
                 warnings,
                 result_warnings,
             )
+            .unwrap_or_else(|error| summary_error_cell(column_id, &summary_name, error))
         })
         .collect()
+}
+
+fn summary_error_cell(column_id: &str, summary_name: &str, error: String) -> BasesSummaryCell {
+    BasesSummaryCell {
+        column_id: column_id.to_string(),
+        summary: summary_name.to_string(),
+        value: CellValue::Error(error),
+    }
 }
 
 fn summary_kind(summary: &SummaryRef) -> Result<(String, SummaryKind), String> {
@@ -2071,9 +2690,26 @@ fn value_key(value: &Value) -> String {
         Value::Bool(value) => format!("bool:{value}"),
         Value::Number(value) => format!("number:{value:?}"),
         Value::Date(value) => format!("date:{}:{}", value.epoch_ms, value.has_time),
+        Value::DqlDate(value) => format!(
+            "dql-date:{}:{}:{}:{}",
+            value.epoch_ms, value.has_time, value.offset_minutes, value.is_local
+        ),
         Value::Duration(value) => format!("duration:{value}"),
+        Value::DqlDuration(value) => {
+            format!(
+                "dql-duration:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+                value.years,
+                value.months,
+                value.weeks,
+                value.days,
+                value.hours,
+                value.minutes,
+                value.seconds,
+                value.milliseconds
+            )
+        }
         Value::Text(value) => format!("text:{value}"),
-        Value::Link(value) => format!("link:{}:{:?}", value.target, value.resolved_path),
+        Value::Link(value) => format!("link:{}", link_identity(value)),
         Value::File(value) => format!("file:{}", value.path),
         Value::Regex(pattern, flags) => format!("regex:{pattern}/{flags}"),
         Value::List(values) => format!(
@@ -2088,6 +2724,84 @@ fn value_key(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+    }
+}
+
+/// ASCII key whose lexicographic order matches the native ascending value
+/// comparator. UI-only grids use it without reimplementing Rust value rules.
+pub(crate) fn value_sort_key(value: &Value) -> String {
+    match value {
+        Value::Null => "ff".to_string(),
+        Value::Bool(false) => "00:0".to_string(),
+        Value::Bool(true) => "00:1".to_string(),
+        Value::Number(value) => fixed_width_u64_sort_key("01:", numeric_order_key(*value)),
+        Value::Date(value) => {
+            let ordered = (value.epoch_ms as u64) ^ (1_u64 << 63);
+            fixed_width_u64_sort_key("02:00:", ordered)
+        }
+        Value::DqlDate(_) => hex_sort_key("02:01:", &value_key(value)),
+        Value::Duration(_) | Value::DqlDuration(_) => hex_sort_key("03:", &value_key(value)),
+        Value::Text(value) => lowercase_text_sort_key(value),
+        Value::Link(_) => hex_sort_key("05:", &value_key(value)),
+        Value::File(_) => hex_sort_key("06:", &value_key(value)),
+        Value::Regex(_, _) => hex_sort_key("07:", &value_key(value)),
+        Value::List(_) => hex_sort_key("08:", &value_key(value)),
+        Value::Object(_) => hex_sort_key("09:", &value_key(value)),
+    }
+}
+
+/// Total numeric order shared by native row sorting and mirrored UI keys:
+/// -Infinity < finite values < +Infinity < NaN. Signed zeroes compare equal,
+/// and all NaN signs/payloads collapse to one canonical position.
+fn numeric_order_key(value: f64) -> u64 {
+    const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+
+    let bits = if value.is_nan() {
+        CANONICAL_NAN_BITS
+    } else if value == 0.0 {
+        0.0_f64.to_bits()
+    } else {
+        value.to_bits()
+    };
+    if bits & (1_u64 << 63) == 0 {
+        bits ^ (1_u64 << 63)
+    } else {
+        !bits
+    }
+}
+
+fn fixed_width_u64_sort_key(prefix: &str, value: u64) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(prefix.len() + 16);
+    encoded.push_str(prefix);
+    for shift in (0..64).step_by(4).rev() {
+        encoded.push(HEX[((value >> shift) & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn hex_sort_key(prefix: &str, value: &str) -> String {
+    let mut encoded = String::with_capacity(prefix.len() + value.len() * 2);
+    encoded.push_str(prefix);
+    push_sort_key_hex(&mut encoded, value.as_bytes());
+    encoded
+}
+
+fn lowercase_text_sort_key(value: &str) -> String {
+    let mut encoded = String::with_capacity(3 + value.len() * 2);
+    encoded.push_str("04:");
+    let mut utf8 = [0_u8; 4];
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        push_sort_key_hex(&mut encoded, ch.encode_utf8(&mut utf8).as_bytes());
+    }
+    encoded
+}
+
+fn push_sort_key_hex(encoded: &mut String, value: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &byte in value {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
 }
 
@@ -2278,7 +2992,9 @@ pub(crate) fn value_display(value: &Value) -> String {
                 }
             })
             .unwrap_or_else(|| value.epoch_ms.to_string()),
+        Value::DqlDate(value) => crate::bases::eval::dql_date_display(*value),
         Value::Duration(value) => value.to_string(),
+        Value::DqlDuration(value) => crate::bases::eval::dql_format_duration_parts(*value),
         Value::Text(value) => value.clone(),
         Value::Link(value) => value.display.clone().unwrap_or_else(|| {
             value
@@ -2331,10 +3047,26 @@ fn eval_column(
 }
 
 fn column_expr(id: &str) -> Expr {
-    super::expr::parse_expr(id).unwrap_or_else(|_| Expr {
+    // ColumnSelection IDs are property identifiers. Calls are the one explicit
+    // expression-shaped compatibility surface (`now()`, `date(when)`, method
+    // calls); every other non-namespaced string is a literal note-property ID.
+    // Native `sort[].expr` is parsed separately and is not constrained here.
+    if let Ok(expr) = super::expr::parse_expr(id)
+        && matches!(expr.kind, ExprKind::Call { .. })
+    {
+        return expr;
+    }
+    super::property_id_expr(id).unwrap_or_else(|| Expr {
         span: super::expr::Span { start: 0, end: 0 },
         kind: ExprKind::Prop(PropertyRef::Note(id.to_string())),
     })
+}
+
+pub(crate) fn sort_key_for_column_id(id: &str, ascending: bool) -> SortKey {
+    SortKey {
+        expr: column_expr(id),
+        ascending,
+    }
 }
 
 fn first_formula_error<'a>(
@@ -2438,6 +3170,7 @@ fn error_result(
         summaries: Vec::new(),
         total_count: 0,
         shown_count: 0,
+        unfiltered_shown_count: 0,
         warnings: Vec::new(),
         error: Some(ViewError {
             construct: construct.into(),
@@ -2456,7 +3189,7 @@ fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
     {
         return None;
     }
-    if query_mentions_global(query, GlobalFn::Now) {
+    if query_mentions_global(query, GlobalFn::Now) || query_mentions_dql_date_shorthand(query) {
         return None;
     }
     let bytes = serde_json::to_vec(query).ok()?;
@@ -2471,85 +3204,243 @@ fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
 }
 
 fn query_mentions_global(query: &SlateQuery, needle: GlobalFn) -> bool {
-    query
-        .filters
-        .as_ref()
-        .is_some_and(|filter| filter_mentions_global(filter, needle))
+    query_matches_expr(query, &|expr| {
+        matches!(
+            &expr.kind,
+            ExprKind::Call {
+                callee: Callee::Global(function),
+                ..
+            } if *function == needle
+        )
+    })
+}
+
+fn query_mentions_dql_date_shorthand(query: &SlateQuery) -> bool {
+    query_matches_expr(query, &expr_is_dql_date_shorthand)
+}
+
+fn query_matches_expr(query: &SlateQuery, predicate: &impl Fn(&Expr) -> bool) -> bool {
+    matches!(query.source, QuerySource::Recent { .. })
+        || query
+            .filters
+            .as_ref()
+            .is_some_and(|filter| filter_matches_expr(filter, predicate))
         || query
             .formulas
             .iter()
-            .any(|(_, expr)| expr_mentions_global(expr, needle))
+            .any(|(_, expr)| expr_or_descendant_matches(expr, predicate))
+        || query
+            .custom_summaries
+            .iter()
+            .any(|(_, expr)| expr_or_descendant_matches(expr, predicate))
         || query
             .sort
             .iter()
-            .any(|sort| expr_mentions_global(&sort.expr, needle))
+            .any(|sort| expr_or_descendant_matches(&sort.expr, predicate))
         || query
             .columns
             .iter()
-            .any(|column| expr_mentions_global(&column_expr(&column.id), needle))
+            .any(|column| expr_or_descendant_matches(&column_expr(&column.id), predicate))
+        || query
+            .summaries
+            .iter()
+            .any(|(column_id, _)| expr_or_descendant_matches(&column_expr(column_id), predicate))
 }
 
-fn filter_mentions_global(filter: &FilterNode, needle: GlobalFn) -> bool {
+fn filter_matches_expr(filter: &FilterNode, predicate: &impl Fn(&Expr) -> bool) -> bool {
     match filter {
-        FilterNode::Stmt(expr) => expr_mentions_global(expr, needle),
+        FilterNode::Stmt(expr) => expr_or_descendant_matches(expr, predicate),
         FilterNode::And(nodes) | FilterNode::Or(nodes) | FilterNode::Not(nodes) => nodes
             .iter()
-            .any(|node| filter_mentions_global(node, needle)),
+            .any(|node| filter_matches_expr(node, predicate)),
     }
 }
 
-fn expr_mentions_global(expr: &Expr, needle: GlobalFn) -> bool {
+fn expr_or_descendant_matches(expr: &Expr, predicate: &impl Fn(&Expr) -> bool) -> bool {
+    if predicate(expr) {
+        return true;
+    }
     match &expr.kind {
         ExprKind::Call { callee, args } => {
-            matches!(callee, Callee::Global(function) if *function == needle)
-                || matches!(callee, Callee::Method { receiver, .. } if expr_mentions_global(receiver, needle))
-                || args.iter().any(|arg| expr_mentions_global(arg, needle))
+            matches!(callee, Callee::Method { receiver, .. } if expr_or_descendant_matches(receiver, predicate))
+                || args
+                    .iter()
+                    .any(|arg| expr_or_descendant_matches(arg, predicate))
         }
         ExprKind::Index { base, index }
         | ExprKind::Binary {
             lhs: base,
             rhs: index,
             ..
-        } => expr_mentions_global(base, needle) || expr_mentions_global(index, needle),
+        } => {
+            expr_or_descendant_matches(base, predicate)
+                || expr_or_descendant_matches(index, predicate)
+        }
         ExprKind::Field { base, .. } | ExprKind::Unary { rhs: base, .. } => {
-            expr_mentions_global(base, needle)
+            expr_or_descendant_matches(base, predicate)
         }
         ExprKind::ListExpr {
             base, body, init, ..
         } => {
-            expr_mentions_global(base, needle)
-                || expr_mentions_global(body, needle)
+            expr_or_descendant_matches(base, predicate)
+                || expr_or_descendant_matches(body, predicate)
                 || init
                     .as_deref()
-                    .is_some_and(|expr| expr_mentions_global(expr, needle))
+                    .is_some_and(|expr| expr_or_descendant_matches(expr, predicate))
         }
-        ExprKind::Lit(Lit::List(items)) => {
-            items.iter().any(|item| expr_mentions_global(item, needle))
-        }
+        ExprKind::Lit(Lit::List(items)) => items
+            .iter()
+            .any(|item| expr_or_descendant_matches(item, predicate)),
         ExprKind::Lit(Lit::Object(items)) => items
             .iter()
-            .any(|(_, value)| expr_mentions_global(value, needle)),
+            .any(|(_, value)| expr_or_descendant_matches(value, predicate)),
         ExprKind::Lit(_) | ExprKind::Prop(_) | ExprKind::Unsupported { .. } => false,
     }
+}
+
+fn expr_is_dql_date_shorthand(expr: &Expr) -> bool {
+    const DQL_DATE_OBJECT_KEY: &str = "\u{f8ff}slate.dql.date";
+
+    let ExprKind::Call {
+        callee: Callee::Global(GlobalFn::Date),
+        args,
+    } = &expr.kind
+    else {
+        return false;
+    };
+    let [
+        Expr {
+            kind:
+                ExprKind::Call {
+                    callee: Callee::Global(GlobalFn::Object),
+                    args: marker_args,
+                },
+            ..
+        },
+    ] = args.as_slice()
+    else {
+        return false;
+    };
+    let [
+        Expr {
+            kind: ExprKind::Lit(Lit::String(marker)),
+            ..
+        },
+        payload,
+    ] = marker_args.as_slice()
+    else {
+        return false;
+    };
+    if marker != DQL_DATE_OBJECT_KEY {
+        return false;
+    }
+    let ExprKind::Lit(Lit::String(value)) = &payload.kind else {
+        // Dynamic DQL date inputs can evaluate to a shorthand at runtime.
+        return true;
+    };
+    matches!(
+        value.as_str(),
+        "now"
+            | "today"
+            | "tomorrow"
+            | "yesterday"
+            | "sow"
+            | "eow"
+            | "som"
+            | "eom"
+            | "soy"
+            | "eoy"
+            | "start-of-week"
+            | "end-of-week"
+            | "start-of-month"
+            | "end-of-month"
+            | "start-of-year"
+            | "end-of-year"
+    )
 }
 
 struct SqlVaultLookup<'a> {
     conn: &'a Connection,
     fts: &'a FtsMatchCache,
     cancel: &'a CancelToken,
+    source_path: &'a str,
+    link_index: RefCell<Option<crate::InMemoryVaultIndex>>,
+    link_resolutions: RefCell<BTreeMap<(String, String), Option<String>>>,
+}
+
+impl SqlVaultLookup<'_> {
+    fn dql_inline_value(
+        &self,
+        value: &crate::dql_inline_fields_db::DqlInlineValue,
+        owner_path: &str,
+        now_ms: i64,
+    ) -> Result<Value, EvalError> {
+        use crate::dql_inline_fields_db::{DqlInlineLinkType, DqlInlineValue};
+        match value {
+            DqlInlineValue::Null => Ok(Value::Null),
+            DqlInlineValue::Boolean(value) => Ok(Value::Bool(*value)),
+            DqlInlineValue::Number(value) => Ok(Value::Number(*value)),
+            DqlInlineValue::Text(value) | DqlInlineValue::Tag(value) => {
+                Ok(Value::Text(value.clone()))
+            }
+            DqlInlineValue::Date(value) => crate::bases::eval::dql_inline_date_value(value, now_ms),
+            DqlInlineValue::Duration(value) => crate::bases::eval::dql_inline_duration_value(value),
+            DqlInlineValue::Link(link) => {
+                let resolved_path = self.resolve_link_from(&link.target, owner_path);
+                Ok(Value::Link(LinkValue {
+                    target: resolved_path.clone().unwrap_or_else(|| link.target.clone()),
+                    display: link.display.clone(),
+                    resolved_path,
+                    subpath: link.subpath.clone(),
+                    link_type: match link.link_type {
+                        DqlInlineLinkType::File => "file",
+                        DqlInlineLinkType::Header => "header",
+                        DqlInlineLinkType::Block => "block",
+                    }
+                    .to_string(),
+                    embed: link.embed,
+                }))
+            }
+            DqlInlineValue::List(values) => values
+                .iter()
+                .map(|value| self.dql_inline_value(value, owner_path, now_ms))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::List),
+        }
+    }
+
+    fn resolve_link_from(&self, target: &str, source_path: &str) -> Option<String> {
+        let cache_key = (source_path.to_string(), target.to_string());
+        if let Some(resolved) = self.link_resolutions.borrow().get(&cache_key) {
+            return resolved.clone();
+        }
+        if self.link_index.borrow().is_none() {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT path FROM files ORDER BY path")
+                .ok()?;
+            let paths = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .ok()?
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            *self.link_index.borrow_mut() = Some(crate::InMemoryVaultIndex::new(paths));
+        }
+        let index = self.link_index.borrow();
+        let resolved = match crate::resolve_link(target, None, source_path, index.as_ref()?) {
+            crate::ResolvedLink::Resolved { target_path, .. } => Some(target_path),
+            crate::ResolvedLink::Unresolved { .. } | crate::ResolvedLink::External => None,
+        };
+        self.link_resolutions
+            .borrow_mut()
+            .insert(cache_key, resolved.clone());
+        resolved
+    }
 }
 
 impl VaultLookup for SqlVaultLookup<'_> {
     fn resolve_link(&self, target: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT path FROM files WHERE path = ?1 OR name = ?1 LIMIT 1",
-                params![target],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
+        self.resolve_link_from(target, self.source_path)
     }
 
     fn file_matches(&self, path: &str, query: &str) -> Result<bool, EvalError> {
@@ -2564,7 +3455,7 @@ impl VaultLookup for SqlVaultLookup<'_> {
     }
 
     fn row_for_path(&self, path: &str) -> Option<RowContext> {
-        assemble_row_for_path(self.conn, path).ok().flatten()
+        assemble_row_for_path(self.conn, path, self).ok().flatten()
     }
 
     fn links_for(&self, path: &str) -> Vec<LinkValue> {
@@ -2577,11 +3468,595 @@ impl VaultLookup for SqlVaultLookup<'_> {
             .optional()
             .ok()
             .flatten()
-            .and_then(|id| load_links(self.conn, id).ok())
+            .and_then(|id| load_outgoing_links(self.conn, id).ok())
+            .map(|outgoing| outgoing.links)
+            .unwrap_or_default()
+    }
+
+    fn embeds_for(&self, path: &str) -> Vec<LinkValue> {
+        self.conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|id| load_outgoing_links(self.conn, id).ok())
+            .map(|outgoing| outgoing.embeds)
+            .unwrap_or_default()
+    }
+
+    fn outlinks_for(&self, path: &str) -> Vec<LinkValue> {
+        self.conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|id| load_outgoing_links(self.conn, id).ok())
+            .map(|outgoing| outgoing.all)
             .unwrap_or_default()
     }
 
     fn backlinks_for(&self, path: &str) -> Vec<LinkValue> {
         load_backlinks(self.conn, path).unwrap_or_default()
+    }
+
+    fn dql_tags_for(&self, path: &str) -> Vec<String> {
+        crate::tags_db::load_dql_tags_for_path(self.conn, path).unwrap_or_default()
+    }
+
+    fn dql_inline_fields_for(
+        &self,
+        path: &str,
+        now_ms: i64,
+    ) -> Result<(Vec<(String, Value)>, bool), EvalError> {
+        let projection = crate::dql_inline_fields_db::load_dql_inline_fields_for_path(
+            self.conn, path,
+        )
+        .map_err(|error| EvalError::InvalidArgument {
+            function: "DQL inline fields".to_string(),
+            message: error.to_string(),
+        })?;
+        let fields = projection
+            .fields
+            .iter()
+            .map(|field| {
+                self.dql_inline_value(&field.value, path, now_ms)
+                    .map(|value| (field.key.clone(), value))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((fields, projection.incomplete))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::{Mutex, mpsc},
+        time::{Duration, Instant},
+    };
+
+    static CANCELLATION_TEST_SERIAL: Mutex<()> = Mutex::new(());
+    const CANCELLATION_PROBE_ROW: usize = 512;
+    const CANCELLATION_VAULT_ROWS: usize = 10_000;
+
+    fn filter(source: &str) -> FilterNode {
+        FilterNode::Stmt(
+            super::super::expr::parse_expr(source).unwrap_or_else(|error| {
+                panic!("planner census expression must parse: {source}: {error}")
+            }),
+        )
+    }
+
+    #[test]
+    fn census_bases_planner_selects_every_active_pushdown_family() {
+        let file_families = [
+            ("extension equality", r#"file.ext == "md""#),
+            ("name equality", r#"file.name == "note.md""#),
+            ("path equality", r#"file.path == "Notes/note.md""#),
+            ("size comparison", "file.size >= 42"),
+            ("mtime comparison", "file.mtime < 1234"),
+            ("ctime comparison", "file.ctime == 5678"),
+            ("note property equality", r#"status == "active""#),
+            ("folder membership", r#"file.inFolder("Notes")"#),
+            ("tag membership", r#"file.hasTag("project")"#),
+            ("name prefix", r#"file.name.startsWith("note")"#),
+            ("path prefix", r#"file.path.startsWith("Notes/")"#),
+            ("note list/text membership", r#"tags.contains("project")"#),
+        ];
+        for (family, source) in file_families {
+            let predicate = pushdown_predicate(&filter(source))
+                .unwrap_or_else(|| panic!("file optimizer did not select {family} for {source}"));
+            assert!(
+                !predicate.clause.trim().is_empty(),
+                "file optimizer selected an empty predicate for {family}: {source}"
+            );
+        }
+
+        let task_families = [
+            ("completed truthiness", "task.completed"),
+            ("completed negation", "!task.completed"),
+            ("completed comparison", "task.completed == false"),
+            ("status comparison", r#"task.status == " ""#),
+            ("priority equality", "task.priority == 3"),
+            ("due equality", r#"task.due == date("2027-01-16")"#),
+            (
+                "scheduled equality",
+                r#"task.scheduled == date("2027-01-15")"#,
+            ),
+            (
+                "scheduled inequality",
+                r#"task.scheduled != date("2027-01-15")"#,
+            ),
+            (
+                "task file folder membership",
+                r#"task.file.inFolder("Notes")"#,
+            ),
+            ("task file tag membership", r#"task.file.hasTag("project")"#),
+        ];
+        for (family, source) in task_families {
+            let predicate = task_pushdown_predicate(&filter(source))
+                .unwrap_or_else(|| panic!("task optimizer did not select {family} for {source}"));
+            assert!(
+                !predicate.clause.trim().is_empty(),
+                "task optimizer selected an empty predicate for {family}: {source}"
+            );
+        }
+
+        let source_families = [
+            ("folder source", QuerySource::Folder("Notes".to_string())),
+            ("tag source", QuerySource::Tag("project".to_string())),
+            ("recent source", QuerySource::Recent { days: 7 }),
+            (
+                "linked depth-one source",
+                QuerySource::Linked {
+                    from_path: "Index.md".to_string(),
+                    depth: 1,
+                },
+            ),
+        ];
+        for (family, source) in source_families {
+            let mut plan = SqlPlan::default();
+            source_predicates(
+                &source,
+                &EngineCtx {
+                    now_ms: 1_800_000_000_000,
+                    ..EngineCtx::default()
+                },
+                &mut plan,
+            );
+            assert!(
+                !plan.clauses.is_empty(),
+                "source optimizer did not select {family}: {source:?}"
+            );
+        }
+
+        let mut conn = Connection::open_in_memory().expect("open FTS planner database");
+        crate::db::migrate(&mut conn).expect("migrate FTS planner database");
+        let fts = FtsMatchCache::default();
+        let warnings = WarningSink::default();
+        let cancel = CancelToken::new();
+        let predicate = fts_pushdown_predicate(
+            &filter(r#"file.matches("needle")"#),
+            &conn,
+            &fts,
+            &warnings,
+            &cancel,
+        )
+        .expect("FTS planner must not fail")
+        .expect("FTS optimizer must select file.matches");
+        assert!(
+            predicate.sql.clause.contains("slate_bases_fts_matches"),
+            "FTS optimizer selected the wrong SQL predicate: {:?}",
+            predicate.sql
+        );
+        assert_eq!(predicate.sql.params, ["needle"]);
+    }
+
+    fn cancellation_query() -> SlateQuery {
+        SlateQuery {
+            source: QuerySource::All,
+            row_source: RowSource::Files,
+            filters: None,
+            formulas: Vec::new(),
+            custom_summaries: Vec::new(),
+            group_by: None,
+            sort: Vec::new(),
+            columns: vec![ColumnSelection {
+                id: "file.name".to_string(),
+                display_name: None,
+            }],
+            summaries: Vec::new(),
+            limit: None,
+            view: super::super::ViewSpec::Table {
+                fallback_from: None,
+            },
+        }
+    }
+
+    fn cancellation_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open cancellation database");
+        crate::db::migrate(&mut conn).expect("migrate cancellation database");
+        {
+            let tx = conn.transaction().expect("begin cancellation seed");
+            {
+                let mut insert = tx
+                    .prepare(
+                        "INSERT INTO files (
+                            id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                            content_hash, parser_version, indexed_at_ms, is_markdown
+                         ) VALUES (?1, ?2, ?3, 'md', ?4, ?5, ?5, ?6, 1, ?5, 1)",
+                    )
+                    .expect("prepare cancellation seed");
+                for index in 0..CANCELLATION_VAULT_ROWS {
+                    insert
+                        .execute(params![
+                            index as i64 + 1,
+                            format!("Notes/note-{index:05}.md"),
+                            format!("note-{index:05}.md"),
+                            index as i64 + 1,
+                            index as i64,
+                            format!("cancellation-hash-{index}")
+                        ])
+                        .expect("insert cancellation row");
+                }
+            }
+            tx.commit().expect("commit cancellation seed");
+        }
+        conn
+    }
+
+    fn empty_cache_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open cache database");
+        crate::db::migrate(&mut conn).expect("migrate cache database");
+        conn
+    }
+
+    #[test]
+    fn mirrored_value_sort_keys_match_the_native_engine_comparator() {
+        use super::super::eval::{DqlDateValue, DqlDurationValue, FileHandleValue};
+
+        let link = |target: &str, display: Option<&str>| {
+            Value::Link(LinkValue {
+                target: target.to_string(),
+                display: display.map(str::to_string),
+                resolved_path: Some(format!("Resolved/{target}.md")),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: false,
+            })
+        };
+        let values = vec![
+            Value::Bool(false),
+            Value::Bool(true),
+            Value::Number(f64::NEG_INFINITY),
+            Value::Number(-10.0),
+            Value::Number(-0.0),
+            Value::Number(0.0),
+            Value::Number(2.0),
+            Value::Number(10.0),
+            Value::Number(f64::INFINITY),
+            Value::Number(f64::NAN),
+            Value::Number(f64::from_bits(0xfff8_0000_0000_0001)),
+            Value::Date(DateValue {
+                epoch_ms: -1,
+                has_time: false,
+            }),
+            Value::Date(DateValue {
+                epoch_ms: 1,
+                has_time: true,
+            }),
+            Value::DqlDate(DqlDateValue {
+                epoch_ms: -1,
+                has_time: false,
+                offset_minutes: 0,
+                is_local: true,
+            }),
+            Value::DqlDate(DqlDateValue {
+                epoch_ms: 1,
+                has_time: true,
+                offset_minutes: -300,
+                is_local: false,
+            }),
+            Value::Duration(-2),
+            Value::Duration(10),
+            Value::DqlDuration(DqlDurationValue::default()),
+            Value::DqlDuration(DqlDurationValue {
+                days: 1.0,
+                ..DqlDurationValue::default()
+            }),
+            Value::Text("Alpha".to_string()),
+            Value::Text("alpha".to_string()),
+            Value::Text("beta".to_string()),
+            link("Alpha", Some("First display")),
+            link("Alpha", Some("Different display")),
+            link("Beta", None),
+            Value::File(FileHandleValue {
+                path: "Alpha.md".to_string(),
+            }),
+            Value::Regex("a+".to_string(), "i".to_string()),
+            Value::List(vec![Value::Number(2.0), Value::Number(10.0)]),
+            Value::List(vec![Value::Number(2.0), Value::Number(2.0)]),
+            Value::Object(BTreeMap::from([(
+                "key".to_string(),
+                Value::Text("value".to_string()),
+            )])),
+        ];
+
+        for lhs in &values {
+            for rhs in &values {
+                assert_eq!(
+                    value_sort_key(lhs).cmp(&value_sort_key(rhs)),
+                    compare_non_null_values(lhs, rhs),
+                    "sort-key mismatch for lhs={lhs:?}, rhs={rhs:?}"
+                );
+            }
+        }
+
+        let mut with_null = values;
+        with_null.push(Value::Null);
+        for lhs in &with_null {
+            for rhs in &with_null {
+                assert_eq!(
+                    value_sort_key(lhs).cmp(&value_sort_key(rhs)),
+                    compare_sort_key(lhs, rhs, true),
+                    "null-aware sort-key mismatch for lhs={lhs:?}, rhs={rhs:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolved_equivalent_links_share_native_semantic_keys() {
+        let link = |target: &str| {
+            Value::Link(LinkValue {
+                target: target.to_string(),
+                display: None,
+                resolved_path: Some("Notes/Target.md".to_string()),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: false,
+            })
+        };
+        let authored = link("Target");
+        let canonical = link("Notes/Target.md");
+
+        assert_eq!(
+            compare_non_null_values(&authored, &canonical),
+            Ordering::Equal,
+            "authored and canonical targets resolving to one file must sort equally"
+        );
+        assert_eq!(
+            value_sort_key(&authored),
+            value_sort_key(&canonical),
+            "mirrored sort keys must use the same resolved-first identity"
+        );
+        let unique_keys = [authored, canonical]
+            .iter()
+            .map(value_key)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique_keys.len(),
+            1,
+            "resolved-equivalent links must count as one unique value"
+        );
+    }
+
+    #[test]
+    fn numeric_sort_order_is_total_for_non_finite_values_and_signed_zero() {
+        let number = Value::Number;
+        let ordered = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+
+        for pair in ordered.windows(2) {
+            let expected = if pair == [-0.0, 0.0] {
+                Ordering::Equal
+            } else {
+                Ordering::Less
+            };
+            assert_eq!(
+                compare_non_null_values(&number(pair[0]), &number(pair[1])),
+                expected,
+                "unexpected numeric order for {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+            assert_eq!(
+                value_sort_key(&number(pair[0])).cmp(&value_sort_key(&number(pair[1]))),
+                expected,
+                "sort-key order disagrees for {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+
+        let negative_payload_nan = f64::from_bits(0xfff8_0000_0000_0001);
+        assert_eq!(
+            compare_non_null_values(&number(f64::NAN), &number(negative_payload_nan)),
+            Ordering::Equal,
+            "all NaN payloads and signs share one canonical order position"
+        );
+        assert_eq!(
+            value_sort_key(&number(f64::NAN)),
+            value_sort_key(&number(negative_payload_nan)),
+            "all NaN payloads and signs share one canonical sort key"
+        );
+    }
+
+    #[test]
+    fn decorated_frontmatter_wikilinks_keep_shared_parser_metadata() {
+        let scalar_json = serde_json::to_string("Target#Project target!|Project lead").unwrap();
+        let Value::Link(scalar) = decode_property_value("wikilink", &scalar_json) else {
+            panic!("scalar wikilink must decode as a link");
+        };
+        assert_eq!(scalar.target, "Target");
+        assert_eq!(scalar.display.as_deref(), Some("Project lead"));
+        assert_eq!(scalar.subpath.as_deref(), Some("Project target"));
+        assert_eq!(scalar.link_type, "header");
+
+        let tagged_list_json = serde_json::json!([{
+            "\u{f8ff}slate.property-kind": "wikilink",
+            "value": "Target#^project-block|Project reference"
+        }])
+        .to_string();
+        let Value::List(values) = decode_property_value("list", &tagged_list_json) else {
+            panic!("wikilink list must decode as a list");
+        };
+        let [Value::Link(list_link)] = values.as_slice() else {
+            panic!("tagged wikilink list element must decode as a link");
+        };
+        assert_eq!(list_link.target, "Target");
+        assert_eq!(list_link.display.as_deref(), Some("Project reference"));
+        assert_eq!(list_link.subpath.as_deref(), Some("project-block"));
+        assert_eq!(list_link.link_type, "block");
+    }
+
+    #[test]
+    fn query_cache_discards_every_stale_generation() {
+        let conn = empty_cache_vault();
+        let query = cancellation_query();
+        let cache = BasesQueryCache::default();
+
+        for generation in 0..=3 {
+            let result = execute(
+                &query,
+                &conn,
+                &EngineCtx {
+                    generation,
+                    cache: Some(&cache),
+                    ..EngineCtx::default()
+                },
+                &CancelToken::new(),
+            )
+            .expect("execute cache generation");
+            assert!(!result.cache_hit, "a new generation cannot hit stale state");
+        }
+
+        let entries = cache.entries.borrow();
+        assert_eq!(entries.len(), 1, "all stale generations must be evicted");
+        assert!(entries.keys().all(|key| key.generation == 3));
+        drop(entries);
+
+        execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                generation: 4,
+                cache: Some(&cache),
+                quick_filter: Some("uncached"),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .expect("execute uncacheable current generation");
+        assert!(
+            cache.entries.borrow().is_empty(),
+            "an uncacheable execution must still evict every stale generation"
+        );
+    }
+
+    #[test]
+    fn query_cache_is_a_bounded_lru_within_one_generation() {
+        const EXPECTED_CAPACITY: usize = 16;
+
+        let conn = empty_cache_vault();
+        let query = cancellation_query();
+        let cache = BasesQueryCache::default();
+        let execute_for = |this_path: &str| {
+            execute(
+                &query,
+                &conn,
+                &EngineCtx {
+                    generation: 7,
+                    this_path: Some(this_path.to_string()),
+                    cache: Some(&cache),
+                    ..EngineCtx::default()
+                },
+                &CancelToken::new(),
+            )
+            .expect("execute cache variant")
+        };
+
+        for index in 0..EXPECTED_CAPACITY {
+            assert!(!execute_for(&format!("Context-{index}.md")).cache_hit);
+        }
+        assert!(
+            execute_for("Context-0.md").cache_hit,
+            "refresh oldest entry"
+        );
+        assert!(
+            !execute_for("Context-16.md").cache_hit,
+            "insert one beyond capacity"
+        );
+
+        assert_eq!(cache.entries.borrow().len(), EXPECTED_CAPACITY);
+        assert!(
+            execute_for("Context-0.md").cache_hit,
+            "recently used entry must survive"
+        );
+        assert!(
+            !execute_for("Context-1.md").cache_hit,
+            "least-recently-used entry must be evicted"
+        );
+        assert_eq!(cache.entries.borrow().len(), EXPECTED_CAPACITY);
+    }
+
+    #[test]
+    fn census_bases_cancellation_under_load_returns_within_100ms() {
+        let _serial = CANCELLATION_TEST_SERIAL
+            .lock()
+            .expect("serialize cancellation probe test");
+        let conn = cancellation_vault();
+        let query = cancellation_query();
+        let cancel = CancelToken::new();
+        let worker_cancel = cancel.clone();
+        let (reached_tx, reached) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            install_test_materialization_probe(TestMaterializationProbe {
+                after_rows: CANCELLATION_PROBE_ROW,
+                reached: reached_tx,
+                release: release_rx,
+            });
+            let result = execute(&query, &conn, &EngineCtx::default(), &worker_cancel);
+            result_tx.send(result).expect("send engine result");
+        });
+
+        let materialized = reached
+            .recv_timeout(Duration::from_secs(5))
+            .expect("engine must park after real row materialization");
+        assert_eq!(materialized, CANCELLATION_PROBE_ROW);
+        let cancelled_at = Instant::now();
+        cancel.cancel();
+        release.send(()).expect("release engine worker");
+        let result = result_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "cancelled engine must finish within 100ms; waited {:?}: {error}",
+                    cancelled_at.elapsed()
+                )
+            });
+        assert!(
+            matches!(result, Err(VaultError::Cancelled)),
+            "expected exact VaultError::Cancelled, got {result:?}"
+        );
+        worker.join().expect("join cancellation worker");
     }
 }

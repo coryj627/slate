@@ -648,6 +648,12 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(
             ReadingBlockSource.fenceInterior("    indented\n    code"),
             "indented\ncode")
+        XCTAssertEqual(
+            ReadingBlockSource.fenceInteriorVerbatim("```yaml\nquery: |\n  Saved\n```"),
+            "query: |\n  Saved\n")
+        XCTAssertEqual(
+            ReadingBlockSource.fenceInteriorVerbatim("~~~yaml\nquery: |+\n  Saved\n\n~~~\n"),
+            "query: |+\n  Saved\n\n")
     }
 
     func testLineNumberMapping() {

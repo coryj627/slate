@@ -1102,4 +1102,54 @@ extension SlateCommandsTests {
             )
         }
     }
+
+    func testBasesHelpDocCarriesPinnedSummaryAndDQLMigrationSemantics() throws {
+        let docURL = Self.projectRoot
+            .appendingPathComponent("docs")
+            .appendingPathComponent("help")
+            .appendingPathComponent("bases.md")
+        let doc = try String(contentsOf: docURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            doc.contains("Summaries are computed after filtering and grouping, but before `limit`"),
+            "Bases help must pin the post-filter, pre-limit summary contract")
+        XCTAssertTrue(doc.contains("`total_count`"), "Bases help must explain the total row count")
+        XCTAssertTrue(doc.contains("`shown_count`"), "Bases help must explain the shown row count")
+
+        let migrationStart = try XCTUnwrap(doc.range(of: "## Dataview Migration"))
+        let migrationEnd = try XCTUnwrap(
+            doc.range(of: "## CLI Querying", range: migrationStart.upperBound..<doc.endIndex))
+        let migration = String(doc[migrationStart.lowerBound..<migrationEnd.lowerBound])
+        for heading in [
+            "### DQL sources and commands",
+            "### DQL file fields",
+            "### DQL task fields",
+            "### DQL functions",
+        ] {
+            XCTAssertTrue(migration.contains(heading), "Bases help is missing \(heading)")
+        }
+
+        let requiredMappings = [
+            "outgoing([[note]])", "[[#]]", "file.inFolder", "file.hasTag", "linksTo",
+            "file.name", "file.path", "file.folder", "file.ext", "file.size", "file.ctime",
+            "file.mtime", "file.tags", "file.aliases", "file.cday", "file.mday", "file.link",
+            "file.inlinks", "file.outlinks", "file.etags", "file.lists", "file.frontmatter",
+            "file.day", "file.starred", "task.text", "task.status", "completed", "checked",
+            "task.due", "task.scheduled", "created", "completion", "fullyCompleted", "children",
+            "section", "contains", "lower", "replace", "join", "length", "sort", "reverse",
+            "unique", "flat", "slice", "filter", "map", "sum", "average", "min", "max",
+            "startswith", "endswith", "round", "trunc", "floor", "ceil", "regextest",
+            "regexmatch", "regexreplace", "split", "substring", "striptime", "choice",
+            "default", "typeof", "number", "string", "date", "dur", "link", "object",
+            "list", "embed", "upper", "truncate", "padleft", "padright", "containsword",
+            "econtains", "icontains", "dateformat", "durationformat", "currencyformat",
+            "localtime", "hash", "meta", "minby", "maxby", "product", "reduce", "extract",
+            "firstvalue", "nonnull", "display", "elink",
+        ]
+        for mapping in requiredMappings {
+            XCTAssertTrue(
+                migration.contains(mapping),
+                "Dataview migration help is missing the pinned mapping for \(mapping)")
+        }
+    }
 }

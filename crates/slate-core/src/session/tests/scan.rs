@@ -9,6 +9,9 @@
 
 use super::common::*;
 use super::*;
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::time::SystemTime;
 
 #[test]
 fn open_creates_cache_database() {
@@ -29,6 +32,111 @@ fn open_is_idempotent() {
 }
 
 #[test]
+fn scan_initial_propagates_database_contention_instead_of_returning_partial_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider.write_file("note.md", b"# Note\n").unwrap();
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .busy_timeout(std::time::Duration::from_millis(10))
+        .unwrap();
+
+    let cache_db = tmp.path().join(".slate").join("cache.sqlite");
+    let blocker = crate::db::open_database(&cache_db, 512).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let result = session.scan_initial(&CancelToken::new());
+    assert!(
+        matches!(result, Err(VaultError::Db(_))),
+        "database contention must abort the scan instead of exposing a partial index: {result:?}"
+    );
+
+    blocker.execute_batch("ROLLBACK").unwrap();
+}
+
+#[test]
+fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider
+        .write_file("Note.md", b"---\ndates: [2026-01-02]\n---\n# Epoch mtime\n")
+        .unwrap();
+    std::fs::File::open(tmp.path().join("Note.md"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH)
+        .unwrap();
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let first = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(first.files_indexed, 1);
+    {
+        let conn = session.conn.lock().unwrap();
+        let cached_mtime: i64 = conn
+            .query_row(
+                "SELECT mtime_ms FROM files WHERE path = 'Note.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            cached_mtime, 0,
+            "the regression requires a real epoch-mtime file"
+        );
+    }
+    drop(session);
+
+    let db_path = tmp.path().join(".slate").join("cache.sqlite");
+    let conn = crate::db::open_database(&db_path, 512).unwrap();
+    conn.execute(
+        "UPDATE properties SET value_text = ?1, value_text_norm = '' WHERE key = 'dates'",
+        rusqlite::params![r#"["2026-01-02"]"#],
+    )
+    .unwrap();
+    conn.execute("DELETE FROM schema_version WHERE version = 26", [])
+        .unwrap();
+    let version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        version, 25,
+        "fixture must represent the pre-migration cache"
+    );
+    drop(conn);
+
+    let upgraded = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let report = upgraded.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        report.files_indexed, 1,
+        "migration 026 must force a slow path"
+    );
+    assert_eq!(report.files_skipped, 0);
+
+    let conn = upgraded.conn.lock().unwrap();
+    let encoded: String = conn
+        .query_row(
+            "SELECT value_text FROM properties WHERE key = 'dates'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    let decoded = crate::properties_db::tagged_list_element_to_property_value(&encoded[0]);
+    assert_eq!(
+        decoded,
+        Some(crate::frontmatter::PropertyValue::Date(
+            "2026-01-02".to_string()
+        )),
+        "the forced scan must rewrite the erased list element type"
+    );
+}
+
+#[test]
 fn scan_initial_indexes_markdown_and_non_markdown() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/a.md", b"# A").unwrap();
@@ -42,6 +150,60 @@ fn scan_initial_indexes_markdown_and_non_markdown() {
     assert_eq!(report.files_indexed, 4);
     assert_eq!(report.errors.len(), 0);
     assert!(report.bytes_processed > 0);
+}
+
+#[test]
+fn scan_and_save_rebuild_dql_inline_fields_without_changing_frontmatter_properties() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "note.md",
+            b"---\nfront: keep\n---\npage:: 1\n\n- list:: 2\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        let keys: Vec<String> = conn
+            .prepare(
+                "SELECT i.key FROM dql_inline_fields i
+                 JOIN files f ON f.id = i.file_id
+                 WHERE f.path = 'note.md' ORDER BY i.ordinal",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(keys, ["list", "page"]);
+        let property_keys: Vec<String> = conn
+            .prepare(
+                "SELECT p.key FROM properties p JOIN files f ON f.id = p.file_id
+                 WHERE f.path = 'note.md' ORDER BY p.ordinal",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(property_keys, ["front"]);
+    }
+
+    session.save_text("note.md", "updated:: 3\n", None).unwrap();
+    let conn = session.conn.lock().unwrap();
+    let keys: Vec<String> = conn
+        .prepare(
+            "SELECT i.key FROM dql_inline_fields i
+             JOIN files f ON f.id = i.file_id
+             WHERE f.path = 'note.md' ORDER BY i.ordinal",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(keys, ["updated"]);
 }
 
 #[test]
@@ -144,109 +306,533 @@ fn scan_discovers_base_slate_query_and_dataview_fences_only() {
 }
 
 #[test]
-fn census_bases_scan_incremental() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("one.base", b"views:\n  - type: table\n    name: One\n")
-            .unwrap();
-        p.write_file("gone.base", b"views:\n  - type: list\n    name: Gone\n")
-            .unwrap();
-        p.write_file("embed.md", b"```base\nviews:\n  - type: table\n```\n")
+fn indexed_base_fence_body_is_original_bytes() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"```base\r\nviews: []\r\n```\r\n")
             .unwrap();
     });
-    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
 
     session.scan_initial(&CancelToken::new()).unwrap();
-    let initial = bases_index_snapshot(&session);
 
-    rewrite_until_mtime_advances(
-        &provider,
-        "one.base",
-        b"views:\n  - type: list\n    name: One updated\n",
-        provider.stat("one.base").unwrap().mtime_ms,
-    );
-    provider
-        .write_file(
-            "embed.md",
-            b"```slate-query\nTABLE file.name\n```\n```dataviewjs\nignored\n```\n",
-        )
+    let conn = session.conn.lock().unwrap();
+    let source_text: String = conn
+        .query_row("SELECT source_text FROM bases_blocks", [], |row| row.get(0))
         .unwrap();
-    provider
-        .write_file("two.base", b"filters: \"file.name\"\n")
-        .unwrap();
-    std::fs::remove_file(tmp.path().join("gone.base")).unwrap();
-    session.scan_initial(&CancelToken::new()).unwrap();
-    let incremental = bases_index_snapshot(&session);
-
-    drop(session);
-    std::fs::remove_dir_all(tmp.path().join(".slate")).unwrap();
-    let fresh = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
-    fresh.scan_initial(&CancelToken::new()).unwrap();
-    let full = bases_index_snapshot(&fresh);
-
-    assert_ne!(
-        initial, incremental,
-        "the mutation sequence should change rows"
-    );
-    assert_eq!(incremental, full);
+    assert_eq!(source_text.as_bytes(), b"views: []\r\n");
 }
 
-fn bases_index_snapshot(session: &VaultSession) -> Vec<String> {
-    let conn = session.conn.lock().unwrap();
-    let mut rows = Vec::new();
+#[test]
+fn census_bases_scan_incremental() {
+    const SEED: u64 = 0x5ca1_2026_0709_0001;
 
-    {
-        let mut stmt = conn
-            .prepare(
-                "SELECT f.path, bf.name, bf.warning_count, bf.parser_version, bf.parsed_query_json
-                 FROM bases_files bf
-                 JOIN files f ON f.id = bf.file_id
-                 ORDER BY f.path",
-            )
-            .unwrap();
-        let base_rows = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "file\t{}\t{}\t{}\t{}\t{}",
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        rows.extend(base_rows);
+    let full = std::env::var("SLATE_CENSUS_FULL").is_ok_and(|value| value == "1");
+    let file_count = if full { 10_000 } else { 256 };
+    let mutation_count = if full { 1_000 } else { 64 };
+    let checkpoint_stride = if full { 100 } else { 8 };
+    let tmp = tempfile::tempdir()
+        .unwrap_or_else(|error| panic!("scanner census seed={SEED}: create vault: {error}"));
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    let mut files = BTreeMap::new();
+
+    for case_index in 0..file_count {
+        let generated = scanner_census_case(case_index, SEED);
+        provider
+            .write_file(&generated.path, generated.content.as_bytes())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "scanner census seed={SEED} case={case_index} write failed: {error}\npath={}\nsource:\n{}",
+                    generated.path, generated.content
+                )
+            });
+        let replaced = files.insert(generated.path.clone(), generated);
+        assert!(
+            replaced.is_none(),
+            "scanner census seed={SEED} case={case_index}: duplicate generated path\npath={}\nsource:\n{}",
+            replaced
+                .as_ref()
+                .map_or("<missing>", |file| file.path.as_str()),
+            replaced
+                .as_ref()
+                .map_or("<missing>", |file| file.content.as_str()),
+        );
     }
 
-    {
-        let mut stmt = conn
-            .prepare(
-                "SELECT f.path, bb.fence_kind, bb.source_text, bb.line, bb.byte_offset
-                 FROM bases_blocks bb
-                 JOIN files f ON f.id = bb.file_id
-                 ORDER BY f.path, bb.byte_offset",
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap_or_else(|error| {
+        panic!("scanner census seed={SEED}: open incremental session: {error}")
+    });
+    scan_census_checkpoint(
+        &session,
+        tmp.path(),
+        &files,
+        SEED,
+        &format!("initial files={file_count}"),
+        &[],
+    );
+
+    let mut rng = ScannerCensusRng::new(SEED);
+    let mut operation_prefix = Vec::with_capacity(mutation_count);
+    for mutation_index in 0..mutation_count {
+        let operation = apply_scanner_census_mutation(
+            &provider,
+            tmp.path(),
+            &mut files,
+            &mut rng,
+            SEED,
+            file_count,
+            mutation_index,
+            &operation_prefix,
+        );
+        operation_prefix.push(operation);
+
+        if (mutation_index + 1) % checkpoint_stride == 0 || mutation_index + 1 == mutation_count {
+            scan_census_checkpoint(
+                &session,
+                tmp.path(),
+                &files,
+                SEED,
+                &format!("after mutation {mutation_index}"),
+                &operation_prefix,
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ScannerCensusFile {
+    case_index: usize,
+    path: String,
+    content: String,
+}
+
+fn scanner_census_case(case_index: usize, seed: u64) -> ScannerCensusFile {
+    let bucket = (case_index.wrapping_mul(37).wrapping_add(seed as usize)) % 31;
+    let stem = format!("case-{case_index:05}");
+    let (extension, content) = match case_index % 8 {
+        0 => (
+            "base",
+            format!(
+                "filters: 'file.extension == \"md\"'\nviews:\n  - type: table\n    name: Generated {case_index}\n    order:\n      - file.name\n"
+            ),
+        ),
+        1 => (
+            "base",
+            format!(
+                "filters:\n  and:\n    - 'file.hasTag(\"census\")'\n    - 'file.name != \"\"'\nviews:\n  - type: cards\n    name: Plugin {case_index}\n    plugin-option: {case_index}\nunknown-root-{case_index}: true\n"
+            ),
+        ),
+        2 => (
+            "md",
+            format!(
+                "---\nkind: base-fence\nordinal: {case_index}\ntags: [census, base]\n---\n# Base fence {case_index}\n\n- [ ] inspect generated base {case_index}\n\n```base\nfilters: 'file.name != \"\"'\nviews:\n  - type: table\n    name: Embedded {case_index}\n```\n\n[[case-00000]] #census\n"
+            ),
+        ),
+        3 => (
+            "md",
+            format!(
+                "# Slate query {case_index}\n\n```slate-query\nTABLE file.name, file.mtime\nWHERE file.name != \"\"\n```\n\nParagraph {case_index} ^block-{case_index}\n"
+            ),
+        ),
+        4 => (
+            "md",
+            format!(
+                "# Dataview {case_index}\n\n```dataview\nTABLE file.name\nFROM #census\n```\n\n[external {case_index}](https://example.com/{case_index})\n"
+            ),
+        ),
+        5 => (
+            "md",
+            format!(
+                "# Ignored fences {case_index}\n\n```dataviewjs\ndv.paragraph(\"ignored {case_index}\")\n```\n\n```javascript\nconst ignored = {case_index};\n```\n"
+            ),
+        ),
+        6 => (
+            "md",
+            format!(
+                "---\ntitle: Ordinary {case_index}\npublished: {}\nscore: {}\ntags:\n  - census\n  - ordinary\n---\n# Ordinary {case_index}\n\nBody token-{case_index} with [[case-00002|a link]].\n\n- [{}] task {case_index} 📅 2026-07-09\n",
+                case_index.is_multiple_of(2),
+                case_index % 97,
+                if case_index.is_multiple_of(3) {
+                    "x"
+                } else {
+                    " "
+                },
+            ),
+        ),
+        _ => (
+            "md",
+            format!(
+                "# Ordinary with ignored query {case_index}\n\n```query\ntag:#census\n```\n\nNo supported fence here; unicode café 雪 {case_index}.\n"
+            ),
+        ),
+    };
+
+    ScannerCensusFile {
+        case_index,
+        path: format!("generated/bucket-{bucket:02}/{stem}.{extension}"),
+        content,
+    }
+}
+
+// The explicit inputs keep every mutation and its reproduction context visible
+// at the call site; bundling them into mutable test state would obscure failures.
+#[allow(clippy::too_many_arguments)]
+fn apply_scanner_census_mutation(
+    provider: &FsVaultProvider,
+    vault_root: &Path,
+    files: &mut BTreeMap<String, ScannerCensusFile>,
+    rng: &mut ScannerCensusRng,
+    seed: u64,
+    initial_file_count: usize,
+    mutation_index: usize,
+    operation_prefix: &[String],
+) -> String {
+    let prior_operations = || scanner_census_operation_prefix(operation_prefix);
+
+    match mutation_index % 5 {
+        0 => {
+            let case_index = initial_file_count + mutation_index;
+            let mut generated = scanner_census_case(case_index, seed);
+            generated.path = format!(
+                "generated/created/created-{mutation_index:04}.{}",
+                generated.path.rsplit_once('.').map_or("md", |(_, ext)| ext)
+            );
+            provider
+                .write_file(&generated.path, generated.content.as_bytes())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "scanner census seed={seed} mutation={mutation_index} create failed: {error}\npath={}\nsource:\n{}\noperation prefix:\n{}",
+                        generated.path,
+                        generated.content,
+                        prior_operations(),
+                    )
+                });
+            assert!(
+                files
+                    .insert(generated.path.clone(), generated.clone())
+                    .is_none(),
+                "scanner census seed={seed} mutation={mutation_index}: create collided at {}\noperation prefix:\n{}",
+                generated.path,
+                prior_operations(),
+            );
+            format!(
+                "mutation={mutation_index} create case={case_index} path={} source={:?}",
+                generated.path, generated.content
             )
-            .unwrap();
-        let block_rows = stmt
-            .query_map([], |row| {
-                Ok(format!(
-                    "block\t{}\t{}\t{}\t{}\t{}",
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                ))
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        rows.extend(block_rows);
+        }
+        1 => {
+            let path = scanner_census_existing_path(
+                files,
+                rng,
+                seed,
+                mutation_index,
+                operation_prefix,
+                |_| true,
+            );
+            let file = files.get_mut(&path).unwrap_or_else(|| {
+                panic!(
+                    "scanner census seed={seed} mutation={mutation_index}: selected edit path vanished: {path}\noperation prefix:\n{}",
+                    prior_operations(),
+                )
+            });
+            let previous = file.content.clone();
+            file.content.push_str(&format!(
+                "\n<!-- scanner-census edit seed={seed} mutation={mutation_index} {} -->\n",
+                "x".repeat(1 + mutation_index % 23)
+            ));
+            provider
+                .write_file(&path, file.content.as_bytes())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "scanner census seed={seed} mutation={mutation_index} edit failed: {error}\npath={path}\nold source:\n{previous}\nnew source:\n{}\noperation prefix:\n{}",
+                        file.content,
+                        prior_operations(),
+                    )
+                });
+            format!(
+                "mutation={mutation_index} edit case={} path={path} old={previous:?} new={:?}",
+                file.case_index, file.content
+            )
+        }
+        2 => {
+            let from = scanner_census_existing_path(
+                files,
+                rng,
+                seed,
+                mutation_index,
+                operation_prefix,
+                |_| true,
+            );
+            let mut file = files.remove(&from).unwrap_or_else(|| {
+                panic!(
+                    "scanner census seed={seed} mutation={mutation_index}: selected rename path vanished: {from}\noperation prefix:\n{}",
+                    prior_operations(),
+                )
+            });
+            let extension = from.rsplit_once('.').map_or("md", |(_, ext)| ext);
+            let to = format!("generated/renamed/rename-{mutation_index:04}.{extension}");
+            provider.rename(&from, &to).unwrap_or_else(|error| {
+                panic!(
+                    "scanner census seed={seed} mutation={mutation_index} rename failed: {error}\nfrom={from}\nto={to}\nsource:\n{}\noperation prefix:\n{}",
+                    file.content,
+                    prior_operations(),
+                )
+            });
+            file.path.clone_from(&to);
+            assert!(
+                files.insert(to.clone(), file.clone()).is_none(),
+                "scanner census seed={seed} mutation={mutation_index}: rename collided at {to}\noperation prefix:\n{}",
+                prior_operations(),
+            );
+            format!(
+                "mutation={mutation_index} rename case={} from={from} to={to} source={:?}",
+                file.case_index, file.content
+            )
+        }
+        3 => {
+            let path = scanner_census_existing_path(
+                files,
+                rng,
+                seed,
+                mutation_index,
+                operation_prefix,
+                |_| true,
+            );
+            let file = files.remove(&path).unwrap_or_else(|| {
+                panic!(
+                    "scanner census seed={seed} mutation={mutation_index}: selected delete path vanished: {path}\noperation prefix:\n{}",
+                    prior_operations(),
+                )
+            });
+            std::fs::remove_file(vault_root.join(&path)).unwrap_or_else(|error| {
+                panic!(
+                    "scanner census seed={seed} mutation={mutation_index} delete failed: {error}\npath={path}\nsource:\n{}\noperation prefix:\n{}",
+                    file.content,
+                    prior_operations(),
+                )
+            });
+            format!(
+                "mutation={mutation_index} delete case={} path={path} source={:?}",
+                file.case_index, file.content
+            )
+        }
+        _ => {
+            let convert_to_supported = (mutation_index / 5).is_multiple_of(2);
+            let path = scanner_census_existing_path(
+                files,
+                rng,
+                seed,
+                mutation_index,
+                operation_prefix,
+                |file| {
+                    file.path.ends_with(".md")
+                        && scanner_census_has_supported_fence(&file.content) != convert_to_supported
+                },
+            );
+            let file = files.get_mut(&path).unwrap_or_else(|| {
+                panic!(
+                    "scanner census seed={seed} mutation={mutation_index}: selected fence path vanished: {path}\noperation prefix:\n{}",
+                    prior_operations(),
+                )
+            });
+            let previous = file.content.clone();
+            file.content = if convert_to_supported {
+                format!(
+                    "# Fence conversion {mutation_index}\n\n```base\nfilters: 'file.name != \"\"'\nviews:\n  - type: list\n    name: Converted {mutation_index}\n```\n\n```dataviewjs\nignored after conversion {mutation_index}\n```\n"
+                )
+            } else {
+                format!(
+                    "# Fence conversion {mutation_index}\n\n```dataviewjs\ndv.paragraph(\"ignored {mutation_index}\")\n```\n\n```query\ntag:#ignored-{mutation_index}\n```\n"
+                )
+            };
+            provider
+                .write_file(&path, file.content.as_bytes())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "scanner census seed={seed} mutation={mutation_index} fence conversion failed: {error}\npath={path}\nold source:\n{previous}\nnew source:\n{}\noperation prefix:\n{}",
+                        file.content,
+                        prior_operations(),
+                    )
+                });
+            format!(
+                "mutation={mutation_index} fence-conversion case={} path={path} old={previous:?} new={:?}",
+                file.case_index, file.content
+            )
+        }
+    }
+}
+
+fn scanner_census_existing_path(
+    files: &BTreeMap<String, ScannerCensusFile>,
+    rng: &mut ScannerCensusRng,
+    seed: u64,
+    mutation_index: usize,
+    operation_prefix: &[String],
+    predicate: impl Fn(&ScannerCensusFile) -> bool,
+) -> String {
+    let candidates: Vec<&String> = files
+        .iter()
+        .filter_map(|(path, file)| predicate(file).then_some(path))
+        .collect();
+    assert!(
+        !candidates.is_empty(),
+        "scanner census seed={seed} mutation={mutation_index}: no mutation candidate\noperation prefix:\n{}",
+        scanner_census_operation_prefix(operation_prefix),
+    );
+    candidates[rng.below(candidates.len())].clone()
+}
+
+fn scanner_census_has_supported_fence(content: &str) -> bool {
+    content.contains("```base\n")
+        || content.contains("```slate-query\n")
+        || content.contains("```dataview\n")
+}
+
+fn scan_census_checkpoint(
+    incremental: &VaultSession,
+    vault_root: &Path,
+    files: &BTreeMap<String, ScannerCensusFile>,
+    seed: u64,
+    checkpoint: &str,
+    operation_prefix: &[String],
+) {
+    let repro = scanner_census_repro(seed, checkpoint, operation_prefix);
+    let report = incremental
+        .scan_initial(&CancelToken::new())
+        .unwrap_or_else(|error| panic!("{repro}\nincremental scan failed: {error}"));
+    assert!(
+        report.errors.is_empty(),
+        "{repro}\nincremental scan errors: {:?}",
+        report.errors
+    );
+    let incremental_snapshot = scanner_census_index_snapshot(incremental, &repro);
+
+    let fresh_cache = tempfile::tempdir()
+        .unwrap_or_else(|error| panic!("{repro}\ncreate fresh cache root: {error}"));
+    let fresh = VaultSession::open(
+        Arc::new(FsVaultProvider::new(vault_root.to_path_buf())),
+        SessionConfig::new(fresh_cache.path().join("cache")),
+    )
+    .unwrap_or_else(|error| panic!("{repro}\nopen genuinely fresh session: {error}"));
+    let fresh_report = fresh
+        .scan_initial(&CancelToken::new())
+        .unwrap_or_else(|error| panic!("{repro}\nfresh scan failed: {error}"));
+    assert!(
+        fresh_report.errors.is_empty(),
+        "{repro}\nfresh scan errors: {:?}",
+        fresh_report.errors
+    );
+    let fresh_snapshot = scanner_census_index_snapshot(&fresh, &repro);
+
+    if incremental_snapshot != fresh_snapshot {
+        let mismatch_index = incremental_snapshot
+            .iter()
+            .zip(&fresh_snapshot)
+            .position(|(left, right)| left != right)
+            .unwrap_or_else(|| incremental_snapshot.len().min(fresh_snapshot.len()));
+        let incremental_row = incremental_snapshot.get(mismatch_index);
+        let fresh_row = fresh_snapshot.get(mismatch_index);
+        let source = incremental_row
+            .or(fresh_row)
+            .and_then(|row| scanner_census_source_for_row(row, files))
+            .map_or_else(
+                || "source path could not be derived from mismatched row".to_string(),
+                |file| {
+                    format!(
+                        "case={} path={} source:\n{}",
+                        file.case_index, file.path, file.content
+                    )
+                },
+            );
+        panic!(
+            "{repro}\nindex mismatch at row {mismatch_index}\nincremental={incremental_row:?}\nfresh={fresh_row:?}\n{source}"
+        );
+    }
+}
+
+fn scanner_census_repro(seed: u64, checkpoint: &str, operation_prefix: &[String]) -> String {
+    format!(
+        "scanner census seed={seed} checkpoint={checkpoint}\noperation prefix:\n{}",
+        scanner_census_operation_prefix(operation_prefix)
+    )
+}
+
+fn scanner_census_operation_prefix(operation_prefix: &[String]) -> String {
+    if operation_prefix.is_empty() {
+        "<initial generated corpus; case index is encoded in every path>".to_string()
+    } else {
+        operation_prefix.join("\n")
+    }
+}
+
+fn scanner_census_source_for_row<'a>(
+    row: &str,
+    files: &'a BTreeMap<String, ScannerCensusFile>,
+) -> Option<&'a ScannerCensusFile> {
+    files.values().find(|file| row.contains(file.path.as_str()))
+}
+
+fn scanner_census_index_snapshot(session: &VaultSession, repro: &str) -> Vec<String> {
+    let conn = session
+        .conn
+        .lock()
+        .unwrap_or_else(|error| panic!("{repro}\nlock scanner index for snapshot: {error}"));
+    let mut rows = Vec::new();
+
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.scanner_census_fts_vocab
+         USING fts5vocab(main, files_fts, instance);",
+    )
+    .unwrap_or_else(|error| panic!("{repro}\ncreate FTS snapshot vocabulary: {error}"));
+
+    for query in [
+        "SELECT json_array('files', path, name, extension, size_bytes, mtime_ms, ctime_ms, content_hash, parser_version, is_markdown, body_text) FROM files ORDER BY path",
+        "SELECT json_array('dirs', path, parent_path, name) FROM dirs ORDER BY path",
+        "SELECT json_array('headings', f.path, h.ordinal, h.level, h.text, h.anchor_id, h.byte_offset) FROM headings h JOIN files f ON f.id = h.file_id ORDER BY f.path, h.ordinal",
+        "SELECT json_array('links', f.path, l.ordinal, l.target_path, l.target_raw, l.target_anchor, l.kind, l.is_embed, l.is_external, l.snippet, l.span_start, l.span_end, l.display_text) FROM links l JOIN files f ON f.id = l.source_file_id ORDER BY f.path, l.ordinal",
+        "SELECT json_array('properties', f.path, p.ordinal, p.key, p.value_kind, p.value_text, p.value_text_norm) FROM properties p JOIN files f ON f.id = p.file_id ORDER BY f.path, p.ordinal",
+        "SELECT json_array('property-list', f.path, p.key, p.value_norm) FROM properties_list_values p JOIN files f ON f.id = p.file_id ORDER BY f.path, p.key, p.value_norm",
+        "SELECT json_array('tasks', f.path, t.ordinal, t.text, t.status_char, t.completed, t.due_ms, t.scheduled_ms, t.priority, t.recurrence, t.line, t.byte_offset) FROM tasks t JOIN files f ON f.id = t.file_id ORDER BY f.path, t.ordinal",
+        "SELECT json_array('blocks', f.path, b.ordinal, b.block_id, b.kind, b.line_start, b.line_end, b.byte_start, b.byte_end, b.text_preview) FROM blocks b JOIN files f ON f.id = b.file_id ORDER BY f.path, b.ordinal",
+        "SELECT json_array('tags', f.path, t.tag_norm) FROM file_tags t JOIN files f ON f.id = t.file_id ORDER BY f.path, t.tag_norm",
+        "SELECT json_array('bases-files', f.path, b.name, b.parsed_query_json, b.warning_count, b.parser_version) FROM bases_files b JOIN files f ON f.id = b.file_id ORDER BY f.path",
+        "SELECT json_array('bases-blocks', f.path, b.fence_kind, b.source_text, b.line, b.byte_offset) FROM bases_blocks b JOIN files f ON f.id = b.file_id ORDER BY f.path, b.byte_offset, b.fence_kind",
+        "SELECT json_array('fts', f.path, v.term, v.col, v.offset) FROM scanner_census_fts_vocab v JOIN files f ON f.id = v.doc ORDER BY f.path, v.term, v.col, v.offset",
+    ] {
+        let mut statement = conn
+            .prepare(query)
+            .unwrap_or_else(|error| panic!("{repro}\nprepare snapshot query {query:?}: {error}"));
+        let query_rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap_or_else(|error| panic!("{repro}\nrun snapshot query {query:?}: {error}"));
+        for row in query_rows {
+            rows.push(
+                row.unwrap_or_else(|error| {
+                    panic!("{repro}\nread snapshot query {query:?}: {error}")
+                }),
+            );
+        }
     }
 
     rows
+}
+
+struct ScannerCensusRng(u64);
+
+impl ScannerCensusRng {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+
+    fn below(&mut self, upper: usize) -> usize {
+        (self.next() % upper as u64) as usize
+    }
 }
 
 #[test]
@@ -1373,7 +1959,7 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
     // Small source file with one heading, one outgoing link, and
     // one frontmatter property. Total is well under the 300-byte
     // cap configured below.
-    let small_body = "---\ntag: important\n---\n# H1\nSee [[target]]\n";
+    let small_body = "---\ntag: important\n---\n# H1\nSee [[target]]\nbody:: 1\n";
     provider
         .write_file("src.md", small_body.as_bytes())
         .unwrap();
@@ -1400,6 +1986,23 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
         !outgoing_before.is_empty(),
         "outgoing link should be indexed: {outgoing_before:?}"
     );
+    {
+        let conn = session.conn.lock().unwrap();
+        let (field_count, incomplete): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                   (SELECT COUNT(*) FROM dql_inline_fields i WHERE i.file_id = f.id),
+                   s.incomplete
+                 FROM files f
+                 JOIN dql_inline_field_state s ON s.file_id = f.id
+                 WHERE f.path = 'src.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(field_count, 1, "body inline field should be indexed");
+        assert_eq!(incomplete, 0, "small-file projection should be complete");
+    }
 
     // Grow the file past the cap. Use the FsVaultProvider directly
     // so we don't have to thread the session's provider out.
@@ -1437,6 +2040,24 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
     assert!(
         outgoing_after.is_empty(),
         "stale outgoing link rows must be purged, got {outgoing_after:?}"
+    );
+    let conn = session.conn.lock().unwrap();
+    let (field_count, incomplete): (i64, i64) = conn
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM dql_inline_fields i WHERE i.file_id = f.id),
+               s.incomplete
+             FROM files f
+             JOIN dql_inline_field_state s ON s.file_id = f.id
+             WHERE f.path = 'src.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(field_count, 0, "stale body inline fields must be purged");
+    assert_eq!(
+        incomplete, 1,
+        "large-file projection must fail loud instead of claiming an empty body"
     );
 }
 

@@ -213,6 +213,28 @@ enum PendingTemplateFlow: Equatable {
     case needsName(TemplateSummary, [String: String])
 }
 
+enum BaseQueryBuilderPreviewExecutionPhase: Sendable, Equatable {
+    case opened
+    case executed
+    case closed
+}
+
+/// Nil-default preview lifecycle observation surface. The recorded thread bit
+/// is captured immediately before each synchronous native call; tests can also
+/// suspend the observer after `opened` to hold a real handle across generations.
+struct BaseQueryBuilderPreviewExecutionEvent: Sendable, Equatable {
+    let phase: BaseQueryBuilderPreviewExecutionPhase
+    let generation: Int
+    let handle: UInt64
+    let ranOnMainThread: Bool
+}
+
+enum BaseQueryBuilderPreviewExecutionOutcome: Sendable {
+    case success(BasesResultSet)
+    case failure(String)
+    case cancelled
+}
+
 /// Top-level app state.
 ///
 /// Owns the currently-open `VaultSession` (or none, on the welcome
@@ -373,6 +395,17 @@ final class AppState: ObservableObject {
     /// Last Bases action announcement, exposed for XCTest because the global
     /// accessibility announcer is a no-op without a running NSApp.
     @Published var lastBaseActionAnnouncement: String?
+
+    /// Deduplicated membership announcements produced by the most recent
+    /// successful in-app write refresh. This is also the deterministic XCTest
+    /// surface for the no-spam gate; ordinary Bases action announcements stay
+    /// in `lastBaseActionAnnouncement`.
+    @Published var lastBaseRefreshAnnouncements: [String] = []
+
+    /// N3-07 race-test seam — always nil in production. Tests park a completed
+    /// write immediately before the session/active-note publish guards, switch
+    /// notes or vaults, then release it to prove global Bases refresh ownership.
+    var basesPostWritePublishGate: (() async -> Void)?
 
     /// Currently selected Bases row/column for registry commands whose
     /// invocation originates outside the grid's AppKit row-action callback.
@@ -695,7 +728,7 @@ final class AppState: ObservableObject {
         let parts: NotePartsBundle? = await Task.detached(priority: .userInitiated) {
             try? session.readNoteParts(path: path)
         }.value
-        guard let parts, loadedFilePath == path else { return }
+        guard let parts, currentSession === session, loadedFilePath == path else { return }
         currentNoteFMSource = parts.fmSource
         bodyByteOffset = Int(parts.bodyByteOffset)
         bodyLineOffset = Int(parts.bodyLineOffset)
@@ -1228,9 +1261,26 @@ final class AppState: ObservableObject {
     /// Active Bases query-builder draft (Milestone N4-1, #707).
     /// Non-nil presents `BaseQueryBuilderSheet`; the draft is in-memory
     /// only until N4-2 adds preview/save.
-    @Published var activeBaseQueryBuilder: BaseQueryBuilderModel?
+    @Published var activeBaseQueryBuilder: BaseQueryBuilderModel? {
+        didSet {
+            guard let previous = oldValue else { return }
+            if let current = activeBaseQueryBuilder, previous === current { return }
+            baseQueryBuilderPreviewGeneration += 1
+            baseQueryBuilderPreviewTask?.cancel()
+            baseQueryBuilderPreviewTask = nil
+            baseQueryBuilderPreviewCancelToken?.cancel()
+            baseQueryBuilderPreviewCancelToken = nil
+        }
+    }
     var baseQueryBuilderPreviewTask: Task<Void, Never>?
     var baseQueryBuilderPreviewCancelToken: CancelToken?
+    /// Monotonic freshness identity for builder preview publication. Every
+    /// schedule and builder/vault teardown invalidates all earlier work.
+    var baseQueryBuilderPreviewGeneration = 0
+    /// N4-02 deterministic execution seam. Always nil in production; tests
+    /// record native-call executor context and can park a real opened handle.
+    var baseQueryBuilderPreviewExecutionObserver:
+        (@Sendable (BaseQueryBuilderPreviewExecutionEvent) async -> Void)?
 
     /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
     /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file
@@ -2462,13 +2512,14 @@ final class AppState: ObservableObject {
         tasksLoadError = nil
     }
 
-    /// Audit #203: embeds + content pipelines clear synchronously on any
-    /// transition (their cached payloads are whole rendered content of the
-    /// PREVIOUS file); links/properties intentionally hold stale values
-    /// until the new load lands (#90 anti-flicker discipline).
+    /// Audit #203: resolved note embeds + content pipelines clear synchronously
+    /// on transition (their cached payloads belong to the previous file).
+    /// Rendered Base embeds use weak visibility leases because sibling panes
+    /// can remain live; links/properties intentionally hold stale values until
+    /// the new load lands (#90 anti-flicker discipline).
     func clearTransitionSensitiveCollections() {
         currentNoteEmbedResolutions = [:]
-        releaseAllBaseEmbedDocuments()
+        releaseUnleasedBaseEmbedDocuments()
         // Drop any open embed-preview popover too — its target may
         // not exist in the new file's embed set.
         pendingEmbedPreview = nil
@@ -2806,6 +2857,15 @@ final class AppState: ObservableObject {
             releaseAllBaseDocuments()
             releaseAllBaseEmbedDocuments()
             releaseAllDashboardDocuments()
+            // A directly reopened vault replaces the operation lifecycle too.
+            // Cancel/reset before installing the new session so an old task
+            // resuming later cannot own the new vault's saving/editing flags.
+            saveTask?.cancel()
+            saveTask = nil
+            isSaving = false
+            propertyEditTask?.cancel()
+            propertyEditTask = nil
+            isEditingProperty = false
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -3069,6 +3129,7 @@ final class AppState: ObservableObject {
         // U1-6: persist the layout FIRST — the teardown below clears
         // `currentVaultURL`, and the save is a no-op once it's gone.
         saveWorkspaceLayout()
+        baseQueryBuilderPreviewGeneration += 1
         scanTask?.cancel()
         scanTask = nil
         noteLoadTask?.cancel()
@@ -3607,7 +3668,7 @@ final class AppState: ObservableObject {
         // on. Same reasoning as `loadCurrentLinks`: the newer task
         // already set the flag, and clearing it here would flicker
         // the loading state off briefly.
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled, currentSession === session, selectedFilePath == path else { return }
 
         switch result {
         case .success(let (parts, headings)):
@@ -5146,10 +5207,18 @@ final class AppState: ObservableObject {
             }
         }.value
 
+        if let gate = basesPostWritePublishGate { await gate() }
+
         // The user could have switched files (or closed the vault)
         // while we were saving. Drop the result in that case
         // rather than mutating state for a file the user has
         // already moved on from.
+        guard currentSession === session else { return }
+        if case .success = outcome {
+            // Bases are session-global consumers. A same-session note switch
+            // must not suppress their refresh after this write committed.
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+        }
         guard loadedFilePath == path else {
             isSaving = false
             return
@@ -5786,7 +5855,15 @@ final class AppState: ObservableObject {
         } else {
             loadedFilePath = nil
         }
-        if selectedFilePath != newPath { selectedFilePath = newPath }
+        let selectionMatches: Bool
+        if case .base = workspace.activeTab?.item {
+            selectionMatches = BaseExactIdentity.matches(selectedFilePath, newPath)
+        } else {
+            selectionMatches = selectedFilePath == newPath
+        }
+        if !selectionMatches {
+            selectedFilePath = newPath
+        }
     }
 
     /// After a successful delete, flip open tabs pointing at the removed path
@@ -6152,9 +6229,17 @@ final class AppState: ObservableObject {
             }
         }.value
 
+        if let gate = basesPostWritePublishGate { await gate() }
+
         // If the user navigated away mid-edit, drop the result
         // rather than mutating state for a file the user has
         // already moved on from. Same shape as `performSave`.
+        guard currentSession === session else { return }
+        if case .success = outcome {
+            // The native property write is already indexed. Refresh global
+            // Bases consumers before guarding active-note-only publication.
+            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+        }
         guard loadedFilePath == path else {
             isEditingProperty = false
             return
@@ -6169,12 +6254,22 @@ final class AppState: ObservableObject {
             // by an fm-only edit, so the buffer + baseline stay untouched
             // (property edits are allowed while the body is dirty).
             await refreshNoteParts(session: session, path: path)
+            guard currentSession === session else { return }
+            guard loadedFilePath == path else {
+                isEditingProperty = false
+                return
+            }
             // Refresh the properties panel so the row updates in
             // place. `loadCurrentLinks` already runs one trip
             // through the SQLite mutex for backlinks + outgoing +
             // properties — reusing it keeps the panel coherent
             // without a second round-trip.
             await loadCurrentLinks(path: path)
+            guard currentSession === session else { return }
+            guard loadedFilePath == path else {
+                isEditingProperty = false
+                return
+            }
             if case .setSource = action {
                 propertiesSourceError = nil
                 propertiesSourceCommitted &+= 1

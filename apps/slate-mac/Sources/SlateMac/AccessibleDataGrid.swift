@@ -48,18 +48,27 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     struct Column {
         let header: String
         let cell: (Row) -> String
-        let sort: ((Row, Row) -> Bool)?
+        let sort: ((Row, Row, Bool) -> Bool)?
         let accessibilityHint: ((Row) -> String?)?
 
         init(
             _ header: String,
             cell: @escaping (Row) -> String,
             sort: ((Row, Row) -> Bool)? = nil,
+            directionalSort: ((Row, Row, Bool) -> Bool)? = nil,
             accessibilityHint: ((Row) -> String?)? = nil
         ) {
             self.header = header
             self.cell = cell
-            self.sort = sort
+            if let directionalSort {
+                self.sort = directionalSort
+            } else if let sort {
+                self.sort = { lhs, rhs, ascending in
+                    ascending ? sort(lhs, rhs) : sort(rhs, lhs)
+                }
+            } else {
+                self.sort = nil
+            }
             self.accessibilityHint = accessibilityHint
         }
     }
@@ -129,11 +138,20 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var cellSelection: Binding<CellPosition?>?
     var sortState: Binding<DataGridSortState?>?
     var cellNavigation: Bool
+    /// When false, the binding owner supplies rows in authoritative sort order.
+    /// Header interaction still updates `sortState`, but the grid does not
+    /// re-sort the stale row snapshot before that owner publishes its result.
+    var sortsRowsLocally: Bool
     var onActivate: ((Row) -> Void)?
     var onEditCell: ((Row, Int) -> Void)?
     var editRequest: Binding<EditRequest?>?
     var onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)?
     var onCancelEdit: (() -> Void)?
+    /// Optional engine-authored row context (for example, Bases'
+    /// `audioDescription`). It augments vertical moves into a new row only;
+    /// native labels and within-row navigation keep "Header: value" speech.
+    /// Generic grids keep their existing cell-only speech when this is nil.
+    var rowAccessibilityDescription: ((Row) -> String?)?
     var rowActions: [RowAction]
     var focusRequest: Int
     /// Sort (and other grid-owned) announcements route here. Defaults
@@ -150,11 +168,13 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         cellSelection: Binding<CellPosition?>? = nil,
         sortState: Binding<DataGridSortState?>? = nil,
         cellNavigation: Bool = false,
+        sortsRowsLocally: Bool = true,
         onActivate: ((Row) -> Void)? = nil,
         onEditCell: ((Row, Int) -> Void)? = nil,
         editRequest: Binding<EditRequest?>? = nil,
         onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)? = nil,
         onCancelEdit: (() -> Void)? = nil,
+        rowAccessibilityDescription: ((Row) -> String?)? = nil,
         rowActions: [RowAction] = [],
         focusRequest: Int = 0,
         announce: @escaping (String) -> Void = {
@@ -170,11 +190,13 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.cellSelection = cellSelection
         self.sortState = sortState
         self.cellNavigation = cellNavigation
+        self.sortsRowsLocally = sortsRowsLocally
         self.onActivate = onActivate
         self.onEditCell = onEditCell
         self.editRequest = editRequest
         self.onCommitEdit = onCommitEdit
         self.onCancelEdit = onCancelEdit
+        self.rowAccessibilityDescription = rowAccessibilityDescription
         self.rowActions = rowActions
         self.focusRequest = focusRequest
         self.announce = announce
@@ -308,9 +330,12 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         if let sortState = grid.sortState {
             activeSort = sortState.wrappedValue
         }
+        invalidateUnavailableSort()
         resortPreservingDescriptor()
         rebuildDisplayEntries()
+        reconcileTableColumnsAndLabel()
         syncSortDescriptorsToTable()
+        syncHeaderAccessibilityToTable()
         table?.reloadData()
         syncSelectionFromBinding()
         syncEditRequestToTable()
@@ -325,15 +350,52 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
 
     // MARK: Sorting
 
+    private func invalidateUnavailableSort() {
+        guard let activeSort,
+            (!grid.columns.indices.contains(activeSort.columnIndex)
+                || grid.columns[activeSort.columnIndex].sort == nil)
+        else { return }
+        self.activeSort = nil
+        if grid.sortState?.wrappedValue != nil {
+            grid.sortState?.wrappedValue = nil
+        }
+    }
+
+    private func reconcileTableColumnsAndLabel() {
+        guard let table else { return }
+        table.setAccessibilityLabel(grid.accessibilityLabel)
+
+        while table.tableColumns.count > grid.columns.count {
+            guard let trailingColumn = table.tableColumns.last else { break }
+            table.removeTableColumn(trailingColumn)
+        }
+        while table.tableColumns.count < grid.columns.count {
+            let index = table.tableColumns.count
+            table.addTableColumn(
+                NSTableColumn(identifier: NSUserInterfaceItemIdentifier("col\(index)")))
+        }
+
+        for (index, column) in grid.columns.enumerated() {
+            let tableColumn = table.tableColumns[index]
+            tableColumn.identifier = NSUserInterfaceItemIdentifier("col\(index)")
+            tableColumn.title = column.header
+            tableColumn.resizingMask = .autoresizingMask
+            tableColumn.sortDescriptorPrototype = column.sort == nil
+                ? nil
+                : NSSortDescriptor(key: "\(index)", ascending: true)
+        }
+    }
+
     private func resortPreservingDescriptor() {
         displayRows = grid.rows
+        guard grid.sortsRowsLocally else { return }
         guard let sort = activeSort,
             grid.columns.indices.contains(sort.columnIndex),
             let comparator = grid.columns[sort.columnIndex].sort
         else { return }
 
         let ordered: (Row, Row) -> Bool = {
-            sort.ascending ? comparator($0, $1) : comparator($1, $0)
+            comparator($0, $1, sort.ascending)
         }
         guard !grid.groups.isEmpty else {
             displayRows.sort {
@@ -402,6 +464,26 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         isSyncingSortDescriptors = false
     }
 
+    private func syncHeaderAccessibilityToTable() {
+        guard let table else { return }
+        for (columnIndex, tableColumn) in table.tableColumns.enumerated() {
+            guard grid.columns.indices.contains(columnIndex) else { continue }
+            let column = grid.columns[columnIndex]
+            guard column.sort != nil else {
+                tableColumn.headerCell.setAccessibilityLabel(column.header)
+                continue
+            }
+            let direction: String
+            if activeSort?.columnIndex == columnIndex {
+                direction = activeSort?.ascending == true ? "asc" : "desc"
+            } else {
+                direction = "none"
+            }
+            tableColumn.headerCell.setAccessibilityLabel(
+                "Column: \(column.header), sortable, current sort: \(direction)")
+        }
+    }
+
     /// Apply a sort (the unit-testable seam). Returns the announcement
     /// text it routed through the announce hook.
     @discardableResult
@@ -414,6 +496,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         grid.sortState?.wrappedValue = sort
         resortPreservingDescriptor()
         syncSortDescriptorsToTable()
+        syncHeaderAccessibilityToTable()
         table?.reloadData()
         let text =
             "Sorted by \(grid.columns[columnIndex].header), "
@@ -454,6 +537,12 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
                 let cell = makeCell(tableView: tableView, tableColumn: tableColumn, text: text)
                 cell.textField?.font = NSFont.preferredFont(forTextStyle: .headline)
                 cell.textField?.setAccessibilityLabel(text)
+                cell.textField?.setAccessibilityElement(false)
+                if columnIndex == 0 {
+                    configureNativeHeadingAccessibility(cell, label: text)
+                } else {
+                    cell.setAccessibilityElement(false)
+                }
                 return cell
             }
             guard case .row(let rowValue) = displayEntries[row] else { return nil }
@@ -472,7 +561,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             // (WCAG 1.4.4); the row height follows via rowSizeStyle.
             cell.textField?.font = NSFont.preferredFont(forTextStyle: .body)
             // "Header: value" — the v1 AX contract, now on the AppKit cell.
-            cell.textField?.setAccessibilityLabel("\(column.header): \(text)")
+            cell.textField?.setAccessibilityLabel(
+                cellAccessibilityLabel(for: rowValue, columnIndex: columnIndex))
             cell.textField?.setAccessibilityHelp(column.accessibilityHint?(rowValue))
             // Named row actions surface as AX custom actions on every
             // cell (Switch Control / Voice Control reachable).
@@ -529,6 +619,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             ])
         }
         cell.textField?.stringValue = text
+        cell.setAccessibilityElement(true)
+        cell.setAccessibilityRole(.cell)
+        cell.setAccessibilityLabel(nil)
+        cell.textField?.setAccessibilityElement(true)
         cell.textField?.setAccessibilityCustomActions(nil)
         cell.textField?.setAccessibilityHelp(nil)
         return cell
@@ -538,7 +632,36 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         MainActor.assumeIsolated {
             guard !isSyncingSelectionFromBinding, let table else { return }
             let row = table.selectedRow
-            grid.selection?.wrappedValue = rowValue(atDisplayIndex: row)?.id
+            guard let rowValue = rowValue(atDisplayIndex: row) else {
+                grid.cellSelection?.wrappedValue = nil
+                grid.selection?.wrappedValue = nil
+                return
+            }
+            if !grid.columns.isEmpty {
+                let columnIndex = min(
+                    max(grid.cellSelection?.wrappedValue?.columnIndex ?? 0, 0),
+                    grid.columns.count - 1)
+                grid.cellSelection?.wrappedValue = .init(
+                    rowID: rowValue.id,
+                    columnIndex: columnIndex)
+            }
+            grid.selection?.wrappedValue = rowValue.id
+        }
+    }
+
+    nonisolated func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        MainActor.assumeIsolated {
+            guard rowValue(atDisplayIndex: row) != nil else {
+                if tableView.selectedRow != -1 {
+                    mirrorTableSelectionFromBinding {
+                        tableView.deselectAll(nil)
+                    }
+                }
+                grid.cellSelection?.wrappedValue = nil
+                grid.selection?.wrappedValue = nil
+                return false
+            }
+            return true
         }
     }
 
@@ -669,7 +792,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             case 121:
                 moveCell(.pageDown, in: table)
                 return true
-            case 36, 76:
+            case 36, 76, 120:  // Return, keypad Enter, F2
                 if let handler = grid.onEditCell,
                     let position = grid.cellSelection?.wrappedValue,
                     let row = displayRows.first(where: { $0.id == position.rowID })
@@ -734,6 +857,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             displayRows.firstIndex { $0.id == position.rowID }
         } ?? 0
         let currentColumn = min(max(current?.columnIndex ?? 0, 0), grid.columns.count - 1)
+        let visibleDataRows = visibleDataRowCount(in: table)
 
         let rowIndex: Int
         let columnIndex: Int
@@ -757,10 +881,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             rowIndex = currentRowIndex
             columnIndex = grid.columns.count - 1
         case .pageUp:
-            rowIndex = max(currentRowIndex - 10, 0)
+            rowIndex = max(currentRowIndex - visibleDataRows, 0)
             columnIndex = currentColumn
         case .pageDown:
-            rowIndex = min(currentRowIndex + 10, displayRows.count - 1)
+            rowIndex = min(currentRowIndex + visibleDataRows, displayRows.count - 1)
             columnIndex = currentColumn
         }
 
@@ -771,8 +895,29 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             table.selectRowIndexes([displayIndex], byExtendingSelection: false)
             table.scrollRowToVisible(displayIndex)
         }
-        let column = grid.columns[columnIndex]
-        grid.announce("\(column.header): \(column.cell(row))")
+        let movedToDifferentRow = row.id != current?.rowID
+        switch move {
+        case .up, .down, .pageUp, .pageDown:
+            grid.announce(
+                movedToDifferentRow
+                    ? rowMoveAnnouncement(for: row, columnIndex: columnIndex)
+                    : cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+        default:
+            grid.announce(cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+        }
+    }
+
+    private func visibleDataRowCount(in table: NSTableView?) -> Int {
+        guard let table else { return 1 }
+        let visibleRows = table.rows(in: table.visibleRect)
+        guard visibleRows.location != NSNotFound else { return 1 }
+        let lowerBound = max(visibleRows.location, 0)
+        let upperBound = min(visibleRows.location + visibleRows.length, displayEntries.count)
+        guard lowerBound < upperBound else { return 1 }
+        let count = displayEntries[lowerBound..<upperBound].reduce(into: 0) { result, entry in
+            if case .row = entry { result += 1 }
+        }
+        return max(count, 1)
     }
 
     func accessibilityLabelForDisplayRow(_ row: Int) -> String? {
@@ -781,8 +926,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         case .group(let group):
             return accessibilityLabel(for: group)
         case .row(let rowValue):
-            guard let column = grid.columns.first else { return nil }
-            return "\(column.header): \(column.cell(rowValue))"
+            guard !grid.columns.isEmpty else { return nil }
+            return rowMoveAnnouncement(for: rowValue, columnIndex: 0)
         }
     }
 
@@ -817,10 +962,41 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         return "Group: \(group.label), \(rowText)"
     }
 
+    private func cellAccessibilityLabel(for row: Row, columnIndex: Int) -> String {
+        guard grid.columns.indices.contains(columnIndex) else { return "" }
+        let column = grid.columns[columnIndex]
+        return "\(column.header): \(column.cell(row))"
+    }
+
+    private func rowMoveAnnouncement(for row: Row, columnIndex: Int) -> String {
+        let focusedCell = cellAccessibilityLabel(for: row, columnIndex: columnIndex)
+        guard let rawDescription = grid.rowAccessibilityDescription?(row) else {
+            return focusedCell
+        }
+        let description = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !description.isEmpty else { return focusedCell }
+        if description.range(
+            of: focusedCell,
+            options: [.caseInsensitive, .diacriticInsensitive]
+        ) != nil {
+            return description
+        }
+        return description + (description.hasSuffix(".") ? " " : ". ") + focusedCell
+    }
+
     @objc func doubleClicked(_ sender: Any?) {
         guard let table, let handler = grid.onActivate, let row = selectedRow(in: table) else {
             return
         }
         handler(row)
     }
+}
+
+@MainActor
+func configureNativeHeadingAccessibility(_ view: NSView, label: String) {
+    view.setAccessibilityElement(true)
+    // AXHeading predates AppKit's typed `.headingRole` constant, so use the
+    // underlying role string to preserve heading semantics on our older targets.
+    view.setAccessibilityRole(NSAccessibility.Role(rawValue: "AXHeading"))
+    view.setAccessibilityLabel(label)
 }

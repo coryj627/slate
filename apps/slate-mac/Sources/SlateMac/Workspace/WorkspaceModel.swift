@@ -47,6 +47,49 @@ enum EditorItem: Hashable, Codable {
     case savedQuery(id: String, name: String)
     case dashboard(id: String, name: String)
 
+    static func == (lhs: EditorItem, rhs: EditorItem) -> Bool {
+        switch (lhs, rhs) {
+        case (.markdown(let lhs), .markdown(let rhs)),
+            (.canvas(let lhs), .canvas(let rhs)):
+            // Markdown/canvas registries predate Bases and are keyed by native
+            // Swift strings. Keep their canonical-equivalence semantics until
+            // those registries are migrated as one coherent unit.
+            return lhs == rhs
+        case (.base(let lhs), .base(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.savedQuery(let lhsID, let lhsName),
+            .savedQuery(let rhsID, let rhsName)),
+            (.dashboard(let lhsID, let lhsName),
+                .dashboard(let rhsID, let rhsName)):
+            return BaseExactIdentity.matches(lhsID, rhsID)
+                && BaseExactIdentity.matches(lhsName, rhsName)
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .markdown(let path):
+            hasher.combine(0)
+            hasher.combine(path)
+        case .canvas(let path):
+            hasher.combine(1)
+            hasher.combine(path)
+        case .base(let path):
+            hasher.combine(2)
+            BaseExactIdentity.hash(path, into: &hasher)
+        case .savedQuery(let id, let name):
+            hasher.combine(3)
+            BaseExactIdentity.hash(id, into: &hasher)
+            BaseExactIdentity.hash(name, into: &hasher)
+        case .dashboard(let id, let name):
+            hasher.combine(4)
+            BaseExactIdentity.hash(id, into: &hasher)
+            BaseExactIdentity.hash(name, into: &hasher)
+        }
+    }
+
     /// The vault-relative file path behind this tab, regardless of kind.
     var path: String {
         switch self {
@@ -336,8 +379,8 @@ struct WorkspaceModel: Hashable {
         root = Self.mapAllGroups(root) { group in
             for idx in group.tabs.indices {
                 guard case .savedQuery(let currentID, let currentName) = group.tabs[idx].item,
-                    currentID == id,
-                    currentName != name
+                    BaseExactIdentity.matches(currentID, id),
+                    !BaseExactIdentity.matches(currentName, name)
                 else { continue }
                 group.tabs[idx].item = .savedQuery(id: id, name: name)
                 changed.append(group.tabs[idx].id)
@@ -352,8 +395,8 @@ struct WorkspaceModel: Hashable {
         root = Self.mapAllGroups(root) { group in
             for idx in group.tabs.indices {
                 guard case .dashboard(let currentID, let currentName) = group.tabs[idx].item,
-                    currentID == id,
-                    currentName != name
+                    BaseExactIdentity.matches(currentID, id),
+                    !BaseExactIdentity.matches(currentName, name)
                 else { continue }
                 group.tabs[idx].item = .dashboard(id: id, name: name)
                 changed.append(group.tabs[idx].id)

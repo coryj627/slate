@@ -7,9 +7,10 @@ use slate_core::{
     bases::{
         ColumnSelection, FilterNode, GroupBy, QuerySource, RowSource, SlateQuery, SortKey,
         SummaryRef, ViewSpec,
+        dql::parse_dql,
         engine::{BasesQueryCache, BasesSummaryCell, CellValue, EngineCtx, execute},
-        eval::Value,
-        expr::{Expr, PropertyRef, parse_expr},
+        eval::{LinkValue, Value},
+        expr::{BinaryOp, Expr, ExprKind, PropertyRef, TaskField, parse_expr},
     },
     db::migrate,
 };
@@ -334,6 +335,7 @@ fn sort_limit_summaries_and_audio_use_post_filter_pre_limit_rows() {
     assert_eq!(result.error, None);
     assert_eq!(result.total_count, 3);
     assert_eq!(result.shown_count, 2);
+    assert_eq!(result.unfiltered_shown_count, 2);
     assert_eq!(
         result
             .rows
@@ -348,6 +350,55 @@ fn sort_limit_summaries_and_audio_use_post_filter_pre_limit_rows() {
     );
     assert_eq!(result.rows[0].audio_description, "Gamma.md. rating: 5");
     assert!((summary_number(&result.summaries[0]) - (11.5 / 3.0)).abs() < f64::EPSILON);
+}
+
+#[test]
+fn quick_filter_preserves_unfiltered_shown_count_with_and_without_limit() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.columns = vec![column("file.name"), column("status")];
+    query.summaries = vec![(
+        "status".to_string(),
+        SummaryRef::Builtin("count".to_string()),
+    )];
+
+    let unlimited = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            quick_filter: Some("Gamma"),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute unlimited quick filter");
+
+    assert_eq!(unlimited.total_count, 1);
+    assert_eq!(unlimited.shown_count, 1);
+    assert_eq!(unlimited.unfiltered_shown_count, 3);
+    assert_eq!(unlimited.rows[0].path, "Notes/Gamma.md");
+    assert_eq!(summary_number(&unlimited.summaries[0]), 1.0);
+    assert_eq!(unlimited.audio_summary, "1 note.");
+
+    query.limit = Some(2);
+    let limited = execute(
+        &query,
+        &conn,
+        &EngineCtx {
+            quick_filter: Some("Gamma"),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute limited quick filter");
+
+    assert_eq!(limited.total_count, 1);
+    assert_eq!(limited.shown_count, 1);
+    assert_eq!(limited.unfiltered_shown_count, 2);
+    assert_eq!(limited.rows[0].path, "Notes/Gamma.md");
+    assert_eq!(summary_number(&limited.summaries[0]), 1.0);
+    assert_eq!(limited.audio_summary, "1 note.");
 }
 
 #[test]
@@ -379,6 +430,82 @@ fn multi_key_sort_uses_later_keys_and_path_tiebreak() {
             .collect::<Vec<_>>(),
         vec!["Notes/Gamma.md", "Projects/Alpha.md", "Projects/Beta.md"]
     );
+}
+
+#[test]
+fn typed_sort_orders_numbers_dates_nulls_and_uses_stable_path_ties() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_file(&conn, 4, "Notes/Null.md", "Null.md", "md", 400, 4_000);
+    insert_number_property(&conn, 1, 5, "score", 10.0);
+    insert_number_property(&conn, 2, 3, "score", 2.0);
+    insert_number_property(&conn, 3, 3, "score", 10.0);
+    insert_date_property(&conn, 1, 6, "due", "2026-03-01");
+    insert_date_property(&conn, 2, 4, "due", "2026-02-01");
+    insert_date_property(&conn, 3, 4, "due", "2026-03-01");
+    let mut query = query();
+    query.columns = vec![column("file.name"), column("score"), column("due")];
+
+    let cases = [
+        (
+            "score",
+            true,
+            vec![
+                "Projects/Beta.md",
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Notes/Null.md",
+            ],
+        ),
+        (
+            "score",
+            false,
+            vec![
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Projects/Beta.md",
+                "Notes/Null.md",
+            ],
+        ),
+        (
+            "due",
+            true,
+            vec![
+                "Projects/Beta.md",
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Notes/Null.md",
+            ],
+        ),
+        (
+            "due",
+            false,
+            vec![
+                "Notes/Gamma.md",
+                "Projects/Alpha.md",
+                "Projects/Beta.md",
+                "Notes/Null.md",
+            ],
+        ),
+    ];
+
+    for (column_id, ascending, expected) in cases {
+        query.sort = vec![SortKey {
+            expr: expr(column_id),
+            ascending,
+        }];
+        let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+            .expect("execute typed sort");
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "sort {column_id} ascending={ascending}"
+        );
+    }
 }
 
 #[test]
@@ -678,8 +805,12 @@ fn inapplicable_and_unsupported_summaries_surface_correctly() {
     )];
     let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
         .expect("execute unsupported summary query");
-    let error = result.error.expect("unsupported summary fails loud");
-    assert!(error.construct.contains("summary.median"), "{error:?}");
+    assert_eq!(result.error, None);
+    assert!(!result.rows.is_empty());
+    assert!(matches!(
+        &result.summaries[0].value,
+        CellValue::Error(error) if error.contains("summary.median")
+    ));
 }
 
 #[test]
@@ -702,20 +833,57 @@ fn custom_summary_formulas_use_values_binding() {
 }
 
 #[test]
-fn custom_summary_unsupported_methods_fail_loud() {
+fn custom_summary_unsupported_methods_poison_only_the_summary_cell() {
     let conn = migrated_conn();
     seed_index(&conn);
     let mut query = query();
     query.columns = vec![column("rating")];
+    query.group_by = Some(GroupBy {
+        property: PropertyRef::Note("status".to_string()),
+        ascending: true,
+    });
+    let baseline = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute grouped summary baseline");
     query.custom_summaries = vec![("bad".to_string(), expr("values.mean()"))];
     query.summaries = vec![("rating".to_string(), SummaryRef::Custom("bad".to_string()))];
 
     let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
         .expect("execute custom summary query");
 
-    let error = result.error.expect("unsupported custom summary fails loud");
-    assert!(error.construct.contains("summary.bad"), "{error:?}");
-    assert!(error.construct.contains("mean"), "{error:?}");
+    assert_eq!(result.error, None);
+    assert_eq!(result.rows, baseline.rows);
+    assert_eq!(result.total_count, baseline.total_count);
+    assert_eq!(result.shown_count, baseline.shown_count);
+    assert_eq!(
+        result.unfiltered_shown_count,
+        baseline.unfiltered_shown_count
+    );
+    assert_eq!(result.audio_summary, baseline.audio_summary);
+    assert_eq!(
+        result
+            .groups
+            .iter()
+            .map(|group| (&group.key, group.label.as_str(), group.rows.clone()))
+            .collect::<Vec<_>>(),
+        baseline
+            .groups
+            .iter()
+            .map(|group| (&group.key, group.label.as_str(), group.rows.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(matches!(
+        &result.summaries[0].value,
+        CellValue::Error(error)
+            if error.contains("summary.bad") && error.contains("mean")
+    ));
+    assert_eq!(result.groups.len(), 2);
+    assert!(result.groups.iter().all(|group| {
+        matches!(
+            &group.summaries[0].value,
+            CellValue::Error(error)
+                if error.contains("summary.bad") && error.contains("mean")
+        )
+    }));
 }
 
 #[test]
@@ -880,6 +1048,413 @@ fn column_formula_errors_poison_cells_without_failing_view() {
         &result.rows[0].cells[1],
         CellValue::Value(Value::Text(name)) if name.ends_with(".md")
     ));
+}
+
+#[test]
+fn formulas_evaluate_in_dependency_order_not_declaration_order() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.formulas = vec![
+        ("visible".to_string(), expr("formula.adjusted_rating > 5")),
+        (
+            "adjusted_rating".to_string(),
+            expr("formula.base_rating + 1"),
+        ),
+        ("base_rating".to_string(), expr("rating + 1")),
+    ];
+    query.filters = Some(stmt("formula.visible"));
+    query.columns = vec![
+        column("formula.base_rating"),
+        column("formula.adjusted_rating"),
+        column("formula.visible"),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute forward formula dependency query");
+    let mut dependency_first = query.clone();
+    dependency_first.formulas.reverse();
+    let dependency_first_result = execute(
+        &dependency_first,
+        &conn,
+        &EngineCtx::default(),
+        &CancelToken::new(),
+    )
+    .expect("execute dependency-first formula query");
+
+    assert_eq!(result.error, None);
+    assert!(result.warnings.is_empty());
+    assert_eq!(result.rows, dependency_first_result.rows);
+    assert_eq!(result.warnings, dependency_first_result.warnings);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| (row.path.as_str(), row.cells.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "Notes/Gamma.md",
+                vec![
+                    CellValue::Value(Value::Number(6.0)),
+                    CellValue::Value(Value::Number(7.0)),
+                    CellValue::Value(Value::Bool(true)),
+                ],
+            ),
+            (
+                "Projects/Alpha.md",
+                vec![
+                    CellValue::Value(Value::Number(5.5)),
+                    CellValue::Value(Value::Number(6.5)),
+                    CellValue::Value(Value::Bool(true)),
+                ],
+            ),
+        ]
+    );
+}
+
+#[test]
+fn circular_formula_dependencies_fail_loudly_and_deterministically() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let mut query = query();
+    query.formulas = vec![
+        ("a".to_string(), expr("formula.b + 1")),
+        ("b".to_string(), expr("formula.a + 1")),
+    ];
+    query.filters = Some(stmt("formula.a > 0"));
+    query.columns = vec![column("file.path")];
+
+    let first = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute first circular formula query");
+    let second = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute second circular formula query");
+
+    let error = first.error.as_ref().expect("circular formula fails view");
+    assert!(error.construct.contains("formula.a"), "{error:?}");
+    assert!(error.construct.contains("circular formula"), "{error:?}");
+    assert!(first.rows.is_empty());
+    assert_eq!(first.error, second.error);
+    assert_eq!(first.warnings, second.warnings);
+}
+
+#[test]
+fn aliases_are_loaded_from_the_indexed_property() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_list_property(&conn, 2, 3, "aliases", &["B", "Beta alias"]);
+
+    let mut query = query();
+    query.source = QuerySource::Folder("Projects".to_string());
+    query.columns = vec![column("file.aliases")];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute aliases query");
+    let beta = result
+        .rows
+        .iter()
+        .find(|row| row.path == "Projects/Beta.md")
+        .expect("Beta result row");
+    assert_eq!(
+        beta.cells,
+        vec![CellValue::Value(Value::List(vec![
+            Value::Text("B".to_string()),
+            Value::Text("Beta alias".to_string()),
+        ]))]
+    );
+}
+
+#[test]
+fn links_and_embeds_are_complete_and_partitioned() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         )
+         VALUES (2, 0, 'Notes/Target.md', 'Target', NULL, 'wikilink', 1, 0, '', 10, 19)",
+        [],
+    )
+    .expect("insert embed");
+
+    let mut query = query();
+    query.source = QuerySource::Folder("Projects".to_string());
+    query.columns = vec![
+        column("file.links"),
+        column("file.embeds"),
+        column("file.outDegree"),
+    ];
+
+    let result = execute(&query, &conn, &EngineCtx::default(), &CancelToken::new())
+        .expect("execute aliases and embeds query");
+    let alpha = result
+        .rows
+        .iter()
+        .find(|row| row.path == "Projects/Alpha.md")
+        .expect("Alpha result row");
+    assert_eq!(
+        alpha.cells,
+        vec![
+            CellValue::Value(Value::List(vec![Value::Link(LinkValue {
+                target: "Gamma".to_string(),
+                display: None,
+                resolved_path: Some("Notes/Gamma.md".to_string()),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: false,
+            })])),
+            CellValue::Value(Value::List(vec![])),
+            CellValue::Value(Value::Number(1.0)),
+        ]
+    );
+    let beta = result
+        .rows
+        .iter()
+        .find(|row| row.path == "Projects/Beta.md")
+        .expect("Beta result row");
+    assert_eq!(
+        beta.cells,
+        vec![
+            CellValue::Value(Value::List(vec![])),
+            CellValue::Value(Value::List(vec![Value::Link(LinkValue {
+                target: "Target".to_string(),
+                display: None,
+                resolved_path: Some("Notes/Target.md".to_string()),
+                subpath: None,
+                link_type: "file".to_string(),
+                embed: true,
+            })])),
+            CellValue::Value(Value::Number(1.0)),
+        ]
+    );
+}
+
+#[test]
+fn temporal_sources_and_custom_summaries_never_cache() {
+    const DAY_MS: i64 = 86_400_000;
+
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let cache = BasesQueryCache::default();
+
+    let mut recent = query();
+    recent.source = QuerySource::Recent { days: 1 };
+    recent.columns = vec![column("file.path")];
+    let before_cutoff_transition = execute(
+        &recent,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS + 3_000,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute recent query before cutoff transition");
+    let after_cutoff_transition = execute(
+        &recent,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS + 3_001,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute recent query after cutoff transition");
+    assert_eq!(
+        before_cutoff_transition
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Notes/Gamma.md"]
+    );
+    assert!(after_cutoff_transition.rows.is_empty());
+    assert!(!before_cutoff_transition.cache_hit);
+    assert!(!after_cutoff_transition.cache_hit);
+
+    let mut summary = query();
+    summary.columns = vec![column("status")];
+    summary.custom_summaries = vec![("clock".to_string(), expr("now()"))];
+    summary.summaries = vec![(
+        "status".to_string(),
+        SummaryRef::Custom("clock".to_string()),
+    )];
+    let first_summary = execute(
+        &summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 100,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute first temporal custom summary");
+    let second_summary = execute(
+        &summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 200,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute second temporal custom summary");
+    assert!(matches!(
+        &first_summary.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 100
+    ));
+    assert!(matches!(
+        &second_summary.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 200
+    ));
+    assert!(!first_summary.cache_hit);
+    assert!(!second_summary.cache_hit);
+}
+
+#[test]
+fn recent_source_saturates_extreme_day_cutoffs() {
+    const DAY_MS: u64 = 86_400_000;
+    let conn = migrated_conn();
+    seed_index(&conn);
+
+    for days in [(i64::MAX as u64 / DAY_MS) + 1, u64::MAX] {
+        let mut recent = query();
+        recent.source = QuerySource::Recent { days };
+        recent.columns = vec![column("file.path")];
+
+        let result = execute(
+            &recent,
+            &conn,
+            &EngineCtx {
+                now_ms: 10_000,
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("execute Recent({days}) source: {error}"));
+
+        assert_eq!(result.error, None, "days={days}");
+        assert_eq!(result.total_count, 3, "days={days}");
+    }
+}
+
+#[test]
+fn hidden_now_summary_column_disables_cache() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let cache = BasesQueryCache::default();
+
+    let mut now_summary = query();
+    now_summary.columns = vec![column("file.path")];
+    now_summary.summaries = vec![(
+        "now()".to_string(),
+        SummaryRef::Builtin("earliest".to_string()),
+    )];
+    let first_now = execute(
+        &now_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 100,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute first hidden now summary");
+    let second_now = execute(
+        &now_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: 200,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute second hidden now summary");
+    assert!(matches!(
+        &first_now.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 100
+    ));
+    assert!(matches!(
+        &second_now.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == 200
+    ));
+    assert!(!first_now.cache_hit);
+    assert!(!second_now.cache_hit);
+}
+
+#[test]
+fn hidden_today_summary_column_invalidates_cache_across_days() {
+    const DAY_MS: i64 = 86_400_000;
+
+    let conn = migrated_conn();
+    seed_index(&conn);
+    let cache = BasesQueryCache::default();
+
+    let mut today_summary = query();
+    today_summary.columns = vec![column("file.path")];
+    today_summary.summaries = vec![(
+        "today()".to_string(),
+        SummaryRef::Builtin("earliest".to_string()),
+    )];
+    let first_today = execute(
+        &today_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS * 10 + 100,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute first hidden today summary");
+    let same_day_today = execute(
+        &today_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS * 10 + 200,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute same-day hidden today summary");
+    let next_day_today = execute(
+        &today_summary,
+        &conn,
+        &EngineCtx {
+            now_ms: DAY_MS * 11,
+            generation: 7,
+            cache: Some(&cache),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute next-day hidden today summary");
+    assert!(matches!(
+        &first_today.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == DAY_MS * 10
+    ));
+    assert!(same_day_today.cache_hit);
+    assert!(matches!(
+        &next_day_today.summaries[0].value,
+        CellValue::Value(Value::Date(date)) if date.epoch_ms == DAY_MS * 11
+    ));
+    assert!(!next_day_today.cache_hit);
 }
 
 #[test]
@@ -1054,6 +1629,89 @@ fn cache_keys_stable_queries_by_generation_and_today_queries_by_day() {
 }
 
 #[test]
+fn dql_date_shorthands_never_reuse_engine_cache_across_new_york_midnight() {
+    const CHILD: &str = "SLATE_DQL_ENGINE_CACHE_TZ_CHILD";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("locate Bases engine test binary"),
+        )
+        .arg("dql_date_shorthands_never_reuse_engine_cache_across_new_york_midnight")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TZ", "America/New_York")
+        .env(CHILD, "1")
+        .status()
+        .expect("run DQL engine-cache test in America/New_York");
+        assert!(status.success(), "DQL engine-cache timezone child failed");
+        return;
+    }
+
+    // 2026-07-10T04:00:00Z is local midnight in America/New_York.
+    const LOCAL_MIDNIGHT_MS: i64 = 1_783_656_000_000;
+    let before_midnight_ms = LOCAL_MIDNIGHT_MS - 1;
+    let after_midnight_ms = LOCAL_MIDNIGHT_MS + 1;
+    let conn = migrated_conn();
+    seed_index(&conn);
+
+    for shorthand in [
+        "now",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "sow",
+        "eow",
+        "som",
+        "eom",
+        "soy",
+        "eoy",
+        "start-of-week",
+        "end-of-week",
+        "start-of-month",
+        "end-of-month",
+        "start-of-year",
+        "end-of-year",
+    ] {
+        let source = format!(
+            "TABLE WITHOUT ID string(date({shorthand})) AS \"Value\"\nWHERE file.path = \"Projects/Alpha.md\"\n"
+        );
+        let (query, warnings) = parse_dql(&source);
+        assert!(warnings.is_empty(), "shorthand={shorthand}: {warnings:?}");
+        let cache = BasesQueryCache::default();
+        let first = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                now_ms: before_midnight_ms,
+                generation: 7,
+                cache: Some(&cache),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("first shorthand={shorthand}: {error}"));
+        let second = execute(
+            &query,
+            &conn,
+            &EngineCtx {
+                now_ms: after_midnight_ms,
+                generation: 7,
+                cache: Some(&cache),
+                ..EngineCtx::default()
+            },
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("second shorthand={shorthand}: {error}"));
+
+        assert!(!first.cache_hit, "first shorthand={shorthand}");
+        assert!(!second.cache_hit, "second shorthand={shorthand}");
+        assert_eq!(
+            second.executed_at_ms, after_midnight_ms,
+            "shorthand={shorthand} reused a stale result"
+        );
+    }
+}
+
+#[test]
 fn cancellation_is_checked_before_querying() {
     let conn = migrated_conn();
     seed_index(&conn);
@@ -1092,6 +1750,80 @@ fn linked_source_depth_one_limits_candidates_and_later_depths_fail_loudly() {
     let error = result.error.expect("unsupported depth is a view error");
     assert!(error.construct.contains("depth 2"), "{:?}", error);
     assert!(result.rows.is_empty());
+}
+
+#[test]
+fn linked_source_preserves_exact_public_path_over_contextual_collision() {
+    let conn = migrated_conn();
+    for (id, path) in [
+        (1_i64, "Hub.md"),
+        (2, "Notes/Hub.md"),
+        (3, "RootTarget.md"),
+        (4, "Notes/Target.md"),
+        (5, "Notes/View.base"),
+    ] {
+        let (name, extension) = path.rsplit_once('.').expect("fixture extension");
+        insert_file(&conn, id, path, name, extension, 0, 0);
+    }
+    for (source_file_id, target_path) in [(1_i64, "RootTarget.md"), (2_i64, "Notes/Target.md")] {
+        conn.execute(
+            "INSERT INTO links (
+                source_file_id, ordinal, target_path, target_raw, target_anchor,
+                kind, is_embed, is_external, snippet, span_start, span_end
+             )
+             VALUES (?1, 0, ?2, ?2, NULL, 'wikilink', 0, 0, '', 0, 10)",
+            params![source_file_id, target_path],
+        )
+        .expect("insert colliding linked-source fixture");
+    }
+
+    let mut linked = query();
+    linked.source = QuerySource::Linked {
+        from_path: "Hub.md".to_string(),
+        depth: 1,
+    };
+    linked.columns = vec![column("file.path")];
+
+    let result = execute(
+        &linked,
+        &conn,
+        &EngineCtx {
+            this_path: Some("Notes/View.base".to_string()),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute exact canonical linked source");
+
+    assert_eq!(result.error, None);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>(),
+        ["RootTarget.md"]
+    );
+
+    conn.execute("DELETE FROM files WHERE path = 'Hub.md'", [])
+        .expect("remove exact canonical linked source");
+    let missing = execute(
+        &linked,
+        &conn,
+        &EngineCtx {
+            this_path: Some("Notes/View.base".to_string()),
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute missing canonical linked source");
+
+    assert_eq!(missing.error, None);
+    assert!(
+        missing.rows.is_empty(),
+        "missing canonical Hub.md must not retarget to Notes/Hub.md: {:?}",
+        missing.rows
+    );
 }
 
 #[test]
@@ -1875,4 +2607,353 @@ fn file_matches_outside_filter_position_fails_loud() {
         &result.rows[0].cells[0],
         CellValue::Error(error) if error.contains("file.matches") && error.contains("filter position")
     ));
+}
+
+#[test]
+fn nullable_task_ordering_pushdown_preserves_interpreter_warning() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    insert_task(&conn, 1, 0, "Comparable", " ", false, None, None, Some(5));
+    insert_task(
+        &conn,
+        2,
+        0,
+        "Missing priority",
+        " ",
+        false,
+        None,
+        None,
+        None,
+    );
+
+    let mut generated = query();
+    generated.row_source = RowSource::Tasks;
+    generated.filters = Some(stmt("task.priority >= 3"));
+    generated.columns = vec![column("task.text"), column("task.priority")];
+    let pushdown = execute(
+        &generated,
+        &conn,
+        &EngineCtx {
+            pushdown: true,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute nullable priority with pushdown enabled");
+    let interpreted = execute(
+        &generated,
+        &conn,
+        &EngineCtx {
+            pushdown: false,
+            ..EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .expect("execute nullable priority in interpreter");
+
+    assert_eq!(pushdown, interpreted);
+    assert_eq!(pushdown.rows.len(), 1);
+    assert_eq!(pushdown.rows[0].path, "Projects/Alpha.md");
+    assert_eq!(
+        pushdown.warnings,
+        ["ordering comparison on non-comparable values evaluated to false"]
+    );
+}
+
+const ENGINE_CENSUS_SEED: u64 = 0xE11E_CE55_5EED_0001;
+const ENGINE_CENSUS_ROWS: usize = 36;
+
+#[derive(Clone)]
+struct CensusFile {
+    id: i64,
+    path: String,
+    name: String,
+    extension: String,
+    size: i64,
+    mtime_ms: i64,
+}
+
+struct CensusRng(u64);
+
+impl CensusRng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    }
+
+    fn below(&mut self, upper: usize) -> usize {
+        (self.next() % upper as u64) as usize
+    }
+}
+
+fn engine_census_scale() -> (usize, usize) {
+    if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+        (128, 24)
+    } else {
+        (32, 12)
+    }
+}
+
+fn census_file(seed: u64, logical: usize) -> CensusFile {
+    let folders = ["Projects", "Notes", "Archive"];
+    let extensions = ["md", "md", "canvas", "txt"];
+    let folder = folders[(logical + seed as usize) % folders.len()];
+    let extension = extensions[(logical * 3 + seed as usize) % extensions.len()];
+    let name = format!("note-{seed:016x}-{logical:03}.{extension}");
+    CensusFile {
+        id: logical as i64 + 1,
+        path: format!("{folder}/{name}"),
+        name,
+        extension: extension.to_string(),
+        size: 100 + ((logical as u64 * 37 + seed) % 2_000) as i64,
+        mtime_ms: 1_700_000_000_000 + (seed % 10_000) as i64 + logical as i64 * 1_000,
+    }
+}
+
+fn seed_engine_census(seed: u64) -> Connection {
+    let conn = migrated_conn();
+    let mut order = (0..ENGINE_CENSUS_ROWS).collect::<Vec<_>>();
+    let mut rng = CensusRng(seed);
+    for index in (1..order.len()).rev() {
+        let other = rng.below(index + 1);
+        order.swap(index, other);
+    }
+
+    for logical in order {
+        let file = census_file(seed, logical);
+        insert_file(
+            &conn,
+            file.id,
+            &file.path,
+            &file.name,
+            &file.extension,
+            file.size,
+            file.mtime_ms,
+        );
+        let status = ["active", "waiting", "done"][(logical + seed as usize) % 3];
+        let tag = if (logical + seed as usize).is_multiple_of(2) {
+            "project"
+        } else {
+            "archive"
+        };
+        insert_text_property(&conn, file.id, 0, "status", status);
+        insert_number_property(
+            &conn,
+            file.id,
+            1,
+            "rating",
+            ((logical * 7 + seed as usize) % 50) as f64 / 10.0,
+        );
+        insert_bool_property(&conn, file.id, 2, "done", logical % 3 == 0);
+        insert_date_property(
+            &conn,
+            file.id,
+            3,
+            "due",
+            &format!("2027-01-{:02}", logical % 28 + 1),
+        );
+        insert_list_property(&conn, file.id, 4, "tags", &[tag]);
+        insert_tag(&conn, file.id, tag);
+        if tag == "project" && logical % 4 == 0 {
+            insert_tag(&conn, file.id, "project/rust");
+        }
+        insert_task(
+            &conn,
+            file.id,
+            0,
+            &format!("Census task {seed:016x}-{logical:03}"),
+            if logical % 3 == 0 { "x" } else { " " },
+            logical % 3 == 0,
+            (logical % 7 != 0).then_some(1_800_000_000_000 + logical as i64 * 86_400_000),
+            (logical % 6 != 0).then_some(1_799_000_000_000 + logical as i64 * 86_400_000),
+            (logical % 5 != 0).then_some((logical % 5 + 1) as i64),
+        );
+        update_body_text(
+            &conn,
+            file.id,
+            if logical % 2 == 0 {
+                "commonneedle generated engine census body"
+            } else {
+                "alternate generated engine census body"
+            },
+        );
+    }
+
+    let source = census_file(seed, 0);
+    let target = census_file(seed, 1);
+    conn.execute(
+        "INSERT INTO links (
+            source_file_id, ordinal, target_path, target_raw, target_anchor,
+            kind, is_embed, is_external, snippet, span_start, span_end
+         ) VALUES (?1, 0, ?2, ?3, NULL, 'wikilink', 0, 0, '', 0, 10)",
+        params![source.id, target.path, target.name],
+    )
+    .expect("insert engine census link");
+    conn
+}
+
+fn engine_census_query(seed: u64, family: usize) -> SlateQuery {
+    let target = census_file(seed, (seed as usize + family) % ENGINE_CENSUS_ROWS);
+    let mut generated = query();
+    generated.columns = vec![
+        column("file.path"),
+        column("status"),
+        column("rating"),
+        column("done"),
+        column("due"),
+    ];
+    generated.limit = family.is_multiple_of(5).then_some(7);
+
+    match family {
+        0 => generated.filters = Some(stmt(r#"file.ext == "md""#)),
+        1 => {
+            generated.filters = Some(stmt(&format!("file.name == {:?}", target.name)));
+        }
+        2 => {
+            generated.filters = Some(stmt(&format!("file.path == {:?}", target.path)));
+        }
+        3 => generated.filters = Some(stmt(&format!("file.size >= {}", target.size))),
+        4 => {
+            generated.filters = Some(stmt(&format!("file.mtime < {}", target.mtime_ms + 1)));
+        }
+        5 => {
+            generated.filters = Some(stmt(&format!("file.ctime >= {}", target.mtime_ms + 10_000)));
+        }
+        6 => generated.filters = Some(stmt(r#"status == "active""#)),
+        7 => generated.filters = Some(stmt(r#"file.inFolder("Projects")"#)),
+        8 => generated.filters = Some(stmt(r#"file.hasTag("project")"#)),
+        9 => generated.filters = Some(stmt(r#"file.name.startsWith("note-")"#)),
+        10 => generated.filters = Some(stmt(r#"file.path.startsWith("Projects/")"#)),
+        11 => generated.filters = Some(stmt(r#"tags.contains("project")"#)),
+        12 => generated.filters = Some(stmt(r#"file.matches("commonneedle")"#)),
+        13 => {
+            generated.filters = Some(FilterNode::And(vec![
+                stmt(r#"file.ext == "md""#),
+                stmt("rating + 1 > 3"),
+            ]));
+            generated.formulas = vec![("rank".to_string(), expr("rating + file.size"))];
+            generated.columns.push(column("formula.rank"));
+        }
+        14 => generated.source = QuerySource::Folder("Projects".to_string()),
+        15 => generated.source = QuerySource::Tag("project".to_string()),
+        16 => generated.source = QuerySource::Recent { days: 1 },
+        17 => {
+            generated.source = QuerySource::Linked {
+                from_path: census_file(seed, 0).path,
+                depth: 1,
+            };
+        }
+        18..=23 => {
+            generated.row_source = RowSource::Tasks;
+            generated.columns = vec![
+                column("task.file.path"),
+                column("task.text"),
+                column("task.status"),
+                column("task.completed"),
+                column("task.priority"),
+                column("task.due"),
+                column("task.scheduled"),
+            ];
+            generated.filters = Some(match family {
+                18 => stmt("!task.completed"),
+                19 => stmt(r#"task.status == "x""#),
+                20 => stmt("task.priority == 3"),
+                21 => stmt(r#"task.due == date("2027-01-16")"#),
+                22 => FilterNode::And(vec![
+                    stmt(r#"task.file.inFolder("Projects")"#),
+                    stmt(r#"task.file.hasTag("project")"#),
+                ]),
+                23 => stmt(r#"task.scheduled != date("2027-01-20")"#),
+                _ => unreachable!(),
+            });
+        }
+        _ => unreachable!("24 engine census query families"),
+    }
+    generated
+}
+
+#[test]
+fn census_bases_generated_tasks_include_nullable_equality_pushdowns() {
+    for (family, expected_field) in [(20, TaskField::Priority), (21, TaskField::Due)] {
+        let generated = engine_census_query(ENGINE_CENSUS_SEED, family);
+        let Some(FilterNode::Stmt(expression)) = generated.filters else {
+            panic!("family {family} must be a statement filter: {generated:#?}");
+        };
+        let ExprKind::Binary { op, lhs, .. } = &expression.kind else {
+            panic!("family {family} must be a binary filter: {expression:#?}");
+        };
+        assert_eq!(
+            *op,
+            BinaryOp::Eq,
+            "family {family} must exercise equality pushdown: {expression:#?}"
+        );
+        assert!(
+            matches!(&lhs.kind, ExprKind::Prop(PropertyRef::TaskField(field)) if *field == expected_field),
+            "family {family} must target {expected_field:?}: {expression:#?}"
+        );
+    }
+}
+
+#[test]
+fn census_bases_engine_pushdown_matches_interpreter() {
+    let (seed_count, queries_per_seed) = engine_census_scale();
+    for seed_index in 0..seed_count {
+        let seed = ENGINE_CENSUS_SEED
+            .wrapping_add((seed_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let conn = seed_engine_census(seed);
+        for query_index in 0..queries_per_seed {
+            let family = if queries_per_seed == 24 {
+                query_index
+            } else {
+                query_index + (seed_index % 2) * 12
+            };
+            let generated = engine_census_query(seed, family);
+            let now_ms = census_file(seed, ENGINE_CENSUS_ROWS - 1).mtime_ms + 60_000;
+            let page_size = [1, 2, 3, 7, 16, 64][(seed_index + query_index) % 6];
+            let cancel = CancelToken::new();
+            let pushdown = execute(
+                &generated,
+                &conn,
+                &EngineCtx {
+                    now_ms,
+                    page_size,
+                    pushdown: true,
+                    ..EngineCtx::default()
+                },
+                &cancel,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "pushdown execution failed seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}: {error}\nquery={generated:#?}"
+                )
+            });
+            let interpreted = execute(
+                &generated,
+                &conn,
+                &EngineCtx {
+                    now_ms,
+                    page_size,
+                    pushdown: false,
+                    ..EngineCtx::default()
+                },
+                &cancel,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "interpreted execution failed seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}: {error}\nquery={generated:#?}"
+                )
+            });
+            assert_eq!(
+                pushdown, interpreted,
+                "pushdown mismatch seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}\nquery={generated:#?}"
+            );
+            assert_eq!(
+                pushdown.error, None,
+                "generated supported query failed loud seed_index={seed_index} seed={seed:#018x} query_index={query_index} family={family} page_size={page_size}\nquery={generated:#?}"
+            );
+        }
+    }
 }

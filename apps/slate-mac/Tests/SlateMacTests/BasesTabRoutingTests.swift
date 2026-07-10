@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -212,6 +214,203 @@ final class BasesTabRoutingTests: XCTestCase {
         return state
     }
 
+    private func makeTypedSortAppState() async throws -> AppState {
+        let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Table
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, score, due]
+              - type: list
+                name: List
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, score, due]
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Typed.base"))
+        try Data("---\nscore: 10\ndue: 2026-03-01\n---\n# Aardvark\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Aardvark.md"))
+        try Data("---\nscore: 10\ndue: 2026-03-01\n---\n# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("---\nscore: 2\ndue: 2026-02-01\n---\n# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
+        try Data("# Null\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Null.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return state
+    }
+
+    private func makeLiveTaskSurfacesState() async throws -> (
+        state: AppState,
+        openBase: BaseDocument,
+        openDashboard: DashboardDocument,
+        dock: BaseDocument
+    ) {
+        let vault = tempDir.appendingPathComponent("live-task-vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Tasks
+                source: tasks
+                filters: "file.inFolder(\"Notes\")"
+                order:
+                  - task.text
+                  - task.status
+                  - task.file
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Tasks.base"))
+        try Data("# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+
+        var taskQuery = BaseQueryBuilderDraft()
+        taskQuery.source = .tasks
+        let queryID = try session.saveQuery(
+            name: "All tasks",
+            description: nil,
+            queryJson: taskQuery.queryJSON(),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Task dashboard",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+        state.refreshBaseQueries()
+
+        state.openBaseFile("Queries/Tasks.base")
+        let openBase = state.baseDocument(for: "Queries/Tasks.base")
+        state.openDashboard(id: dashboardID, name: "Task dashboard", target: .newTab)
+        let openDashboard = try XCTUnwrap(state.activeDashboardDocument)
+        state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+
+        state.openFile("Notes/Alpha.md", target: .newTab)
+        await state.noteLoadTask?.value
+        return (state, openBase, openDashboard, dock)
+    }
+
+    private func makeLivePropertySurfacesState() async throws -> (
+        state: AppState,
+        active: BaseDocument,
+        sibling: BaseDocument,
+        dashboard: DashboardDocument,
+        dock: BaseDocument,
+        alpha: BasesRow,
+        beta: BasesRow,
+        status: BasesColumn
+    ) {
+        let vault = tempDir.appendingPathComponent("live-property-vault-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Primary
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, status]
+              - type: table
+                name: Alternate
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, status]
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Edit.base"))
+        try Data("---\nstatus: active\n---\n# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+        try Data("---\nstatus: active\n---\n# Beta\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Beta.md"))
+
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+
+        var activeQuery = BaseQueryBuilderDraft()
+        activeQuery.source = .folder("Notes")
+        activeQuery.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .note("status"),
+                    operator: .equals,
+                    value: .text("active")))
+        ]
+        let queryID = try session.saveQuery(
+            name: "Active notes",
+            description: nil,
+            queryJson: activeQuery.queryJSON(),
+            sourceSyntax: .builder)
+        let dashboardID = try session.saveDashboard(
+            name: "Active dashboard",
+            sections: [
+                DashboardSection(
+                    savedQueryId: queryID,
+                    headingOverride: nil,
+                    viewOverride: nil)
+            ])
+        state.refreshBaseQueries()
+
+        state.openSavedQuery(id: queryID, name: "Active notes")
+        let sibling = try XCTUnwrap(state.activeBaseDocument)
+        state.openDashboard(id: dashboardID, name: "Active dashboard", target: .newTab)
+        let dashboard = try XCTUnwrap(state.activeDashboardDocument)
+        state.openBaseFile("Queries/Edit.base", target: .newTab)
+        let active = try XCTUnwrap(state.activeBaseDocument)
+        state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+
+        active.selectView(index: 1, session: session)
+        let unfiltered = try XCTUnwrap(active.result)
+        let alpha = try XCTUnwrap(unfiltered.rows.first { $0.filePath == "Notes/Alpha.md" })
+        let beta = try XCTUnwrap(unfiltered.rows.first { $0.filePath == "Notes/Beta.md" })
+        let status = try XCTUnwrap(unfiltered.columns.first { $0.id == "status" })
+        _ = active.applyQuickFilter("Alpha", session: session)
+        _ = active.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: false),
+            session: session)
+        state.updateActiveBaseSelection(
+            path: active.selectionKey,
+            rowID: BaseGridRow.id(for: alpha),
+            columnIndex: 1,
+            result: active.result)
+        return (state, active, sibling, dashboard, dock, alpha, beta, status)
+    }
+
     func testOpenFileRoutesBaseToBasesTabAndLoadsDefaultView() async throws {
         let state = try await makeAppState()
 
@@ -230,6 +429,292 @@ final class BasesTabRoutingTests: XCTestCase {
 
         XCTAssertNil(state.currentNoteText, "the note loader must not read .base as markdown")
         XCTAssertNil(state.noteLoadError)
+    }
+
+    func testBaseTabActivationKeepsCanonicallyEquivalentPathsDistinct() async throws {
+        let state = try await makeAppState()
+        let composed = "Queries/é.base"
+        let decomposed = "Queries/e\u{301}.base"
+        let source = "views:\n  - type: table\n    name: Exact\n"
+        try Data(source.utf8).write(to: vaultURL.appendingPathComponent(composed))
+
+        state.openBaseFile(composed, target: .newTab)
+        let composedTab = try XCTUnwrap(state.workspace.activeTab?.id)
+        XCTAssertTrue(BaseExactIdentity.matches(try XCTUnwrap(state.selectedFilePath), composed))
+
+        state.openBaseFile(decomposed, target: .newTab)
+        let decomposedTab = try XCTUnwrap(state.workspace.activeTab?.id)
+        XCTAssertNotEqual(composedTab, decomposedTab)
+        XCTAssertTrue(
+            BaseExactIdentity.matches(try XCTUnwrap(state.selectedFilePath), decomposed))
+
+        state.activateTab(composedTab)
+        XCTAssertTrue(BaseExactIdentity.matches(try XCTUnwrap(state.selectedFilePath), composed))
+        state.activateTab(decomposedTab)
+        XCTAssertTrue(
+            BaseExactIdentity.matches(try XCTUnwrap(state.selectedFilePath), decomposed))
+    }
+
+    func testSavingNoteRefreshesOpenBaseDashboardAndDock() async throws {
+        let fixture = try await makeLiveTaskSurfacesState()
+        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Ship it\n")
+        await fixture.state.saveCurrentNote()?.value
+
+        XCTAssertEqual(fixture.openBase.result?.rows.count, 1)
+        XCTAssertEqual(fixture.openDashboard.sections[0].result?.rows.count, 1)
+        XCTAssertEqual(fixture.dock.result?.rows.count, 1)
+        XCTAssertEqual(
+            fixture.openBase.result?.rows.first?.filePath,
+            "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 task."])
+    }
+
+    func testSameSessionNavigationAfterNoteSaveRefreshesGlobalBasesWithoutPublishingStaleNoteState()
+        async throws
+    {
+        let fixture = try await makeLiveTaskSurfacesState()
+        let session = try XCTUnwrap(fixture.state.currentSession)
+        let request = try XCTUnwrap(BaseEmbedRequest.wikilinkTarget("Queries/Tasks.base"))
+        let embed = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Alpha.md",
+            sharedHandle: fixture.state.baseEmbedHandle(
+                for: request,
+                thisPath: "Notes/Alpha.md"))
+        embed.load(session: session)
+        XCTAssertTrue(embed.result?.rows.isEmpty == true)
+
+        let entered = expectation(description: "same-session save parked after native write")
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        fixture.state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gate {}
+        }
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Ship after navigation\n")
+        let save = try XCTUnwrap(fixture.state.saveCurrentNote())
+        await fulfillment(of: [entered], timeout: 10)
+        fixture.state.basesPostWritePublishGate = nil
+
+        fixture.state.openFile("Notes/Beta.md", target: .newTab)
+        await fixture.state.noteLoadTask?.value
+        let betaText = fixture.state.currentNoteText
+        let betaHash = fixture.state.currentNoteContentHash
+        let betaPropertyKeys = fixture.state.currentNoteProperties.map(\.key)
+
+        release.finish()
+        await save.value
+
+        XCTAssertEqual(fixture.state.loadedFilePath, "Notes/Beta.md")
+        XCTAssertEqual(fixture.state.currentNoteText, betaText)
+        XCTAssertEqual(fixture.state.currentNoteContentHash, betaHash)
+        XCTAssertEqual(fixture.state.currentNoteProperties.map(\.key), betaPropertyKeys)
+        XCTAssertEqual(fixture.openBase.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(
+            fixture.openDashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(embed.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 task."])
+    }
+
+    func testGridSetAndDeleteRefreshSiblingSurfacesAndPreserveActiveState() async throws {
+        let fixture = try await makeLivePropertySurfacesState()
+
+        _ = await fixture.state.basesSetProperty(
+            row: fixture.alpha,
+            column: fixture.status,
+            value: .text(value: "archived"))
+
+        XCTAssertEqual(fixture.sibling.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(
+            fixture.dashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Beta.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(fixture.active.activeViewIndex, 1)
+        XCTAssertEqual(fixture.active.quickFilterText, "Alpha")
+        XCTAssertEqual(
+            fixture.active.sortState,
+            DataGridSortState(columnIndex: 1, ascending: false))
+        XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.activeBaseSelectedRow?.filePath, "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.activeBaseSelectedColumn?.id, "status")
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
+
+        _ = await fixture.state.basesDeleteProperty(
+            row: fixture.beta,
+            column: fixture.status)
+
+        XCTAssertTrue(fixture.sibling.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+        XCTAssertEqual(fixture.active.activeViewIndex, 1)
+        XCTAssertEqual(fixture.active.quickFilterText, "Alpha")
+        XCTAssertEqual(
+            fixture.active.sortState,
+            DataGridSortState(columnIndex: 1, ascending: false))
+        XCTAssertEqual(fixture.state.activeBaseSelectedRow?.filePath, "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: No results."])
+    }
+
+    func testPropertyPanelSetAndDeleteRefreshOpenBase() async throws {
+        let state = try await makeAppState()
+        state.openBaseFile("Queries/Reading.base")
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+        doc.selectView(index: 1, session: session)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        state.openFile("Notes/Alpha.md", target: .newTab)
+        await state.noteLoadTask?.value
+
+        await state.setProperty(
+            path: "Notes/Alpha.md",
+            key: "status",
+            value: .text(value: "done"))?.value
+
+        XCTAssertEqual(
+            Set(doc.result?.rows.map(\.filePath) ?? []),
+            Set(["Notes/Alpha.md", "Notes/Beta.md"]))
+        XCTAssertEqual(doc.activeViewIndex, 1)
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 2 notes."])
+
+        await state.deleteProperty(path: "Notes/Alpha.md", key: "status")?.value
+
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(doc.activeViewIndex, 1)
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
+    }
+
+    func testSameSessionNavigationAfterPropertyEditRefreshesGlobalBasesWithoutPublishingStaleNoteState()
+        async throws
+    {
+        let fixture = try await makeLivePropertySurfacesState()
+        let state = fixture.state
+        let session = try XCTUnwrap(state.currentSession)
+        let query = try XCTUnwrap(
+            state.baseQueries.savedQueries.first { $0.name == "Active notes" })
+        let request = try XCTUnwrap(
+            BaseEmbedRequest.codeFence(
+                language: "slate-query",
+                source: "```slate-query\nquery: \(query.id)\n```"))
+        let embed = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Alpha.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: request,
+                thisPath: "Notes/Alpha.md"))
+        embed.load(session: session)
+        XCTAssertEqual(
+            embed.result?.rows.map(\.filePath),
+            ["Notes/Alpha.md", "Notes/Beta.md"])
+
+        state.openFile("Notes/Alpha.md", target: .newTab)
+        await state.noteLoadTask?.value
+        let entered = expectation(description: "same-session property edit parked after native write")
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gate {}
+        }
+        let edit = try XCTUnwrap(
+            state.setProperty(
+                path: "Notes/Alpha.md",
+                key: "status",
+                value: .text(value: "archived")))
+        await fulfillment(of: [entered], timeout: 10)
+        state.basesPostWritePublishGate = nil
+
+        state.openFile("Notes/Beta.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        let betaText = state.currentNoteText
+        let betaHash = state.currentNoteContentHash
+        let betaPropertyKeys = state.currentNoteProperties.map(\.key)
+
+        release.finish()
+        await edit.value
+
+        XCTAssertEqual(state.loadedFilePath, "Notes/Beta.md")
+        XCTAssertEqual(state.currentNoteText, betaText)
+        XCTAssertEqual(state.currentNoteContentHash, betaHash)
+        XCTAssertEqual(state.currentNoteProperties.map(\.key), betaPropertyKeys)
+        XCTAssertEqual(fixture.sibling.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(
+            fixture.dashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Beta.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(embed.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements, ["Updated: 1 note."])
+    }
+
+    func testConflictedNoteSaveDoesNotRefreshOrAnnounce() async throws {
+        let fixture = try await makeLiveTaskSurfacesState()
+        let session = try XCTUnwrap(fixture.state.currentSession)
+        _ = try session.saveComposed(
+            path: "Notes/Alpha.md",
+            fmSource: "",
+            body: "# Alpha\n\n- [ ] External task\n",
+            expectedContentHash: fixture.state.currentNoteContentHash)
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Local task\n")
+
+        await fixture.state.saveCurrentNote()?.value
+
+        XCTAssertNotNil(fixture.state.currentSaveConflict)
+        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.state.lastBaseRefreshAnnouncements.isEmpty)
+    }
+
+    func testStaleSessionNoteSaveCannotPublishIntoReopenedVault() async throws {
+        let fixture = try await makeLiveTaskSurfacesState()
+        let entered = expectation(description: "save parked before Bases publish")
+        let (gateStream, release) = AsyncStream.makeStream(of: Void.self)
+        fixture.state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gateStream {}
+        }
+        fixture.state.updateEditorText("# Alpha\n\n- [ ] Stale task\n")
+        let staleSave = try XCTUnwrap(fixture.state.saveCurrentNote())
+        await fulfillment(of: [entered], timeout: 10)
+        fixture.state.basesPostWritePublishGate = nil
+
+        let replacement = tempDir.appendingPathComponent("replacement-vault")
+        try FileManager.default.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try Data("# Replacement\n".utf8).write(to: replacement.appendingPathComponent("note.md"))
+        fixture.state.openVault(at: replacement)
+        await fixture.state.scanTask?.value
+        fixture.state.openFile("note.md", target: .currentTab)
+        await fixture.state.noteLoadTask?.value
+
+        let replacementEntered = expectation(description: "replacement save parked")
+        let (replacementGate, releaseReplacement) = AsyncStream.makeStream(of: Void.self)
+        fixture.state.basesPostWritePublishGate = {
+            replacementEntered.fulfill()
+            for await _ in replacementGate {}
+        }
+        fixture.state.updateEditorText("# Replacement saved\n")
+        let replacementSave = try XCTUnwrap(fixture.state.saveCurrentNote())
+        await fulfillment(of: [replacementEntered], timeout: 10)
+        XCTAssertTrue(fixture.state.isSaving)
+
+        release.finish()
+        await staleSave.value
+
+        XCTAssertTrue(
+            fixture.state.isSaving,
+            "a stale old-session save must not clear the replacement session's in-flight flag")
+        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
+        XCTAssertTrue(fixture.state.lastBaseRefreshAnnouncements.isEmpty)
+
+        fixture.state.basesPostWritePublishGate = nil
+        releaseReplacement.finish()
+        await replacementSave.value
+        XCTAssertFalse(fixture.state.isSaving)
     }
 
     func testSummaryFormatterUsesSummaryCellsNotOnlyAudioSummary() async throws {
@@ -275,7 +760,8 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertTrue(doc.quickFilterActive)
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Cafe.md"])
         XCTAssertEqual(doc.result?.audioSummary, "1 note.")
-        XCTAssertEqual(announcement, "1 of 1 results")
+        XCTAssertEqual(announcement, "1 of 3 results")
+        XCTAssertEqual(doc.result?.unfilteredShownCount, 3)
         XCTAssertTrue(doc.whereAmIReadback.contains("quick filter: CAFE"))
         XCTAssertEqual(
             BaseSummaryFormatter.summaryText(
@@ -315,6 +801,25 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(doc.quickFilterText, "")
         XCTAssertFalse(doc.quickFilterActive)
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+    }
+
+    func testEscapeClearReexecutesWhenFieldWasTypedEmptyBeforeDebounce() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let session = try XCTUnwrap(state.currentSession)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        _ = doc.applyQuickFilter("cafe", session: session)
+        doc.quickFilterText = ""
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Cafe.md"])
+        XCTAssertTrue(doc.quickFilterActive, "the published result is still filtered")
+
+        let announcement = doc.clearQuickFilter(session: session)
+
+        XCTAssertEqual(
+            doc.result?.rows.map(\.filePath),
+            ["Notes/Alpha.md", "Notes/Beta.md", "Notes/Cafe.md"])
+        XCTAssertFalse(doc.quickFilterActive)
+        XCTAssertEqual(announcement, "3 of 3 results")
     }
 
     func testBasesQuickFilterFocusTokenIsBaseScoped() async throws {
@@ -385,6 +890,108 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(state.lastBaseActionAnnouncement, "Copied base view as Markdown.")
     }
 
+    func testQuickFilterLimitMatchesFilteredAndUnfilteredExportRows() async throws {
+        let state = try await makeQuickFilterAppState()
+        let baseURL = vaultURL.appendingPathComponent("Queries/Reading.base")
+        let source = try String(contentsOf: baseURL, encoding: .utf8)
+        try source.replacingOccurrences(
+            of: "    name: Reading\n",
+            with: "    name: Reading\n    limit: 2\n"
+        ).write(to: baseURL, atomically: true, encoding: .utf8)
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+
+        XCTAssertEqual(doc.applyQuickFilter("cafe", session: session), "1 of 2 results")
+        XCTAssertEqual(doc.result?.shownCount, 1)
+        XCTAssertEqual(doc.result?.unfilteredShownCount, 2)
+        XCTAssertEqual(
+            try doc.export(format: .csv, session: session, includeQuickFilter: true),
+            "file.name,status\r\nCafe.md,café\r\n")
+        XCTAssertEqual(
+            try doc.export(format: .csv, session: session, includeQuickFilter: false),
+            "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n")
+    }
+
+    func testTransientTypedSortDrivesTableListExportAndLifecycle() async throws {
+        let state = try await makeTypedSortAppState()
+        state.openFile("Queries/Typed.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Typed.base")
+        let session = try XCTUnwrap(state.currentSession)
+        let initial = try XCTUnwrap(doc.result)
+        let localRows = Dictionary(
+            uniqueKeysWithValues: initial.rows.enumerated().map {
+                ($0.element.filePath, BaseGridRow(row: $0.element, ordinal: $0.offset))
+            })
+        let beta = try XCTUnwrap(localRows["Notes/Beta.md"])
+        let aardvark = try XCTUnwrap(localRows["Notes/Aardvark.md"])
+        let alpha = try XCTUnwrap(localRows["Notes/Alpha.md"])
+        let null = try XCTUnwrap(localRows["Notes/Null.md"])
+        XCTAssertTrue(beta.sortsBefore(aardvark, at: 1), "numbers compare by value, not display")
+        XCTAssertTrue(aardvark.sortsBefore(alpha, at: 1), "equal values use the path tiebreak")
+        XCTAssertTrue(alpha.sortsBefore(null, at: 1), "nulls sort after typed values")
+        XCTAssertTrue(beta.sortsBefore(aardvark, at: 2), "dates compare by epoch")
+        XCTAssertTrue(
+            aardvark.sortsBefore(beta, at: 1, ascending: false),
+            "descending reverses typed values")
+        XCTAssertTrue(
+            beta.sortsBefore(null, at: 1, ascending: false),
+            "nulls remain last descending")
+        XCTAssertTrue(
+            aardvark.sortsBefore(alpha, at: 1, ascending: false),
+            "path ties remain ascending regardless of sort direction")
+
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: true), session: session)
+        let numericPaths = [
+            "Notes/Beta.md", "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Null.md",
+        ]
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), numericPaths)
+        XCTAssertEqual(
+            try doc.export(format: .csv, session: session)
+                .split(whereSeparator: \.isNewline).dropFirst()
+                .compactMap { $0.split(separator: ",").first.map(String.init) },
+            ["Beta.md", "Aardvark.md", "Alpha.md", "Null.md"])
+        XCTAssertEqual(
+            BaseListProjection(
+                result: try XCTUnwrap(doc.result),
+                options: BaseListOptions(slateStateJson: nil)
+            ).items.map(\.filePath),
+            numericPaths)
+
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 2, ascending: false), session: session)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), [
+            "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
+        ])
+
+        doc.selectView(index: 1, session: session)
+        XCTAssertNil(doc.sortState)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), [
+            "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
+        ])
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: true), session: session)
+        XCTAssertEqual(
+            BaseListProjection(
+                result: try XCTUnwrap(doc.result),
+                options: BaseListOptions(slateStateJson: nil)
+            ).items.map(\.filePath),
+            numericPaths)
+
+        doc.setTransientSort(nil, session: session)
+        XCTAssertNil(doc.sortState)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), [
+            "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
+        ])
+
+        let staleHandle = try XCTUnwrap(doc.handle)
+        doc.close(session: session)
+        XCTAssertThrowsError(
+            try session.baseSetTransientSort(
+                handle: staleHandle, view: 0, columnId: "score", ascending: true))
+    }
+
     func testBasePropertyEditUsesExistingWritePathAndReexecutes() async throws {
         let state = try await makeQuickFilterAppState()
         state.openFile("Queries/Reading.base", target: .currentTab)
@@ -427,6 +1034,32 @@ final class BasesTabRoutingTests: XCTestCase {
 
         XCTAssertEqual(announcement, "Saved. Row no longer matches this view")
         XCTAssertTrue(doc.result?.rows.isEmpty == true)
+    }
+
+    func testBlankCellCommitRoutesToDeleteAndPreservesNonblankText() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let result = try XCTUnwrap(state.activeBaseDocument?.result)
+        let row = try XCTUnwrap(result.rows.first { $0.filePath == "Notes/Alpha.md" })
+        let status = try XCTUnwrap(result.columns.first { $0.id == "status" })
+
+        let announcement = await state.basesDeleteProperty(row: row, column: status)
+
+        XCTAssertEqual(announcement, "Saved. status: empty")
+        let note = try String(
+            contentsOf: vaultURL.appendingPathComponent("Notes/Alpha.md"),
+            encoding: .utf8)
+        XCTAssertFalse(note.contains("status:"), "blank commit must remove the property key")
+        XCTAssertEqual(
+            BaseCellEditPolicy.propertyValue(from: "  keep exactly  ", valueKind: "text"),
+            .success(.text(value: "  keep exactly  ")),
+            "nonblank text drafts must not be normalized")
+
+        let source = try sourceFile("Bases/BaseContainerView.swift")
+        XCTAssertTrue(source.contains("trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
+        XCTAssertTrue(
+            source.contains("await appState.basesDeleteProperty"),
+            "the editable-cell commit path must route blank drafts to deletion")
     }
 
     func testBaseRowActionsCopyLinkAndShowBacklinks() async throws {
@@ -531,25 +1164,433 @@ final class BasesTabRoutingTests: XCTestCase {
                 availableIDs: []))
     }
 
+    func testGridCellSelectionStoresStableColumnIdentityInsteadOfResultOffset() throws {
+        let source = try sourceFile("Bases/BaseContainerView.swift")
+
+        XCTAssertTrue(
+            source.contains("@State private var selectedCell: BaseGridCellSelection?"),
+            "editable grid selection must store a stable column identifier")
+        XCTAssertTrue(
+            source.contains("selectedCell?.columnIndex(in:"),
+            "every grid/AppState boundary must resolve the stable identifier in the current result")
+        XCTAssertTrue(
+            source.contains("selectedCell.reconciledEditRequest("),
+            "an in-flight editor must remap its index from the same stable column identity")
+        XCTAssertTrue(
+            source.contains("gridEditRequest.flatMap { request in")
+                && source.contains(
+                    "selectedCell?.reconciledEditRequest(request, in: result)"),
+            "the edit-request Binding getter must derive the current index before the first "
+                + "AppKit reload; onChange runs too late for that render boundary")
+        XCTAssertFalse(
+            source.contains(
+                "@State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?"),
+            "an index-backed @State selection can edit the wrong property after columns reorder")
+    }
+
+    func testTransientLinkSortTableListAndExportShareEngineOrder() async throws {
+        let vault = tempDir.appendingPathComponent("link-sort-\(UUID().uuidString)")
+        vaultURL = vault
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Queries"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Links
+                filters: "file.inFolder(\"Notes\")"
+                order: [file.name, ref]
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("Queries/Links.base"))
+        try Data("---\nref: \"[[Alpha|Zulu]]\"\n---\n# One\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/One.md"))
+        try Data("---\nref: \"[[Zulu|Alpha]]\"\n---\n# Two\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Two.md"))
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+        let doc = state.baseDocument(for: "Queries/Links.base")
+        doc.load(session: session)
+        let refIndex = try XCTUnwrap(doc.result?.columns.firstIndex { $0.id == "ref" })
+
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: refIndex, ascending: true),
+            session: session)
+
+        let result = try XCTUnwrap(doc.result)
+        let enginePaths = result.rows.map(\.filePath)
+        XCTAssertEqual(enginePaths, ["Notes/One.md", "Notes/Two.md"])
+        XCTAssertEqual(
+            result.rows.enumerated()
+                .map { BaseGridRow(row: $0.element, ordinal: $0.offset) }
+                .sorted { $0.sortsBefore($1, at: refIndex) }
+                .map { $0.row.filePath },
+            enginePaths)
+        XCTAssertEqual(
+            BaseListProjection(result: result, options: BaseListOptions(slateStateJson: nil))
+                .items.map { $0.row.filePath },
+            enginePaths)
+        let csv = try doc.export(format: .csv, session: session)
+        let one = try XCTUnwrap(csv.range(of: "One.md")?.lowerBound)
+        let two = try XCTUnwrap(csv.range(of: "Two.md")?.lowerBound)
+        XCTAssertLessThan(one, two)
+
+        let container = try sourceFile("Bases/BaseContainerView.swift")
+        XCTAssertTrue(container.contains("sortsRowsLocally: false"))
+    }
+
+    func testRowOnlyFallbackOmitsOrExplainsUnavailableEditPropertyAction() async throws {
+        let state = try await makeAppState()
+        state.openBaseFile("Queries/Reading.base")
+        var result = try XCTUnwrap(state.baseDocument(for: "Queries/Reading.base").result)
+        result.columns = []
+        result.rows = result.rows.map { row in
+            var row = row
+            row.values = []
+            return row
+        }
+        let row = try XCTUnwrap(result.rows.first)
+        state.updateActiveBaseSelection(
+            path: "Queries/Reading.base",
+            rowID: BaseGridRow.id(for: row),
+            columnIndex: nil,
+            result: result)
+        let token = state.baseEditPropertyRequestToken
+
+        state.basesEditSelectedProperty()
+
+        XCTAssertEqual(state.baseEditPropertyRequestToken, token)
+        XCTAssertEqual(
+            state.lastBaseActionAnnouncement,
+            "No editable property is available for the selected row.")
+        XCTAssertFalse(BaseGridRowActionPolicy.canEditProperty(in: result))
+    }
+
+    func testDefinitionReloadPreservesActiveViewByNameAcrossReorder() async throws {
+        let state = try await makeAppState()
+        let session = try XCTUnwrap(state.currentSession)
+        state.openBaseFile("Queries/Reading.base")
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        doc.selectView(index: 1, session: session)
+        XCTAssertEqual(doc.activeViewName, "Done")
+        let reordered = #"""
+        views:
+          - type: table
+            name: Done
+            filters: "status == \"done\""
+            order: [file.name, status]
+          - type: table
+            name: Reading
+            filters: "file.inFolder(\"Notes\")"
+            order: [file.name, status]
+        """#
+        try Data(reordered.utf8).write(
+            to: try XCTUnwrap(vaultURL).appendingPathComponent("Queries/Reading.base"))
+
+        doc.load(session: session)
+
+        XCTAssertEqual(doc.views.map(\.name), ["Done", "Reading"])
+        XCTAssertEqual(doc.activeViewName, "Done")
+        XCTAssertEqual(doc.activeViewIndex, 0)
+        XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md"])
+    }
+
+    func testDefinitionReloadPreservesByteExactActiveViewName() async throws {
+        let state = try await makeAppState()
+        let session = try XCTUnwrap(state.currentSession)
+        let composed = "é"
+        let decomposed = "e\u{301}"
+        let source = """
+        views:
+          - type: table
+            name: "\(composed)"
+            order: [file.name]
+          - type: table
+            name: "\(decomposed)"
+            order: [file.name]
+        """
+        try source.write(
+            to: try XCTUnwrap(vaultURL).appendingPathComponent("Queries/Reading.base"),
+            atomically: true,
+            encoding: .utf8)
+        let doc = BaseDocument(path: "Queries/Reading.base")
+        doc.load(session: session)
+        XCTAssertEqual(doc.views.count, 2)
+        doc.selectView(index: 1, session: session)
+
+        doc.load(session: session)
+
+        XCTAssertEqual(doc.activeViewIndex, 1)
+        XCTAssertTrue(BaseExactIdentity.matches(try XCTUnwrap(doc.activeViewName), decomposed))
+    }
+
+    func testGridCellSelectionKeepsReturnF2EditTargetAcrossColumnReorder() throws {
+        let columnA = BasesColumn(
+            id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
+        let columnB = BasesColumn(
+            id: "property-b", label: "Property B", valueKind: "text", role: .metadata)
+        let initial = Self.selectionResult(columns: [columnA, columnB])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
+        let selection = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: initial))
+
+        let reordered = Self.selectionResult(columns: [columnB, columnA])
+
+        XCTAssertEqual(selection.columnID, "property-b")
+        XCTAssertEqual(selection.columnIndex(in: reordered), 0)
+        XCTAssertEqual(selection.position(in: reordered)?.columnIndex, 0)
+        XCTAssertEqual(
+            selection.column(in: reordered)?.id,
+            "property-b",
+            "Return/F2 must still target B, not the property now at B's former offset")
+        let editRequest = AccessibleDataGrid<BaseGridRow>.EditRequest(
+            rowID: rowID,
+            columnIndex: 1,
+            text: "unsaved draft")
+        let remappedRequest = try XCTUnwrap(
+            selection.reconciledEditRequest(editRequest, in: reordered))
+        XCTAssertEqual(remappedRequest.rowID, rowID)
+        XCTAssertEqual(remappedRequest.columnIndex, 0)
+        XCTAssertEqual(remappedRequest.text, "unsaved draft")
+
+        let missingB = Self.selectionResult(columns: [columnA])
+        XCTAssertNil(selection.position(in: missingB))
+        XCTAssertNil(selection.column(in: missingB))
+        XCTAssertNil(selection.reconciledEditRequest(editRequest, in: missingB))
+    }
+
+    func testGridStableStateKeepsCanonicallyEquivalentColumnIDsDistinct() throws {
+        let composedID = "é"
+        let decomposedID = "e\u{301}"
+        let composed = BasesColumn(
+            id: composedID, label: "Composed", valueKind: "text", role: .metadata)
+        let decomposed = BasesColumn(
+            id: decomposedID, label: "Decomposed", valueKind: "text", role: .metadata)
+        let initial = Self.selectionResult(columns: [composed, decomposed])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
+        let cell = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: initial))
+        let sort = try XCTUnwrap(
+            BaseGridSortSelection(
+                sortState: DataGridSortState(columnIndex: 1, ascending: false),
+                result: initial))
+
+        XCTAssertEqual(cell.columnIndex(in: initial), 1)
+        XCTAssertEqual(sort.sortState(in: initial)?.columnIndex, 1)
+        XCTAssertTrue(BaseExactIdentity.matches(try XCTUnwrap(cell.column(in: initial)?.id), decomposedID))
+        XCTAssertNotEqual(
+            cell,
+            BaseGridCellSelection(rowID: rowID, columnID: composedID))
+
+        let reordered = Self.selectionResult(columns: [decomposed, composed])
+        XCTAssertEqual(cell.columnIndex(in: reordered), 0)
+        XCTAssertEqual(sort.sortState(in: reordered)?.columnIndex, 0)
+        let request = AccessibleDataGrid<BaseGridRow>.EditRequest(
+            rowID: rowID,
+            columnIndex: 1,
+            text: "edit decomposed")
+        XCTAssertEqual(
+            cell.reconciledEditRequest(request, in: reordered)?.columnIndex,
+            0,
+            "the edit must remain targeted at the exact authored property ID")
+    }
+
+    func testGlobalEditColumnLookupUsesExactUTF8ID() {
+        let composed = "é"
+        let decomposed = "e\u{301}"
+        let result = Self.selectionResult(columns: [
+            BasesColumn(
+                id: composed, label: "Same", valueKind: "text", role: .metadata),
+            BasesColumn(
+                id: decomposed, label: "Same", valueKind: "text", role: .metadata),
+        ])
+
+        XCTAssertEqual(result.exactColumnIndex(forID: composed), 0)
+        XCTAssertEqual(result.exactColumnIndex(forID: decomposed), 1)
+    }
+
+    func testSplitPaneBaseActionsRouteOnlyToTheActiveTab() {
+        let active = TabID()
+        let inactive = TabID()
+
+        XCTAssertTrue(
+            BaseContainerTabRouting.handles(tabID: active, activeTabID: active))
+        XCTAssertFalse(
+            BaseContainerTabRouting.handles(tabID: inactive, activeTabID: active))
+        XCTAssertFalse(
+            BaseContainerTabRouting.handles(tabID: active, activeTabID: nil))
+    }
+
+    func testGridCellReconciliationKeepsSurvivingRowWhenSelectedColumnDisappears() throws {
+        let columnA = BasesColumn(
+            id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
+        let columnB = BasesColumn(
+            id: "property-b", label: "Property B", valueKind: "text", role: .metadata)
+        let initial = Self.selectionResult(columns: [columnA, columnB])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
+        let selectedCell = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: initial))
+
+        let missingColumn = Self.selectionResult(columns: [columnA])
+        let columnReconciliation = BaseGridSelectionReconciliation(
+            selectedCell: selectedCell,
+            result: missingColumn)
+
+        XCTAssertEqual(columnReconciliation.selectedRowID, rowID)
+        XCTAssertNil(columnReconciliation.selectedCell)
+        XCTAssertNil(columnReconciliation.columnIndex)
+        XCTAssertTrue(columnReconciliation.clearEditRequest)
+
+        var missingRow = missingColumn
+        missingRow.rows = []
+        let rowReconciliation = BaseGridSelectionReconciliation(
+            selectedCell: selectedCell,
+            result: missingRow)
+
+        XCTAssertNil(rowReconciliation.selectedRowID)
+        XCTAssertNil(rowReconciliation.selectedCell)
+        XCTAssertNil(rowReconciliation.columnIndex)
+        XCTAssertTrue(rowReconciliation.clearEditRequest)
+    }
+
+    func testGridReturnAndF2DispatchStableColumnAfterResultReorder() throws {
+        let columnA = BasesColumn(
+            id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
+        let columnB = BasesColumn(
+            id: "property-b", label: "Property B", valueKind: "text", role: .metadata)
+        var result = Self.selectionResult(columns: [columnA, columnB])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(result.rows.first))
+        var stableSelection = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: result))
+        var editedColumnIDs: [String] = []
+
+        func makeGrid() -> AccessibleDataGrid<BaseGridRow> {
+            let snapshot = result
+            return AccessibleDataGrid(
+                columns: snapshot.columns.enumerated().map { columnIndex, column in
+                    AccessibleDataGrid<BaseGridRow>.Column(
+                        column.label,
+                        cell: { $0.value(at: columnIndex) })
+                },
+                rows: snapshot.rows.enumerated().map {
+                    BaseGridRow(row: $0.element, ordinal: $0.offset)
+                },
+                summary: "1 row",
+                accessibilityLabel: "Stable selection test grid",
+                cellSelection: Binding(
+                    get: { stableSelection.position(in: snapshot) },
+                    set: { position in
+                        guard let position else { return }
+                        stableSelection = BaseGridCellSelection(
+                            position: position,
+                            result: snapshot) ?? stableSelection
+                    }),
+                cellNavigation: true,
+                onEditCell: { _, columnIndex in
+                    guard snapshot.columns.indices.contains(columnIndex) else { return }
+                    editedColumnIDs.append(snapshot.columns[columnIndex].id)
+                })
+        }
+
+        let coordinator = GridCoordinator(grid: makeGrid())
+        let table = NSTableView()
+        let returnEvent = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "\r",
+                charactersIgnoringModifiers: "\r",
+                isARepeat: false,
+                keyCode: 36))
+        let f2Event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.function],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                isARepeat: false,
+                keyCode: 120))
+
+        result = Self.selectionResult(columns: [columnB, columnA])
+        coordinator.reload(grid: makeGrid())
+
+        XCTAssertTrue(coordinator.handleKeyDown(returnEvent, in: table))
+        XCTAssertTrue(coordinator.handleKeyDown(f2Event, in: table))
+        XCTAssertEqual(
+            editedColumnIDs,
+            ["property-b", "property-b"],
+            "native Return and F2 dispatch must resolve the stable ID in the reordered result")
+
+        result = Self.selectionResult(columns: [columnA])
+        coordinator.reload(grid: makeGrid())
+
+        XCTAssertFalse(coordinator.handleKeyDown(returnEvent, in: table))
+        XCTAssertFalse(coordinator.handleKeyDown(f2Event, in: table))
+        XCTAssertEqual(
+            editedColumnIDs,
+            ["property-b", "property-b"],
+            "a disappeared selected column must not dispatch an edit to its former offset")
+    }
+
+    func testF2CommandReceivesTheStableSelectedColumnAfterResultReorder() async throws {
+        let state = try await makeAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let document = try XCTUnwrap(state.activeBaseDocument)
+        let initial = try XCTUnwrap(document.result)
+        let statusIndex = try XCTUnwrap(initial.columns.firstIndex { $0.id == "status" })
+        let row = try XCTUnwrap(initial.rows.first)
+        let rowID = BaseGridRow.id(for: row)
+        let selection = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: statusIndex),
+                result: initial))
+        var reordered = initial
+        reordered.columns.swapAt(0, statusIndex)
+        reordered.rows = initial.rows.map { row in
+            var row = row
+            row.values.swapAt(0, statusIndex)
+            return row
+        }
+        let reorderedIndex = try XCTUnwrap(selection.columnIndex(in: reordered))
+
+        state.updateActiveBaseSelection(
+            path: document.selectionKey,
+            rowID: rowID,
+            columnIndex: reorderedIndex,
+            result: reordered)
+        let requestToken = state.baseEditPropertyRequestToken
+        state.basesEditSelectedProperty()
+
+        XCTAssertEqual(state.activeBaseSelectedColumn?.id, "status")
+        XCTAssertEqual(state.baseEditPropertyRequestToken, requestToken + 1)
+    }
+
     func testBaseQuickFilterEscapeRestoresNativeResultFocus() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let baseContainer = try String(
-            contentsOf: root.appendingPathComponent(
-                "apps/slate-mac/Sources/SlateMac/Bases/BaseContainerView.swift"),
-            encoding: .utf8)
-        let grid = try String(
-            contentsOf: root.appendingPathComponent(
-                "apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift"),
-            encoding: .utf8)
-        let list = try String(
-            contentsOf: root.appendingPathComponent(
-                "apps/slate-mac/Sources/SlateMac/Bases/BaseListRenderer.swift"),
-            encoding: .utf8)
+        let baseContainer = try sourceFile("Bases/BaseContainerView.swift")
+        let grid = try sourceFile("AccessibleDataGrid.swift")
+        let list = try sourceFile("Bases/BaseListRenderer.swift")
 
         XCTAssertTrue(baseContainer.contains("resultFocusToken &+="))
         XCTAssertTrue(baseContainer.contains("focusRequest: resultFocusToken"))
@@ -578,31 +1619,85 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(doc.result?.rows.map(\.filePath), ["Notes/Beta.md", "Notes/Alpha.md"])
     }
 
+    func testSaveSortPreservesOwnerStateWhileReloadingSameBaseDockMetadata() async throws {
+        let fixture = try await makeLivePropertySurfacesState()
+        fixture.state.dockBaseFileToSidebar(
+            path: "Queries/Edit.base",
+            refreshDelayNanoseconds: 0)
+        await fixture.state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(fixture.state.basesDockDocument)
+        let ownerHandle = try XCTUnwrap(fixture.active.handle)
+        let dockHandle = try XCTUnwrap(dock.handle)
+        XCTAssertFalse(
+            fixture.active.views[1].slateStateJson?.contains(#""sort""#) == true)
+        XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+
+        fixture.state.basesSaveSortToView()
+
+        XCTAssertEqual(
+            fixture.active.handle,
+            ownerHandle,
+            "saveSortToView already refreshes its handle; the shared funnel must not reopen it")
+        XCTAssertEqual(fixture.active.activeViewIndex, 1)
+        XCTAssertEqual(fixture.active.quickFilterText, "Alpha")
+        XCTAssertEqual(
+            fixture.active.sortState,
+            DataGridSortState(columnIndex: 1, ascending: false))
+        XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.activeBaseSelectedRow?.filePath, "Notes/Alpha.md")
+        XCTAssertEqual(fixture.state.activeBaseSelectedColumn?.id, "status")
+
+        XCTAssertNotEqual(
+            dock.handle,
+            dockHandle,
+            "the separately opened dock handle must reload the edited .base definition")
+        let ownerSlateState = try XCTUnwrap(fixture.active.views[1].slateStateJson)
+        let dockSlateState = try XCTUnwrap(dock.views[1].slateStateJson)
+        XCTAssertEqual(dockSlateState, ownerSlateState)
+        XCTAssertTrue(dockSlateState.contains(#""sort""#), dockSlateState)
+        XCTAssertTrue(dockSlateState.contains(#""property":"status""#), dockSlateState)
+        XCTAssertTrue(dockSlateState.contains(#""direction":"DESC""#), dockSlateState)
+    }
+
     func testReplacingBaseTabReleasesUnreferencedBaseDocument() async throws {
         let state = try await makeAppState()
         state.openFile("Queries/Reading.base", target: .currentTab)
-        XCTAssertNotNil(state.baseDocuments["Queries/Reading.base"]?.handle)
+        let readingKey = BaseDocumentSource.file(path: "Queries/Reading.base").key
+        let otherKey = BaseDocumentSource.file(path: "Queries/Other.base").key
+        XCTAssertNotNil(state.baseDocuments[readingKey]?.handle)
 
         state.openFile("Queries/Other.base", target: .currentTab)
 
         XCTAssertNil(
-            state.baseDocuments["Queries/Reading.base"],
+            state.baseDocuments[readingKey],
             "replacing a base tab closes and drops the old unreferenced base document")
-        XCTAssertNotNil(state.baseDocuments["Queries/Other.base"]?.handle)
+        XCTAssertNotNil(state.baseDocuments[otherKey]?.handle)
     }
 
     func testRenamingOpenBaseRekeysBaseDocument() async throws {
         let state = try await makeAppState()
         state.openFile("Queries/Reading.base", target: .currentTab)
         let doc = state.baseDocument(for: "Queries/Reading.base")
+        state.dockBaseFileToSidebar(
+            path: "Queries/Reading.base", name: "Reading", refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dockDocument = try XCTUnwrap(state.basesDockDocument)
 
         await state.renameEntry(
             path: "Queries/Reading.base", isDirectory: false, to: "Renamed.base")?.value
 
-        XCTAssertNil(state.baseDocuments["Queries/Reading.base"])
-        XCTAssertTrue(state.baseDocuments["Queries/Renamed.base"] === doc)
+        let oldKey = BaseDocumentSource.file(path: "Queries/Reading.base").key
+        let newKey = BaseDocumentSource.file(path: "Queries/Renamed.base").key
+        XCTAssertNil(state.baseDocuments[oldKey])
+        XCTAssertTrue(state.baseDocuments[newKey] === doc)
         XCTAssertEqual(doc.path, "Queries/Renamed.base")
         XCTAssertEqual(state.workspace.activeTab?.item, .base(path: "Queries/Renamed.base"))
+        XCTAssertEqual(
+            state.basesDock.target,
+            .base(path: "Queries/Renamed.base", name: "Renamed"))
+        XCTAssertTrue(state.basesDockDocument === dockDocument)
+        XCTAssertEqual(dockDocument.path, "Queries/Renamed.base")
+        XCTAssertEqual(dockDocument.state, .ready)
 
         doc.focusColumn(1)
         state.basesSortByColumn()
@@ -615,6 +1710,23 @@ final class BasesTabRoutingTests: XCTestCase {
             "saving sort after rename must not resurrect the old base path")
         let source = try String(contentsOf: newURL, encoding: .utf8)
         XCTAssertTrue(source.contains("property: \"status\""))
+    }
+
+    func testRenamingDockedBaseDuringInitialDebounceStillLoadsNewPath() async throws {
+        let state = try await makeAppState()
+        state.dockBaseFileToSidebar(
+            path: "Queries/Reading.base", name: "Reading",
+            refreshDelayNanoseconds: 10_000_000_000)
+        XCTAssertNil(state.basesDockDocument)
+
+        await state.renameEntry(
+            path: "Queries/Reading.base", isDirectory: false, to: "Renamed.base")?.value
+
+        XCTAssertEqual(
+            state.basesDock.target,
+            .base(path: "Queries/Renamed.base", name: "Renamed"))
+        XCTAssertEqual(state.basesDockDocument?.path, "Queries/Renamed.base")
+        XCTAssertEqual(state.basesDockDocument?.state, .ready)
     }
 
     func testQuickOpenSurfacesBaseFiles() async throws {
@@ -652,10 +1764,9 @@ final class BasesTabRoutingTests: XCTestCase {
             result: result,
             options: BaseListOptions(slateStateJson: nil))
 
-        XCTAssertEqual(projection.items.map(\.id), [
-            "Notes/Alpha.md",
-            "Notes/Beta.md",
-        ])
+        XCTAssertEqual(
+            projection.items.map(\.id),
+            result.rows.map { BaseGridRow.id(for: $0) })
         XCTAssertEqual(projection.items.map(\.filePath), result.rows.map(\.filePath))
         XCTAssertEqual(projection.items.map(\.primaryText), ["Alpha", "Beta"])
         XCTAssertEqual(projection.items.map(\.inlineDetailText), [
@@ -665,6 +1776,127 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(projection.sections.map(\.label), ["Status: active", "Status: done"])
         XCTAssertEqual(projection.summary, "status count: 2")
         XCTAssertEqual(projection.items.first?.accessibilityLabel, "Alpha row audio")
+    }
+
+    func testColumnlessNonemptyResultRoutesEveryRowThroughAccessibleListFallback() throws {
+        var result = Self.sampleBaseResult()
+        result.columns = []
+        result.rows = result.rows.map { row in
+            var row = row
+            row.values = []
+            return row
+        }
+        result.groups = []
+        result.summaries = []
+        result.audioSummary = "2 notes without configured columns."
+
+        XCTAssertEqual(BaseResultContentState(result: result), .rowOnly)
+        let projection = BaseListProjection(
+            result: result,
+            options: BaseListOptions(slateStateJson: nil))
+        XCTAssertEqual(
+            projection.items.map(\.id),
+            result.rows.map { BaseGridRow.id(for: $0) })
+        XCTAssertEqual(projection.items.map(\.primaryText), ["Alpha.md", "Beta.md"])
+        XCTAssertEqual(projection.items.map(\.accessibilityLabel), [
+            "Alpha row audio", "Beta row audio",
+        ])
+
+        let readOnlyResult = BaseReadOnlyResultView(
+            result: result,
+            accessibilityLabel: "Columnless result")
+        let host = NSHostingView(rootView: readOnlyResult)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        host.layoutSubtreeIfNeeded()
+        let outline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        outline.reloadData()
+        outline.layoutSubtreeIfNeeded()
+        XCTAssertEqual(outline.numberOfRows, 2)
+        XCTAssertEqual(outline.accessibilityLabel(), result.audioSummary)
+
+        var empty = result
+        empty.rows = []
+        XCTAssertEqual(BaseResultContentState(result: empty), .empty)
+        XCTAssertEqual(BaseResultContentState(result: Self.sampleBaseResult()), .tabular)
+
+        for path in [
+            "Bases/BaseContainerView.swift",
+            "Bases/BaseEmbedView.swift",
+            "Bases/DashboardViews.swift",
+            "Bases/BaseQueryBuilderSheet.swift",
+        ] {
+            XCTAssertTrue(
+                try sourceFile(path).contains("BaseResultContentState(result: result)"),
+                "\(path) must distinguish row-only results from genuinely empty results")
+        }
+    }
+
+    func testGridAndListEntryUseResultAudioSummaryAndListSectionsAreHeadings() throws {
+        let result = Self.sampleBaseResult()
+        let projection = BaseListProjection(
+            result: result,
+            options: BaseListOptions(slateStateJson: nil))
+        var selection: String?
+        let list = BaseListView(
+            projection: projection,
+            selection: Binding(get: { selection }, set: { selection = $0 }),
+            onActivate: { _ in })
+        let host = NSHostingView(rootView: list)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        host.layoutSubtreeIfNeeded()
+
+        let outline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        outline.reloadData()
+        outline.layoutSubtreeIfNeeded()
+        XCTAssertEqual(outline.accessibilityLabel(), result.audioSummary)
+        let section = try XCTUnwrap(
+            outline.view(atColumn: 0, row: 0, makeIfNecessary: true))
+        XCTAssertEqual(
+            section.accessibilityRole(),
+            NSAccessibility.Role(rawValue: "AXHeading"))
+
+        XCTAssertTrue(
+            try sourceFile("Bases/BaseContainerView.swift")
+                .contains("accessibilityLabel: result.audioSummary"),
+            "grid entry must expose the engine result audio summary")
+    }
+
+    func testNativeListAudioSummaryRefreshesWhenProjectionUpdates() throws {
+        let result = Self.sampleBaseResult()
+        var selection: String?
+        let selectionBinding = Binding<String?>(
+            get: { selection }, set: { selection = $0 })
+        let list = BaseListView(
+            projection: BaseListProjection(
+                result: result,
+                options: BaseListOptions(slateStateJson: nil)),
+            selection: selectionBinding,
+            onActivate: { _ in })
+        let host = NSHostingView(rootView: list)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        host.layoutSubtreeIfNeeded()
+
+        let outline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        XCTAssertEqual(outline.accessibilityLabel(), "2 notes.")
+
+        var filteredResult = result
+        filteredResult.rows = Array(result.rows.prefix(1))
+        filteredResult.groups = Array(result.groups.prefix(1))
+        filteredResult.totalCount = 1
+        filteredResult.shownCount = 1
+        filteredResult.unfilteredShownCount = 1
+        filteredResult.audioSummary = "1 note."
+        host.rootView = BaseListView(
+            projection: BaseListProjection(
+                result: filteredResult,
+                options: BaseListOptions(slateStateJson: nil)),
+            selection: selectionBinding,
+            onActivate: { _ in })
+        host.layoutSubtreeIfNeeded()
+
+        let updatedOutline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        XCTAssertTrue(outline === updatedOutline, "the probe must exercise updateNSView, not makeNSView")
+        XCTAssertEqual(updatedOutline.accessibilityLabel(), "1 note.")
     }
 
     func testIndentedListDisplayRowsExposeDetailsAndSkipSectionsForHomeEnd() {
@@ -681,7 +1913,9 @@ final class BasesTabRoutingTests: XCTestCase {
         ])
         XCTAssertEqual(display.firstItemIndex, 1)
         XCTAssertEqual(display.lastItemIndex, 5)
-        XCTAssertEqual(display.selectionID(at: 2), "Notes/Alpha.md")
+        XCTAssertEqual(
+            display.selectionID(at: 2),
+            BaseGridRow.id(for: Self.sampleBaseResult().rows[0]))
         XCTAssertEqual(display.activationItem(at: 2)?.filePath, "Notes/Alpha.md")
         XCTAssertEqual(display.accessibilityLabel(at: 0), "Group: Status: active, 1 row")
         XCTAssertEqual(display.accessibilityLabel(at: 1), "Alpha row audio")
@@ -818,15 +2052,38 @@ final class BasesTabRoutingTests: XCTestCase {
             ],
             totalCount: 2,
             shownCount: 2,
+            unfilteredShownCount: 2,
             executedAtMs: 0,
             warnings: [],
             viewError: nil,
             audioSummary: "2 notes.")
     }
 
+    private static func selectionResult(columns: [BasesColumn]) -> BasesResultSet {
+        BasesResultSet(
+            columns: columns,
+            rows: [
+                BasesRow(
+                    filePath: "Notes/Selected.md",
+                    taskOrdinal: nil,
+                    values: columns.map { textValue($0.id) },
+                    audioDescription: "Selected row")
+            ],
+            groups: [],
+            summaries: [],
+            totalCount: 1,
+            shownCount: 1,
+            unfilteredShownCount: 1,
+            executedAtMs: 0,
+            warnings: [],
+            viewError: nil,
+            audioSummary: "1 note.")
+    }
+
     private static func textValue(_ value: String) -> BasesValue {
         BasesValue(
             rawKind: "text",
+            sortKey: value.lowercased(),
             display: value,
             text: value,
             number: nil,
@@ -837,5 +2094,27 @@ final class BasesTabRoutingTests: XCTestCase {
             linkDisplay: nil,
             list: [],
             error: nil)
+    }
+
+    private func sourceFile(_ relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root
+                .appendingPathComponent("apps/slate-mac/Sources/SlateMac")
+                .appendingPathComponent(relativePath),
+            encoding: .utf8)
+    }
+
+    private func firstSubview<T: NSView>(of type: T.Type, in root: NSView) -> T? {
+        if let match = root as? T { return match }
+        for child in root.subviews {
+            if let match = firstSubview(of: type, in: child) { return match }
+        }
+        return nil
     }
 }

@@ -29,7 +29,9 @@ New module `crates/slate-core/src/bases/eval.rs`: `pub fn eval(expr: &Expr, ctx:
 pub enum Value {
     Null, Bool(bool), Number(f64), Text(String),
     Date(DateValue),                 // ms epoch + has_time flag (date-only vs datetime)
+    DqlDate(DqlDateValue),           // Dataview zone/calendar provenance; isolated from native Date
     Duration(i64),                   // ms
+    DqlDuration(DqlDurationValue),   // authored calendar/fixed components; isolated from native Duration
     List(Vec<Value>), Object(BTreeMap<String, Value>),
     Link(LinkValue),                 // target, display, resolved_path: Option<String>
     File(FileHandleValue),           // row-backed: path + lazily-loadable fields
@@ -54,7 +56,10 @@ pub struct RowContext {
 }
 ```
 
-(`ResolvedFormulas`, `VaultLookup`, `DateValue`, `LinkValue`, `FileHandleValue` are implementation-latitude types inside `bases::eval`; `RowContext` is pinned because three issues consume it.)
+(`ResolvedFormulas`, `VaultLookup`, `DateValue`, `DqlDateValue`,
+`DqlDurationValue`, `LinkValue`, and `FileHandleValue` are
+implementation-latitude types inside `bases::eval`; `RowContext` is pinned
+because three issues consume it.)
 
 ### Normative rules
 
@@ -74,9 +79,9 @@ pub struct RowContext {
 
 Unit: every Evaluate-status function with edge cases (empty input, Null receiver, type mismatch, division by zero ⇒ `Number(inf)` per JS parity, missing property) — the vendored milestone test list (../02_milestone_brief.md). Golden: brief-§7 field-report idioms evaluate to expected values over fixture rows. Property: eval never panics; determinism (equal ctx ⇒ equal result); `parse ∘ emit ∘ parse ∘ eval` ≡ `parse ∘ eval`.
 
-- [ ] `Value`/`EvalCtx` + `eval` per rules 1–8; function-status table in module docs
-- [ ] Unit + golden + property tests
-- [ ] fmt/clippy; host-independent; no I/O (VaultLookup is a trait)
+- [x] `Value`/`EvalCtx` + `eval` per rules 1–8; function-status table in module docs
+- [x] Unit + golden + property tests
+- [x] fmt/clippy; host-independent; no I/O (VaultLookup is a trait)
 
 ## N1-2 · Planner + SQLite execution + cancellation + cache (#695) — PR 2
 
@@ -86,9 +91,9 @@ New module `crates/slate-core/src/bases/engine.rs`: `pub fn execute(query: &Slat
 
 1. **Two-stage execution** (05 §8.3): SQL narrows candidates; Rust finishes. Pushdown-eligible predicates (top-level AND conjuncts only, conservative): `file.ext == lit`, `file.inFolder(lit)` (path-prefix), `file.hasTag(lit…)` (tags table, nested semantics), `file.name/path` equality and `startsWith`, `file.mtime/ctime/size` comparisons, `note.prop == lit` (`value_text_norm` probe), `note.prop.contains(lit)` on list properties (`properties_list_values` probe), `task.*` columns (N1-4), `file.matches(lit)` (N1-5). Everything else — OR-trees, NOT, formulas, method chains — evaluates in Rust over the candidate stream. **Semantics identical either way** (census 2).
 2. Candidate streaming: batches of `page_size` (SessionConfig-derived; default 512) with `cancel.is_cancelled()` checked per batch (full_text_search precedent, search_db.rs:123). No full-vault materialization (05 §9.3.1).
-3. Row assembly: file fields from `files`; properties decoded from `value_text` JSON to `Value` by `value_kind`; formulas per N1-1 rule 6; columns = `order` list resolved against note/file/formula namespaces (unknown column id ⇒ column of Nulls + view warning, not an error — display concern, not semantics).
+3. Row assembly: file fields from `files`; properties decoded from `value_text` JSON to `Value` by `value_kind`; tagged Date/Datetime/Wikilink list elements recover their original `Value` variants while legacy untagged list strings remain Text; scalar and list Wikilinks resolve relative to the owning row's file. Formulas follow N1-1 rule 6; columns = `order` list resolved against note/file/formula namespaces (unknown column id ⇒ column of Nulls + view warning, not an error — display concern, not semantics).
 4. **Fail-loud propagation** (decision 6): the first `EvalError` in a *filter* aborts that view's execution with `ViewError { construct, row_path }`; an `EvalError` in a *column/summary* poisons that column (error marker cell values) but keeps rows. Rationale pinned: filter errors change membership (unsafe to show), column errors don't.
-5. **Cache:** key = (SlateQuery stable hash, vault generation from N0-4 rule 4, `this` identity). **Queries mentioning `now()` never cache** (a cached `now()` diverges from a cold run within the same key — §N-C would be violated); queries mentioning only `today()` additionally key on the current day. A cache hit returns the cached `executed_at_ms` unchanged (honest staleness readout). Value = `BasesResultSet`. Invalidation = generation bump (session-global — coarser than 05 §8.3's per-source-set sketch, recorded as gap G9); no partial invalidation in v1 (correct-by-construction beats clever). Cache ≡ fresh census (§N-C).
+5. **Cache:** key = (SlateQuery stable hash, vault generation from N0-4 rule 4, `this` identity). **Queries mentioning `now()` never cache** (a cached `now()` diverges from a cold run within the same key — §N-C would be violated); queries mentioning only `today()` additionally key on the current day. A cache hit returns the cached `executed_at_ms` unchanged (honest staleness readout). Value = `BasesResultSet`. Each open handle owns a 16-entry LRU: every get/insert first removes entries and recency records from obsolete generations, hits refresh recency, and same-generation query/`this` variants evict the least-recently-used entry at the cap. Invalidation remains the session-global generation bump (coarser than 05 §8.3's per-source-set sketch, recorded as gap G9); no partial source-set invalidation ships in v1. Cache ≡ fresh and bounded-retention regressions enforce §N-C.
 6. Determinism (§N-B): before sort (N1-3) rows order by `(file path, task ordinal)`; all iteration over hash containers goes through sorted views.
 7. Budgets (decision 16): indexed query < 50 ms @ 10k, < 200 ms @ 50k; unindexed worst case (pure formula filter) documented in BENCHMARKS.md, not gated.
 
@@ -96,15 +101,15 @@ New module `crates/slate-core/src/bases/engine.rs`: `pub fn execute(query: &Slat
 
 Unit: each pushdown rule vs. Rust-eval equivalence (same fixture, force both paths); cancellation under load @ 10k (vendored test list, ../02_milestone_brief.md). Censuses: `census_bases_pushdown_equiv` (random queries × random vaults: pushdown-on ≡ pushdown-off), `census_bases_cache_fresh` (§N-C: random edit/rename/delete interleavings), `census_bases_read_only` (§N-F: vault byte-hash before/after every corpus query). Criterion bench `bases_bench.rs` @ 1k/10k/50k synthetic vaults.
 
-- [ ] `execute` per rules 1–7
-- [ ] Censuses + benches recorded in BENCHMARKS.md
-- [ ] fmt/clippy clean
+- [x] `execute` per rules 1–7
+- [x] Censuses + benches recorded in BENCHMARKS.md
+- [x] fmt/clippy clean
 
 ## N1-3 · Sort, groupBy, summaries, audio strings (#696) — PR 3
 
 ### Normative rules
 
-1. **Sort:** multi-key (view state: Slate's own sort lives in the `slate` view sub-key, decision 3; Obsidian's undocumented sort state is preserved-opaque and **ignored for execution** — recorded interop caveat, brief §6.1 — the notice banner names it when present). Type-aware comparisons (Text: Unicode-aware, same tables as `value_text_norm`; Number; Date; Bool false<true; Null always last); final tiebreak `(path, ordinal)` (§N-B).
+1. **Sort:** multi-key. Obsidian's native per-view `sort` entries are interpreted read-only as property IDs or expressions while their authored bytes remain preserved. A present `slate.sort` key, including `slate.sort: []`, takes execution precedence; Slate writes sort state only through that namespaced child (decision 3; N0-2 rule 4). Type-aware comparisons (Text: Unicode-aware, same tables as `value_text_norm`; Number; Date; Bool false<true; Null always last); final tiebreak `(path, ordinal)` (§N-B).
 2. **groupBy:** one property (brief §1), direction ASC/DESC; groups ordered by key with Null-key group last ("No <property>"); rows within groups keep rule-1 order. `ResultGroup { key: Value, label: String, rows: Range, summaries }`.
 3. **Summaries:** the ten milestone-14 defaults — count, filled, empty, unique, min, max, sum, average, earliest, latest — computed per column, per view and per group. Type applicability per brief §4 (numeric set on Numbers, earliest/latest on Dates, count/filled/empty/unique on anything); inapplicable assignment ⇒ view warning + em-dash cell. Obsidian built-in summary *names* map onto these (Average→average, Checked/Unchecked→ documented mapping: Checked = count of true, ships as `checked`/`unchecked` aliases). Median/Stddev/Range parse-preserve as `Unsupported` in v1 (N-E6) — fail-loud only if assigned in an executed view.
 4. **Custom summary formulas** (top-level `summaries`): evaluate with implicit `values: List` binding when inside the v1 function set; else fail-loud per decision 6. (`values.mean()` from the docs example: `mean` is **not** in the v1 set — brief §6.2 — so it fails loud with a named error; recorded in help.)
@@ -115,9 +120,9 @@ Unit: each pushdown rule vs. Rust-eval equivalence (same fixture, force both pat
 
 Unit per rule incl. groupBy ordering stability + summary correctness per default (vendored test list, ../02_milestone_brief.md); mixed-type column sort golden; audio-grammar snapshots; property: group partition is total and stable under insertion-order permutation (§N-B).
 
-- [ ] Rules 1–6
-- [ ] Unit + golden + property tests
-- [ ] fmt/clippy clean
+- [x] Rules 1–6
+- [x] Unit + golden + property tests
+- [x] fmt/clippy clean
 
 ## N1-4 · Tasks as rows + `file.tasks` aggregates (#697) — PR 4
 
@@ -136,9 +141,9 @@ The differentiator (brief §5.2). Two independent surfaces:
 
 Unit per rule; fixture vault with custom status chars, emoji metadata, recurrences; pushdown-equiv census extension covering task predicates; golden: thread-103074's two motivating dashboards (progress column per project; open `#next-action` tasks across notes) as executable fixtures.
 
-- [ ] Rules 1–6
-- [ ] Fixtures + census extension + goldens
-- [ ] fmt/clippy clean
+- [x] Rules 1–6
+- [x] Fixtures + census extension + goldens
+- [x] fmt/clippy clean
 
 ## N1-5 · Full-text filter function (#698) — PR 5
 
@@ -154,8 +159,8 @@ Unit per rule; fixture vault with custom status chars, emoji metadata, recurrenc
 
 Unit per rule; composition golden ("in `Projects/` AND matching 'roadmap'" — 05 §8.8's example, executable); pushdown-equiv census extension; determinism (FTS row order never leaks — membership only).
 
-- [ ] Rules 1–5
-- [ ] Unit + golden + census extension
-- [ ] fmt/clippy clean
+- [x] Rules 1–5
+- [x] Unit + golden + census extension
+- [x] fmt/clippy clean
 
 **Wave-2 exit:** pushdown-equiv, cache≡fresh, and read-only censuses clean; benches recorded; evaluator function-status table complete.

@@ -103,7 +103,7 @@ struct ReadingView: View {
         /// note/image embed resolver. `thisPath` is the host note path.
         var baseEmbedSession: VaultSession?
         var baseEmbedThisPath: String?
-        var onOpenBaseEmbedInTab: (String) -> Void = { _ in }
+        var onOpenBaseEmbedInTab: (BaseEmbedOpenDestination) -> Void = { _ in }
         var baseEmbedHandleProvider: @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
             { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
 
@@ -121,7 +121,7 @@ struct ReadingView: View {
             onOpenEmbedSource: @escaping (String) -> Void = { _ in },
             baseEmbedSession: VaultSession? = nil,
             baseEmbedThisPath: String? = nil,
-            onOpenBaseEmbedInTab: @escaping (String) -> Void = { _ in },
+            onOpenBaseEmbedInTab: @escaping (BaseEmbedOpenDestination) -> Void = { _ in },
             baseEmbedHandleProvider: @escaping @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
                 { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
         ) {
@@ -455,13 +455,20 @@ struct ReadingView: View {
     }
 
     private func baseEmbedBlock(_ request: BaseEmbedRequest, identity: Int) -> some View {
-        BaseEmbedView(
+        VisibilityGatedBaseEmbed(
             request: request,
             session: context.baseEmbedSession,
             thisPath: context.baseEmbedThisPath,
             sharedHandle: context.baseEmbedHandleProvider(request, context.baseEmbedThisPath),
-            onOpenInTab: { path in context.onOpenBaseEmbedInTab(path) })
-            .id("\(identity)|\(request.cacheKey)|\(context.baseEmbedThisPath ?? "")")
+            onOpenInTab: { destination in
+                context.onOpenBaseEmbedInTab(destination)
+            })
+            .id(
+                BaseExactIdentity.key(
+                    prefix: "reading-base-embed",
+                    components: [
+                        String(identity), request.cacheKey, context.baseEmbedThisPath,
+                    ]))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

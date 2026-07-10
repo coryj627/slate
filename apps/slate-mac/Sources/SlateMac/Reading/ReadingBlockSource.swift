@@ -197,6 +197,41 @@ enum ReadingBlockSource {
         }.joined(separator: "\n")
     }
 
+    /// Return the bytes authored between the opening and closing fence lines.
+    /// Unlike `fenceInterior`, this deliberately preserves the line ending
+    /// immediately before the closing fence. YAML block scalars use that byte
+    /// to distinguish clip/strip/keep chomping semantics.
+    static func fenceInteriorVerbatim(_ source: String) -> String {
+        guard let openingLineEnd = source.firstIndex(of: "\n") else { return source }
+        let openingLine = source[..<openingLineEnd]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let marker: String
+        if openingLine.hasPrefix("```") {
+            marker = "```"
+        } else if openingLine.hasPrefix("~~~") {
+            marker = "~~~"
+        } else {
+            return source
+        }
+
+        let contentStart = source.index(after: openingLineEnd)
+        var logicalEnd = source.endIndex
+        if logicalEnd > contentStart,
+            source[source.index(before: logicalEnd)] == "\n"
+        {
+            logicalEnd = source.index(before: logicalEnd)
+        }
+        let closingLineStart = source[..<logicalEnd].lastIndex(of: "\n")
+            .map { source.index(after: $0) }
+            ?? source.startIndex
+        let closingLine = source[closingLineStart..<logicalEnd]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard closingLine.hasPrefix(marker), closingLineStart >= contentStart else {
+            return String(source[contentStart...])
+        }
+        return String(source[contentStart..<closingLineStart])
+    }
+
     // MARK: - Line numbers
 
     /// Byte offsets of every line start in `text` (UTF-8). Computed once per

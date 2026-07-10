@@ -187,8 +187,8 @@ struct NoteContentView: View {
                 },
                 baseEmbedSession: appState.currentSession,
                 baseEmbedThisPath: appState.selectedFilePath,
-                onOpenBaseEmbedInTab: { [appState] path in
-                    appState.openFile(path, target: .newTab)
+                onOpenBaseEmbedInTab: { [appState] destination in
+                    appState.openBaseEmbedDestination(destination)
                 },
                 baseEmbedHandleProvider: { [appState] request, thisPath in
                     appState.baseEmbedHandle(for: request, thisPath: thisPath)
@@ -271,8 +271,8 @@ struct NoteContentView: View {
                 text: text,
                 session: appState.currentSession,
                 thisPath: appState.selectedFilePath,
-                onOpenInTab: { [appState] path in
-                    appState.openFile(path, target: .newTab)
+                onOpenInTab: { [appState] destination in
+                    appState.openBaseEmbedDestination(destination)
                 },
                 onJumpToSource: { [appState] line in
                     appState.lineScrollRequest.send(line)
