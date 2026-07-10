@@ -22,7 +22,7 @@ Cross-references: [00_program.md](../00_program.md) decisions · [01_research_br
 | # | Obsidian | Slate v1 | Authority |
 |---|---|---|---|
 | O1 | `random()` regenerates per view load | Excluded — fail-loud | Determinism DoD §N-B; help documents it. |
-| O2 | Undocumented per-view UI state keys (sort, widths, card size…) | Preserved opaque; **ignored for execution**, banner names them; Slate state under `slate` sub-key | Brief §6.1; decision 3. Reverse-engineering their names is N-E-scale future work, not v1. |
+| O2 | Undocumented per-view UI state keys (sort, widths, card size…) | Unknown keys remain preserved opaque, ignored for execution, and named by the notice banner. Native `sort` is the read-only execution exception: interpret property IDs/expressions while preserving authored bytes; a present `slate.sort` (including `[]`) wins. Slate writes only the namespaced child. | Brief §6.1; decision 3; n0 §N0-2 rule 4; n1 §N1-3 rule 1. Reverse-engineering the remaining keys is N-E-scale future work, not v1. |
 | O3 | Cards + Map render | Table-fallback + notice | 05 §8.5 (cards V1.x = N-E3; map V2+ with the AT-caveat stance). |
 | O4 | `html()`/`image()`/`icon()` render rich | Parse, render as text | 05 §1.3 (no webview); help documents. |
 | O5 | Summary superset (`mean`, Median, Stddev, Range) | v1 = the ten milestone-14 defaults (+ checked/unchecked mapping); others preserved, fail-loud if executed | Brief §6.2; N-E6. |

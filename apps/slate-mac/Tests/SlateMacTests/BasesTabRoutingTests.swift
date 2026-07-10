@@ -1182,6 +1182,40 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertNil(selection.reconciledEditRequest(editRequest, in: missingB))
     }
 
+    func testGridCellReconciliationKeepsSurvivingRowWhenSelectedColumnDisappears() throws {
+        let columnA = BasesColumn(
+            id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
+        let columnB = BasesColumn(
+            id: "property-b", label: "Property B", valueKind: "text", role: .metadata)
+        let initial = Self.selectionResult(columns: [columnA, columnB])
+        let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
+        let selectedCell = try XCTUnwrap(
+            BaseGridCellSelection(
+                position: .init(rowID: rowID, columnIndex: 1),
+                result: initial))
+
+        let missingColumn = Self.selectionResult(columns: [columnA])
+        let columnReconciliation = BaseGridSelectionReconciliation(
+            selectedCell: selectedCell,
+            result: missingColumn)
+
+        XCTAssertEqual(columnReconciliation.selectedRowID, rowID)
+        XCTAssertNil(columnReconciliation.selectedCell)
+        XCTAssertNil(columnReconciliation.columnIndex)
+        XCTAssertTrue(columnReconciliation.clearEditRequest)
+
+        var missingRow = missingColumn
+        missingRow.rows = []
+        let rowReconciliation = BaseGridSelectionReconciliation(
+            selectedCell: selectedCell,
+            result: missingRow)
+
+        XCTAssertNil(rowReconciliation.selectedRowID)
+        XCTAssertNil(rowReconciliation.selectedCell)
+        XCTAssertNil(rowReconciliation.columnIndex)
+        XCTAssertTrue(rowReconciliation.clearEditRequest)
+    }
+
     func testGridReturnAndF2DispatchStableColumnAfterResultReorder() throws {
         let columnA = BasesColumn(
             id: "property-a", label: "Property A", valueKind: "text", role: .metadata)
@@ -1463,6 +1497,57 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(projection.sections.map(\.label), ["Status: active", "Status: done"])
         XCTAssertEqual(projection.summary, "status count: 2")
         XCTAssertEqual(projection.items.first?.accessibilityLabel, "Alpha row audio")
+    }
+
+    func testColumnlessNonemptyResultRoutesEveryRowThroughAccessibleListFallback() throws {
+        var result = Self.sampleBaseResult()
+        result.columns = []
+        result.rows = result.rows.map { row in
+            var row = row
+            row.values = []
+            return row
+        }
+        result.groups = []
+        result.summaries = []
+        result.audioSummary = "2 notes without configured columns."
+
+        XCTAssertEqual(BaseResultContentState(result: result), .rowOnly)
+        let projection = BaseListProjection(
+            result: result,
+            options: BaseListOptions(slateStateJson: nil))
+        XCTAssertEqual(projection.items.map(\.id), ["Notes/Alpha.md", "Notes/Beta.md"])
+        XCTAssertEqual(projection.items.map(\.primaryText), ["Alpha.md", "Beta.md"])
+        XCTAssertEqual(projection.items.map(\.accessibilityLabel), [
+            "Alpha row audio", "Beta row audio",
+        ])
+
+        let readOnlyResult = BaseReadOnlyResultView(
+            result: result,
+            accessibilityLabel: "Columnless result")
+        let host = NSHostingView(rootView: readOnlyResult)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        host.layoutSubtreeIfNeeded()
+        let outline = try XCTUnwrap(firstSubview(of: NSOutlineView.self, in: host))
+        outline.reloadData()
+        outline.layoutSubtreeIfNeeded()
+        XCTAssertEqual(outline.numberOfRows, 2)
+        XCTAssertEqual(outline.accessibilityLabel(), result.audioSummary)
+
+        var empty = result
+        empty.rows = []
+        XCTAssertEqual(BaseResultContentState(result: empty), .empty)
+        XCTAssertEqual(BaseResultContentState(result: Self.sampleBaseResult()), .tabular)
+
+        for path in [
+            "Bases/BaseContainerView.swift",
+            "Bases/BaseEmbedView.swift",
+            "Bases/DashboardViews.swift",
+            "Bases/BaseQueryBuilderSheet.swift",
+        ] {
+            XCTAssertTrue(
+                try sourceFile(path).contains("BaseResultContentState(result: result)"),
+                "\(path) must distinguish row-only results from genuinely empty results")
+        }
     }
 
     func testGridAndListEntryUseResultAudioSummaryAndListSectionsAreHeadings() throws {

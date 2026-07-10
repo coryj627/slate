@@ -14,6 +14,22 @@ enum BaseRendererMode: String, Equatable, Hashable {
     }
 }
 
+enum BaseResultContentState: Equatable {
+    case empty
+    case rowOnly
+    case tabular
+
+    init(result: BasesResultSet) {
+        if result.rows.isEmpty {
+            self = .empty
+        } else if result.columns.isEmpty {
+            self = .rowOnly
+        } else {
+            self = .tabular
+        }
+    }
+}
+
 struct BaseListOptions: Equatable, Hashable {
     enum Marker: Equatable, Hashable {
         case bullet

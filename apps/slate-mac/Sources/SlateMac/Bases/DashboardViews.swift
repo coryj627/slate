@@ -99,9 +99,16 @@ private struct DashboardSectionView: View {
         case .failed(let message):
             placeholder(message)
         case .ready:
-            if let result = section.result, !result.columns.isEmpty {
-                BaseReadOnlyResultView(result: result, accessibilityLabel: "\(section.title) grid")
-                    .frame(minHeight: 160)
+            if let result = section.result {
+                switch BaseResultContentState(result: result) {
+                case .empty:
+                    placeholder("No results in this section.")
+                case .rowOnly, .tabular:
+                    BaseReadOnlyResultView(
+                        result: result,
+                        accessibilityLabel: "\(section.title) grid")
+                        .frame(minHeight: 160)
+                }
             } else {
                 placeholder("No results in this section.")
             }
@@ -237,15 +244,22 @@ struct BasesDockPanel: View {
             }
             .padding(Tokens.Spacing.md)
         case .ready:
-            if let result = doc.result, !result.columns.isEmpty {
-                VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-                    Text(doc.displayName)
-                        .font(Tokens.Typography.sectionHeader)
-                        .foregroundStyle(Tokens.ColorRole.textPrimary)
-                        .accessibilityAddTraits(.isHeader)
-                    BaseReadOnlyResultView(result: result, accessibilityLabel: "\(doc.displayName) grid")
+            if let result = doc.result {
+                switch BaseResultContentState(result: result) {
+                case .empty:
+                    placeholder("No base results.")
+                case .rowOnly, .tabular:
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+                        Text(doc.displayName)
+                            .font(Tokens.Typography.sectionHeader)
+                            .foregroundStyle(Tokens.ColorRole.textPrimary)
+                            .accessibilityAddTraits(.isHeader)
+                        BaseReadOnlyResultView(
+                            result: result,
+                            accessibilityLabel: "\(doc.displayName) grid")
+                    }
+                    .padding(Tokens.Spacing.md)
                 }
-                .padding(Tokens.Spacing.md)
             } else {
                 placeholder("No base results.")
             }
@@ -269,20 +283,34 @@ struct BaseReadOnlyResultView: View {
     @State private var selectedCell: AccessibleDataGrid<BaseGridRow>.CellPosition?
     @State private var sortState: DataGridSortState?
 
+    @ViewBuilder
     var body: some View {
-        AccessibleDataGrid(
-            columns: columns,
-            rows: rows,
-            summary: BaseSummaryFormatter.summaryText(result),
-            accessibilityLabel: accessibilityLabel,
-            groups: groups,
-            selection: $selectedRow,
-            cellSelection: $selectedCell,
-            sortState: $sortState,
-            cellNavigation: true,
-            onActivate: { _ in },
-            rowAccessibilityDescription: { $0.row.audioDescription },
-            rowActions: [])
+        switch BaseResultContentState(result: result) {
+        case .empty:
+            EmptyView()
+        case .rowOnly:
+            BaseListView(
+                projection: BaseListProjection(
+                    result: result,
+                    options: BaseListOptions(slateStateJson: nil)),
+                selection: $selectedRow,
+                onActivate: { _ in },
+                rowActions: [])
+        case .tabular:
+            AccessibleDataGrid(
+                columns: columns,
+                rows: rows,
+                summary: BaseSummaryFormatter.summaryText(result),
+                accessibilityLabel: accessibilityLabel,
+                groups: groups,
+                selection: $selectedRow,
+                cellSelection: $selectedCell,
+                sortState: $sortState,
+                cellNavigation: true,
+                onActivate: { _ in },
+                rowAccessibilityDescription: { $0.row.audioDescription },
+                rowActions: [])
+        }
     }
 
     private var columns: [AccessibleDataGrid<BaseGridRow>.Column] {

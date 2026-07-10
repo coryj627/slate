@@ -137,8 +137,15 @@ struct BaseEmbedView: View {
         case .failed(let message):
             placeholder(message)
         case .ready, .degraded:
-            if let result = document.result, !result.columns.isEmpty {
-                resultRenderer(result)
+            if let result = document.result {
+                switch BaseResultContentState(result: result) {
+                case .empty:
+                    placeholder("No base results.")
+                case .rowOnly:
+                    resultList(result)
+                case .tabular:
+                    resultRenderer(result)
+                }
             } else {
                 placeholder("No base results.")
             }

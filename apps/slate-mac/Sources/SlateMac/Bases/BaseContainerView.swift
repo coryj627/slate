@@ -135,8 +135,15 @@ struct BaseContainerView: View {
         case .failed(let message):
             placeholder(message)
         case .ready, .degraded:
-            if let result = document.result, !result.columns.isEmpty {
-                resultRenderer(result)
+            if let result = document.result {
+                switch BaseResultContentState(result: result) {
+                case .empty:
+                    placeholder("No base results.")
+                case .rowOnly:
+                    resultList(result)
+                case .tabular:
+                    resultRenderer(result)
+                }
             } else {
                 placeholder("No base results.")
             }
@@ -358,10 +365,15 @@ struct BaseContainerView: View {
 
     private func reconcileSelectedCell(with result: BasesResultSet?) {
         guard let selectedCell else { return }
-        guard let result, let columnIndex = selectedCell.columnIndex(in: result) else {
-            self.selectedCell = nil
-            selectedRow = nil
+        let reconciliation = BaseGridSelectionReconciliation(
+            selectedCell: selectedCell,
+            result: result)
+        self.selectedCell = reconciliation.selectedCell
+        selectedRow = reconciliation.selectedRowID
+        if reconciliation.clearEditRequest {
             gridEditRequest = nil
+        }
+        guard let result, let columnIndex = reconciliation.columnIndex else {
             if let result, !result.columns.isEmpty {
                 document.focusColumn(firstEditableColumnIndex(result: result))
             }
@@ -636,6 +648,44 @@ struct BaseGridCellSelection: Equatable {
             return nil
         }
         return .init(rowID: rowID, columnIndex: columnIndex, text: request.text)
+    }
+}
+
+struct BaseGridSelectionReconciliation: Equatable {
+    let selectedRowID: String?
+    let selectedCell: BaseGridCellSelection?
+    let columnIndex: Int?
+    let clearEditRequest: Bool
+
+    init(selectedCell: BaseGridCellSelection, result: BasesResultSet?) {
+        guard let result else {
+            selectedRowID = nil
+            self.selectedCell = nil
+            columnIndex = nil
+            clearEditRequest = true
+            return
+        }
+        guard result.rows.contains(where: { BaseGridRow.id(for: $0) == selectedCell.rowID }) else {
+            selectedRowID = nil
+            self.selectedCell = nil
+            columnIndex = nil
+            clearEditRequest = true
+            return
+        }
+
+        selectedRowID = selectedCell.rowID
+        guard let columnIndex = result.columns.firstIndex(where: {
+            $0.id == selectedCell.columnID
+        }) else {
+            self.selectedCell = nil
+            self.columnIndex = nil
+            clearEditRequest = true
+            return
+        }
+
+        self.selectedCell = selectedCell
+        self.columnIndex = columnIndex
+        clearEditRequest = false
     }
 }
 

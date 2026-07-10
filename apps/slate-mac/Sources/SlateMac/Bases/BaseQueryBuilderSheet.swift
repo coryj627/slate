@@ -569,10 +569,22 @@ struct BaseQueryBuilderSheet: View {
     private var previewContent: some View {
         switch model.previewState {
         case .ready(let result):
-            if result.columns.isEmpty {
+            switch BaseResultContentState(result: result) {
+            case .empty:
                 Text("No preview rows.")
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-            } else {
+            case .rowOnly:
+                BaseListView(
+                    projection: BaseListProjection(
+                        result: result,
+                        options: BaseListOptions(slateStateJson: nil)),
+                    selection: Binding(
+                        get: { previewSelectedRow },
+                        set: { previewSelectedRow = $0 }),
+                    onActivate: { _ in },
+                    rowActions: [])
+                    .frame(minHeight: 220)
+            case .tabular:
                 AccessibleDataGrid(
                     columns: previewColumns(from: result),
                     rows: previewRows(from: result),
