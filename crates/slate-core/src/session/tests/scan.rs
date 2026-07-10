@@ -32,6 +32,33 @@ fn open_is_idempotent() {
 }
 
 #[test]
+fn scan_initial_propagates_database_contention_instead_of_returning_partial_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    provider.write_file("note.md", b"# Note\n").unwrap();
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .busy_timeout(std::time::Duration::from_millis(10))
+        .unwrap();
+
+    let cache_db = tmp.path().join(".slate").join("cache.sqlite");
+    let blocker = crate::db::open_database(&cache_db, 512).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let result = session.scan_initial(&CancelToken::new());
+    assert!(
+        matches!(result, Err(VaultError::Db(_))),
+        "database contention must abort the scan instead of exposing a partial index: {result:?}"
+    );
+
+    blocker.execute_batch("ROLLBACK").unwrap();
+}
+
+#[test]
 fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     let tmp = tempfile::tempdir().unwrap();
     let provider = FsVaultProvider::new(tmp.path().to_path_buf());

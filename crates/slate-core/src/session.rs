@@ -2814,11 +2814,13 @@ fn scan_vault(
 
     let mut report = ScanReport::default();
     let now = now_ms();
-    // Open the transaction *before* emitting Started so a tx-open
-    // failure can't leave listeners stuck waiting for a terminal
-    // event. If conn.transaction() fails here, the listener has
-    // observed nothing and the error flows through the Result.
-    let tx = conn.transaction()?;
+    // Open an IMMEDIATE transaction *before* emitting Started so a
+    // tx-open failure can't leave listeners stuck waiting for a terminal
+    // event. Taking SQLite's one-writer lock before the initial index
+    // snapshot also serializes simultaneous cold scans: a second process
+    // cannot snapshot an empty cache and then lose the deferred lock
+    // upgrade while indexing, returning a misleading partial scan.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
     // Snapshot vault-relative paths for link resolution. Built once
     // up-front so per-file scanning doesn't re-query SQLite for every
