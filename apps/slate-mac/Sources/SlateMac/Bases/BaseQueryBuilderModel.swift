@@ -446,13 +446,15 @@ enum BaseQueryOperator: Hashable {
         let equalityAndEmpty: [BaseQueryOperator] = [.equals, .notEquals, .isEmpty]
         switch kind {
         case .text:
-            return [.equals, .notEquals, .contains, .startsWith, .endsWith, .isEmpty, .matches]
+            return [.equals, .notEquals, .contains, .startsWith, .endsWith, .isEmpty]
         case .number, .date, .datetime:
             return [
                 .equals, .notEquals, .greaterThan, .greaterThanOrEqual,
                 .lessThan, .lessThanOrEqual, .isEmpty,
             ]
-        case .boolean, .wikilink, .file, .object, .mixedOrUnknown, .formula:
+        case .file:
+            return [.equals, .notEquals, .hasTag, .hasLink, .matches, .isEmpty]
+        case .boolean, .wikilink, .object, .mixedOrUnknown, .formula:
             return equalityAndEmpty
         case .list, .tagList:
             return [.equals, .notEquals, .contains, .isEmpty]
@@ -706,7 +708,10 @@ struct BaseQueryCondition: Hashable {
         if !BaseQueryOperator.options(for: choice.kind).contains(op) {
             op = .equals
         }
-        value = value.coerced(preferredKind: choice.kind)
+        let operandKind = op == .isEmpty
+            ? choice.kind
+            : Self.inputKind(for: choice.kind, operator: op)
+        value = value.coerced(preferredKind: operandKind)
         preservedFilterJSON = nil
     }
 
@@ -729,7 +734,7 @@ struct BaseQueryCondition: Hashable {
     func isCompatible(with kind: BaseQueryValueKind) -> Bool {
         guard BaseQueryOperator.options(for: kind).contains(op) else { return false }
         guard op != .isEmpty else { return true }
-        switch kind {
+        switch Self.inputKind(for: kind, operator: op) {
         case .text:
             if case .text = value { return true }
         case .number:
@@ -740,11 +745,7 @@ struct BaseQueryCondition: Hashable {
             if case .absoluteDate = value { return true }
             if case .relativeDays = value { return true }
         case .list, .tagList:
-            if op == .contains {
-                if case .text = value { return true }
-            } else if case .tokens = value {
-                return true
-            }
+            if case .tokens = value { return true }
         case .wikilink:
             if case .wikilink = value { return true }
         case .file:
@@ -809,10 +810,15 @@ struct BaseQueryCondition: Hashable {
         for kind: BaseQueryValueKind,
         operator conditionOperator: BaseQueryOperator
     ) -> BaseQueryValueKind {
-        if conditionOperator == .contains, kind == .list || kind == .tagList {
+        switch (kind, conditionOperator) {
+        case (.file, .hasTag), (.file, .matches),
+            (.list, .contains), (.tagList, .contains):
             return .text
+        case (.file, .hasLink):
+            return .file
+        default:
+            return kind
         }
-        return kind
     }
 }
 
@@ -1159,7 +1165,7 @@ struct BaseQueryBuilderDraft: Equatable {
 
         let decoded = Self.decodeFilterRows(
             root["filters"],
-            allowSourceExtraction: rowSource != "Tasks")
+            allowSourceExtraction: decodedSource == .allNotes && rowSource != "Tasks")
         if source == .allNotes, let canonical = decoded.source {
             source = canonical
         }
@@ -1720,11 +1726,11 @@ struct BaseQueryBuilderDraft: Equatable {
     ) -> (source: BaseQuerySource?, combinator: BaseQueryCombinator, rows: [BaseQueryBuilderRow]) {
         var source: BaseQuerySource?
         var rows: [BaseQueryBuilderRow] = []
-        for node in nodes {
+        for (index, node) in nodes.enumerated() {
             guard
                 let decoded = decodeRow(
                     node,
-                    allowSourceExtraction: allowSourceExtraction,
+                    allowSourceExtraction: allowSourceExtraction && index == 0 && source == nil,
                     depth: depth)
             else {
                 rows.append(advancedRow(node, fallback: "unrecognized filter"))
@@ -1749,6 +1755,10 @@ struct BaseQueryBuilderDraft: Equatable {
             if let source = decodeCanonicalSourceExpression(expr) {
                 if allowSourceExtraction {
                     return (source, advancedRow(value, fallback: source.accessibilityLabel))
+                }
+                if var condition = decodeConditionExpression(expr) {
+                    condition.preservedFilterJSON = canonicalJSONString(value)
+                    return (nil, .condition(condition))
                 }
                 return (nil, advancedRow(value, fallback: source.accessibilityLabel))
             }
@@ -1870,7 +1880,10 @@ struct BaseQueryBuilderDraft: Equatable {
         if let call = methodCall(expr),
             let property = decodeProperty(call.receiver),
             let conditionOperator = decodeMethodOperator(call.name),
-            let value = decodeMethodConditionValue(operator: conditionOperator, args: call.args)
+            let value = decodeMethodConditionValue(
+                receiver: property,
+                operator: conditionOperator,
+                args: call.args)
         {
             let condition = BaseQueryCondition(
                 property: property,
@@ -1940,6 +1953,7 @@ struct BaseQueryBuilderDraft: Equatable {
     }
 
     private static func decodeMethodConditionValue(
+        receiver property: BaseQueryProperty,
         operator conditionOperator: BaseQueryOperator,
         args: [Any]
     ) -> BaseQueryValue? {
@@ -1948,9 +1962,30 @@ struct BaseQueryBuilderDraft: Equatable {
             return args.isEmpty ? .text("") : nil
         case .contains, .startsWith, .endsWith, .hasTag, .hasLink, .matches:
             guard args.count == 1,
-                let expr = args[0] as? [String: Any]
+                let expr = args[0] as? [String: Any],
+                let value = decodeConditionValue(expr)
             else { return nil }
-            return decodeLiteral(expr)
+            switch conditionOperator {
+            case .hasTag, .matches:
+                guard property.staticValueKind == .file else { return nil }
+                guard case .text = value else { return nil }
+            case .hasLink:
+                guard property.staticValueKind == .file else { return nil }
+                guard case .file = value else { return nil }
+            case .contains, .startsWith, .endsWith:
+                break
+            case .isEmpty, .equals, .notEquals, .greaterThan, .greaterThanOrEqual,
+                .lessThan, .lessThanOrEqual:
+                return nil
+            }
+            if let kind = property.staticValueKind {
+                let condition = BaseQueryCondition(
+                    property: property,
+                    operator: conditionOperator,
+                    value: value)
+                guard condition.isCompatible(with: kind) else { return nil }
+            }
+            return value
         case .equals, .notEquals, .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual:
             return nil
         }
@@ -2073,7 +2108,7 @@ final class BaseQueryBuilderModel: ObservableObject {
     @Published var editingRowIndex: Int?
     @Published var previewState: BaseQueryPreviewState = .idle
     let editingSavedQuery: EditingSavedQuery?
-    private let initialDraft: BaseQueryBuilderDraft
+    private var comparisonBaseline: BaseQueryBuilderDraft
 
     init(
         draft: BaseQueryBuilderDraft = BaseQueryBuilderDraft(),
@@ -2081,7 +2116,7 @@ final class BaseQueryBuilderModel: ObservableObject {
     ) {
         self.draft = draft
         self.editingSavedQuery = editingSavedQuery
-        self.initialDraft = draft
+        self.comparisonBaseline = draft
     }
 
     var source: BaseQuerySource {
@@ -2129,7 +2164,11 @@ final class BaseQueryBuilderModel: ObservableObject {
     }
 
     func baseEditsForView(_ view: UInt32) throws -> [BaseEdit] {
-        try draft.baseEditsForView(view, replacing: initialDraft)
+        try draft.baseEditsForView(view, replacing: comparisonBaseline)
+    }
+
+    func rebaseAfterSuccessfulSave() {
+        comparisonBaseline = draft
     }
 
     func applyPropertyChoices(_ choices: [BaseQueryPropertyChoice]) {

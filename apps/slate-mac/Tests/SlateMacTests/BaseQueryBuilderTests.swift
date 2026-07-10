@@ -95,6 +95,16 @@ final class BaseQueryBuilderTests: XCTestCase {
         }
     }
 
+    private static func hasRemoveFormulaEdit(
+        _ edits: [BaseEdit],
+        named expectedName: String
+    ) -> Bool {
+        edits.contains { edit in
+            if case .removeFormula(let name) = edit, name == expectedName { return true }
+            return false
+        }
+    }
+
     private static func semanticJSON(_ value: Any) throws -> String {
         func removingSpans(_ value: Any) -> Any {
             if let object = value as? [String: Any] {
@@ -1064,37 +1074,257 @@ final class BaseQueryBuilderTests: XCTestCase {
             .lessThan, .lessThanOrEqual, .isEmpty,
         ]
 
-        XCTAssertEqual(
-            BaseQueryOperator.options(for: .text),
-            [.equals, .notEquals, .contains, .startsWith, .endsWith, .isEmpty, .matches])
-        XCTAssertEqual(BaseQueryOperator.options(for: .number), ordered)
-        XCTAssertEqual(BaseQueryOperator.options(for: .date), ordered)
-        XCTAssertEqual(BaseQueryOperator.options(for: .datetime), ordered)
-        XCTAssertEqual(BaseQueryOperator.options(for: .boolean), equalityAndEmpty)
-        XCTAssertEqual(
-            BaseQueryOperator.options(for: .list),
-            [.equals, .notEquals, .contains, .isEmpty])
-        XCTAssertEqual(
-            BaseQueryOperator.options(for: .tagList),
-            [.equals, .notEquals, .contains, .isEmpty])
-        XCTAssertEqual(BaseQueryOperator.options(for: .wikilink), equalityAndEmpty)
-        XCTAssertEqual(BaseQueryOperator.options(for: .file), equalityAndEmpty)
-        XCTAssertEqual(BaseQueryOperator.options(for: .object), equalityAndEmpty)
-        XCTAssertEqual(BaseQueryOperator.options(for: .mixedOrUnknown), equalityAndEmpty)
-        XCTAssertEqual(BaseQueryOperator.options(for: .formula), equalityAndEmpty)
+        let cases: [(
+            kind: BaseQueryValueKind,
+            operators: [BaseQueryOperator],
+            editor: BaseQueryEditorDescriptor
+        )] = [
+            (
+                .text,
+                [.equals, .notEquals, .contains, .startsWith, .endsWith, .isEmpty],
+                .text),
+            (.number, ordered, .number),
+            (.boolean, equalityAndEmpty, .toggle),
+            (.date, ordered, .dateAndRelative),
+            (.datetime, ordered, .dateAndRelative),
+            (.list, [.equals, .notEquals, .contains, .isEmpty], .tokenList),
+            (.tagList, [.equals, .notEquals, .contains, .isEmpty], .tokenList),
+            (.wikilink, equalityAndEmpty, .link),
+            (
+                .file,
+                [.equals, .notEquals, .hasTag, .hasLink, .matches, .isEmpty],
+                .link),
+            (.object, equalityAndEmpty, .text),
+            (.mixedOrUnknown, equalityAndEmpty, .text),
+            (.formula, equalityAndEmpty, .text),
+        ]
 
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.text), .text)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.number), .number)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.boolean), .toggle)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.list), .tokenList)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.tagList), .tokenList)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.wikilink), .link)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.file), .link)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.object), .text)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.date), .dateAndRelative)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.datetime), .dateAndRelative)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.mixedOrUnknown), .text)
-        XCTAssertEqual(BaseQueryEditorDescriptor.forKind(.formula), .text)
+        for testCase in cases {
+            XCTAssertEqual(
+                BaseQueryOperator.options(for: testCase.kind),
+                testCase.operators,
+                "operator matrix for \(testCase.kind)")
+            XCTAssertEqual(
+                BaseQueryEditorDescriptor.forKind(testCase.kind),
+                testCase.editor,
+                "editor matrix for \(testCase.kind)")
+        }
+    }
+
+    func testMethodOperatorInputKindsMatchExecutableArgumentFamilies() throws {
+        let cases: [(
+            receiver: BaseQueryValueKind,
+            op: BaseQueryOperator,
+            operand: BaseQueryValueKind
+        )] = [
+            (.file, .hasTag, .text),
+            (.file, .hasLink, .file),
+            (.file, .matches, .text),
+            (.list, .contains, .text),
+            (.tagList, .contains, .text),
+            (.text, .contains, .text),
+        ]
+
+        for testCase in cases {
+            XCTAssertEqual(
+                BaseQueryCondition.inputKind(
+                    for: testCase.receiver,
+                    operator: testCase.op),
+                testCase.operand,
+                "operand kind for \(testCase.receiver).\(testCase.op)")
+        }
+    }
+
+    private func assertFileSpecialOperatorRoundTrip(
+        _ op: BaseQueryOperator,
+        value: BaseQueryValue,
+        baseName: String
+    ) throws {
+        let (_, session) = try makeSession()
+        _ = try session.saveText(
+            path: "Projects/Alpha.md",
+            contents:
+                """
+                ---
+                tags: [project, shared]
+                status: active
+                priority: 3
+                ---
+                # Alpha
+                #inline
+                [[Zeta]]
+                - [ ] Project task
+                """,
+            expectedContentHash: nil)
+
+        var draft = BaseQueryBuilderDraft()
+        draft.source = .folder("Projects")
+        draft.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .file(.file),
+                    operator: op,
+                    value: value))
+        ]
+        let queryJSON = try draft.queryJSON()
+        let liveHandle = try session.openQuery(queryJson: queryJSON, thisPath: nil)
+        let live = try session.baseExecute(
+            handle: liveHandle,
+            view: 0,
+            thisPath: nil,
+            quickFilter: nil,
+            cancel: CancelToken())
+        session.closeBase(handle: liveHandle)
+        XCTAssertEqual(live.rows.map(\.filePath), ["Projects/Alpha.md"])
+
+        let path = "Queries/\(baseName).base"
+        try session.saveQueryAsBase(queryJson: queryJSON, path: path)
+        let savedHandle = try session.openBase(path: path)
+        defer { session.closeBase(handle: savedHandle) }
+        let saved = try session.baseExecute(
+            handle: savedHandle,
+            view: 0,
+            thisPath: nil,
+            quickFilter: nil,
+            cancel: CancelToken())
+        XCTAssertEqual(saved.rows.map(\.filePath), live.rows.map(\.filePath))
+
+        let reopened = try BaseQueryBuilderDraft(
+            queryJSON: session.baseViewQueryJson(handle: savedHandle, view: 0))
+        guard reopened.rows.count == 1,
+            case .condition(let condition) = reopened.rows[0]
+        else {
+            return XCTFail("\(op) must reopen as one structured condition")
+        }
+        XCTAssertEqual(condition.property, .file(.file))
+        XCTAssertEqual(condition.op, op)
+        XCTAssertEqual(condition.value, value)
+    }
+
+    func testRootFolderSourceKeepsFileHasTagAsStructuredFilterRow() throws {
+        var draft = BaseQueryBuilderDraft()
+        draft.source = .folder("Projects")
+        draft.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .file(.file),
+                    operator: .hasTag,
+                    value: .text("project")))
+        ]
+
+        let reopened = try BaseQueryBuilderDraft(queryJSON: draft.queryJSON())
+
+        XCTAssertEqual(reopened.source, .folder("Projects"))
+        guard reopened.rows.count == 1,
+            case .condition(let condition) = reopened.rows[0]
+        else {
+            return XCTFail("root Folder source must not consume the hasTag filter row")
+        }
+        XCTAssertEqual(condition.property, .file(.file))
+        XCTAssertEqual(condition.op, .hasTag)
+        XCTAssertEqual(condition.value, .text("project"))
+    }
+
+    func testSavedBaseAndExtractsOnlyFolderAndKeepsFileHasTagStructured() throws {
+        let (_, session) = try makeSession()
+        let folderExpression = try XCTUnwrap(
+            session.validateBaseExpression(source: #"file.inFolder("Projects")"#).exprJson)
+        let tagExpression = try XCTUnwrap(
+            session.validateBaseExpression(source: #"file.file.hasTag("project")"#).exprJson)
+        var root = try Self.jsonObject(BaseQueryBuilderDraft().queryJSON())
+        root["filters"] = [
+            "And": [
+                ["Stmt": try Self.jsonObject(folderExpression)],
+                ["Stmt": try Self.jsonObject(tagExpression)],
+            ]
+        ]
+
+        let reopened = try BaseQueryBuilderDraft(queryJSON: Self.jsonString(root))
+
+        XCTAssertEqual(reopened.source, .folder("Projects"))
+        guard reopened.rows.count == 1,
+            case .condition(let condition) = reopened.rows[0]
+        else {
+            return XCTFail("only the first canonical source may be extracted from saved filters")
+        }
+        XCTAssertEqual(condition.property, .file(.file))
+        XCTAssertEqual(condition.op, .hasTag)
+        XCTAssertEqual(condition.value, .text("project"))
+    }
+
+    func testSavedBaseAndDoesNotExtractCanonicalSourceAfterFirstCondition() throws {
+        var draft = BaseQueryBuilderDraft()
+        draft.rows = [
+            .condition(
+                BaseQueryCondition(
+                    property: .note("status"),
+                    operator: .equals,
+                    value: .text("active"))),
+            .condition(
+                BaseQueryCondition(
+                    property: .file(.file),
+                    operator: .hasTag,
+                    value: .text("project"))),
+        ]
+
+        let reopened = try BaseQueryBuilderDraft(queryJSON: draft.queryJSON())
+
+        XCTAssertEqual(reopened.source, .allNotes)
+        guard reopened.rows.count == 2,
+            case .condition(let status) = reopened.rows[0],
+            case .condition(let tag) = reopened.rows[1]
+        else {
+            return XCTFail("a later canonical-looking filter must remain a structured row")
+        }
+        XCTAssertEqual(status.property, .note("status"))
+        XCTAssertEqual(status.op, .equals)
+        XCTAssertEqual(status.value, .text("active"))
+        XCTAssertEqual(tag.property, .file(.file))
+        XCTAssertEqual(tag.op, .hasTag)
+        XCTAssertEqual(tag.value, .text("project"))
+    }
+
+    func testFileHasTagRoundTripsThroughJSONEngineAndBaseAsStructuredCondition() throws {
+        try assertFileSpecialOperatorRoundTrip(
+            .hasTag,
+            value: .text("project"),
+            baseName: "HasTag")
+    }
+
+    func testFileHasLinkRoundTripsThroughJSONEngineAndBaseAsStructuredCondition() throws {
+        try assertFileSpecialOperatorRoundTrip(
+            .hasLink,
+            value: .file("Zeta.md"),
+            baseName: "HasLink")
+    }
+
+    func testFileMatchesRoundTripsThroughJSONEngineAndBaseAsStructuredCondition() throws {
+        try assertFileSpecialOperatorRoundTrip(
+            .matches,
+            value: .text("Alpha"),
+            baseName: "Matches")
+    }
+
+    func testFileSpecialMethodsOnNonFileReceiversStayAdvanced() throws {
+        let (_, session) = try makeSession()
+        let sources = [
+            #"status.hasTag("project")"#,
+            #"status.hasLink(file("Zeta.md"))"#,
+            #"status.matches("Alpha")"#,
+        ]
+
+        for source in sources {
+            let validation = session.validateBaseExpression(source: source)
+            var root = try Self.jsonObject(BaseQueryBuilderDraft().queryJSON())
+            root["filters"] = ["Stmt": try Self.jsonObject(XCTUnwrap(validation.exprJson))]
+
+            let decoded = try BaseQueryBuilderDraft(queryJSON: Self.jsonString(root))
+
+            guard case .advanced = decoded.rows.first else {
+                XCTFail("\(source) must not become a typed file-special condition")
+                continue
+            }
+        }
     }
 
     func testListContainsEncodesAndExecutesWithOneScalarNeedle() throws {
@@ -2002,6 +2232,51 @@ final class BaseQueryBuilderTests: XCTestCase {
 
         XCTAssertTrue(model.formulas.isEmpty)
         XCTAssertTrue(model.sortKeys.isEmpty)
+    }
+
+    func testSuccessfulSaveRebasePreventsReplayingRemovedFormulaEdit() throws {
+        let (_, session) = try makeSession()
+        let validation = session.validateBaseExpression(source: "number(priority)")
+        var draft = BaseQueryBuilderDraft()
+        draft.formulas = [
+            try BaseQueryFormula(
+                name: "score",
+                expression: "number(priority)",
+                expressionJSON: XCTUnwrap(validation.exprJson))
+        ]
+        let model = BaseQueryBuilderModel(draft: draft)
+        model.removeFormula(named: "score")
+
+        XCTAssertTrue(
+            Self.hasRemoveFormulaEdit(try model.baseEditsForView(0), named: "score"))
+
+        model.rebaseAfterSuccessfulSave()
+
+        XCTAssertFalse(
+            Self.hasRemoveFormulaEdit(try model.baseEditsForView(0), named: "score"),
+            "a successful save must make the saved draft the next comparison baseline")
+    }
+
+    func testUnrebasedBuilderPreservesPendingRemovedFormulaEdit() throws {
+        let (_, session) = try makeSession()
+        let validation = session.validateBaseExpression(source: "number(priority)")
+        var draft = BaseQueryBuilderDraft()
+        draft.formulas = [
+            try BaseQueryFormula(
+                name: "score",
+                expression: "number(priority)",
+                expressionJSON: XCTUnwrap(validation.exprJson))
+        ]
+        let model = BaseQueryBuilderModel(draft: draft)
+        model.removeFormula(named: "score")
+
+        let firstAttempt = try model.baseEditsForView(0)
+        let retryAfterFailure = try model.baseEditsForView(0)
+
+        XCTAssertTrue(Self.hasRemoveFormulaEdit(firstAttempt, named: "score"))
+        XCTAssertTrue(
+            Self.hasRemoveFormulaEdit(retryAfterFailure, named: "score"),
+            "without an explicit success rebase, failed-save edits must remain pending")
     }
 
     func testCompletedDraftCanClearExistingViewFacets() throws {
