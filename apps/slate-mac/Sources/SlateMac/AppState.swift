@@ -5647,9 +5647,13 @@ final class AppState: ObservableObject {
                 priority: .userInitiated
             ) {
                 do {
-                    // A new note is an empty file; save_text creates it + indexes
-                    // it. create_folder's sibling for files is just a write.
-                    _ = try session.saveText(path: path, contents: "", expectedContentHash: nil)
+                    // A new note is an empty file. create_exclusive (O-3) is
+                    // the no-clobber primitive: a name race against a file
+                    // the index hasn't seen yet (external create between
+                    // scan and click) surfaces DestinationExists instead of
+                    // truncating it — save_text would silently overwrite
+                    // (#796).
+                    _ = try session.createExclusive(path: path, content: "")
                     return .success(
                         StructuralReport(opId: 0, moved: [], rewritten: [], failed: []))
                 } catch let e as VaultError { return .failure(e) }
@@ -6947,10 +6951,11 @@ final class AppState: ObservableObject {
                     templatePath: template.path,
                     context: context
                 )
-                _ = try session.saveText(
+                // Same no-clobber discipline as createNote (#796): the
+                // template flow races external creates identically.
+                _ = try session.createExclusive(
                     path: relativePath,
-                    contents: rendered.body,
-                    expectedContentHash: nil
+                    content: rendered.body
                 )
                 return .success(rendered)
             } catch let error as VaultError {
