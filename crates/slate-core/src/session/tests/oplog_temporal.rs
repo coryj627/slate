@@ -1830,3 +1830,64 @@ fn birthtime_backfills_on_fast_path_and_survives_zero_sentinels() {
     // refresh it — the invariant is only that it never becomes 0.
     assert!(birth > 0, "a known birth never degrades to the sentinel");
 }
+
+/// `save_query_as_base` serialization round-trip for every temporal
+/// operator (regression: the #801 `method_source` arms carried an
+/// `oplog.` prefix, so a saved query serialized as
+/// `oplog.oplog.created_since(...)` — which no longer re-parses as the
+/// operator and killed the saved view on read-back).
+#[test]
+fn saved_query_serialization_round_trips_every_operator() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let r = session
+        .save_text("n.md", "keep DOOMED keep\n", None)
+        .unwrap();
+    session
+        .save_text("n.md", "keep keep\n", Some(&r.new_content_hash))
+        .unwrap();
+
+    for (filter, expect_match) in [
+        (r#"oplog.has_change_since("1h")"#, true),
+        (r#"oplog.has_property_change("k", "1h")"#, false),
+        (r#"oplog.deleted_content_matches("doomed", "1h")"#, true),
+        (r#"oplog.created_since("1h")"#, true),
+        (r#"oplog.untouched_for("1h")"#, false),
+    ] {
+        let yaml = format!(
+            "views:\n  - type: table\n    name: T\n    filters: '{filter}'\n    order:\n      - file.name\n"
+        );
+        let (base, warnings) = crate::bases::parse_base(&yaml);
+        assert!(warnings.is_empty(), "{filter}: {warnings:?}");
+        let query_json = serde_json::to_string(&crate::bases::view_query(&base, 0)).unwrap();
+        let path = "Queries/RoundTrip.base";
+        session.save_query_as_base(&query_json, path).unwrap();
+
+        // The serialized text carries the operator call — never a
+        // doubled receiver. (Argument quoting is the YAML writer's
+        // business; assert on the token up to the open paren.)
+        let text = session.read_text(path).unwrap();
+        let token = &filter[..filter.find('"').unwrap()];
+        assert!(text.contains(token), "{filter}: operator survives:\n{text}");
+        assert!(
+            !text.contains("oplog.oplog"),
+            "{filter}: doubled receiver:\n{text}"
+        );
+
+        // And the written .base re-parses INTO the operator: executing
+        // it filters (no in-band view error, correct verdict for n.md).
+        let handle = session.open_base(path).unwrap();
+        let result = session
+            .base_execute(handle, 0, None, None, &CancelToken::new())
+            .unwrap();
+        session.close_base(handle);
+        assert_eq!(result.view_error, None, "{filter}");
+        let paths: Vec<&str> = result.rows.iter().map(|r| r.file_path.as_str()).collect();
+        // The .base file itself is also a vault note; only assert on n.md.
+        assert_eq!(
+            paths.contains(&"n.md"),
+            expect_match,
+            "{filter}: rows {paths:?}"
+        );
+    }
+}
