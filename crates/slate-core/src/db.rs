@@ -167,6 +167,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "open_marks: changes-since-last-open baselines (O-4 #542)",
         sql: include_str!("../migrations/028_open_marks.sql"),
     },
+    Migration {
+        description: "oplog_events: temporal-query index over the op logs (O-6 #544)",
+        sql: include_str!("../migrations/029_oplog_events.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

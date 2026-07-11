@@ -8918,6 +8918,9 @@ fn method_source(method: crate::bases::expr::MethodName) -> &'static str {
         MethodName::Keys => "keys",
         MethodName::Values => "values",
         MethodName::Matches => "matches",
+        MethodName::OplogHasChangeSince => "has_change_since",
+        MethodName::OplogHasPropertyChange => "has_property_change",
+        MethodName::OplogDeletedContentMatches => "deleted_content_matches",
     }
 }
 

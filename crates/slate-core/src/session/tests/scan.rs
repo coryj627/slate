@@ -106,6 +106,7 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     conn.execute("ALTER TABLE files DROP COLUMN oplog_name", [])
         .unwrap();
     conn.execute("DROP TABLE open_marks", []).unwrap();
+    conn.execute("DROP TABLE oplog_events", []).unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)
