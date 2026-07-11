@@ -213,7 +213,10 @@ extension AppState {
             historyNextCursor = page.nextCursor
             historyTotalFiltered = page.totalFiltered
         case .failure(.InvalidArgument):
-            await loadHistoryForCurrentNote(path: path)
+            // Through the serialized chain, like every other entry
+            // point — a direct call here could compute while a
+            // scheduled load's mark is in flight (round 3 High).
+            await scheduleHistoryLoad(path: path).value
         case .failure(let error):
             historyLoadError = humanReadable(error)
         }
