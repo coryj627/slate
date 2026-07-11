@@ -51,6 +51,7 @@ mod dql_inline_fields_db;
 pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;
+pub mod history_prefs;
 mod line_index;
 pub mod link_resolver;
 pub mod link_rewrite;
@@ -102,6 +103,7 @@ pub use frontmatter::{
     NoteParts, Property, PropertyParseWarning, PropertyValue, compose_note, extract_frontmatter,
     frontmatter_range, split_note, validate_frontmatter_source,
 };
+pub use history_prefs::HistoryPrefs;
 pub use link_resolver::{InMemoryVaultIndex, ResolvedLink, VaultIndex, resolve_link};
 pub use links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};

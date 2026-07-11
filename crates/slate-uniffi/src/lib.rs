@@ -534,6 +534,20 @@ impl VaultSession {
         self.inner.unregister_event_listener(token);
     }
 
+    /// The live history prefs (O-5 #543) — always what the session is
+    /// actually enforcing.
+    pub fn history_prefs(&self) -> HistoryPrefs {
+        self.inner.history_prefs().into()
+    }
+
+    /// Persist (`.slate/prefs.json`, unknown keys preserved) AND
+    /// live-apply history prefs (O-5 #543). `retention_days == 0` and
+    /// an unparseable existing prefs file are typed errors; on any
+    /// error the running session keeps its previous setting.
+    pub fn set_history_prefs(&self, prefs: HistoryPrefs) -> Result<(), VaultError> {
+        Ok(self.inner.set_history_prefs(prefs.into())?)
+    }
+
     /// Page through a file's version history, newest first (O-3
     /// #541). A compaction between pages invalidates the cursor with
     /// `InvalidArgument("history changed, restart paging")` — reload
@@ -2586,6 +2600,31 @@ impl From<core::VersionSummary> for VersionSummary {
             annotations: v.annotations.into_iter().map(Into::into).collect(),
             is_marker: v.is_marker,
             audio_fragment: v.audio_fragment,
+        }
+    }
+}
+
+/// The `.slate/prefs.json` `history` section (O-5 #543). Mirrors
+/// `slate_core::HistoryPrefs`.
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct HistoryPrefs {
+    /// Op-log retention window in days (UI offers 30/90/180/365;
+    /// any non-zero value is accepted).
+    pub retention_days: u32,
+}
+
+impl From<core::HistoryPrefs> for HistoryPrefs {
+    fn from(p: core::HistoryPrefs) -> Self {
+        Self {
+            retention_days: p.retention_days,
+        }
+    }
+}
+
+impl From<HistoryPrefs> for core::HistoryPrefs {
+    fn from(p: HistoryPrefs) -> Self {
+        Self {
+            retention_days: p.retention_days,
         }
     }
 }

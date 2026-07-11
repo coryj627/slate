@@ -592,3 +592,67 @@ fn post_rebuild_deletion_lists_with_unknown_timestamp() {
     assert_eq!(entry.deleted_at_ms, None, "no journal → honest None");
     assert!(entry.recoverable);
 }
+
+// --- History prefs (O-5 #543) -------------------------------------------
+
+#[test]
+fn history_prefs_roundtrip_apply_live_and_survive_reopen() {
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+        assert_eq!(
+            session.history_prefs().retention_days,
+            90,
+            "config default without a prefs file"
+        );
+
+        // Persist + live-apply in one call.
+        session
+            .set_history_prefs(crate::history_prefs::HistoryPrefs { retention_days: 30 })
+            .unwrap();
+        assert_eq!(
+            session.retention_days(),
+            30,
+            "compaction window applied live"
+        );
+
+        // Rejected values change nothing anywhere.
+        assert!(
+            session
+                .set_history_prefs(crate::history_prefs::HistoryPrefs { retention_days: 0 })
+                .is_err()
+        );
+        assert_eq!(session.retention_days(), 30);
+
+        // Unknown prefs.json keys survive the write (the writer
+        // discipline the Swift store established).
+        let raw = std::fs::read_to_string(tmp.path().join(".slate/prefs.json")).unwrap();
+        let mut root: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        root["future_section"] = serde_json::json!({"keep": true});
+        std::fs::write(
+            tmp.path().join(".slate/prefs.json"),
+            serde_json::to_string_pretty(&root).unwrap(),
+        )
+        .unwrap();
+        session
+            .set_history_prefs(crate::history_prefs::HistoryPrefs {
+                retention_days: 180,
+            })
+            .unwrap();
+        let root: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(tmp.path().join(".slate/prefs.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(root["future_section"]["keep"], true);
+        assert_eq!(root["history"]["retention_days"], 180);
+    }
+
+    // A fresh session reads the persisted window at open.
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    assert_eq!(session.history_prefs().retention_days, 180);
+    assert_eq!(
+        session.retention_days(),
+        180,
+        "runtime config seeded from prefs"
+    );
+}
