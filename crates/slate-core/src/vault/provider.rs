@@ -47,6 +47,24 @@ pub trait VaultProvider: Send + Sync {
     /// possible (write to a temp file, then rename).
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError>;
 
+    /// Create a vault file that must not already exist (O-3 #541 —
+    /// `create_exclusive`/recovery must never clobber a concurrent
+    /// writer, including one outside Slate). An occupied destination
+    /// is `VaultError::DestinationExists`, nothing written.
+    /// Implementations should use a filesystem no-replace primitive
+    /// (the default is a weaker check-then-write for providers without
+    /// one — documented TOCTOU against non-Slate writers only; Slate
+    /// writers are serialized by the caller's cross-process SQLite
+    /// lock).
+    fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        if self.stat(relative).is_ok() {
+            return Err(VaultError::DestinationExists {
+                path: relative.to_string(),
+            });
+        }
+        self.write_file(relative, contents)
+    }
+
     /// Delete a file or directory. Implementations should move-to-trash
     /// where the platform supports it.
     fn delete(&self, relative: &str) -> Result<(), VaultError>;

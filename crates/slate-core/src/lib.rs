@@ -127,11 +127,12 @@ pub use session::{
     CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement,
     CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
     CanvasWhereAmI, ColumnRole, CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus,
-    DashboardSummary, DirListing, DirNodeSummary, EventErrorCode, ExportFormat, FileFilter,
-    FileMetadata, FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RemnantLog,
-    RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped,
-    SaveReport, SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress,
-    ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultSession,
+    DashboardSummary, DeletedFileEntry, DirListing, DirNodeSummary, EventErrorCode, ExportFormat,
+    FileFilter, FileMetadata, FileSummary, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary,
+    Page, Paging, RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport,
+    RenameSkipReason, RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax,
+    SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport, SessionConfig,
+    VaultEventListener, VaultSession, VersionSummary,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
@@ -204,6 +205,13 @@ pub enum VaultError {
         expected_content_hash: String,
         current_mtime_ms: i64,
     },
+
+    /// A version operation refused to serve bytes whose hash doesn't
+    /// match the requested version (O-3 #541): the log is corrupt or
+    /// inconsistent, and the operation failed CLOSED rather than
+    /// returning wrong content. Never a silent fallback.
+    #[error("history for {path:?} is unavailable: {reason}")]
+    HistoryUnavailable { path: String, reason: String },
 
     /// Returned from `set_property` / `delete_property` /
     /// `rename_property_across_vault` when a file's YAML frontmatter

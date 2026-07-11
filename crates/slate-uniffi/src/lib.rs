@@ -110,6 +110,12 @@ pub enum VaultError {
         current_mtime_ms: i64,
     },
 
+    /// A version operation refused to serve bytes whose hash doesn't
+    /// match the requested version (O-3 #541) — history is corrupt or
+    /// inconsistent and the operation failed closed.
+    #[error("history for {path:?} is unavailable: {reason}")]
+    HistoryUnavailable { path: String, reason: String },
+
     /// `set_property` / `delete_property` / `rename_property_across_vault`
     /// refused to merge the requested edit into a YAML block that
     /// doesn't parse. The user's broken YAML is left on disk.
@@ -167,6 +173,9 @@ impl From<core::VaultError> for VaultError {
                 expected_content_hash,
                 current_mtime_ms,
             },
+            core::VaultError::HistoryUnavailable { path, reason } => {
+                VaultError::HistoryUnavailable { path, reason }
+            }
             core::VaultError::MalformedFrontmatter { path, reason } => {
                 VaultError::MalformedFrontmatter { path, reason }
             }
@@ -523,6 +532,66 @@ impl VaultSession {
     /// tokens are a no-op.
     pub fn unregister_event_listener(&self, token: u64) {
         self.inner.unregister_event_listener(token);
+    }
+
+    /// Page through a file's version history, newest first (O-3
+    /// #541). A compaction between pages invalidates the cursor with
+    /// `InvalidArgument("history changed, restart paging")` — reload
+    /// page one.
+    pub fn list_versions(
+        &self,
+        path: String,
+        paging: Paging,
+    ) -> Result<VersionSummaryPage, VaultError> {
+        Ok(self.inner.list_versions(&path, paging.into())?.into())
+    }
+
+    /// The exact bytes of one version, integrity-verified — wrong
+    /// bytes are never served (`HistoryUnavailable` instead).
+    pub fn version_content(
+        &self,
+        path: String,
+        version_hash: String,
+    ) -> Result<String, VaultError> {
+        Ok(self.inner.version_content(&path, &version_hash)?)
+    }
+
+    /// Restore a (verified) version through the standard save
+    /// machinery — conflict-detected, atomic, itself versioned.
+    /// History is never rewritten.
+    pub fn restore_version(
+        &self,
+        path: String,
+        version_hash: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        Ok(self
+            .inner
+            .restore_version(&path, &version_hash, expected_content_hash.as_deref())?
+            .into())
+    }
+
+    /// The recoverable deleted files (newest per path, journal
+    /// timestamps where known, `deleted_at_ms` descending).
+    pub fn list_deleted_files(&self, paging: Paging) -> Result<DeletedFilePage, VaultError> {
+        Ok(self.inner.list_deleted_files(paging.into())?.into())
+    }
+
+    /// Recover a deleted file to its pre-deletion bytes; the recovered
+    /// file keeps its history. Occupied destination →
+    /// `DestinationExists`, nothing written.
+    pub fn recover_deleted_file(&self, path: String) -> Result<SaveReport, VaultError> {
+        Ok(self.inner.recover_deleted_file(&path)?.into())
+    }
+
+    /// Create-if-absent write: existing destination (on disk or in the
+    /// index) → `DestinationExists`; else the standard save machinery.
+    pub fn create_exclusive(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<SaveReport, VaultError> {
+        Ok(self.inner.create_exclusive(&path, &content)?.into())
     }
 
     /// All outgoing links from `path` in document order, including
@@ -2222,7 +2291,7 @@ impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
 /// [`decode_edit_batch_ops`] and `Annotated` payloads with
 /// [`decode_annotated_payload`] (O-1's per-op accessors). `CanvasApply`
 /// payloads (the JSON `{name, action, inverse}` record) remain opaque.
-#[derive(Debug, uniffi::Enum)]
+#[derive(Debug, Clone, uniffi::Enum)]
 pub enum OpKind {
     WholeFileReplace,
     EditBatch,
@@ -2327,6 +2396,115 @@ pub fn decode_edit_batch_ops(payload: Vec<u8>) -> Result<Vec<EditOp>, VaultError
     core::decode_edit_batch(&payload)
         .map(|ops| ops.into_iter().map(EditOp::from).collect())
         .map_err(|message| VaultError::InvalidArgument { message })
+}
+
+/// One annotation on a version row (O-3 #541). Mirrors
+/// `slate_core::OpAnnotationSummary`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct OpAnnotationSummary {
+    pub kind: String,
+    pub display: String,
+}
+
+impl From<core::OpAnnotationSummary> for OpAnnotationSummary {
+    fn from(a: core::OpAnnotationSummary) -> Self {
+        Self {
+            kind: a.kind,
+            display: a.display,
+        }
+    }
+}
+
+/// One version-history row (O-3 #541). Mirrors
+/// `slate_core::VersionSummary` — `position_from_tail` is the ROW
+/// identity (hashes repeat across A→B→A histories);
+/// `content_hash_after` is the CONTENT identity used for
+/// `version_content`/`restore_version`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct VersionSummary {
+    pub position_from_tail: u32,
+    pub content_hash_after: String,
+    pub timestamp_ms: i64,
+    pub op_kind: OpKind,
+    pub op_count: u32,
+    pub byte_delta: i64,
+    pub annotations: Vec<OpAnnotationSummary>,
+    pub is_marker: bool,
+    pub audio_fragment: String,
+}
+
+impl From<core::VersionSummary> for VersionSummary {
+    fn from(v: core::VersionSummary) -> Self {
+        Self {
+            position_from_tail: v.position_from_tail,
+            content_hash_after: v.content_hash_after,
+            timestamp_ms: v.timestamp_ms,
+            op_kind: v.op_kind.into(),
+            op_count: v.op_count,
+            byte_delta: v.byte_delta,
+            annotations: v.annotations.into_iter().map(Into::into).collect(),
+            is_marker: v.is_marker,
+            audio_fragment: v.audio_fragment,
+        }
+    }
+}
+
+/// One page of version history (uniffi doesn't take generics — the
+/// concrete `Page<VersionSummary>` instantiation).
+#[derive(Debug, uniffi::Record)]
+pub struct VersionSummaryPage {
+    pub items: Vec<VersionSummary>,
+    pub next_cursor: Option<String>,
+    pub total_filtered: u64,
+}
+
+impl From<core::Page<core::VersionSummary>> for VersionSummaryPage {
+    fn from(p: core::Page<core::VersionSummary>) -> Self {
+        Self {
+            items: p.items.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
+            total_filtered: p.total_filtered,
+        }
+    }
+}
+
+/// One recoverable deleted file (O-3 #541). Mirrors
+/// `slate_core::DeletedFileEntry`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeletedFileEntry {
+    pub path: String,
+    pub deleted_at_ms: Option<i64>,
+    pub recoverable: bool,
+    pub size_bytes: Option<u64>,
+}
+
+impl From<core::DeletedFileEntry> for DeletedFileEntry {
+    fn from(e: core::DeletedFileEntry) -> Self {
+        Self {
+            path: e.path,
+            deleted_at_ms: e.deleted_at_ms,
+            recoverable: e.recoverable,
+            size_bytes: e.size_bytes,
+        }
+    }
+}
+
+/// One page of deleted files (concrete `Page<DeletedFileEntry>`).
+#[derive(Debug, uniffi::Record)]
+pub struct DeletedFilePage {
+    pub items: Vec<DeletedFileEntry>,
+    pub next_cursor: Option<String>,
+    pub total_filtered: u64,
+}
+
+impl From<core::Page<core::DeletedFileEntry>> for DeletedFilePage {
+    fn from(p: core::Page<core::DeletedFileEntry>) -> Self {
+        Self {
+            items: p.items.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
+            total_filtered: p.total_filtered,
+        }
+    }
 }
 
 /// Decode an `Annotated` payload into its inner entry + annotations

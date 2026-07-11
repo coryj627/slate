@@ -85,6 +85,8 @@ func describe(_ error: VaultError) -> String {
         return "preferences file \(path) is unreadable: \(reason)"
     case .DestinationExists(let path):
         return "destination already exists: \(path)"
+    case .HistoryUnavailable(let path, let reason):
+        return "history for \(path) is unavailable: \(reason)"
     }
 }
 
