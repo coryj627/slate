@@ -287,6 +287,178 @@ fn rebuild_snapshot_boundary_yields_null_where_append_sampled() {
     assert_eq!(after[1].3, None, "snapshot boundary → NULL after rebuild");
 }
 
+#[test]
+fn deleted_file_events_die_with_the_row_and_recycled_ids_start_clean() {
+    // The O-1 recycled-id hazard at the events layer (adversarial
+    // review): SQLite reuses a deleted max rowid, so without the
+    // CASCADE a re-created file would inherit the dead file's history
+    // through all three operators.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("keeper.md", "stable\n", None).unwrap();
+
+    // Created last → max rowid → the recycle candidate.
+    let r = session
+        .save_text("doomed.md", "hide GHOSTWORD now\n", None)
+        .unwrap();
+    session
+        .save_text("doomed.md", "hide now\n", Some(&r.new_content_hash))
+        .unwrap();
+    session
+        .set_property(
+            "doomed.md",
+            "secret",
+            crate::frontmatter::PropertyValue::Text("yes".into()),
+            None,
+        )
+        .unwrap();
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("GHOSTWORD", "1h")"#,
+    );
+    assert_eq!(paths, vec!["doomed.md"], "premise: history exists");
+
+    session.delete_file("doomed.md").unwrap();
+    session.save_text("doomed.md", "reborn\n", None).unwrap();
+
+    // The newcomer's only event is its own cold save.
+    let events = events_for(&session, "doomed.md");
+    assert_eq!(events.len(), 1, "no inherited rows: {events:?}");
+    for filter in [
+        r#"oplog.deleted_content_matches("GHOSTWORD", "1h")"#,
+        r#"oplog.has_property_change("secret", "1h")"#,
+    ] {
+        let (paths, err) = filter_paths(&session, filter);
+        assert_eq!(err, None);
+        assert_eq!(
+            paths,
+            Vec::<String>::new(),
+            "{filter} must not see the dead file"
+        );
+    }
+    let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
+    assert_eq!(paths, vec!["doomed.md", "keeper.md"], "own events intact");
+}
+
+#[test]
+fn recovered_file_history_is_immediately_queryable() {
+    // recover_deleted_file re-binds the remnant log to a NEW files row
+    // — the old row's event rows died via the CASCADE. The recovery
+    // transaction must repopulate them from the log, or the restored
+    // history stays invisible to the operators until the next cache
+    // rebuild.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    // Multi-line body so the second save is a genuine batch (a tiny
+    // file would force a snapshot, whose rebuild sample is NULL by
+    // spec — tested elsewhere).
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let r = session
+        .save_text("lost.md", &format!("{body}PHOENIXWORD\n"), None)
+        .unwrap();
+    session
+        .save_text("lost.md", &body, Some(&r.new_content_hash))
+        .unwrap();
+    session.delete_file("lost.md").unwrap();
+    assert_eq!(
+        filter_paths(
+            &session,
+            r#"oplog.deleted_content_matches("PHOENIXWORD", "1h")"#
+        )
+        .0,
+        Vec::<String>::new(),
+        "premise: the CASCADE removed the dead file's rows"
+    );
+
+    // Surface the remnant (reconcile runs at scan), then recover.
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.recover_deleted_file("lost.md").unwrap();
+
+    // NO further scan: the history must already be queryable.
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("PHOENIXWORD", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(
+        paths,
+        vec!["lost.md"],
+        "recovered history visible immediately"
+    );
+    // Rebuild-shaped rows (snapshot boundary NULL + batch sample) plus
+    // the recovery save's own cold row.
+    let events = events_for(&session, "lost.md");
+    assert_eq!(
+        events.iter().map(|e| e.1).collect::<Vec<_>>(),
+        vec![1, 1, 1]
+    );
+    assert!(events[1].3.as_deref().unwrap().contains("PHOENIXWORD"));
+}
+
+#[test]
+fn failed_event_insert_is_atomic_and_heals_at_next_scan() {
+    // Fault injection via a RAISE trigger: an entry whose LAST event
+    // row fails must land NO rows (all-or-nothing, adversarial
+    // review), set the staleness marker, and be fully repaired by the
+    // next scan's rebuild — the entry itself is durable in the log.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.md", "start\n", None).unwrap();
+    let rows_before = events_for(&session, "n.md").len();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "CREATE TRIGGER fault_class5 BEFORE INSERT ON oplog_events
+             WHEN NEW.event_class = 5
+             BEGIN SELECT RAISE(ABORT, 'injected fault'); END",
+            [],
+        )
+        .unwrap();
+    }
+    // A frontmatter replace derives [class-1, class-5]; the trigger
+    // fails the second row. The save itself must still succeed.
+    session
+        .set_frontmatter_source("n.md", "k: v", None)
+        .unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("DROP TRIGGER fault_class5", []).unwrap();
+    }
+
+    let events = events_for(&session, "n.md");
+    assert_eq!(
+        events.len(),
+        rows_before,
+        "no partial set: the class-1 row must have rolled back with the class-5"
+    );
+    let stale: bool = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM oplog_events_stale)", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert!(stale, "the failure must be recorded durably");
+
+    // The next scan repairs from the log and clears the marker.
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let events = events_for(&session, "n.md");
+    assert_eq!(
+        events.iter().map(|e| e.1).collect::<Vec<_>>(),
+        vec![1, 1, 5],
+        "rebuild recovered the lost entry's rows from the log"
+    );
+    let stale: bool = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM oplog_events_stale)", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert!(!stale, "marker cleared by the successful rebuild");
+}
+
 // --- The operators, end to end ----------------------------------------
 
 #[test]
