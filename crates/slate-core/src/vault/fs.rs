@@ -306,6 +306,7 @@ impl VaultProvider for FsVaultProvider {
             size_bytes: meta.len(),
             mtime_ms,
             ctime_ms: ctime_ms_of(&meta),
+            birthtime_ms: birthtime_ms_of(&meta),
             kind,
         })
     }
@@ -446,6 +447,18 @@ fn ctime_ms_of(meta: &fs::Metadata) -> i64 {
 #[cfg(not(unix))]
 fn ctime_ms_of(_meta: &fs::Metadata) -> i64 {
     0
+}
+
+/// File birth time in epoch ms, `0` where unavailable (the ctime
+/// convention). `std::fs::Metadata::created()` maps to `st_birthtime`
+/// on macOS/APFS and creation time on Windows; filesystems without a
+/// birth time surface an error → `0`.
+fn birthtime_ms_of(meta: &fs::Metadata) -> i64 {
+    meta.created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Atomically replace the contents of `target` by writing into a temp

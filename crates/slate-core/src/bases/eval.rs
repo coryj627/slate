@@ -385,6 +385,20 @@ pub trait VaultLookup {
         })
     }
 
+    /// `oplog.created_since` (#801). FilterOnly by default.
+    fn oplog_created_since(&self, _path: &str, _cutoff_ms: i64) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "oplog.created_since".to_string(),
+        })
+    }
+
+    /// `oplog.untouched_for` (#801). FilterOnly by default.
+    fn oplog_untouched_for(&self, _path: &str, _cutoff_ms: i64) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "oplog.untouched_for".to_string(),
+        })
+    }
+
     fn row_for_path(&self, _path: &str) -> Option<RowContext> {
         None
     }
@@ -1858,6 +1872,46 @@ fn eval_method(
             let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
             ctx.vault
                 .oplog_deleted_content_matches(&ctx.file.file_path, &pattern, cutoff_ms)
+                .map(Value::Bool)
+        }
+        MethodName::OplogCreatedSince => {
+            expect_arity("oplog.created_since", args.len(), 1, 1)?;
+            if !ctx.filter_position {
+                return Err(EvalError::FilterOnly {
+                    function: "oplog.created_since".to_string(),
+                });
+            }
+            let duration = expect_text("oplog.created_since", &args[0])?;
+            let window_ms = crate::bases::engine::parse_operator_duration(&duration)
+                .ok_or_else(|| {
+                    invalid_arg(
+                        "oplog.created_since",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
+                    )
+                })?;
+            let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
+            ctx.vault
+                .oplog_created_since(&ctx.file.file_path, cutoff_ms)
+                .map(Value::Bool)
+        }
+        MethodName::OplogUntouchedFor => {
+            expect_arity("oplog.untouched_for", args.len(), 1, 1)?;
+            if !ctx.filter_position {
+                return Err(EvalError::FilterOnly {
+                    function: "oplog.untouched_for".to_string(),
+                });
+            }
+            let duration = expect_text("oplog.untouched_for", &args[0])?;
+            let window_ms = crate::bases::engine::parse_operator_duration(&duration)
+                .ok_or_else(|| {
+                    invalid_arg(
+                        "oplog.untouched_for",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
+                    )
+                })?;
+            let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
+            ctx.vault
+                .oplog_untouched_for(&ctx.file.file_path, cutoff_ms)
                 .map(Value::Bool)
         }
     }

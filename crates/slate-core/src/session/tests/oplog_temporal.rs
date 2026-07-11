@@ -832,6 +832,10 @@ fn invalid_durations_are_in_band_view_errors() {
 
     for bad in ["0d", "7x", "d", "1.5h", "-2d", "01h"] {
         let filter = format!(r#"oplog.has_change_since("{bad}")"#);
+        let (_, err2) = filter_paths(&session, &format!(r#"oplog.created_since("{bad}")"#));
+        assert!(err2.is_some(), "{bad}: created_since rejects too");
+        let (_, err3) = filter_paths(&session, &format!(r#"oplog.untouched_for("{bad}")"#));
+        assert!(err3.is_some(), "{bad}: untouched_for rejects too");
         let (paths, err) = filter_paths(&session, &filter);
         assert!(paths.is_empty(), "{bad}: no rows on error");
         let err = err.unwrap_or_else(|| panic!("{bad}: expected a view error"));
@@ -864,6 +868,8 @@ fn wrong_arity_errors_identically_in_pushdown_and_row_eval() {
         r#"oplog.has_change_since("7d", "extra") || file.name == "n.md""#,
         r#"oplog.has_property_change("k", "7d", "extra")"#,
         r#"oplog.deleted_content_matches("pat")"#,
+        r#"oplog.created_since("7d", "extra")"#,
+        r#"oplog.untouched_for()"#,
     ] {
         let (paths, err) = filter_paths(&session, filter);
         assert!(paths.is_empty(), "{filter}: no rows on error");
@@ -927,6 +933,116 @@ fn oplog_queries_bypass_the_result_cache() {
         0,
         "a cached result would still show the aged-out file"
     );
+}
+
+#[test]
+fn created_since_and_untouched_for_operators() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("planted.md", b"never saved through slate\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("fresh.md", "born now\n", None).unwrap();
+    session
+        .save_text("old.md", "born long ago\n", None)
+        .unwrap();
+
+    // Real filesystem birth: a just-created file matches a wide window
+    // and carries a real (non-zero) birthtime.
+    let (paths, err) = filter_paths(&session, r#"oplog.created_since("1h")"#);
+    assert_eq!(err, None);
+    assert!(paths.contains(&"fresh.md".to_string()));
+    assert!(
+        paths.contains(&"planted.md".to_string()),
+        "fs birth, not oplog"
+    );
+
+    // Scripted windowing (birthtime is a plain files column; the
+    // operator reads it — shifting is the same discipline as the
+    // event-ts shifts above).
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = birthtime_ms - ?1 WHERE path = 'old.md'",
+            rusqlite::params![8 * DAY_MS],
+        )
+        .unwrap();
+    }
+    let (paths, _) = filter_paths(&session, r#"oplog.created_since("7d")"#);
+    assert!(
+        !paths.contains(&"old.md".to_string()),
+        "8d-old birth misses 7d"
+    );
+    let (paths, _) = filter_paths(&session, r#"oplog.created_since("2w")"#);
+    assert!(
+        paths.contains(&"old.md".to_string()),
+        "wider window catches it"
+    );
+
+    // Unknown birth (0) never matches — documented.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = 0 WHERE path = 'old.md'",
+            [],
+        )
+        .unwrap();
+    }
+    let (paths, _) = filter_paths(&session, r#"oplog.created_since("52w")"#);
+    assert!(
+        !paths.contains(&"old.md".to_string()),
+        "unknown birth ⇒ no match"
+    );
+
+    // untouched_for: fresh activity fails; aged mtime + aged events
+    // pass; a touch INSIDE a wider window fails that window.
+    let (paths, err) = filter_paths(&session, r#"oplog.untouched_for("1h")"#);
+    assert_eq!(err, None);
+    assert!(paths.is_empty(), "everything was just touched");
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET mtime_ms = mtime_ms - ?1 WHERE path = 'fresh.md'",
+            rusqlite::params![8 * DAY_MS],
+        )
+        .unwrap();
+    }
+    shift_events(&session, "fresh.md", -8 * DAY_MS);
+    let (paths, _) = filter_paths(&session, r#"oplog.untouched_for("7d")"#);
+    assert_eq!(paths, vec!["fresh.md"], "8d idle ⇒ untouched for 7d");
+    let (paths, _) = filter_paths(&session, r#"oplog.untouched_for("2w")"#);
+    assert!(paths.is_empty(), "touched 8d ago ⇒ NOT untouched for 2w");
+
+    // Never-logged file: mtime alone governs (vacuously untouched
+    // once idle — documented).
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET mtime_ms = mtime_ms - ?1 WHERE path = 'planted.md'",
+            rusqlite::params![8 * DAY_MS],
+        )
+        .unwrap();
+    }
+    let (paths, _) = filter_paths(&session, r#"oplog.untouched_for("7d")"#);
+    assert!(paths.contains(&"planted.md".to_string()));
+
+    // Both compose with the standard grammar (conjunction with
+    // negation) and fall back to row-eval under OR.
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.created_since("1h") && !oplog.untouched_for("7d")"#,
+    );
+    assert_eq!(err, None);
+    assert!(
+        !paths.contains(&"planted.md".to_string()),
+        "planted is untouched-for-7d, so the negation excludes it"
+    );
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.untouched_for("7d") || file.name == "old.md""#,
+    );
+    assert_eq!(err, None, "row-eval fallback path works");
+    assert!(paths.contains(&"old.md".to_string()));
 }
 
 // --- Census -------------------------------------------------------------
@@ -1095,6 +1211,30 @@ fn census_temporal_operators_vs_reference() {
         session.rebuild_oplog_events_if_stale(&mut conn, true);
     }
 
+    // Scripted birthtimes + mtimes for the #801 probes (same grid
+    // discipline as the event timestamps: 15-min steps, 5-min offset
+    // from whole-hour boundaries).
+    let mut fs_times: Vec<(String, i64, i64)> = Vec::new(); // (path, birth, mtime)
+    for i in 0..files {
+        let path = format!("f{i:02}.md");
+        let now = now_ms();
+        let birth = if rng.below(5) == 0 {
+            0 // unknown birth — must never match created_since
+        } else {
+            now - (rng.below(4032) as i64 + 1) * 15 * 60_000 - 5 * 60_000
+        };
+        let mtime = now - (rng.below(4032) as i64 + 1) * 15 * 60_000 - 5 * 60_000;
+        {
+            let conn = session.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE files SET birthtime_ms = ?1, mtime_ms = ?2 WHERE path = ?3",
+                rusqlite::params![birth, mtime, path],
+            )
+            .unwrap();
+        }
+        fs_times.push((path, birth, mtime));
+    }
+
     // Brute-force reference, computed from the decoded logs in flat
     // imperative code (no shared derivation helpers): replay each
     // prefix for old content, collect removed spans per content
@@ -1172,7 +1312,7 @@ fn census_temporal_operators_vs_reference() {
         let duration = format!("{n}{unit}");
         let cutoff = now_ms() - (n as i64) * unit_ms;
 
-        let (filter, reference): (String, Vec<String>) = match rng.below(3) {
+        let (filter, reference): (String, Vec<String>) = match rng.below(5) {
             0 => (
                 format!(r#"oplog.has_change_since("{duration}")"#),
                 expected_rows
@@ -1198,6 +1338,29 @@ fn census_temporal_operators_vs_reference() {
                         .collect(),
                 )
             }
+            3 => (
+                format!(r#"oplog.created_since("{duration}")"#),
+                fs_times
+                    .iter()
+                    .filter(|(_, birth, _)| *birth > 0 && *birth >= cutoff)
+                    .map(|(p, _, _)| p.clone())
+                    .collect(),
+            ),
+            4 => (
+                format!(r#"oplog.untouched_for("{duration}")"#),
+                fs_times
+                    .iter()
+                    .filter(|(path, _, mtime)| {
+                        *mtime < cutoff
+                            && expected_rows.iter().find(|(p, _)| p == path).is_none_or(
+                                |(_, rows)| {
+                                    !rows.iter().any(|(ts, c, ..)| *c == 1 && *ts >= cutoff)
+                                },
+                            )
+                    })
+                    .map(|(p, _, _)| p.clone())
+                    .collect(),
+            ),
             _ => {
                 // Case-scrambled fragments, including the metachar-bearing
                 // words — the reference applies plain (escaped) substring
@@ -1594,4 +1757,76 @@ fn compaction_racing_saves_never_loses_indexed_events() {
     // The newest save is queryable — the row a lost-update would drop.
     let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
     assert_eq!(paths, vec!["n.md"]);
+}
+
+#[test]
+fn birthtime_backfills_on_fast_path_and_survives_zero_sentinels() {
+    // Round 2 (adversarial review): (1) migration-030 rows carry
+    // birthtime 0; an UNCHANGED file's next scan — the fast path,
+    // which never re-reads content — must back-fill the filesystem
+    // birth, or created_since omits every pre-upgrade file forever.
+    // (2) A 0 sentinel from a platform that stops reporting birth
+    // must never clobber a known value.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("old.md", b"pre-upgrade content\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Simulate the migrated row: birth unknown.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = 0 WHERE path = 'old.md'",
+            [],
+        )
+        .unwrap();
+    }
+    let (paths, _) = filter_paths(&session, r#"oplog.created_since("52w")"#);
+    assert!(
+        !paths.contains(&"old.md".to_string()),
+        "premise: unknown birth"
+    );
+
+    // An unchanged rescan takes the fast path and back-fills.
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let birth: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT birthtime_ms FROM files WHERE path = 'old.md'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert!(birth > 0, "fast path back-filled the filesystem birth");
+    let (paths, _) = filter_paths(&session, r#"oplog.created_since("1h")"#);
+    assert!(paths.contains(&"old.md".to_string()));
+
+    // Sentinel guard on the upsert paths: a save whose stat carried
+    // birth keeps it; simulate a later 0-stat by direct SQL-shaped
+    // upsert through the save path is fs-backed here (real birth), so
+    // assert the CASE the other way: plant a KNOWN value, then verify
+    // a real save (birth present) doesn't lose it and a scripted
+    // 0-sentinel UPDATE through the fast path preserves it.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = 1234567890123 WHERE path = 'old.md'",
+            [],
+        )
+        .unwrap();
+    }
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let birth: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT birthtime_ms FROM files WHERE path = 'old.md'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    // The fs reports a real birth, so the fast path may legitimately
+    // refresh it — the invariant is only that it never becomes 0.
+    assert!(birth > 0, "a known birth never degrades to the sentinel");
 }

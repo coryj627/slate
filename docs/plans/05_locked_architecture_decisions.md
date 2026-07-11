@@ -1362,9 +1362,19 @@ filters:
     - file.tags.contains("project")
     - oplog.has_change_since(7d)
     - oplog.has_property_change("status", 30d)
+    - oplog.deleted_content_matches("draft intro", 30d)
+    - oplog.created_since(7d)      # filesystem birth time — compaction-stable (#801)
+    - oplog.untouched_for(90d)     # idle by BOTH mtime and recorded saves (#801)
 ```
 
-V1 ships the op log infrastructure (Section 7). V1.x adds the op-log query operators.
+Shipped: the op log infrastructure (Section 7) and the five operators above
+(O-6 #544 shipped the first three; #801 added created_since/untouched_for).
+Durations use the pinned grammar `^([1-9][0-9]*)(h|d|w)$`; every operator is
+filter-position-only, composes with the standard combinators, and bypasses
+the query result cache (window verdicts change with no vault mutation).
+`created_since` reads `files.birthtime_ms` (0 = unknown ⇒ never matches);
+`untouched_for` requires BOTH an idle mtime and no class-1 event in-window
+(a never-logged idle file matches vacuously).
 
 ### 8.10 Saved queries and dashboards
 

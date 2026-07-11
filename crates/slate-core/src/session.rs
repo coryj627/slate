@@ -2273,15 +2273,18 @@ impl VaultSession {
 
         tx.execute(
             "INSERT INTO files
-                (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
                  content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?12, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(path) DO UPDATE SET
                 name           = excluded.name,
                 extension      = excluded.extension,
                 size_bytes     = excluded.size_bytes,
                 mtime_ms       = excluded.mtime_ms,
                 ctime_ms       = excluded.ctime_ms,
+                birthtime_ms   = CASE WHEN excluded.birthtime_ms != 0
+                                      THEN excluded.birthtime_ms
+                                      ELSE files.birthtime_ms END,
                 content_hash   = excluded.content_hash,
                 parser_version = excluded.parser_version,
                 indexed_at_ms  = excluded.indexed_at_ms,
@@ -2299,6 +2302,7 @@ impl VaultSession {
                 now,
                 is_markdown as i64,
                 body_text,
+                new_stat.birthtime_ms,
             ],
         )?;
         let file_id: i64 = tx.query_row(
@@ -5263,12 +5267,20 @@ fn index_file(
             //      ctime → Windows without, or a future runtime that
             //      drops ctime support) must not clobber a known-good
             //      ctime_ms with a 0 sentinel from the current stat.
+            //   3. (#801) birthtime follows the same two rules:
+            //      migration-030 rows carry 0 until this back-fill
+            //      copies the filesystem birth in — WITHOUT it,
+            //      `created_since` silently omits every unchanged
+            //      pre-upgrade file forever (adversarial review) —
+            //      and a 0 sentinel from a platform that stops
+            //      reporting birth must not clobber a known value.
             tx.execute(
                 "UPDATE files SET
                     indexed_at_ms = ?1,
-                    ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END
+                    ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END,
+                    birthtime_ms = CASE WHEN ?4 != 0 THEN ?4 ELSE birthtime_ms END
                  WHERE path = ?3",
-                rusqlite::params![now, stat.ctime_ms, path],
+                rusqlite::params![now, stat.ctime_ms, path, stat.birthtime_ms],
             )?;
             report.files_skipped += 1;
             return Ok(());
@@ -5302,15 +5314,18 @@ fn index_file(
         let empty_hash = content_hash(b"");
         tx.execute(
             "INSERT INTO files
-                (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
                  content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '')
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?11, ?7, ?8, ?9, ?10, '')
              ON CONFLICT(path) DO UPDATE SET
                 name           = excluded.name,
                 extension      = excluded.extension,
                 size_bytes     = excluded.size_bytes,
                 mtime_ms       = excluded.mtime_ms,
                 ctime_ms       = excluded.ctime_ms,
+                birthtime_ms   = CASE WHEN excluded.birthtime_ms != 0
+                                      THEN excluded.birthtime_ms
+                                      ELSE files.birthtime_ms END,
                 content_hash   = excluded.content_hash,
                 parser_version = excluded.parser_version,
                 indexed_at_ms  = excluded.indexed_at_ms,
@@ -5327,6 +5342,7 @@ fn index_file(
                 parser_version,
                 now,
                 is_markdown as i64,
+                stat.birthtime_ms,
             ],
         )?;
         // A file that grew past the refuse threshold may have been
@@ -5366,15 +5382,18 @@ fn index_file(
 
     tx.prepare_cached(
         "INSERT INTO files
-            (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+            (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
              content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?12, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(path) DO UPDATE SET
             name           = excluded.name,
             extension      = excluded.extension,
             size_bytes     = excluded.size_bytes,
             mtime_ms       = excluded.mtime_ms,
             ctime_ms       = excluded.ctime_ms,
+            birthtime_ms   = CASE WHEN excluded.birthtime_ms != 0
+                                  THEN excluded.birthtime_ms
+                                  ELSE files.birthtime_ms END,
             content_hash   = excluded.content_hash,
             parser_version = excluded.parser_version,
             indexed_at_ms  = excluded.indexed_at_ms,
@@ -5393,6 +5412,7 @@ fn index_file(
         now,
         is_markdown as i64,
         body_text,
+        stat.birthtime_ms,
     ])?;
 
     // For Markdown files, parse + persist headings, links, and
@@ -9405,6 +9425,8 @@ fn method_source(method: crate::bases::expr::MethodName) -> &'static str {
         MethodName::OplogHasChangeSince => "has_change_since",
         MethodName::OplogHasPropertyChange => "has_property_change",
         MethodName::OplogDeletedContentMatches => "deleted_content_matches",
+        MethodName::OplogCreatedSince => "oplog.created_since",
+        MethodName::OplogUntouchedFor => "oplog.untouched_for",
     }
 }
 
@@ -10135,9 +10157,9 @@ impl VaultSession {
                 let (name, extension, is_markdown) = classify_path(path);
                 tx.execute(
                     "INSERT INTO files
-                        (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                        (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
                          content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '')",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?11, ?7, ?8, ?9, ?10, '')",
                     rusqlite::params![
                         path,
                         name,
@@ -10149,6 +10171,7 @@ impl VaultSession {
                         self.config.parser_version,
                         now_ms(),
                         is_markdown as i64,
+                        stat.birthtime_ms,
                     ],
                 )?;
                 tx.query_row(

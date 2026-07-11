@@ -240,6 +240,14 @@ pub enum MethodName {
     OplogHasPropertyChange,
     /// `oplog.deleted_content_matches(pat, D)` (O-6 #544).
     OplogDeletedContentMatches,
+    /// `oplog.created_since(D)` (#801). Lowers onto the files table's
+    /// filesystem birth time — compaction- and rebuild-stable, unlike
+    /// the oldest event row.
+    OplogCreatedSince,
+    /// `oplog.untouched_for(D)` (#801): no content change within the
+    /// window, by BOTH signals (mtime for external writes, class-1
+    /// events for Slate saves).
+    OplogUntouchedFor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -716,6 +724,8 @@ impl<'a> Parser<'a> {
                     "has_change_since" => Some(MethodName::OplogHasChangeSince),
                     "has_property_change" => Some(MethodName::OplogHasPropertyChange),
                     "deleted_content_matches" => Some(MethodName::OplogDeletedContentMatches),
+                    "created_since" => Some(MethodName::OplogCreatedSince),
+                    "untouched_for" => Some(MethodName::OplogUntouchedFor),
                     _ => None,
                 };
                 if let Some(operator) = operator

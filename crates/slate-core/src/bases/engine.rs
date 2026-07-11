@@ -1039,6 +1039,8 @@ enum OplogOperator {
     HasChangeSince { duration: String },
     HasPropertyChange { key: String, duration: String },
     DeletedContentMatches { pattern: String, duration: String },
+    CreatedSince { duration: String },
+    UntouchedFor { duration: String },
 }
 
 /// Recognize an `oplog.*` operator call with LITERAL args (the
@@ -1071,6 +1073,12 @@ fn oplog_operator_call(expr: &Expr) -> Option<OplogOperator> {
                 duration: literal_text(args.get(1)?)?,
             })
         }
+        MethodName::OplogCreatedSince if args.len() == 1 => Some(OplogOperator::CreatedSince {
+            duration: literal_text(args.first()?)?,
+        }),
+        MethodName::OplogUntouchedFor if args.len() == 1 => Some(OplogOperator::UntouchedFor {
+            duration: literal_text(args.first()?)?,
+        }),
         _ => None,
     }
 }
@@ -1126,6 +1134,28 @@ fn oplog_pushdown_predicate(
                 )"
                 .to_string(),
                 params: vec![cutoff.to_string(), like_escape(&pattern)],
+            })
+        }
+        // #801: filesystem birth time — compaction/rebuild-stable
+        // (event rows shift with retention folds; birth doesn't).
+        // birthtime 0 = unknown ⇒ never matches (documented).
+        OplogOperator::CreatedSince { duration } => {
+            lower(&duration, "oplog.created_since").map(|cutoff| SqlPredicate {
+                clause: "(birthtime_ms > 0 AND birthtime_ms >= ?)".to_string(),
+                params: vec![cutoff.to_string()],
+            })
+        }
+        // #801: untouched by BOTH signals — mtime (external writes)
+        // and class-1 events (Slate saves). A never-logged, old-mtime
+        // file is vacuously untouched (documented).
+        OplogOperator::UntouchedFor { duration } => {
+            lower(&duration, "oplog.untouched_for").map(|cutoff| SqlPredicate {
+                clause: "(mtime_ms < ? AND id NOT IN (
+                    SELECT file_id FROM oplog_events
+                    WHERE event_class = 1 AND ts_ms >= ?
+                ))"
+                .to_string(),
+                params: vec![cutoff.to_string(), cutoff.to_string()],
             })
         }
     })
@@ -3378,6 +3408,8 @@ fn query_mentions_oplog_operator(query: &SlateQuery) -> bool {
                 MethodName::OplogHasChangeSince
                     | MethodName::OplogHasPropertyChange
                     | MethodName::OplogDeletedContentMatches
+                    | MethodName::OplogCreatedSince
+                    | MethodName::OplogUntouchedFor
             )
         )
     })
@@ -3668,6 +3700,28 @@ impl VaultLookup for SqlVaultLookup<'_> {
                AND e.deleted_text LIKE '%' || ?3 || '%' ESCAPE '\\' LIMIT 1",
             rusqlite::params![path, cutoff_ms, like_escape(pattern)],
             "oplog.deleted_content_matches",
+        )
+    }
+
+    fn oplog_created_since(&self, path: &str, cutoff_ms: i64) -> Result<bool, EvalError> {
+        self.exists_query(
+            "SELECT 1 FROM files
+             WHERE path = ?1 AND birthtime_ms > 0 AND birthtime_ms >= ?2 LIMIT 1",
+            rusqlite::params![path, cutoff_ms],
+            "oplog.created_since",
+        )
+    }
+
+    fn oplog_untouched_for(&self, path: &str, cutoff_ms: i64) -> Result<bool, EvalError> {
+        self.exists_query(
+            "SELECT 1 FROM files f
+             WHERE f.path = ?1 AND f.mtime_ms < ?2
+               AND NOT EXISTS (
+                   SELECT 1 FROM oplog_events e
+                   WHERE e.file_id = f.id AND e.event_class = 1 AND e.ts_ms >= ?2
+               ) LIMIT 1",
+            rusqlite::params![path, cutoff_ms],
+            "oplog.untouched_for",
         )
     }
 
