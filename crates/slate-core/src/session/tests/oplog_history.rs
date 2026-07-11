@@ -839,3 +839,69 @@ fn canvas_and_base_writes_are_versioned_through_the_seam() {
         "verified .base bytes round-trip"
     );
 }
+
+/// #797 fold under interleave (codex): in-process splits are closed by
+/// holding the session lock across both canvas appends, but a
+/// cross-process writer can still land between them. The record then
+/// renders as a STANDALONE "canvas action" row — the pre-fold
+/// behavior for that one action — and must never mis-fold into the
+/// interloper (whose hash pair differs).
+#[test]
+fn interleaved_semantic_record_degrades_to_standalone_never_misfolds() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.canvas", "{}\n", None).unwrap();
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.canvas'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let cache_dir = session.config.cache_dir.clone();
+    let (a, b, c) = ("A\n", "B\n", "C\n");
+    let hash = |s: &str| crate::vault::content_hash(s.as_bytes());
+    let mk = |kind, before: &str, after: &str, payload: Vec<u8>| crate::oplog::OpLogEntry {
+        timestamp_ms: now_ms(),
+        user_actor_id: "t".into(),
+        op_kind: kind,
+        content_hash_before: hash(before),
+        content_hash_after: hash(after),
+        payload_bytes: payload,
+    };
+    // byte(A→B), foreign save (B→C), then the canvas record (A→B)
+    // landing late — the cross-process interleave shape.
+    for entry in [
+        mk(crate::OpKind::WholeFileReplace, a, b, b.as_bytes().to_vec()),
+        mk(crate::OpKind::WholeFileReplace, b, c, c.as_bytes().to_vec()),
+        mk(
+            crate::OpKind::CanvasApply,
+            a,
+            b,
+            br#"{"name":"late action"}"#.to_vec(),
+        ),
+    ] {
+        crate::oplog::append_entry(&cache_dir, &stem, "n.canvas", &entry).unwrap();
+    }
+
+    let page = session
+        .list_versions("n.canvas", Paging::first(10))
+        .unwrap();
+    // Initial save + the three constructed entries, NONE folded: the
+    // record's predecessor (B→C) has a different pair.
+    assert_eq!(page.total_filtered, 4);
+    let canvas_row = page
+        .items
+        .iter()
+        .find(|r| r.op_kind == crate::OpKind::CanvasApply)
+        .expect("standalone canvas row");
+    assert_eq!(canvas_row.audio_fragment, "canvas action");
+    assert!(
+        page.items
+            .iter()
+            .all(|r| !r.annotations.iter().any(|a| a.kind == "CanvasAction")),
+        "no row absorbed the interleaved record"
+    );
+}

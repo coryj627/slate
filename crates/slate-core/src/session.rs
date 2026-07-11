@@ -10758,7 +10758,6 @@ impl VaultSession {
             .ok()
             .flatten()
             .flatten();
-        drop(conn);
         state.canvas = working;
         state.model = model;
         let hash_before = state.content_hash.clone();
@@ -10768,6 +10767,14 @@ impl VaultSession {
         // the byte-level text entry the save just wrote. Best-effort,
         // same discipline as append_save_to_oplog — a logging hiccup
         // must never fail the user's committed action.
+        //
+        // Appended while the session connection lock is STILL HELD
+        // (#797, codex): the version-list fold pairs this record with
+        // its byte entry by adjacency, and an in-process save slipping
+        // between the two appends would split them. Cross-process
+        // writers can still interleave — then the record renders as a
+        // standalone "canvas action" row (the pre-fold behavior for
+        // that one action; pinned by test), never a mis-fold.
         let payload = serde_json::json!({
             "name": action.name,
             "action": crate::canvas::apply::action_to_json(&action),
@@ -10807,6 +10814,7 @@ impl VaultSession {
                 state.path
             );
         }
+        drop(conn);
 
         // #802: the Modified event fired inside `save_text_locked`
         // above — the canvas serialization commits through the same
