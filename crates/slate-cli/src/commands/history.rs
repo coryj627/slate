@@ -113,7 +113,7 @@ pub fn run(
     }
 
     match mode {
-        HistoryMode::List { limit } => list(&session, &abs_path, note_path, limit),
+        HistoryMode::List { limit } => list(&session, &abs_path, note_path, limit, cancel),
         HistoryMode::Show { hash } => show(&session, &abs_path, note_path, &hash),
         HistoryMode::Restore { hash } => restore(&session, &abs_path, note_path, &hash),
     }
@@ -124,11 +124,17 @@ fn list(
     abs_path: &str,
     note_path: &str,
     limit: u32,
+    cancel: &CancelToken,
 ) -> Result<(String, CommandOutput), CliError> {
     let mut versions = Vec::new();
     let mut cursor: Option<String> = None;
     let mut total: u64 = 0;
     loop {
+        // Ctrl-C between pages: exit 130 like every other long-running
+        // verb, instead of grinding through a large history.
+        if cancel.is_cancelled() {
+            return Err(CliError::Cancelled);
+        }
         let remaining = limit.saturating_sub(versions.len() as u32);
         if remaining == 0 {
             break;

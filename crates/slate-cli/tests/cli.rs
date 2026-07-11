@@ -1454,6 +1454,57 @@ fn seed_history_vault() -> (TempDir, Vec<String>) {
     (dir, hashes)
 }
 
+/// The list drain pages at 200; 201 versions forces a second page, so
+/// the cursor handoff (generation-stamped `next_cursor` → next
+/// request) is exercised end to end (Codoki suggestion on #841).
+#[test]
+fn history_list_drains_across_page_boundary() {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path();
+    fs::write(root.join("n.md"), "v0\n").unwrap();
+    let session = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let mut expected: Option<String> = None;
+    let mut newest = String::new();
+    for i in 0..201 {
+        let report = session
+            .save_text(
+                "n.md",
+                &format!("{body}revision {i}\n"),
+                expected.as_deref(),
+            )
+            .unwrap();
+        newest = report.new_content_hash.clone();
+        expected = Some(report.new_content_hash);
+    }
+    drop(session);
+
+    let output = slate()
+        .args([
+            "history",
+            root.to_str().unwrap(),
+            "n.md",
+            "--limit",
+            "201",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let data = assert_envelope(&output.get_output().stdout, "history");
+    let versions = data["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 201);
+    assert_eq!(data["total"], 201);
+    assert_eq!(versions[0]["hash"], newest.as_str());
+    // `position_from_tail` is distance from the newest entry, so a
+    // newest-first listing ascends 0..=200 with no gap — a cursor bug
+    // (skip, repeat, restart) at the page-200 boundary breaks this.
+    for (i, v) in versions.iter().enumerate() {
+        assert_eq!(v["position"], i as u64);
+    }
+}
+
 #[test]
 fn history_lists_versions_newest_first_in_all_formats() {
     let (vault, hashes) = seed_history_vault();
