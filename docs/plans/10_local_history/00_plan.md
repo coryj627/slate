@@ -1,6 +1,6 @@
 # 10 — Milestone O plan: Local history + change tracking
 
-**Status:** 📝 Planned (2026-07-03). Not started. GitHub [milestone 15](https://github.com/coryj627/slate/milestone/15).
+**Status:** 🚧 In progress. O-1 ([#539](https://github.com/coryj627/slate/issues/539)) shipped via [PR #790](https://github.com/coryj627/slate/pull/790) (2026-07-11); O-2–O-5 open; O-6 ([#544](https://github.com/coryj627/slate/issues/544)) blocked on Milestone N. GitHub [milestone 15](https://github.com/coryj627/slate/milestone/15).
 **Implements:** `05_locked_architecture_decisions.md` §7.5 (op-log persistence + compaction), §9.3.3 (compaction at scale, hard constraints), §8.9 (op-log-aware temporal queries), the V1 half of §7.3 (structured-diff plumbing, no conflict UI), and the "Local history and recovery" workstream from `03_phase_1_plan.md` §11.
 **Executable spec:** [o_spec.md](o_spec.md).
 
