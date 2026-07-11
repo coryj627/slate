@@ -455,8 +455,10 @@ pub trait VaultEventListener: Send + Sync {
     fn on_error(&self, code: EventErrorCode, path: String, message: String);
 
     /// #802: a Slate-originated file mutation committed (write on disk
-    /// AND index row in one transaction). Default no-op — O-2
-    /// registrations stay valid unchanged. The filesystem watcher is a
+    /// AND index row in one transaction). Dispatch is strictly
+    /// post-commit: at callback time the new state is visible to any
+    /// external reader of the index (Codoki on #846). Default no-op —
+    /// O-2 registrations stay valid unchanged. The filesystem watcher is a
     /// stub (`provider.watch` yields nothing), so external edits
     /// surface at the next scan, never here: this event covers the
     /// app's own write paths. Do not call session APIs synchronously
@@ -2289,18 +2291,23 @@ impl VaultSession {
             .remove(&token);
     }
 
-    /// #802: fan a file-change event out to every listener. Snapshot
-    /// first (the compaction-dispatch discipline) so listener code
-    /// never runs under the registry mutex; callers arrange to have
-    /// dropped the session connection lock where possible.
-    fn notify_file_change(&self, kind: FileChangeKind, path: &str, previous_path: Option<&str>) {
-        let snapshot: Vec<Arc<dyn VaultEventListener>> = self
-            .event_listeners
+    /// #802: one snapshot of the registered listeners — the shared
+    /// fan-out seat for every event family (Codoki on #846: one
+    /// helper, no drift). Snapshotting first (the compaction-dispatch
+    /// discipline) means listener code never runs under the registry
+    /// mutex.
+    fn listener_snapshot(&self) -> Vec<Arc<dyn VaultEventListener>> {
+        self.event_listeners
             .lock()
             .expect("event listener mutex")
             .values()
             .cloned()
-            .collect();
+            .collect()
+    }
+
+    /// #802: fan a file-change event out to every listener.
+    fn notify_file_change(&self, kind: FileChangeKind, path: &str, previous_path: Option<&str>) {
+        let snapshot = self.listener_snapshot();
         if snapshot.is_empty() {
             return;
         }
@@ -2323,16 +2330,9 @@ impl VaultSession {
         }
     }
 
-    /// #802: fan an index-phase event out (same snapshot discipline).
+    /// #802: fan an index-phase event out (same snapshot seat).
     fn notify_index_phase(&self, phase: IndexPhase, files_seen: u64) {
-        let snapshot: Vec<Arc<dyn VaultEventListener>> = self
-            .event_listeners
-            .lock()
-            .expect("event listener mutex")
-            .values()
-            .cloned()
-            .collect();
-        for listener in snapshot {
+        for listener in self.listener_snapshot() {
             listener.on_index_phase(phase, files_seen);
         }
     }
@@ -6614,6 +6614,10 @@ impl VaultSession {
         let conn = self.conn.lock().expect("session connection mutex");
         // #802: the range delete below erases the paths — capture them
         // first so each file's Deleted event can fire after commit.
+        // In-memory and O(folder size) by design (Codoki on #846): a
+        // folder delete already walks its subtree on disk, and events
+        // are per-file by contract; revisit with streamed emission
+        // only if a real vault shows this hot.
         let deleted_files: Vec<String> = {
             let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
             let mut stmt = conn.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
