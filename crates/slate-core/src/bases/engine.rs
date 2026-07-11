@@ -3762,11 +3762,17 @@ impl VaultLookup for SqlVaultLookup<'_> {
                 message: error.to_string(),
             })?;
             let Some(row) = row else { return Ok(false) };
-            let deleted: String = row.get(0).map_err(|error| EvalError::InvalidArgument {
-                function: FUNCTION.to_string(),
-                message: error.to_string(),
-            })?;
-            if regex.is_match(&deleted) {
+            // Borrow the sampled text in place (Codoki on #843): a
+            // deletion sample runs up to 4 KiB and this loop visits
+            // every in-window row — no per-row String.
+            let deleted = row
+                .get_ref(0)
+                .and_then(|value| value.as_str().map_err(rusqlite::Error::from))
+                .map_err(|error| EvalError::InvalidArgument {
+                    function: FUNCTION.to_string(),
+                    message: error.to_string(),
+                })?;
+            if regex.is_match(deleted) {
                 return Ok(true);
             }
         }
