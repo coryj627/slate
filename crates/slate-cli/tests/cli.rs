@@ -1426,3 +1426,213 @@ fn sigint_during_search_exits_130() {
         "no attempt reached the graceful exit-130 cancel path across delays {delays:?}"
     );
 }
+
+// --- slate history (#799) ------------------------------------------------
+
+/// Seed a vault whose note has real history: three saved versions
+/// through the session (the same machinery the app uses).
+fn seed_history_vault() -> (TempDir, Vec<String>) {
+    let dir = TempDir::new().expect("tempdir");
+    let root = dir.path();
+    fs::write(root.join("n.md"), "v0\n").unwrap();
+    let session = VaultSession::from_filesystem(root.to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let mut hashes = Vec::new();
+    let mut expected: Option<String> = None;
+    // Multi-line bodies so the later saves are genuine edit batches (a
+    // tiny file's diff payload rivals the file size and forces a
+    // snapshot — the known fixture trap).
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    for suffix in ["first version\n", "second version\n", "third version\n"] {
+        let report = session
+            .save_text("n.md", &format!("{body}{suffix}"), expected.as_deref())
+            .unwrap();
+        hashes.push(report.new_content_hash.clone());
+        expected = Some(report.new_content_hash);
+    }
+    drop(session);
+    (dir, hashes)
+}
+
+#[test]
+fn history_lists_versions_newest_first_in_all_formats() {
+    let (vault, hashes) = seed_history_vault();
+
+    let output = slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let data = assert_envelope(&output.get_output().stdout, "history");
+    let versions = data["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 3);
+    assert_eq!(data["total"], 3);
+    // Newest first, position identity, full hashes.
+    assert_eq!(versions[0]["position"], 0);
+    assert_eq!(versions[0]["hash"], hashes[2].as_str());
+    assert_eq!(versions[2]["hash"], hashes[0].as_str());
+    assert_eq!(versions[0]["kind"], "edits");
+    assert_eq!(versions[2]["kind"], "snapshot", "cold first save anchors");
+    assert!(versions[0]["summary"].is_string());
+
+    // tsv: header + 3 rows.
+    let tsv = slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .success();
+    let text = String::from_utf8(tsv.get_output().stdout.clone()).unwrap();
+    assert_eq!(text.lines().count(), 4);
+    assert!(text.starts_with("position\thash\ttimestamp_ms\tkind\tsummary"));
+
+    // Human: one row per version with the short hash.
+    let human = slate()
+        .args(["history", vault.path().to_str().unwrap(), "n.md"])
+        .assert()
+        .success();
+    let text = String::from_utf8(human.get_output().stdout.clone()).unwrap();
+    assert_eq!(text.lines().count(), 3);
+    assert!(text.contains(&hashes[2][..12]));
+
+    // --limit truncates from the newest side.
+    let limited = slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--limit",
+            "1",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let data = assert_envelope(&limited.get_output().stdout, "history");
+    assert_eq!(data["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(data["versions"][0]["hash"], hashes[2].as_str());
+}
+
+#[test]
+fn history_show_prints_verified_content_verbatim() {
+    let (vault, hashes) = seed_history_vault();
+
+    let output = slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--show",
+            &hashes[0],
+        ])
+        .assert()
+        .success();
+    let expected_body: String = (0..12)
+        .map(|i| format!("keep line {i}\n"))
+        .collect::<String>()
+        + "first version\n";
+    assert_eq!(
+        String::from_utf8(output.get_output().stdout.clone()).unwrap(),
+        expected_body,
+        "verbatim bytes, no framing, no appended terminator"
+    );
+
+    // tsv is rejected up front (exit 2, the read/render-template rule).
+    slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--show",
+            &hashes[0],
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .code(2);
+
+    // An unknown hash is exit 1 with an informative message.
+    slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--show",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn history_restore_round_trips_and_conflicts_surface() {
+    let (vault, hashes) = seed_history_vault();
+
+    let output = slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--restore",
+            &hashes[0],
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let data = assert_envelope(&output.get_output().stdout, "history");
+    assert_eq!(data["restored_hash"], hashes[0].as_str());
+    let expected_body: String = (0..12)
+        .map(|i| format!("keep line {i}\n"))
+        .collect::<String>()
+        + "first version\n";
+    assert_eq!(
+        fs::read_to_string(vault.path().join("n.md")).unwrap(),
+        expected_body,
+        "the restore landed on disk"
+    );
+    // The restore is itself a new version (restore appends — history
+    // is never rewritten).
+    let list = slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let data = assert_envelope(&list.get_output().stdout, "history");
+    assert_eq!(data["total"], 4);
+
+    // --show and --restore are mutually exclusive (clap, exit 2).
+    slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--show",
+            &hashes[0],
+            "--restore",
+            &hashes[1],
+        ])
+        .assert()
+        .code(2);
+
+    // A typo'd note path is the pinned "no such note" exit 1.
+    slate()
+        .args(["history", vault.path().to_str().unwrap(), "nope.md"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("no such note"));
+}
