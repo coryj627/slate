@@ -58,6 +58,7 @@ pub mod links;
 pub mod links_db;
 pub mod math;
 pub mod oplog;
+pub mod oplog_compaction;
 pub mod properties_db;
 pub mod reading;
 pub mod search_db;
@@ -126,11 +127,11 @@ pub use session::{
     CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement,
     CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
     CanvasWhereAmI, ColumnRole, CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus,
-    DashboardSummary, DirListing, DirNodeSummary, ExportFormat, FileFilter, FileMetadata,
-    FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RemnantLog, RenameAffected,
-    RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
-    SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener,
-    ScanReport, SessionConfig, VaultSession,
+    DashboardSummary, DirListing, DirNodeSummary, EventErrorCode, ExportFormat, FileFilter,
+    FileMetadata, FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RemnantLog,
+    RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped,
+    SaveReport, SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress,
+    ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultSession,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,

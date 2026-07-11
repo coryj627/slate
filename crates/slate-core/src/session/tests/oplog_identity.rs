@@ -418,7 +418,9 @@ fn content_salvage_binds_unique_match_and_refuses_ambiguous() {
         "ambiguous",
         "gone/twin.md",
         &crate::oplog::OpLogEntry {
-            timestamp_ms: 2,
+            // Recent: an epoch timestamp would be reclaimed by O-2's
+            // retention sweep before it could be listed as a remnant.
+            timestamp_ms: now_ms(),
             user_actor_id: "t".into(),
             op_kind: crate::OpKind::WholeFileReplace,
             content_hash_before: String::new(),

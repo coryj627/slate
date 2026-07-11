@@ -509,6 +509,22 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// Register a session-event listener (O-2 #540). Returns an opaque
+    /// token for `unregister_event_listener`. Events arrive on
+    /// background worker threads — marshal to the main actor inside
+    /// the listener.
+    pub fn register_event_listener(&self, listener: Arc<dyn VaultEventListener>) -> u64 {
+        let adapter: Arc<dyn core::VaultEventListener> =
+            Arc::new(VaultEventListenerAdapter { foreign: listener });
+        self.inner.register_event_listener(adapter)
+    }
+
+    /// Remove a previously registered session-event listener. Unknown
+    /// tokens are a no-op.
+    pub fn unregister_event_listener(&self, token: u64) {
+        self.inner.unregister_event_listener(token);
+    }
+
     /// All outgoing links from `path` in document order, including
     /// resolved (internal-and-found), unresolved (internal-and-missing),
     /// and external links. UI uses `kind` + `is_external` +
@@ -1848,6 +1864,45 @@ struct ScanProgressListenerAdapter {
 impl core::ScanProgressListener for ScanProgressListenerAdapter {
     fn on_progress(&self, event: core::ScanProgress) {
         self.foreign.on_progress(event.into());
+    }
+}
+
+/// What went wrong in a session-event error (O-2 #540). Mirrors
+/// `slate_core::EventErrorCode`; additive-only — hosts must tolerate
+/// unknown codes.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum EventErrorCode {
+    CompactionFailed,
+}
+
+impl From<core::EventErrorCode> for EventErrorCode {
+    fn from(c: core::EventErrorCode) -> Self {
+        match c {
+            core::EventErrorCode::CompactionFailed => EventErrorCode::CompactionFailed,
+        }
+    }
+}
+
+/// Session-level error events (O-2 #540) — the minimal `VaultEventListener`
+/// delivery: one method, one code for now. Invoked on a background
+/// worker thread; implementations must be cheap and non-blocking and
+/// marshal to their main actor themselves (the `ScanProgressListener`
+/// contract). `message` is user-facing copy and may name the vault
+/// path.
+#[uniffi::export(with_foreign)]
+pub trait VaultEventListener: Send + Sync {
+    fn on_error(&self, code: EventErrorCode, path: String, message: String);
+}
+
+/// Bridges core::VaultEventListener calls into the foreign-implemented
+/// uniffi trait, converting the code enum at the boundary.
+struct VaultEventListenerAdapter {
+    foreign: Arc<dyn VaultEventListener>,
+}
+
+impl core::VaultEventListener for VaultEventListenerAdapter {
+    fn on_error(&self, code: core::EventErrorCode, path: String, message: String) {
+        self.foreign.on_error(code.into(), path, message);
     }
 }
 

@@ -445,6 +445,35 @@ pub trait ScanProgressListener: Send + Sync {
     fn on_progress(&self, event: ScanProgress);
 }
 
+/// Session-level error events (O-2 #540) — the minimal delivery of the
+/// `05` §4.4 `VaultEventListener` sketch: one method, one code for
+/// now, both growable additively. Invoked from the background
+/// compaction worker's thread; implementations must be cheap and
+/// non-blocking and marshal to their UI thread themselves (the
+/// `ScanProgressListener` contract).
+pub trait VaultEventListener: Send + Sync {
+    fn on_error(&self, code: EventErrorCode, path: String, message: String);
+}
+
+/// What went wrong. Additive-only — hosts must tolerate unknown codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventErrorCode {
+    /// A background op-log compaction failed; the named file's history
+    /// may grow unbounded until a later run succeeds (§9.3.3's
+    /// "failure is a user-visible hard error").
+    CompactionFailed,
+}
+
+/// One unit of background compaction work (O-2 #540).
+enum CompactionJob {
+    Compact {
+        file_id: i64,
+        log_name: String,
+        path: String,
+    },
+    Shutdown,
+}
+
 /// Incremental events emitted during a scan.
 ///
 /// Once `Started` fires, the listener is guaranteed exactly one
@@ -526,6 +555,18 @@ pub struct CslStyleInfo {
 struct OplogAppendState {
     last_hash_after: String,
     bytes_since_snapshot: u64,
+    /// O-2 (#540): the last compaction attempt could not shrink this
+    /// log (single oversized entry). Cleared by the next append; while
+    /// set, non-append paths (the on-open sweep) skip re-enqueueing —
+    /// no livelock on permanently-oversized logs.
+    compaction_futile: bool,
+    /// Appends this session (O-2, adversarial review): a sound lower
+    /// bound on the log's entry count — once it exceeds
+    /// `oplog_compaction_threshold_entries`, the log definitely does
+    /// too, so the entry-count trigger fires without ever walking the
+    /// log on the save path. Cross-session accumulation is covered by
+    /// the on-open sweep's size-based estimate.
+    appends_this_session: u64,
 }
 
 /// Estimated per-entry on-disk framing overhead (body header + two hex
@@ -539,7 +580,8 @@ pub struct VaultSession {
     conn: Mutex<Connection>,
     config: SessionConfig,
     /// Per-file op-log append state (#378). See [`OplogAppendState`].
-    oplog_state: Mutex<std::collections::HashMap<i64, OplogAppendState>>,
+    /// `Arc` so the compaction worker can mark futility (O-2).
+    oplog_state: Arc<Mutex<std::collections::HashMap<i64, OplogAppendState>>>,
     /// Runtime-mutable math preferences. Audit #259: changing
     /// `config.math_prefs` at runtime isn't possible because
     /// `config` is owned by the session. UI surfaces (Settings
@@ -588,6 +630,24 @@ pub struct VaultSession {
     /// True when this open created the cache database (fresh vault or
     /// rebuild). Gates the reconcile's content salvage — see `open`.
     cache_created_this_open: bool,
+    /// Registered session-event listeners (O-2 #540), keyed by an
+    /// opaque registration token. Shared with the compaction worker.
+    event_listeners: Arc<Mutex<std::collections::HashMap<u64, Arc<dyn VaultEventListener>>>>,
+    next_listener_token: AtomicU64,
+    /// Runtime-mutable retention window (days). Initialized from
+    /// `SessionConfig::oplog_retention_days`; O-5's settings surface
+    /// writes it live and the next compaction/sweep reads it.
+    retention_days: Arc<std::sync::atomic::AtomicU32>,
+    /// Background compaction queue (O-2 #540): send side + the
+    /// single-flight dedup set shared with the worker.
+    compaction_tx: std::sync::mpsc::Sender<CompactionJob>,
+    compaction_queued: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Logs whose compaction was requested while a run was already in
+    /// flight (adversarial review): the worker queues exactly one
+    /// follow-up per dirty log after the in-flight run completes.
+    compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>>,
+    compaction_shutdown: Arc<std::sync::atomic::AtomicBool>,
+    compaction_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// A deleted file's surviving op log, discovered by the scan reconcile
@@ -641,6 +701,157 @@ struct OpenBaseState {
     transient_sort: Option<(u32, crate::bases::SortKey)>,
 }
 
+/// The background compaction worker (O-2 #540). Owns nothing but its
+/// channel: config snapshots, the listener registry, the append-state
+/// map, and the dedup set all arrive as `Arc`s. Checks the shutdown
+/// flag between files — a mid-file compaction completes (sub-second by
+/// the §9.3.3 perf gate) rather than tearing.
+#[allow(clippy::too_many_arguments)] // cohesive worker context
+fn compaction_worker_loop(
+    rx: std::sync::mpsc::Receiver<CompactionJob>,
+    tx: std::sync::mpsc::Sender<CompactionJob>,
+    cache_dir: PathBuf,
+    threshold_bytes: u64,
+    threshold_entries: u64,
+    retention_days: Arc<std::sync::atomic::AtomicU32>,
+    listeners: Arc<Mutex<std::collections::HashMap<u64, Arc<dyn VaultEventListener>>>>,
+    oplog_state: Arc<Mutex<std::collections::HashMap<i64, OplogAppendState>>>,
+    queued: Arc<Mutex<std::collections::HashSet<String>>>,
+    dirty: Arc<Mutex<std::collections::HashSet<String>>>,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+) {
+    while let Ok(job) = rx.recv() {
+        let CompactionJob::Compact {
+            file_id,
+            log_name,
+            path,
+        } = job
+        else {
+            break; // Shutdown
+        };
+        if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        // Single-flight THROUGH completion (adversarial review): the
+        // log stays claimed in `queued` for the whole drain below, so
+        // triggers landing at ANY point — first run, follow-up runs,
+        // or the release window — either find the claim and flip the
+        // dirty bit, or arrive after release and queue normally. The
+        // release itself holds BOTH locks (queued → dirty, the same
+        // order enqueue_compaction uses), so a trigger can never slip
+        // between "observe clean" and "drop the claim" and be erased.
+        let mut passes = 0u32;
+        loop {
+            let limits = crate::oplog_compaction::CompactionLimits {
+                threshold_bytes,
+                threshold_entries,
+                retention_days: retention_days.load(std::sync::atomic::Ordering::SeqCst),
+            };
+            match crate::oplog_compaction::compact_log(
+                &cache_dir,
+                &log_name,
+                &path,
+                &limits,
+                now_ms(),
+            ) {
+                Ok(crate::oplog_compaction::CompactionOutcome::Rewritten { .. }) => {
+                    // Tail hash unchanged by construction; the session
+                    // append state still chains and its cadence
+                    // counter self-corrects at the next snapshot.
+                }
+                Ok(crate::oplog_compaction::CompactionOutcome::Futile)
+                | Ok(crate::oplog_compaction::CompactionOutcome::AlreadyCompact) => {
+                    if let Some(state) = oplog_state
+                        .lock()
+                        .expect("oplog state mutex")
+                        .get_mut(&file_id)
+                    {
+                        state.compaction_futile = true;
+                    }
+                }
+                Ok(crate::oplog_compaction::CompactionOutcome::Missing) => {}
+                Err(e) => {
+                    // §9.3.3: failure is a user-visible hard error — the
+                    // exact copy below is the O-2/O-5 contract. The
+                    // listener message may carry the vault path (it IS
+                    // user-facing UI copy); the log warn stays path-free
+                    // per the privacy rule.
+                    let message = format!(
+                        "Slate couldn't compact the edit history for {path}: {e}. \
+                         History for this file may grow unbounded."
+                    );
+                    let snapshot: Vec<Arc<dyn VaultEventListener>> = listeners
+                        .lock()
+                        .expect("event listener mutex")
+                        .values()
+                        .cloned()
+                        .collect();
+                    for listener in snapshot {
+                        listener.on_error(
+                            EventErrorCode::CompactionFailed,
+                            path.clone(),
+                            message.clone(),
+                        );
+                    }
+                    log::warn!("oplog compaction failed for {log_name}: {}", e.kind());
+                    log::debug!("oplog compaction failure for {path:?}: {e}");
+                }
+            }
+
+            // Atomic release-or-continue: with BOTH locks held, either
+            // consume a dirty bit (another pass is owed) or drop the
+            // claim (fully clean — new triggers queue normally).
+            let rerun = {
+                let mut queued = queued.lock().expect("compaction queue mutex");
+                let mut dirty = dirty.lock().expect("compaction dirty mutex");
+                if dirty.remove(&log_name) {
+                    true // claim stays held for the next pass
+                } else {
+                    queued.remove(&log_name);
+                    false
+                }
+            };
+            if !rerun {
+                break;
+            }
+            passes += 1;
+            if passes >= 3 || shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                // Fairness / shutdown: keep the claim and requeue
+                // through the channel so other logs get a turn (a
+                // hot saver must not pin the worker to one log). On
+                // shutdown the queued job is simply abandoned — the
+                // next open's sweep rediscovers the oversized log.
+                let _ = tx.send(CompactionJob::Compact {
+                    file_id,
+                    log_name: log_name.clone(),
+                    path: path.clone(),
+                });
+                break;
+            }
+        }
+    }
+}
+
+impl Drop for VaultSession {
+    fn drop(&mut self) {
+        // Stop the compaction worker: flag first (checked between
+        // files), then a wake-up message, then join — a mid-file
+        // compaction completes, everything queued behind it is
+        // abandoned (re-discovered by the next open's sweep).
+        self.compaction_shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.compaction_tx.send(CompactionJob::Shutdown);
+        if let Some(handle) = self
+            .compaction_join
+            .lock()
+            .expect("compaction join mutex")
+            .take()
+        {
+            let _ = handle.join();
+        }
+    }
+}
+
 impl VaultSession {
     fn bump_bases_generation(&self) {
         self.bases_generation
@@ -687,14 +898,73 @@ impl VaultSession {
             1,
         ));
 
+        // Background compaction worker (O-2 #540): one thread, jobs
+        // deduped per log (single-flight), idle when the queue is
+        // empty, joined on session close. It takes only per-log file
+        // locks — never the connection mutex — so the save path can
+        // block on a log lock while the worker runs without any
+        // ordering cycle.
+        let oplog_state: Arc<Mutex<std::collections::HashMap<i64, OplogAppendState>>> =
+            Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let event_listeners: Arc<
+            Mutex<std::collections::HashMap<u64, Arc<dyn VaultEventListener>>>,
+        > = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let retention_days = Arc::new(std::sync::atomic::AtomicU32::new(
+            config.oplog_retention_days,
+        ));
+        let compaction_queued: Arc<Mutex<std::collections::HashSet<String>>> =
+            Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>> =
+            Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let compaction_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (compaction_tx, compaction_rx) = std::sync::mpsc::channel::<CompactionJob>();
+        let worker_tx = compaction_tx.clone();
+        let compaction_join = {
+            let cache_dir = config.cache_dir.clone();
+            let threshold_bytes = config.oplog_compaction_threshold_bytes as u64;
+            let threshold_entries = config.oplog_compaction_threshold_entries as u64;
+            let retention = Arc::clone(&retention_days);
+            let listeners = Arc::clone(&event_listeners);
+            let state = Arc::clone(&oplog_state);
+            let queued = Arc::clone(&compaction_queued);
+            let dirty = Arc::clone(&compaction_dirty);
+            let shutdown = Arc::clone(&compaction_shutdown);
+            std::thread::Builder::new()
+                .name("slate-oplog-compactor".into())
+                .spawn(move || {
+                    compaction_worker_loop(
+                        compaction_rx,
+                        worker_tx,
+                        cache_dir,
+                        threshold_bytes,
+                        threshold_entries,
+                        retention,
+                        listeners,
+                        state,
+                        queued,
+                        dirty,
+                        shutdown,
+                    );
+                })
+                .expect("spawn compaction worker")
+        };
+
         Ok(Self {
             provider,
             conn: Mutex::new(conn),
             config,
-            oplog_state: Mutex::new(std::collections::HashMap::new()),
+            oplog_state,
             next_oplog_stem_salt: AtomicU64::new(0),
             remnant_logs: Mutex::new(Vec::new()),
             cache_created_this_open,
+            event_listeners,
+            next_listener_token: AtomicU64::new(1),
+            retention_days,
+            compaction_tx,
+            compaction_queued,
+            compaction_dirty,
+            compaction_shutdown,
+            compaction_join: Mutex::new(Some(compaction_join)),
             math_prefs,
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
@@ -833,7 +1103,59 @@ impl VaultSession {
         // remnants (O-1 #539). Best-effort: a reconcile failure
         // degrades history features, never the scan itself.
         self.reconcile_oplogs(&mut conn);
+        // On-open compaction sweep (O-2 #540): enqueue any bound log
+        // whose file size exceeds the byte threshold — stat only, no
+        // log reads.
+        self.sweep_oversized_logs(&conn);
         Ok(report)
+    }
+
+    /// O-2 (#540): stat every bound log and queue the oversized ones
+    /// for background compaction. Best-effort; runs after the scan
+    /// reconcile so bindings are fresh.
+    fn sweep_oversized_logs(&self, conn: &Connection) {
+        let rows: Vec<(i64, String, String)> = match conn
+            .prepare("SELECT id, oplog_name, path FROM files WHERE oplog_name IS NOT NULL")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .and_then(std::iter::Iterator::collect)
+            }) {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::warn!("oplog sweep query failed");
+                log::debug!("oplog sweep query failure: {e}");
+                return;
+            }
+        };
+        let threshold = self.config.oplog_compaction_threshold_bytes as u64;
+        // Conservative cross-session entry-count trigger (adversarial
+        // review): a log cannot hold more entries than its size divided
+        // by a minimum realistic frame (~64 B with real hashes), so any
+        // file smaller than threshold_entries × 64 provably satisfies
+        // the entry threshold and is skipped without IO. Bigger files
+        // get ONE background read per open; a fine count reports Futile
+        // and the flag stops repeats within the session.
+        let min_avg_entry_bytes: u64 = 64;
+        let entry_estimate_floor = (self.config.oplog_compaction_threshold_entries as u64)
+            .saturating_mul(min_avg_entry_bytes);
+        for (file_id, log_name, path) in rows {
+            let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, &log_name);
+            if let Ok(meta) = std::fs::metadata(&log_path)
+                && (meta.len() > threshold || meta.len() > entry_estimate_floor)
+            {
+                // Respect an in-session futility verdict (a giant
+                // single-entry log doesn't shrink until it grows).
+                let futile = self
+                    .oplog_state
+                    .lock()
+                    .expect("oplog state mutex")
+                    .get(&file_id)
+                    .is_some_and(|s| s.compaction_futile);
+                if !futile {
+                    self.enqueue_compaction(file_id, &log_name, &path);
+                }
+            }
+        }
     }
 
     /// Scan-time op-log reconcile (O-1 #539): bind every on-disk log to
@@ -974,11 +1296,31 @@ impl VaultSession {
                     claims.push((stem.clone(), file.id));
                 } else {
                     // A live file at this path already has its own log
-                    // — e.g. a hand-copied log file. Never guess.
+                    // — e.g. a hand-copied log file. Never guess; but
+                    // DO age it out on the same retention rule as
+                    // remnants (O-2: quarantined logs are eventually
+                    // reclaimed too).
                     log::warn!(
                         "oplog reconcile: log {stem} claims an already-bound file; quarantined"
                     );
                     log::debug!("oplog reconcile: {stem} claimed path {eff:?}");
+                    let cutoff = now_ms() - i64::from(self.retention_days()) * 24 * 60 * 60 * 1000;
+                    // Newest-timestamp rule — same backwards-clock
+                    // conservatism as the remnant branch below.
+                    if !entries.is_empty()
+                        && entries
+                            .iter()
+                            .map(|e| e.timestamp_ms)
+                            .max()
+                            .is_some_and(|ts| ts <= cutoff)
+                    {
+                        let log_path =
+                            crate::oplog::oplog_path_for_name(&self.config.cache_dir, stem);
+                        if let Err(e) = std::fs::remove_file(&log_path) {
+                            log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
+                            log::debug!("oplog reclamation failure detail: {e}");
+                        }
+                    }
                 }
                 continue;
             }
@@ -1005,8 +1347,34 @@ impl VaultSession {
                 }
             }
 
-            // Remnant (deleted file) or quarantine.
+            // Remnant (deleted file) or quarantine — with the O-2
+            // retention sweep applied first: an unbound log whose tail
+            // is older than the retention window is DELETED (`05` §7.5
+            // "old ops are discarded", applied to deleted files). This
+            // both bounds `.slate/oplog` disk and is the mechanism by
+            // which the deleted-files list ages out. Within retention,
+            // remnants are never rewritten — full fidelity for
+            // recovery. Unreadable logs are left in place (no
+            // timestamp to judge by; conservative).
+            // Age = the NEWEST wall-clock timestamp anywhere in the
+            // log, not the tail's (adversarial-review High): clocks
+            // step backwards, so a fresh deletion can carry a
+            // stale-looking tail — deleting on the tail alone would
+            // permanently destroy the only recovery copy. Requiring
+            // EVERY entry to be past the cutoff is the conservative
+            // reading; a log written entirely under a regressed clock
+            // can still age out early, which is the best a wall clock
+            // can do (documented limit).
+            let cutoff = now_ms() - i64::from(self.retention_days()) * 24 * 60 * 60 * 1000;
+            let newest_ts = entries.iter().map(|e| e.timestamp_ms).max();
             match (effective_path, entries.last()) {
+                (_, Some(_)) if newest_ts.is_some_and(|ts| ts <= cutoff) => {
+                    let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, stem);
+                    if let Err(e) = std::fs::remove_file(&log_path) {
+                        log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
+                        log::debug!("oplog reclamation failure detail: {e}");
+                    }
+                }
                 (Some(eff), Some(tail)) => remnants.push(RemnantLog {
                     stem: stem.clone(),
                     effective_path: eff,
@@ -1465,16 +1833,31 @@ impl VaultSession {
                         rusqlite::params![stem, file_id],
                     ) {
                         Ok(0) => {
-                            return conn
+                            // A racing writer bound the file first —
+                            // return the winner's binding. Lookup
+                            // failures are logged, not swallowed
+                            // (Codoki, PR #790): a DB error here means
+                            // no binding is known, so the append is
+                            // skipped exactly like an append failure.
+                            return match conn
                                 .query_row(
                                     "SELECT oplog_name FROM files WHERE id = ?1",
                                     rusqlite::params![file_id],
                                     |row| row.get::<_, Option<String>>(0),
                                 )
                                 .optional()
-                                .ok()
-                                .flatten()
-                                .flatten();
+                            {
+                                Ok(binding) => binding.flatten(),
+                                Err(e) => {
+                                    log::warn!(
+                                        "oplog raced-bind lookup failed for file_id={file_id}: db error"
+                                    );
+                                    log::debug!(
+                                        "oplog raced-bind lookup failure for path {path:?}: {e}"
+                                    );
+                                    None
+                                }
+                            };
                         }
                         Ok(_) => return Some(stem),
                         Err(e) => {
@@ -1510,6 +1893,70 @@ impl VaultSession {
             .lock()
             .expect("remnant logs mutex")
             .clone()
+    }
+
+    /// Register a session-event listener (O-2 #540). Returns an opaque
+    /// token for [`unregister_event_listener`](Self::unregister_event_listener).
+    /// Listeners are invoked from background threads and must be cheap
+    /// and non-blocking.
+    pub fn register_event_listener(&self, listener: Arc<dyn VaultEventListener>) -> u64 {
+        let token = self
+            .next_listener_token
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.event_listeners
+            .lock()
+            .expect("event listener mutex")
+            .insert(token, listener);
+        token
+    }
+
+    /// Remove a previously registered session-event listener. Unknown
+    /// tokens are a no-op (idempotent).
+    pub fn unregister_event_listener(&self, token: u64) {
+        self.event_listeners
+            .lock()
+            .expect("event listener mutex")
+            .remove(&token);
+    }
+
+    /// The live retention window in days (runtime-mutable; O-5's
+    /// settings surface writes it and the next compaction reads it).
+    pub fn retention_days(&self) -> u32 {
+        self.retention_days
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Set the retention window (days). Applies to the compaction
+    /// worker and the next scan's remnant reclamation immediately.
+    pub fn set_retention_days(&self, days: u32) {
+        self.retention_days
+            .store(days, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Queue a background compaction for one log (single-flight: a log
+    /// already queued is not queued again). Best-effort — a send onto
+    /// a shut-down worker is silently dropped.
+    fn enqueue_compaction(&self, file_id: i64, log_name: &str, path: &str) {
+        {
+            let mut queued = self
+                .compaction_queued
+                .lock()
+                .expect("compaction queue mutex");
+            if !queued.insert(log_name.to_string()) {
+                // Queued or in flight: mark dirty so the worker runs
+                // exactly one follow-up after the current run.
+                self.compaction_dirty
+                    .lock()
+                    .expect("compaction dirty mutex")
+                    .insert(log_name.to_string());
+                return;
+            }
+        }
+        let _ = self.compaction_tx.send(CompactionJob::Compact {
+            file_id,
+            log_name: log_name.to_string(),
+            path: path.to_string(),
+        });
     }
 
     /// Append this save to the file's op log, choosing between a
@@ -1624,25 +2071,45 @@ impl VaultSession {
             payload_bytes,
         };
 
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, log_name, path, &entry) {
-            // Non-fatal: a missing op-log entry only degrades undo to a
-            // per-file conflict report, never corruption. Route through the
-            // facade (#507). warn carries only the file id and the error
-            // *kind* — never the full error Display, which for a torn/short
-            // existing log embeds the cache path (`oplog {path:?}: …`). The
-            // path-bearing detail rides the debug line instead, so it stays
-            // out of shipped host logs (see lib.rs privacy rule).
-            log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
-            log::debug!("oplog append failure for path {path:?}: {e}");
-            return; // leave the cache untouched so the next save re-snapshots
-        }
+        let post_append_len =
+            match crate::oplog::append_entry(&self.config.cache_dir, log_name, path, &entry) {
+                Ok(len) => len,
+                Err(e) => {
+                    // Non-fatal: a missing op-log entry only degrades undo to a
+                    // per-file conflict report, never corruption. Route through the
+                    // facade (#507). warn carries only the file id and the error
+                    // *kind* — never the full error Display, which for a torn/short
+                    // existing log embeds the cache path (`oplog {path:?}: …`). The
+                    // path-bearing detail rides the debug line instead, so it stays
+                    // out of shipped host logs (see lib.rs privacy rule).
+                    log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
+                    log::debug!("oplog append failure for path {path:?}: {e}");
+                    return; // leave the cache untouched so the next save re-snapshots
+                }
+            };
+        let appends_this_session = cached.as_ref().map_or(1, |c| c.appends_this_session + 1);
         state.insert(
             file_id,
             OplogAppendState {
                 last_hash_after: new_hash.to_string(),
                 bytes_since_snapshot,
+                compaction_futile: false, // an append clears futility
+                appends_this_session,
             },
         );
+        drop(state);
+
+        // O-2 (#540): the compaction trigger check is pure arithmetic —
+        // the returned post-append length against the byte threshold,
+        // plus this session's append count against the entry threshold
+        // (a sound lower bound on the log's entries). No log walk ever
+        // runs on the save path; compaction itself makes the count
+        // exact when it reads the log.
+        if post_append_len > self.config.oplog_compaction_threshold_bytes as u64
+            || appends_this_session > self.config.oplog_compaction_threshold_entries as u64
+        {
+            self.enqueue_compaction(file_id, log_name, path);
+        }
     }
 
     /// Read every well-formed op-log entry recorded for `path`.
@@ -5510,6 +5977,8 @@ impl VaultSession {
             OplogAppendState {
                 last_hash_after: content_hash.to_string(),
                 bytes_since_snapshot: 0,
+                compaction_futile: false,
+                appends_this_session: 1,
             },
         );
     }
@@ -8974,6 +9443,9 @@ mod tests {
 
     #[path = "oplog_identity.rs"]
     mod oplog_identity;
+
+    #[path = "oplog_compaction_session.rs"]
+    mod oplog_compaction_session;
 
     #[path = "oplog_logging.rs"]
     mod oplog_logging;
