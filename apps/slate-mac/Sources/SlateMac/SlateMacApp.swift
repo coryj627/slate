@@ -190,6 +190,13 @@ struct SlateMacApp: App {
                 }
                 .disabled(!appState.isVaultOpen)
 
+                // O-5 (#543): the history panel's menu home — same
+                // View-section rule as the sync-diagnostics item above.
+                Button("Show history panel") {
+                    appState.showHistoryPanel()
+                }
+                .disabled(!appState.isVaultOpen)
+
                 Divider()
 
                 // Milestone T (#518): the ⌃⌘I Where-am-I chord lives in

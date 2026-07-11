@@ -42,6 +42,10 @@ struct SettingsView: View {
                     .tabItem {
                         SlateSymbol.canvas.label()
                     }
+                HistorySettingsTab()
+                    .tabItem {
+                        SlateSymbol.history.label()
+                    }
             }
         }
         .frame(minWidth: 500, minHeight: 400)
@@ -723,5 +727,59 @@ struct CanvasSettingsTab: View {
             get: { appState.canvasAnnouncer.verbosity },
             set: { appState.setCanvasVerbosity($0) }
         )
+    }
+}
+
+
+// MARK: - History tab (Milestone O-5, #543)
+
+/// Retention window (per-vault, persisted to `.slate/prefs.json`
+/// through the session so unknown keys survive) + the since-open
+/// toggle (host preference — UI + mark writes only).
+struct HistorySettingsTab: View {
+    @EnvironmentObject var appState: AppState
+    @State private var retentionDays: UInt32 = 90
+
+    /// The picker's fixed menu (o_spec §O-5): 30 / 90 (default) /
+    /// 180 / 365 days.
+    static let retentionChoices: [UInt32] = [30, 90, 180, 365]
+
+    static let sinceOpenFooter =
+        "Adds a summary of what changed to the History panel when you open a note."
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Keep edit history for", selection: $retentionDays) {
+                    ForEach(Self.retentionChoices, id: \.self) { days in
+                        Text("\(days) days").tag(days)
+                    }
+                }
+                .onChange(of: retentionDays) { _, newValue in
+                    Task { await appState.applyHistoryRetention(days: newValue) }
+                }
+                .disabled(!appState.isVaultOpen)
+            } footer: {
+                if !appState.isVaultOpen {
+                    Text("Open a vault to change its history retention.")
+                }
+            }
+            Section {
+                Toggle(
+                    "Show changes since last open",
+                    isOn: Binding(
+                        get: { appState.historyShowChangesSinceOpen },
+                        set: { appState.setHistoryShowChangesSinceOpen($0) }
+                    )
+                )
+            } footer: {
+                Text(Self.sinceOpenFooter)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            retentionDays = appState.currentHistoryRetentionDays()
+        }
+        .navigationTitle("History")
     }
 }

@@ -28,6 +28,10 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     case code
     case diagrams
     case tasks
+    /// Per-note version history + deleted-file recovery (Milestone O-5,
+    /// #543) — registered BEFORE `.citations` (usage-frequency order:
+    /// content leaves, then history, then citations/bibliography).
+    case history
     case citations
     case bibliography
     case queries
@@ -50,6 +54,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .code: return "Code"
         case .diagrams: return "Diagrams"
         case .tasks: return "Tasks"
+        case .history: return "History"
         case .citations: return "Citations"
         case .bibliography: return "Bibliography"
         case .queries: return "Queries"
@@ -74,6 +79,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .code: return .code
         case .diagrams: return .diagram
         case .tasks: return .tasksLeaf
+        case .history: return .history
         case .citations: return .citationSummary
         case .bibliography: return .bibliography
         case .queries: return .base
@@ -92,7 +98,8 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     /// a selectable-but-blank icon.
     static let registered: [Leaf] = [
         .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-        .tasks, .citations, .bibliography, .queries, .basesDock, .syncDiagnostics,
+        .tasks, .history, .citations, .bibliography, .queries, .basesDock,
+        .syncDiagnostics,
     ]
 
     var isRegistered: Bool { Self.registered.contains(self) }
@@ -287,6 +294,8 @@ struct RightPaneView: View {
             DiagramsPanel()
         case .tasks:
             TasksPanel()
+        case .history:
+            HistoryPanel()
         case .citations:
             CitationsPanel()
         case .bibliography:

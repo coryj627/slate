@@ -56,6 +56,12 @@ final class SlateSymbolTests: XCTestCase {
         // risk-badge glyphs. arrow.triangle.2.circlepath is SF Symbols 1
         // (macOS 11); exclamationmark.circle / info.circle are SF Symbols 1.
         "arrow.triangle.2.circlepath", "exclamationmark.circle", "info.circle",
+        // O-5 (#543) history roles. All predate SF Symbols 7:
+        // clock.arrow.circlepath (SF 2), arrow.uturn.backward.circle
+        // (SF 3), arrow.left.arrow.right (SF 1), minus/pencil circles
+        // (SF 1); plus.circle is already in the fixture.
+        "clock.arrow.circlepath", "arrow.uturn.backward.circle",
+        "arrow.left.arrow.right", "minus.circle", "pencil.circle",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated

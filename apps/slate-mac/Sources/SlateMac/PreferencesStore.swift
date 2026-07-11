@@ -69,6 +69,22 @@ final class PreferencesStore {
         encode(prefs, key: Self.baseQueriesKey)
     }
 
+    // MARK: - History (Milestone O-5, #543)
+
+    /// Bare-bool key (spec-pinned name): the "Show changes since last
+    /// open" toggle. Default OFF — the section (and its `mark_opened`
+    /// writes) are opt-in.
+    static let historyShowChangesSinceOpenKey =
+        "slate.prefs.historyShowChangesSinceOpen"
+
+    func loadHistoryShowChangesSinceOpen() -> Bool {
+        defaults.bool(forKey: Self.historyShowChangesSinceOpenKey)
+    }
+
+    func saveHistoryShowChangesSinceOpen(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.historyShowChangesSinceOpenKey)
+    }
+
     // MARK: - Internals
 
     private func decode<T: Codable>(_ type: T.Type, key: String) -> T? {
