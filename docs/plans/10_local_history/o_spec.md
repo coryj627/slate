@@ -768,7 +768,16 @@ consistency rule DoD §B; the three `diff*` roles cover add/remove/edit tinting.
 - Swift new-note flow adopting `create_exclusive` (today's `save_text(path, "", nil)` can clobber
   an existing file on a name race) — file with O-3 (`bug`-leaning `enhancement`).
 - Config-file + `.canvas`/`.base` history coverage — file when T/N route writes through the save
-  seam (`enhancement`, cross-referenced to T/N).
+  seam (`enhancement`, cross-referenced to T/N). **Resolved (#797):** `.canvas` (via
+  `canvas_apply` → `save_text_locked`) and `.base` (via `save_query_as_base` → `save_text`)
+  already commit through the seam, so versions, verified reads, and restores work — pinned by
+  test. One committed canvas action journals two entries (byte save + semantic record); version
+  listings fold the semantic record into its byte row as a `Canvas: <action>` annotation, so one
+  transition renders as one row. **Config files are explicitly out of scope**: `.slate/prefs.json`
+  writes are a flock-guarded read-modify-write deliberately outside the vault session (both the
+  Rust history-prefs writer and the Swift store hold `prefs.json.lock` across the cycle); routing
+  them through the save seam would change that locking contract for a settings-history user story
+  nobody has asked for. Revisit only with a concrete story.
 - Version-list day-grouping / condensation UI — file with O-5, decided by tester question #2.
 - `slate history <vault> <path>` CLI command — file against the M CLI (`enhancement`).
 - Regex + unicode-case-aware variant of `deleted_content_matches` — file with O-6, decided by

@@ -724,3 +724,271 @@ fn recover_deleted_file_as_lands_at_the_chosen_path_with_history() {
         Err(VaultError::InvalidArgument { .. })
     ));
 }
+
+/// #797: history coverage for non-markdown writers — both route
+/// through the save seam, so versions, verified content, and restores
+/// all work; a canvas action's two journal entries (byte + semantic)
+/// render as ONE version row carrying the action name.
+#[test]
+fn canvas_and_base_writes_are_versioned_through_the_seam() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "board.canvas",
+            br#"{"nodes":[{"id":"seed","type":"text","text":"seed","x":0,"y":0,"width":100,"height":50}],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Canvas: one action = TWO oplog entries (the seam's byte save +
+    // the semantic record) = ONE version row, action name attached.
+    let info = session.open_canvas("board.canvas").unwrap();
+    session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "create card".into(),
+                ops: vec![CanvasOp::CreateNode {
+                    id: "n1".into(),
+                    content: CanvasNodeContent::Text {
+                        text: "first card".into(),
+                    },
+                    x: 0.0,
+                    y: 100.0,
+                    width: 200.0,
+                    height: 100.0,
+                    color: None,
+                }],
+            },
+        )
+        .unwrap();
+    let page = session
+        .list_versions("board.canvas", Paging::first(50))
+        .unwrap();
+    assert_eq!(page.total_filtered, 1, "one action, one version row");
+    let row = &page.items[0];
+    assert!(
+        row.annotations
+            .iter()
+            .any(|a| a.kind == "CanvasAction" && a.display == "Canvas: create card"),
+        "the action name rides the byte row: {:?}",
+        row.annotations
+    );
+
+    // Verified content + restore work on .canvas like any note.
+    let v1_hash = row.content_hash_after.clone();
+    let v1_content = session.version_content("board.canvas", &v1_hash).unwrap();
+    assert!(v1_content.contains("first card"));
+    session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "nudge card".into(),
+                ops: vec![CanvasOp::UpdateNodeGeometry {
+                    id: "n1".into(),
+                    x: 50.0,
+                    y: 150.0,
+                    width: 200.0,
+                    height: 100.0,
+                }],
+            },
+        )
+        .unwrap();
+    let current = session
+        .get_file_metadata("board.canvas")
+        .unwrap()
+        .unwrap()
+        .content_hash;
+    session
+        .restore_version("board.canvas", &v1_hash, Some(&current))
+        .unwrap();
+    assert_eq!(
+        session.read_text("board.canvas").unwrap(),
+        v1_content,
+        "the restore landed the verified bytes"
+    );
+    let after = session
+        .list_versions("board.canvas", Paging::first(50))
+        .unwrap();
+    assert_eq!(
+        after.total_filtered, 3,
+        "restore appended its own row — history never rewrites"
+    );
+
+    // Base: save_query_as_base routes through save_text — versioned.
+    let yaml = "views:\n  - type: table\n    name: T\n    order:\n      - file.name\n";
+    let (base, warnings) = crate::bases::parse_base(yaml);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let query_json = serde_json::to_string(&crate::bases::view_query(&base, 0)).unwrap();
+    session
+        .save_query_as_base(&query_json, "Queries/Q.base")
+        .unwrap();
+    let base_page = session
+        .list_versions("Queries/Q.base", Paging::first(10))
+        .unwrap();
+    assert_eq!(base_page.total_filtered, 1, ".base writes are versioned");
+    let base_hash = &base_page.items[0].content_hash_after;
+    let round_trip = session
+        .version_content("Queries/Q.base", base_hash)
+        .unwrap();
+    assert_eq!(
+        round_trip,
+        session.read_text("Queries/Q.base").unwrap(),
+        "verified .base bytes round-trip"
+    );
+}
+
+/// #797 fold under interleave (codex): in-process splits are closed by
+/// holding the session lock across both canvas appends, but a
+/// cross-process writer can still land between them. The record then
+/// renders as a STANDALONE "canvas action" row — the pre-fold
+/// behavior for that one action — and must never mis-fold into the
+/// interloper (whose hash pair differs).
+#[test]
+fn interleaved_semantic_record_degrades_to_standalone_never_misfolds() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.canvas", "{}\n", None).unwrap();
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.canvas'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let cache_dir = session.config.cache_dir.clone();
+    let (a, b, c) = ("A\n", "B\n", "C\n");
+    let hash = |s: &str| crate::vault::content_hash(s.as_bytes());
+    let mk = |kind, before: &str, after: &str, payload: Vec<u8>| crate::oplog::OpLogEntry {
+        timestamp_ms: now_ms(),
+        user_actor_id: "t".into(),
+        op_kind: kind,
+        content_hash_before: hash(before),
+        content_hash_after: hash(after),
+        payload_bytes: payload,
+    };
+    // byte(A→B), foreign save (B→C), then the canvas record (A→B)
+    // landing late — the cross-process interleave shape.
+    for entry in [
+        mk(crate::OpKind::WholeFileReplace, a, b, b.as_bytes().to_vec()),
+        mk(crate::OpKind::WholeFileReplace, b, c, c.as_bytes().to_vec()),
+        mk(
+            crate::OpKind::CanvasApply,
+            a,
+            b,
+            br#"{"name":"late action"}"#.to_vec(),
+        ),
+    ] {
+        crate::oplog::append_entry(&cache_dir, &stem, "n.canvas", &entry).unwrap();
+    }
+
+    let page = session
+        .list_versions("n.canvas", Paging::first(10))
+        .unwrap();
+    // Initial save + the three constructed entries, NONE folded: the
+    // record's predecessor (B→C) has a different pair.
+    assert_eq!(page.total_filtered, 4);
+    let canvas_row = page
+        .items
+        .iter()
+        .find(|r| r.op_kind == crate::OpKind::CanvasApply)
+        .expect("standalone canvas row");
+    assert_eq!(canvas_row.audio_fragment, "canvas action");
+    assert!(
+        page.items
+            .iter()
+            .all(|r| !r.annotations.iter().any(|a| a.kind == "CanvasAction")),
+        "no row absorbed the interleaved record"
+    );
+}
+
+/// #797 fold guard (Codoki on #865): the fold absorbs into BYTE rows
+/// only — a duplicate semantic record renders standalone rather than
+/// folding into the first record's row, and a marker row never
+/// swallows a record (it would vanish under the default marker-hide).
+#[test]
+fn fold_absorbs_into_byte_rows_only() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.canvas", "{}\n", None).unwrap();
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.canvas'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let cache_dir = session.config.cache_dir.clone();
+    let hash = |s: &str| crate::vault::content_hash(s.as_bytes());
+    let mk = |kind, before: &str, after: &str, payload: Vec<u8>| crate::oplog::OpLogEntry {
+        timestamp_ms: now_ms(),
+        user_actor_id: "t".into(),
+        op_kind: kind,
+        content_hash_before: hash(before),
+        content_hash_after: hash(after),
+        payload_bytes: payload,
+    };
+    for entry in [
+        // byte(A→B) + its record + a DUPLICATE record (crash-retry shape).
+        mk(
+            crate::OpKind::WholeFileReplace,
+            "A\n",
+            "B\n",
+            b"B\n".to_vec(),
+        ),
+        mk(
+            crate::OpKind::CanvasApply,
+            "A\n",
+            "B\n",
+            br#"{"name":"real"}"#.to_vec(),
+        ),
+        mk(
+            crate::OpKind::CanvasApply,
+            "A\n",
+            "B\n",
+            br#"{"name":"duplicate"}"#.to_vec(),
+        ),
+        // A no-op action: anchor(B→B) + record(B→B) — the record must
+        // NOT vanish into the default-hidden marker row.
+        mk(
+            crate::OpKind::WholeFileReplace,
+            "B\n",
+            "B\n",
+            b"B\n".to_vec(),
+        ),
+        mk(
+            crate::OpKind::CanvasApply,
+            "B\n",
+            "B\n",
+            br#"{"name":"noop"}"#.to_vec(),
+        ),
+    ] {
+        crate::oplog::append_entry(&cache_dir, &stem, "n.canvas", &entry).unwrap();
+    }
+    let page = session
+        .list_versions("n.canvas", Paging::first(10))
+        .unwrap();
+    // initial save + byte(with "real" folded) + standalone "duplicate"
+    // + anchor + standalone "noop" record = 5 rows.
+    assert_eq!(page.total_filtered, 5, "{:?}", page.items);
+    let folded: Vec<_> = page
+        .items
+        .iter()
+        .flat_map(|r| r.annotations.iter())
+        .filter(|a| a.kind == "CanvasAction")
+        .map(|a| a.display.clone())
+        .collect();
+    assert_eq!(folded, vec!["Canvas: real"], "only the byte row absorbed");
+    let standalone = page
+        .items
+        .iter()
+        .filter(|r| r.op_kind == crate::OpKind::CanvasApply)
+        .count();
+    assert_eq!(standalone, 2, "duplicate + noop records stay visible rows");
+}

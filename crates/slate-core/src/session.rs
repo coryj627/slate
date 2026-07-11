@@ -455,8 +455,10 @@ pub trait VaultEventListener: Send + Sync {
     fn on_error(&self, code: EventErrorCode, path: String, message: String);
 
     /// #802: a Slate-originated file mutation committed (write on disk
-    /// AND index row in one transaction). Default no-op — O-2
-    /// registrations stay valid unchanged. The filesystem watcher is a
+    /// AND index row in one transaction). Dispatch is strictly
+    /// post-commit: at callback time the new state is visible to any
+    /// external reader of the index (Codoki on #846). Default no-op —
+    /// O-2 registrations stay valid unchanged. The filesystem watcher is a
     /// stub (`provider.watch` yields nothing), so external edits
     /// surface at the next scan, never here: this event covers the
     /// app's own write paths. Do not call session APIs synchronously
@@ -2289,18 +2291,23 @@ impl VaultSession {
             .remove(&token);
     }
 
-    /// #802: fan a file-change event out to every listener. Snapshot
-    /// first (the compaction-dispatch discipline) so listener code
-    /// never runs under the registry mutex; callers arrange to have
-    /// dropped the session connection lock where possible.
-    fn notify_file_change(&self, kind: FileChangeKind, path: &str, previous_path: Option<&str>) {
-        let snapshot: Vec<Arc<dyn VaultEventListener>> = self
-            .event_listeners
+    /// #802: one snapshot of the registered listeners — the shared
+    /// fan-out seat for every event family (Codoki on #846: one
+    /// helper, no drift). Snapshotting first (the compaction-dispatch
+    /// discipline) means listener code never runs under the registry
+    /// mutex.
+    fn listener_snapshot(&self) -> Vec<Arc<dyn VaultEventListener>> {
+        self.event_listeners
             .lock()
             .expect("event listener mutex")
             .values()
             .cloned()
-            .collect();
+            .collect()
+    }
+
+    /// #802: fan a file-change event out to every listener.
+    fn notify_file_change(&self, kind: FileChangeKind, path: &str, previous_path: Option<&str>) {
+        let snapshot = self.listener_snapshot();
         if snapshot.is_empty() {
             return;
         }
@@ -2323,16 +2330,9 @@ impl VaultSession {
         }
     }
 
-    /// #802: fan an index-phase event out (same snapshot discipline).
+    /// #802: fan an index-phase event out (same snapshot seat).
     fn notify_index_phase(&self, phase: IndexPhase, files_seen: u64) {
-        let snapshot: Vec<Arc<dyn VaultEventListener>> = self
-            .event_listeners
-            .lock()
-            .expect("event listener mutex")
-            .values()
-            .cloned()
-            .collect();
-        for listener in snapshot {
+        for listener in self.listener_snapshot() {
             listener.on_index_phase(phase, files_seen);
         }
     }
@@ -6614,6 +6614,10 @@ impl VaultSession {
         let conn = self.conn.lock().expect("session connection mutex");
         // #802: the range delete below erases the paths — capture them
         // first so each file's Deleted event can fire after commit.
+        // In-memory and O(folder size) by design (Codoki on #846): a
+        // folder delete already walks its subtree on disk, and events
+        // are per-file by contract; revisit with streamed emission
+        // only if a real vault shows this hot.
         let deleted_files: Vec<String> = {
             let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
             let mut stmt = conn.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
@@ -7627,6 +7631,9 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
     // Forward length tracking: batch deltas are computable from the
     // ops alone; snapshots reset the running length.
     let mut prev_len: Option<i64> = None;
+    // #797: the previous in-order entry's (before, after) pair, for
+    // folding a canvas action's semantic record into its byte row.
+    let mut prev_pair: Option<(String, String)> = None;
     for (idx, entry) in entries.iter().enumerate() {
         use crate::oplog::OpKind;
         let (inner_kind, inner_payload, annotations) = match entry.op_kind {
@@ -7641,6 +7648,51 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
             },
             kind => (kind, Some(entry.payload_bytes.clone()), Vec::new()),
         };
+
+        // #797: a committed canvas action journals TWO entries for ONE
+        // transition — the byte-level save the seam wrote, then the
+        // semantic CanvasApply record beside it (T #372). One
+        // transition = one version row: fold the semantic record into
+        // its byte row as an annotation carrying the action name. A
+        // standalone record (its byte entry compacted away) keeps
+        // today's own-row rendering.
+        // Fold eligibility (Codoki on #865, both rounds): the target
+        // must be an actual BYTE-level row — WholeFileReplace or
+        // EditBatch by allowlist, so an undecodable Annotated row or a
+        // standalone CanvasApply row can never absorb — non-marker (a
+        // no-op action's record must not vanish into a default-hidden
+        // anchor row), and not already annotated (the T protocol
+        // appends exactly one record per action; a second match is an
+        // anomaly that should stay a visible row).
+        let fold_target = |row: &VersionSummary| {
+            matches!(row.op_kind, OpKind::WholeFileReplace | OpKind::EditBatch)
+                && !row.is_marker
+                && !row.annotations.iter().any(|a| a.kind == "CanvasAction")
+        };
+        if inner_kind == OpKind::CanvasApply
+            && prev_pair.as_ref()
+                == Some(&(
+                    entry.content_hash_before.clone(),
+                    entry.content_hash_after.clone(),
+                ))
+            && let Some(last) = rows.last_mut()
+            && fold_target(last)
+        {
+            let name = inner_payload
+                .as_deref()
+                .and_then(|p| serde_json::from_slice::<serde_json::Value>(p).ok())
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "canvas action".to_string());
+            last.annotations.push(OpAnnotationSummary {
+                kind: "CanvasAction".into(),
+                display: format!("Canvas: {name}"),
+            });
+            prev_pair = Some((
+                entry.content_hash_before.clone(),
+                entry.content_hash_after.clone(),
+            ));
+            continue;
+        }
 
         let (op_count, byte_delta) = match inner_kind {
             OpKind::WholeFileReplace => {
@@ -7687,6 +7739,10 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
             OpKind::CanvasApply => "canvas action".to_string(),
             OpKind::Annotated => "unreadable entry".to_string(),
         };
+        prev_pair = Some((
+            entry.content_hash_before.clone(),
+            entry.content_hash_after.clone(),
+        ));
         rows.push(VersionSummary {
             position_from_tail: (entries.len() - 1 - idx) as u32,
             content_hash_after: entry.content_hash_after.clone(),
@@ -10716,7 +10772,6 @@ impl VaultSession {
             .ok()
             .flatten()
             .flatten();
-        drop(conn);
         state.canvas = working;
         state.model = model;
         let hash_before = state.content_hash.clone();
@@ -10726,6 +10781,14 @@ impl VaultSession {
         // the byte-level text entry the save just wrote. Best-effort,
         // same discipline as append_save_to_oplog — a logging hiccup
         // must never fail the user's committed action.
+        //
+        // Appended while the session connection lock is STILL HELD
+        // (#797, codex): the version-list fold pairs this record with
+        // its byte entry by adjacency, and an in-process save slipping
+        // between the two appends would split them. Cross-process
+        // writers can still interleave — then the record renders as a
+        // standalone "canvas action" row (the pre-fold behavior for
+        // that one action; pinned by test), never a mis-fold.
         let payload = serde_json::json!({
             "name": action.name,
             "action": crate::canvas::apply::action_to_json(&action),
@@ -10765,6 +10828,7 @@ impl VaultSession {
                 state.path
             );
         }
+        drop(conn);
 
         // #802: the Modified event fired inside `save_text_locked`
         // above — the canvas serialization commits through the same
