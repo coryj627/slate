@@ -114,24 +114,28 @@ fn coarse(kind: &ReadingBlockKind) -> Coarse {
 /// Truncate to at most `max` chars on a char boundary, appending `…`
 /// when shortened.
 fn truncate_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
+    // Single pass (Codoki, PR #792): find the byte cut for `max` chars
+    // and only then decide whether the ellipsis is needed.
+    match text.char_indices().nth(max) {
+        None => text.to_string(),
+        Some((cut, _)) => format!("{}…", &text[..cut]),
     }
-    let cut: String = text.chars().take(max).collect();
-    format!("{cut}…")
 }
 
 /// A one-line, whitespace-normalized excerpt of a block for
-/// descriptions.
+/// descriptions (streaming — no intermediate Vec; Codoki, PR #792).
 fn excerpt(source: &str, max: usize) -> String {
-    truncate_chars(
-        source
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim(),
-        max,
-    )
+    let mut normalized = String::with_capacity(source.len().min(4 * max));
+    for word in source.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(word);
+        if normalized.chars().count() > max {
+            break; // enough for the truncation below
+        }
+    }
+    truncate_chars(&normalized, max)
 }
 
 /// Heading text sans marker characters.
@@ -241,13 +245,27 @@ fn task_status(kind: &ReadingBlockKind) -> Option<char> {
 }
 
 /// Do two task sources differ ONLY in the status character?
+///
+/// The status bracket is parsed from the FIRST line only — the task
+/// marker lives there, and a `[` on a continuation line must never be
+/// mistaken for it (Codoki, PR #792). Continuation lines ride along
+/// unchanged in the normalized comparison.
 fn only_status_differs(from: &str, to: &str) -> bool {
     let strip = |s: &str| -> Option<(String, char)> {
-        let open = s.find('[')?;
-        let mut chars = s[open + 1..].chars();
+        let (first, rest) = match s.split_once('\n') {
+            Some((first, rest)) => (first, Some(rest)),
+            None => (s, None),
+        };
+        let open = first.find('[')?;
+        let mut chars = first[open + 1..].chars();
         let status = chars.next()?;
-        let rest = chars.as_str().strip_prefix(']')?;
-        Some((format!("{}{}", &s[..open], rest), status))
+        let after = chars.as_str().strip_prefix(']')?;
+        let mut normalized = format!("{}{}", &first[..open], after);
+        if let Some(rest) = rest {
+            normalized.push('\n');
+            normalized.push_str(rest);
+        }
+        Some((normalized, status))
     };
     match (strip(from), strip(to)) {
         (Some((f_rest, f_status)), Some((t_rest, t_status))) => {
@@ -858,6 +876,26 @@ mod tests {
             "- [ ] alpha beta gamma delta\n",
             "- [x] alpha beta gamma DELTA\n",
         );
+        assert_eq!(d.operations[0].kind, DiffOpClass::ListItemEdited);
+    }
+
+    #[test]
+    fn multiline_task_with_continuation_bracket_classifies_correctly() {
+        // Codoki (PR #792): a '[' on a continuation line must not be
+        // parsed as the status marker. Status-only flip on a
+        // multi-line item → TaskStatusChanged…
+        let from = "- [ ] review the notes\n  see [reference] for context\n";
+        let to = "- [x] review the notes\n  see [reference] for context\n";
+        let d = diff(from, to);
+        assert_eq!(d.operations[0].kind, DiffOpClass::TaskStatusChanged);
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Completed task 'review the notes'"
+        );
+        // …while a continuation-line edit is an EDIT even when the
+        // status also flipped (never misread as status-only).
+        let to = "- [x] review the notes\n  see [other source] for context\n";
+        let d = diff(from, to);
         assert_eq!(d.operations[0].kind, DiffOpClass::ListItemEdited);
     }
 
