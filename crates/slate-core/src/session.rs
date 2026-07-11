@@ -797,6 +797,7 @@ fn regen_events_after_compaction(
     file_id: i64,
     log_name: &str,
     marker_rowid: Option<i64>,
+    events_cutoff_ms: i64,
 ) -> Result<(), VaultError> {
     // Hold the LOG's exclusive lock across read + transaction
     // (milestone re-review High): without it, a save can append entry
@@ -823,7 +824,7 @@ fn regen_events_after_compaction(
         "DELETE FROM oplog_events WHERE file_id = ?1",
         rusqlite::params![file_id],
     )?;
-    insert_oplog_events(&tx, file_id, &events)?;
+    insert_oplog_events(&tx, file_id, &events, events_cutoff_ms)?;
     if let Some(rowid) = marker_rowid {
         tx.execute(
             "DELETE FROM oplog_events_stale WHERE rowid = ?1",
@@ -956,6 +957,7 @@ fn compaction_worker_loop(
                             file_id,
                             &log_name,
                             marker_rowid,
+                            retention_cutoff_ms(limits.retention_days),
                         ),
                         None => Err(VaultError::Trash {
                             message: "no worker db connection".into(),
@@ -1364,6 +1366,35 @@ impl VaultSession {
         // transaction), and parser bumps (above) — so a failed rebuild
         // keeps its obligation for the next scan.
         self.rebuild_oplog_events_if_stale(&mut conn, force_rebuild);
+        // #831: age out event rows past the retention window — the
+        // producers' shared rule applied as a pruner, so long-lived
+        // active files stop accumulating rows their next compaction
+        // would fold anyway. Best-effort, like the rebuild above: a
+        // failed DELETE leaves extra rows, never wrong ones.
+        //
+        // Deliberately unindexed (Codoki on #844): a bare ts_ms index
+        // would tax every save's insert for a once-per-open DELETE
+        // whose table this very rule keeps bounded — the full scan is
+        // O(retained rows), single-digit ms at a 90-day heavy-use
+        // bound, and the one large pass (first open on a pre-#831
+        // vault) is a one-time upgrade cost.
+        let events_cutoff = retention_cutoff_ms(self.retention_days());
+        match conn.execute(
+            "DELETE FROM oplog_events WHERE ts_ms <= ?1",
+            rusqlite::params![events_cutoff],
+        ) {
+            // Deleted-count observability (Codoki on #844): steady
+            // state prunes a trickle; a large count marks the one-time
+            // legacy cleanup and would flag a pathological producer.
+            Ok(aged_out) if aged_out > 0 => {
+                log::debug!("oplog_events age-out removed {aged_out} rows");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("oplog_events age-out failed");
+                log::debug!("oplog_events age-out failure detail: {e}");
+            }
+        }
         // On-open compaction sweep (O-2 #540): enqueue any bound log
         // whose file size exceeds the byte threshold — stat only, no
         // log reads.
@@ -1456,6 +1487,7 @@ impl VaultSession {
         if !empty && !force && !stale {
             return Ok(());
         }
+        let cutoff_ms = retention_cutoff_ms(self.retention_days());
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM oplog_events", [])?;
         tx.execute("DELETE FROM oplog_events_stale", [])?;
@@ -1471,7 +1503,7 @@ impl VaultSession {
                 Err(_) => continue,
             };
             let events = crate::oplog_events::derive_events_for_log(&entries);
-            insert_oplog_events(&tx, file_id, &events)?;
+            insert_oplog_events(&tx, file_id, &events, cutoff_ms)?;
         }
         tx.commit()?;
         Ok(())
@@ -1626,7 +1658,7 @@ impl VaultSession {
                         "oplog reconcile: log {stem} claims an already-bound file; quarantined"
                     );
                     log::debug!("oplog reconcile: {stem} claimed path {eff:?}");
-                    let cutoff = now_ms() - i64::from(self.retention_days()) * 24 * 60 * 60 * 1000;
+                    let cutoff = retention_cutoff_ms(self.retention_days());
                     // Newest-timestamp rule — same backwards-clock
                     // conservatism as the remnant branch below.
                     if !entries.is_empty()
@@ -1687,7 +1719,7 @@ impl VaultSession {
             // reading; a log written entirely under a regressed clock
             // can still age out early, which is the best a wall clock
             // can do (documented limit).
-            let cutoff = now_ms() - i64::from(self.retention_days()) * 24 * 60 * 60 * 1000;
+            let cutoff = retention_cutoff_ms(self.retention_days());
             let newest_ts = entries.iter().map(|e| e.timestamp_ms).max();
             match (effective_path, entries.last()) {
                 (_, Some(_)) if newest_ts.is_some_and(|ts| ts <= cutoff) => {
@@ -2593,7 +2625,12 @@ impl VaultSession {
         let events =
             crate::oplog_events::derive_events(&entry, ops_in_hand.as_deref(), old_contents);
         let inserted = conn.unchecked_transaction().and_then(|tx| {
-            insert_oplog_events(&tx, file_id, &events)?;
+            insert_oplog_events(
+                &tx,
+                file_id,
+                &events,
+                retention_cutoff_ms(self.retention_days()),
+            )?;
             if let Some(rowid) = stale_marker_rowid {
                 tx.execute(
                     "DELETE FROM oplog_events_stale WHERE rowid = ?1",
@@ -3194,7 +3231,13 @@ impl VaultSession {
                 .map_err(VaultError::Io)
                 .and_then(|entries| {
                     let events = crate::oplog_events::derive_events_for_log(&entries);
-                    insert_oplog_events(&tx, file_id, &events).map_err(VaultError::from)
+                    insert_oplog_events(
+                        &tx,
+                        file_id,
+                        &events,
+                        retention_cutoff_ms(self.retention_days()),
+                    )
+                    .map_err(VaultError::from)
                 });
             if let Err(e) = repopulated {
                 log::warn!("oplog_events recovery repopulation failed for file_id={file_id}");
@@ -10048,16 +10091,39 @@ impl crate::canvas::model::FileTitleSource for DbTitleSource<'_> {
 /// Insert derived `oplog_events` rows for one file (O-6 #544). Works
 /// on a bare connection (append path, autocommit) or inside the
 /// rebuild transaction — `Transaction` derefs to `Connection`.
+/// #831: the single retention-cutoff rule. Every consumer of the
+/// retention window derives its boundary from THIS function — the
+/// event-row producers (the [`insert_oplog_events`] filter), the
+/// scan-time age-out, and the reconcile's log reclamation — so the
+/// table a rebuild regenerates always converges with what
+/// append-plus-age-out left behind (rebuild ≡ append). The boundary
+/// convention matches the log-level fold
+/// (`oplog_compaction::fold_boundary`): `ts <= cutoff` is out,
+/// `ts > cutoff` is retained.
+fn retention_cutoff_ms(retention_days: u32) -> i64 {
+    now_ms() - i64::from(retention_days) * 24 * 60 * 60 * 1000
+}
+
+/// Insert derived event rows, applying the shared retention rule
+/// (#831): rows at or before `cutoff_ms` are not written. Append-time
+/// events are always fresh (the filter is a no-op there); full-log
+/// rederivations — rebuild, post-compaction regen, deleted-file
+/// recovery — drop the beyond-window slice a compaction would fold,
+/// whether or not that compaction has run yet.
 fn insert_oplog_events(
     conn: &Connection,
     file_id: i64,
     events: &[crate::oplog_events::DerivedEvent],
+    cutoff_ms: i64,
 ) -> Result<(), rusqlite::Error> {
     let mut stmt = conn.prepare_cached(
         "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
     for event in events {
+        if event.ts_ms <= cutoff_ms {
+            continue;
+        }
         stmt.execute(rusqlite::params![
             file_id,
             event.ts_ms,
