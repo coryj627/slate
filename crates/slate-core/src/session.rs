@@ -7627,6 +7627,9 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
     // Forward length tracking: batch deltas are computable from the
     // ops alone; snapshots reset the running length.
     let mut prev_len: Option<i64> = None;
+    // #797: the previous in-order entry's (before, after) pair, for
+    // folding a canvas action's semantic record into its byte row.
+    let mut prev_pair: Option<(String, String)> = None;
     for (idx, entry) in entries.iter().enumerate() {
         use crate::oplog::OpKind;
         let (inner_kind, inner_payload, annotations) = match entry.op_kind {
@@ -7641,6 +7644,37 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
             },
             kind => (kind, Some(entry.payload_bytes.clone()), Vec::new()),
         };
+
+        // #797: a committed canvas action journals TWO entries for ONE
+        // transition — the byte-level save the seam wrote, then the
+        // semantic CanvasApply record beside it (T #372). One
+        // transition = one version row: fold the semantic record into
+        // its byte row as an annotation carrying the action name. A
+        // standalone record (its byte entry compacted away) keeps
+        // today's own-row rendering.
+        if inner_kind == OpKind::CanvasApply
+            && prev_pair.as_ref()
+                == Some(&(
+                    entry.content_hash_before.clone(),
+                    entry.content_hash_after.clone(),
+                ))
+            && let Some(last) = rows.last_mut()
+        {
+            let name = inner_payload
+                .as_deref()
+                .and_then(|p| serde_json::from_slice::<serde_json::Value>(p).ok())
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "canvas action".to_string());
+            last.annotations.push(OpAnnotationSummary {
+                kind: "CanvasAction".into(),
+                display: format!("Canvas: {name}"),
+            });
+            prev_pair = Some((
+                entry.content_hash_before.clone(),
+                entry.content_hash_after.clone(),
+            ));
+            continue;
+        }
 
         let (op_count, byte_delta) = match inner_kind {
             OpKind::WholeFileReplace => {
@@ -7687,6 +7721,10 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
             OpKind::CanvasApply => "canvas action".to_string(),
             OpKind::Annotated => "unreadable entry".to_string(),
         };
+        prev_pair = Some((
+            entry.content_hash_before.clone(),
+            entry.content_hash_after.clone(),
+        ));
         rows.push(VersionSummary {
             position_from_tail: (entries.len() - 1 - idx) as u32,
             content_hash_after: entry.content_hash_after.clone(),

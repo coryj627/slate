@@ -724,3 +724,118 @@ fn recover_deleted_file_as_lands_at_the_chosen_path_with_history() {
         Err(VaultError::InvalidArgument { .. })
     ));
 }
+
+/// #797: history coverage for non-markdown writers — both route
+/// through the save seam, so versions, verified content, and restores
+/// all work; a canvas action's two journal entries (byte + semantic)
+/// render as ONE version row carrying the action name.
+#[test]
+fn canvas_and_base_writes_are_versioned_through_the_seam() {
+    use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "board.canvas",
+            br#"{"nodes":[{"id":"seed","type":"text","text":"seed","x":0,"y":0,"width":100,"height":50}],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Canvas: one action = TWO oplog entries (the seam's byte save +
+    // the semantic record) = ONE version row, action name attached.
+    let info = session.open_canvas("board.canvas").unwrap();
+    session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "create card".into(),
+                ops: vec![CanvasOp::CreateNode {
+                    id: "n1".into(),
+                    content: CanvasNodeContent::Text {
+                        text: "first card".into(),
+                    },
+                    x: 0.0,
+                    y: 100.0,
+                    width: 200.0,
+                    height: 100.0,
+                    color: None,
+                }],
+            },
+        )
+        .unwrap();
+    let page = session
+        .list_versions("board.canvas", Paging::first(50))
+        .unwrap();
+    assert_eq!(page.total_filtered, 1, "one action, one version row");
+    let row = &page.items[0];
+    assert!(
+        row.annotations
+            .iter()
+            .any(|a| a.kind == "CanvasAction" && a.display == "Canvas: create card"),
+        "the action name rides the byte row: {:?}",
+        row.annotations
+    );
+
+    // Verified content + restore work on .canvas like any note.
+    let v1_hash = row.content_hash_after.clone();
+    let v1_content = session.version_content("board.canvas", &v1_hash).unwrap();
+    assert!(v1_content.contains("first card"));
+    session
+        .canvas_apply(
+            info.handle,
+            CanvasAction {
+                name: "nudge card".into(),
+                ops: vec![CanvasOp::UpdateNodeGeometry {
+                    id: "n1".into(),
+                    x: 50.0,
+                    y: 150.0,
+                    width: 200.0,
+                    height: 100.0,
+                }],
+            },
+        )
+        .unwrap();
+    let current = session
+        .get_file_metadata("board.canvas")
+        .unwrap()
+        .unwrap()
+        .content_hash;
+    session
+        .restore_version("board.canvas", &v1_hash, Some(&current))
+        .unwrap();
+    assert_eq!(
+        session.read_text("board.canvas").unwrap(),
+        v1_content,
+        "the restore landed the verified bytes"
+    );
+    let after = session
+        .list_versions("board.canvas", Paging::first(50))
+        .unwrap();
+    assert_eq!(
+        after.total_filtered, 3,
+        "restore appended its own row — history never rewrites"
+    );
+
+    // Base: save_query_as_base routes through save_text — versioned.
+    let yaml = "views:\n  - type: table\n    name: T\n    order:\n      - file.name\n";
+    let (base, warnings) = crate::bases::parse_base(yaml);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let query_json = serde_json::to_string(&crate::bases::view_query(&base, 0)).unwrap();
+    session
+        .save_query_as_base(&query_json, "Queries/Q.base")
+        .unwrap();
+    let base_page = session
+        .list_versions("Queries/Q.base", Paging::first(10))
+        .unwrap();
+    assert_eq!(base_page.total_filtered, 1, ".base writes are versioned");
+    let base_hash = &base_page.items[0].content_hash_after;
+    let round_trip = session
+        .version_content("Queries/Q.base", base_hash)
+        .unwrap();
+    assert_eq!(
+        round_trip,
+        session.read_text("Queries/Q.base").unwrap(),
+        "verified .base bytes round-trip"
+    );
+}
