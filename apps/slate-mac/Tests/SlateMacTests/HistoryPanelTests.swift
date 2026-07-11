@@ -1171,4 +1171,26 @@ extension HistoryPanelTests {
             "the Yesterday run extended in place")
         XCTAssertEqual(after.count, 3)
     }
+
+    /// Cross-note leak regression (codex on #798): collapse keys are
+    /// day+position, which different notes reuse independently — the
+    /// note-change handler must reset collapse state alongside compare
+    /// and inline-diff state. Inspection assert on the single handler,
+    /// the same style as the diff-rendering pin.
+    func testNoteSwitchResetsCollapseState() throws {
+        let source = try historyPanelSource()
+        let handlerRange = try XCTUnwrap(
+            source.range(
+                of: #"\.onChange\(of: appState\.selectedFilePath\) \{[^}]*\}"#,
+                options: .regularExpression),
+            "the note-change handler exists")
+        let handler = source[handlerRange]
+        XCTAssertTrue(
+            handler.contains("collapsedDayGroups = []"),
+            "note switch clears collapse state: \(handler)")
+        XCTAssertTrue(
+            handler.contains("comparePositions = []")
+                && handler.contains("inlineDiff = nil"),
+            "…alongside the existing resets")
+    }
 }

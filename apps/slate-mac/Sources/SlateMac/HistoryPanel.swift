@@ -195,6 +195,11 @@ struct HistoryPanel: View {
             .onChange(of: appState.selectedFilePath) { _, _ in
                 comparePositions = []
                 inlineDiff = nil
+                // Collapse keys are day+position, which different
+                // notes reuse independently — carried state would open
+                // another note with matching groups already hidden
+                // (codex on #798).
+                collapsedDayGroups = []
             }
         }
     }
