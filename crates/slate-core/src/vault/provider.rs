@@ -153,6 +153,12 @@ pub struct FileStat {
     /// mtime-preserving copies (`cp -p`, `rsync -a`) that mtime alone
     /// can't see.
     pub ctime_ms: i64,
+    /// File birth time as Unix epoch milliseconds; `0` where the
+    /// filesystem/platform doesn't expose it (the ctime convention).
+    /// macOS/APFS `st_birthtime`. Compaction- and rebuild-stable —
+    /// `oplog.created_since` (#801) lowers onto it precisely because
+    /// event rows shift with retention folds while birth doesn't.
+    pub birthtime_ms: i64,
     pub kind: EntryKind,
 }
 

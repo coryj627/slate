@@ -171,6 +171,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "oplog_events: temporal-query index over the op logs (O-6 #544)",
         sql: include_str!("../migrations/029_oplog_events.sql"),
     },
+    Migration {
+        description: "files.birthtime_ms: compaction-stable creation time (#801)",
+        sql: include_str!("../migrations/030_files_birthtime.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -384,7 +388,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(indexes, 2);
+        // extension + mtime (001) + birthtime (030, #801).
+        assert_eq!(indexes, 3);
     }
 
     #[test]
