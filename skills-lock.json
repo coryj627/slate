@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "apple-hig": {
+      "source": "justinwetch/HIGAgentSkills",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "98452d641ba6cff68d030bbf0b7453f98deef50278321c31279822d8ad39a390"
+    }
+  }
+}
