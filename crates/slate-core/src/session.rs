@@ -1452,18 +1452,40 @@ impl VaultSession {
             let stem = crate::vault::content_hash(&stem_input)[..32].to_string();
             match crate::oplog::try_create_log(&self.config.cache_dir, &stem, path) {
                 Ok(true) => {
-                    if let Err(e) = conn.execute(
-                        "UPDATE files SET oplog_name = ?1 WHERE id = ?2",
+                    // Guarded UPDATE: never overwrite a binding that
+                    // appeared since the lookup (a racing writer in
+                    // another process). Zero rows updated → return the
+                    // winner's binding; our freshly created log stays
+                    // behind as an orphan the reconcile re-binds or
+                    // reclaims. The partial UNIQUE index on oplog_name
+                    // (migration 027) backstops double-binding at the
+                    // schema level.
+                    match conn.execute(
+                        "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
                         rusqlite::params![stem, file_id],
                     ) {
-                        // The created log file stays behind as an
-                        // orphan; the scan reconcile re-binds it by
-                        // its header path.
-                        log::warn!("oplog name bind failed for file_id={file_id}: db error");
-                        log::debug!("oplog name bind failure for path {path:?}: {e}");
-                        return None;
+                        Ok(0) => {
+                            return conn
+                                .query_row(
+                                    "SELECT oplog_name FROM files WHERE id = ?1",
+                                    rusqlite::params![file_id],
+                                    |row| row.get::<_, Option<String>>(0),
+                                )
+                                .optional()
+                                .ok()
+                                .flatten()
+                                .flatten();
+                        }
+                        Ok(_) => return Some(stem),
+                        Err(e) => {
+                            // The created log file stays behind as an
+                            // orphan; the scan reconcile re-binds it
+                            // by its header path.
+                            log::warn!("oplog name bind failed for file_id={file_id}: db error");
+                            log::debug!("oplog name bind failure for path {path:?}: {e}");
+                            return None;
+                        }
                     }
-                    return Some(stem);
                 }
                 Ok(false) => continue,
                 Err(e) => {

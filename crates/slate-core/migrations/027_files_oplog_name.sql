@@ -18,3 +18,12 @@
 -- first save (append_entry creates it with a v2 header).
 ALTER TABLE files ADD COLUMN oplog_name TEXT;
 UPDATE files SET oplog_name = CAST(id AS TEXT);
+
+-- One log, one file — structurally. The partial UNIQUE index makes a
+-- double-binding (two files sharing one history) a constraint error
+-- instead of a latent cross-attach: the milestone's "never attach
+-- another file's history" invariant enforced by the schema, not just
+-- by code discipline (Codoki review, PR #790). Legacy stamping above
+-- writes distinct ids, so the index always builds cleanly.
+CREATE UNIQUE INDEX files_oplog_name_unique
+    ON files(oplog_name) WHERE oplog_name IS NOT NULL;

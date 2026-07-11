@@ -500,6 +500,62 @@ fn bare_v1_orphan_after_rebuild_is_quarantined() {
     assert!(session.remnant_logs().is_empty());
 }
 
+#[test]
+fn oplog_name_binding_is_unique_at_the_schema_level() {
+    // Codoki (PR #790): the partial UNIQUE index makes a double-binding
+    // (two files sharing one log) a constraint error — the never-cross-
+    // attach invariant enforced by the schema itself.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"a\n").unwrap();
+        p.write_file("b.md", b"b\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let conn = session.conn.lock().unwrap();
+    conn.execute(
+        "UPDATE files SET oplog_name = 'shared-stem' WHERE path = 'a.md'",
+        [],
+    )
+    .unwrap();
+    let err = conn
+        .execute(
+            "UPDATE files SET oplog_name = 'shared-stem' WHERE path = 'b.md'",
+            [],
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("unique"),
+        "binding a second file to the same stem must violate the index: {err}"
+    );
+}
+
+#[test]
+fn ensure_oplog_name_never_overwrites_an_existing_binding() {
+    // Codoki (PR #790): a binding that appeared since the lookup (a
+    // racing writer in another process) must win; the guarded UPDATE
+    // returns the existing binding instead of clobbering it.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("raced.md", b"body\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET oplog_name = 'winner-stem' WHERE path = 'raced.md'",
+            [],
+        )
+        .unwrap();
+    }
+    // A save resolves the binding through ensure_oplog_name — it must
+    // append to the pre-existing binding, not mint a new stem.
+    session.save_text("raced.md", "edited\n", None).unwrap();
+    assert_eq!(
+        oplog_name_of(&session, "raced.md").as_deref(),
+        Some("winner-stem")
+    );
+    let entries = crate::oplog::read_oplog(&session.config.cache_dir, "winner-stem").unwrap();
+    assert_eq!(entries.len(), 1, "the save landed in the winner's log");
+}
+
 // --- The two identity censuses ------------------------------------------
 
 /// Randomized delete-newest → recreate → edit flows (the exact
