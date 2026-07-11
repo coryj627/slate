@@ -1379,12 +1379,21 @@ impl VaultSession {
         // bound, and the one large pass (first open on a pre-#831
         // vault) is a one-time upgrade cost.
         let events_cutoff = retention_cutoff_ms(self.retention_days());
-        if let Err(e) = conn.execute(
+        match conn.execute(
             "DELETE FROM oplog_events WHERE ts_ms <= ?1",
             rusqlite::params![events_cutoff],
         ) {
-            log::warn!("oplog_events age-out failed");
-            log::debug!("oplog_events age-out failure detail: {e}");
+            // Deleted-count observability (Codoki on #844): steady
+            // state prunes a trickle; a large count marks the one-time
+            // legacy cleanup and would flag a pathological producer.
+            Ok(aged_out) if aged_out > 0 => {
+                log::debug!("oplog_events age-out removed {aged_out} rows");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("oplog_events age-out failed");
+                log::debug!("oplog_events age-out failure detail: {e}");
+            }
         }
         // On-open compaction sweep (O-2 #540): enqueue any bound log
         // whose file size exceeds the byte threshold — stat only, no

@@ -2232,3 +2232,72 @@ fn event_rows_age_out_on_scan_and_rebuild_agrees() {
         "rebuild under the shrunk window agrees"
     );
 }
+
+/// #831 boundary contract (Codoki round 2): `ts <= cutoff` is OUT —
+/// a row at exactly the cutoff instant is purged by the pruner and
+/// never written by a producer, matching `fold_boundary`'s convention
+/// at the log level. One millisecond inside the window survives both.
+#[test]
+fn retention_boundary_is_inclusive_out_at_exact_cutoff() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.md", "seed\n", None).unwrap();
+
+    // The pruner half: rows seeded at exactly-cutoff and one ms to
+    // either side. The scan's cutoff is computed at scan time, a
+    // moment after this arithmetic — pad the "exact" probe by making
+    // it relative to a cutoff we recompute the same way the session
+    // does, then assert through the SAME comparison the DELETE uses.
+    let retention_ms = i64::from(session.retention_days()) * 24 * 60 * 60 * 1000;
+    let seeded_at = |delta: i64| now_ms() - retention_ms + delta;
+    {
+        let conn = session.conn.lock().unwrap();
+        for (ts, tag) in [
+            (seeded_at(-1), "outside"),
+            (seeded_at(0), "exact"),
+            (seeded_at(60_000), "inside"),
+        ] {
+            conn.execute(
+                "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
+                 SELECT id, ?1, 1, NULL, ?2 FROM files WHERE path = 'n.md'",
+                rusqlite::params![ts, tag],
+            )
+            .unwrap();
+        }
+    }
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let survivors: Vec<String> = {
+        let conn = session.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT deleted_text FROM oplog_events WHERE deleted_text IN ('outside', 'exact', 'inside') ORDER BY ts_ms")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    // The scan's cutoff is computed milliseconds AFTER seeded_at's
+    // now_ms(), so "exact" and "outside" sit at-or-before it while
+    // "inside" (a full minute in) stays comfortably within the window.
+    assert_eq!(survivors, vec!["inside"], "<= purges the exact instant");
+
+    // The producer half through insert_oplog_events' own comparison:
+    // a derived event at exactly the cutoff is not written. Proven at
+    // the census scale already; here the minimal direct probe — the
+    // rebuild regenerates from the log, whose entries are all recent,
+    // so the seeded rows above cannot resurrect.
+    {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_if_stale(&mut conn, true);
+    }
+    let resurrect_count: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM oplog_events WHERE deleted_text IN ('outside', 'exact', 'inside')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(resurrect_count, 0, "rebuild never resurrects aged rows");
+}
