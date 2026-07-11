@@ -240,6 +240,10 @@ pub enum MethodName {
     OplogHasPropertyChange,
     /// `oplog.deleted_content_matches(pat, D)` (O-6 #544).
     OplogDeletedContentMatches,
+    /// `oplog.deleted_content_matches_regex(pat, D)` (#800): the regex
+    /// variant — Unicode-case-insensitive, bounded compilation, row-eval
+    /// only (regex cannot lower onto SQL LIKE).
+    OplogDeletedContentMatchesRegex,
     /// `oplog.created_since(D)` (#801). Lowers onto the files table's
     /// filesystem birth time — compaction- and rebuild-stable, unlike
     /// the oldest event row.
@@ -724,6 +728,9 @@ impl<'a> Parser<'a> {
                     "has_change_since" => Some(MethodName::OplogHasChangeSince),
                     "has_property_change" => Some(MethodName::OplogHasPropertyChange),
                     "deleted_content_matches" => Some(MethodName::OplogDeletedContentMatches),
+                    "deleted_content_matches_regex" => {
+                        Some(MethodName::OplogDeletedContentMatchesRegex)
+                    }
                     "created_since" => Some(MethodName::OplogCreatedSince),
                     "untouched_for" => Some(MethodName::OplogUntouchedFor),
                     _ => None,

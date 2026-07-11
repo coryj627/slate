@@ -836,6 +836,11 @@ fn invalid_durations_are_in_band_view_errors() {
         assert!(err2.is_some(), "{bad}: created_since rejects too");
         let (_, err3) = filter_paths(&session, &format!(r#"oplog.untouched_for("{bad}")"#));
         assert!(err3.is_some(), "{bad}: untouched_for rejects too");
+        let (_, err4) = filter_paths(
+            &session,
+            &format!(r#"oplog.deleted_content_matches_regex("x", "{bad}")"#),
+        );
+        assert!(err4.is_some(), "{bad}: the regex variant rejects too");
         let (paths, err) = filter_paths(&session, &filter);
         assert!(paths.is_empty(), "{bad}: no rows on error");
         let err = err.unwrap_or_else(|| panic!("{bad}: expected a view error"));
@@ -868,6 +873,8 @@ fn wrong_arity_errors_identically_in_pushdown_and_row_eval() {
         r#"oplog.has_change_since("7d", "extra") || file.name == "n.md""#,
         r#"oplog.has_property_change("k", "7d", "extra")"#,
         r#"oplog.deleted_content_matches("pat")"#,
+        r#"oplog.deleted_content_matches_regex("pat")"#,
+        r#"oplog.deleted_content_matches_regex("pat", "7d", "extra")"#,
         r#"oplog.created_since("7d", "extra")"#,
         r#"oplog.untouched_for()"#,
     ] {
@@ -1312,7 +1319,7 @@ fn census_temporal_operators_vs_reference() {
         let duration = format!("{n}{unit}");
         let cutoff = now_ms() - (n as i64) * unit_ms;
 
-        let (filter, reference): (String, Vec<String>) = match rng.below(5) {
+        let (filter, reference): (String, Vec<String>) = match rng.below(6) {
             0 => (
                 format!(r#"oplog.has_change_since("{duration}")"#),
                 expected_rows
@@ -1361,6 +1368,43 @@ fn census_temporal_operators_vs_reference() {
                     .map(|(p, _, _)| p.clone())
                     .collect(),
             ),
+            5 => {
+                // #800, the regex variant: same corpus word,
+                // case-scrambled, split around an explicit `.*` so the
+                // pattern exercises live regex syntax. The reference
+                // applies the same bounded builder to the expected
+                // samples — the census pins the PLUMBING (event class,
+                // cutoff, NULL-skip, per-file scoping), not the regex
+                // engine itself.
+                let word = words[rng.below(words.len() as u64) as usize];
+                let scrambled: String = word
+                    .chars()
+                    .map(|c| {
+                        if rng.below(2) == 0 {
+                            c.to_ascii_uppercase()
+                        } else {
+                            c.to_ascii_lowercase()
+                        }
+                    })
+                    .collect();
+                let (head, tail) = scrambled.split_at(scrambled.len() / 2);
+                let pattern = format!("{head}.*{tail}");
+                let regex = crate::bases::eval::build_deleted_content_regex(&pattern).unwrap();
+                (
+                    format!(r#"oplog.deleted_content_matches_regex("{pattern}", "{duration}")"#),
+                    expected_rows
+                        .iter()
+                        .filter(|(_, rows)| {
+                            rows.iter().any(|(ts, c, _, d)| {
+                                *c == 1
+                                    && *ts >= cutoff
+                                    && d.as_deref().is_some_and(|d| regex.is_match(d))
+                            })
+                        })
+                        .map(|(p, _)| p.clone())
+                        .collect(),
+                )
+            }
             _ => {
                 // Case-scrambled fragments, including the metachar-bearing
                 // words — the reference applies plain (escaped) substring
@@ -1853,6 +1897,10 @@ fn saved_query_serialization_round_trips_every_operator() {
         (r#"oplog.deleted_content_matches("doomed", "1h")"#, true),
         (r#"oplog.created_since("1h")"#, true),
         (r#"oplog.untouched_for("1h")"#, false),
+        (
+            r#"oplog.deleted_content_matches_regex("doo.ed", "1h")"#,
+            true,
+        ),
     ] {
         let yaml = format!(
             "views:\n  - type: table\n    name: T\n    filters: '{filter}'\n    order:\n      - file.name\n"
@@ -1890,4 +1938,113 @@ fn saved_query_serialization_round_trips_every_operator() {
             "{filter}: rows {paths:?}"
         );
     }
+}
+
+/// #800: the regex variant of `deleted_content_matches` — live regex
+/// syntax, Unicode case folding (the capability LIKE cannot offer),
+/// bounded compilation with in-band errors, and the same sampling-gap
+/// semantics as the substring operator.
+#[test]
+fn deleted_content_matches_regex_is_unicode_case_aware_and_bounded() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Warm saves so the removed spans are sampled.
+    let r = session
+        .save_text("a.md", "keep ЗАМЕТКА draft-42 keep\n", None)
+        .unwrap();
+    session
+        .save_text("a.md", "keep keep\n", Some(&r.new_content_hash))
+        .unwrap();
+    // b.md's deletion sits at the very start of the text, so anchors
+    // have a boundary to bite on.
+    let r = session
+        .save_text("b.md", "zebra first\nkeep plain body\n", None)
+        .unwrap();
+    session
+        .save_text("b.md", "keep plain body\n", Some(&r.new_content_hash))
+        .unwrap();
+
+    // Live regex syntax: classes, alternation, bounded repetition.
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches_regex("draft-[0-9]{2}", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["a.md"]);
+
+    // Unicode case folding: the deletion is uppercase Cyrillic; the
+    // lowercase pattern matches through the regex variant…
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches_regex("заметка", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["a.md"]);
+    // …while the LIKE-based substring variant folds ASCII only — the
+    // delta #800 exists to close, pinned here.
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("заметка", "1h")"#,
+    );
+    assert_eq!(paths, Vec::<String>::new(), "LIKE folding is ASCII-only");
+
+    // Anchors work against the whole sampled span.
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches_regex("^ZEBRA", "1h")"#,
+    );
+    assert_eq!(paths, vec!["b.md"]);
+
+    // Composes at a top-level AND (no pushdown exists — the residual
+    // row-eval fallback carries it) and under OR.
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches_regex("зам.тка", "1h") && file.name == "a.md""#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["a.md"]);
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches_regex("nomatch.+x", "1h") || file.name == "b.md""#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["b.md"]);
+
+    // A bad pattern is an in-band view error naming the operator, in
+    // both filter positions.
+    for filter in [
+        r#"oplog.deleted_content_matches_regex("(", "1h")"#,
+        r#"oplog.deleted_content_matches_regex("(", "1h") || file.name == "a.md""#,
+    ] {
+        let (paths, err) = filter_paths(&session, filter);
+        assert!(paths.is_empty(), "{filter}: no rows on error");
+        let err = err.unwrap_or_else(|| panic!("{filter}: expected a view error"));
+        assert!(
+            err.contains("deleted_content_matches_regex"),
+            "{filter}: error names the operator: {err}"
+        );
+    }
+
+    // Bounded compilation: a pattern whose compiled program exceeds
+    // the 1 MiB size limit is refused in-band — never compiled or run.
+    let huge = format!(
+        r#"oplog.deleted_content_matches_regex("{}", "1h")"#,
+        "[a-z]{100}{100}{100}"
+    );
+    let (paths, err) = filter_paths(&session, &huge);
+    assert!(paths.is_empty());
+    assert!(
+        err.is_some_and(|e| e.contains("deleted_content_matches_regex")),
+        "size-limited pattern is an in-band error"
+    );
+
+    // Cold-cache deletions sample NULL and never match — the same
+    // documented sampling gap as the substring variant. `.` matches
+    // any sampled deletion, so only the warm files appear.
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches_regex(".", "1h")"#,
+    );
+    assert_eq!(paths, vec!["a.md", "b.md"], "warm deletions only");
 }

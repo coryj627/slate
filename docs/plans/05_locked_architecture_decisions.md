@@ -1365,16 +1365,25 @@ filters:
     - oplog.deleted_content_matches("draft intro", 30d)
     - oplog.created_since(7d)      # filesystem birth time — compaction-stable (#801)
     - oplog.untouched_for(90d)     # idle by BOTH mtime and recorded saves (#801)
+    - oplog.deleted_content_matches_regex("draft.*intro", 30d)  # regex variant (#800)
 ```
 
-Shipped: the op log infrastructure (Section 7) and the five operators above
-(O-6 #544 shipped the first three; #801 added created_since/untouched_for).
+Shipped: the op log infrastructure (Section 7) and the six operators above
+(O-6 #544 shipped the first three; #801 added created_since/untouched_for;
+#800 added the regex variant).
 Durations use the pinned grammar `^([1-9][0-9]*)(h|d|w)$`; every operator is
 filter-position-only, composes with the standard combinators, and bypasses
 the query result cache (window verdicts change with no vault mutation).
 `created_since` reads `files.birthtime_ms` (0 = unknown ⇒ never matches);
 `untouched_for` requires BOTH an idle mtime and no class-1 event in-window
 (a never-logged idle file matches vacuously).
+`deleted_content_matches_regex` is Unicode-case-insensitive (the LIKE-based
+substring variant folds ASCII only), linear-time by construction with a
+1 MiB compiled-size bound (oversized/invalid patterns are in-band view
+errors), and row-eval only — a regex has no SQL lowering, so it rides the
+residual row-eval path in every filter position. Cold-cache deletions
+sample NULL and never match — the same documented sampling gap as the
+substring variant.
 
 ### 8.10 Saved queries and dashboards
 
