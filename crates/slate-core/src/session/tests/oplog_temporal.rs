@@ -2048,3 +2048,50 @@ fn deleted_content_matches_regex_is_unicode_case_aware_and_bounded() {
     );
     assert_eq!(paths, vec!["a.md", "b.md"], "warm deletions only");
 }
+
+/// The memo contract (codex round 1 on #800): one query compiles each
+/// distinct pattern EXACTLY once, however many candidate rows the
+/// residual row-eval visits — the eval arm must not validate-compile
+/// per row, and the lookup memo must hold across rows (including rows
+/// with no matching events).
+#[test]
+fn regex_pattern_compiles_once_per_query() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    // Eight candidates: three with warm sampled deletions (one
+    // matching), five never-edited (no events at all — the
+    // short-circuit rows).
+    for i in 0..3 {
+        let path = format!("edited{i}.md");
+        let r = session
+            .save_text(&path, &format!("keep chameleon_{i} keep\n"), None)
+            .unwrap();
+        session
+            .save_text(&path, "keep keep\n", Some(&r.new_content_hash))
+            .unwrap();
+    }
+    for i in 0..5 {
+        session
+            .save_text(&format!("quiet{i}.md"), "still\n", None)
+            .unwrap();
+    }
+
+    // Test-unique pattern: the count below is per-pattern, so parallel
+    // tests using the builder cannot interfere.
+    let pattern = "chameleon_[01]";
+    let (paths, err) = filter_paths(
+        &session,
+        &format!(r#"oplog.deleted_content_matches_regex("{pattern}", "1h")"#),
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["edited0.md", "edited1.md"]);
+
+    let counts = crate::bases::eval::regex_build_counts()
+        .lock()
+        .expect("build-count mutex");
+    assert_eq!(
+        counts.get(pattern).copied(),
+        Some(1),
+        "one compile per query per distinct pattern"
+    );
+}

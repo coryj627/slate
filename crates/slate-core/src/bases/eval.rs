@@ -1907,11 +1907,11 @@ fn eval_method(
                         "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
                     )
                 })?;
-            // Compile eagerly so a bad pattern is an in-band view error
-            // even when the lookup would short-circuit (e.g. a file
-            // with no events) — the same error either way.
-            build_deleted_content_regex(&pattern)
-                .map_err(|message| invalid_arg("oplog.deleted_content_matches_regex", &message))?;
+            // No compile here: the eval arm runs once per candidate
+            // row, so compiling (even to validate) would cost
+            // O(rows) x compile. The lookup compiles through its
+            // per-query memo BEFORE any event short-circuit, so a bad
+            // pattern still surfaces as the same in-band error.
             let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
             ctx.vault
                 .oplog_deleted_content_matches_regex(&ctx.file.file_path, &pattern, cutoff_ms)
@@ -4407,12 +4407,29 @@ fn expect_arity(
 /// unicode61 tokenizer, and the capability the LIKE-based substring
 /// variant (ASCII-only folding) cannot offer.
 pub(crate) fn build_deleted_content_regex(pattern: &str) -> Result<regex::Regex, String> {
+    #[cfg(test)]
+    {
+        let mut counts = regex_build_counts().lock().expect("build-count mutex");
+        *counts.entry(pattern.to_string()).or_insert(0) += 1;
+    }
     regex::RegexBuilder::new(pattern)
         .case_insensitive(true)
         .size_limit(1 << 20)
         .dfa_size_limit(1 << 20)
         .build()
         .map_err(|error| error.to_string())
+}
+
+/// Test seam: compilations per raw pattern, so a regression test can
+/// pin "one compile per query per distinct pattern" (the memo
+/// contract) with a test-unique pattern, race-free under the parallel
+/// test runner.
+#[cfg(test)]
+pub(crate) fn regex_build_counts()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, usize>> {
+    static COUNTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+        std::sync::OnceLock::new();
+    COUNTS.get_or_init(Default::default)
 }
 
 fn invalid_arg(function: impl Into<String>, message: impl ToString) -> EvalError {
