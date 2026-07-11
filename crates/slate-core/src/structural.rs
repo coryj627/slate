@@ -116,11 +116,16 @@ pub struct StructuralOpPayload {
     pub moved: Vec<(String, String)>,
     /// U2-3's applied rewrites, for byte-exact undo.
     pub rewrites: Vec<RewriteOutcome>,
+    /// `DeleteFile` only (O-1 #539): the deleted file's op-log name
+    /// stem, captured before its `files` row went. The durable
+    /// stem↔path association O-3's deleted-file recovery joins on.
+    /// `None` for every other op kind and for pre-O-1 journal rows.
+    pub oplog_name: Option<String>,
 }
 
 impl StructuralOpPayload {
     pub fn to_json(&self) -> String {
-        json!({
+        let mut payload = json!({
             "from": self.from,
             "to": self.to,
             "moved": self.moved.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
@@ -129,8 +134,11 @@ impl StructuralOpPayload {
                 "hash_before": r.hash_before,
                 "hash_after": r.hash_after,
             })).collect::<Vec<_>>(),
-        })
-        .to_string()
+        });
+        if let Some(name) = &self.oplog_name {
+            payload["oplog_name"] = json!(name);
+        }
+        payload.to_string()
     }
 
     /// None on any shape violation — a corrupt journal row renders that op
@@ -178,6 +186,7 @@ impl StructuralOpPayload {
             to: str_field("to")?,
             moved,
             rewrites,
+            oplog_name: str_field("oplog_name"),
         })
     }
 }

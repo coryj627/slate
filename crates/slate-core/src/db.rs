@@ -159,6 +159,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "properties: reindex typed list elements after tagged encoding",
         sql: include_str!("../migrations/026_reindex_typed_property_lists.sql"),
     },
+    Migration {
+        description: "files: oplog_name binding column + legacy-id stamping (O-1 #539)",
+        sql: include_str!("../migrations/027_files_oplog_name.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -266,6 +270,21 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
     let final_version = current_version(&tx)?;
     tx.commit()?;
     Ok(final_version)
+}
+
+/// Test-only: apply migrations `1..=version` on a fresh connection —
+/// upgrade-path fixtures need a database frozen at an older schema
+/// (e.g. pre-027, to prove the legacy op-log stamping only fires when
+/// rows exist at migration time).
+#[cfg(test)]
+pub(crate) fn migrate_up_to(conn: &mut Connection, version: u32) -> Result<(), DbError> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    ensure_version_table(&tx)?;
+    for (i, migration) in MIGRATIONS.iter().take(version as usize).enumerate() {
+        apply_migration(&tx, (i + 1) as u32, migration)?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Returns the highest applied migration version, or 0 if none have been
@@ -414,6 +433,63 @@ mod tests {
                 .unwrap();
             assert_eq!(exists, 1, "{index} should exist");
         }
+    }
+
+    #[test]
+    fn migration_027_stamps_legacy_oplog_names_only_for_existing_rows() {
+        // Upgrade path: a row that exists when 027 runs gets its legacy
+        // `<id>.oplog` binding stamped — the one moment ids provably
+        // match the on-disk log names (a rebuilt cache runs 027 on an
+        // empty table and stamps nothing, leaving the scan reconcile
+        // to re-bind by header path / content salvage).
+        let mut conn = fresh_db();
+        migrate_up_to(&mut conn, 26).unwrap();
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/legacy.md', 'legacy.md', 'md', 10, 1700000000000,
+               1700000000000, 'legacyhash', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), MIGRATIONS.len() as u32);
+
+        let (id, stamped): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT id, oplog_name FROM files WHERE path = 'notes/legacy.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stamped.as_deref(),
+            Some(id.to_string().as_str()),
+            "pre-existing rows must carry their legacy id-derived binding"
+        );
+
+        // Rows inserted AFTER the migration start unbound — new files
+        // get collision-proof stems on first save, never id-derived
+        // names.
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown)
+             VALUES
+              ('notes/fresh.md', 'fresh.md', 'md', 10, 1700000000000,
+               1700000000000, 'freshhash', 1, 1700000000000, 1)",
+            [],
+        )
+        .unwrap();
+        let fresh: Option<String> = conn
+            .query_row(
+                "SELECT oplog_name FROM files WHERE path = 'notes/fresh.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fresh, None);
     }
 
     #[test]
@@ -931,8 +1007,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(MIGRATIONS.len(), 26, "migration 026 must be registered");
-        assert_eq!(migrate(&mut conn).unwrap(), 26);
+        assert!(MIGRATIONS.len() >= 26, "migration 026 must be registered");
+        assert_eq!(migrate(&mut conn).unwrap(), MIGRATIONS.len() as u32);
 
         let size: i64 = conn
             .query_row(

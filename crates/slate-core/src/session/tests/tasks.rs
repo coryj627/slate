@@ -719,7 +719,19 @@ fn toggle_task_status_appends_oplog_entry() {
         1,
         "toggle should append exactly one op-log entry"
     );
-    assert_eq!(entries[0].op_kind, crate::OpKind::WholeFileReplace);
+    // O-1 (#539): the toggle's intent rides the entry as an annotation —
+    // one atomic kind-4 entry wrapping the cold-cache snapshot.
+    assert_eq!(entries[0].op_kind, crate::OpKind::Annotated);
+    let (inner_kind, _inner_payload, anns) =
+        crate::oplog::decode_annotated(&entries[0].payload_bytes).unwrap();
+    assert_eq!(inner_kind, crate::OpKind::WholeFileReplace);
+    assert_eq!(
+        anns,
+        vec![crate::OpAnnotation::ToggleTask {
+            ordinal: 0,
+            new_status: 'x',
+        }]
+    );
 }
 
 #[test]

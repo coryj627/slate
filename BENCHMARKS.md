@@ -454,3 +454,23 @@ Raw median estimates and confidence intervals live at
 The p50 delta is `(post - pre) / pre * 100`; both sizes are faster than the
 pre-N source and therefore pass decision 16's no-worse-than-5% regression
 budget.
+
+## Milestone O — O-1 op-log v2 baselines (2026-07-10)
+
+First recorded baselines for the op-log append path (no earlier rows exist —
+`oplog_bench.rs` is new with O-1 #539). Machine: same arm64 laptop as the
+Milestone N close-out rows. Command:
+
+```sh
+CARGO_TARGET_DIR=target/o1-bench cargo bench -p slate-core --bench oplog_bench -- --sample-size 20
+```
+
+| Bench | p50 (95% CI) | Note |
+|---|---:|---|
+| `oplog_append/plain_batch` | **3.3002 ms** (3.1915–3.4350) | one `EditBatch` append incl. `sync_data` — the fsync dominates |
+| `oplog_append/annotated_batch` | **3.6132 ms** (3.4792–3.7693) | same batch + 3 annotations in a kind-4 wrapper — **+9.5% vs plain, inside the <10% O-1 gate**; the delta is encode + ~200 extra bytes through the same fsync |
+| `oplog_save_path/save_text_hot` | **9.3330 ms** (9.0947–9.5120) | full warm `save_text` (CAS re-hash + atomic write + index tx + op-log append) — the absolute anchor the micro rows sit inside |
+
+The `#404` keystroke baselines (`doc_buffer_keystroke/*`) are untouched by
+O-1: no editor-path code changed, and the save path's new work is one indexed
+`oplog_name` lookup inside the existing save transaction plus arithmetic.

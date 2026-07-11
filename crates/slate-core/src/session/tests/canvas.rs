@@ -552,15 +552,15 @@ fn canvas_apply_journals_named_semantic_entries() {
     // The per-file journal now holds BOTH the byte-level text entry
     // (from the save path) and the semantic CanvasApply record.
     let conn = session.conn.lock().unwrap();
-    let file_id: i64 = conn
+    let log_name: String = conn
         .query_row(
-            "SELECT id FROM files WHERE path = 'board.canvas'",
+            "SELECT oplog_name FROM files WHERE path = 'board.canvas'",
             [],
             |r| r.get(0),
         )
         .unwrap();
     drop(conn);
-    let entries = crate::oplog::read_oplog(&session.config.cache_dir, file_id).unwrap();
+    let entries = crate::oplog::read_oplog(&session.config.cache_dir, &log_name).unwrap();
     let semantic: Vec<_> = entries
         .iter()
         .filter(|e| e.op_kind == crate::oplog::OpKind::CanvasApply)
