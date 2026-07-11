@@ -19,6 +19,13 @@ struct TasksReviewView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    /// Initial keyboard focus: seeded onto the ACTIVE filter chip on
+    /// appear, so first-Tab starts from a meaningful control instead
+    /// of SwiftUI's arbitrary default (every other sheet in the app
+    /// seeds focus — palette/switcher/Add-Property/Move each land on
+    /// their first field; this sheet's equivalent is its filter row).
+    @FocusState private var focusedChip: TaskReviewFilter?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -38,6 +45,12 @@ struct TasksReviewView: View {
                 "Tasks review opened. \(appState.taskReviewFilter.displayName). \(taskCountAnnouncement(appState.vaultTasks.count))",
                 priority: .high
             )
+            // After the announcement, not before — the async hop keeps
+            // the focus move out of the presentation transaction (the
+            // #448 publish-in-view-update lesson).
+            DispatchQueue.main.async {
+                focusedChip = appState.taskReviewFilter
+            }
         }
     }
 
@@ -115,6 +128,7 @@ struct TasksReviewView: View {
                 )
         }
         .buttonStyle(.plain)
+        .focused($focusedChip, equals: filter)
         .accessibilityLabel(
             count.map { "\(filter.displayName), \($0) tasks" } ?? filter.displayName
         )

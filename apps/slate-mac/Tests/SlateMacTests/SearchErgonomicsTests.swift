@@ -155,4 +155,47 @@ final class SearchErgonomicsTests: XCTestCase {
             XCTFail("empty query under vault scope must idle after clearing the tag scope")
         }
     }
+
+    // MARK: - Snippet match emphasis
+
+    /// FTS5's STX/ETX markers must become styled runs, not vanish:
+    /// the visible characters carry no markers, and exactly the
+    /// marked span gets an explicit font (the semibold emphasis).
+    func testEmphasizedSnippetStylesMarkedSpanAndStripsMarkers() {
+        let attributed = SearchOverlay.emphasizedSnippet(
+            "before \u{2}match\u{3} after")
+        XCTAssertEqual(
+            String(attributed.characters), "before match after",
+            "STX/ETX markers must not survive into the visible string")
+
+        let styledText = attributed.runs
+            .filter { $0.font != nil }
+            .map { String(attributed.characters[$0.range]) }
+            .joined()
+        XCTAssertEqual(
+            styledText, "match",
+            "exactly the marked span carries the emphasis font")
+    }
+
+    /// A snippet with no markers passes through unstyled — the view-
+    /// level `.caption`/`.secondary` modifiers stay in charge.
+    func testEmphasizedSnippetWithoutMarkersIsUnstyled() {
+        let attributed = SearchOverlay.emphasizedSnippet("plain text")
+        XCTAssertEqual(String(attributed.characters), "plain text")
+        XCTAssertTrue(
+            attributed.runs.allSatisfy { $0.font == nil },
+            "no marker, no explicit style")
+    }
+
+    /// Multiple marked terms each get their own styled run ("foo AND
+    /// bar" queries mark every hit in the snippet).
+    func testEmphasizedSnippetHandlesMultipleMarkedSpans() {
+        let attributed = SearchOverlay.emphasizedSnippet(
+            "\u{2}alpha\u{3} mid \u{2}beta\u{3}")
+        XCTAssertEqual(String(attributed.characters), "alpha mid beta")
+        let styled = attributed.runs
+            .filter { $0.font != nil }
+            .map { String(attributed.characters[$0.range]) }
+        XCTAssertEqual(styled, ["alpha", "beta"])
+    }
 }

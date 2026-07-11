@@ -13,6 +13,12 @@ import SwiftUI
 struct MainSplitView: View {
     @EnvironmentObject private var appState: AppState
 
+    /// WCAG 2.3.1: the search-overlay transition swaps its slide for a
+    /// plain crossfade under Reduce Motion. SwiftUI does NOT substitute
+    /// custom transitions automatically — the environment flag must be
+    /// consulted explicitly (runbook §3b).
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Focus-return target for the two `.alert` modifiers below.
     /// Each alert button action assigns this so AppKit /
     /// VoiceOver routes keyboard + AX focus back to the editor
@@ -78,10 +84,17 @@ struct MainSplitView: View {
         .overlay(alignment: .top) {
             if appState.isSearchOpen {
                 SearchOverlay()
-                    // Transition stays subtle; honors Reduce Motion
-                    // through SwiftUI's automatic crossfade fallback
-                    // when the user has it enabled.
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    // Reduce Motion: crossfade only — SwiftUI has NO
+                    // automatic fallback for custom transitions (the
+                    // previous comment claimed one; no such behavior
+                    // exists). The slide is currently inert anyway
+                    // (`isSearchOpen` flips without `withAnimation`),
+                    // but the gate keeps a future animated toggle from
+                    // shipping a Reduce-Motion violation (WCAG 2.3.1).
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .top).combined(with: .opacity))
             }
         }
         // WriteConflict resolution alert (#64). Three buttons:
@@ -531,7 +544,9 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.save.label()
                 }
-                .keyboardShortcut("s", modifiers: .command)
+                // ⌘S lives on File ▸ Save (menu-bar-homed like ⌘F —
+                // the #422 lesson: a toolbar-button keyboardShortcut
+                // is dead with sidebar focus). Click/AX-activate only.
                 .disabled(
                     appState.loadedFilePath == nil
                         || appState.isSaving
@@ -565,7 +580,8 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.newFromTemplate.label()
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
+                // ⇧⌘N lives on File ▸ New from Template… (#422 — see
+                // the Save button above). Click/AX-activate only.
                 .accessibilityHint(
                     "Opens the template picker. Cmd+Shift+N. Esc closes."
                 )
@@ -576,7 +592,8 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.tasksReview.label()
                 }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
+                // ⇧⌘T lives on View ▸ Tasks Review (#422 — see the
+                // Save button above). Click/AX-activate only.
                 .disabled(appState.currentSession == nil)
                 .accessibilityHint(
                     "Opens the vault-wide tasks review. Cmd+Shift+T. Esc closes."
@@ -591,7 +608,8 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.citationSummary.label()
                 }
-                .keyboardShortcut("j", modifiers: [.command, .shift])
+                // ⇧⌘J lives on View ▸ Citation Summary (#422 — see
+                // the Save button above). Click/AX-activate only.
                 .disabled(appState.selectedFilePath == nil)
                 .accessibilityHint(
                     "Opens the citation summary for the current note. Cmd+Shift+J. Esc closes."
@@ -606,7 +624,8 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.bibliography.label("Jump to Bibliography")
                 }
-                .keyboardShortcut("j", modifiers: .command)
+                // ⌘J lives on View ▸ Jump to Bibliography (#422 — see
+                // the Save button above). Click/AX-activate only.
                 .disabled(appState.expandedCitation == nil)
                 .accessibilityHint(
                     "Filters the Bibliography sidebar to the citation's key. Cmd+J."

@@ -118,14 +118,20 @@ private struct PromptStep: View {
             Button("Cancel") {
                 appState.cancelTemplateFlow()
             }
-            .keyboardShortcut(.escape, modifiers: [])
+            .keyboardShortcut(.cancelAction)
             .accessibilityHint("Cancels the create-from-template flow.")
             Spacer()
+            // `.defaultAction`, not the former ⌘↩: bare Return in a
+            // macOS dialog activates the default button even from a
+            // text field (AddPropertySheet is the in-app precedent),
+            // and `.defaultAction` is what confers the visually-
+            // primary (blue) treatment — with ⌘↩ the sheet rendered
+            // no default button at all and Return was a dead key.
             Button("Next") {
                 appState.submitTemplatePrompts(values)
             }
-            .keyboardShortcut(.return, modifiers: [.command])
-            .accessibilityHint("Continue to choose the new note's name. Cmd+Return.")
+            .keyboardShortcut(.defaultAction)
+            .accessibilityHint("Continue to choose the new note's name. Return.")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -199,13 +205,17 @@ private struct NameStep: View {
             Button("Cancel") {
                 appState.cancelTemplateFlow()
             }
-            .keyboardShortcut(.escape, modifiers: [])
+            .keyboardShortcut(.cancelAction)
             .accessibilityHint("Cancels the create-from-template flow. No file is written.")
             Spacer()
+            // `.defaultAction` (not bare `.return`): same key, but
+            // also confers the visually-primary default-button
+            // treatment the prompt step's footer now has — one
+            // consistent dialog idiom across both steps.
             Button("Create") {
                 submit()
             }
-            .keyboardShortcut(.return, modifiers: [])
+            .keyboardShortcut(.defaultAction)
             .accessibilityHint("Render the template and open the new note. Return.")
         }
         .padding(.horizontal, 16)

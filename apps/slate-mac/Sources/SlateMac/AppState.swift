@@ -3377,6 +3377,16 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Empty the recent-vaults list. Backs the File ▸ Open Recent ▸
+    /// Clear Menu item (the macOS-standard tail of an Open Recent
+    /// submenu). Same fire-and-log persistence contract as
+    /// `removeRecent(path:)` — the in-memory list is what the UI reads.
+    func clearRecentVaults() {
+        for entry in recentVaults {
+            removeRecent(path: entry.path)
+        }
+    }
+
     /// Run the initial scan against the current session, then page
     /// through `listFiles` to build the sidebar's in-memory list.
     /// Called automatically after `openVault` succeeds; can be called
@@ -3479,6 +3489,19 @@ final class AppState: ObservableObject {
     /// Total non-marker versions (the section header count).
     @Published var historyTotalFiltered: UInt64 = 0
     @Published var historyLoadError: String?
+    /// True from `scheduleHistoryLoad` until the NEWEST load publishes
+    /// (or the panel resets on vault close). Gates the HistoryPanel's
+    /// first-page spinner: the list starts EMPTY after a vault open
+    /// and the load is async, so without this flag the panel shows the
+    /// misleading "No versions yet" copy for the whole load window
+    /// (the Tasks/Citations panels' loading idiom, applied here).
+    /// Note-to-note switches LATCH the previous rows until the new
+    /// publish (no flash — deliberate), so the spinner only fills
+    /// genuinely-empty windows. Stale loads guard-return without
+    /// touching the flag — the newest publish (first-page load OR
+    /// `loadOlderVersions`, which also bumps the seq) or the reset
+    /// clears it.
+    @Published var isHistoryLoading = false
     /// Since-last-open verdict for the selected note. Populated ONLY
     /// when the pref is on — the compute-then-mark funnel order is
     /// pinned by o_spec §O-4/§O-5 (g3): compute first, then mark;

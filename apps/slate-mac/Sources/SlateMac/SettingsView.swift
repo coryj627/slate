@@ -422,8 +422,12 @@ struct BibliographySettingsTab: View {
     private var noVaultState: some View {
         VStack(spacing: 12) {
             Spacer()
+            // Audit #262 M3 policy (as the Math/Code tabs): SwiftUI
+            // `.secondary` lands ~3.2:1 on the grouped Form background,
+            // below AA. The APCA-gated token role is the compliant
+            // secondary (the Canvas tab's approach).
             Text("Open a vault to configure its bibliography.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
                 .multilineTextAlignment(.center)
             Spacer()
         }
@@ -455,7 +459,7 @@ struct BibliographySettingsTab: View {
         Section {
             if appState.bibliographyPrefs.sources.isEmpty {
                 Text("No sources configured yet.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .accessibilityLabel("No sources configured yet.")
             } else {
                 ForEach(
@@ -480,7 +484,7 @@ struct BibliographySettingsTab: View {
                 "BibTeX / BibLaTeX / CSL-JSON files. Drop your library export anywhere in the vault, then add it here. Multiple sources merge by citation key — first-source wins on duplicates."
             )
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
     }
 
@@ -491,7 +495,7 @@ struct BibliographySettingsTab: View {
                     .lineLimit(2)
                 Text(formatLabel(source.format))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .accessibilityHidden(true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -574,7 +578,7 @@ struct BibliographySettingsTab: View {
                 "Renders citations against this style by default. Use View → Citation Style to switch styles on a specific note."
             )
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
         }
     }
 
@@ -584,7 +588,7 @@ struct BibliographySettingsTab: View {
         Section {
             if appState.bibliographyPrefs.additionalStyles.isEmpty {
                 Text("No additional styles configured.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .accessibilityLabel("No additional styles configured.")
             } else {
                 ForEach(

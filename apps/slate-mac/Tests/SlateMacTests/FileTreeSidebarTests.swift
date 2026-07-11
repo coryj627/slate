@@ -392,6 +392,68 @@ final class FileTreeSidebarTests: XCTestCase {
     // MARK: - PresentationReady (spec: appearance snapshots, both appearances)
 
     /// A sidebar rendered against a small real vault, in both appearances.
+    // MARK: - Delete-command modifier gate (spec §U2-5: the chord is ⌘⌫)
+
+    /// A bare ⌫ keyDown must NOT delete — Finder ignores the unmodified
+    /// key, and the tree's highlight can sit on a row selected long ago.
+    func testBareDeleteKeyIsRejected() {
+        let bare = Self.deleteKeyEvent(modifiers: [])
+        XCTAssertFalse(FileTreeSidebar.deleteCommandAllowed(event: bare))
+    }
+
+    /// ⌘⌫ — the documented Move-to-Trash chord — passes the gate.
+    func testCommandDeleteKeyIsAllowed() {
+        let cmd = Self.deleteKeyEvent(modifiers: [.command])
+        XCTAssertTrue(FileTreeSidebar.deleteCommandAllowed(event: cmd))
+    }
+
+    /// Non-key deliveries (VoiceOver's AX delete action, a menu `delete:`)
+    /// have no matching keyDown — they're deliberate and must pass.
+    func testNonKeyDeliveryIsAllowed() {
+        XCTAssertTrue(FileTreeSidebar.deleteCommandAllowed(event: nil))
+        let keyUp = NSEvent.keyEvent(
+            with: .keyUp, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\u{7F}",
+            charactersIgnoringModifiers: "\u{7F}", isARepeat: false, keyCode: 51)
+        XCTAssertTrue(FileTreeSidebar.deleteCommandAllowed(event: keyUp))
+    }
+
+    private static func deleteKeyEvent(modifiers: NSEvent.ModifierFlags) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\u{7F}",
+            charactersIgnoringModifiers: "\u{7F}", isARepeat: false, keyCode: 51)
+    }
+
+    // MARK: - List-level key-interception gate (red-team F1 on the HIG audit)
+
+    /// `.focused` on the List has focus-WITHIN semantics: it stays true
+    /// while the inline RenameField is first responder, and a List-level
+    /// `.onKeyPress` sees keys before the field editor. The gate must
+    /// therefore be OFF during rename — otherwise Space toggles the
+    /// folder instead of typing, Return can't commit, and ⌘⌫ trashes the
+    /// node under rename.
+    func testTreeKeyInterceptionInactiveDuringRename() {
+        XCTAssertFalse(
+            FileTreeSidebar.treeKeyInterceptionActive(
+                fileTreeFocused: true, isRenaming: true))
+    }
+
+    func testTreeKeyInterceptionActiveWithTreeFocusAndNoRename() {
+        XCTAssertTrue(
+            FileTreeSidebar.treeKeyInterceptionActive(
+                fileTreeFocused: true, isRenaming: false))
+    }
+
+    func testTreeKeyInterceptionInactiveWithoutTreeFocus() {
+        XCTAssertFalse(
+            FileTreeSidebar.treeKeyInterceptionActive(
+                fileTreeFocused: false, isRenaming: false))
+        XCTAssertFalse(
+            FileTreeSidebar.treeKeyInterceptionActive(
+                fileTreeFocused: false, isRenaming: true))
+    }
+
     /// Uses a live session (not the fetch spy) so the *view* — not just the VM —
     /// is exercised end-to-end through the render.
     func testSidebarRendersInBothAppearances() async throws {

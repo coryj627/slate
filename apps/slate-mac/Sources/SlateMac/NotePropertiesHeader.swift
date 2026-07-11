@@ -65,17 +65,13 @@ struct NotePropertiesHeader: View {
                 }
                 .padding(.horizontal, Tokens.Spacing.sm)
                 .padding(.vertical, Tokens.Spacing.xxs)
-                // Hidden trigger for Cmd+Shift+R — opens the bulk-rename
-                // sheet (moved verbatim from the retired PropertiesPanel;
-                // the visible button is the discoverable surface).
-                .background(
-                    Button("") {
-                        appState.isBulkRenameSheetOpen = true
-                    }
-                    .keyboardShortcut(KeyEquivalent("r"), modifiers: [.command, .shift])
-                    .opacity(0)
-                    .accessibilityHidden(true)
-                )
+                // ⇧⌘R (bulk rename) lives on Edit ▸ Bulk Rename
+                // Properties… — menu-bar-homed like ⌘F (the #422
+                // lesson). The former hidden opacity-0 trigger here
+                // also vanished whenever this header wasn't mounted;
+                // the menu item is reachable regardless of focus or
+                // which note surface is showing. The visible header
+                // button below remains the discoverable affordance.
                 Divider()
             }
             .accessibilityElement(children: .contain)
@@ -148,10 +144,17 @@ struct NotePropertiesHeader: View {
 
     private var sourceEditor: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-            TextEditor(text: $sourceDraft)
-                .font(Tokens.Typography.code)
-                .frame(minHeight: 80, maxHeight: Self.rowAreaMaxHeight)
-                .accessibilityLabel("Properties source, YAML")
+            // PlainTextEditor, not SwiftUI TextEditor: a bare
+            // TextEditor inherits the system smart-quote/dash
+            // substitutions, so typing `"` into a YAML value lands a
+            // curly quote — the exact corruption the main editor's
+            // hygiene block exists to prevent, on the one surface
+            // that edits frontmatter as raw source.
+            PlainTextEditor(
+                text: $sourceDraft,
+                accessibilityLabel: "Properties source, YAML"
+            )
+            .frame(minHeight: 80, maxHeight: Self.rowAreaMaxHeight)
             if let error = appState.propertiesSourceError {
                 // Inline, specific, non-destructive (DoD §F): the Rust
                 // MalformedFrontmatter line/column message; the draft and
@@ -195,10 +198,15 @@ struct NotePropertiesHeader: View {
                 .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
+            // Header glyph buttons: pin the WCAG 2.5.8 target-size
+            // floor — a bare `.decorative` glyph in a borderless
+            // button renders ~16pt with no padded hit area.
             Button {
                 appState.isAddPropertySheetOpen = true
             } label: {
                 SlateSymbol.addProperty.decorative
+                    .frame(minWidth: 24, minHeight: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .help("Add property")
@@ -208,6 +216,8 @@ struct NotePropertiesHeader: View {
                 appState.isBulkRenameSheetOpen = true
             } label: {
                 SlateSymbol.bulkRename.decorative
+                    .frame(minWidth: 24, minHeight: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .help("Rename property across the vault")
@@ -217,6 +227,8 @@ struct NotePropertiesHeader: View {
                 toggleSourceMode()
             } label: {
                 SlateSymbol.showSource.decorative
+                    .frame(minWidth: 24, minHeight: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .help("Show source (⇧⌘D)")

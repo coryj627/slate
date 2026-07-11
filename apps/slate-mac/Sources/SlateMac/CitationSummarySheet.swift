@@ -59,6 +59,16 @@ struct CitationSummarySheet: View {
         }
         .padding(20)
         .frame(minWidth: 380, idealWidth: 460, maxWidth: 560, minHeight: 160)
+        // Esc dismissal. This was the one sheet in the app with no
+        // cancel path — Done carries `.defaultAction` (Return), and a
+        // second `.keyboardShortcut` can't sit on the same button, so
+        // the container-level exit command supplies Esc (the
+        // MoveToFolderSheet pattern). Return and Esc now both close,
+        // which is correct for a read-only summary: there is nothing
+        // to cancel, only to leave.
+        .onExitCommand {
+            appState.isCitationSummaryOpen = false
+        }
         .accessibilityElement(children: .contain)
         // Sheet-level label so VoiceOver reads the stat on appear
         // without the user having to navigate to the body Text.

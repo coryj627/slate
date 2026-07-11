@@ -280,7 +280,15 @@ struct ReadingView: View {
                 }
             }
             .padding(Tokens.Spacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Measure cap (WCAG 1.4.8 / typographic 45–90ch band): the
+            // column tops out at `readingMeasure` and centers in wider
+            // windows — prose no longer runs 150+ characters per line
+            // full-width. Below the cap nothing changes (leading
+            // alignment inside the column is preserved). Code/table
+            // blocks already scroll horizontally within their own
+            // containers, so they lose nothing.
+            .frame(maxWidth: Tokens.Layout.readingMeasure, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .background(Tokens.ColorRole.surface)
         .accessibilityElement(children: .contain)

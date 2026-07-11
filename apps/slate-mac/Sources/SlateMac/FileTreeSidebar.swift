@@ -660,14 +660,20 @@ struct FileTreeSidebar: View {
     }
 
     private var emptyState: some View {
+        // Empty states offer the primary action (DoD §A "tighten every
+        // empty state"): without the button, the only path to a first
+        // note is ⌘N / the palette — invisible from the empty sidebar.
         VStack(spacing: Tokens.Spacing.sm) {
             Text("No Markdown files in this vault.")
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Button("New Note") {
+                appState.createNote(in: "")
+            }
+            .accessibilityHint("Creates your first note at the vault root. Cmd+N.")
         }
         .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityLabel("No Markdown files in this vault.")
     }
 
     // MARK: - Tree list
@@ -720,9 +726,50 @@ struct FileTreeSidebar: View {
         // a menu-bar chord so it can't fire while a property field or the editor
         // is focused. A folder-or-file selection is required; placeholders and
         // no-selection no-op.
+        //
+        // The chord is ⌘⌫ — Finder's Move-to-Trash. `.onDeleteCommand` alone
+        // also fires for a BARE ⌫, which must never mutate the vault (HIG:
+        // Finder ignores it; an unmodified slip-key must not trash the
+        // selection — especially since the highlight may sit on a row the
+        // user last clicked minutes ago). The gate inspects the live key
+        // event; non-key deliveries (a VoiceOver/AX delete action, a menu
+        // `delete:`) carry no matching keyDown and pass through.
         .onDeleteCommand {
-            guard fileTreeFocused, let node = selectedTreeNode else { return }
+            guard fileTreeFocused, let node = selectedTreeNode,
+                Self.deleteCommandAllowed(event: NSApp.currentEvent)
+            else { return }
             appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+        }
+        // Explicit ⌘⌫ delivery: SwiftUI routes a COMMAND-modified ⌫ through
+        // the key-press path, not (reliably) the delete-command path — with
+        // only the `.onDeleteCommand` above, ⌘⌫ can be a dead chord while
+        // bare ⌫ (the one that must NOT delete) is the live one. `.handled`
+        // consumes the event so the two paths can't double-fire.
+        .onKeyPress(keys: [.delete]) { press in
+            guard
+                Self.treeKeyInterceptionActive(
+                    fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil),
+                press.modifiers.contains(.command),
+                let node = selectedTreeNode
+            else { return .ignored }
+            appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+            return .handled
+        }
+        // Space/Return toggle the selected FOLDER's disclosure — the
+        // keyboard equivalent of the folder row's tap (the row comment
+        // promises it; §U2-4 keyboard disclosure). Files: `.ignored` —
+        // selection already opened the note, so Return has nothing to add.
+        .onKeyPress(keys: [.space, .return]) { press in
+            guard
+                Self.treeKeyInterceptionActive(
+                    fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil),
+                press.modifiers.isEmpty,
+                let node = selectedTreeNode, node.isDirectory
+            else { return .ignored }
+            tree.toggle(node)
+            return .handled
         }
         // Root drop target: a node dropped on the tree background (not on a
         // folder row) moves to the vault root. Folder rows have their own
@@ -1046,16 +1093,29 @@ struct FileTreeSidebar: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
-            // A folder row toggles disclosure on activation (pointer tap, or
-            // Space/Return/double-click when selected). The spec preferred an
-            // "isButton-free plain row", but the a11y gate (WCAG 4.1.2) requires
-            // any `.onTapGesture` target to carry `.isButton` so VoiceOver users
-            // can discover it's actuatable — and for a folder that genuinely
-            // toggles on activation, the button role is honest. We keep BOTH: the
-            // button trait (discoverable activation) and the named Expand/Collapse
-            // rotor action (VO users get an explicit verb), plus the AX value that
-            // states expanded/collapsed + item count + level.
-            .onTapGesture { tree.toggle(node) }
+            // A folder row SELECTS and toggles disclosure on activation
+            // (pointer tap; Space/Return when selected ride the List-level
+            // `.onKeyPress` above). Selecting matters as much as toggling:
+            // the tap must move `listSelection` onto the folder — exactly
+            // as a file row's tap does — or the highlight (and therefore
+            // the ⌘⌫ / Rename / Move target that `mirrorTreeSelectionToAppState`
+            // derives from it) silently stays on the PREVIOUSLY selected
+            // file. That stale-target trap is Finder-hostile: click a
+            // folder, press ⌘⌫, and the file you clicked minutes ago is
+            // what lands in the Trash.
+            //
+            // The spec preferred an "isButton-free plain row", but the a11y
+            // gate (WCAG 4.1.2) requires any `.onTapGesture` target to carry
+            // `.isButton` so VoiceOver users can discover it's actuatable —
+            // and for a folder that genuinely acts on activation, the button
+            // role is honest. We keep BOTH: the button trait (discoverable
+            // activation) and the named Expand/Collapse rotor action (VO
+            // users get an explicit verb), plus the AX value that states
+            // expanded/collapsed + item count + level.
+            .onTapGesture {
+                listSelection = .node(node.nodeID)
+                tree.toggle(node)
+            }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(node.name)
@@ -1107,6 +1167,11 @@ struct FileTreeSidebar: View {
                     Text(node.name)
                         .font(Tokens.Typography.body)
                         .foregroundStyle(Tokens.ColorRole.textPrimary)
+                        // Cap like the folder rows (2 lines, not 1 — the
+                        // a11y gate's line-limit-1 rule + WCAG 1.4.4 want
+                        // wrap-room at large type). `.help(node.path)`
+                        // below carries the full name for the long tail.
+                        .lineLimit(2)
                     Text("Modified \(relativeDate(for: mtime(of: node)))")
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -1268,11 +1333,34 @@ struct FileTreeSidebar: View {
             SlateSymbol.moveTo.label("Move to…")
         }
         Divider()
+        // Finder-staple inspection actions (HIG file-tree conventions —
+        // every macOS file sidebar offers a jump to the real file and a
+        // path copy). Plain Buttons like the open-in trio: inspection
+        // actions carry no SlateSymbol role (the u2_spec table maps
+        // symbols to MUTATION verbs only).
+        Button("Reveal in Finder") {
+            if let url = absoluteURL(for: node) {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        }
+        Button("Copy Path") {
+            if let url = absoluteURL(for: node) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.path, forType: .string)
+            }
+        }
+        Divider()
         Button(role: .destructive) {
             appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
         } label: {
             SlateSymbol.trash.label("Move to Trash")
         }
+    }
+
+    /// Absolute filesystem URL for a tree node (vault root + relative
+    /// path). Backs the Reveal in Finder / Copy Path context actions.
+    private func absoluteURL(for node: TreeNode) -> URL? {
+        appState.currentVaultURL?.appendingPathComponent(node.path)
     }
 
     // MARK: - Drag & drop (U2-5)
@@ -1453,6 +1541,41 @@ struct FileTreeSidebar: View {
     }
 
     // MARK: - Keyboard disclosure
+
+    /// Whether a delete-command delivery may mutate the vault. The spec'd
+    /// chord is ⌘⌫ (Finder's Move-to-Trash); a bare ⌫ must not delete —
+    /// `.onDeleteCommand` can't see the key, so the gate inspects the live
+    /// event. A keyDown without ⌘ is the bare slip-key: reject. Anything
+    /// that isn't a keyDown (AX delete action, menu `delete:`, or no
+    /// current event at all) passes — those deliveries are deliberate.
+    ///
+    /// Static + pure so the modifier semantics are regression-locked by a
+    /// unit test without a running List (the `moveOutcome` pattern).
+    static func deleteCommandAllowed(event: NSEvent?) -> Bool {
+        guard let event, event.type == .keyDown else { return true }
+        return event.modifierFlags.contains(.command)
+    }
+
+    /// Whether the List-level `.onKeyPress` interceptors (⌘⌫ delete,
+    /// Space/Return folder disclosure) may fire. TWO conditions, and the
+    /// second is load-bearing: `.focused($fileTreeFocused)` on the List
+    /// has focus-WITHIN semantics — it stays TRUE while the inline
+    /// RenameField (a descendant) is first responder, and a List-level
+    /// `.onKeyPress` sees keys BEFORE the field editor does. Without the
+    /// rename gate, typing a space into "Project Notes" toggles the
+    /// folder under the rename row instead of inserting the space,
+    /// Return can never commit the rename, and ⌘⌫ (delete-to-line-start
+    /// muscle memory in any macOS text field) trashes the node being
+    /// renamed (red-team probe on the HIG-audit pass, empirically
+    /// reproduced in-harness).
+    ///
+    /// Static + pure so the two-flag semantics are regression-locked by
+    /// a unit test (the `deleteCommandAllowed` pattern).
+    static func treeKeyInterceptionActive(
+        fileTreeFocused: Bool, isRenaming: Bool
+    ) -> Bool {
+        fileTreeFocused && !isRenaming
+    }
 
     /// →/← handling for the tree (macOS custom-row outline navigation). The
     /// mapping decision is the VM's pure `moveOutcome`; this just applies it, so

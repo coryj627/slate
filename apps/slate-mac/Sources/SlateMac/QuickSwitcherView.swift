@@ -65,6 +65,23 @@ struct QuickSwitcherView: View {
             searchField
             Divider()
             results
+            Divider()
+            // Visible key legend: the ⌘↩ / ⌥⌘↩ open targets existed
+            // only in the field's accessibilityHint, so sighted users
+            // had no way to learn them (the palette shows per-row
+            // hotkey hints; this is the switcher's equivalent).
+            // Hidden from AX — the hint above is the audio source,
+            // and glyph-runs read poorly compared to its prose.
+            HStack(spacing: Tokens.Spacing.lg) {
+                Text("↩ Open")
+                Text("⌘↩ New Tab")
+                Text("⌥⌘↩ Split")
+            }
+            .font(Tokens.Typography.caption)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, Tokens.Spacing.sm)
+            .accessibilityHidden(true)
         }
         .frame(minWidth: 560, idealWidth: 560, minHeight: 360, idealHeight: 360)
         .background(Color(nsColor: .controlBackgroundColor))

@@ -43,8 +43,8 @@ enum HotkeySpoken {
     /// The walk is per-`Character`, so it handles two shapes:
     /// - **Single-glyph keys** (arrows `↑↓←→`, the modifier glyphs)
     ///   — add a `keyWord` entry (e.g. `"↑": "Up Arrow"`) and they
-    ///   speak correctly. No registry command uses an arrow chord
-    ///   today, so none are listed.
+    ///   speak correctly. The pane-focus (⌥⌘←→↑↓) and tab-move
+    ///   (⌃⌘←→) registry chords use arrows, so all four are listed.
     /// - **Multi-character key names** (function keys `"F1"`, `"F12"`)
     ///   — these are NOT handled by the per-`Character` walk: `"F1"`
     ///   would iterate as `F`, `1` and speak "F 1". If a chord ever
@@ -94,5 +94,14 @@ enum HotkeySpoken {
         "=": "Equals",
         "`": "Backtick",
         " ": "Space",
+        // Arrow glyphs — used by the pane-focus (⌥⌘←→↑↓) and tab-move
+        // (⌃⌘←→) palette hints. Without these the per-character walk
+        // passes the raw glyph through and VoiceOver users hear
+        // "Option Command" followed by nothing at most punctuation
+        // levels — the exact elision this helper exists to prevent.
+        "↑": "Up Arrow",
+        "↓": "Down Arrow",
+        "←": "Left Arrow",
+        "→": "Right Arrow",
     ]
 }
