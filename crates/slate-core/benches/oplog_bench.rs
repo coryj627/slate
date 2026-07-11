@@ -300,8 +300,44 @@ fn bench_save_with_big_log(c: &mut Criterion) {
     group.finish();
 }
 
+/// O-4 gate: a 500 KB / 2k-block pair diffs in < 50 ms (release).
+fn bench_structured_diff(c: &mut Criterion) {
+    let mut group = c.benchmark_group("structured_diff");
+    // ~2k blocks, ~500 KB total: alternating headings/paragraphs/lists
+    // with a scattering of edits between the two sides.
+    let mut from = String::with_capacity(600 * 1024);
+    let mut to = String::with_capacity(600 * 1024);
+    for i in 0..2000 {
+        let block = match i % 4 {
+            0 => format!("# Section {i}\n\n"),
+            1 => format!(
+                "paragraph {i} with some longer filler text to bulk the block {}\n\n",
+                "x".repeat(1024)
+            ),
+            2 => format!("- [ ] task number {i}\n"),
+            _ => format!("- bullet {i}\n"),
+        };
+        from.push_str(&block);
+        if i % 97 == 0 {
+            // Edit ~1 in 97 blocks on the to-side.
+            to.push_str(&block.replace("filler", "FILLER").replace("task", "TASK"));
+        } else {
+            to.push_str(&block);
+        }
+    }
+    assert!(from.len() > 500 * 1024);
+    group.bench_function("diff_500kb_2k_blocks", |b| {
+        b.iter(|| {
+            let d = slate_core::structured_diff("bench.md", "a", "b", &from, &to);
+            black_box(d);
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_structured_diff,
     bench_append,
     bench_compact,
     bench_save_with_big_log

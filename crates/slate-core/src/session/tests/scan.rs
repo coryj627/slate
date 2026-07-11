@@ -96,15 +96,16 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
         rusqlite::params![r#"["2026-01-02"]"#],
     )
     .unwrap();
-    // Unwind 027 too (O-1): its ALTER + CREATE INDEX aren't
-    // re-runnable, so the pre-026 fixture must drop the schema rows,
-    // the uniqueness index, and the column.
+    // Unwind every post-025 migration (their DDL isn't re-runnable),
+    // so the pre-026 fixture can replay 026+ from scratch: 027's
+    // index + column and 028's open_marks table.
     conn.execute("DELETE FROM schema_version WHERE version >= 26", [])
         .unwrap();
     conn.execute("DROP INDEX files_oplog_name_unique", [])
         .unwrap();
     conn.execute("ALTER TABLE files DROP COLUMN oplog_name", [])
         .unwrap();
+    conn.execute("DROP TABLE open_marks", []).unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)

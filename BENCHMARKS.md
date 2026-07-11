@@ -484,3 +484,9 @@ Same machine/command pattern as the O-1 rows (`--sample-size 10`).
 | `oplog_compact/compact_50k_ops` | **100.15 ms** (99.2–101.1) | §9.3.3 "< 1 s in the background" — **10× headroom** (50,001 entries: read + fold + verify + rewrite + rename) |
 | `oplog_save_path/save_text_with_trigger_check_5mib_log` | **10.45 ms** (10.3–10.5) | o_spec §O-2 g2 — vs `save_text_hot` 9.33 ms on a tiny log; the ~1 ms delta tracks the bench's 64 KiB file content (hash + write + diff), not the log: the trigger check is returned-length arithmetic, no log walk on the save path |
 
+
+## Milestone O — O-4 structured diff baseline (2026-07-11)
+
+| Bench | p50 (95% CI) | Gate |
+|---|---:|---|
+| `structured_diff/diff_500kb_2k_blocks` | **23.65 ms** (23.5–23.8) | o_spec §O-4 "< 50 ms release" — ~550 KB, 2,000 blocks, ~21 scattered edits (LCS anchoring + pairing + copy generation) |

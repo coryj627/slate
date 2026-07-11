@@ -99,9 +99,9 @@ enum Coarse {
 fn coarse(kind: &ReadingBlockKind) -> Coarse {
     match kind {
         ReadingBlockKind::Heading { .. } => Coarse::Heading,
-        ReadingBlockKind::Paragraph | ReadingBlockKind::BlockQuote { .. } | ReadingBlockKind::Html => {
-            Coarse::Paragraph
-        }
+        ReadingBlockKind::Paragraph
+        | ReadingBlockKind::BlockQuote { .. }
+        | ReadingBlockKind::Html => Coarse::Paragraph,
         ReadingBlockKind::ListItem { .. } => Coarse::ListItem,
         ReadingBlockKind::CodeFence { .. } => Coarse::Code,
         ReadingBlockKind::MathBlock => Coarse::Math,
@@ -124,7 +124,14 @@ fn truncate_chars(text: &str, max: usize) -> String {
 /// A one-line, whitespace-normalized excerpt of a block for
 /// descriptions.
 fn excerpt(source: &str, max: usize) -> String {
-    truncate_chars(source.split_whitespace().collect::<Vec<_>>().join(" ").trim(), max)
+    truncate_chars(
+        source
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim(),
+        max,
+    )
 }
 
 /// Heading text sans marker characters.
@@ -191,16 +198,37 @@ fn similarity(a: &str, b: &str) -> f64 {
     1.0 - prev[b.len()] as f64 / max_len as f64
 }
 
-/// 1-based line of a byte offset in `source`.
-fn line_of(source: &str, byte: usize) -> u32 {
-    let byte = byte.min(source.len());
-    source[..byte].bytes().filter(|b| *b == b'\n').count() as u32 + 1
+/// Newline positions of a source, built once — per-block line lookups
+/// are then O(log n) instead of rescanning the prefix (which made
+/// large diffs quadratic in total size; adversarial-review stress
+/// test).
+struct LineIndex(Vec<usize>);
+
+impl LineIndex {
+    fn new(source: &str) -> Self {
+        Self(
+            source
+                .bytes()
+                .enumerate()
+                .filter_map(|(i, b)| (b == b'\n').then_some(i))
+                .collect(),
+        )
+    }
+    /// 1-based line containing `byte`.
+    fn line_of(&self, byte: usize) -> u32 {
+        self.0.partition_point(|&newline| newline < byte) as u32 + 1
+    }
 }
 
 /// `(line, line_end)` of a block within its source.
-fn block_lines(source: &str, block: &ReadingBlock) -> (u32, u32) {
-    let line = line_of(source, block.byte_start as usize);
-    let inner_newlines = block.source.trim_end_matches('\n').bytes().filter(|b| *b == b'\n').count() as u32;
+fn block_lines(index: &LineIndex, block: &ReadingBlock) -> (u32, u32) {
+    let line = index.line_of(block.byte_start as usize);
+    let inner_newlines = block
+        .source
+        .trim_end_matches('\n')
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count() as u32;
     (line, line + inner_newlines)
 }
 
@@ -229,6 +257,70 @@ fn only_status_differs(from: &str, to: &str) -> bool {
     }
 }
 
+/// Indentation-aware line lookup for a flattened dotted property path
+/// within a source's frontmatter. Matches each path component at
+/// strictly increasing indentation under its parent; returns the LEAF
+/// component's own 1-based line. Duplicate leaf names under different
+/// parents resolve to the right branch. `None` when the path can't be
+/// walked (fall back to line 1 — display-only data).
+fn key_path_line(source: &str, dotted: &str) -> Option<u32> {
+    let components: Vec<&str> = dotted.split('.').collect();
+    // Stack of matched-ancestor indents; stack.len() == matched depth.
+    let mut indents: Vec<usize> = Vec::new();
+    let mut in_frontmatter = false;
+    for (i, raw_line) in source.lines().enumerate() {
+        let line = raw_line.trim_end_matches('\r');
+        if i == 0 {
+            if line.trim() != "---" {
+                return None; // no frontmatter block
+            }
+            in_frontmatter = true;
+            continue;
+        }
+        if !in_frontmatter {
+            break;
+        }
+        if line.trim() == "---" {
+            break; // closing delimiter — path not found
+        }
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim_start();
+        // Leaving matched scopes: pop ancestors at or beyond this
+        // indent (a sibling or shallower key ends their branches).
+        while indents.last().is_some_and(|&parent| indent <= parent) {
+            indents.pop();
+        }
+        let expected = components.get(indents.len());
+        if let Some(component) = expected
+            && trimmed
+                .strip_prefix(component)
+                .is_some_and(|rest| rest.trim_start().starts_with(':'))
+        {
+            indents.push(indent);
+            if indents.len() == components.len() {
+                return Some(i as u32 + 1);
+            }
+        }
+    }
+    // Bare fallback: first occurrence of the leaf anywhere in the
+    // frontmatter (kept for tag-list shapes the walker can't see).
+    let leaf = dotted.rsplit('.').next()?;
+    for (i, raw_line) in source.lines().enumerate() {
+        let line = raw_line.trim_end_matches('\r');
+        if line.trim() == "---" && i > 0 {
+            break;
+        }
+        if line
+            .trim_start()
+            .strip_prefix(leaf)
+            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+        {
+            return Some(i as u32 + 1);
+        }
+    }
+    None
+}
+
 /// Compute the structured diff between two full note sources.
 pub fn structured_diff(
     file_path: &str,
@@ -242,25 +334,21 @@ pub fn structured_diff(
     // --- 1. Frontmatter: key-level compare -------------------------
     let (from_props, _) = extract_frontmatter(from);
     let (to_props, _) = extract_frontmatter(to);
-    let from_map: std::collections::BTreeMap<&str, &PropertyValue> =
-        from_props.iter().map(|p| (p.key.as_str(), &p.value)).collect();
-    let to_map: std::collections::BTreeMap<&str, &PropertyValue> =
-        to_props.iter().map(|p| (p.key.as_str(), &p.value)).collect();
+    let from_map: std::collections::BTreeMap<&str, &PropertyValue> = from_props
+        .iter()
+        .map(|p| (p.key.as_str(), &p.value))
+        .collect();
+    let to_map: std::collections::BTreeMap<&str, &PropertyValue> = to_props
+        .iter()
+        .map(|p| (p.key.as_str(), &p.value))
+        .collect();
 
-    // Best-effort 1-based line of `key:` within a source's frontmatter.
-    let key_line = |source: &str, key: &str| -> u32 {
-        let top = key.split('.').next().unwrap_or(key);
-        for (i, line) in source.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed
-                .strip_prefix(top)
-                .is_some_and(|rest| rest.trim_start().starts_with(':'))
-            {
-                return i as u32 + 1;
-            }
-        }
-        1
-    };
+    // Best-effort 1-based line of a property within a source's
+    // frontmatter: a full dotted-path walk with an indentation stack,
+    // so `second.status` anchors at the `status:` under `second:` even
+    // when another branch has its own `status:` (adversarial review —
+    // duplicate leaf names). Falls back to a bare leaf scan, then 1.
+    let key_line = |source: &str, key: &str| -> u32 { key_path_line(source, key).unwrap_or(1) };
 
     for (key, to_value) in &to_map {
         let changed = from_map.get(key) != Some(to_value);
@@ -295,10 +383,14 @@ pub fn structured_diff(
     // --- 2. Body: segment + LCS align -------------------------------
     let from_blocks = reading_blocks_source(from);
     let to_blocks = reading_blocks_source(to);
+    let from_index = LineIndex::new(from);
+    let to_index = LineIndex::new(to);
 
     // Trim the common prefix/suffix first (typical edits touch a small
     // region; this keeps the LCS table tiny).
-    let same = |a: &ReadingBlock, b: &ReadingBlock| coarse(&a.kind) == coarse(&b.kind) && a.source == b.source;
+    let same = |a: &ReadingBlock, b: &ReadingBlock| {
+        coarse(&a.kind) == coarse(&b.kind) && a.source == b.source
+    };
     let mut prefix = 0usize;
     while prefix < from_blocks.len()
         && prefix < to_blocks.len()
@@ -331,34 +423,52 @@ pub fn structured_diff(
     // Walk runs between anchors.
     let mut fi = 0usize;
     let mut ti = 0usize;
-    let mut emit_run = |operations: &mut Vec<DiffOperation>,
-                        removed: &[ReadingBlock],
-                        added: &[ReadingBlock]| {
-        let pairs = removed.len().min(added.len());
-        for i in 0..pairs {
-            let from_block = &removed[i];
-            let to_block = &added[i];
-            let pairable = coarse(&from_block.kind) == coarse(&to_block.kind)
-                && similarity(&from_block.source, &to_block.source) > 0.6;
-            if pairable {
-                operations.push(edited_op(to, from_block, to_block));
-            } else {
-                operations.push(removed_op(from, from_block));
-                operations.push(added_op(to, to_block));
+    // Global similarity work budget (adversarial review): pairing cost
+    // is quadratic per pair (capped Levenshtein), so a pathological
+    // diff with thousands of long unmatched blocks — especially on the
+    // LCS-bailout path — must not go CPU-pathological. Once the budget
+    // is spent, remaining pairs read as remove + add: coarser, still
+    // total and deterministic. ~100M char-cells ≈ tens of ms.
+    let mut similarity_budget: u64 = 100_000_000;
+    let mut emit_run =
+        |operations: &mut Vec<DiffOperation>, removed: &[ReadingBlock], added: &[ReadingBlock]| {
+            let pairs = removed.len().min(added.len());
+            for i in 0..pairs {
+                let from_block = &removed[i];
+                let to_block = &added[i];
+                let cost = (from_block.source.len().min(2048) as u64)
+                    * (to_block.source.len().min(2048) as u64);
+                let affordable = cost <= similarity_budget;
+                if affordable {
+                    similarity_budget -= cost;
+                }
+                let pairable = affordable
+                    && coarse(&from_block.kind) == coarse(&to_block.kind)
+                    && similarity(&from_block.source, &to_block.source) > 0.6;
+                if pairable {
+                    operations.push(edited_op(&to_index, from_block, to_block));
+                } else {
+                    operations.push(removed_op(&from_index, from_block));
+                    operations.push(added_op(&to_index, to_block));
+                }
             }
-        }
-        for from_block in &removed[pairs..] {
-            operations.push(removed_op(from, from_block));
-        }
-        for to_block in &added[pairs..] {
-            operations.push(added_op(to, to_block));
-        }
-    };
-    for (anchor_from, anchor_to) in anchors.iter().copied().chain(std::iter::once((
-        from_mid.len(),
-        to_mid.len(),
-    ))) {
-        emit_run(&mut operations, &from_mid[fi..anchor_from], &to_mid[ti..anchor_to]);
+            for from_block in &removed[pairs..] {
+                operations.push(removed_op(&from_index, from_block));
+            }
+            for to_block in &added[pairs..] {
+                operations.push(added_op(&to_index, to_block));
+            }
+        };
+    for (anchor_from, anchor_to) in anchors
+        .iter()
+        .copied()
+        .chain(std::iter::once((from_mid.len(), to_mid.len())))
+    {
+        emit_run(
+            &mut operations,
+            &from_mid[fi..anchor_from],
+            &to_mid[ti..anchor_to],
+        );
         fi = (anchor_from + 1).min(from_mid.len());
         ti = (anchor_to + 1).min(to_mid.len());
     }
@@ -416,14 +526,19 @@ fn lcs_pairs(
     pairs
 }
 
-fn added_op(to_source: &str, block: &ReadingBlock) -> DiffOperation {
-    let (line, line_end) = block_lines(to_source, block);
+fn added_op(to_index: &LineIndex, block: &ReadingBlock) -> DiffOperation {
+    let (line, line_end) = block_lines(to_index, block);
     let (kind, noun) = add_class(&block.kind);
     let semantic_description = match &block.kind {
         ReadingBlockKind::Heading { .. } => {
-            format!("Added heading '{}' at line {line}", heading_text(&block.source))
+            format!(
+                "Added heading '{}' at line {line}",
+                heading_text(&block.source)
+            )
         }
-        ReadingBlockKind::ListItem { task: Some(status), .. } => {
+        ReadingBlockKind::ListItem {
+            task: Some(status), ..
+        } => {
             return DiffOperation {
                 kind,
                 line,
@@ -455,8 +570,8 @@ impl DiffOperation {
     }
 }
 
-fn removed_op(from_source: &str, block: &ReadingBlock) -> DiffOperation {
-    let (line, line_end) = block_lines(from_source, block);
+fn removed_op(from_index: &LineIndex, block: &ReadingBlock) -> DiffOperation {
+    let (line, line_end) = block_lines(from_index, block);
     let (kind, noun) = remove_class(&block.kind);
     let semantic_description = match &block.kind {
         ReadingBlockKind::Heading { .. } => {
@@ -476,8 +591,12 @@ fn removed_op(from_source: &str, block: &ReadingBlock) -> DiffOperation {
     }
 }
 
-fn edited_op(to_source: &str, from_block: &ReadingBlock, to_block: &ReadingBlock) -> DiffOperation {
-    let (line, line_end) = block_lines(to_source, to_block);
+fn edited_op(
+    to_index: &LineIndex,
+    from_block: &ReadingBlock,
+    to_block: &ReadingBlock,
+) -> DiffOperation {
+    let (line, line_end) = block_lines(to_index, to_block);
     // Task-status special case: same text, different status char.
     if let (Some(_), Some(to_status)) = (task_status(&from_block.kind), task_status(&to_block.kind))
         && only_status_differs(&from_block.source, &to_block.source)
@@ -608,4 +727,442 @@ fn audio_summary(operations: &[DiffOperation]) -> String {
         if operations.len() == 1 { "" } else { "s" },
         breakdown.join(", ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diff(from: &str, to: &str) -> StructuredDiff {
+        structured_diff("note.md", "from-hash", "to-hash", from, to)
+    }
+
+    // --- The §7.3 walkthrough, verbatim ------------------------------
+
+    #[test]
+    fn spec_walkthrough_heading_property_paragraph() {
+        // A heading added at line 10, a property set, a paragraph
+        // added — the 05 §7.3 sequential-walkthrough example.
+        let from = "---\nstatus: draft\n---\nintro\n\none\n\ntwo\n";
+        let to =
+            "---\nstatus: final\n---\nintro\n\none\n\ntwo\n\n# Goals\n\na new closing paragraph\n";
+        let d = diff(from, to);
+        let descriptions: Vec<&str> = d
+            .operations
+            .iter()
+            .map(|op| op.semantic_description.as_str())
+            .collect();
+        assert!(
+            descriptions.contains(&"Added heading 'Goals' at line 10"),
+            "the §7.3 example copy, verbatim; got {descriptions:?}"
+        );
+        assert!(
+            descriptions.contains(&"Set property 'status' to 'final'"),
+            "got {descriptions:?}"
+        );
+        assert!(
+            descriptions.contains(&"Added paragraph at line 12"),
+            "got {descriptions:?}"
+        );
+        assert_eq!(
+            d.audio_summary,
+            "3 changes: 1 added heading, 1 added paragraph, 1 property change.",
+        );
+    }
+
+    // --- One fixture per class family ---------------------------------
+
+    #[test]
+    fn heading_add_remove_edit() {
+        let d = diff(
+            "# Project Goals\n\nbody\n",
+            "# Project Goals 2026\n\nbody\n",
+        );
+        assert_eq!(d.operations.len(), 1);
+        assert_eq!(d.operations[0].kind, DiffOpClass::HeadingEdited);
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Edited heading 'Project Goals 2026' at line 1"
+        );
+        // Below the 0.6 similarity gate, a rewrite reads as
+        // remove + add (the pinned pairing rule).
+        let d = diff("# One\n\nbody\n", "# Two\n\nbody\n");
+        let kinds: Vec<DiffOpClass> = d.operations.iter().map(|op| op.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![DiffOpClass::HeadingRemoved, DiffOpClass::HeadingAdded]
+        );
+
+        let d = diff("body\n", "# New\n\nbody\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::HeadingAdded);
+        let d = diff("# Gone\n\nbody\n", "body\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::HeadingRemoved);
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Removed heading 'Gone' at line 1"
+        );
+    }
+
+    #[test]
+    fn paragraph_add_remove_edit() {
+        let d = diff("alpha\n", "alpha\n\nbeta\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::ParagraphAdded);
+        assert_eq!(d.operations[0].detail.as_deref(), Some("beta"));
+
+        let d = diff("alpha\n\nbeta\n", "alpha\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::ParagraphRemoved);
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Removed paragraph at line 3"
+        );
+
+        let d = diff(
+            "a shared paragraph about goats\n",
+            "a shared paragraph about stoats\n",
+        );
+        assert_eq!(d.operations[0].kind, DiffOpClass::ParagraphEdited);
+    }
+
+    #[test]
+    fn list_items_and_all_three_task_status_arms() {
+        let d = diff("- one\n", "- one\n- two\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::ListItemAdded);
+        let d = diff("- one\n- two\n", "- one\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::ListItemRemoved);
+        let d = diff("- long enough item text\n", "- long enough item text!\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::ListItemEdited);
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Edited list item at line 1"
+        );
+
+        // Task copy, all three arms.
+        let d = diff("- [ ] ship the milestone\n", "- [x] ship the milestone\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::TaskStatusChanged);
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Completed task 'ship the milestone'"
+        );
+        let d = diff("- [x] ship the milestone\n", "- [ ] ship the milestone\n");
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Reopened task 'ship the milestone'"
+        );
+        let d = diff("- [ ] ship the milestone\n", "- [/] ship the milestone\n");
+        assert_eq!(
+            d.operations[0].semantic_description,
+            "Changed task 'ship the milestone' status to '/'"
+        );
+        // Text AND status changed → an edit, not a status change.
+        let d = diff(
+            "- [ ] alpha beta gamma delta\n",
+            "- [x] alpha beta gamma DELTA\n",
+        );
+        assert_eq!(d.operations[0].kind, DiffOpClass::ListItemEdited);
+    }
+
+    #[test]
+    fn specialized_blocks_map_to_their_edit_classes() {
+        let code_from = "```rust\nfn a() {}\nfn shared() {}\n```\n";
+        let code_to = "```rust\nfn b() {}\nfn shared() {}\n```\n";
+        let d = diff(code_from, code_to);
+        assert_eq!(d.operations[0].kind, DiffOpClass::CodeBlockEdited);
+
+        let d = diff("$$\na + b\n$$\n", "$$\na + b + c\n$$\n");
+        assert_eq!(d.operations[0].kind, DiffOpClass::MathBlockEdited);
+
+        let d = diff(
+            "```mermaid\ngraph TD; A-->B;\n```\n",
+            "```mermaid\ngraph TD; A-->C;\n```\n",
+        );
+        assert_eq!(d.operations[0].kind, DiffOpClass::DiagramEdited);
+
+        let d = diff(
+            "| a | b |\n|---|---|\n| 1 | 2 |\n",
+            "| a | b |\n|---|---|\n| 1 | 3 |\n",
+        );
+        assert_eq!(d.operations[0].kind, DiffOpClass::TableEdited);
+    }
+
+    #[test]
+    fn property_set_and_removed() {
+        let d = diff(
+            "---\ndraft: true\nkeep: 1\n---\nbody\n",
+            "---\nkeep: 1\nstatus: final\n---\nbody\n",
+        );
+        let kinds: Vec<DiffOpClass> = d.operations.iter().map(|op| op.kind).collect();
+        assert!(kinds.contains(&DiffOpClass::PropertySet));
+        assert!(kinds.contains(&DiffOpClass::PropertyRemoved));
+        let descriptions: Vec<&str> = d
+            .operations
+            .iter()
+            .map(|op| op.semantic_description.as_str())
+            .collect();
+        assert!(descriptions.contains(&"Set property 'status' to 'final'"));
+        assert!(descriptions.contains(&"Removed property 'draft'"));
+    }
+
+    // --- Pairing rules --------------------------------------------------
+
+    #[test]
+    fn moved_block_reads_as_remove_plus_add() {
+        // No reordering detection (documented): a moved paragraph is a
+        // removal at its old position and an addition at its new one.
+        let from = "# H\n\nmover paragraph\n\nanchor one\n\nanchor two\n";
+        let to = "# H\n\nanchor one\n\nanchor two\n\nmover paragraph\n";
+        let d = diff(from, to);
+        let kinds: Vec<DiffOpClass> = d.operations.iter().map(|op| op.kind).collect();
+        assert!(kinds.contains(&DiffOpClass::ParagraphRemoved), "{kinds:?}");
+        assert!(kinds.contains(&DiffOpClass::ParagraphAdded), "{kinds:?}");
+        assert!(
+            !kinds.contains(&DiffOpClass::ParagraphEdited),
+            "a move must not read as an edit: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn pairing_is_in_order_same_kind_and_similarity_gated() {
+        // Two removed + two added in one run, mixed kinds: the i-th
+        // removed pairs with the i-th added only when the kind matches
+        // and the text is similar.
+        let from = "anchor\n\nfirst paragraph body text here\n\n- a list item\n\ntail\n";
+        let to = "anchor\n\nfirst paragraph body text HERE\n\n- a really different item entirely\n\ntail\n";
+        let d = diff(from, to);
+        let kinds: Vec<DiffOpClass> = d.operations.iter().map(|op| op.kind).collect();
+        // Paragraph pairs (same kind, similar) → edit; list items are
+        // dissimilar → remove + add.
+        assert!(kinds.contains(&DiffOpClass::ParagraphEdited), "{kinds:?}");
+        assert!(kinds.contains(&DiffOpClass::ListItemRemoved), "{kinds:?}");
+        assert!(kinds.contains(&DiffOpClass::ListItemAdded), "{kinds:?}");
+
+        // Dissimilar same-kind blocks stay remove + add.
+        let d = diff(
+            "anchor\n\ncompletely original words\n\ntail\n",
+            "anchor\n\nnothing shared whatsoever!!\n\ntail\n",
+        );
+        let kinds: Vec<DiffOpClass> = d.operations.iter().map(|op| op.kind).collect();
+        assert!(kinds.contains(&DiffOpClass::ParagraphRemoved), "{kinds:?}");
+        assert!(kinds.contains(&DiffOpClass::ParagraphAdded), "{kinds:?}");
+    }
+
+    #[test]
+    fn empty_diff_and_line_ranges() {
+        let d = diff("same\n", "same\n");
+        assert!(d.operations.is_empty());
+        assert_eq!(d.audio_summary, "No changes.");
+
+        // Multi-line block: line..line_end covers it.
+        let d = diff("one\n", "one\n\n```rust\nfn x() {}\nfn y() {}\n```\n");
+        let op = &d.operations[0];
+        assert_eq!((op.line, op.line_end), (3, 6));
+    }
+
+    // --- Totality census -----------------------------------------------
+
+    struct SplitMix64(u64);
+    impl SplitMix64 {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    fn census_scale() -> u64 {
+        if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+            2_000
+        } else {
+            150
+        }
+    }
+
+    fn random_doc(rng: &mut SplitMix64) -> String {
+        const PIECES: &[&str] = &[
+            "# Heading\n\n",
+            "plain paragraph text\n\n",
+            "- [ ] a task\n",
+            "- bullet\n",
+            "```rust\ncode();\n```\n\n",
+            "$$\nx^2\n$$\n\n",
+            "| a |\n|---|\n| 1 |\n\n",
+            "> quoted\n\n",
+            "---\n\n",
+            "中文段落😀\r\n\r\n",
+            "",
+        ];
+        let mut out = String::new();
+        if rng.below(3) == 0 {
+            out.push_str("---\nstatus: draft\ncount: 3\n---\n");
+        }
+        for _ in 0..rng.below(30) {
+            out.push_str(PIECES[rng.below(PIECES.len())]);
+        }
+        out
+    }
+
+    /// Random document pairs (unicode, CRLF, frontmatter mix,
+    /// pathological shapes): never panics; every changed line (from a
+    /// plain line-diff reference) falls within some operation's
+    /// [line, line_end] range; descriptions non-empty; deterministic.
+    #[test]
+    fn census_structured_diff_total() {
+        for seed in 0..census_scale() {
+            let mut rng = SplitMix64(seed.wrapping_mul(0xABCD_EF01).wrapping_add(3));
+            let from = random_doc(&mut rng);
+            let to = if rng.below(5) == 0 {
+                from.clone() // identical pair
+            } else {
+                random_doc(&mut rng)
+            };
+
+            let d1 = diff(&from, &to);
+            let d2 = diff(&from, &to);
+            assert_eq!(d1, d2, "seed {seed}: nondeterministic output");
+            for op in &d1.operations {
+                assert!(
+                    !op.semantic_description.is_empty(),
+                    "seed {seed}: empty description"
+                );
+                assert!(op.line_end >= op.line, "seed {seed}: inverted range");
+            }
+            assert!(!d1.audio_summary.is_empty());
+
+            // Coverage: changed TO-side lines (excluding the
+            // frontmatter region, whose ops anchor at the key line)
+            // must fall inside some op range.
+            let from_lines: std::collections::HashSet<&str> = from.lines().collect();
+            let body_start_line = {
+                let parts = crate::split_note(&to);
+                let offset = to.len() - parts.body.len();
+                to[..offset].bytes().filter(|b| *b == b'\n').count() as u32
+            };
+            for (i, line) in to.lines().enumerate() {
+                let line_number = i as u32 + 1;
+                if line_number <= body_start_line {
+                    continue; // frontmatter — property ops cover it
+                }
+                if line.trim().is_empty() || from_lines.contains(line) {
+                    continue;
+                }
+                let covered = d1
+                    .operations
+                    .iter()
+                    .any(|op| op.line <= line_number && line_number <= op.line_end);
+                assert!(
+                    covered,
+                    "seed {seed}: changed line {line_number} ({line:?}) not covered by any \
+                     operation; ops: {:?}",
+                    d1.operations
+                        .iter()
+                        .map(|op| (op.line, op.line_end, op.kind))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_property_anchors_at_the_leaf_key_line() {
+        // Adversarial review: `parent.child` must anchor at `child:`,
+        // not collapse onto `parent:`.
+        let from = "---\nparent:\n  child: old\n---\nbody\n";
+        let to = "---\nparent:\n  child: new\n---\nbody\n";
+        let d = diff(from, to);
+        let op = d
+            .operations
+            .iter()
+            .find(|op| op.kind == DiffOpClass::PropertySet)
+            .expect("a property change");
+        assert_eq!(op.line, 3, "the leaf key's own line, not the parent's");
+    }
+
+    #[test]
+    fn duplicate_leaf_keys_anchor_to_the_right_branch() {
+        // Adversarial review round 2: two branches with the same leaf
+        // name — set + removed operations must anchor to the correct
+        // branch's own line, in both LF and CRLF sources.
+        let from =
+            "---\nfirst:\n  status: keep\nsecond:\n  status: old\nthird:\n  gone: yes\n---\nbody\n";
+        let to = "---\nfirst:\n  status: keep\nsecond:\n  status: new\nthird: {}\n---\nbody\n";
+        let d = diff(from, to);
+        let set = d
+            .operations
+            .iter()
+            .find(|op| {
+                op.kind == DiffOpClass::PropertySet
+                    && op.semantic_description.contains("second.status")
+            })
+            .expect("second.status set");
+        assert_eq!(set.line, 5, "anchors at second's status:, not first's");
+        let removed = d
+            .operations
+            .iter()
+            .find(|op| op.kind == DiffOpClass::PropertyRemoved)
+            .expect("third.gone removed");
+        assert_eq!(removed.line, 7, "removal anchors in the FROM source");
+
+        // CRLF variant.
+        let from_crlf = from.replace('\n', "\r\n");
+        let to_crlf = to.replace('\n', "\r\n");
+        let d = diff(&from_crlf, &to_crlf);
+        let set = d
+            .operations
+            .iter()
+            .find(|op| {
+                op.kind == DiffOpClass::PropertySet
+                    && op.semantic_description.contains("second.status")
+            })
+            .expect("second.status set (CRLF)");
+        assert_eq!(set.line, 5);
+    }
+
+    #[test]
+    fn crlf_sources_report_correct_lines() {
+        let from = "line one\r\n\r\nline two\r\n";
+        let to = "line one\r\n\r\nline two\r\n\r\nline three\r\n";
+        let d = diff(from, to);
+        assert_eq!(d.operations.len(), 1);
+        assert_eq!(d.operations[0].kind, DiffOpClass::ParagraphAdded);
+        assert_eq!(d.operations[0].line, 5);
+    }
+
+    #[test]
+    fn lcs_bailout_with_long_unmatched_blocks_stays_bounded() {
+        // Adversarial review: >4M-cell middles skip LCS anchoring, and
+        // the similarity work budget keeps per-pair Levenshtein from
+        // going CPU-pathological (billions of cells). 2,100 unmatched
+        // ~2KB paragraphs per side would cost ~8.8B cells unbudgeted.
+        let from: String = (0..2_100)
+            .map(|i| format!("left {i} {}\n\n", "a".repeat(2000)))
+            .collect();
+        let to: String = (0..2_100)
+            .map(|i| format!("right {i} {}\n\n", "b".repeat(2000)))
+            .collect();
+        let started = std::time::Instant::now();
+        let d = diff(&from, &to);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "bailout diff must stay work-bounded; took {:?}",
+            started.elapsed()
+        );
+        assert!(!d.operations.is_empty());
+        // Deterministic across runs even with the budget in play.
+        assert_eq!(d, diff(&from, &to));
+    }
+
+    #[test]
+    fn pathological_sizes_stay_bounded() {
+        // 2k blocks + a single 1 MB paragraph: total, no panic.
+        let big_para = "x".repeat(1024 * 1024);
+        let many: String = (0..2000).map(|i| format!("para {i}\n\n")).collect();
+        let from = format!("{many}{big_para}\n");
+        let to = format!("{many}{big_para}y\n");
+        let d = diff(&from, &to);
+        assert!(!d.operations.is_empty());
+    }
 }

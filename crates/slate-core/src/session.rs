@@ -691,6 +691,22 @@ pub struct VersionSummary {
     pub audio_fragment: String,
 }
 
+/// The changes-since-last-open verdict (O-4 #542).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangesSinceOpen {
+    /// No mark recorded yet (first open, or a cache rebuild wiped
+    /// `open_marks` — honest degradation, plan decision #6).
+    NoBaseline,
+    /// The mark's hash equals the current content hash.
+    Unchanged,
+    /// The structured diff from the mark's version to the log tail.
+    Diff(crate::structured_diff::StructuredDiff),
+    /// The mark's version is no longer reconstructible (compacted
+    /// past, or the log was rebound) — earlier changes exist but
+    /// can't be described.
+    BaselineCompacted,
+}
+
 /// One recoverable (or at least known) deleted file (O-3 #541).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeletedFileEntry {
@@ -2333,6 +2349,160 @@ impl VaultSession {
     ) -> Result<SaveReport, VaultError> {
         let content = self.version_content(path, version_hash)?;
         self.save_text(path, &content, expected_content_hash)
+    }
+
+    /// Structured diff between two (verified) versions of `path`
+    /// (O-4 #542). Both hashes resolve through
+    /// [`version_content`](Self::version_content), so wrong bytes are
+    /// never diffed.
+    pub fn diff_versions(
+        &self,
+        path: &str,
+        from_hash: &str,
+        to_hash: &str,
+    ) -> Result<crate::structured_diff::StructuredDiff, VaultError> {
+        let from = self.version_content(path, from_hash)?;
+        let to = self.version_content(path, to_hash)?;
+        Ok(crate::structured_diff::structured_diff(
+            path, from_hash, to_hash, &from, &to,
+        ))
+    }
+
+    /// What changed since the last recorded open (O-4 #542).
+    ///
+    /// **Ordering contract (pinned)**: hosts compute THIS first, then
+    /// call [`mark_opened`](Self::mark_opened) — marking first would
+    /// always report `Unchanged`.
+    pub fn changes_since_last_open(&self, path: &str) -> Result<ChangesSinceOpen, VaultError> {
+        // Snapshot consistency (adversarial review): every verdict is a
+        // pure function of ONE atomic observation — the (current_hash,
+        // mark) pair read under a single connection-mutex hold. In
+        // particular `Unchanged` involves no further reads, so it is
+        // exactly the truth at its observation instant: returning it
+        // is a valid linearization even if a save lands right after
+        // (any API racing a live writer has that property). The
+        // original defect was different — a verdict assembled from an
+        // index read at t1 and log reads at t2, coherent with neither.
+        // The bounded revalidation loop below adds FRESHNESS on top of
+        // that correctness: it retries when the pair moved during the
+        // (Diff-path) log work, and on persistent churn returns the
+        // verdict of the newest atomic observation.
+        let read_state = |session: &Self| -> Result<Option<(String, Option<String>)>, VaultError> {
+            let conn = session.conn.lock().expect("session connection mutex");
+            let row: Option<(i64, String)> = conn
+                .query_row(
+                    "SELECT id, content_hash FROM files WHERE path = ?1",
+                    rusqlite::params![path],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((file_id, current_hash)) = row else {
+                return Ok(None);
+            };
+            let mark_hash: Option<String> = conn
+                .query_row(
+                    "SELECT content_hash_at_open FROM open_marks WHERE file_id = ?1",
+                    rusqlite::params![file_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(Some((current_hash, mark_hash)))
+        };
+
+        let mut observed = read_state(self)?.ok_or_else(|| VaultError::InvalidPath {
+            path: path.to_string(),
+            reason: "no such file in the index".into(),
+        })?;
+        for _ in 0..3 {
+            let (current_hash, mark_hash) = observed.clone();
+            let verdict = self.changes_verdict(path, &current_hash, mark_hash.as_deref())?;
+            let reread = read_state(self)?.ok_or_else(|| VaultError::InvalidPath {
+                path: path.to_string(),
+                reason: "file disappeared from the index".into(),
+            })?;
+            if reread == observed {
+                return Ok(verdict);
+            }
+            observed = reread;
+        }
+        // Third strike under churn: compute once more from the final
+        // observation and return it.
+        let (current_hash, mark_hash) = observed;
+        self.changes_verdict(path, &current_hash, mark_hash.as_deref())
+    }
+
+    /// One verdict computation over an observed `(current_hash, mark)`
+    /// pair — a pure function of that single atomic observation
+    /// (adversarial review round 3): the Diff target is the OBSERVED
+    /// `current_hash`, never a separately read log tail, so no verdict
+    /// can mix index state from one instant with log state from
+    /// another. Both sides resolve through
+    /// [`version_content`](Self::version_content) (membership +
+    /// integrity verification); either side missing from the log —
+    /// compacted past the mark, a rebound log, or a save whose
+    /// best-effort append failed — degrades to `BaselineCompacted`
+    /// ("changes happened but this span can't be described").
+    fn changes_verdict(
+        &self,
+        path: &str,
+        current_hash: &str,
+        mark_hash: Option<&str>,
+    ) -> Result<ChangesSinceOpen, VaultError> {
+        let Some(mark_hash) = mark_hash else {
+            return Ok(ChangesSinceOpen::NoBaseline);
+        };
+        if mark_hash == current_hash {
+            return Ok(ChangesSinceOpen::Unchanged);
+        }
+        let from = match self.version_content(path, mark_hash) {
+            Ok(content) => content,
+            Err(VaultError::InvalidArgument { .. })
+            | Err(VaultError::HistoryUnavailable { .. }) => {
+                return Ok(ChangesSinceOpen::BaselineCompacted);
+            }
+            Err(other) => return Err(other),
+        };
+        let to = match self.version_content(path, current_hash) {
+            Ok(content) => content,
+            Err(VaultError::InvalidArgument { .. })
+            | Err(VaultError::HistoryUnavailable { .. }) => {
+                return Ok(ChangesSinceOpen::BaselineCompacted);
+            }
+            Err(other) => return Err(other),
+        };
+        Ok(ChangesSinceOpen::Diff(
+            crate::structured_diff::structured_diff(path, mark_hash, current_hash, &from, &to),
+        ))
+    }
+
+    /// Record "opened now, at this content" (O-4 #542) — upsert into
+    /// `open_marks`. Call AFTER
+    /// [`changes_since_last_open`](Self::changes_since_last_open) (the
+    /// pinned funnel order).
+    pub fn mark_opened(&self, path: &str) -> Result<(), VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let row: Option<(i64, String)> = conn
+            .query_row(
+                "SELECT id, content_hash FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((file_id, current_hash)) = row else {
+            return Err(VaultError::InvalidPath {
+                path: path.to_string(),
+                reason: "no such file in the index".into(),
+            });
+        };
+        conn.execute(
+            "INSERT INTO open_marks (file_id, last_opened_ms, content_hash_at_open)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(file_id) DO UPDATE SET
+                last_opened_ms = excluded.last_opened_ms,
+                content_hash_at_open = excluded.content_hash_at_open",
+            rusqlite::params![file_id, now_ms(), current_hash],
+        )?;
+        Ok(())
     }
 
     /// The recoverable deleted files (O-3 #541): the scan reconcile's
@@ -10022,6 +10192,9 @@ mod tests {
 
     #[path = "oplog_history.rs"]
     mod oplog_history;
+
+    #[path = "oplog_since_open.rs"]
+    mod oplog_since_open;
 
     #[path = "oplog_logging.rs"]
     mod oplog_logging;
