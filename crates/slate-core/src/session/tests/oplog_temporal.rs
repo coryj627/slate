@@ -93,6 +93,17 @@ fn filter_paths(session: &VaultSession, filter: &str) -> (Vec<String>, Option<St
     )
 }
 
+/// Poll until `pred` or ~5 s elapse (the worker is asynchronous).
+fn wait_for(mut pred: impl FnMut() -> bool) -> bool {
+    for _ in 0..200 {
+        if pred() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    false
+}
+
 const HOUR_MS: i64 = 3_600_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
 
@@ -1336,4 +1347,251 @@ fn operators_compose_with_n_corpus_filters() {
         Vec::<String>::new(),
         "folder conjunct filters it out"
     );
+}
+
+// --- Compaction ↔ oplog_events coherence (milestone red team) -----------
+
+#[test]
+fn compaction_fold_invalidates_and_regenerates_the_events_index() {
+    // Milestone red-team High: a successful fold discards history from
+    // the LOG; the derived index must not keep matching it. The worker
+    // couples every rewrite to a per-file regeneration (marker before
+    // the rewrite, regen tx after), so the retention picker, the
+    // recoverable log, and the temporal operators agree.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join(".slate");
+    let mut config = SessionConfig::new(cache_dir);
+    config.oplog_compaction_threshold_bytes = 2048;
+    let provider = std::sync::Arc::new(FsVaultProvider::new(tmp.path().to_path_buf()));
+    let session = VaultSession::open(provider, config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Warm saves whose deletions carry a distinctive word, then enough
+    // bulk to trip the 2 KiB trigger and force a positional fold.
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let r = session
+        .save_text("n.md", &format!("{body}FOLDWORD\n"), None)
+        .unwrap();
+    let mut hash = session
+        .save_text("n.md", &body, Some(&r.new_content_hash))
+        .unwrap()
+        .new_content_hash;
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("FOLDWORD", "1h")"#,
+    );
+    assert_eq!(paths, vec!["n.md"], "premise: the deletion is indexed");
+
+    let mut contents = body;
+    for i in 0..40 {
+        contents.push_str(&format!("bulk filler line number {i} with padding\n"));
+        hash = session
+            .save_text("n.md", &contents, Some(&hash))
+            .unwrap()
+            .new_content_hash;
+    }
+    // The fold rewrites the log (generation bump) and the worker
+    // regenerates the file's rows; the early FOLDWORD deletion is
+    // discarded from BOTH.
+    let folded = wait_for(|| {
+        let entries = session.read_oplog("n.md").unwrap();
+        !entries.iter().any(|e| {
+            crate::oplog_events::derive_events(e, None, None)
+                .iter()
+                .any(|_| false)
+        }) && {
+            let conn = session.conn.lock().unwrap();
+            let generation: u32 = {
+                let name: String = conn
+                    .query_row(
+                        "SELECT oplog_name FROM files WHERE path = 'n.md'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                drop(conn);
+                crate::oplog::read_oplog_with_header(&session.config.cache_dir, &name)
+                    .unwrap()
+                    .0
+                    .generation
+            };
+            generation > 0
+        }
+    });
+    assert!(folded, "the fold ran");
+
+    // The index no longer matches the folded-away deletion…
+    let coherent = wait_for(|| {
+        filter_paths(
+            &session,
+            r#"oplog.deleted_content_matches("FOLDWORD", "1h")"#,
+        )
+        .0
+        .is_empty()
+    });
+    assert!(coherent, "regeneration removed the discarded event's row");
+    // …while the retained recent history still matches.
+    let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
+    assert_eq!(paths, vec!["n.md"], "retained history still indexed");
+    // And no orphan marker remains once the worker settled.
+    let settled = wait_for(|| {
+        let conn = session.conn.lock().unwrap();
+        let stale: bool = conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM oplog_events_stale)", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        !stale
+    });
+    assert!(settled, "the worker's marker was cleared");
+}
+
+#[test]
+fn crash_between_rewrite_and_regen_heals_via_the_marker() {
+    // The compaction crash window: the rewrite renamed, the process
+    // died before the regen transaction. On-disk state = rewritten log
+    // + stale rows + the pre-rewrite marker; the next scan rebuilds
+    // from the (post-fold) logs.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let r = session
+        .save_text("n.md", &format!("{body}CRASHFOLD\n"), None)
+        .unwrap();
+    session
+        .save_text("n.md", &body, Some(&r.new_content_hash))
+        .unwrap();
+    assert_eq!(
+        filter_paths(
+            &session,
+            r#"oplog.deleted_content_matches("CRASHFOLD", "1h")"#
+        )
+        .0,
+        vec!["n.md"]
+    );
+
+    // Fold DIRECTLY (bypassing the worker — simulating its rewrite
+    // landing without the follow-up regen), then plant the marker the
+    // worker would have written pre-rewrite.
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let limits = crate::oplog_compaction::CompactionLimits {
+        threshold_bytes: 1,
+        threshold_entries: 1,
+        retention_days: u32::MAX,
+    };
+    let outcome = crate::oplog_compaction::compact_log(
+        &session.config.cache_dir,
+        &stem,
+        "n.md",
+        &limits,
+        now_ms(),
+    )
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        crate::oplog_compaction::CompactionOutcome::Rewritten { .. }
+    ));
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+            .unwrap();
+    }
+    // Stale rows still match — exactly the incoherence the marker exists
+    // to repair.
+    assert_eq!(
+        filter_paths(
+            &session,
+            r#"oplog.deleted_content_matches("CRASHFOLD", "1h")"#
+        )
+        .0,
+        vec!["n.md"],
+        "premise: rows outlived the fold"
+    );
+
+    // "Restart": the scan sees the marker and rebuilds from the folded log.
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        filter_paths(
+            &session,
+            r#"oplog.deleted_content_matches("CRASHFOLD", "1h")"#
+        )
+        .0,
+        Vec::<String>::new(),
+        "healed: the discarded event no longer matches"
+    );
+}
+
+#[test]
+fn compaction_racing_saves_never_loses_indexed_events() {
+    // Milestone re-review High: a save landing between the worker's
+    // log read and its DELETE+reinsert must not lose its event row.
+    // The regen holds the log's exclusive lock across read+tx, so a
+    // concurrent save's append (and thus its insert) orders strictly
+    // around it. This test interleaves saves with worker folds and
+    // pins the settle-state invariant: the indexed (ts, class) rows
+    // equal exactly what the FINAL log derives — nothing lost,
+    // nothing orphaned, no markers left.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join(".slate");
+    let mut config = SessionConfig::new(cache_dir);
+    config.oplog_compaction_threshold_bytes = 1024;
+    let provider = std::sync::Arc::new(FsVaultProvider::new(tmp.path().to_path_buf()));
+    let session = VaultSession::open(provider, config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let mut contents = body;
+    let mut hash = session
+        .save_text("n.md", &contents, None)
+        .unwrap()
+        .new_content_hash;
+    for i in 0..30 {
+        contents.push_str(&format!("racing save number {i} with some padding\n"));
+        hash = session
+            .save_text("n.md", &contents, Some(&hash))
+            .unwrap()
+            .new_content_hash;
+    }
+
+    // Settle: worker drained (no marker rows) AND the index matches
+    // the final log exactly on (ts_ms, event_class).
+    let settled = wait_for(|| {
+        let no_markers: bool = {
+            let conn = session.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM oplog_events_stale)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        if !no_markers {
+            return false;
+        }
+        let indexed: Vec<(i64, u8)> = events_for(&session, "n.md")
+            .iter()
+            .map(|e| (e.0, e.1))
+            .collect();
+        let entries = session.read_oplog("n.md").unwrap();
+        let derived: Vec<(i64, u8)> = crate::oplog_events::derive_events_for_log(&entries)
+            .iter()
+            .map(|e| (e.ts_ms, e.event_class))
+            .collect();
+        indexed == derived
+    });
+    assert!(
+        settled,
+        "index must converge to exactly the final log's derivation"
+    );
+    // The newest save is queryable — the row a lost-update would drop.
+    let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
+    assert_eq!(paths, vec!["n.md"]);
 }
