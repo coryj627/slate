@@ -103,7 +103,8 @@ pub use link_resolver::{InMemoryVaultIndex, ResolvedLink, VaultIndex, resolve_li
 pub use links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{
-    EditOp, OpKind, OpLogEntry, decode_edit_batch, encode_edit_batch, reconstruct_at_tail,
+    EditOp, OpAnnotation, OpKind, OpLogEntry, OplogHeader, decode_annotated, decode_edit_batch,
+    encode_annotated, encode_edit_batch, reconstruct_at_tail,
 };
 pub use properties_db::PropertyKeySummary;
 pub use reading::{ReadingBlock, ReadingBlockKind, reading_blocks_source};
@@ -126,10 +127,10 @@ pub use session::{
     CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
     CanvasWhereAmI, ColumnRole, CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus,
     DashboardSummary, DirListing, DirNodeSummary, ExportFormat, FileFilter, FileMetadata,
-    FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RenameAffected, RenameFailed,
-    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
-    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
-    SessionConfig, VaultSession,
+    FileSummary, NoteLoadBundle, NotePartsBundle, Page, Paging, RemnantLog, RenameAffected,
+    RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
+    SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener,
+    ScanReport, SessionConfig, VaultSession,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,

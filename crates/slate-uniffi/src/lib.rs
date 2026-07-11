@@ -2158,22 +2158,26 @@ impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
     }
 }
 
-/// Kind of operation recorded in an op-log entry (#378).
+/// Kind of operation recorded in an op-log entry (#378, #372, O-1 #539).
 ///
 /// `WholeFileReplace`'s `payload_bytes` is the full file; `EditBatch`'s
 /// is the encoded fine-grained Insert/Delete/Replace op-vector for one
-/// save. The host currently switches on the kind for counting / coarse
-/// display; **decoding an `EditBatch` payload into typed ops is
-/// Rust-internal** until the per-op accessors land (a later step), so
-/// hosts should treat an `EditBatch` payload as opaque for now.
+/// save; `Annotated` wraps one of those plus the save's semantic
+/// annotations. Hosts decode `EditBatch` payloads with
+/// [`decode_edit_batch_ops`] and `Annotated` payloads with
+/// [`decode_annotated_payload`] (O-1's per-op accessors). `CanvasApply`
+/// payloads (the JSON `{name, action, inverse}` record) remain opaque.
 #[derive(Debug, uniffi::Enum)]
 pub enum OpKind {
     WholeFileReplace,
     EditBatch,
     /// One committed canvas action (Milestone T #372): payload is the
-    /// JSON `{name, action, inverse}` record. Opaque to hosts like
-    /// `EditBatch`.
+    /// JSON `{name, action, inverse}` record. Opaque to hosts.
     CanvasApply,
+    /// An annotated wrapper around a single inner snapshot/batch entry
+    /// (O-1 #539) — one atomic entry per save, intent attached. Decode
+    /// with [`decode_annotated_payload`].
+    Annotated,
 }
 
 impl From<core::OpKind> for OpKind {
@@ -2182,8 +2186,109 @@ impl From<core::OpKind> for OpKind {
             core::OpKind::WholeFileReplace => OpKind::WholeFileReplace,
             core::OpKind::EditBatch => OpKind::EditBatch,
             core::OpKind::CanvasApply => OpKind::CanvasApply,
+            core::OpKind::Annotated => OpKind::Annotated,
         }
     }
+}
+
+/// One fine-grained edit within an `EditBatch` payload. Mirrors
+/// `slate_core::EditOp`; offsets are UTF-8 **byte** offsets in the
+/// OLD-content space (usize → u64 for the FFI).
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum EditOp {
+    Insert { pos: u64, text: String },
+    Delete { start: u64, end: u64 },
+    Replace { start: u64, end: u64, text: String },
+}
+
+impl From<core::EditOp> for EditOp {
+    fn from(op: core::EditOp) -> Self {
+        match op {
+            core::EditOp::Insert { pos, text } => EditOp::Insert {
+                pos: pos as u64,
+                text,
+            },
+            core::EditOp::Delete { start, end } => EditOp::Delete {
+                start: start as u64,
+                end: end as u64,
+            },
+            core::EditOp::Replace { start, end, text } => EditOp::Replace {
+                start: start as u64,
+                end: end as u64,
+                text,
+            },
+        }
+    }
+}
+
+/// Semantic intent recorded alongside a save (O-1 #539). Mirrors
+/// `slate_core::OpAnnotation`; `new_status` is a one-scalar String
+/// (uniffi has no char primitive — the `TaskItem::status` precedent).
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum OpAnnotation {
+    SetProperty { key: String, value_json: String },
+    RemoveProperty { key: String },
+    ToggleTask { ordinal: u32, new_status: String },
+    FrontmatterReplace,
+    PathChanged { from: String, to: String },
+}
+
+impl From<core::OpAnnotation> for OpAnnotation {
+    fn from(a: core::OpAnnotation) -> Self {
+        match a {
+            core::OpAnnotation::SetProperty { key, value_json } => {
+                OpAnnotation::SetProperty { key, value_json }
+            }
+            core::OpAnnotation::RemoveProperty { key } => OpAnnotation::RemoveProperty { key },
+            core::OpAnnotation::ToggleTask {
+                ordinal,
+                new_status,
+            } => OpAnnotation::ToggleTask {
+                ordinal,
+                new_status: new_status.to_string(),
+            },
+            core::OpAnnotation::FrontmatterReplace => OpAnnotation::FrontmatterReplace,
+            core::OpAnnotation::PathChanged { from, to } => OpAnnotation::PathChanged { from, to },
+        }
+    }
+}
+
+/// A decoded `Annotated` payload: the wrapped inner entry plus its
+/// annotations. `inner_payload` is interpreted per `inner_kind`
+/// exactly like a bare entry's payload (a wrapped `EditBatch` feeds
+/// [`decode_edit_batch_ops`]).
+#[derive(Debug, uniffi::Record)]
+pub struct AnnotatedPayload {
+    pub inner_kind: OpKind,
+    pub inner_payload: Vec<u8>,
+    pub annotations: Vec<OpAnnotation>,
+}
+
+/// Decode an `EditBatch` payload into its typed ops (O-1 #539's
+/// per-op accessor — `EditBatch` payloads are no longer host-opaque).
+/// A malformed/truncated payload is `InvalidArgument`, never a panic.
+#[uniffi::export]
+pub fn decode_edit_batch_ops(payload: Vec<u8>) -> Result<Vec<EditOp>, VaultError> {
+    core::decode_edit_batch(&payload)
+        .map(|ops| ops.into_iter().map(EditOp::from).collect())
+        .map_err(|message| VaultError::InvalidArgument { message })
+}
+
+/// Decode an `Annotated` payload into its inner entry + annotations
+/// (O-1 #539). A malformed/truncated payload is `InvalidArgument`,
+/// never a panic; unknown annotation tags were already skipped by the
+/// decoder (forward-extensible vocabulary).
+#[uniffi::export]
+pub fn decode_annotated_payload(payload: Vec<u8>) -> Result<AnnotatedPayload, VaultError> {
+    core::decode_annotated(&payload)
+        .map(
+            |(inner_kind, inner_payload, annotations)| AnnotatedPayload {
+                inner_kind: inner_kind.into(),
+                inner_payload,
+                annotations: annotations.into_iter().map(OpAnnotation::from).collect(),
+            },
+        )
+        .map_err(|message| VaultError::InvalidArgument { message })
 }
 
 /// One recorded op-log entry. Mirrors `slate_core::OpLogEntry`.

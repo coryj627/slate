@@ -96,7 +96,11 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
         rusqlite::params![r#"["2026-01-02"]"#],
     )
     .unwrap();
-    conn.execute("DELETE FROM schema_version WHERE version = 26", [])
+    // Unwind 027 too (O-1): its ALTER isn't re-runnable, so the
+    // pre-026 fixture must drop both the schema rows and the column.
+    conn.execute("DELETE FROM schema_version WHERE version >= 26", [])
+        .unwrap();
+    conn.execute("ALTER TABLE files DROP COLUMN oplog_name", [])
         .unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {

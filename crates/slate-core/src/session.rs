@@ -577,6 +577,31 @@ pub struct VaultSession {
     /// Coarse session-local generation for Bases query caches. Bumped after
     /// index-changing writes so cache lookups stay O(1) at large vault sizes.
     bases_generation: AtomicU64,
+    /// Monotonic salt for new op-log name stems (O-1 #539): stems derive
+    /// from `blake3(path ‖ now_ms ‖ salt)`, so even two allocations for
+    /// the same path in the same millisecond differ.
+    next_oplog_stem_salt: AtomicU64,
+    /// Deleted-file remnant logs discovered by the last scan reconcile
+    /// (O-1 #539). O-3's deleted-file recovery reads this; O-2's
+    /// retention sweep ages entries out on disk.
+    remnant_logs: Mutex<Vec<RemnantLog>>,
+}
+
+/// A deleted file's surviving op log, discovered by the scan reconcile
+/// (O-1 #539): an on-disk log bound to no live `files` row, whose
+/// effective vault path is known from its header path record or its
+/// last `PathChanged` annotation. This is the reconcile's output
+/// interface to O-3's `list_deleted_files` / `recover_deleted_file`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemnantLog {
+    /// Log name stem (`<stem>.oplog` under `<cache_dir>/oplog/`).
+    pub stem: String,
+    /// The file's vault-relative path as last recorded in the log.
+    pub effective_path: String,
+    /// `content_hash_after` of the log's final entry.
+    pub tail_hash: String,
+    /// Timestamp of the log's final entry.
+    pub tail_timestamp_ms: i64,
 }
 
 /// Per-open-canvas state: the tolerant parse (the write surface
@@ -655,6 +680,8 @@ impl VaultSession {
             conn: Mutex::new(conn),
             config,
             oplog_state: Mutex::new(std::collections::HashMap::new()),
+            next_oplog_stem_salt: AtomicU64::new(0),
+            remnant_logs: Mutex::new(Vec::new()),
             math_prefs,
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
@@ -789,7 +816,204 @@ impl VaultSession {
             listener.as_deref(),
         )?;
         self.bump_bases_generation();
+        // Re-attach op logs to live files and surface deleted-file
+        // remnants (O-1 #539). Best-effort: a reconcile failure
+        // degrades history features, never the scan itself.
+        self.reconcile_oplogs(&mut conn);
         Ok(report)
+    }
+
+    /// Scan-time op-log reconcile (O-1 #539): bind every on-disk log to
+    /// its live file, salvage what a cache rebuild orphaned, and
+    /// collect deleted-file remnants for O-3.
+    ///
+    /// Steps (o_spec §O-1, adjusted for the migration-027 stamping —
+    /// legacy `<id>.oplog` bindings were written into `files.oplog_name`
+    /// at upgrade time, so no id-based adoption ever happens here):
+    ///
+    /// 1. Fast path: every `*.oplog` stem matching some live
+    ///    `files.oplog_name` is bound. With an intact cache this covers
+    ///    everything and the reconcile does **no** log IO.
+    /// 2. Remaining unbound logs are forward-walked once each: header
+    ///    path, last `PathChanged`, tail hash/timestamp, and the
+    ///    `hash_after` set. Effective path = last `PathChanged.to`,
+    ///    else the header's `created_path`, else unknown (bare v1 log
+    ///    after a rebuild).
+    /// 3. Adoption: effective path names a live file with
+    ///    `oplog_name IS NULL` → claim; no path match → content
+    ///    salvage (exactly ONE unbound live file whose current
+    ///    `content_hash` appears in the log's `hash_after` set → claim;
+    ///    zero or several → no adoption).
+    /// 4. Unbound + effective path known + that path is not a live
+    ///    file → **deleted-file remnant** ([`RemnantLog`]).
+    /// 5. Anything conflicted (two logs claiming one file, a claimed
+    ///    path already bound) or pathless → quarantine: left on disk,
+    ///    warned about, invisible to features. Never guess.
+    fn reconcile_oplogs(&self, conn: &mut Connection) {
+        match self.reconcile_oplogs_inner(conn) {
+            Ok(remnants) => {
+                *self.remnant_logs.lock().expect("remnant logs mutex") = remnants;
+            }
+            Err(e) => {
+                // Leave the previous remnant set in place — stale data
+                // beats a silently emptied Deleted list.
+                log::warn!("oplog reconcile failed: {e:#?}");
+            }
+        }
+    }
+
+    fn reconcile_oplogs_inner(&self, conn: &mut Connection) -> Result<Vec<RemnantLog>, VaultError> {
+        let dir = crate::oplog::oplog_dir(&self.config.cache_dir);
+        let read_dir = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(VaultError::Io(e)),
+        };
+        let mut stems: Vec<String> = Vec::new();
+        for entry in read_dir {
+            let Ok(entry) = entry else { continue };
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if let Some(stem) = name.strip_suffix(".oplog") {
+                stems.push(stem.to_string());
+            }
+        }
+        if stems.is_empty() {
+            return Ok(Vec::new());
+        }
+        stems.sort(); // deterministic adoption/quarantine decisions
+
+        // One-writer discipline from the start (#787): binding updates
+        // below write `files.oplog_name`.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        struct LiveFile {
+            id: i64,
+            path: String,
+            content_hash: String,
+            oplog_name: Option<String>,
+        }
+        let live: Vec<LiveFile> = tx
+            .prepare("SELECT id, path, content_hash, oplog_name FROM files")?
+            .query_map([], |row| {
+                Ok(LiveFile {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    content_hash: row.get(2)?,
+                    oplog_name: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let bound: std::collections::HashSet<&str> = live
+            .iter()
+            .filter_map(|f| f.oplog_name.as_deref())
+            .collect();
+        let by_path: std::collections::HashMap<&str, &LiveFile> =
+            live.iter().map(|f| (f.path.as_str(), f)).collect();
+
+        // (stem, file_id) adoption claims, resolved after the walk so
+        // conflicts are visible before any binding is written.
+        let mut claims: Vec<(String, i64)> = Vec::new();
+        // Remnant candidates keyed by stem; pruned if their claim won.
+        let mut remnants: Vec<RemnantLog> = Vec::new();
+
+        for stem in &stems {
+            if bound.contains(stem.as_str()) {
+                continue; // fast path — already bound, no log IO
+            }
+            let (header, entries) =
+                match crate::oplog::read_oplog_with_header(&self.config.cache_dir, stem) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        log::warn!("oplog reconcile: unreadable log {stem}: {}", e.kind());
+                        log::debug!("oplog reconcile: unreadable log {stem}: {e}");
+                        continue; // quarantine
+                    }
+                };
+
+            // Effective path: last PathChanged wins over the creation
+            // record. Undecodable annotated payloads are skipped —
+            // best-effort metadata, never a walk-stopper here.
+            let mut effective_path: Option<String> = header.created_path.clone();
+            for entry in &entries {
+                if entry.op_kind == crate::oplog::OpKind::Annotated
+                    && let Ok((_, _, anns)) = crate::oplog::decode_annotated(&entry.payload_bytes)
+                {
+                    for ann in anns {
+                        if let crate::oplog::OpAnnotation::PathChanged { to, .. } = ann {
+                            effective_path = Some(to);
+                        }
+                    }
+                }
+            }
+
+            // Adoption by path.
+            if let Some(eff) = effective_path.as_deref()
+                && let Some(file) = by_path.get(eff)
+            {
+                if file.oplog_name.is_none() {
+                    claims.push((stem.clone(), file.id));
+                } else {
+                    // A live file at this path already has its own log
+                    // — e.g. a hand-copied log file. Never guess.
+                    log::warn!(
+                        "oplog reconcile: log {stem} claims an already-bound file; quarantined"
+                    );
+                    log::debug!("oplog reconcile: {stem} claimed path {eff:?}");
+                }
+                continue;
+            }
+
+            // Content salvage (cache-rebuild case): exactly one unbound
+            // live file whose current hash this log once produced.
+            let hash_set: std::collections::HashSet<&str> = entries
+                .iter()
+                .map(|e| e.content_hash_after.as_str())
+                .collect();
+            let mut matches = live
+                .iter()
+                .filter(|f| f.oplog_name.is_none() && hash_set.contains(f.content_hash.as_str()));
+            if let (Some(only), None) = (matches.next(), matches.next()) {
+                claims.push((stem.clone(), only.id));
+                continue;
+            }
+
+            // Remnant (deleted file) or quarantine.
+            match (effective_path, entries.last()) {
+                (Some(eff), Some(tail)) => remnants.push(RemnantLog {
+                    stem: stem.clone(),
+                    effective_path: eff,
+                    tail_hash: tail.content_hash_after.clone(),
+                    tail_timestamp_ms: tail.timestamp_ms,
+                }),
+                _ => {
+                    log::warn!(
+                        "oplog reconcile: log {stem} has no usable path record; quarantined"
+                    );
+                }
+            }
+        }
+
+        // Resolve claims: a file claimed by more than one log gets
+        // none of them (quarantine both — never guess).
+        let mut claims_per_file: std::collections::HashMap<i64, u32> =
+            std::collections::HashMap::new();
+        for (_, file_id) in &claims {
+            *claims_per_file.entry(*file_id).or_insert(0) += 1;
+        }
+        for (stem, file_id) in &claims {
+            if claims_per_file[file_id] > 1 {
+                log::warn!("oplog reconcile: log {stem} conflicts with another claim; quarantined");
+                continue;
+            }
+            tx.execute(
+                "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
+                rusqlite::params![stem, file_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(remnants)
     }
 
     /// Fetch full per-file metadata, including parsed headings.
@@ -929,7 +1153,7 @@ impl VaultSession {
         // process-wide critical section, so two concurrent saves to
         // the same file_id can never tear a frame.
         let mut conn = self.conn.lock().expect("session connection mutex");
-        self.save_text_locked(&mut conn, path, contents, expected_content_hash)
+        self.save_text_locked(&mut conn, path, contents, expected_content_hash, &[])
     }
 
     /// Body of `save_text` minus the path validation, size check, and
@@ -940,12 +1164,20 @@ impl VaultSession {
     /// read+parse+rewrite+save sequence — passing a stale-pre-read
     /// payload to a non-locked `save_text` was the lost-update race
     /// fixed in #135.
+    ///
+    /// `annotations` is the save's semantic intent (O-1 #539): callers
+    /// that know what the edit *means* — `set_property`,
+    /// `delete_property`, `set_frontmatter_source`,
+    /// `toggle_task_status` — pass it here and the op-log entry wraps
+    /// it; plain text saves pass `&[]`. Kept off the public `save_text`
+    /// signature: hosts never supply intent directly.
     fn save_text_locked(
         &self,
         conn: &mut Connection,
         path: &str,
         contents: &str,
         expected_content_hash: Option<&str>,
+        annotations: &[crate::oplog::OpAnnotation],
     ) -> Result<SaveReport, VaultError> {
         // Cross-process critical section (#641 adversarial review).
         //
@@ -1104,27 +1336,132 @@ impl VaultSession {
                 &DbTitleSource { conn: &tx },
             )?;
         }
+        // Resolve (allocating on first save) the file's op-log name
+        // inside the index transaction, so the binding column commits
+        // atomically with the save it serves (O-1 #539). Best-effort:
+        // `None` skips the append below exactly like an append failure.
+        let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
         tx.commit()?;
         self.bump_bases_generation();
 
         // Op-log append: best-effort (#378). A logging-disk hiccup must
         // not throw away the user's just-saved text, so all of the
         // diff/encode/append work below swallows its errors.
-        self.append_save_to_oplog(
-            file_id,
-            path,
-            &hash_before,
-            &new_hash,
-            contents,
-            old_contents.as_deref(),
-            now,
-        );
+        if let Some(log_name) = oplog_name.as_deref() {
+            self.append_save_to_oplog(
+                file_id,
+                log_name,
+                path,
+                &hash_before,
+                &new_hash,
+                contents,
+                old_contents.as_deref(),
+                now,
+                annotations,
+            );
+        }
 
         Ok(SaveReport {
             new_content_hash: new_hash,
             new_size_bytes: new_stat.size_bytes,
             new_mtime_ms: new_stat.mtime_ms,
         })
+    }
+
+    /// Resolve — allocating on first use — the op-log name stem bound
+    /// to `file_id` through `files.oplog_name` (O-1 #539). The column
+    /// is the ONLY binding: log paths are never derived from
+    /// `files.id`, whose rowids SQLite recycles after a delete (the
+    /// hazard documented above [`OplogAppendState`] — a recycled id
+    /// must never inherit a dead note's history). Legacy `<id>.oplog`
+    /// bindings were stamped into the column once, by migration 027,
+    /// at upgrade time — the one moment ids are provably trustworthy
+    /// (a rebuilt cache has no rows to stamp).
+    ///
+    /// Allocation derives `<32 lowercase hex>` stems from
+    /// `blake3(path ‖ now_ms ‖ salt)`, re-deriving with a bumped salt
+    /// until [`crate::oplog::try_create_log`] wins the creation race
+    /// (serialized by the oplog directory lock). Stems are unique
+    /// forever and mean nothing.
+    ///
+    /// Best-effort like every op-log write: `None` means "no log for
+    /// this save" and the caller skips the append. The warn carries
+    /// the file id only; the path rides debug (lib.rs privacy rule).
+    fn ensure_oplog_name(&self, conn: &Connection, file_id: i64, path: &str) -> Option<String> {
+        match conn
+            .query_row(
+                "SELECT oplog_name FROM files WHERE id = ?1",
+                rusqlite::params![file_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+        {
+            Ok(Some(Some(name))) => return Some(name),
+            Ok(Some(None)) => {} // row exists, no binding yet — allocate below
+            Ok(None) => {
+                log::warn!("oplog name lookup found no row for file_id={file_id}");
+                log::debug!("oplog name lookup miss was for path {path:?}");
+                return None;
+            }
+            Err(e) => {
+                log::warn!("oplog name lookup failed for file_id={file_id}: db error");
+                log::debug!("oplog name lookup failure for path {path:?}: {e}");
+                return None;
+            }
+        }
+
+        // Collisions are astronomically unlikely (128-bit stems salted
+        // by time and counter), so a handful of retries is already
+        // paranoid; a persistent failure is an IO problem, not a
+        // collision storm.
+        for _ in 0..8 {
+            let salt = self
+                .next_oplog_stem_salt
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut stem_input = Vec::with_capacity(path.len() + 16);
+            stem_input.extend_from_slice(path.as_bytes());
+            stem_input.extend_from_slice(&now_ms().to_le_bytes());
+            stem_input.extend_from_slice(&salt.to_le_bytes());
+            // First 16 bytes of the blake3 = first 32 lowercase hex chars.
+            let stem = crate::vault::content_hash(&stem_input)[..32].to_string();
+            match crate::oplog::try_create_log(&self.config.cache_dir, &stem, path) {
+                Ok(true) => {
+                    if let Err(e) = conn.execute(
+                        "UPDATE files SET oplog_name = ?1 WHERE id = ?2",
+                        rusqlite::params![stem, file_id],
+                    ) {
+                        // The created log file stays behind as an
+                        // orphan; the scan reconcile re-binds it by
+                        // its header path.
+                        log::warn!("oplog name bind failed for file_id={file_id}: db error");
+                        log::debug!("oplog name bind failure for path {path:?}: {e}");
+                        return None;
+                    }
+                    return Some(stem);
+                }
+                Ok(false) => continue,
+                Err(e) => {
+                    log::warn!(
+                        "oplog name allocation failed for file_id={file_id}: {}",
+                        e.kind()
+                    );
+                    log::debug!("oplog name allocation failure for path {path:?}: {e}");
+                    return None;
+                }
+            }
+        }
+        log::warn!("oplog name allocation exhausted retries for file_id={file_id}");
+        log::debug!("oplog name allocation retries exhausted for path {path:?}");
+        None
+    }
+
+    /// The deleted-file remnant logs from the most recent scan
+    /// reconcile (O-1 #539). Refreshed by every `scan_initial`.
+    pub fn remnant_logs(&self) -> Vec<RemnantLog> {
+        self.remnant_logs
+            .lock()
+            .expect("remnant logs mutex")
+            .clone()
     }
 
     /// Append this save to the file's op log, choosing between a
@@ -1138,7 +1475,15 @@ impl VaultSession {
     /// as the file (near-total rewrite / a giant single line — keeps the
     /// entry well under `MAX_PLAUSIBLE_BODY_LEN`), or the bytes since the
     /// last snapshot would exceed the cadence threshold. An identical
-    /// save (empty diff) writes nothing. Otherwise: one `EditBatch`.
+    /// save (empty diff) writes nothing — **even when it carries
+    /// annotations** (a no-op semantic edit changed no bytes; there is
+    /// no version to describe). Otherwise: one `EditBatch`.
+    ///
+    /// Non-empty `annotations` wrap whatever inner kind the decision
+    /// logic picked in **one** kind-4 `Annotated` entry (O-1 #539) — a
+    /// cadence-forced snapshot that also set a property is one entry
+    /// wrapping a snapshot payload; intent preserved, atomicity
+    /// preserved, never an entry pair.
     ///
     /// Best-effort throughout: any error logs a warning and returns,
     /// leaving the (already durable) file save untouched.
@@ -1146,27 +1491,22 @@ impl VaultSession {
     fn append_save_to_oplog(
         &self,
         file_id: i64,
+        log_name: &str,
         path: &str,
         hash_before: &str,
         new_hash: &str,
         new_contents: &str,
         old_contents: Option<&str>,
         now: i64,
+        annotations: &[crate::oplog::OpAnnotation],
     ) {
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
         let cached = state.get(&file_id).cloned();
 
-        let snapshot = || crate::oplog::OpLogEntry {
-            timestamp_ms: now,
-            user_actor_id: self.config.user_actor_id.clone(),
-            op_kind: crate::oplog::OpKind::WholeFileReplace,
-            content_hash_before: hash_before.to_string(),
-            content_hash_after: new_hash.to_string(),
-            payload_bytes: new_contents.as_bytes().to_vec(),
-        };
-
-        // (entry, bytes_since_snapshot_after). `None` ⇒ write nothing.
-        let decision: Option<(crate::oplog::OpLogEntry, u64)> = match (old_contents, &cached) {
+        // (inner_kind, inner_payload, resets_snapshot_cadence).
+        // `None` ⇒ write nothing.
+        let decision: Option<(crate::oplog::OpKind, Vec<u8>, bool)> = match (old_contents, &cached)
+        {
             (Some(old), Some(c)) if c.last_hash_after == hash_before => {
                 let ops = crate::diff::diff_to_ops(old, new_contents);
                 if ops.is_empty() {
@@ -1188,29 +1528,55 @@ impl VaultSession {
                     if payload.len() as u64 >= new_contents.len() as u64
                         || projected > self.config.oplog_compaction_threshold_bytes as u64
                     {
-                        Some((snapshot(), 0))
+                        (
+                            crate::oplog::OpKind::WholeFileReplace,
+                            new_contents.as_bytes().to_vec(),
+                            true,
+                        )
+                            .into()
                     } else {
-                        let entry = crate::oplog::OpLogEntry {
-                            timestamp_ms: now,
-                            user_actor_id: self.config.user_actor_id.clone(),
-                            op_kind: crate::oplog::OpKind::EditBatch,
-                            content_hash_before: hash_before.to_string(),
-                            content_hash_after: new_hash.to_string(),
-                            payload_bytes: payload,
-                        };
-                        Some((entry, projected))
+                        Some((crate::oplog::OpKind::EditBatch, payload, false))
                     }
                 }
             }
             // Cold cache, misaligned, None path, or non-UTF-8 old → snapshot.
-            _ => Some((snapshot(), 0)),
+            _ => Some((
+                crate::oplog::OpKind::WholeFileReplace,
+                new_contents.as_bytes().to_vec(),
+                true,
+            )),
         };
 
-        let Some((entry, bytes_since_snapshot)) = decision else {
+        let Some((inner_kind, inner_payload, resets_cadence)) = decision else {
             return; // nothing to write (identical save)
         };
 
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
+        // Wrap intent (O-1 #539): one atomic entry either way.
+        let (op_kind, payload_bytes) = if annotations.is_empty() {
+            (inner_kind, inner_payload)
+        } else {
+            (
+                crate::oplog::OpKind::Annotated,
+                crate::oplog::encode_annotated(inner_kind, &inner_payload, annotations),
+            )
+        };
+        let bytes_since_snapshot = if resets_cadence {
+            0
+        } else {
+            cached.as_ref().map_or(0, |c| c.bytes_since_snapshot)
+                + payload_bytes.len() as u64
+                + OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE
+        };
+        let entry = crate::oplog::OpLogEntry {
+            timestamp_ms: now,
+            user_actor_id: self.config.user_actor_id.clone(),
+            op_kind,
+            content_hash_before: hash_before.to_string(),
+            content_hash_after: new_hash.to_string(),
+            payload_bytes,
+        };
+
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, log_name, path, &entry) {
             // Non-fatal: a missing op-log entry only degrades undo to a
             // per-file conflict report, never corruption. Route through the
             // facade (#507). warn carries only the file id and the error
@@ -1239,18 +1605,20 @@ impl VaultSession {
     /// vector is the well-formed prefix.
     pub fn read_oplog(&self, path: &str) -> Result<Vec<crate::oplog::OpLogEntry>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
-        let file_id: Option<i64> = conn
+        let log_name: Option<Option<String>> = conn
             .query_row(
-                "SELECT id FROM files WHERE path = ?1",
+                "SELECT oplog_name FROM files WHERE path = ?1",
                 rusqlite::params![path],
                 |row| row.get(0),
             )
             .optional()?;
         drop(conn);
-        let Some(file_id) = file_id else {
+        let Some(Some(log_name)) = log_name else {
+            // Unindexed path, or an indexed file that has never been
+            // saved through Slate (no binding, no log).
             return Ok(Vec::new());
         };
-        crate::oplog::read_oplog(&self.config.cache_dir, file_id).map_err(VaultError::Io)
+        crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)
     }
 
     /// Page through the indexed files.
@@ -1766,7 +2134,16 @@ impl VaultSession {
             });
         }
 
-        self.save_text_locked(&mut conn, path, &new_contents, expected_content_hash)
+        self.save_text_locked(
+            &mut conn,
+            path,
+            &new_contents,
+            expected_content_hash,
+            &[crate::oplog::OpAnnotation::ToggleTask {
+                ordinal,
+                new_status: new_status_char,
+            }],
+        )
     }
 
     /// Insert or replace a single YAML frontmatter property and flush
@@ -1809,7 +2186,17 @@ impl VaultSession {
             });
         }
 
-        self.save_text_locked(&mut conn, path, &new_contents, expected_content_hash)
+        let value_json = crate::properties_db::property_value_to_json(&value).to_string();
+        self.save_text_locked(
+            &mut conn,
+            path,
+            &new_contents,
+            expected_content_hash,
+            &[crate::oplog::OpAnnotation::SetProperty {
+                key: key.to_string(),
+                value_json,
+            }],
+        )
     }
 
     /// Remove a single YAML frontmatter property.
@@ -1884,7 +2271,15 @@ impl VaultSession {
             });
         }
 
-        self.save_text_locked(&mut conn, path, &new_contents, expected_content_hash)
+        self.save_text_locked(
+            &mut conn,
+            path,
+            &new_contents,
+            expected_content_hash,
+            &[crate::oplog::OpAnnotation::RemoveProperty {
+                key: key.to_string(),
+            }],
+        )
     }
 
     /// Read a note split into `{ fm_source, body }` plus the whole-file
@@ -2011,7 +2406,13 @@ impl VaultSession {
             });
         }
 
-        self.save_text_locked(&mut conn, path, &composed, expected_content_hash.as_deref())
+        self.save_text_locked(
+            &mut conn,
+            path,
+            &composed,
+            expected_content_hash.as_deref(),
+            &[crate::oplog::OpAnnotation::FrontmatterReplace],
+        )
     }
 
     /// Rename a YAML frontmatter property across every file in the
@@ -4350,6 +4751,19 @@ impl VaultSession {
     pub fn delete_file(&self, path: &str) -> Result<(), VaultError> {
         validate_save_path(path)?;
         let conn = self.conn.lock().expect("session connection mutex");
+        // Capture the op-log binding before the row goes: the journal
+        // row is then the durable stem↔path association for a deleted
+        // file (O-1 #539 — the `.oplog` itself is deliberately left in
+        // place; O-3's recovery joins remnant logs with these rows,
+        // O-2's retention sweep ages them out).
+        let oplog_name: Option<String> = conn
+            .query_row(
+                "SELECT oplog_name FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
         self.provider.delete(path)?;
         self.with_structural_tx(conn, |tx| {
             tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
@@ -4359,6 +4773,7 @@ impl VaultSession {
                 &crate::structural::StructuralOpPayload {
                     from: path.to_string(),
                     to: path.to_string(),
+                    oplog_name,
                     ..Default::default()
                 },
             )
@@ -4718,6 +5133,17 @@ impl VaultSession {
             return Err(e);
         }
 
+        // Re-path each moved file's history (O-1 #539): a pure
+        // `PathChanged` marker per file, appended before any rewrite
+        // entries so a log tells its story in order — "renamed, then
+        // its links were rewritten". The oplog_name binding column is
+        // untouched by moves (stems are path-independent); the marker
+        // exists so a log orphaned by a LATER cache rebuild or delete
+        // still knows its final vault path.
+        for (old, new) in &moved {
+            self.append_path_changed_marker(&conn, old, new);
+        }
+
         // Undo inverts the move and restores the FORWARD rewrites from the
         // journal — it must never plan NEW rewrites (the reverse pass would
         // both break byte-identity and invalidate the hash-guarded
@@ -4738,6 +5164,7 @@ impl VaultSession {
                     to: to.to_string(),
                     moved: moved.clone(),
                     rewrites: rewritten.clone(),
+                    oplog_name: None,
                 },
             )?;
             tx.commit()?;
@@ -4750,6 +5177,89 @@ impl VaultSession {
             rewritten,
             failed,
         })
+    }
+
+    /// Append a pure `PathChanged` marker to a just-moved file's log
+    /// (O-1 #539): kind-4 wrapping an **empty batch**, both hashes set
+    /// to the log's current **tail hash**.
+    ///
+    /// Marker hash rule (normative — protects version identity): the
+    /// marker's `hash_before == hash_after` MUST be the last entry's
+    /// `hash_after` — NEVER the index's/disk's current hash, which can
+    /// differ after an external edit and would introduce a `hash_after`
+    /// whose prefix reconstruction is not that hash's content. Skipped
+    /// when the file has no log or the log is empty: there is no
+    /// history to re-path.
+    ///
+    /// The in-memory append state is left untouched: the tail hash is
+    /// unchanged by construction, so the next save still chains (the
+    /// ~100 marker bytes are deliberately not counted into the
+    /// snapshot cadence — noise next to the 256-byte framing
+    /// estimate). Best-effort like every op-log write.
+    fn append_path_changed_marker(&self, conn: &Connection, from: &str, to: &str) {
+        let row: Option<(i64, Option<String>)> = conn
+            .query_row(
+                "SELECT id, oplog_name FROM files WHERE path = ?1",
+                rusqlite::params![to],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        let Some((file_id, Some(log_name))) = row else {
+            return; // unindexed, or never saved through Slate — no log
+        };
+
+        // Tail hash: the in-memory append state when this session has
+        // written to the log; otherwise one forward read (moves are
+        // rare next to saves — acceptable).
+        let cached_tail = {
+            let state = self.oplog_state.lock().expect("oplog state mutex");
+            state.get(&file_id).map(|s| s.last_hash_after.clone())
+        };
+        let tail_hash = match cached_tail {
+            Some(h) => h,
+            None => {
+                match crate::oplog::read_oplog(&self.config.cache_dir, &log_name) {
+                    Ok(entries) => match entries.last() {
+                        Some(e) => e.content_hash_after.clone(),
+                        None => return, // empty log — nothing to re-path
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            "oplog marker tail read failed for file_id={file_id}: {}",
+                            e.kind()
+                        );
+                        log::debug!("oplog marker tail read failure for path {to:?}: {e}");
+                        return;
+                    }
+                }
+            }
+        };
+
+        let payload = crate::oplog::encode_annotated(
+            crate::oplog::OpKind::EditBatch,
+            &crate::oplog::encode_edit_batch(&[]),
+            &[crate::oplog::OpAnnotation::PathChanged {
+                from: from.to_string(),
+                to: to.to_string(),
+            }],
+        );
+        let entry = crate::oplog::OpLogEntry {
+            timestamp_ms: now_ms(),
+            user_actor_id: self.config.user_actor_id.clone(),
+            op_kind: crate::oplog::OpKind::Annotated,
+            content_hash_before: tail_hash.clone(),
+            content_hash_after: tail_hash,
+            payload_bytes: payload,
+        };
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, &log_name, to, &entry) {
+            log::warn!(
+                "oplog path marker append failed for file_id={file_id}: {}",
+                e.kind()
+            );
+            log::debug!("oplog path marker append failure for path {to:?}: {e}");
+        }
     }
 
     /// U2-3 (#461): plan and apply the link-text rewrites a move demands.
@@ -4819,7 +5329,7 @@ impl VaultSession {
             // the following save appends its EditBatch against it.
             self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
             let new_text = crate::link_rewrite::apply_edits(&text, &edits);
-            match self.save_text_locked(conn, &path, &new_text, Some(&hash_before)) {
+            match self.save_text_locked(conn, &path, &new_text, Some(&hash_before), &[]) {
                 Ok(report) => rewritten.push(RewriteOutcome {
                     path,
                     hash_before,
@@ -4915,7 +5425,7 @@ impl VaultSession {
             }
             self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
             let new_text = crate::canvas::serialize::serialize(&canvas);
-            match self.save_text_locked(conn, &path, &new_text, Some(&hash_before)) {
+            match self.save_text_locked(conn, &path, &new_text, Some(&hash_before), &[]) {
                 Ok(report) => rewritten.push(RewriteOutcome {
                     path,
                     hash_before,
@@ -4953,6 +5463,9 @@ impl VaultSession {
             )
             .ok();
         let Some(file_id) = file_id else { return };
+        let Some(log_name) = self.ensure_oplog_name(conn, file_id, path) else {
+            return; // ensure_oplog_name already warned
+        };
         let entry = crate::oplog::OpLogEntry {
             timestamp_ms: now_ms(),
             user_actor_id: self.config.user_actor_id.clone(),
@@ -4961,7 +5474,8 @@ impl VaultSession {
             content_hash_after: content_hash.to_string(),
             payload_bytes: contents.as_bytes().to_vec(),
         };
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, file_id, &entry) {
+        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, &log_name, path, &entry)
+        {
             // Non-fatal: a missing anchor only degrades a structural-move's
             // undo to a per-file conflict report, never corruption. Route
             // through the facade (#507). warn carries only the file id and
@@ -5003,30 +5517,34 @@ impl VaultSession {
         expected_current: &str,
     ) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        // Inline id lookup (NOT the public read_oplog — it takes the mutex
-        // this method already holds).
-        let file_id: Option<i64> = conn
+        // Inline binding lookup (NOT the public read_oplog — it takes the
+        // mutex this method already holds).
+        let log_name: Option<Option<String>> = conn
             .query_row(
-                "SELECT id FROM files WHERE path = ?1",
+                "SELECT oplog_name FROM files WHERE path = ?1",
                 rusqlite::params![path],
                 |row| row.get(0),
             )
             .optional()?;
-        let Some(file_id) = file_id else {
+        let Some(log_name) = log_name else {
             return Err(VaultError::InvalidPath {
                 path: path.to_string(),
                 reason: "no such file in the index".into(),
             });
         };
-        let entries =
-            crate::oplog::read_oplog(&self.config.cache_dir, file_id).map_err(VaultError::Io)?;
+        let entries = match log_name {
+            Some(name) => {
+                crate::oplog::read_oplog(&self.config.cache_dir, &name).map_err(VaultError::Io)?
+            }
+            None => Vec::new(),
+        };
         let contents =
             crate::oplog::reconstruct_at_hash(&entries, hash_before).ok_or_else(|| {
                 VaultError::InvalidArgument {
                     message: format!("op-log for {path:?} has no state with hash {hash_before}"),
                 }
             })?;
-        self.save_text_locked(&mut conn, path, &contents, Some(expected_current))
+        self.save_text_locked(&mut conn, path, &contents, Some(expected_current), &[])
             .map(|_| ())
     }
 }
@@ -8180,13 +8698,31 @@ impl VaultSession {
         // since open/last apply → typed WriteConflict for t0 §5.
         let new_text = crate::canvas::serialize::serialize(&working);
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let report =
-            self.save_text_locked(&mut conn, &state.path, &new_text, Some(&state.content_hash))?;
+        let report = self.save_text_locked(
+            &mut conn,
+            &state.path,
+            &new_text,
+            Some(&state.content_hash),
+            &[],
+        )?;
 
         // Refresh the handle: new parse-equivalent state + model.
         let tx = conn.transaction()?;
         let model = crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
         drop(tx);
+        // The save above allocated/resolved the binding; read it before
+        // releasing the connection so the semantic entry lands in the
+        // same log (O-1: names come from the column, never `files.id`).
+        let log_name: Option<String> = conn
+            .query_row(
+                "SELECT oplog_name FROM files WHERE id = ?1",
+                rusqlite::params![state.file_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .flatten();
         drop(conn);
         state.canvas = working;
         state.model = model;
@@ -8210,7 +8746,16 @@ impl VaultSession {
             content_hash_after: report.new_content_hash.clone(),
             payload_bytes: payload.to_string().into_bytes(),
         };
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, state.file_id, &entry) {
+        let append_result = match log_name.as_deref() {
+            Some(name) => {
+                crate::oplog::append_entry(&self.config.cache_dir, name, &state.path, &entry)
+                    .map(|_| ())
+            }
+            // Save append was skipped (no binding — allocation failed);
+            // treat the journal entry the same way, loudly.
+            None => Err(std::io::Error::other("no op-log binding for file")),
+        };
+        if let Err(e) = append_result {
             // Non-fatal, same discipline as the save/anchor append sites
             // (#507): the committed canvas write already succeeded; only the
             // semantic journal entry (undo/audit metadata) is missing. Route
@@ -8408,6 +8953,9 @@ mod tests {
 
     #[path = "save.rs"]
     mod save;
+
+    #[path = "oplog_identity.rs"]
+    mod oplog_identity;
 
     #[path = "oplog_logging.rs"]
     mod oplog_logging;

@@ -93,3 +93,7 @@ harness = false
 [[bench]]
 name = "bases_bench"
 harness = false
+
+[[bench]]
+name = "oplog_bench"
+harness = false

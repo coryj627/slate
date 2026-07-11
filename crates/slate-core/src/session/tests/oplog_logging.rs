@@ -295,16 +295,16 @@ fn oplog_append_torn_header_warn_carries_no_cache_path() {
         .expect("first save should succeed");
 
     // Look up the file_id so we can find and corrupt its op-log file.
-    let file_id: i64 = {
+    let (file_id, log_name): (i64, String) = {
         let conn = session.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id FROM files WHERE path = ?1",
+            "SELECT id, oplog_name FROM files WHERE path = ?1",
             rusqlite::params![sentinel_path],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("file row should exist after a successful save")
     };
-    let oplog_file = crate::oplog::oplog_path(&cache_dir, file_id);
+    let oplog_file = crate::oplog::oplog_path_for_name(&cache_dir, &log_name);
     assert!(oplog_file.is_file(), "op-log file should exist after save");
 
     // Truncate to fewer than HEADER_LEN (8) bytes. The next append opens a
@@ -392,16 +392,16 @@ fn canvas_apply_journal_failure_warns_without_cache_path() {
     let info = session.open_canvas("board.canvas").unwrap();
 
     // file_id of the canvas file, so we can corrupt its op-log.
-    let file_id: i64 = {
+    let log_name: String = {
         let conn = session.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id FROM files WHERE path = ?1",
+            "SELECT oplog_name FROM files WHERE path = ?1",
             rusqlite::params!["board.canvas"],
             |row| row.get(0),
         )
         .expect("canvas file row should exist")
     };
-    let oplog_file = crate::oplog::oplog_path(&cache_dir, file_id);
+    let oplog_file = crate::oplog::oplog_path_for_name(&cache_dir, &log_name);
     // The save above may or may not have created the op-log yet; force a
     // short/torn file so the next append hits the path-bearing error.
     std::fs::create_dir_all(oplog_file.parent().unwrap()).unwrap();

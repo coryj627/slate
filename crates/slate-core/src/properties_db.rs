@@ -542,7 +542,10 @@ fn finite_float_to_json(f: f64) -> String {
     }
 }
 
-fn property_value_to_json(value: &PropertyValue) -> JsonValue {
+/// JSON encoding of one property value — shared with the op-log's
+/// `SetProperty` annotation (O-1 #539), which records the value as
+/// written.
+pub(crate) fn property_value_to_json(value: &PropertyValue) -> JsonValue {
     match value {
         PropertyValue::Text(s) => JsonValue::String(s.clone()),
         PropertyValue::Integer(i) => JsonValue::from(*i),
