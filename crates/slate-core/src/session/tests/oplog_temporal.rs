@@ -1076,8 +1076,11 @@ fn census_temporal_operators_vs_reference() {
     let cache_dir = session.config.cache_dir.clone();
     let actor = "census".to_string();
 
-    // One save per file creates the binding; then the log is replaced
-    // wholesale with a constructed history.
+    // One clock capture for the whole census: entry scripting and the
+    // reference retention cutoff below derive from the same instant
+    // (Codoki on #844 — the 5-min grid offset already absorbs drift,
+    // but one capture removes the question).
+    let census_now = now_ms();
     let mut logs: Vec<(String, Vec<crate::oplog::OpLogEntry>)> = Vec::new();
     for i in 0..files {
         let path = format!("f{i:02}.md");
@@ -1098,7 +1101,7 @@ fn census_temporal_operators_vs_reference() {
         // edit batches (with deletions drawn from `words`), annotated
         // saves, touch-only anchors, and PathChanged markers. Document
         // versions chain so every batch replays.
-        let now = now_ms();
+        let now = census_now;
         // Offsets reach ~126 days — beyond the 90-day retention
         // window — so the census exercises the #831 shared cutoff:
         // the production rebuild must drop the beyond-window slice
@@ -1313,7 +1316,7 @@ fn census_temporal_operators_vs_reference() {
         // at least 5 minutes from the whole-day cutoff boundary, so
         // clock drift between scripting and rebuilding cannot flip a
         // row.
-        let retention_cutoff = now_ms() - 90 * DAY_MS;
+        let retention_cutoff = census_now - 90 * DAY_MS;
         rows.retain(|(ts, ..)| *ts > retention_cutoff);
         expected_rows.push((path.clone(), rows));
     }

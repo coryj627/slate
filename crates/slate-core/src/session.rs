@@ -1371,6 +1371,13 @@ impl VaultSession {
         // active files stop accumulating rows their next compaction
         // would fold anyway. Best-effort, like the rebuild above: a
         // failed DELETE leaves extra rows, never wrong ones.
+        //
+        // Deliberately unindexed (Codoki on #844): a bare ts_ms index
+        // would tax every save's insert for a once-per-open DELETE
+        // whose table this very rule keeps bounded — the full scan is
+        // O(retained rows), single-digit ms at a 90-day heavy-use
+        // bound, and the one large pass (first open on a pre-#831
+        // vault) is a one-time upgrade cost.
         let events_cutoff = retention_cutoff_ms(self.retention_days());
         if let Err(e) = conn.execute(
             "DELETE FROM oplog_events WHERE ts_ms <= ?1",
