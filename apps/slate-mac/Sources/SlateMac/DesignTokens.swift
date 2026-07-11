@@ -64,6 +64,35 @@ enum Tokens {
         static let caption = Font.caption
         /// Monospaced role for code / keys.
         static let code = Font.system(.body, design: .monospaced)
+
+        /// AppKit-side base font for the NSTextView surfaces (editor
+        /// buffer, code blocks): monospaced at the SYSTEM BODY text-
+        /// style size. `NSFont.preferredFont(forTextStyle:)` is what
+        /// tracks System Settings ▸ Accessibility ▸ Display ▸ Text
+        /// Size — `NSFont.systemFontSize` is a fixed 13pt constant
+        /// and does not (WCAG 1.4.4). Callers re-derive on
+        /// `\.dynamicTypeSize` changes (the reduce-motion
+        /// updateNSView pattern) so AppKit surfaces scale live, like
+        /// the SwiftUI roles above.
+        static func monospacedBodyNSFont() -> NSFont {
+            NSFont.monospacedSystemFont(
+                ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                weight: .regular
+            )
+        }
+    }
+
+    // MARK: Layout — structural measurements that aren't spacing steps.
+    enum Layout {
+        /// 680 — the reading column's maximum measure (points). Roughly
+        /// 70–80 characters of body text at the default size: inside the
+        /// comfortable 45–90ch band (WCAG 1.4.8 advises ≤ 80ch), instead
+        /// of prose running 150+ characters wide in a full-width window.
+        /// A fixed point cap, not a ch count: at larger Dynamic Type the
+        /// effective measure NARROWS in characters, which errs in the
+        /// readable direction. Wide content (code, tables) scrolls
+        /// horizontally inside the column rather than widening it.
+        static let readingMeasure: CGFloat = 680
     }
 
     // MARK: Color — semantic roles as SwiftUI `Color`, backed by dynamic
@@ -131,6 +160,20 @@ enum Tokens {
 
 extension NSColor {
     /// A dynamic color resolving to `light` in Aqua and `dark` in DarkAqua.
+    ///
+    /// **Increase Contrast (deliberate no-op):** `bestMatch` collapses the
+    /// `.accessibilityHighContrast*` appearance variants onto the two base
+    /// names, so these roles do not shift when the user enables Increase
+    /// Contrast. That is a considered trade, not an oversight: every
+    /// text-carrying pairing is already pinned at APCA |Lc| > 75 in both
+    /// appearances (`Tokens.contrastPairings`, machine-gated) — comfortably
+    /// past AA — and a high-contrast variant per role would double the
+    /// gated matrix for marginal gain. The code/canvas surfaces, whose
+    /// syntax tints sit closer to their floors, DO consult
+    /// `accessibilityDisplayShouldIncreaseContrast` (see
+    /// `EditorSyntaxPalette` / `CodeBlockView` / `CanvasRendererView`).
+    /// Revisit if Milestone R theming lands user-supplied palettes that
+    /// can't guarantee the APCA floor.
     fileprivate static func tokenDynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light

@@ -337,6 +337,24 @@ struct HistoryPanel: View {
                     .font(.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .padding(.horizontal, 12)
+            } else if appState.isHistoryLoading && visibleVersions.isEmpty {
+                // First-load window (the list starts empty after a
+                // vault open; the load is async): a spinner, NOT the
+                // empty copy — "No versions yet" while versions exist
+                // on disk is a false statement. Note switches latch
+                // the prior rows until the new publish, so this only
+                // fills genuinely-empty windows. The Tasks/Citations
+                // panels' loading idiom.
+                HStack(spacing: Tokens.Spacing.sm) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading history…")
+                        .font(.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                }
+                .padding(.horizontal, 12)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Loading history.")
             } else if visibleVersions.isEmpty {
                 Text("No versions yet. Versions are recorded as you save.")
                     .font(.caption)

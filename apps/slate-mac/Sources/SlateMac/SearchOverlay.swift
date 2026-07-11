@@ -143,6 +143,13 @@ struct SearchOverlay: View {
                 appState.closeSearchOverlay()
             } label: {
                 SlateSymbol.clearSearch.decorative
+                    // The comment below promises a "properly-sized"
+                    // button; a bare glyph in a .plain button renders
+                    // ~16pt with no padding. Pin the WCAG 2.5.8
+                    // minimum so the promise is implemented, not
+                    // aspirational.
+                    .frame(minWidth: 24, minHeight: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close search")
@@ -191,6 +198,10 @@ struct SearchOverlay: View {
                 } label: {
                     SlateSymbol.clearSearch.decorative
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
+                        // WCAG 2.5.8 target-size floor (same as the
+                        // overlay close button above).
+                        .frame(minWidth: 24, minHeight: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear tag filter")
@@ -276,21 +287,73 @@ struct SearchOverlay: View {
     }
 
     private func resultsList(_ rows: [QueryHit]) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
-                // Stable id on `.path` rather than offset — FTS5
-                // returns one hit per file, so paths are unique
-                // within a result set, and using a stable id keeps
-                // SwiftUI from re-creating row views when results
-                // reorder by score after a query change.
-                ForEach(Array(rows.enumerated()), id: \.element.path) { idx, hit in
-                    row(for: hit, at: idx)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            // Visible twin of the "Search returned N results"
+            // live-region announcement — sighted users now get the
+            // tally the AT side always had. Hidden from AX: the
+            // announcement is the audio source of truth, and a second
+            // speaking element would double-announce every query.
+            if !appState.searchSummary.isEmpty {
+                Text(appState.searchSummary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, Tokens.Spacing.sm)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    // Stable id on `.path` rather than offset — FTS5
+                    // returns one hit per file, so paths are unique
+                    // within a result set, and using a stable id keeps
+                    // SwiftUI from re-creating row views when results
+                    // reorder by score after a query change.
+                    ForEach(Array(rows.enumerated()), id: \.element.path) { idx, hit in
+                        row(for: hit, at: idx)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 320)
         }
-        .frame(maxHeight: 320)
+    }
+
+    /// FTS5 brackets each matched term in STX/ETX (`\u{2}`/`\u{3}`)
+    /// markers. Convert the marked spans to a semibold, primary-color
+    /// run so sighted users can see WHAT matched — previously the
+    /// markers were stripped and the emphasis silently discarded
+    /// (the row comment even called them "useful for visual
+    /// emphasis"). Unmarked runs carry no explicit style, so the
+    /// view-level `.caption`/`.secondary` modifiers keep styling
+    /// them. Static + pure so the marker parse is unit-testable.
+    static func emphasizedSnippet(_ raw: String) -> AttributedString {
+        var out = AttributedString()
+        var bold = false
+        var run = ""
+        func flush() {
+            guard !run.isEmpty else { return }
+            var piece = AttributedString(run)
+            if bold {
+                piece.font = Tokens.Typography.caption.weight(.semibold)
+                piece.foregroundColor = Tokens.ColorRole.textPrimary
+            }
+            out += piece
+            run = ""
+        }
+        for ch in raw {
+            if ch == "\u{2}" {
+                flush()
+                bold = true
+            } else if ch == "\u{3}" {
+                flush()
+                bold = false
+            } else {
+                run.append(ch)
+            }
+        }
+        flush()
+        return out
     }
 
     private func row(for hit: QueryHit, at index: Int) -> some View {
@@ -305,9 +368,10 @@ struct SearchOverlay: View {
                 // truncating below the threshold WCAG 1.4.4 needs for
                 // sighted users (the `.help()` tooltip helps mouse
                 // users but not keyboard-only ones). Let it wrap; the
-                // panel's scroll view absorbs the height.
-                Text(hit.snippet.replacingOccurrences(of: "\u{2}", with: "")
-                    .replacingOccurrences(of: "\u{3}", with: ""))
+                // panel's scroll view absorbs the height. The STX/ETX
+                // hit markers become semibold emphasis on the matched
+                // term (`emphasizedSnippet`).
+                Text(Self.emphasizedSnippet(hit.snippet))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

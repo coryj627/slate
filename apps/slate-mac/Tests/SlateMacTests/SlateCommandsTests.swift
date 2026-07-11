@@ -225,6 +225,36 @@ final class SlateCommandsTests: XCTestCase {
         )
     }
 
+    /// **#422 dead-zone gate.** Every registry chord must be declared
+    /// in the menu bar (`SlateMacApp.swift`'s `.commands` block) or
+    /// auto-installed by a SwiftUI scene. A chord whose only source
+    /// declaration is a toolbar/hidden-button `keyboardShortcut`
+    /// satisfies the all-files reverse check above while being
+    /// unreachable with sidebar focus — exactly the ⌘F defect #422
+    /// fixed, and the defect ⌘S / ⇧⌘N / ⇧⌘T / ⇧⌘J / ⌘J / ⇧⌘R shipped
+    /// with until the menu migration. This test makes the regression
+    /// class red instead of silently green.
+    @MainActor
+    func testEveryRegistryChordIsDeclaredInTheMenuBar() throws {
+        let menuBarChords = try Self.scrapedMenuBarChords()
+        let appState = AppState()
+        let registryChords: Set<String> = Set(
+            appState.commandRegistry.list().compactMap(\.hotkeyHint)
+        )
+        let reachable = menuBarChords
+            .union(Self.chordsImplicitFromSwiftUIScenes)
+        let deadZone = registryChords.subtracting(reachable)
+        XCTAssertTrue(
+            deadZone.isEmpty,
+            "Registry chords with no menu-bar declaration (#422 dead-zone — a "
+                + "toolbar/hidden-button keyboardShortcut is unreachable with sidebar "
+                + "focus): \(deadZone.sorted()). Move the chord to a CommandGroup in "
+                + "SlateMacApp.swift and leave the in-view button click/AX-only, or — "
+                + "if a SwiftUI scene auto-installs it — add it to "
+                + "chordsImplicitFromSwiftUIScenes with a comment citing the scene."
+        )
+    }
+
     /// Chords known to be auto-installed by SwiftUI scene
     /// declarations rather than by explicit `keyboardShortcut(...)`
     /// calls in our source. These are real menu chords from the
@@ -257,13 +287,15 @@ final class SlateCommandsTests: XCTestCase {
         // context-dependence (which stack fires depends on focus, and
         // the palette steals focus).
         "⌘Z", "⇧⌘Z",
-        // TemplatePromptSheet.swift's "commit" button binding.
-        // In-sheet submission action, structurally identical to a
-        // global chord but scoped to the sheet's responder chain
-        // by SwiftUI. Not a menu / palette-worthy command. Picked
-        // up by the broader scraper (#322) — earlier scrapers
-        // missed `.return` entirely because it isn't a quoted
-        // single char.
+        // NotePropertiesHeader.swift's source-mode "Apply" binding
+        // (⌘↩ commits the YAML draft). In-sheet submission action,
+        // structurally identical to a global chord but scoped to the
+        // view's responder chain by SwiftUI. Not a menu / palette-
+        // worthy command. Picked up by the broader scraper (#322) —
+        // earlier scrapers missed `.return` entirely because it
+        // isn't a quoted single char. (TemplatePromptSheet's former
+        // ⌘↩ moved to `.defaultAction` — bare Return + the visually-
+        // primary default treatment — in the HIG-conformance pass.)
         "⌘↩",
         // PropertyEditorRow.swift's per-row Delete button. Row-
         // scoped action — deletes one property of the focused
@@ -316,6 +348,36 @@ final class SlateCommandsTests: XCTestCase {
             throw DriftLocatorError(message: message)
         }
         return try scrapeChordsFromDirectory(sourcesDir)
+    }
+
+    /// Scrape ONLY `SlateMacApp.swift` — the file whose `.commands`
+    /// block declares the menu bar. #422 hardening: the all-files
+    /// scrape above treats a `keyboardShortcut(...)` on a toolbar or
+    /// hidden button as a "menu binding", but those registrations are
+    /// DEAD with sidebar focus (the ⌘F lesson — AppKit's key-window
+    /// sweep doesn't reach them from every responder). Menu-bar
+    /// reachability is a property of `SlateMacApp.swift` alone; if a
+    /// second file ever hosts a `.commands` block, add it here with a
+    /// comment.
+    static func scrapedMenuBarChords() throws -> Set<String> {
+        let appFile = projectRoot
+            .appendingPathComponent("apps")
+            .appendingPathComponent("slate-mac")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("SlateMac")
+            .appendingPathComponent("SlateMacApp.swift")
+        guard FileManager.default.fileExists(atPath: appFile.path) else {
+            let message =
+                "SlateMacApp.swift not found at \(appFile.path) — projectRoot "
+                + "resolution from \(#filePath) likely broke (repo layout change), "
+                + "or the app entry point moved. The menu-bar reachability check "
+                + "has nothing to read; fix the locator rather than letting the "
+                + "#422 dead-zone gate pass on an empty scrape."
+            XCTFail(message)
+            throw DriftLocatorError(message: message)
+        }
+        let text = try String(contentsOf: appFile, encoding: .utf8)
+        return extractChords(from: text)
     }
 
     /// Recursive walk over `.swift` files under `dir`, accumulating

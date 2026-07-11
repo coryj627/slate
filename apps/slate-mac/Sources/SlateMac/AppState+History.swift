@@ -127,6 +127,14 @@ extension AppState {
     /// here; the publish guards inside remain the stale-drop defence.
     @discardableResult
     func scheduleHistoryLoad(path: String) -> Task<Void, Never> {
+        // Flag at SCHEDULE time, not body-entry: the chained task may
+        // sit behind a predecessor, and the panel must read "loading"
+        // for that whole window. The window where it VISIBLY matters
+        // is a genuinely-empty list — first load after a vault open
+        // (the list starts empty; note switches latch the prior
+        // note's rows until the new publish, deliberately no flash)
+        // and marker-only histories.
+        isHistoryLoading = true
         let previous = historyLoadTask
         let task = Task { [weak self] in
             await previous?.value
@@ -193,6 +201,7 @@ extension AppState {
             historyNextCursor = page.nextCursor
             historyTotalFiltered = page.totalFiltered
             historyLoadError = nil
+            isHistoryLoading = false
             // The open is REAL (guards passed): move the baseline now,
             // AFTER the verdict — the pinned compute-then-mark order.
             // A selection switch DURING this mark is benign — the open
@@ -224,6 +233,7 @@ extension AppState {
             historyNextCursor = nil
             historyTotalFiltered = 0
             historyLoadError = humanReadable(error)
+            isHistoryLoading = false
         }
     }
 
@@ -256,13 +266,22 @@ extension AppState {
             historyVersions.append(contentsOf: page.items)
             historyNextCursor = page.nextCursor
             historyTotalFiltered = page.totalFiltered
+            // This publish holds the newest seq — the bump above just
+            // staled any queued first-page reload, whose guard-return
+            // deliberately leaves the flag alone. Clear it here or it
+            // sticks true until the next reset (red-team F3 on the
+            // HIG-audit pass).
+            isHistoryLoading = false
         case .failure(.InvalidArgument):
             // Through the serialized chain, like every other entry
             // point — a direct call here could compute while a
             // scheduled load's mark is in flight (round 3 High).
+            // (The re-schedule owns `isHistoryLoading`: sets on
+            // schedule, clears on ITS publish.)
             await scheduleHistoryLoad(path: path).value
         case .failure(let error):
             historyLoadError = humanReadable(error)
+            isHistoryLoading = false
         }
     }
 
@@ -296,6 +315,7 @@ extension AppState {
         historyNextCursor = nil
         historyTotalFiltered = 0
         historyLoadError = nil
+        isHistoryLoading = false
         sinceOpenChanges = nil
         deletedFiles = []
         deletedLoadError = nil

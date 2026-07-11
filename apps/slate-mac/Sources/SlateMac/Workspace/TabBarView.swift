@@ -85,15 +85,21 @@ struct TabBarView: View {
     /// The reading/editing toggle at the strip's leading edge (U3-2, #466).
     /// Shows the TARGET mode's glyph + label ("Reading mode" enters
     /// reading); `accessibilityValue` carries the CURRENT mode so VoiceOver
-    /// reads "Reading mode, button, Currently editing". Toggling a
-    /// non-focused group's strip focuses that group first — one funnel,
-    /// the group's own active tab flips. Hidden for empty groups (nothing
-    /// to render) — the ⌘⇧E menu item stays the single shortcut owner.
+    /// reads "Reading mode, button, Currently editing". The CURRENT mode is
+    /// also visible to sighted users: the control carries an accent wash +
+    /// tint while the pane is in reading mode (a toggle that's "on"), so
+    /// the state isn't AT-only — without it, a pointer user had to infer
+    /// the mode from whether the content looked like raw Markdown.
+    /// Toggling a non-focused group's strip focuses that group first — one
+    /// funnel, the group's own active tab flips. Hidden for empty groups
+    /// (nothing to render) — the ⌘⇧E menu item stays the single shortcut
+    /// owner.
     @ViewBuilder
     private var modeToggle: some View {
         if let activeTabID = group.activeTabID {
             let current = appState.workspace.viewMode(for: activeTabID)
             let target: NoteViewMode = current == .editing ? .reading : .editing
+            let isReading = current == .reading
             Button {
                 // Non-focused group: focus it FIRST through the identity
                 // funnel (activateTab restores that pane's document into
@@ -106,8 +112,17 @@ struct TabBarView: View {
                 (target == .reading
                     ? SlateSymbol.readingMode : SlateSymbol.editingMode)
                     .decorative
+                    .foregroundStyle(
+                        isReading
+                            ? Tokens.ColorRole.accentText
+                            : Tokens.ColorRole.textPrimary)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
+                    .background(
+                        isReading
+                            ? Tokens.ColorRole.accentFill.opacity(0.18)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Tokens.Radius.control))
             }
             .buttonStyle(.interactiveRow())
             .padding(.leading, Tokens.Spacing.xs)

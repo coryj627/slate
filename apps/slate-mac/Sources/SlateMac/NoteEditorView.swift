@@ -94,6 +94,12 @@ struct NoteEditorView: NSViewRepresentable {
     /// changes mid-session.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// System Text Size dependency (WCAG 1.4.4) — read in
+    /// `updateNSView` so the editor font re-derives when the user
+    /// changes System Settings ▸ Accessibility ▸ Display ▸ Text Size,
+    /// exactly as the SwiftUI surfaces rescale automatically.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
@@ -151,10 +157,13 @@ struct NoteEditorView: NSViewRepresentable {
         textView.smartInsertDeleteEnabled = false
         textView.usesFontPanel = false
         textView.usesRuler = false
-        textView.font = NSFont.monospacedSystemFont(
-            ofSize: NSFont.systemFontSize,
-            weight: .regular
-        )
+        // Body-text-style size, NOT `NSFont.systemFontSize` — the
+        // latter is a fixed 13pt constant that ignores the macOS
+        // Text Size setting, which left the WRITING surface pinned
+        // while the reading surface (Dynamic-Type-backed
+        // Tokens.Typography) scaled. `updateNSView` re-derives on
+        // Dynamic Type changes so the scaling is live (WCAG 1.4.4).
+        textView.font = Tokens.Typography.monospacedBodyNSFont()
         textView.textContainerInset = NSSize(width: 16, height: 16)
         // Soft-wrap. NSTextView defaults vary by SDK; pin
         // explicitly so a vault opened on one macOS version doesn't
@@ -170,17 +179,12 @@ struct NoteEditorView: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.delegate = context.coordinator
-        // Hook Cmd+S without subclassing NSTextView: route through
-        // the coordinator's command-selector responder. AppKit's
-        // standard responder chain invokes
-        // `noResponderFor:eventSelector:` on the `NSTextView` for
-        // unhandled key equivalents, which falls through to our
-        // window-level handler. Cleaner approach for V1.F: install
-        // the save shortcut at the SwiftUI level via a hidden
-        // button on the toolbar (see #F4 acceptance + MainSplitView).
-        // The `onSave` argument stays here so future per-view
-        // shortcuts (autosave on focus loss) have a single place
-        // to call into.
+        // ⌘S is owned by File ▸ Save (SlateMacApp's CommandGroup) —
+        // menu-bar-homed so it works regardless of which pane has
+        // focus (the #422 lesson; it previously rode a toolbar
+        // button's keyboardShortcut, dead with sidebar focus). The
+        // `onSave` argument stays here so future per-view shortcuts
+        // (autosave on focus loss) have a single place to call into.
 
         textView.setAccessibilityLabel(accessibilityLabel)
         textView.setAccessibilityRole(.textArea)
@@ -245,6 +249,19 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.reduceMotion = reduceMotion
         context.coordinator.onCaretUTF16Change = onCaretUTF16Change
         textView.setAccessibilityLabel(accessibilityLabel)
+
+        // Live Text Size tracking (WCAG 1.4.4): reading
+        // `dynamicTypeSize` registers it as a dependency, so this
+        // method re-runs when the system setting changes (the
+        // reduce-motion pattern above); the font re-derives at the
+        // new body-style size. Point-size compare keeps the common
+        // keystroke path allocation-free.
+        _ = dynamicTypeSize
+        let baseFont = Tokens.Typography.monospacedBodyNSFont()
+        if textView.font?.pointSize != baseFont.pointSize {
+            textView.font = baseFont
+            context.coordinator.scheduleHighlight(debounced: false)
+        }
 
         // External buffer change (e.g. file reload after a
         // WriteConflict "Reload from disk"). Only restamp when the

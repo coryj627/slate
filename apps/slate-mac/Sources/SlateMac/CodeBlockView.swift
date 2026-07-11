@@ -178,6 +178,11 @@ enum CodeTokenTheme {
 struct CodeBlockContent: NSViewRepresentable {
     let block: CodeBlock
 
+    /// System Text Size dependency — read in `updateNSView` so the
+    /// code font re-derives live when the setting changes (WCAG
+    /// 1.4.4; the NoteEditorView pattern).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject {
@@ -210,15 +215,13 @@ struct CodeBlockContent: NSViewRepresentable {
         textView.drawsBackground = true
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.textColor = NSColor.labelColor
-        // Audit #252 M2: Dynamic Type / system text size. Pinning
-        // to 12pt makes the code smaller than the editor pane and
-        // ignores System Settings → Display → Text Size. Use the
-        // user's chosen system font size (same as the editor pane,
-        // see NoteEditorView).
-        textView.font = NSFont.monospacedSystemFont(
-            ofSize: NSFont.systemFontSize,
-            weight: .regular
-        )
+        // Audit #252 M2's intent, actually implemented: the previous
+        // `NSFont.systemFontSize` claim ("the user's chosen system
+        // font size") was false — that constant is a fixed 13pt and
+        // never tracks System Settings ▸ Accessibility ▸ Display ▸
+        // Text Size. The body-TEXT-STYLE size does; `updateNSView`
+        // re-applies on Dynamic Type changes (WCAG 1.4.4).
+        textView.font = Tokens.Typography.monospacedBodyNSFont()
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.usesFontPanel = false
         textView.usesRuler = false
@@ -261,6 +264,11 @@ struct CodeBlockContent: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.block = block
+        // Dynamic Type dependency: reading the environment value here
+        // re-runs this method when the system Text Size changes, and
+        // `applyAttributedString` re-derives the base font (WCAG
+        // 1.4.4 — the same live-tracking hook NoteEditorView uses).
+        _ = dynamicTypeSize
         applyAttributedString(to: textView, block: block)
     }
 
@@ -292,7 +300,9 @@ private func applyAttributedString(to textView: NSTextView, block: CodeBlock) {
 /// depending on the system's actual setting.
 func attributedString(for block: CodeBlock, increaseContrast: Bool = false) -> NSAttributedString {
     let baseAttributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
+        // Body-text-style size (tracks the macOS Text Size setting),
+        // matching the editor pane — see the makeNSView note above.
+        .font: Tokens.Typography.monospacedBodyNSFont(),
         .foregroundColor: NSColor.labelColor,
     ]
     let attributed = NSMutableAttributedString(

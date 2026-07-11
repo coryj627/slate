@@ -43,6 +43,25 @@ struct SlateMacApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
+                // Standard File ▸ Open Recent submenu (HIG: apps that
+                // open documents/folders provide one, with Clear Menu
+                // last). Reuses the same store + `openRecent` route as
+                // the welcome screen and the utility-bar switcher.
+                // Disabled (not hidden) when empty, like the system's.
+                Menu("Open Recent") {
+                    ForEach(appState.recentVaults) { entry in
+                        Button(entry.displayName) {
+                            appState.openRecent(entry)
+                        }
+                        .help(entry.path)
+                    }
+                    Divider()
+                    Button("Clear Menu") {
+                        appState.clearRecentVaults()
+                    }
+                }
+                .disabled(appState.recentVaults.isEmpty)
+
                 Divider()
 
                 // File-management commands (U2-5, #463). Act on the file tree's
@@ -56,10 +75,43 @@ struct SlateMacApp: App {
                 .keyboardShortcut("n", modifiers: [.command])
                 .disabled(!appState.isVaultOpen)
 
+                // ⇧⌘N migrated from the toolbar button's registration
+                // (the #422 dead-zone: a toolbar keyboardShortcut is
+                // unreachable with sidebar focus — the ⌘F lesson). The
+                // toolbar button remains as the click/AX affordance;
+                // the menu item is the single chord owner. Label
+                // matches the palette registration (menu↔palette
+                // naming parity).
+                Button("New from Template…") {
+                    appState.openTemplatePicker()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen)
+
                 Button("New Folder…") {
                     appState.newFolderCommand()
                 }
                 .disabled(!appState.isVaultOpen)
+
+                Divider()
+
+                // File ▸ Save (HIG: the File menu carries Save). ⌘S
+                // previously lived ONLY on the toolbar button — the
+                // same #422 dead-zone as ⌘F: dead with sidebar focus,
+                // exactly when a keyboard user finishes tree work and
+                // reflexively saves. Enablement mirrors the toolbar
+                // button (a no-op Save stays visibly disabled).
+                Button("Save") {
+                    appState.saveCurrentNote()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(
+                    appState.loadedFilePath == nil
+                        || appState.isSaving
+                        || !appState.hasUnsavedChanges
+                )
+
+                Divider()
 
                 Button("Rename…") {
                     appState.renameSelectedCommand()
@@ -109,6 +161,18 @@ struct SlateMacApp: App {
                     NSApplication.shared.keyWindow?.performClose(nil)
                 }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
+
+                // Close Vault's menu-bar home (HIG: a Close-family
+                // command for the primary open document belongs in
+                // File). The utility-bar switcher and the palette
+                // command remain; all three route through
+                // `closeVaultFromUserAction` (U4-3 #472 funnel). No
+                // chord — closing a vault is deliberate, not muscle-
+                // memory (same rationale as the palette registration).
+                Button("Close Vault") {
+                    appState.closeVaultFromUserAction()
+                }
+                .disabled(!appState.isVaultOpen)
             }
             // Tab navigation lives under View alongside the palette/search
             // items — one menu for "where am I looking" commands.
@@ -196,6 +260,32 @@ struct SlateMacApp: App {
                     appState.showHistoryPanel()
                 }
                 .disabled(!appState.isVaultOpen)
+
+                Divider()
+
+                // ⇧⌘T / ⇧⌘J / ⌘J migrated from toolbar-button
+                // registrations (the #422 dead-zone — see the File ▸
+                // Save note). The toolbar buttons remain click/AX
+                // affordances; each chord's single owner is its menu
+                // item here. Labels match the palette registrations.
+                // Enablement mirrors the corresponding toolbar button.
+                Button("Tasks Review") {
+                    appState.openTasksReview()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(appState.currentSession == nil)
+
+                Button("Citation Summary") {
+                    appState.isCitationSummaryOpen = true
+                }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+                .disabled(appState.selectedFilePath == nil)
+
+                Button("Jump to Bibliography") {
+                    appState.jumpToBibliographyFromExpandedCitation()
+                }
+                .keyboardShortcut("j", modifiers: .command)
+                .disabled(appState.expandedCitation == nil)
 
                 Divider()
 
@@ -355,7 +445,14 @@ struct SlateMacApp: App {
                     appState.requestCommandPalette()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+            }
 
+            // Edit-menu additions. HIG places Find under Edit (Edit ▸
+            // Find ▸ Find… ⌘F); the #422 requirement is only that the
+            // chord be MENU-BAR-homed (reachable regardless of focus),
+            // which any menu satisfies — so the HIG-correct Edit
+            // placement costs nothing.
+            CommandGroup(after: .textEditing) {
                 // #422 (F-E1): Cmd+F lived only on the toolbar
                 // button's keyboardShortcut, which proved
                 // unreachable with focus in the sidebar (VO test).
@@ -371,6 +468,31 @@ struct SlateMacApp: App {
                     appState.requestFindInFocusedSurface()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
+
+                Divider()
+
+                // ⇧⌘R migrated from NotePropertiesHeader's hidden
+                // opacity-0 button (the #422 dead-zone pattern, plus
+                // the chord silently vanished whenever the properties
+                // header wasn't mounted). A vault-wide bulk edit is an
+                // Edit-menu verb; label matches the palette
+                // registration.
+                Button("Bulk Rename Properties…") {
+                    appState.isBulkRenameSheetOpen = true
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(appState.currentSession == nil)
+            }
+
+            // Help ▸ Slate Help (HIG: the Help menu's first item is
+            // "<AppName> Help"). Routes through the same `openHelp`
+            // the palette and utility bar use. `replacing: .help`
+            // rather than `after:` — the default SwiftUI Help menu
+            // only carries the stub search field.
+            CommandGroup(replacing: .help) {
+                Button("Slate Help") {
+                    appState.openHelp()
+                }
             }
         }
 

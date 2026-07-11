@@ -38,6 +38,57 @@ final class HotkeySpokenTests: XCTestCase {
         )
     }
 
+    // MARK: - Arrow glyphs
+
+    /// The pane-focus registry chords (⌥⌘←→↑↓) as the palette speaks
+    /// them. Before the arrow entries landed, the raw glyph passed
+    /// through the walk and VoiceOver elided it at most punctuation
+    /// levels — "Option Command" with no key.
+    func testArrowChordsSpeakArrowNames() {
+        XCTAssertEqual(
+            HotkeySpoken.spoken(for: "⌥⌘←"), "Option Command Left Arrow")
+        XCTAssertEqual(
+            HotkeySpoken.spoken(for: "⌥⌘→"), "Option Command Right Arrow")
+        XCTAssertEqual(
+            HotkeySpoken.spoken(for: "⌥⌘↑"), "Option Command Up Arrow")
+        XCTAssertEqual(
+            HotkeySpoken.spoken(for: "⌥⌘↓"), "Option Command Down Arrow")
+    }
+
+    /// The tab-move chords (⌃⌘←→) — the second arrow-chord family in
+    /// the registry.
+    func testTabMoveArrowChordsSpeak() {
+        XCTAssertEqual(
+            HotkeySpoken.spoken(for: "⌃⌘←"), "Control Command Left Arrow")
+        XCTAssertEqual(
+            HotkeySpoken.spoken(for: "⌃⌘→"), "Control Command Right Arrow")
+    }
+
+    /// Every arrow-carrying hotkeyHint in the LIVE registry must speak
+    /// with no raw glyph surviving — the drift-shaped guard that keeps
+    /// a future arrow chord from re-opening the elision gap.
+    @MainActor
+    func testEveryRegistryArrowChordSpeaksWithoutRawGlyphs() {
+        let appState = AppState()
+        let arrowHints = appState.commandRegistry.list()
+            .compactMap(\.hotkeyHint)
+            .filter { $0.contains(where: { "↑↓←→".contains($0) }) }
+        XCTAssertFalse(
+            arrowHints.isEmpty,
+            "Expected arrow-carrying registry chords (pane focus / tab move); "
+                + "if they were removed, drop this guard or repoint it."
+        )
+        for hint in arrowHints {
+            let spoken = HotkeySpoken.spoken(for: hint)
+            for glyph in "↑↓←→" {
+                XCTAssertFalse(
+                    spoken.contains(glyph),
+                    "Raw arrow glyph survived in spoken form of \(hint): \(spoken)"
+                )
+            }
+        }
+    }
+
     // MARK: - Punctuation keys
 
     func testTrailingCommaSpelledOut() {
