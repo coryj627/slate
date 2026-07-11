@@ -117,6 +117,33 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
         format: OutputFormat,
     },
+    /// List a note's version history; show or restore one version.
+    History {
+        /// Path to the vault directory.
+        vault_path: PathBuf,
+        /// Vault-relative note path.
+        note_path: String,
+        /// Print the verified content of ONE version (by full hash)
+        /// instead of listing. tsv is rejected for this mode — a
+        /// document body is not a table.
+        #[arg(long, conflicts_with = "restore")]
+        show: Option<String>,
+        /// Restore ONE version (by full hash) through the standard
+        /// save machinery: compare-and-swap on the current hash (a
+        /// racing writer surfaces as a write conflict), atomic write,
+        /// its own history entry.
+        #[arg(long, conflicts_with = "show")]
+        restore: Option<String>,
+        /// Maximum versions to list (list mode only; newest first).
+        /// Must be at least 1 — `total` in the json envelope always
+        /// reports the full history count regardless of truncation,
+        /// so a count-only probe is `--limit 1`.
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..))]
+        limit: u32,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+        format: OutputFormat,
+    },
     /// Full-text search the vault; prints ranked hits with snippets.
     Search {
         /// Path to the vault directory.
@@ -275,6 +302,7 @@ impl Command {
             Command::Query { .. } => "query",
             Command::Write { .. } => "write",
             Command::Read { .. } => "read",
+            Command::History { .. } => "history",
             Command::List { .. } => "list",
             Command::Links { .. } => "links",
             Command::Properties { .. } => "properties",
@@ -468,6 +496,31 @@ fn dispatch(
                 });
             }
             let (vault, output) = commands::read::run(&vault_path, &note_path, cancel)?;
+            Ok((vault, format, output, 0))
+        }
+        Command::History {
+            vault_path,
+            note_path,
+            show,
+            restore,
+            limit,
+            format,
+        } => {
+            let mode = match (show, restore) {
+                (Some(hash), None) => {
+                    // A version body is a document, not a table (the
+                    // `read` rule).
+                    if format == OutputFormat::Tsv {
+                        return Err(CliError::Usage {
+                            message: "tsv not supported for history --show".to_string(),
+                        });
+                    }
+                    commands::history::HistoryMode::Show { hash }
+                }
+                (None, Some(hash)) => commands::history::HistoryMode::Restore { hash },
+                _ => commands::history::HistoryMode::List { limit },
+            };
+            let (vault, output) = commands::history::run(&vault_path, &note_path, mode, cancel)?;
             Ok((vault, format, output, 0))
         }
         Command::List {

@@ -10,6 +10,7 @@
 //! script from clap's grammar and touches no vault.
 
 pub mod completions;
+pub mod history;
 pub mod links;
 pub mod list;
 pub mod open;
