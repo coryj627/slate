@@ -739,12 +739,6 @@ struct CanvasSettingsTab: View {
 struct HistorySettingsTab: View {
     @EnvironmentObject var appState: AppState
     @State private var retentionDays: UInt32 = 90
-    /// Consumed-once guard so a programmatic reseed (vault switch
-    /// while Settings stays mounted) doesn't round-trip back into
-    /// `set_history_prefs` as if the user picked it (adversarial
-    /// review: stale UI state must never overwrite the NEW vault's
-    /// persisted setting).
-    @State private var isReseeding = false
 
     /// The picker's fixed menu (o_spec §O-5): 30 / 90 (default) /
     /// 180 / 365 days.
@@ -756,17 +750,26 @@ struct HistorySettingsTab: View {
     var body: some View {
         Form {
             Section {
-                Picker("Keep edit history for", selection: $retentionDays) {
+                // Persistence rides the binding SETTER — only a user
+                // gesture goes through it. Programmatic reseeds (vault
+                // switch below) write the @State directly, so there is
+                // no suppression flag to get out of sync under
+                // coalesced or rapid switches (adversarial round 2).
+                Picker(
+                    "Keep edit history for",
+                    selection: Binding(
+                        get: { retentionDays },
+                        set: { newValue in
+                            retentionDays = newValue
+                            Task {
+                                await appState.applyHistoryRetention(days: newValue)
+                            }
+                        }
+                    )
+                ) {
                     ForEach(Self.retentionChoices, id: \.self) { days in
                         Text("\(days) days").tag(days)
                     }
-                }
-                .onChange(of: retentionDays) { _, newValue in
-                    if isReseeding {
-                        isReseeding = false
-                        return
-                    }
-                    Task { await appState.applyHistoryRetention(days: newValue) }
                 }
                 .disabled(!appState.isVaultOpen)
             } footer: {
@@ -793,12 +796,10 @@ struct HistorySettingsTab: View {
         .onChange(of: appState.currentVaultURL) { _, _ in
             // Settings can stay mounted across a vault switch; reseed
             // from the NEW session (or back to the default when the
-            // vault closed) without persisting the programmatic change.
-            let fresh = appState.currentHistoryRetentionDays()
-            if fresh != retentionDays {
-                isReseeding = true
-                retentionDays = fresh
-            }
+            // vault closed). Direct @State write — the persistence
+            // path is the picker binding's setter, which only user
+            // gestures reach.
+            retentionDays = appState.currentHistoryRetentionDays()
         }
         .navigationTitle("History")
     }

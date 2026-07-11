@@ -299,9 +299,12 @@ final class HistoryPanelTests: XCTestCase {
         state.updateEditorText("unsaved edits\n")
         XCTAssertTrue(state.hasUnsavedChanges)
 
-        let request = HistoryRestoreRequest(
-            path: "n.md", versionHash: r0.newContentHash,
-            formattedDate: "test date")
+        state.requestRestore(
+            versionHash: r0.newContentHash, formattedDate: "test date")
+        guard let request = state.historyRestoreRequest else {
+            return XCTFail("staging failed")
+        }
+        state.historyRestoreRequest = nil
         await state.performRestore(request)
 
         XCTAssertNotNil(
@@ -337,9 +340,12 @@ final class HistoryPanelTests: XCTestCase {
         await state.noteLoadTask?.value
         await state.historyLoadTask?.value
         let focusBefore = state.historyFocusHeadToken
-        let request = HistoryRestoreRequest(
-            path: "n.md", versionHash: r0.newContentHash,
-            formattedDate: "test date")
+        state.requestRestore(
+            versionHash: r0.newContentHash, formattedDate: "test date")
+        guard let request = state.historyRestoreRequest else {
+            return XCTFail("staging failed")
+        }
+        state.historyRestoreRequest = nil
         await state.performRestore(request)
 
         XCTAssertNil(state.historyAlert)
@@ -375,9 +381,12 @@ final class HistoryPanelTests: XCTestCase {
         // compare-and-swap must fail and route to the conflict alert.
         try write("external overwrite\n", to: dir, name: "n.md")
 
-        let request = HistoryRestoreRequest(
-            path: "n.md", versionHash: r0.newContentHash,
-            formattedDate: "test date")
+        state.requestRestore(
+            versionHash: r0.newContentHash, formattedDate: "test date")
+        guard let request = state.historyRestoreRequest else {
+            return XCTFail("staging failed")
+        }
+        state.historyRestoreRequest = nil
         await state.performRestore(request)
 
         XCTAssertNotNil(state.currentSaveConflict, "WriteConflict routes to the standard flow")
@@ -425,14 +434,61 @@ final class HistoryPanelTests: XCTestCase {
             try data.write(to: log)
         }
 
-        let request = HistoryRestoreRequest(
-            path: "n.md", versionHash: r0.newContentHash,
-            formattedDate: "test date")
+        state.requestRestore(
+            versionHash: r0.newContentHash, formattedDate: "test date")
+        guard let request = state.historyRestoreRequest else {
+            return XCTFail("staging failed")
+        }
+        state.historyRestoreRequest = nil
         await state.performRestore(request)
 
         XCTAssertNotNil(state.historyAlert, "damage surfaces as an alert")
         XCTAssertEqual(
             try session.readText(path: "n.md"), "changed\n", "nothing written")
+    }
+
+    /// Round 2 High: a restore staged on note A and confirmed after
+    /// the user switched to note B must do NOTHING — never associate
+    /// A's captured state with B, never write either file.
+    func testRestoreStagedThenNoteSwitchedIsDropped() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer) {
+            try self.write("original a\n", to: $0, name: "a.md")
+            try self.write("original b\n", to: $0, name: "b.md")
+        }
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let r0 = try session.saveText(
+            path: "a.md", contents: "original a\n", expectedContentHash: nil)
+        _ = try session.saveText(
+            path: "a.md", contents: "changed a\n",
+            expectedContentHash: r0.newContentHash)
+
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+
+        state.requestRestore(
+            versionHash: r0.newContentHash, formattedDate: "test date")
+        guard let request = state.historyRestoreRequest else {
+            return XCTFail("staging failed")
+        }
+        state.historyRestoreRequest = nil
+
+        // The user moves on before confirming.
+        state.selectedFilePath = "b.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+
+        await state.performRestore(request)
+        XCTAssertNil(state.historyAlert)
+        XCTAssertNil(state.currentSaveConflict)
+        XCTAssertEqual(try session.readText(path: "a.md"), "changed a\n")
+        XCTAssertEqual(try session.readText(path: "b.md"), "original b\n")
+        XCTAssertTrue(
+            announcer.posts.allSatisfy { !$0.message.contains("Restored") },
+            "no restore announcement for a dropped request")
     }
 
     // MARK: - Deleted segment
@@ -762,11 +818,11 @@ final class HistoryPanelTests: XCTestCase {
             source.contains(".onChange(of: appState.currentVaultURL)"),
             "the History tab reseeds on vault identity change")
         XCTAssertTrue(
-            source.contains("isReseeding = true"),
-            "programmatic reseeds are marked...")
-        XCTAssertTrue(
-            source.contains("if isReseeding {"),
-            "...and consumed before persisting")
+            source.contains("await appState.applyHistoryRetention(days: newValue)"),
+            "persistence rides the picker binding's setter...")
+        XCTAssertFalse(
+            source.contains("isReseeding"),
+            "...with no suppression flag to desynchronize (round 2)")
     }
 
     private func appStateHistorySource() throws -> String {

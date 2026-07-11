@@ -14,13 +14,26 @@ struct DisplayError: Error, Equatable {
     let message: String
 }
 
-/// One pending "Restore version?" confirmation.
+/// One pending "Restore version?" confirmation. Everything the
+/// perform step needs is CAPTURED at staging time (adversarial round
+/// 2): reading selection-scoped state at confirmation time would
+/// associate another note's buffer/hash with this request if the
+/// selection changed between staging and confirming.
 struct HistoryRestoreRequest: Identifiable, Equatable {
     let id = UUID()
     let path: String
     let versionHash: String
     /// Pre-formatted absolute date for the alert copy.
     let formattedDate: String
+    /// The loaded document's hash at staging — the compare-and-swap
+    /// guard restoreVersion runs against.
+    let expectedContentHash: String
+    /// The loaded buffer body at staging — what "Keep Mine" preserves
+    /// if the restore conflicts.
+    let attemptedBody: String
+    /// Whether the buffer was dirty at staging (routes straight to
+    /// the conflict flow, before touching disk).
+    let bufferWasDirty: Bool
 }
 
 /// A history-specific error alert (integrity failure, recovery
@@ -58,6 +71,26 @@ final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
 
 extension AppState {
     // MARK: - Note-open funnel
+
+    /// Schedule a history load STRICTLY AFTER any in-flight one
+    /// (adversarial round 2 High): without serialization, load B can
+    /// compute its verdict against the old baseline while load A's
+    /// post-guard `markOpened` is still in flight — B then publishes a
+    /// verdict whose comparison point no longer matches the persisted
+    /// baseline. Chaining on the previous task means a load's compute
+    /// can never overlap another's mark. All production entry points
+    /// (the selection funnel and the restore refresh) route through
+    /// here; the publish guards inside remain the stale-drop defence.
+    @discardableResult
+    func scheduleHistoryLoad(path: String) -> Task<Void, Never> {
+        let previous = historyLoadTask
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.loadHistoryForCurrentNote(path: path)
+        }
+        historyLoadTask = task
+        return task
+    }
 
     /// Load the selected note's history surfaces in ONE detached
     /// slice, in the pinned order (o_spec §O-5 g3):
@@ -118,6 +151,11 @@ extension AppState {
             historyLoadError = nil
             // The open is REAL (guards passed): move the baseline now,
             // AFTER the verdict — the pinned compute-then-mark order.
+            // A selection switch DURING this mark is benign — the open
+            // it records genuinely happened and its verdict was
+            // published above; competing loads can't interleave with
+            // it because every load is serialized through
+            // scheduleHistoryLoad.
             if sinceOpenEnabled {
                 let markResult: Result<Void, VaultError> =
                     await Task.detached(priority: .userInitiated) {
@@ -221,11 +259,16 @@ extension AppState {
 
     // MARK: - Restore flow
 
-    /// Row action: stage the confirmation alert.
+    /// Row action: stage the confirmation alert, capturing the
+    /// selection-scoped inputs NOW (see HistoryRestoreRequest).
     func requestRestore(versionHash: String, formattedDate: String) {
-        guard let path = selectedFilePath else { return }
+        guard let path = selectedFilePath, let expectedHash = currentNoteContentHash
+        else { return }
         historyRestoreRequest = HistoryRestoreRequest(
-            path: path, versionHash: versionHash, formattedDate: formattedDate)
+            path: path, versionHash: versionHash, formattedDate: formattedDate,
+            expectedContentHash: expectedHash,
+            attemptedBody: currentNoteText ?? "",
+            bufferWasDirty: hasUnsavedChanges)
     }
 
     /// Confirmed restore. Passes the loaded document's hash as the
@@ -239,14 +282,20 @@ extension AppState {
     /// head row (position 0 — the restored state; WCAG 2.4.3).
     func performRestore(_ request: HistoryRestoreRequest) async {
         guard let session = currentSession else { return }
-        guard let expectedHash = currentNoteContentHash else { return }
+        // The request is selection-scoped: if the user moved on
+        // between staging and confirming, do nothing — never mix one
+        // note's captured state with another's path (round 2 High).
+        guard selectedFilePath == request.path, loadedFilePath == request.path
+        else { return }
+        let expectedHash = request.expectedContentHash
 
-        if hasUnsavedChanges {
+        if request.bufferWasDirty {
             // Buffer-dirty: same surface as an external-change save
-            // conflict — keep-mine saves the buffer, reload discards.
+            // conflict — keep-mine saves the CAPTURED buffer, reload
+            // discards.
             currentSaveConflict = SaveConflict(
                 path: request.path,
-                attemptedContents: currentNoteText ?? "",
+                attemptedContents: request.attemptedBody,
                 currentContentHash: expectedHash,
                 expectedContentHash: expectedHash,
                 currentMtimeMs: 0
@@ -276,21 +325,24 @@ extension AppState {
                 "Restored version from \(request.formattedDate).", priority: .high)
             if selectedFilePath == request.path {
                 await loadCurrentNote(path: request.path)
-                await loadHistoryForCurrentNote(path: request.path)
+                await scheduleHistoryLoad(path: request.path).value
                 historyFocusHeadToken &+= 1
             }
         case .failure(
             .WriteConflict(
                 let currentContentHash, let expectedContentHash, let currentMtimeMs)):
-            // "Mine" = MY LOADED buffer body — the same semantics as
-            // every other conflict producer: Keep Mine writes my state
-            // back over the external change (then the version list is
-            // fresh for a retry). Re-reading the DISK body here would
-            // make Keep Mine a no-op that writes the external content
-            // over itself (adversarial round 1 High).
+            // "Mine" = the CAPTURED buffer body for request.path — the
+            // same semantics as every other conflict producer: Keep
+            // Mine writes my state back over the external change. The
+            // capture (not a live read) matters twice over: a live
+            // DISK re-read made Keep Mine a no-op (round 1), and a
+            // live BUFFER read after the await could carry another
+            // note's body if the selection switched mid-restore
+            // (round 2). The resolver's own loadedFilePath guard
+            // additionally no-ops a conflict whose note is gone.
             currentSaveConflict = SaveConflict(
                 path: request.path,
-                attemptedContents: currentNoteText ?? "",
+                attemptedContents: request.attemptedBody,
                 currentContentHash: currentContentHash,
                 expectedContentHash: expectedContentHash,
                 currentMtimeMs: currentMtimeMs

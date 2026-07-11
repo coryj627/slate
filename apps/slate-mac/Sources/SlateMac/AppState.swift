@@ -2606,10 +2606,10 @@ final class AppState: ObservableObject {
             await self?.loadCurrentNoteDiagramBlocks(path: path)
         }
         // History leaf (O-5, #543): version list + the pref-gated
-        // since-open funnel (compute-then-mark, one detached slice).
-        historyLoadTask = Task { [weak self] in
-            await self?.loadHistoryForCurrentNote(path: path)
-        }
+        // since-open funnel (compute-then-mark), strictly serialized
+        // behind any in-flight load (round 2 — see
+        // scheduleHistoryLoad).
+        scheduleHistoryLoad(path: path)
         // Milestone L (#279): citations for the current note. Same
         // fan-out shape — race-guarded by selectedFilePath == path
         // inside the loader.
