@@ -3051,21 +3051,56 @@ impl VaultSession {
             .ok_or_else(|| VaultError::InvalidArgument {
                 message: format!("no deleted-file history for {path:?}"),
             })?;
+        self.recover_remnant_to(remnant, path)
+    }
+
+    /// `recover_deleted_file` to a CALLER-CHOSEN destination (#795
+    /// "Restore As…"): the occupied-destination case's escape hatch.
+    /// The remnant is looked up by its original deleted path; the
+    /// content lands at `destination` via the same no-clobber
+    /// machinery, and the remnant log re-binds to the new path (its
+    /// history — including the pre-delete versions — follows the
+    /// file, immediately queryable through the O-5 repopulation).
+    pub fn recover_deleted_file_as(
+        &self,
+        path: &str,
+        destination: &str,
+    ) -> Result<SaveReport, VaultError> {
+        let remnant = self
+            .remnant_logs()
+            .into_iter()
+            .filter(|r| r.effective_path == path)
+            .max_by_key(|r| r.tail_timestamp_ms)
+            .ok_or_else(|| VaultError::InvalidArgument {
+                message: format!("no deleted-file history for {path:?}"),
+            })?;
+        self.recover_remnant_to(remnant, destination)
+    }
+
+    /// Shared tail of the two recovery entry points: reconstruct +
+    /// verify the remnant's content, publish it exclusively at
+    /// `destination` with the log re-bound, and drop the remnant from
+    /// the Deleted list.
+    fn recover_remnant_to(
+        &self,
+        remnant: RemnantLog,
+        destination: &str,
+    ) -> Result<SaveReport, VaultError> {
         let entries = crate::oplog::read_oplog(&self.config.cache_dir, &remnant.stem)
             .map_err(VaultError::Io)?;
         let content = crate::oplog::reconstruct_at_tail(&entries).map_err(|e| {
             VaultError::HistoryUnavailable {
-                path: path.to_string(),
+                path: destination.to_string(),
                 reason: format!("deleted-file history failed to reconstruct: {e}"),
             }
         })?;
         if crate::vault::content_hash(content.as_bytes()) != remnant.tail_hash {
             return Err(VaultError::HistoryUnavailable {
-                path: path.to_string(),
+                path: destination.to_string(),
                 reason: "deleted-file history failed integrity verification".into(),
             });
         }
-        let report = self.create_exclusive_binding(path, &content, Some(&remnant.stem))?;
+        let report = self.create_exclusive_binding(destination, &content, Some(&remnant.stem))?;
         // The remnant is a remnant no more (one lock hold: retain +
         // generation bump are atomic together).
         {

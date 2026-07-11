@@ -600,6 +600,20 @@ impl VaultSession {
 
     /// Create-if-absent write: existing destination (on disk or in the
     /// index) → `DestinationExists`; else the standard save machinery.
+    /// Restore As… (#795): recover a deleted file's tail content to
+    /// a CALLER-CHOSEN destination (no-clobber; the remnant log
+    /// re-binds to the new path, history following the file).
+    pub fn recover_deleted_file_as(
+        &self,
+        path: String,
+        destination: String,
+    ) -> Result<SaveReport, VaultError> {
+        Ok(self
+            .inner
+            .recover_deleted_file_as(&path, &destination)?
+            .into())
+    }
+
     pub fn create_exclusive(
         &self,
         path: String,
