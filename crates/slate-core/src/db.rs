@@ -163,6 +163,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "files: oplog_name binding column + legacy-id stamping (O-1 #539)",
         sql: include_str!("../migrations/027_files_oplog_name.sql"),
     },
+    Migration {
+        description: "open_marks: changes-since-last-open baselines (O-4 #542)",
+        sql: include_str!("../migrations/028_open_marks.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

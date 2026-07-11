@@ -594,6 +594,33 @@ impl VaultSession {
         Ok(self.inner.create_exclusive(&path, &content)?.into())
     }
 
+    /// Structured diff between two (verified) versions (O-4 #542) —
+    /// named operations in document order, never a side-by-side dump.
+    pub fn diff_versions(
+        &self,
+        path: String,
+        from_hash: String,
+        to_hash: String,
+    ) -> Result<StructuredDiff, VaultError> {
+        Ok(self
+            .inner
+            .diff_versions(&path, &from_hash, &to_hash)?
+            .into())
+    }
+
+    /// What changed since the last recorded open. Hosts MUST call this
+    /// BEFORE `mark_opened` (the pinned funnel order — marking first
+    /// always reports Unchanged).
+    pub fn changes_since_last_open(&self, path: String) -> Result<ChangesSinceOpen, VaultError> {
+        Ok(self.inner.changes_since_last_open(&path)?.into())
+    }
+
+    /// Record "opened now, at this content" into `open_marks`.
+    pub fn mark_opened(&self, path: String) -> Result<(), VaultError> {
+        self.inner.mark_opened(&path)?;
+        Ok(())
+    }
+
     /// All outgoing links from `path` in document order, including
     /// resolved (internal-and-found), unresolved (internal-and-missing),
     /// and external links. UI uses `kind` + `is_external` +
@@ -2381,6 +2408,120 @@ impl From<core::OpAnnotation> for OpAnnotation {
 /// annotations. `inner_payload` is interpreted per `inner_kind`
 /// exactly like a bare entry's payload (a wrapped `EditBatch` feeds
 /// [`decode_edit_batch_ops`]).
+/// Operation classes for structured diffs (O-4 #542). Mirrors
+/// `slate_core::DiffOpClass`.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum DiffOpClass {
+    HeadingAdded,
+    HeadingRemoved,
+    HeadingEdited,
+    PropertySet,
+    PropertyRemoved,
+    ParagraphAdded,
+    ParagraphRemoved,
+    ParagraphEdited,
+    ListItemAdded,
+    ListItemRemoved,
+    ListItemEdited,
+    TaskStatusChanged,
+    CodeBlockEdited,
+    MathBlockEdited,
+    DiagramEdited,
+    TableEdited,
+    Other,
+}
+
+impl From<core::DiffOpClass> for DiffOpClass {
+    fn from(k: core::DiffOpClass) -> Self {
+        use core::DiffOpClass as C;
+        match k {
+            C::HeadingAdded => DiffOpClass::HeadingAdded,
+            C::HeadingRemoved => DiffOpClass::HeadingRemoved,
+            C::HeadingEdited => DiffOpClass::HeadingEdited,
+            C::PropertySet => DiffOpClass::PropertySet,
+            C::PropertyRemoved => DiffOpClass::PropertyRemoved,
+            C::ParagraphAdded => DiffOpClass::ParagraphAdded,
+            C::ParagraphRemoved => DiffOpClass::ParagraphRemoved,
+            C::ParagraphEdited => DiffOpClass::ParagraphEdited,
+            C::ListItemAdded => DiffOpClass::ListItemAdded,
+            C::ListItemRemoved => DiffOpClass::ListItemRemoved,
+            C::ListItemEdited => DiffOpClass::ListItemEdited,
+            C::TaskStatusChanged => DiffOpClass::TaskStatusChanged,
+            C::CodeBlockEdited => DiffOpClass::CodeBlockEdited,
+            C::MathBlockEdited => DiffOpClass::MathBlockEdited,
+            C::DiagramEdited => DiffOpClass::DiagramEdited,
+            C::TableEdited => DiffOpClass::TableEdited,
+            C::Other => DiffOpClass::Other,
+        }
+    }
+}
+
+/// One named diff operation (O-4 #542). Mirrors
+/// `slate_core::DiffOperation`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DiffOperation {
+    pub kind: DiffOpClass,
+    pub line: u32,
+    pub line_end: u32,
+    pub semantic_description: String,
+    pub detail: Option<String>,
+}
+
+impl From<core::DiffOperation> for DiffOperation {
+    fn from(op: core::DiffOperation) -> Self {
+        Self {
+            kind: op.kind.into(),
+            line: op.line,
+            line_end: op.line_end,
+            semantic_description: op.semantic_description,
+            detail: op.detail,
+        }
+    }
+}
+
+/// One structured diff (O-4 #542). Mirrors `slate_core::StructuredDiff`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct StructuredDiff {
+    pub file_path: String,
+    pub from_hash: String,
+    pub to_hash: String,
+    pub operations: Vec<DiffOperation>,
+    pub audio_summary: String,
+}
+
+impl From<core::StructuredDiff> for StructuredDiff {
+    fn from(d: core::StructuredDiff) -> Self {
+        Self {
+            file_path: d.file_path,
+            from_hash: d.from_hash,
+            to_hash: d.to_hash,
+            operations: d.operations.into_iter().map(Into::into).collect(),
+            audio_summary: d.audio_summary,
+        }
+    }
+}
+
+/// The changes-since-last-open verdict (O-4 #542). Mirrors
+/// `slate_core::ChangesSinceOpen`.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum ChangesSinceOpen {
+    NoBaseline,
+    Unchanged,
+    Diff { diff: StructuredDiff },
+    BaselineCompacted,
+}
+
+impl From<core::ChangesSinceOpen> for ChangesSinceOpen {
+    fn from(c: core::ChangesSinceOpen) -> Self {
+        match c {
+            core::ChangesSinceOpen::NoBaseline => ChangesSinceOpen::NoBaseline,
+            core::ChangesSinceOpen::Unchanged => ChangesSinceOpen::Unchanged,
+            core::ChangesSinceOpen::Diff(diff) => ChangesSinceOpen::Diff { diff: diff.into() },
+            core::ChangesSinceOpen::BaselineCompacted => ChangesSinceOpen::BaselineCompacted,
+        }
+    }
+}
+
 #[derive(Debug, uniffi::Record)]
 pub struct AnnotatedPayload {
     pub inner_kind: OpKind,

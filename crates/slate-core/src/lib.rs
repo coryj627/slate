@@ -64,6 +64,7 @@ pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod structural;
+pub mod structured_diff;
 pub mod sync_detect;
 pub mod tags_db;
 pub mod tasks;
@@ -109,6 +110,7 @@ pub use oplog::{
 };
 pub use properties_db::PropertyKeySummary;
 pub use reading::{ReadingBlock, ReadingBlockKind, reading_blocks_source};
+pub use structured_diff::{DiffOpClass, DiffOperation, StructuredDiff, structured_diff};
 pub use sync_detect::{
     DetectedSyncProvider, LiveSyncConfig, LiveSyncConfigStatus, RiskLevel, SyncDetectionReport,
     SyncProviderKind, detect_sync_providers, read_livesync_config,
@@ -126,13 +128,13 @@ pub use session::{
     BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasLoadWarning,
     CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement,
     CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
-    CanvasWhereAmI, ColumnRole, CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus,
-    DashboardSummary, DeletedFileEntry, DirListing, DirNodeSummary, EventErrorCode, ExportFormat,
-    FileFilter, FileMetadata, FileSummary, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary,
-    Page, Paging, RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport,
-    RenameSkipReason, RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax,
-    SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport, SessionConfig,
-    VaultEventListener, VaultSession, VersionSummary,
+    CanvasWhereAmI, ChangesSinceOpen, ColumnRole, CslStyleInfo, Dashboard, DashboardSection,
+    DashboardSectionStatus, DashboardSummary, DeletedFileEntry, DirListing, DirNodeSummary,
+    EventErrorCode, ExportFormat, FileFilter, FileMetadata, FileSummary, NoteLoadBundle,
+    NotePartsBundle, OpAnnotationSummary, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
+    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
+    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
+    SessionConfig, VaultEventListener, VaultSession, VersionSummary,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
