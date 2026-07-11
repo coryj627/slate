@@ -85,6 +85,25 @@ struct PrefsJsonStore {
         try ensureSlateDirExists()
         let url = prefsURL
 
+        // Cross-writer serialization (O-5 adversarial review): the
+        // core's history-prefs writer does the same read-modify-write
+        // on this file from Rust. Atomic rename prevents torn JSON but
+        // NOT lost updates — two cycles that both read the old file
+        // drop whichever section renamed first. Both writers therefore
+        // hold an exclusive flock on `prefs.json.lock` across the
+        // whole cycle.
+        let lockFD = open(url.path + ".lock", O_CREAT | O_WRONLY, 0o644)
+        guard lockFD >= 0 else {
+            throw PrefsJsonStoreError.writeFailed(
+                path: url.path, reason: "prefs lock unavailable")
+        }
+        defer { close(lockFD) }
+        guard flock(lockFD, LOCK_EX) == 0 else {
+            throw PrefsJsonStoreError.writeFailed(
+                path: url.path, reason: "prefs lock failed")
+        }
+        defer { flock(lockFD, LOCK_UN) }
+
         // Read existing top-level object to preserve unrelated keys.
         var root: [String: Any] = [:]
         if FileManager.default.fileExists(atPath: url.path) {

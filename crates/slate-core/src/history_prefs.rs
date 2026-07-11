@@ -17,6 +17,37 @@ use std::path::Path;
 
 use crate::VaultError;
 
+/// Cross-process, cross-language write serialization (adversarial
+/// review): every prefs.json mutation — this module AND the Mac app's
+/// `PrefsJsonStore` (bibliography section) — takes an exclusive
+/// `flock` on the sidecar `prefs.json.lock` for the whole
+/// read→merge→write→rename cycle. Atomic rename alone prevents torn
+/// JSON but NOT lost updates: two read-modify-write cycles that both
+/// read the old file drop whichever section renamed first.
+struct PrefsLock {
+    _file: std::fs::File,
+}
+
+impl PrefsLock {
+    fn acquire(prefs_path: &Path) -> std::io::Result<Self> {
+        let lock_path = prefs_path.with_extension("json.lock");
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        // Blocking exclusive lock; released on close (Drop).
+        let rc = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self { _file: file })
+    }
+}
+
 /// The `history` section of `.slate/prefs.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HistoryPrefs {
@@ -76,6 +107,11 @@ pub fn read_history_prefs(prefs_path: &Path) -> Result<Option<HistoryPrefs>, Vau
 /// the parent directory is created if missing (a fresh vault may not
 /// have written `.slate/prefs.json` yet).
 pub fn write_history_prefs(prefs_path: &Path, prefs: &HistoryPrefs) -> Result<(), VaultError> {
+    // Exclusive cross-writer lock for the whole read-modify-write.
+    let _lock = PrefsLock::acquire(prefs_path).map_err(|e| VaultError::PrefsUnreadable {
+        path: prefs_path.display().to_string(),
+        reason: format!("prefs lock unavailable: {e}"),
+    })?;
     let mut root: serde_json::Value = match std::fs::read_to_string(prefs_path) {
         Ok(contents) => {
             serde_json::from_str(&contents).map_err(|e| VaultError::PrefsUnreadable {
@@ -110,7 +146,15 @@ pub fn write_history_prefs(prefs_path: &Path, prefs: &HistoryPrefs) -> Result<()
     if let Some(parent) = prefs_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = prefs_path.with_extension("json.tmp");
+    // Unique temp name: concurrent writers (already serialized by the
+    // lock, but belt-and-braces for lock-bypassing readers/tools)
+    // never share a staging file.
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = prefs_path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, serialized.as_bytes())?;
     std::fs::rename(&tmp, prefs_path)?;
     Ok(())

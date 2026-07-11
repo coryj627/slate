@@ -139,6 +139,71 @@ final class HistoryPanelTests: XCTestCase {
         )
     }
 
+    /// Adversarial round 1 High: a STALE history load (the user
+    /// navigated away while it was in flight) must neither publish its
+    /// verdict NOR move the note's baseline. The load is parked
+    /// deterministically inside the race window (post-compute,
+    /// pre-guard) on the `historyPublishGate` seam; the selection
+    /// switch completes fully; then the stale load is released. If it
+    /// had marked, the later genuine reopen would report `.unchanged`
+    /// and the user's changes would be swallowed.
+    func testStaleHistoryLoadNeitherPublishesNorMarks() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer) {
+            try self.write("v1\n", to: $0, name: "n.md")
+            try self.write("other\n", to: $0, name: "m.md")
+        }
+        state.setHistoryShowChangesSinceOpen(true)
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        _ = try session.saveText(path: "n.md", contents: "v1\n", expectedContentHash: nil)
+
+        // Genuine first open of n.md: computes (.noBaseline) + marks.
+        state.selectedFilePath = "n.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+        XCTAssertEqual(state.sinceOpenChanges, .noBaseline)
+
+        // Edit the note so an honest future reopen must report .diff.
+        _ = try session.saveText(
+            path: "n.md", contents: "v1\nv2 added\n", expectedContentHash: nil)
+
+        // Park the NEXT load for n.md inside the race window.
+        let entered = expectation(description: "stale load parked in the race window")
+        let (gateStream, release) = AsyncStream.makeStream(of: Void.self)
+        state.historyPublishGate = {
+            entered.fulfill()
+            for await _ in gateStream {}
+        }
+        let staleLoad = Task { await state.loadHistoryForCurrentNote(path: "n.md") }
+        await fulfillment(of: [entered], timeout: 10)
+        state.historyPublishGate = nil
+
+        // Navigate away while the stale load is suspended; m.md's own
+        // funnel completes (bumping the seq).
+        state.selectedFilePath = "m.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+        let verdictOnM = state.sinceOpenChanges
+
+        // Release the stale load: it must change NOTHING.
+        release.finish()
+        await staleLoad.value
+        XCTAssertEqual(state.sinceOpenChanges, verdictOnM, "stale publish blocked")
+
+        // The honest reopen of n.md reports .diff — proof the stale
+        // load never marked (a stale mark would make this .unchanged).
+        state.selectedFilePath = "n.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+        guard case .diff = state.sinceOpenChanges else {
+            return XCTFail(
+                "stale load moved the baseline: \(String(describing: state.sinceOpenChanges))"
+            )
+        }
+    }
+
     // MARK: - Version list
 
     func testVersionListLoadsFiltersAndPages() async throws {
@@ -167,6 +232,87 @@ final class HistoryPanelTests: XCTestCase {
         // Newest first; position identity.
         XCTAssertEqual(state.historyVersions.first?.positionFromTail, 0)
         XCTAssertFalse(state.historyVersions[0].audioFragment.isEmpty)
+
+        // Markers: a rename appends a PathChanged marker. It reaches
+        // the published list (tests/CLI want the full ledger) and the
+        // panel's default filter hides it; the toggle reveals it.
+        try session.renameFile(path: "n.md", newName: "renamed.md")
+        state.selectedFilePath = "renamed.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+        let markers = state.historyVersions.filter(\.isMarker)
+        XCTAssertEqual(markers.count, 1, "the rename marker is in the ledger")
+        let hidden = HistoryPanel.visible(state.historyVersions, showMarkers: false)
+        XCTAssertTrue(hidden.allSatisfy { !$0.isMarker }, "hidden by default")
+        let shown = HistoryPanel.visible(state.historyVersions, showMarkers: true)
+        XCTAssertEqual(shown.count, hidden.count + 1, "toggle reveals it")
+    }
+
+    func testShowOlderVersionsPagesThroughTheCursor() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer) {
+            try self.write("v0\n", to: $0, name: "n.md")
+        }
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        var contents = "v0\n"
+        var hash: String? = nil
+        for i in 1...55 {
+            contents += "line \(i)\n"
+            hash = try session.saveText(
+                path: "n.md", contents: contents, expectedContentHash: hash
+            ).newContentHash
+        }
+        state.selectedFilePath = "n.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+        XCTAssertEqual(state.historyVersions.count, 50, "first page")
+        XCTAssertNotNil(state.historyNextCursor)
+        XCTAssertEqual(state.historyTotalFiltered, 55)
+
+        await state.loadOlderVersions()
+        XCTAssertEqual(state.historyVersions.count, 55, "second page appended")
+        XCTAssertNil(state.historyNextCursor, "no more pages")
+        // Position identity stays contiguous across pages.
+        XCTAssertEqual(
+            state.historyVersions.map(\.positionFromTail),
+            (0..<55).map(UInt32.init))
+    }
+
+    func testDirtyBufferRestoreRoutesToConflictBeforeTouchingDisk() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer) {
+            try self.write("original\n", to: $0, name: "n.md")
+        }
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let r0 = try session.saveText(
+            path: "n.md", contents: "original\n", expectedContentHash: nil)
+
+        state.selectedFilePath = "n.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+
+        // Dirty the buffer through the editor's real entry point.
+        state.updateEditorText("unsaved edits\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        let request = HistoryRestoreRequest(
+            path: "n.md", versionHash: r0.newContentHash,
+            formattedDate: "test date")
+        await state.performRestore(request)
+
+        XCTAssertNotNil(
+            state.currentSaveConflict,
+            "dirty buffer routes to the conflict flow BEFORE any write")
+        XCTAssertEqual(
+            state.currentSaveConflict?.attemptedContents, "unsaved edits\n",
+            "keep-mine preserves MY buffer, not the disk body")
+        XCTAssertEqual(
+            try session.readText(path: "n.md"), "original\n",
+            "nothing was written")
     }
 
     // MARK: - Restore flow
@@ -241,7 +387,12 @@ final class HistoryPanelTests: XCTestCase {
             "nothing was written")
     }
 
-    func testRestoreIntegrityFailureGetsTheSpecificAlert() async throws {
+    /// A restore that fails on damaged history must alert and write
+    /// NOTHING. (The byte-flip tears an entry frame, so the reader's
+    /// clean-prefix rule drops it and restore fails typed — the
+    /// HistoryUnavailable-specific mapping is pinned by the Rust
+    /// suite end-to-end and by copy inspection below.)
+    func testRestoreFailureOnDamagedHistoryAlertsAndWritesNothing() async throws {
         let announcer = RecordingAnnouncer()
         let (state, dir) = try await openVault(announcer: announcer) {
             try self.write("original\n", to: $0, name: "n.md")
@@ -279,7 +430,7 @@ final class HistoryPanelTests: XCTestCase {
             formattedDate: "test date")
         await state.performRestore(request)
 
-        XCTAssertNotNil(state.historyAlert)
+        XCTAssertNotNil(state.historyAlert, "damage surfaces as an alert")
         XCTAssertEqual(
             try session.readText(path: "n.md"), "changed\n", "nothing written")
     }
@@ -360,6 +511,49 @@ final class HistoryPanelTests: XCTestCase {
         let root = try JSONSerialization.jsonObject(with: prefs) as? [String: Any]
         let history = root?["history"] as? [String: Any]
         XCTAssertEqual(history?["retention_days"] as? Int, 180, "persisted")
+    }
+
+    /// Adversarial round 1 High: the Rust history writer and the Swift
+    /// bibliography writer race on ONE prefs.json. Both hold the
+    /// `prefs.json.lock` flock across their read-modify-write, so
+    /// neither section is ever lost to the other's rename. Without the
+    /// lock this test fails within a few rounds.
+    func testConcurrentPrefsWritersPreserveBothSections() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, dir) = try await openVault(announcer: announcer)
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let store = PrefsJsonStore(vaultRoot: dir)
+        try store.writeBibliographyPrefs(
+            BibliographyPrefs(
+                sources: [], defaultStyle: "style.csl", additionalStyles: []))
+
+        for round in 1...12 {
+            let days = UInt32(30 + round)
+            async let history: Void = Task.detached {
+                try? session.setHistoryPrefs(
+                    prefs: HistoryPrefs(retentionDays: days))
+            }.value
+            async let bibliography: Void = Task.detached {
+                try? PrefsJsonStore(vaultRoot: dir)
+                    .writeBibliographyPrefs(
+                        BibliographyPrefs(
+                            sources: [], defaultStyle: "style.csl",
+                            additionalStyles: ["round\(round).csl"]))
+            }.value
+            _ = await (history, bibliography)
+
+            let data = try Data(
+                contentsOf: dir.appendingPathComponent(".slate/prefs.json"))
+            let root =
+                try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            XCTAssertNotNil(
+                root?["history"], "round \(round): history section lost")
+            XCTAssertNotNil(
+                root?["bibliography"],
+                "round \(round): bibliography section lost")
+        }
     }
 
     // MARK: - Pure panel helpers
@@ -472,6 +666,120 @@ final class HistoryPanelTests: XCTestCase {
             cursor = cursor.deletingLastPathComponent()
         }
         XCTFail("Could not locate HistoryPanel.swift from \(#filePath)")
+        return ""
+    }
+
+    /// Two-version orientation: the OLDER selection (higher position)
+    /// is `from`, the newer is `to`, regardless of toggle order.
+    func testCompareEndpointsOrientation() {
+        func version(_ position: UInt32, hash: String) -> VersionSummary {
+            VersionSummary(
+                positionFromTail: position, contentHashAfter: hash,
+                timestampMs: 0, opKind: .editBatch, opCount: 1, byteDelta: 0,
+                annotations: [], isMarker: false, audioFragment: "f")
+        }
+        let versions = [
+            version(0, hash: "newest"), version(3, hash: "older"),
+            version(7, hash: "oldest"),
+        ]
+        for positions in [[UInt32(3), 7], [UInt32(7), 3]] {
+            let endpoints = HistoryPanel.compareEndpoints(
+                positions: positions, in: versions)
+            XCTAssertEqual(endpoints?.from.contentHashAfter, "oldest")
+            XCTAssertEqual(endpoints?.to.contentHashAfter, "older")
+        }
+        XCTAssertNil(
+            HistoryPanel.compareEndpoints(positions: [3], in: versions),
+            "exactly two selections required")
+        // Duplicate hashes resolve independently by position.
+        let twins = [version(0, hash: "same"), version(5, hash: "same")]
+        let endpoints = HistoryPanel.compareEndpoints(
+            positions: [0, 5], in: twins)
+        XCTAssertEqual(endpoints?.from.positionFromTail, 5)
+        XCTAssertEqual(endpoints?.to.positionFromTail, 0)
+    }
+
+    /// The spec-pinned strings survive refactors (inspection asserts —
+    /// the alert copy, the destructive role, and the BaselineCompacted
+    /// caption all live in view code XCTest can't execute).
+    func testPinnedCopyInspection() throws {
+        let source = try historyPanelSource()
+        XCTAssertTrue(source.contains(#""Restore version?""#))
+        XCTAssertTrue(
+            source.contains("This replaces the current content of"),
+            "the pinned confirmation copy")
+        XCTAssertTrue(
+            source.contains("The replaced state remains available in version history."),
+            "the pinned confirmation copy, second sentence")
+        XCTAssertTrue(
+            source.contains(#"Button("Restore", role: .destructive)"#),
+            "destructive styling on the confirm action")
+        XCTAssertTrue(
+            source.contains(#""Earlier changes have been compacted.""#),
+            "the BaselineCompacted caption")
+        XCTAssertTrue(
+            source.contains("case .noBaseline, .unchanged, nil:"),
+            "Unchanged/NoBaseline render nothing — the four-state matrix")
+        XCTAssertTrue(
+            source.contains(
+                #""Files deleted before Slate saved them go to the system Trash.""#),
+            "the Deleted-segment footer")
+        XCTAssertTrue(
+            source.contains(#""No recently deleted files.""#)
+                && source.contains(#""Select a note to see its history.""#),
+            "the two empty states")
+        // The HistoryUnavailable-specific restore copy lives in
+        // AppState+History.swift (the Rust suite pins the error path
+        // itself; this pins the exact user-facing sentence).
+        let plumbing = try appStateHistorySource()
+        XCTAssertTrue(
+            plumbing.contains(
+                "This version can't be restored: its history failed an integrity check."
+            ), "the pinned integrity copy")
+        XCTAssertTrue(
+            plumbing.contains("Rename or move it first, then restore."),
+            "the pinned DestinationExists copy")
+    }
+
+    /// Settings reseed (adversarial round 1 Medium): the History tab
+    /// reseeds its retention picker when the vault changes while
+    /// Settings stays mounted, and the programmatic reseed must not
+    /// round-trip into set_history_prefs (view-local logic — pinned by
+    /// inspection).
+    func testSettingsReseedsAcrossVaultSwitchByInspection() throws {
+        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        var source = ""
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent(
+                "Sources/SlateMac/SettingsView.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                source = (try? String(contentsOf: candidate, encoding: .utf8)) ?? ""
+                break
+            }
+            cursor = cursor.deletingLastPathComponent()
+        }
+        XCTAssertTrue(
+            source.contains(".onChange(of: appState.currentVaultURL)"),
+            "the History tab reseeds on vault identity change")
+        XCTAssertTrue(
+            source.contains("isReseeding = true"),
+            "programmatic reseeds are marked...")
+        XCTAssertTrue(
+            source.contains("if isReseeding {"),
+            "...and consumed before persisting")
+    }
+
+    private func appStateHistorySource() throws -> String {
+        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent(
+                "Sources/SlateMac/AppState+History.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor = cursor.deletingLastPathComponent()
+        }
+        XCTFail("Could not locate AppState+History.swift from \(#filePath)")
         return ""
     }
 

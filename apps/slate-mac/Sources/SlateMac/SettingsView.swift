@@ -739,6 +739,12 @@ struct CanvasSettingsTab: View {
 struct HistorySettingsTab: View {
     @EnvironmentObject var appState: AppState
     @State private var retentionDays: UInt32 = 90
+    /// Consumed-once guard so a programmatic reseed (vault switch
+    /// while Settings stays mounted) doesn't round-trip back into
+    /// `set_history_prefs` as if the user picked it (adversarial
+    /// review: stale UI state must never overwrite the NEW vault's
+    /// persisted setting).
+    @State private var isReseeding = false
 
     /// The picker's fixed menu (o_spec §O-5): 30 / 90 (default) /
     /// 180 / 365 days.
@@ -756,6 +762,10 @@ struct HistorySettingsTab: View {
                     }
                 }
                 .onChange(of: retentionDays) { _, newValue in
+                    if isReseeding {
+                        isReseeding = false
+                        return
+                    }
                     Task { await appState.applyHistoryRetention(days: newValue) }
                 }
                 .disabled(!appState.isVaultOpen)
@@ -779,6 +789,16 @@ struct HistorySettingsTab: View {
         .formStyle(.grouped)
         .onAppear {
             retentionDays = appState.currentHistoryRetentionDays()
+        }
+        .onChange(of: appState.currentVaultURL) { _, _ in
+            // Settings can stay mounted across a vault switch; reseed
+            // from the NEW session (or back to the default when the
+            // vault closed) without persisting the programmatic change.
+            let fresh = appState.currentHistoryRetentionDays()
+            if fresh != retentionDays {
+                isReseeding = true
+                retentionDays = fresh
+            }
         }
         .navigationTitle("History")
     }

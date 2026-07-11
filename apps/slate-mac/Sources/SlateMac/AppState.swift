@@ -3518,6 +3518,12 @@ final class AppState: ObservableObject {
     /// Task handle for the per-note history load (cancelled with the
     /// other note-scoped work).
     var historyLoadTask: Task<Void, Never>?
+    /// O-5 race-test seam — ALWAYS nil in production (the M-3
+    /// `syncDiagnosticsPublishGate` pattern). Awaited between the
+    /// detached compute and the main-actor guards so tests can park a
+    /// load inside the window and prove a stale resume neither
+    /// publishes NOR marks the baseline.
+    var historyPublishGate: (() async -> Void)?
 
     // MARK: - Sync diagnostics (Milestone M-3, #534)
 

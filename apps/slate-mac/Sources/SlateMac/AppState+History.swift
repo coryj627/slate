@@ -75,13 +75,17 @@ extension AppState {
         let seq = historyLoadSeq
         let sinceOpenEnabled = historyShowChangesSinceOpen
 
+        // Slice 1: COMPUTE only — no mutation. `markOpened` must not
+        // ride this slice: the guards below run after it completes, so
+        // a stale load for a note the user already left would still
+        // move its baseline and swallow the changes from the user's
+        // last real visit (adversarial round 1 High).
         let result: Result<(ChangesSinceOpen?, VersionSummaryPage), VaultError> =
             await Task.detached(priority: .userInitiated) {
                 do {
                     var changes: ChangesSinceOpen?
                     if sinceOpenEnabled {
                         changes = try session.changesSinceLastOpen(path: path)
-                        try session.markOpened(path: path)
                     }
                     let page = try session.listVersions(
                         path: path, paging: Paging(cursor: nil, limit: 50))
@@ -93,9 +97,15 @@ extension AppState {
                 }
             }.value
 
+        // Race-test seam: parks the load inside the race window
+        // (post-compute, pre-guard). Nil in production — the M-3
+        // syncDiagnosticsPublishGate pattern.
+        if let gate = historyPublishGate { await gate() }
+
         // The #328 post-await publish guards + the seq recheck
         // (sync-diagnostics pattern): only the newest load for the
-        // still-selected note on the still-open session may publish.
+        // still-selected note on the still-open session may publish —
+        // or MARK. A stale resume must leave the baseline untouched.
         guard !Task.isCancelled, currentSession === session,
             selectedFilePath == path, seq == historyLoadSeq
         else { return }
@@ -106,6 +116,26 @@ extension AppState {
             historyNextCursor = page.nextCursor
             historyTotalFiltered = page.totalFiltered
             historyLoadError = nil
+            // The open is REAL (guards passed): move the baseline now,
+            // AFTER the verdict — the pinned compute-then-mark order.
+            if sinceOpenEnabled {
+                let markResult: Result<Void, VaultError> =
+                    await Task.detached(priority: .userInitiated) {
+                        do {
+                            try session.markOpened(path: path)
+                            return .success(())
+                        } catch let error as VaultError {
+                            return .failure(error)
+                        } catch {
+                            return .failure(.Io(message: error.localizedDescription))
+                        }
+                    }.value
+                if case .failure(let error) = markResult {
+                    // A failed mark only means the NEXT open re-reports
+                    // the same changes — never fatal, never blocking.
+                    _ = error
+                }
+            }
         case .failure(let error):
             sinceOpenChanges = nil
             historyVersions = []
@@ -252,10 +282,15 @@ extension AppState {
         case .failure(
             .WriteConflict(
                 let currentContentHash, let expectedContentHash, let currentMtimeMs)):
-            let attempted = ((try? session.readNoteParts(path: request.path))?.body) ?? ""
+            // "Mine" = MY LOADED buffer body — the same semantics as
+            // every other conflict producer: Keep Mine writes my state
+            // back over the external change (then the version list is
+            // fresh for a retry). Re-reading the DISK body here would
+            // make Keep Mine a no-op that writes the external content
+            // over itself (adversarial round 1 High).
             currentSaveConflict = SaveConflict(
                 path: request.path,
-                attemptedContents: attempted,
+                attemptedContents: currentNoteText ?? "",
                 currentContentHash: currentContentHash,
                 expectedContentHash: expectedContentHash,
                 currentMtimeMs: currentMtimeMs

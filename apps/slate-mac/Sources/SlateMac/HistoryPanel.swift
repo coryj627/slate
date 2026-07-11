@@ -174,9 +174,15 @@ struct HistoryPanel: View {
     }
 
     private var visibleVersions: [VersionSummary] {
-        showMarkers
-            ? appState.historyVersions
-            : appState.historyVersions.filter { !$0.isMarker }
+        Self.visible(appState.historyVersions, showMarkers: showMarkers)
+    }
+
+    /// Pure marker filter (unit-tested): markers are hidden by default
+    /// and revealed by the section-menu toggle.
+    static func visible(_ versions: [VersionSummary], showMarkers: Bool)
+        -> [VersionSummary]
+    {
+        showMarkers ? versions : versions.filter { !$0.isMarker }
     }
 
     @ViewBuilder private var versionsSection: some View {
@@ -319,24 +325,30 @@ struct HistoryPanel: View {
     }
 
     private func compareSelected() {
-        guard comparePositions.count == 2, let path = appState.selectedFilePath
-        else { return }
-        // Older position = from, newer = to.
-        let sorted = comparePositions.sorted(by: >)
-        guard
-            let from = appState.historyVersions.first(where: {
-                $0.positionFromTail == sorted[0]
-            }),
-            let to = appState.historyVersions.first(where: {
-                $0.positionFromTail == sorted[1]
-            })
+        guard let path = appState.selectedFilePath,
+            let endpoints = Self.compareEndpoints(
+                positions: comparePositions, in: appState.historyVersions)
         else { return }
         Task {
             let result = await appState.historyDiff(
-                path: path, fromHash: from.contentHashAfter,
-                toHash: to.contentHashAfter)
+                path: path, fromHash: endpoints.from.contentHashAfter,
+                toHash: endpoints.to.contentHashAfter)
             inlineDiff = InlineDiff(anchorPosition: nil, result: result)
         }
+    }
+
+    /// Pure two-version orientation (unit-tested): the OLDER selection
+    /// (higher position-from-tail) is `from`, the newer is `to`.
+    static func compareEndpoints(
+        positions: [UInt32], in versions: [VersionSummary]
+    ) -> (from: VersionSummary, to: VersionSummary)? {
+        guard positions.count == 2 else { return nil }
+        let sorted = positions.sorted(by: >)
+        guard
+            let from = versions.first(where: { $0.positionFromTail == sorted[0] }),
+            let to = versions.first(where: { $0.positionFromTail == sorted[1] })
+        else { return nil }
+        return (from, to)
     }
 
     private func compareAgainstCurrent(_ version: VersionSummary) async {
