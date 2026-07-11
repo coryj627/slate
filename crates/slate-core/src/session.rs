@@ -7663,6 +7663,16 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
                     entry.content_hash_after.clone(),
                 ))
             && let Some(last) = rows.last_mut()
+            // Absorb into BYTE-level rows only, at most one record per
+            // row (Codoki on #865): a duplicate record must not fold
+            // into a standalone CanvasApply row NOR stack onto an
+            // already-annotated byte row (the T protocol appends
+            // exactly one record per action — a second match is an
+            // anomaly that should stay visible), and a no-op action's
+            // record must not vanish into a default-hidden anchor row.
+            && last.op_kind != OpKind::CanvasApply
+            && !last.is_marker
+            && !last.annotations.iter().any(|a| a.kind == "CanvasAction")
         {
             let name = inner_payload
                 .as_deref()

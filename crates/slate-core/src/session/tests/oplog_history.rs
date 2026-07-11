@@ -905,3 +905,90 @@ fn interleaved_semantic_record_degrades_to_standalone_never_misfolds() {
         "no row absorbed the interleaved record"
     );
 }
+
+/// #797 fold guard (Codoki on #865): the fold absorbs into BYTE rows
+/// only — a duplicate semantic record renders standalone rather than
+/// folding into the first record's row, and a marker row never
+/// swallows a record (it would vanish under the default marker-hide).
+#[test]
+fn fold_absorbs_into_byte_rows_only() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.canvas", "{}\n", None).unwrap();
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.canvas'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let cache_dir = session.config.cache_dir.clone();
+    let hash = |s: &str| crate::vault::content_hash(s.as_bytes());
+    let mk = |kind, before: &str, after: &str, payload: Vec<u8>| crate::oplog::OpLogEntry {
+        timestamp_ms: now_ms(),
+        user_actor_id: "t".into(),
+        op_kind: kind,
+        content_hash_before: hash(before),
+        content_hash_after: hash(after),
+        payload_bytes: payload,
+    };
+    for entry in [
+        // byte(A→B) + its record + a DUPLICATE record (crash-retry shape).
+        mk(
+            crate::OpKind::WholeFileReplace,
+            "A\n",
+            "B\n",
+            b"B\n".to_vec(),
+        ),
+        mk(
+            crate::OpKind::CanvasApply,
+            "A\n",
+            "B\n",
+            br#"{"name":"real"}"#.to_vec(),
+        ),
+        mk(
+            crate::OpKind::CanvasApply,
+            "A\n",
+            "B\n",
+            br#"{"name":"duplicate"}"#.to_vec(),
+        ),
+        // A no-op action: anchor(B→B) + record(B→B) — the record must
+        // NOT vanish into the default-hidden marker row.
+        mk(
+            crate::OpKind::WholeFileReplace,
+            "B\n",
+            "B\n",
+            b"B\n".to_vec(),
+        ),
+        mk(
+            crate::OpKind::CanvasApply,
+            "B\n",
+            "B\n",
+            br#"{"name":"noop"}"#.to_vec(),
+        ),
+    ] {
+        crate::oplog::append_entry(&cache_dir, &stem, "n.canvas", &entry).unwrap();
+    }
+    let page = session
+        .list_versions("n.canvas", Paging::first(10))
+        .unwrap();
+    // initial save + byte(with "real" folded) + standalone "duplicate"
+    // + anchor + standalone "noop" record = 5 rows.
+    assert_eq!(page.total_filtered, 5, "{:?}", page.items);
+    let folded: Vec<_> = page
+        .items
+        .iter()
+        .flat_map(|r| r.annotations.iter())
+        .filter(|a| a.kind == "CanvasAction")
+        .map(|a| a.display.clone())
+        .collect();
+    assert_eq!(folded, vec!["Canvas: real"], "only the byte row absorbed");
+    let standalone = page
+        .items
+        .iter()
+        .filter(|r| r.op_kind == crate::OpKind::CanvasApply)
+        .count();
+    assert_eq!(standalone, 2, "duplicate + noop records stay visible rows");
+}
