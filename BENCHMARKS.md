@@ -502,3 +502,23 @@ with the full O-6 population — event derivation, the mark-before-append
 staleness protocol (the marker commit fsync'd under synchronous=FULL),
 and the per-entry event transaction. No spec gate binds the save path
 here; recorded for the close-out benchmark comparison.
+
+## Milestone O — close-out summary vs the #404 baselines (2026-07-11)
+
+Milestone O (local history + change tracking, #539–#544) shipped with every
+spec gate cleared and **zero editor-path regression** — the #404 budget
+(8 MB-document keystroke ~245 µs, flat) is untouched by construction: all O
+work rides the SAVE path (op-log append, event derivation, marker protocol),
+never the keystroke path.
+
+| Gate | Spec budget | Shipped |
+|---|---:|---:|
+| O-1 annotated append overhead vs plain | < 10% | **+9.5%** (3.61 vs 3.30 ms) |
+| O-2 compact 50k-op log (release) | < 1 s | **100.15 ms** |
+| O-2 save-path trigger check (5 MiB log) | no log walk | **10.45 ms** (arithmetic only) |
+| O-4 structured diff, ~550 KB / 2k blocks | < 50 ms | **23.65 ms** |
+| O-6 `has_change_since(7d)`, 10k-file vault | < 50 ms warm | **3.31 ms** |
+| Whole-milestone hot-save delta | no gate | 9.33 → **9.44 ms** (+1.2%: event derivation + fsync'd staleness marker + per-entry event transaction) |
+
+Full-scale release censuses at close: op-log identity/compaction/history/
+temporal batteries 137 tests green; Mac suite 87 suites; `a11y-check` 100.0.
