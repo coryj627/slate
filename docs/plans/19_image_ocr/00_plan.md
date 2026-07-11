@@ -52,13 +52,13 @@ out to already exist:
 
 | ID | Issue | Track | Depends on | Labels |
 |----|-------|-------|-----------|--------|
-| PD-1 (#TBD) | Embed enumeration API: `list_image_embeds` + eligibility + stat-verified hashes (+ uniffi) | Rust | — | `backend` |
-| PD-2 (#TBD) | Sidecar store (`.imagedesc/`) + cache migration (`image_text`, `image_text_fts`) + rebuild/adopt | Rust | PD-1 | `backend`, `schema` |
-| PD-3 (#TBD) | Reconciliation engine: set-difference, triggers, engine-scoped states, downgrade guards, queue | Rust | PD-2 | `backend` |
-| PD-4 (#TBD) | Vision OCR worker (shell drain) + backlog prompt UX | Swift | PD-3 | `swift-ui` |
-| PD-5 (#TBD) | Accessibility label integration + live updates | Swift | PD-3, PD-4 (soft: O-2 [#540](https://github.com/coryj627/slate/issues/540)/[#802](https://github.com/coryj627/slate/issues/802)) | `swift-ui`, `a11y` |
-| PD-6 (#TBD) | Search surfacing: FTS union/attribution + SearchOverlay + CLI | Rust | PD-2 | `backend` |
-| PD-7 (#TBD) | GC + retention + settings (two-tier, retention horizon, prefs) | Rust + Swift | PD-3 | `backend`, `swift-ui` |
+| PD-1 ([#804](https://github.com/coryj627/slate/issues/804)) | Embed enumeration API: `list_image_embeds` + eligibility + stat-verified hashes (+ uniffi) | Rust | — | `backend` |
+| PD-2 ([#805](https://github.com/coryj627/slate/issues/805)) | Sidecar store (`.imagedesc/`) + cache migration (`image_text`, `image_text_fts`) + rebuild/adopt | Rust | PD-1 | `backend`, `schema` |
+| PD-3 ([#806](https://github.com/coryj627/slate/issues/806)) | Reconciliation engine: set-difference, triggers, engine-scoped states, downgrade guards, queue | Rust | PD-2 | `backend` |
+| PD-4 ([#807](https://github.com/coryj627/slate/issues/807)) | Vision OCR worker (shell drain) + backlog prompt UX | Swift | PD-3 | `swift-ui` |
+| PD-5 ([#808](https://github.com/coryj627/slate/issues/808)) | Accessibility label integration + live updates | Swift | PD-3, PD-4 (soft: O-2 [#540](https://github.com/coryj627/slate/issues/540)/[#802](https://github.com/coryj627/slate/issues/802)) | `swift-ui`, `a11y` |
+| PD-6 ([#809](https://github.com/coryj627/slate/issues/809)) | Search surfacing: FTS union/attribution + SearchOverlay + CLI | Rust | PD-2 | `backend` |
+| PD-7 ([#810](https://github.com/coryj627/slate/issues/810)) | GC + retention + settings (two-tier, retention horizon, prefs) | Rust + Swift | PD-3 | `backend`, `swift-ui` |
 
 ```
 PD-1 ──▶ PD-2 ──▶ PD-3 ──▶ PD-4 ──▶ PD-5
