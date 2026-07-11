@@ -1161,6 +1161,31 @@ impl VaultSession {
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
+        // O-6 (#544): observe a parser bump BEFORE the scan runs — the
+        // scan stamps every row with the new version, erasing the
+        // evidence — and convert it straight into the DURABLE
+        // staleness marker (adversarial round 3): an in-memory flag
+        // would be consumed by this scan's rebuild attempt, so one
+        // busy-failed or crashed rebuild would lose the obligation
+        // with the evidence already erased. Query failure
+        // conservatively reads as "bumped"; marker-write failure falls
+        // back to forcing THIS scan's rebuild in memory (better one
+        // volatile attempt than none).
+        let parser_bumped: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE parser_version != ?1)",
+                [self.config.parser_version],
+                |row| row.get(0),
+            )
+            .unwrap_or(true);
+        let mut force_rebuild = false;
+        if parser_bumped
+            && let Err(e) = conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+        {
+            log::warn!("oplog_events parser-bump marker write failed");
+            log::debug!("oplog_events parser-bump marker failure detail: {e}");
+            force_rebuild = true;
+        }
         let report = scan_vault(
             self.provider.as_ref(),
             &mut conn,
@@ -1174,6 +1199,13 @@ impl VaultSession {
         // remnants (O-1 #539). Best-effort: a reconcile failure
         // degrades history features, never the scan itself.
         self.reconcile_oplogs(&mut conn);
+        // O-6 (#544): regenerate the derived temporal-events index if
+        // it's stale. Runs after the reconcile so bindings are fresh.
+        // Every trigger rides the durable marker — append-window
+        // crashes, adoptions (written inside the reconcile
+        // transaction), and parser bumps (above) — so a failed rebuild
+        // keeps its obligation for the next scan.
+        self.rebuild_oplog_events_if_stale(&mut conn, force_rebuild);
         // On-open compaction sweep (O-2 #540): enqueue any bound log
         // whose file size exceeds the byte threshold — stat only, no
         // log reads.
@@ -1229,6 +1261,64 @@ impl VaultSession {
         }
     }
 
+    /// O-6 (#544): regenerate the derived `oplog_events` table from
+    /// the bound logs when it is empty (fresh cache — migration 029
+    /// landing, or a cache rebuild) or the durable staleness marker is
+    /// set — the one channel every trigger rides: append-window
+    /// crashes/failures, reconcile adoptions, and parser bumps
+    /// (adversarial round 3: volatile triggers lose their obligation
+    /// to one failed rebuild). `force` is the in-memory fallback for a
+    /// failed marker write. One transaction end to end, markers
+    /// cleared inside it: a crash mid-rebuild rolls back to the marked
+    /// state and the next open retries. Best-effort — failure degrades
+    /// the temporal operators to stale results, never the scan.
+    /// Unbound remnant logs contribute nothing: events only exist for
+    /// live `files` rows, which is all the operators can ever filter.
+    fn rebuild_oplog_events_if_stale(&self, conn: &mut Connection, force: bool) {
+        if let Err(e) = self.rebuild_oplog_events_inner(conn, force) {
+            log::warn!("oplog_events rebuild failed");
+            log::debug!("oplog_events rebuild failure detail: {e:?}");
+        }
+    }
+
+    fn rebuild_oplog_events_inner(
+        &self,
+        conn: &mut Connection,
+        force: bool,
+    ) -> Result<(), VaultError> {
+        let empty: bool =
+            conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM oplog_events)", [], |row| {
+                row.get(0)
+            })?;
+        let stale: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM oplog_events_stale)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !empty && !force && !stale {
+            return Ok(());
+        }
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM oplog_events", [])?;
+        tx.execute("DELETE FROM oplog_events_stale", [])?;
+        let bound: Vec<(i64, String)> = tx
+            .prepare("SELECT id, oplog_name FROM files WHERE oplog_name IS NOT NULL")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (file_id, log_name) in bound {
+            // A missing/torn log yields its readable prefix or nothing;
+            // either way the file simply has fewer (or no) events.
+            let entries = match crate::oplog::read_oplog(&self.config.cache_dir, &log_name) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            let events = crate::oplog_events::derive_events_for_log(&entries);
+            insert_oplog_events(&tx, file_id, &events)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Scan-time op-log reconcile (O-1 #539): bind every on-disk log to
     /// its live file, salvage what a cache rebuild orphaned, and
     /// collect deleted-file remnants for O-3.
@@ -1258,6 +1348,7 @@ impl VaultSession {
     /// 5. Anything conflicted (two logs claiming one file, a claimed
     ///    path already bound) or pathless → quarantine: left on disk,
     ///    warned about, invisible to features. Never guess.
+    ///
     fn reconcile_oplogs(&self, conn: &mut Connection) {
         match self.reconcile_oplogs_inner(conn) {
             Ok(remnants) => {
@@ -1469,15 +1560,27 @@ impl VaultSession {
         for (_, file_id) in &claims {
             *claims_per_file.entry(*file_id).or_insert(0) += 1;
         }
+        let mut adopted_any = false;
         for (stem, file_id) in &claims {
             if claims_per_file[file_id] > 1 {
                 log::warn!("oplog reconcile: log {stem} conflicts with another claim; quarantined");
                 continue;
             }
-            tx.execute(
+            let newly_bound = tx.execute(
                 "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
                 rusqlite::params![stem, file_id],
             )?;
+            adopted_any |= newly_bound > 0;
+        }
+        if adopted_any {
+            // A fresh binding attaches history the events table has
+            // never seen — set the O-6 staleness marker IN THIS
+            // transaction (#544, adversarial round 3): an in-memory
+            // flag alone dies with a crash or a busy-failed rebuild
+            // between this commit and the rebuild's, leaving the
+            // adopted history permanently invisible. Durable marker ⇒
+            // the rebuild fires now or at any later scan.
+            tx.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])?;
         }
         tx.commit()?;
         Ok(remnants)
@@ -1729,6 +1832,7 @@ impl VaultSession {
         // diff/encode/append work below swallows its errors.
         if let Some(log_name) = oplog_name.as_deref() {
             self.append_save_to_oplog(
+                conn,
                 file_id,
                 log_name,
                 path,
@@ -2081,6 +2185,7 @@ impl VaultSession {
     #[allow(clippy::too_many_arguments)]
     fn append_save_to_oplog(
         &self,
+        conn: &Connection,
         file_id: i64,
         log_name: &str,
         path: &str,
@@ -2094,6 +2199,18 @@ impl VaultSession {
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
         let cached = state.get(&file_id).cloned();
 
+        // The save's edit ops when this function computes them — kept
+        // for O-6 event derivation even when the kind decision lands
+        // on a snapshot. The spec pins `deleted_text` NULL to "no old
+        // content in hand" ONLY: the cadence-snapshot arm samples
+        // because the diff informed its decision, and the cold/
+        // misaligned snapshot arm samples too whenever the conflict
+        // check put the old bytes in hand (adversarial round 3 — the
+        // first save after an app restart is the COMMON divergence,
+        // and leaving it unsampled made deletions across restarts
+        // unsearchable, a wider gap than the documented one).
+        let mut ops_in_hand: Option<Vec<crate::oplog::EditOp>> = None;
+
         // (inner_kind, inner_payload, resets_snapshot_cadence).
         // `None` ⇒ write nothing.
         let decision: Option<(crate::oplog::OpKind, Vec<u8>, bool)> = match (old_contents, &cached)
@@ -2104,6 +2221,7 @@ impl VaultSession {
                     None // identical content — don't grow the log
                 } else {
                     let payload = crate::oplog::encode_edit_batch(&ops);
+                    ops_in_hand = Some(ops);
                     // Count the per-entry framing overhead (body header +
                     // two hex hashes + actor id + length fields + checksum)
                     // alongside the payload so the cadence tracks on-disk
@@ -2131,11 +2249,22 @@ impl VaultSession {
                 }
             }
             // Cold cache, misaligned, None path, or non-UTF-8 old → snapshot.
-            _ => Some((
-                crate::oplog::OpKind::WholeFileReplace,
-                new_contents.as_bytes().to_vec(),
-                true,
-            )),
+            _ => {
+                // Old bytes in hand (conflict-checked save on a cold or
+                // misaligned session cache): compute the diff for event
+                // sampling only — the ENTRY is still a snapshot, so the
+                // log format and replay are untouched. An identical
+                // save still writes the re-anchoring snapshot here (the
+                // pre-O-6 behavior); its empty ops sample as "".
+                if let Some(old) = old_contents {
+                    ops_in_hand = Some(crate::diff::diff_to_ops(old, new_contents));
+                }
+                Some((
+                    crate::oplog::OpKind::WholeFileReplace,
+                    new_contents.as_bytes().to_vec(),
+                    true,
+                ))
+            }
         };
 
         let Some((inner_kind, inner_payload, resets_cadence)) = decision else {
@@ -2167,6 +2296,59 @@ impl VaultSession {
             payload_bytes,
         };
 
+        // O-6 (#544): durable staleness marker BEFORE the filesystem
+        // append (adversarial round 2 — mark-before-append). The log
+        // entry becomes durable at `append_entry`; a crash before the
+        // event rows commit would otherwise leave the index silently
+        // missing them with nothing to ever trigger repair (the
+        // error-path marker only covers REPORTED failures). Marker
+        // first ⇒ a crash anywhere in the window leaves the marker
+        // behind and the next scan rebuilds from the log. Cleared —
+        // this row only, earlier failures' markers must survive — in
+        // the same transaction as the event rows below. If the marker
+        // itself can't be written, proceed anyway: the log is the
+        // source of truth and history beats index freshness.
+        //
+        // The marker commit is forced to disk (round 3): under
+        // WAL+synchronous=NORMAL an autocommit isn't fsynced at
+        // commit, while `append_entry` sync_data's the log — a power
+        // cut (not just a process kill) could otherwise keep the
+        // entry and lose the marker. FULL for exactly this commit
+        // fsyncs its WAL frame, restoring "marker durable before
+        // entry durable". Per-connection pragmas; the caller holds
+        // the connection mutex, so nothing else sees the toggle.
+        let stale_marker_rowid: Option<i64> = {
+            // Checked transitions (round 4): a silent enter-FULL
+            // failure would commit the marker unfsynced while this
+            // comment claims power-cut ordering; a silent restore
+            // failure would leave the connection fsync-heavy forever.
+            // Enter failure degrades the guarantee to process-crash-
+            // only — logged, marker still written. Restore failure
+            // retries once, then warns: durability is unaffected,
+            // later writes just pay FULL until restart.
+            if let Err(e) = conn.pragma_update(None, "synchronous", "FULL") {
+                log::warn!(
+                    "oplog_events marker fsync mode unavailable; power-cut window not covered"
+                );
+                log::debug!("synchronous=FULL pragma failure detail: {e}");
+            }
+            let inserted = conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", []);
+            if conn.pragma_update(None, "synchronous", "NORMAL").is_err()
+                && let Err(e) = conn.pragma_update(None, "synchronous", "NORMAL")
+            {
+                log::warn!("connection stuck in synchronous=FULL; writes stay durable but slower");
+                log::debug!("synchronous=NORMAL restore failure detail: {e}");
+            }
+            match inserted {
+                Ok(_) => Some(conn.last_insert_rowid()),
+                Err(e) => {
+                    log::warn!("oplog_events staleness marker write failed");
+                    log::debug!("oplog_events staleness marker failure detail: {e}");
+                    None
+                }
+            }
+        };
+
         let post_append_len =
             match crate::oplog::append_entry(&self.config.cache_dir, log_name, path, &entry) {
                 Ok(len) => len,
@@ -2180,6 +2362,15 @@ impl VaultSession {
                     // out of shipped host logs (see lib.rs privacy rule).
                     log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
                     log::debug!("oplog append failure for path {path:?}: {e}");
+                    // The append never happened: log and index agree, so
+                    // this save's marker is moot. Best-effort removal — a
+                    // leftover only costs one harmless rebuild.
+                    if let Some(rowid) = stale_marker_rowid {
+                        let _ = conn.execute(
+                            "DELETE FROM oplog_events_stale WHERE rowid = ?1",
+                            rusqlite::params![rowid],
+                        );
+                    }
                     return; // leave the cache untouched so the next save re-snapshots
                 }
             };
@@ -2194,6 +2385,48 @@ impl VaultSession {
             },
         );
         drop(state);
+
+        // O-6 (#544): populate the derived `oplog_events` index from the
+        // entry just appended. One transaction per entry — an entry's
+        // rows land all-or-nothing, never a partial set (adversarial
+        // review) — clearing this save's pre-append staleness marker
+        // with them: commit ⇒ rows in AND marker gone; any failure or
+        // crash ⇒ rows out AND marker present ⇒ the next scan
+        // regenerates the table from the logs. The entry is in the
+        // log either way, so nothing is lost, only deferred.
+        let events =
+            crate::oplog_events::derive_events(&entry, ops_in_hand.as_deref(), old_contents);
+        let inserted = conn.unchecked_transaction().and_then(|tx| {
+            insert_oplog_events(&tx, file_id, &events)?;
+            if let Some(rowid) = stale_marker_rowid {
+                tx.execute(
+                    "DELETE FROM oplog_events_stale WHERE rowid = ?1",
+                    rusqlite::params![rowid],
+                )?;
+            }
+            tx.commit()
+        });
+        if let Err(e) = inserted {
+            // Rows rolled back; the marker stays behind and the next
+            // scan rebuilds.
+            log::warn!("oplog_events insert failed for file_id={file_id}");
+            log::debug!("oplog_events insert failure detail: {e}");
+            // Re-arm the marker unconditionally (round 3). Two ways
+            // the pre-append marker can be missing here: it never
+            // landed (the marker write and this transaction share ONE
+            // cause — a long-lived writer holding the cross-process
+            // lock past the busy timeout — so "two independent
+            // failures" was false comfort), or a concurrent process's
+            // scan rebuild deleted it after reading the log but before
+            // this entry's append landed. A redundant marker when it
+            // DID survive is harmless — the rebuild clears the whole
+            // table. Failing this too degrades to a stale index until
+            // the next full rebuild.
+            if let Err(e) = conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", []) {
+                log::warn!("oplog_events staleness marker retry failed");
+                log::debug!("oplog_events staleness marker retry failure detail: {e}");
+            }
+        }
 
         // O-2 (#540): the compaction trigger check is pure arithmetic —
         // the returned post-append length against the byte threshold,
@@ -2718,6 +2951,29 @@ impl VaultSession {
                 "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
                 rusqlite::params![stem, file_id],
             )?;
+            // O-6 (#544): the re-bound log carries the file's
+            // pre-delete history, but its event rows died with the old
+            // `files` row (the CASCADE). Repopulate inside the binding
+            // transaction — before the post-commit append adds the new
+            // save's own row — so the recovered history is immediately
+            // visible to the temporal operators, not deferred to the
+            // next cache rebuild. Best-effort: a failure sets the
+            // staleness marker and the next scan's rebuild heals.
+            let repopulated = crate::oplog::read_oplog(&self.config.cache_dir, stem)
+                .map_err(VaultError::Io)
+                .and_then(|entries| {
+                    let events = crate::oplog_events::derive_events_for_log(&entries);
+                    insert_oplog_events(&tx, file_id, &events).map_err(VaultError::from)
+                });
+            if let Err(e) = repopulated {
+                log::warn!("oplog_events recovery repopulation failed for file_id={file_id}");
+                log::debug!("oplog_events recovery repopulation failure detail: {e:?}");
+                if let Err(e) = tx.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+                {
+                    log::warn!("oplog_events staleness marker write failed");
+                    log::debug!("oplog_events staleness marker failure detail: {e}");
+                }
+            }
         }
         let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
         tx.commit()?;
@@ -2725,6 +2981,7 @@ impl VaultSession {
 
         if let Some(log_name) = oplog_name.as_deref() {
             self.append_save_to_oplog(
+                &conn,
                 file_id,
                 log_name,
                 path,
@@ -8918,6 +9175,9 @@ fn method_source(method: crate::bases::expr::MethodName) -> &'static str {
         MethodName::Keys => "keys",
         MethodName::Values => "values",
         MethodName::Matches => "matches",
+        MethodName::OplogHasChangeSince => "has_change_since",
+        MethodName::OplogHasPropertyChange => "has_property_change",
+        MethodName::OplogDeletedContentMatches => "deleted_content_matches",
     }
 }
 
@@ -9531,6 +9791,30 @@ impl crate::canvas::model::FileTitleSource for DbTitleSource<'_> {
 }
 
 /// Drop a file's canvas index rows (large-file refuse, file deleted).
+/// Insert derived `oplog_events` rows for one file (O-6 #544). Works
+/// on a bare connection (append path, autocommit) or inside the
+/// rebuild transaction — `Transaction` derefs to `Connection`.
+fn insert_oplog_events(
+    conn: &Connection,
+    file_id: i64,
+    events: &[crate::oplog_events::DerivedEvent],
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for event in events {
+        stmt.execute(rusqlite::params![
+            file_id,
+            event.ts_ms,
+            event.event_class,
+            event.property_key,
+            event.deleted_text,
+        ])?;
+    }
+    Ok(())
+}
+
 fn purge_canvas_rows(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), VaultError> {
     tx.execute(
         "DELETE FROM canvas_nodes WHERE file_id = ?1",
@@ -10198,6 +10482,9 @@ mod tests {
 
     #[path = "oplog_logging.rs"]
     mod oplog_logging;
+
+    #[path = "oplog_temporal.rs"]
+    mod oplog_temporal;
 
     #[path = "composed.rs"]
     mod composed;

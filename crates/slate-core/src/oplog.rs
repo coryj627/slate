@@ -631,6 +631,40 @@ pub fn reconstruct_at_tail(entries: &[OpLogEntry]) -> Result<String, String> {
     Ok(buf.to_string())
 }
 
+/// Advance a running replay buffer by ONE entry — the O(entry)
+/// incremental form of [`reconstruct_at_tail`] for full-log walks
+/// (O-6's event rebuild). A per-prefix `reconstruct_at_tail` over a
+/// compacted log — one synthesized anchor followed by thousands of
+/// batches — re-replays the whole prefix each step, O(n²) end to end
+/// (measured in whole seconds per hot log; adversarial round 3).
+/// `None` = no snapshot seen yet: a batch in that state is the same
+/// "batches but no anchor" divergence `reconstruct_at_tail` reports.
+/// Marker/`CanvasApply` entries leave the buffer untouched.
+pub(crate) fn replay_advance(
+    buf: &mut Option<crate::text_buffer::TextBuffer>,
+    entry: &OpLogEntry,
+) -> Result<(), String> {
+    match replay_op(entry)? {
+        ReplayOp::Snapshot(payload) => {
+            let text = std::str::from_utf8(payload.as_ref())
+                .map_err(|_| "snapshot payload is not valid UTF-8".to_string())?;
+            *buf = Some(crate::text_buffer::TextBuffer::from_str(text));
+        }
+        ReplayOp::Batch(payload) => {
+            let Some(buf) = buf.as_mut() else {
+                return Err("edit batch before any snapshot anchor".to_string());
+            };
+            let mut ops = decode_edit_batch(payload.as_ref())?;
+            ops.sort_by_key(|op| std::cmp::Reverse(op.old_offset()));
+            for op in &ops {
+                apply_op(buf, op)?;
+            }
+        }
+        ReplayOp::Skip => {}
+    }
+    Ok(())
+}
+
 /// Apply one op to the running replay buffer, bounds-checking against the
 /// *current* buffer length so a corrupt offset surfaces as an error
 /// rather than being silently clamped by `TextBuffer`.

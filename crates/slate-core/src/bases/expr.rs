@@ -232,6 +232,14 @@ pub enum MethodName {
     Keys,
     Values,
     Matches,
+    /// `oplog.has_change_since(D)` (O-6 #544). Producible ONLY via the
+    /// `oplog.` namespace parse — `method_name()` deliberately does
+    /// not know these, so `note.has_change_since()` stays Unsupported.
+    OplogHasChangeSince,
+    /// `oplog.has_property_change(key, D)` (O-6 #544).
+    OplogHasPropertyChange,
+    /// `oplog.deleted_content_matches(pat, D)` (O-6 #544).
+    OplogDeletedContentMatches,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -671,6 +679,7 @@ impl<'a> Parser<'a> {
             "note" => self.parse_note_property(start),
             "formula" => self.parse_formula_property(start),
             "file" => self.parse_file_property_or_object(start),
+            "oplog" => self.parse_oplog_namespace(start),
             "this" => self.parse_this_property(start),
             "task" => self.parse_task_property(start),
             "value" if self.implicit.value => Ok(Expr {
@@ -690,6 +699,51 @@ impl<'a> Parser<'a> {
                 kind: ExprKind::Prop(PropertyRef::Note(name)),
             }),
         }
+    }
+
+    /// The `oplog.` temporal-operator namespace (O-6 #544):
+    /// `oplog.has_change_since(D)`, `oplog.has_property_change(key, D)`,
+    /// `oplog.deleted_content_matches(pat, D)`. Anything else after
+    /// `oplog` rewinds to the plain note-property read (a note may
+    /// legitimately carry an `oplog` frontmatter key), mirroring the
+    /// `file.` rewind trick above.
+    fn parse_oplog_namespace(&mut self, start: Span) -> Result<Expr, ExprParseError> {
+        if self.at(TokenKind::Dot) {
+            let save = self.pos;
+            self.advance();
+            if let Ok((name, _)) = self.expect_ident("expected oplog operator") {
+                let operator = match name.as_str() {
+                    "has_change_since" => Some(MethodName::OplogHasChangeSince),
+                    "has_property_change" => Some(MethodName::OplogHasPropertyChange),
+                    "deleted_content_matches" => Some(MethodName::OplogDeletedContentMatches),
+                    _ => None,
+                };
+                if let Some(operator) = operator
+                    && self.at(TokenKind::LParen)
+                {
+                    let args = self.parse_arg_list()?;
+                    let end = self.previous_span();
+                    return Ok(Expr {
+                        span: start.join(end),
+                        kind: ExprKind::Call {
+                            callee: Callee::Method {
+                                receiver: Box::new(Expr {
+                                    span: start,
+                                    kind: ExprKind::Prop(PropertyRef::Note("oplog".to_string())),
+                                }),
+                                name: operator,
+                            },
+                            args,
+                        },
+                    });
+                }
+            }
+            self.pos = save;
+        }
+        Ok(Expr {
+            span: start,
+            kind: ExprKind::Prop(PropertyRef::Note("oplog".to_string())),
+        })
     }
 
     fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr, ExprParseError> {

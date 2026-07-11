@@ -745,6 +745,10 @@ fn load_file_candidates(
             if let Some(predicate) = pushdown_predicate(conjunct) {
                 plan.clauses.push(predicate.clause);
                 plan.params.extend(predicate.params);
+            } else if let Some(result) = oplog_pushdown_predicate(conjunct, ctx.now_ms) {
+                let predicate = result.map_err(CandidateLoadError::View)?;
+                plan.clauses.push(predicate.clause);
+                plan.params.extend(predicate.params);
             } else if let Some(predicate) =
                 fts_pushdown_predicate(conjunct, conn, deps.fts, deps.warnings, deps.cancel)?
             {
@@ -820,6 +824,10 @@ fn load_task_candidates(
             if let Some(predicate) =
                 pushdown_predicate(conjunct).or_else(|| task_pushdown_predicate(conjunct))
             {
+                plan.clauses.push(predicate.clause);
+                plan.params.extend(predicate.params);
+            } else if let Some(result) = oplog_pushdown_predicate(conjunct, ctx.now_ms) {
+                let predicate = result.map_err(CandidateLoadError::View)?;
                 plan.clauses.push(predicate.clause);
                 plan.params.extend(predicate.params);
             } else if let Some(predicate) =
@@ -991,6 +999,136 @@ fn file_matches_query(expr: &Expr) -> Option<String> {
         return None;
     }
     literal_text(args.first()?)
+}
+
+/// The O-6 (#544) operator duration grammar, pinned by the spec:
+/// `^([1-9][0-9]*)(h|d|w)$` — a deliberate strict subset of the
+/// expression language's richer `duration()` grammar (documented
+/// divergence; months/years are calendar-dependent and excluded).
+/// Returns the window in milliseconds.
+pub(crate) fn parse_operator_duration(text: &str) -> Option<i64> {
+    let unit = text.chars().last()?;
+    let digits = &text[..text.len() - unit.len_utf8()];
+    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let count: i64 = digits.parse().ok()?;
+    let unit_ms: i64 = match unit {
+        'h' => 60 * 60 * 1000,
+        'd' => 24 * 60 * 60 * 1000,
+        'w' => 7 * 24 * 60 * 60 * 1000,
+        _ => return None,
+    };
+    count.checked_mul(unit_ms)
+}
+
+/// Escape `pattern` for a SQLite LIKE with `ESCAPE '\'`.
+fn like_escape(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    for c in pattern.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Which O-6 temporal operator (with literal args) an expression is.
+enum OplogOperator {
+    HasChangeSince { duration: String },
+    HasPropertyChange { key: String, duration: String },
+    DeletedContentMatches { pattern: String, duration: String },
+}
+
+/// Recognize an `oplog.*` operator call with LITERAL args (the
+/// pushdown-able shape — non-literal args fall to row-by-row eval).
+fn oplog_operator_call(expr: &Expr) -> Option<OplogOperator> {
+    let ExprKind::Call {
+        callee: Callee::Method { name, .. },
+        args,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    // Exact arity or no pushdown (adversarial round 3): extra args
+    // must fall through to row-eval, whose arity check rejects them —
+    // otherwise the identical wrong expression works at a top-level
+    // AND but errors inside an OR.
+    match name {
+        MethodName::OplogHasChangeSince if args.len() == 1 => Some(OplogOperator::HasChangeSince {
+            duration: literal_text(args.first()?)?,
+        }),
+        MethodName::OplogHasPropertyChange if args.len() == 2 => {
+            Some(OplogOperator::HasPropertyChange {
+                key: literal_text(args.first()?)?,
+                duration: literal_text(args.get(1)?)?,
+            })
+        }
+        MethodName::OplogDeletedContentMatches if args.len() == 2 => {
+            Some(OplogOperator::DeletedContentMatches {
+                pattern: literal_text(args.first()?)?,
+                duration: literal_text(args.get(1)?)?,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// SQL lowering for one recognized operator (O-6 #544): membership
+/// subqueries over `oplog_events`, the tag/property-predicate
+/// convention — unqualified `id` binds to `files` on both the file and
+/// task candidate paths. `Err` = an operator with an invalid duration
+/// (surfaced as an in-band view error, the `file.matches` precedent).
+fn oplog_pushdown_predicate(
+    node: &FilterNode,
+    now_ms: i64,
+) -> Option<Result<SqlPredicate, String>> {
+    let FilterNode::Stmt(expr) = node else {
+        return None;
+    };
+    let operator = oplog_operator_call(expr)?;
+    let lower = |duration: &str, name: &str| -> Result<i64, String> {
+        parse_operator_duration(duration).map(|w| now_ms.saturating_sub(w)).ok_or_else(|| {
+            format!(
+                "{name}: duration {duration:?} must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")"
+            )
+        })
+    };
+    Some(match operator {
+        OplogOperator::HasChangeSince { duration } => lower(&duration, "oplog.has_change_since")
+            .map(|cutoff| SqlPredicate {
+                clause: "id IN (
+                    SELECT file_id FROM oplog_events
+                    WHERE event_class = 1 AND ts_ms >= ?
+                )"
+                .to_string(),
+                params: vec![cutoff.to_string()],
+            }),
+        OplogOperator::HasPropertyChange { key, duration } => {
+            lower(&duration, "oplog.has_property_change").map(|cutoff| SqlPredicate {
+                clause: "id IN (
+                    SELECT file_id FROM oplog_events
+                    WHERE event_class IN (2, 3, 5)
+                      AND (property_key = ? OR event_class = 5)
+                      AND ts_ms >= ?
+                )"
+                .to_string(),
+                params: vec![key, cutoff.to_string()],
+            })
+        }
+        OplogOperator::DeletedContentMatches { pattern, duration } => {
+            lower(&duration, "oplog.deleted_content_matches").map(|cutoff| SqlPredicate {
+                clause: "id IN (
+                    SELECT file_id FROM oplog_events
+                    WHERE event_class = 1 AND ts_ms >= ?
+                      AND deleted_text LIKE '%' || ? || '%' ESCAPE '\\'
+                )"
+                .to_string(),
+                params: vec![cutoff.to_string(), like_escape(&pattern)],
+            })
+        }
+    })
 }
 
 fn false_predicate() -> SqlPredicate {
@@ -2014,11 +2152,18 @@ fn eval_filter_after_pushdown(
     if !pushdown {
         return eval_filter(node, ctx);
     }
+    // A conjunct is SQL-handled when it is a file.matches or a
+    // literal-arg oplog operator (both pushed above); their Rust
+    // re-evaluation is skipped. Non-literal oplog args never push
+    // down, so they still eval row-by-row here.
+    let sql_handled = |expr: &Expr| -> bool {
+        file_matches_query(expr).is_some() || oplog_operator_call(expr).is_some()
+    };
     match node {
-        FilterNode::Stmt(expr) if file_matches_query(expr).is_some() => Ok(true),
+        FilterNode::Stmt(expr) if sql_handled(expr) => Ok(true),
         FilterNode::And(nodes) => {
             for node in nodes {
-                if matches!(node, FilterNode::Stmt(expr) if file_matches_query(expr).is_some()) {
+                if matches!(node, FilterNode::Stmt(expr) if sql_handled(expr)) {
                     continue;
                 }
                 if !eval_filter(node, ctx)? {
@@ -3189,7 +3334,10 @@ fn cache_key(query: &SlateQuery, ctx: &EngineCtx<'_>) -> Option<CacheKey> {
     {
         return None;
     }
-    if query_mentions_global(query, GlobalFn::Now) || query_mentions_dql_date_shorthand(query) {
+    if query_mentions_global(query, GlobalFn::Now)
+        || query_mentions_dql_date_shorthand(query)
+        || query_mentions_oplog_operator(query)
+    {
         return None;
     }
     let bytes = serde_json::to_vec(query).ok()?;
@@ -3211,6 +3359,26 @@ fn query_mentions_global(query: &SlateQuery, needle: GlobalFn) -> bool {
                 callee: Callee::Global(function),
                 ..
             } if *function == needle
+        )
+    })
+}
+
+/// O-6 (#544): temporal operators are wall-clock-dependent — their
+/// truth changes with time, not vault generation — so queries carrying
+/// them are never cached (the `now()` carve-out precedent).
+fn query_mentions_oplog_operator(query: &SlateQuery) -> bool {
+    query_matches_expr(query, &|expr| {
+        matches!(
+            &expr.kind,
+            ExprKind::Call {
+                callee: Callee::Method { name, .. },
+                ..
+            } if matches!(
+                name,
+                MethodName::OplogHasChangeSince
+                    | MethodName::OplogHasPropertyChange
+                    | MethodName::OplogDeletedContentMatches
+            )
         )
     })
 }
@@ -3369,6 +3537,26 @@ struct SqlVaultLookup<'a> {
 }
 
 impl SqlVaultLookup<'_> {
+    /// One EXISTS-shaped probe for the O-6 temporal-operator eval
+    /// fallback (OR/NOT filter positions, where SQL pushdown can't
+    /// fire).
+    fn exists_query(
+        &self,
+        sql: &str,
+        params: impl rusqlite::Params,
+        function: &str,
+    ) -> Result<bool, EvalError> {
+        use rusqlite::OptionalExtension as _;
+        self.conn
+            .query_row(sql, params, |_| Ok(()))
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(|error| EvalError::InvalidArgument {
+                function: function.to_string(),
+                message: error.to_string(),
+            })
+    }
+
     fn dql_inline_value(
         &self,
         value: &crate::dql_inline_fields_db::DqlInlineValue,
@@ -3441,6 +3629,46 @@ impl SqlVaultLookup<'_> {
 impl VaultLookup for SqlVaultLookup<'_> {
     fn resolve_link(&self, target: &str) -> Option<String> {
         self.resolve_link_from(target, self.source_path)
+    }
+
+    fn oplog_has_change_since(&self, path: &str, cutoff_ms: i64) -> Result<bool, EvalError> {
+        self.exists_query(
+            "SELECT 1 FROM oplog_events e JOIN files f ON f.id = e.file_id
+             WHERE f.path = ?1 AND e.event_class = 1 AND e.ts_ms >= ?2 LIMIT 1",
+            rusqlite::params![path, cutoff_ms],
+            "oplog.has_change_since",
+        )
+    }
+
+    fn oplog_has_property_change(
+        &self,
+        path: &str,
+        key: &str,
+        cutoff_ms: i64,
+    ) -> Result<bool, EvalError> {
+        self.exists_query(
+            "SELECT 1 FROM oplog_events e JOIN files f ON f.id = e.file_id
+             WHERE f.path = ?1 AND e.event_class IN (2, 3, 5)
+               AND (e.property_key = ?2 OR e.event_class = 5)
+               AND e.ts_ms >= ?3 LIMIT 1",
+            rusqlite::params![path, key, cutoff_ms],
+            "oplog.has_property_change",
+        )
+    }
+
+    fn oplog_deleted_content_matches(
+        &self,
+        path: &str,
+        pattern: &str,
+        cutoff_ms: i64,
+    ) -> Result<bool, EvalError> {
+        self.exists_query(
+            "SELECT 1 FROM oplog_events e JOIN files f ON f.id = e.file_id
+             WHERE f.path = ?1 AND e.event_class = 1 AND e.ts_ms >= ?2
+               AND e.deleted_text LIKE '%' || ?3 || '%' ESCAPE '\\' LIMIT 1",
+            rusqlite::params![path, cutoff_ms, like_escape(pattern)],
+            "oplog.deleted_content_matches",
+        )
     }
 
     fn file_matches(&self, path: &str, query: &str) -> Result<bool, EvalError> {

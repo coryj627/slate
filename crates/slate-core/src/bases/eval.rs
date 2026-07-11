@@ -349,6 +349,42 @@ pub trait VaultLookup {
         })
     }
 
+    /// O-6 (#544): ∃ a content-change event for `path` at or after
+    /// `cutoff_ms`. Filter-position only, SQL-backed (the engine's
+    /// SqlVaultLookup implements it; the default is the FilterOnly
+    /// refusal, like `file_matches`).
+    fn oplog_has_change_since(&self, _path: &str, _cutoff_ms: i64) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "oplog.has_change_since".to_string(),
+        })
+    }
+
+    /// O-6 (#544): ∃ a property event for `key` (class 5 matches any
+    /// key) at or after `cutoff_ms`.
+    fn oplog_has_property_change(
+        &self,
+        _path: &str,
+        _key: &str,
+        _cutoff_ms: i64,
+    ) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "oplog.has_property_change".to_string(),
+        })
+    }
+
+    /// O-6 (#544): ∃ a content-change event at or after `cutoff_ms`
+    /// whose deleted_text contains `pattern` ASCII-case-insensitively.
+    fn oplog_deleted_content_matches(
+        &self,
+        _path: &str,
+        _pattern: &str,
+        _cutoff_ms: i64,
+    ) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "oplog.deleted_content_matches".to_string(),
+        })
+    }
+
     fn row_for_path(&self, _path: &str) -> Option<RowContext> {
         None
     }
@@ -1761,6 +1797,68 @@ fn eval_method(
                 };
             }
             Ok(Value::Bool(regex.is_match(&value_to_string(&args[0]))))
+        }
+        MethodName::OplogHasChangeSince => {
+            expect_arity("oplog.has_change_since", args.len(), 1, 1)?;
+            if !ctx.filter_position {
+                return Err(EvalError::FilterOnly {
+                    function: "oplog.has_change_since".to_string(),
+                });
+            }
+            let duration = expect_text("oplog.has_change_since", &args[0])?;
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
+                    invalid_arg(
+                        "oplog.has_change_since",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
+                    )
+                })?;
+            let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
+            ctx.vault
+                .oplog_has_change_since(&ctx.file.file_path, cutoff_ms)
+                .map(Value::Bool)
+        }
+        MethodName::OplogHasPropertyChange => {
+            expect_arity("oplog.has_property_change", args.len(), 2, 2)?;
+            if !ctx.filter_position {
+                return Err(EvalError::FilterOnly {
+                    function: "oplog.has_property_change".to_string(),
+                });
+            }
+            let key = expect_text("oplog.has_property_change", &args[0])?;
+            let duration = expect_text("oplog.has_property_change", &args[1])?;
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
+                    invalid_arg(
+                        "oplog.has_property_change",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
+                    )
+                })?;
+            let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
+            ctx.vault
+                .oplog_has_property_change(&ctx.file.file_path, &key, cutoff_ms)
+                .map(Value::Bool)
+        }
+        MethodName::OplogDeletedContentMatches => {
+            expect_arity("oplog.deleted_content_matches", args.len(), 2, 2)?;
+            if !ctx.filter_position {
+                return Err(EvalError::FilterOnly {
+                    function: "oplog.deleted_content_matches".to_string(),
+                });
+            }
+            let pattern = expect_text("oplog.deleted_content_matches", &args[0])?;
+            let duration = expect_text("oplog.deleted_content_matches", &args[1])?;
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
+                    invalid_arg(
+                        "oplog.deleted_content_matches",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
+                    )
+                })?;
+            let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
+            ctx.vault
+                .oplog_deleted_content_matches(&ctx.file.file_path, &pattern, cutoff_ms)
+                .map(Value::Bool)
         }
     }
 }
