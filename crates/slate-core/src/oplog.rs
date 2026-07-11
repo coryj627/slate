@@ -705,9 +705,19 @@ pub fn oplog_path_for_name(cache_dir: &Path, log_name: &str) -> PathBuf {
 
 /// The serialized v2 header block (fixed header + path record +
 /// generation) for a fresh log.
+/// A `created_path` longer than the u16 length prefix can carry is
+/// written as an EMPTY path record rather than silently truncated —
+/// `path_len as u16` would wrap and desynchronize the entry stream
+/// (Codoki review, PR #790). An empty record reads back as
+/// `created_path: None`, so the log degrades to marker/salvage-based
+/// identity exactly like a v1 log — safe, never corrupt. (Real vault
+/// paths are nowhere near 64 KiB; this is a safety rail, not a case.)
 fn v2_header_block(created_path: &str, generation: u32) -> Vec<u8> {
-    let path_bytes = created_path.as_bytes();
-    debug_assert!(path_bytes.len() <= u16::MAX as usize);
+    let path_bytes = if created_path.len() <= u16::MAX as usize {
+        created_path.as_bytes()
+    } else {
+        &[]
+    };
     let mut block = Vec::with_capacity(HEADER_LEN + 2 + path_bytes.len() + 4);
     block.extend_from_slice(&MAGIC);
     block.push(FORMAT_VERSION_V2);
@@ -804,6 +814,10 @@ fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option<OplogHeade
             }
             let created_path =
                 String::from_utf8(path_buf).map_err(|_| torn("path record is not valid UTF-8"))?;
+            // An empty record means "no usable creation path" (the
+            // oversized-path safety rail above) — surface it as None
+            // so consumers fall back to markers/salvage, matching v1.
+            let created_path = (!created_path.is_empty()).then_some(created_path);
             let mut generation_buf = [0u8; 4];
             match read_fully(file, &mut generation_buf)? {
                 ReadOutcome::Full => {}
@@ -811,7 +825,7 @@ fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option<OplogHeade
             }
             Ok(Some(OplogHeader {
                 version: FORMAT_VERSION_V2,
-                created_path: Some(created_path),
+                created_path,
                 generation: u32::from_le_bytes(generation_buf),
             }))
         }
@@ -2265,6 +2279,26 @@ mod tests {
                 entries[i].op_kind
             );
         }
+    }
+
+    #[test]
+    fn oversized_created_path_degrades_to_no_path_record() {
+        // Codoki (PR #790): a path longer than the u16 length prefix
+        // must not wrap-truncate the header. It is written as an empty
+        // record instead, reads back as None, and the entry stream
+        // stays perfectly aligned.
+        let tmp = tempfile::tempdir().unwrap();
+        let huge_path = format!("dir/{}.md", "x".repeat(70_000));
+        assert!(try_create_log(tmp.path(), "huge", &huge_path).unwrap());
+        append_entry(tmp.path(), "huge", &huge_path, &snapshot_entry("body\n")).unwrap();
+        let (header, entries) = read_oplog_with_header(tmp.path(), "huge").unwrap();
+        assert_eq!(header.version, FORMAT_VERSION_V2);
+        assert_eq!(
+            header.created_path, None,
+            "an unwritable path degrades to no record, never truncation"
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(reconstruct_at_tail(&entries).unwrap(), "body\n");
     }
 
     #[test]
