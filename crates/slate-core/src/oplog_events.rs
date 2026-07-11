@@ -158,10 +158,17 @@ pub(crate) fn derive_events_for_log(entries: &[OpLogEntry]) -> Vec<DerivedEvent>
         } else {
             None
         };
-        events.extend(derive_events(entry, None, old.as_deref()));
-        if crate::oplog::replay_advance(&mut buf, entry).is_err() {
+        // Advance BEFORE deriving (round 5): the poisoning entry's own
+        // transition is unreplayable, so its sample must be NULL
+        // (unknown) — extracting against the captured old would skip
+        // every out-of-range span and record a falsely definitive ""
+        // ("known nothing deleted").
+        let advanced = crate::oplog::replay_advance(&mut buf, entry).is_ok();
+        if !advanced {
             buf = None; // resync at the next snapshot
         }
+        let sample_old = if advanced { old.as_deref() } else { None };
+        events.extend(derive_events(entry, None, sample_old));
     }
     events
 }
@@ -389,9 +396,10 @@ mod tests {
         ];
         let events = derive_events_for_log(&entries);
         assert_eq!(events.len(), 4, "every content change emits its row");
-        // The corrupt entry's extraction is bounds-checked: out-of-
-        // range spans contribute nothing, never garbage.
-        assert_eq!(events[1].deleted_text.as_deref(), Some(""));
+        // The corrupt entry's own transition is unreplayable, so its
+        // sample is NULL (unknown) — never a falsely definitive ""
+        // ("known nothing deleted"; round 5).
+        assert_eq!(events[1].deleted_text, None);
         // The post-resync batch samples fully — the later history is
         // NOT lost to the old corruption.
         assert!(
