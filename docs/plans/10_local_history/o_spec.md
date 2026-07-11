@@ -543,6 +543,10 @@ compose in either landing order). Persistence/unknown-token rules as in M-3. `le
   page; a generation-bump paging error silently reloads page one (the list is fresher, not wrong).
   Markers (`is_marker`) filtered out of the default list; a "Show markers" toggle in a
   section-header menu reveals them (they explain gaps: "Renamed from X").
+  *Amendment (2026-07-11, HIG corpus audit):* the toggle is now a DIRECT checkbox in the
+  section header, not behind an ellipsis menu — pull-down-buttons.md advises against
+  single-item menus. Semantics (markers hidden by default, `visible(_:showMarkers:)`
+  filter) unchanged.
   - Row identity = `position_from_tail` (hashes repeat across A→B→A histories; SwiftUI `ForEach`
     ids and the selection model use position, API calls use the row's hash).
   - Row content: absolute date+time (`DateFormatter` medium/short — **not** bare relative time;
@@ -604,6 +608,7 @@ Math/Code/Bibliography):
 ### Commands (registry + menu + palette; drift test updated — same registry/menu rule as M-3)
 
 `slate.history.showPanel` ("Show history panel" — activates the leaf), menu item in the **View
+  *Amendment (2026-07-11, HIG corpus audit):* shipped menu/palette label is Title-Case **“Show History Panel”**; id and behavior unchanged.
 menu, `CommandSection.view`, following the workspace-tabs precedent (SlateCommands.swift:36)** —
 the same normative home M-3's `slate.diagnostics.refreshSync` uses (cross-referenced in both
 specs so the two PRs converge on one menu regardless of landing order). Row actions are not

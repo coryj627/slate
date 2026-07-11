@@ -92,7 +92,7 @@ Cards, map, and plugin-authored view types are preserved. Slate v1 renders them 
 
 ## Quick Filter
 
-Use **Bases: Quick filter** or the grid search field for a temporary filter across displayed values. It never changes the `.base` file, never marks the tab dirty, and never changes saved filters. Use it for one-off narrowing; use the builder when you want a saved filter.
+Use **Bases: Quick Filter** or the grid search field for a temporary filter across displayed values. It never changes the `.base` file, never marks the tab dirty, and never changes saved filters. Use it for one-off narrowing; use the builder when you want a saved filter.
 
 Exports and **Bases: Copy View as Markdown** include the quick filter by default so copied data matches what you are reading. Save-panel exports let you choose whether to include it.
 
@@ -235,7 +235,7 @@ Every Bases command lives in the Command Palette under **Bases**. Static Bases c
 | Bases: Save Sort to View |
 | Bases: View as Table |
 | Bases: View as List |
-| Bases: Quick filter |
+| Bases: Quick Filter |
 | Bases: Where Am I? |
 | Bases: Open Row |
 | Bases: Copy Link |

@@ -23,7 +23,7 @@ struct OutlineSidebar: View {
     var body: some View {
         Group {
             if appState.selectedFilePath == nil {
-                emptyState(message: "Select a file to see its outline.")
+                emptyState(message: "Select a note to see its outline.")
             } else if appState.isLoadingNote && appState.currentNoteHeadings.isEmpty {
                 loadingState
             } else if appState.currentNoteHeadings.isEmpty {

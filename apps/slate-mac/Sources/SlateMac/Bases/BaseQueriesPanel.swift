@@ -57,7 +57,7 @@ struct BaseQueriesPanel: View {
             }
         }
         .onAppear { appState.refreshBaseQueries() }
-        .alert("Rename saved query", isPresented: renamePresented) {
+        .alert("Rename Saved Query", isPresented: renamePresented) {
             Text("Saved query name")
             TextField("Saved query name", text: $renameDraft)
                 .accessibilityLabel("Saved query name")

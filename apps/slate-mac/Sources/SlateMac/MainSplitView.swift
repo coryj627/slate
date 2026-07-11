@@ -115,18 +115,18 @@ struct MainSplitView: View {
     private var splitViewWithAlerts: some View {
         splitViewCore
         .alert(
-            "File changed externally",
+            "File Changed Externally",
             isPresented: writeConflictPresented,
             presenting: appState.currentSaveConflict
         ) { conflict in
-            Button("Keep mine") {
+            Button("Keep Mine") {
                 appState.resolveSaveConflictKeepMine()
                 alertFocusReturn = .editor
             }
             .accessibilityHint(
                 "Save your version, overwriting the external change."
             )
-            Button("Reload from disk", role: .destructive) {
+            Button("Reload from Disk", role: .destructive) {
                 appState.resolveSaveConflictReloadFromDisk()
                 alertFocusReturn = .editor
             }
@@ -149,7 +149,7 @@ struct MainSplitView: View {
         // non-blocking, once per (path, session) (AppState gates), the
         // core's message verbatim.
         .alert(
-            "History compaction failed",
+            "History Compaction Failed",
             isPresented: compactionFailurePresented,
             presenting: appState.compactionFailure
         ) { _ in
@@ -262,18 +262,18 @@ struct MainSplitView: View {
         // a single key edit (Milestone I / #168). Same three-button
         // shape so VoiceOver users learn one mental model.
         .alert(
-            "Property edit blocked",
+            "Property Edit Blocked",
             isPresented: propertyEditConflictPresented,
             presenting: appState.currentPropertyEditConflict
         ) { conflict in
-            Button("Keep mine") {
+            Button("Keep Mine") {
                 appState.resolvePropertyEditConflictKeepMine()
                 alertFocusReturn = .editor
             }
             .accessibilityHint(
                 "Re-apply your property edit, overwriting the external change."
             )
-            Button("Reload from disk", role: .destructive) {
+            Button("Reload from Disk", role: .destructive) {
                 appState.resolvePropertyEditConflictReloadFromDisk()
                 alertFocusReturn = .editor
             }
@@ -553,7 +553,7 @@ struct MainSplitView: View {
                         || !appState.hasUnsavedChanges
                 )
                 .accessibilityHint(
-                    "Save the current note to disk. Cmd+S."
+                    "Save the current note to disk. Command-S."
                 )
             }
             ToolbarItem(placement: .automatic) {
@@ -571,7 +571,7 @@ struct MainSplitView: View {
                 // equivalent would be ambiguous, so the toolbar
                 // button is click/AX-activate only.
                 .accessibilityHint(
-                    "Opens the search overlay. Cmd+F to toggle, Esc to close."
+                    "Opens the search overlay. Command-F to toggle, Escape to close."
                 )
             }
             ToolbarItem(placement: .automatic) {
@@ -583,7 +583,7 @@ struct MainSplitView: View {
                 // ⇧⌘N lives on File ▸ New from Template… (#422 — see
                 // the Save button above). Click/AX-activate only.
                 .accessibilityHint(
-                    "Opens the template picker. Cmd+Shift+N. Esc closes."
+                    "Opens the template picker. Command-Shift-N. Escape closes."
                 )
             }
             ToolbarItem(placement: .automatic) {
@@ -596,7 +596,7 @@ struct MainSplitView: View {
                 // Save button above). Click/AX-activate only.
                 .disabled(appState.currentSession == nil)
                 .accessibilityHint(
-                    "Opens the vault-wide tasks review. Cmd+Shift+T. Esc closes."
+                    "Opens the vault-wide tasks review. Command-Shift-T. Escape closes."
                 )
             }
             // Milestone L #282: Citation Summary. Cmd+Shift+J opens
@@ -612,11 +612,11 @@ struct MainSplitView: View {
                 // the Save button above). Click/AX-activate only.
                 .disabled(appState.selectedFilePath == nil)
                 .accessibilityHint(
-                    "Opens the citation summary for the current note. Cmd+Shift+J. Esc closes."
+                    "Opens the citation summary for the current note. Command-Shift-J. Escape closes."
                 )
             }
             // Milestone L #282: Jump to bibliography from the
-            // currently-expanded citation. Cmd+J. Active only when
+            // currently-expanded citation. Command-J. Active only when
             // a citation popover is open.
             ToolbarItem(placement: .automatic) {
                 Button {
@@ -628,7 +628,7 @@ struct MainSplitView: View {
                 // the Save button above). Click/AX-activate only.
                 .disabled(appState.expandedCitation == nil)
                 .accessibilityHint(
-                    "Filters the Bibliography sidebar to the citation's key. Cmd+J."
+                    "Filters the Bibliography sidebar to the citation's key. Command-J."
                 )
             }
             // U4-3 (#472): the "Close Vault" toolbar button was removed here.

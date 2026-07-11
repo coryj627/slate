@@ -34,7 +34,7 @@ final class SlateSymbolTests: XCTestCase {
         "plus.circle", "arrow.up", "arrow.down", "rectangle.2.swap",
         "checkmark.square", "square",
         "plus", "xmark", "rectangle.split.2x1", "book", "pencil",
-        "folder", "folder.fill", "chevron.right", "list.bullet.indent",
+        "folder", "folder.fill", "chevron.forward", "list.bullet.indent",
         // U4-2 leaf roles (#471).
         "arrow.uturn.backward", "arrow.up.right", "photo.on.rectangle",
         "point.3.connected.trianglepath.dotted",

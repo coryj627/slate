@@ -115,7 +115,9 @@ struct CitationsPanel: View {
     }
 
     private func row(for citation: RenderedCitation) -> some View {
-        Button {
+        let isUnresolved =
+            citation.bibEntry == nil && citation.styleId.isEmpty == false
+        return Button {
             appState.expandedCitation = citation
         } label: {
             // Visible: the visual_text from hayagriva
@@ -124,24 +126,43 @@ struct CitationsPanel: View {
             // and AT users get distinct treatments without showing
             // both side by side (which would clutter the row + risk
             // truncation under Dynamic Type — WCAG 1.4.4).
-            Text(citation.visualText.isEmpty ? citation.raw : citation.visualText)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .foregroundStyle(
-                    citation.bibEntry == nil && citation.styleId.isEmpty == false
-                        // Unresolved-key marker: semantic warning tint. The
-                        // warning-color token + its APCA pairing land in U5-3.
-                        ? Color.orange
-                        : Tokens.ColorRole.textPrimary
-                )
-                .contentShape(Rectangle())
+            HStack(spacing: Tokens.Spacing.xs) {
+                Text(citation.visualText.isEmpty ? citation.raw : citation.visualText)
+                    .lineLimit(2)
+                    .foregroundStyle(
+                        // Unresolved-key marker: the U5-3 APCA-gated
+                        // warning role (this was the one `.orange`
+                        // literal the U5-3 sweep missed — raw orange
+                        // measured Lc ≈ 43 light, below the floor) PLUS
+                        // the text badge below, so the state is never
+                        // color-alone (WCAG 1.4.1; the
+                        // OutgoingLinksPanel pattern).
+                        isUnresolved
+                            ? Tokens.ColorRole.warningText
+                            : Tokens.ColorRole.textPrimary
+                    )
+                if isUnresolved {
+                    Text("Unresolved")
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.warningText)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         // The AT label IS the speech_text — never the visual_text.
         // This is the entire reason Milestone L exists: screen readers
         // never say "open paren Smith comma twenty twenty close paren"
-        // because we never give them the parenthesised form.
-        .accessibilityLabel(citation.speechText)
+        // because we never give them the parenthesised form. The
+        // unresolved state rides the label as a prefix so AT users get
+        // the same cue the badge gives sighted users.
+        .accessibilityLabel(
+            isUnresolved
+                ? "Unresolved citation key. \(citation.speechText)"
+                : citation.speechText
+        )
         .accessibilityHint("Activate to expand citation fields.")
     }
 

@@ -64,7 +64,7 @@ struct TemplatePicker: View {
             Text("Choose a template")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text("Cmd+Shift+N. Esc to cancel.")
+            Text("Command-Shift-N. Escape to cancel.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

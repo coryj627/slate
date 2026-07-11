@@ -243,7 +243,7 @@ struct TasksReviewView: View {
                 dismiss()
             }
             .keyboardShortcut(.escape, modifiers: [])
-            .accessibilityHint("Close the tasks review. Esc.")
+            .accessibilityHint("Close the tasks review. Escape.")
         }
     }
 

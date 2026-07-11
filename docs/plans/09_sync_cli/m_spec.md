@@ -252,6 +252,7 @@ Mirror `LiveSyncConfigStatus` (uniffi::Enum with associated record) + `LiveSyncC
 - A `refreshSyncDiagnostics()` method re-runs both calls (wired to a "Refresh" button in the panel
   header; also the command registry entry `slate.diagnostics.refreshSync`, palette name
   "Refresh sync diagnostics"). **Registry + menu, not palette-only:** the registry's invariant is
+  *Amendment (2026-07-11, HIG corpus audit):* shipped menu/palette label is Title-Case **“Refresh Sync Diagnostics”** (menus.md capitalization rule); id and behavior unchanged.
   menu↔palette unification and the drift test scrapes menu source (SlateCommands.swift:170-182,
   SlateCommandsTests.swift:84) — so the command also gets a menu item: **View menu,
   `CommandSection.view`, following the workspace-tabs precedent (SlateCommands.swift:36)**. This

@@ -2908,6 +2908,11 @@ final class AppState: ObservableObject {
             pendingTabClose = nil
             pendingTabCloseAfterSave = nil
             selectedFilePath = nil
+            // Codex review (corpus PR): the tree-selection mirror must
+            // die with the vault — Reveal in Finder / Copy Path read it,
+            // and a stale vault-A node would resolve against vault B's
+            // root (cross-vault path leak).
+            treeSelectedNode = nil
             scanProgress = nil
             scanAnnouncementCount = 0
             scanAnnouncementLastMessage = nil
@@ -3273,6 +3278,7 @@ final class AppState: ObservableObject {
         pendingTabClose = nil
         pendingTabCloseAfterSave = nil
         selectedFilePath = nil
+        treeSelectedNode = nil
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
@@ -6122,6 +6128,39 @@ final class AppState: ObservableObject {
     func moveSelectedCommand() {
         guard isVaultOpen, let node = treeSelectedNode else { return }
         pendingMove = PendingMove(path: node.path, isDirectory: node.isDirectory)
+    }
+
+    /// File ▸ Reveal in Finder / palette — jump to the selected node on
+    /// disk. Context menus keep their own per-clicked-node variant; this
+    /// one follows the tree SELECTION like every other file command
+    /// (context-menus.md redundancy rule: every context action needs a
+    /// primary-UI home).
+    func revealSelectedInFinderCommand() {
+        guard isVaultOpen, let node = treeSelectedNode,
+            let url = currentVaultURL?.appendingPathComponent(node.path)
+        else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// File ▸ Copy Path / palette — copy the selected node's absolute
+    /// filesystem path (Finder's Copy-as-Pathname affordance).
+    func copySelectedPathCommand() {
+        guard let node = treeSelectedNode else { return }
+        copyAbsolutePath(vaultRelative: node.path)
+    }
+
+    /// Shared Copy Path implementation — the menu/palette command above
+    /// and the tree's context menu both land here so the pasteboard
+    /// write and the AT announcement can never diverge between surfaces
+    /// (red-team F7 on the corpus pass).
+    func copyAbsolutePath(vaultRelative path: String) {
+        guard isVaultOpen,
+            let url = currentVaultURL?.appendingPathComponent(path)
+        else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.path, forType: .string)
+        let name = (path as NSString).lastPathComponent
+        postAccessibilityAnnouncement("Copied path of \(name).")
     }
 
     /// ⌘⌫ (tree-focused) / context-menu "Move to Trash" — delete the selected

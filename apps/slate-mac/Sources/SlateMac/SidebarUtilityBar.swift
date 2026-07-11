@@ -84,7 +84,9 @@ struct SidebarUtilityBar: View {
         .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .accessibilityLabel("Settings")
         .accessibilityHint("Opens the Settings window.")
-        .help("Settings (⌘,)")
+        // Verb-first tooltip (offering-help.md: "explain the action…
+        // begin with a verb").
+        .help("Open Settings (⌘,)")
     }
 
     // MARK: - Help
@@ -99,7 +101,9 @@ struct SidebarUtilityBar: View {
         .buttonStyle(.interactiveRow(cornerRadius: Tokens.Radius.small))
         .accessibilityLabel("Help")
         .accessibilityHint("Opens the project README in your default browser.")
-        .help("Help")
+        // offering-help.md: "don't repeat the control's name" — say
+        // what it opens instead.
+        .help("Open the project README")
     }
 
     // MARK: - Vault switcher

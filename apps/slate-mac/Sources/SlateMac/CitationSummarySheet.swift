@@ -25,7 +25,7 @@ struct CitationSummarySheet: View {
             let citations = appState.currentNoteCitations
 
             if citations.isEmpty {
-                Text("This document has no citations.")
+                Text("This note has no citations.")
                     .foregroundStyle(.secondary)
             } else {
                 Text(summaryText(citations))
@@ -77,13 +77,13 @@ struct CitationSummarySheet: View {
 
     private func summaryText(_ citations: [RenderedCitation]) -> String {
         let (totalText, uniqueText) = countParts(citations)
-        return "This document has \(totalText) referencing \(uniqueText)."
+        return "This note has \(totalText) referencing \(uniqueText)."
     }
 
     private func announcementLabel() -> String {
         let citations = appState.currentNoteCitations
         if citations.isEmpty {
-            return "Citation Summary. This document has no citations."
+            return "Citation Summary. This note has no citations."
         }
         return "Citation Summary. \(summaryText(citations))"
     }

@@ -44,6 +44,42 @@ final class AppStateTests: XCTestCase {
         return AppState(recentsStore: store, externalOpener: externalOpener)
     }
 
+    /// Codex review (corpus PR): the tree-selection mirror is the
+    /// command target for Reveal in Finder / Copy Path — it must die
+    /// on BOTH vault-lifecycle paths, or a vault-A selection resolves
+    /// against vault B's root after a switch.
+    func testVaultLifecycleClearsTreeSelectionMirror() throws {
+        let vaultA = tempDir.appendingPathComponent("vault-a")
+        try FileManager.default.createDirectory(
+            at: vaultA, withIntermediateDirectories: true)
+        try "# a\n".write(
+            to: vaultA.appendingPathComponent("a.md"),
+            atomically: true, encoding: .utf8)
+        let vaultB = tempDir.appendingPathComponent("vault-b")
+        try FileManager.default.createDirectory(
+            at: vaultB, withIntermediateDirectories: true)
+
+        let state = try makeAppState()
+        state.openVault(at: vaultA)
+        state.treeSelectedNode = AppState.TreeSelection(
+            path: "a.md", isDirectory: false)
+
+        // Close path.
+        state.closeVault()
+        XCTAssertNil(
+            state.treeSelectedNode,
+            "closeVault must clear the command target")
+
+        // Open path (fresh selection carried across the boundary).
+        state.openVault(at: vaultA)
+        state.treeSelectedNode = AppState.TreeSelection(
+            path: "a.md", isDirectory: false)
+        state.openVault(at: vaultB)
+        XCTAssertNil(
+            state.treeSelectedNode,
+            "opening another vault must clear the command target")
+    }
+
     func testInitLoadsExistingRecentsFromStore() throws {
         let seed = [
             RecentVault(path: "/tmp/a", displayName: "a", lastOpenedMs: 1),

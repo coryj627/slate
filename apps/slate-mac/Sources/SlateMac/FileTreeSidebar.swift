@@ -548,6 +548,14 @@ struct FileTreeSidebar: View {
     /// to list-driven changes only.
     @FocusState private var fileTreeFocused: Bool
 
+    /// RTL-aware disclosure rotation (right-to-left.md): the base
+    /// `chevron.forward` glyph auto-mirrors to point left under RTL
+    /// (that is why the symbol layer uses forward, not right — measured:
+    /// chevron.right does NOT mirror), so the expanded rotation must
+    /// turn the OPPOSITE way — a fixed +90° composed with the mirrored
+    /// glyph would point up, not down.
+    @Environment(\.layoutDirection) private var layoutDirection
+
     /// Set for exactly one `listSelection` change when post-DELETE focus moves
     /// the highlight to a sibling: the deleted node's tab is now in the missing-
     /// file error state (U2-5), and re-selecting a sibling FILE must NOT open it
@@ -635,8 +643,14 @@ struct FileTreeSidebar: View {
     // MARK: - States
 
     private var scanningState: some View {
+        // Linear (like the `scanStrip` that takes over once rows
+        // appear), NOT circular: progress-indicators.md — "don't
+        // switch between circular and bar styles" mid-operation. The
+        // empty-vault phase and the strip are one scan.
         VStack(spacing: Tokens.Spacing.md) {
             ProgressView()
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 220)
             Text("Scanning vault…")
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -670,7 +684,7 @@ struct FileTreeSidebar: View {
             Button("New Note") {
                 appState.createNote(in: "")
             }
-            .accessibilityHint("Creates your first note at the vault root. Cmd+N.")
+            .accessibilityHint("Creates your first note at the vault root. Command-N.")
         }
         .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -790,6 +804,14 @@ struct FileTreeSidebar: View {
         // two equal mutations still fire.
         .onChange(of: appState.treeMutation?.token) { _, _ in
             handleTreeMutation(proxy: proxy)
+        }
+        // Vault switch: the row highlight must not survive into the next
+        // vault — AppState clears its `treeSelectedNode` mirror on the
+        // lifecycle paths (Codex review: stale mirrors let Copy Path /
+        // Reveal resolve a vault-A node against vault B's root); the
+        // view-side highlight resets with it.
+        .onChange(of: appState.currentVaultURL) { _, _ in
+            listSelection = nil
         }
         // User-driven selection: push it onto AppState here, outside the list's
         // update transaction, so handleSelectionChange runs in a well-defined
@@ -1079,7 +1101,11 @@ struct FileTreeSidebar: View {
                 // through SlateSymbol, no raw glyph): the AX value already states
                 // expanded/collapsed.
                 SlateSymbol.disclosure.decorative
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .rotationEffect(
+                        .degrees(
+                            isExpanded
+                                ? (layoutDirection == .rightToLeft ? -90 : 90)
+                                : 0))
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
                 // Folder glyph per expanded state; decorative since the row label
@@ -1311,6 +1337,10 @@ struct FileTreeSidebar: View {
     @ViewBuilder
     private func fileManagementMenu(for node: TreeNode) -> some View {
         let creationParent = node.isDirectory ? node.path : (AppState.TreeMutation.parentPath(of: node.path) ?? "")
+        // ONE management group (context-menus.md: "max ~3 separator
+        // groups" — with the file rows' open-in trio above, a divider
+        // here would push the menu to 4–5 groups as it briefly did).
+        // Order: create → organize → inspect; Trash stands alone below.
         Button {
             appState.createNote(in: creationParent)
         } label: {
@@ -1321,7 +1351,6 @@ struct FileTreeSidebar: View {
         } label: {
             SlateSymbol.newFolder.label("New Folder")
         }
-        Divider()
         Button {
             beginRename(node)
         } label: {
@@ -1330,24 +1359,22 @@ struct FileTreeSidebar: View {
         Button {
             appState.pendingMove = AppState.PendingMove(path: node.path, isDirectory: node.isDirectory)
         } label: {
-            SlateSymbol.moveTo.label("Move to…")
+            SlateSymbol.moveTo.label("Move To…")
         }
-        Divider()
-        // Finder-staple inspection actions (HIG file-tree conventions —
-        // every macOS file sidebar offers a jump to the real file and a
-        // path copy). Plain Buttons like the open-in trio: inspection
-        // actions carry no SlateSymbol role (the u2_spec table maps
-        // symbols to MUTATION verbs only).
+        // Finder-staple inspection actions. Plain Buttons like the
+        // open-in trio: inspection actions carry no SlateSymbol role
+        // (the u2_spec table maps symbols to MUTATION verbs only).
+        // Menu-bar + palette homes exist (context-menus.md redundancy
+        // rule) — these act on the CLICKED node, those on the selection.
         Button("Reveal in Finder") {
             if let url = absoluteURL(for: node) {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
         }
         Button("Copy Path") {
-            if let url = absoluteURL(for: node) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url.path, forType: .string)
-            }
+            // Same announcing funnel as the menu/palette command —
+            // identical feedback from every surface (red-team F7).
+            appState.copyAbsolutePath(vaultRelative: node.path)
         }
         Divider()
         Button(role: .destructive) {
@@ -1423,7 +1450,9 @@ struct FileTreeSidebar: View {
             indent(for: depth)
             ProgressView()
                 .controlSize(.small)
-            Text("Loading…")
+            // Named object, not bare "Loading…" (progress-indicators.md:
+            // "avoid vague terms like 'Loading'").
+            Text("Loading folder…")
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer(minLength: 0)

@@ -28,6 +28,14 @@ struct SlateMacApp: App {
         #else
         initHostLogging(verbose: false)
         #endif
+
+        // Opt out of native window tabbing (windows.md "system windows
+        // behave as people expect"): Slate ships its own workspace tab
+        // strip, and the system's Show Tab Bar / Merge All Windows
+        // items would nest that custom tab UI inside a native tab —
+        // two tab metaphors in one window frame. Revisit if a real
+        // multi-window story lands (Milestone W parity work).
+        NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     var body: some Scene {
@@ -88,7 +96,9 @@ struct SlateMacApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(!appState.isVaultOpen)
 
-                Button("New Folder…") {
+                // No ellipsis (menus.md): creation is immediate
+                // (inline rename follows) — the New Note flow.
+                Button("New Folder") {
                     appState.newFolderCommand()
                 }
                 .disabled(!appState.isVaultOpen)
@@ -119,10 +129,24 @@ struct SlateMacApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .option])
                 .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
 
-                Button("Move to…") {
+                Button("Move To…") {
                     appState.moveSelectedCommand()
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+
+                // Inspection pair — the primary-UI home the context-menu
+                // rule requires (context-menus.md: context items must
+                // also exist in the main interface). Selection-scoped
+                // like Rename/Move To.
+                Button("Reveal in Finder") {
+                    appState.revealSelectedInFinderCommand()
+                }
+                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+
+                Button("Copy Path") {
+                    appState.copySelectedPathCommand()
+                }
                 .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
 
                 Divider()
@@ -249,14 +273,16 @@ struct SlateMacApp: App {
                 // workspace-tabs precedent above is the normative home
                 // for View-section commands). No hotkey — refresh is a
                 // rare, deliberate action.
-                Button("Refresh sync diagnostics") {
+                // Title-style capitalization (menus.md) — these two were
+                // sentence-case among Title-Case siblings.
+                Button("Refresh Sync Diagnostics") {
                     appState.refreshSyncDiagnostics()
                 }
                 .disabled(!appState.isVaultOpen)
 
                 // O-5 (#543): the history panel's menu home — same
                 // View-section rule as the sync-diagnostics item above.
-                Button("Show history panel") {
+                Button("Show History Panel") {
                     appState.showHistoryPanel()
                 }
                 .disabled(!appState.isVaultOpen)
@@ -269,13 +295,17 @@ struct SlateMacApp: App {
                 // affordances; each chord's single owner is its menu
                 // item here. Labels match the palette registrations.
                 // Enablement mirrors the corresponding toolbar button.
-                Button("Tasks Review") {
+                // Verb-first menu labels (menus.md "verb or verb phrase
+                // for action items") — the palette keeps the noun forms
+                // ("Tasks Review") as its search-friendly names; the
+                // registry invariant is chord parity, not label parity.
+                Button("Show Tasks Review") {
                     appState.openTasksReview()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(appState.currentSession == nil)
 
-                Button("Citation Summary") {
+                Button("Show Citation Summary") {
                     appState.isCitationSummaryOpen = true
                 }
                 .keyboardShortcut("j", modifiers: [.command, .shift])
@@ -487,8 +517,13 @@ struct SlateMacApp: App {
             // Help ▸ Slate Help (HIG: the Help menu's first item is
             // "<AppName> Help"). Routes through the same `openHelp`
             // the palette and utility bar use. `replacing: .help`
-            // rather than `after:` — the default SwiftUI Help menu
-            // only carries the stub search field.
+            // rather than `after:` — replacing swaps only the ITEM
+            // group; the system menu-command search field is AppKit-
+            // injected into the app's help menu at display time and
+            // SURVIVES the replacement (measured via AX on the
+            // running app: AXTextField "search text field" + results
+            // table render above "Slate Help"). `after:` would keep
+            // SwiftUI's dead default "<App> Help" stub next to ours.
             CommandGroup(replacing: .help) {
                 Button("Slate Help") {
                     appState.openHelp()

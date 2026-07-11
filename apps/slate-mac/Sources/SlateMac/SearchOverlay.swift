@@ -139,10 +139,35 @@ struct SearchOverlay: View {
                         appState.openSearchResult(first)
                     }
                 }
+            // Clear-text affordance — core search-field anatomy
+            // (search-fields.md: "Search icon, Clear button,
+            // placeholder"). Previously the ONLY ×-glyph here closed
+            // the whole overlay, so clicking what reads as "clear"
+            // lost the user's context. Shown only with a query, like
+            // the native NSSearchField clear button.
+            if !appState.searchQuery.isEmpty {
+                Button {
+                    appState.searchQuery = ""
+                    focus = .field
+                } label: {
+                    SlateSymbol.clearSearch.decorative
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                        .frame(minWidth: 28, minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search text")
+                .accessibilityHint("Empties the search field and keeps focus in it.")
+            }
             Button {
                 appState.closeSearchOverlay()
             } label: {
-                SlateSymbol.clearSearch.decorative
+                // Plain xmark (the closeTab dismiss glyph), NOT the
+                // circle-fill clearSearch glyph the clear button now
+                // owns — the two adjacent actions must not share a
+                // shape. Decorative: this button carries its own AX
+                // label.
+                SlateSymbol.closeTab.decorative
                     // The comment below promises a "properly-sized"
                     // button; a bare glyph in a .plain button renders
                     // ~16pt with no padding. Pin the HIG macOS
