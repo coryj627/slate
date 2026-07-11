@@ -474,3 +474,13 @@ CARGO_TARGET_DIR=target/o1-bench cargo bench -p slate-core --bench oplog_bench -
 The `#404` keystroke baselines (`doc_buffer_keystroke/*`) are untouched by
 O-1: no editor-path code changed, and the save path's new work is one indexed
 `oplog_name` lookup inside the existing save transaction plus arithmetic.
+
+## Milestone O — O-2 compaction baselines (2026-07-10)
+
+Same machine/command pattern as the O-1 rows (`--sample-size 10`).
+
+| Bench | p50 (95% CI) | Gate |
+|---|---:|---|
+| `oplog_compact/compact_50k_ops` | **100.15 ms** (99.2–101.1) | §9.3.3 "< 1 s in the background" — **10× headroom** (50,001 entries: read + fold + verify + rewrite + rename) |
+| `oplog_save_path/save_text_with_trigger_check_5mib_log` | **10.45 ms** (10.3–10.5) | o_spec §O-2 g2 — vs `save_text_hot` 9.33 ms on a tiny log; the ~1 ms delta tracks the bench's 64 KiB file content (hash + write + diff), not the log: the trigger check is returned-length arithmetic, no log walk on the save path |
+

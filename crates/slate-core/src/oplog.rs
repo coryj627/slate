@@ -712,7 +712,7 @@ pub fn oplog_path_for_name(cache_dir: &Path, log_name: &str) -> PathBuf {
 /// `created_path: None`, so the log degrades to marker/salvage-based
 /// identity exactly like a v1 log — safe, never corrupt. (Real vault
 /// paths are nowhere near 64 KiB; this is a safety rail, not a case.)
-fn v2_header_block(created_path: &str, generation: u32) -> Vec<u8> {
+pub(crate) fn v2_header_block(created_path: &str, generation: u32) -> Vec<u8> {
     let path_bytes = if created_path.len() <= u16::MAX as usize {
         created_path.as_bytes()
     } else {
@@ -770,7 +770,7 @@ pub fn try_create_log(cache_dir: &Path, log_name: &str, created_path: &str) -> i
 /// file is too short to contain — is a hard `InvalidData` error: we
 /// can't locate the entry stream, so there is no clean prefix to
 /// salvage.
-fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option<OplogHeader>> {
+pub(crate) fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option<OplogHeader>> {
     let mut header = [0u8; HEADER_LEN];
     match read_fully(file, &mut header)? {
         ReadOutcome::Full => {}
@@ -838,6 +838,62 @@ fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option<OplogHeade
     }
 }
 
+/// Lock-then-verify-inode (O-2 #540, load-bearing): a compaction
+/// rewrite swaps the path→inode binding with a rename-over, so a
+/// writer that opened the OLD inode and then acquired its advisory
+/// lock would append to an orphaned file and lose the entry. After
+/// every lock acquisition, verify the locked handle still IS the file
+/// at `path`; on mismatch close, reopen, retry (bounded — a hard error
+/// after 5 attempts, which would take 5 back-to-back rewrites of the
+/// same log inside this window).
+///
+/// Returns `Ok(None)` when `path` stops existing (only possible for
+/// openers that don't `create(true)` — the marker path treats it as
+/// "no log, nothing to do").
+pub(crate) fn open_locked_verified(
+    path: &Path,
+    opts: &OpenOptions,
+) -> io::Result<Option<fs::File>> {
+    for _ in 0..5 {
+        let file = match opts.open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        file.lock()?;
+        if same_inode(&file, path)? {
+            return Ok(Some(file));
+        }
+        // The lock releases when `file` drops; retry the fresh inode.
+    }
+    Err(io::Error::other(format!(
+        "oplog {path:?}: lost the rename/inode race 5 times"
+    )))
+}
+
+/// Does the open handle still refer to the file currently at `path`?
+/// A missing path counts as "no" (the appender should re-create or
+/// bail, per its own policy).
+#[cfg(unix)]
+fn same_inode(file: &fs::File, path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let handle = file.metadata()?;
+    let on_disk = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    Ok(handle.dev() == on_disk.dev() && handle.ino() == on_disk.ino())
+}
+
+/// Non-Unix: no stable (dev, inode) identity to compare — the Windows
+/// port (Milestone W) supplies the file-index equivalent. Until then
+/// the check is a no-op there (single-writer-per-platform in practice).
+#[cfg(not(unix))]
+fn same_inode(_file: &fs::File, _path: &Path) -> io::Result<bool> {
+    Ok(true)
+}
+
 /// Append a single entry to `<cache_dir>/oplog/<log_name>.oplog`.
 ///
 /// Creates the directory and writes a fresh **v2** header carrying
@@ -876,12 +932,10 @@ pub fn append_entry(
     // on Windows — `File::lock` papers over the platform difference.
     // Lock is released when `file` is dropped at the end of this
     // function.
-    let mut file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(&path)?;
-    file.lock()?;
+    let mut opts = OpenOptions::new();
+    opts.create(true).read(true).append(true);
+    let mut file =
+        open_locked_verified(&path, &opts)?.expect("create(true) openers always get a file");
 
     let len = file.metadata()?.len();
     let is_new_file = len == 0;
@@ -932,7 +986,7 @@ pub fn append_entry(
 }
 
 /// The on-disk frame for one entry: `body_len | body | body_checksum`.
-fn frame_entry(entry: &OpLogEntry) -> Vec<u8> {
+pub(crate) fn frame_entry(entry: &OpLogEntry) -> Vec<u8> {
     let body = serialize_body(entry);
     let mut framed = Vec::with_capacity(4 + body.len() + 4);
     framed.extend_from_slice(&(body.len() as u32).to_le_bytes());
@@ -967,12 +1021,11 @@ pub fn append_path_changed_marker(
     timestamp_ms: i64,
 ) -> io::Result<Option<u64>> {
     let path = oplog_path_for_name(cache_dir, log_name);
-    let mut file = match OpenOptions::new().read(true).append(true).open(&path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
+    let mut opts = OpenOptions::new();
+    opts.read(true).append(true);
+    let Some(mut file) = open_locked_verified(&path, &opts)? else {
+        return Ok(None);
     };
-    file.lock()?;
 
     let len = file.metadata()?.len();
     if len == 0 {
@@ -1016,12 +1069,12 @@ pub fn append_path_changed_marker(
 /// data durable; the worst case is the file disappears on power loss
 /// before the next save_text re-creates it.
 #[cfg(unix)]
-fn fsync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn fsync_dir(_dir: &Path) -> io::Result<()> {
+pub(crate) fn fsync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -1081,7 +1134,7 @@ pub fn read_oplog_with_header(
 /// returning the clean prefix. Any torn/corrupt trailing material stops
 /// the walk (reported through the facade — see
 /// [`read_oplog_with_header`]'s degradation contract).
-fn read_entries_stream(
+pub(crate) fn read_entries_stream(
     file: &mut fs::File,
     log_name: &str,
     path: &Path,
