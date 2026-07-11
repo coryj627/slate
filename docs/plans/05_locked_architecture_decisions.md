@@ -315,21 +315,36 @@ pub struct CodeBlock {
 
 ### 4.4 Layer 4: Events
 
+Shipped shape (O-2 #540 shipped `on_error`; #802 broadened additively —
+new methods carry default no-op impls so existing registrations never
+break):
+
 ```rust
 pub trait VaultEventListener: Send + Sync {
-    fn on_file_changed(&self, event: FileChangeEvent);
-    fn on_index_progress(&self, progress: IndexProgress);
-    fn on_index_complete(&self);
-    fn on_error(&self, error: VaultError);
+    fn on_error(&self, code: EventErrorCode, path: String, message: String);
+    fn on_file_change(&self, _event: FileChangeEvent) {}          // #802
+    fn on_index_phase(&self, _phase: IndexPhase, _files_seen: u64) {} // #802
 }
 
-pub enum FileChangeEvent {
-    Created { path: String },
-    Modified { path: String },
-    Deleted { path: String },
-    Renamed { from: String, to: String },
+pub struct FileChangeEvent {
+    pub kind: FileChangeKind,           // Created | Modified | Deleted | Renamed
+    pub path: String,                   // vault-relative; Renamed: the NEW path
+    pub previous_path: Option<String>,  // Renamed only
 }
+
+pub enum IndexPhase { ScanStarted, ReconcileStarted, ReconcileFinished, ScanFinished }
 ```
+
+Semantics (normative): file-change events cover **Slate's own write
+paths** (save, create-exclusive, structural move/rename/delete —
+per-file for folder operations — canvas apply, deleted-file recovery;
+restores ride the save seam). The filesystem watcher is a stub, so
+external edits surface at the next scan, never as events. Events are
+emitted after the write and index commit; callbacks may arrive with
+session locks held (the `ScanProgressListener` discipline) — listeners
+marshal, never reenter synchronously. All enums additive-only; hosts
+tolerate unknown variants. First non-error consumers land with
+Milestone PD (OCR label refresh, failure counts, GC prompts).
 
 ### 4.5 SQLite schema (V0)
 

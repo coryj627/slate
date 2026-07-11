@@ -74,20 +74,42 @@ struct CompactionFailure: Identifiable, Equatable {
     let message: String
 }
 
-/// uniffi callback adapter: the core invokes `onError` on a worker
-/// thread; hop to the main actor and hand the event to AppState. The
-/// weak reference means a closed vault's straggler events go nowhere.
+/// uniffi callback adapter: the core invokes callbacks on worker
+/// threads (the #802 methods may even arrive with session locks held);
+/// hop to the main actor and hand the event to AppState — never call
+/// back into the session synchronously. The weak reference means a
+/// closed vault's straggler events go nowhere.
 final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
     private weak var appState: AppState?
+    /// #802 observation seams. Production registration leaves these
+    /// nil — Milestone PD wires the first real consumers (OCR label
+    /// refresh, failure counts, GC prompts); tests observe through
+    /// them today so the uniffi conformance is exercised end to end.
+    let onFileChangeHook: (@Sendable (FileChangeEvent) -> Void)?
+    let onIndexPhaseHook: (@Sendable (IndexPhase, UInt64) -> Void)?
 
-    init(appState: AppState) {
+    init(
+        appState: AppState,
+        onFileChangeHook: (@Sendable (FileChangeEvent) -> Void)? = nil,
+        onIndexPhaseHook: (@Sendable (IndexPhase, UInt64) -> Void)? = nil
+    ) {
         self.appState = appState
+        self.onFileChangeHook = onFileChangeHook
+        self.onIndexPhaseHook = onIndexPhaseHook
     }
 
     func onError(code: EventErrorCode, path: String, message: String) {
         Task { @MainActor [weak appState] in
             appState?.handleVaultEvent(code: code, path: path, message: message)
         }
+    }
+
+    func onFileChange(event: FileChangeEvent) {
+        onFileChangeHook?(event)
+    }
+
+    func onIndexPhase(phase: IndexPhase, filesSeen: UInt64) {
+        onIndexPhaseHook?(phase, filesSeen)
     }
 }
 

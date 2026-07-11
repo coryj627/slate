@@ -453,6 +453,50 @@ pub trait ScanProgressListener: Send + Sync {
 /// `ScanProgressListener` contract).
 pub trait VaultEventListener: Send + Sync {
     fn on_error(&self, code: EventErrorCode, path: String, message: String);
+
+    /// #802: a Slate-originated file mutation committed (write on disk
+    /// AND index row in one transaction). Default no-op — O-2
+    /// registrations stay valid unchanged. The filesystem watcher is a
+    /// stub (`provider.watch` yields nothing), so external edits
+    /// surface at the next scan, never here: this event covers the
+    /// app's own write paths. Do not call session APIs synchronously
+    /// from the callback — it may arrive with session locks held (the
+    /// `ScanProgressListener` discipline); marshal first.
+    fn on_file_change(&self, _event: FileChangeEvent) {}
+
+    /// #802: coarse index lifecycle. `files_seen` is nonzero only for
+    /// [`IndexPhase::ScanFinished`]. Default no-op; same
+    /// no-synchronous-reentry rule as [`Self::on_file_change`].
+    fn on_index_phase(&self, _phase: IndexPhase, _files_seen: u64) {}
+}
+
+/// One Slate-originated file mutation (#802).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChangeEvent {
+    pub kind: FileChangeKind,
+    /// Vault-relative. For [`FileChangeKind::Renamed`], the NEW path.
+    pub path: String,
+    /// [`FileChangeKind::Renamed`] only: the path moved away from.
+    pub previous_path: Option<String>,
+}
+
+/// What happened to the file. Additive-only — hosts must tolerate
+/// unknown kinds (the [`EventErrorCode`] convention).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileChangeKind {
+    Created,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+/// Index lifecycle phases (#802). Additive-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexPhase {
+    ScanStarted,
+    ReconcileStarted,
+    ReconcileFinished,
+    ScanFinished,
 }
 
 /// What went wrong. Additive-only — hosts must tolerate unknown codes.
@@ -1320,6 +1364,12 @@ impl VaultSession {
         cancel: &CancelToken,
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
+        // #802: coarse lifecycle events bracket the scan. Started
+        // fires before the session lock is taken; Finished after it
+        // drops; the reconcile pair fires under the lock (the
+        // ScanProgressListener precedent — listeners marshal, never
+        // reenter synchronously).
+        self.notify_index_phase(IndexPhase::ScanStarted, 0);
         let mut conn = self.conn.lock().expect("session connection mutex");
         // O-6 (#544): observe a parser bump BEFORE the scan runs — the
         // scan stamps every row with the new version, erasing the
@@ -1358,7 +1408,9 @@ impl VaultSession {
         // Re-attach op logs to live files and surface deleted-file
         // remnants (O-1 #539). Best-effort: a reconcile failure
         // degrades history features, never the scan itself.
+        self.notify_index_phase(IndexPhase::ReconcileStarted, 0);
         self.reconcile_oplogs(&mut conn);
+        self.notify_index_phase(IndexPhase::ReconcileFinished, 0);
         // O-6 (#544): regenerate the derived temporal-events index if
         // it's stale. Runs after the reconcile so bindings are fresh.
         // Every trigger rides the durable marker — append-window
@@ -1399,6 +1451,8 @@ impl VaultSession {
         // whose file size exceeds the byte threshold — stat only, no
         // log reads.
         self.sweep_oversized_logs(&conn);
+        drop(conn);
+        self.notify_index_phase(IndexPhase::ScanFinished, report.files_seen);
         Ok(report)
     }
 
@@ -1994,6 +2048,16 @@ impl VaultSession {
                 (cached, None)
             };
 
+        // Created-vs-Modified for the #802 event, read inside the
+        // save's own transaction so a racing writer can't flip it.
+        let existed: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE path = ?1)",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
         // Atomic write happens before the index update so that a
         // subsequent SQLite failure leaves the file on disk in a
         // consistent state. Worst case: the file is newer than the
@@ -2034,6 +2098,24 @@ impl VaultSession {
                 annotations,
             );
         }
+
+        // #802: the ONE file-change emission seat for text writes —
+        // plain saves, property/task/frontmatter edits, canvas
+        // serialization, structural link rewrites, and restores all
+        // commit through this seam, so no mutator can silently bypass
+        // the event stream. A same-content save still committed a
+        // write (the identity-axiom anchor), so Modified is honest.
+        // Delivered with the session lock held — the documented
+        // contract: listeners marshal, never reenter synchronously.
+        self.notify_file_change(
+            if existed {
+                FileChangeKind::Modified
+            } else {
+                FileChangeKind::Created
+            },
+            path,
+            None,
+        );
 
         Ok(SaveReport {
             new_content_hash: new_hash,
@@ -2205,6 +2287,54 @@ impl VaultSession {
             .lock()
             .expect("event listener mutex")
             .remove(&token);
+    }
+
+    /// #802: fan a file-change event out to every listener. Snapshot
+    /// first (the compaction-dispatch discipline) so listener code
+    /// never runs under the registry mutex; callers arrange to have
+    /// dropped the session connection lock where possible.
+    fn notify_file_change(&self, kind: FileChangeKind, path: &str, previous_path: Option<&str>) {
+        let snapshot: Vec<Arc<dyn VaultEventListener>> = self
+            .event_listeners
+            .lock()
+            .expect("event listener mutex")
+            .values()
+            .cloned()
+            .collect();
+        if snapshot.is_empty() {
+            return;
+        }
+        let event = FileChangeEvent {
+            kind,
+            path: path.to_string(),
+            previous_path: previous_path.map(str::to_string),
+        };
+        for listener in snapshot {
+            listener.on_file_change(event.clone());
+        }
+    }
+
+    /// #802: one Renamed event per file a structural move touched —
+    /// `report.moved` carries (from, to) for the file itself or every
+    /// file under a moved folder.
+    fn notify_moved(&self, report: &crate::structural::StructuralReport) {
+        for (from, to) in &report.moved {
+            self.notify_file_change(FileChangeKind::Renamed, to, Some(from));
+        }
+    }
+
+    /// #802: fan an index-phase event out (same snapshot discipline).
+    fn notify_index_phase(&self, phase: IndexPhase, files_seen: u64) {
+        let snapshot: Vec<Arc<dyn VaultEventListener>> = self
+            .event_listeners
+            .lock()
+            .expect("event listener mutex")
+            .values()
+            .cloned()
+            .collect();
+        for listener in snapshot {
+            listener.on_index_phase(phase, files_seen);
+        }
     }
 
     /// The live retention window in days (runtime-mutable; O-5's
@@ -3149,6 +3279,7 @@ impl VaultSession {
             guard.0 += 1;
             guard.1.retain(|r| r.stem != remnant.stem);
         }
+        self.notify_file_change(FileChangeKind::Created, destination, None);
         Ok(report)
     }
 
@@ -3158,7 +3289,9 @@ impl VaultSession {
     /// convention) → [`VaultError::DestinationExists`]; else the
     /// standard atomic-write + index + op-log machinery.
     pub fn create_exclusive(&self, path: &str, content: &str) -> Result<SaveReport, VaultError> {
-        self.create_exclusive_binding(path, content, None)
+        let report = self.create_exclusive_binding(path, content, None)?;
+        self.notify_file_change(FileChangeKind::Created, path, None);
+        Ok(report)
     }
 
     /// `create_exclusive` with an optional pre-existing op-log binding
@@ -6376,12 +6509,14 @@ impl VaultSession {
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let new_path = sibling_path(path, new_name)?;
-        self.structural_move_folder(
+        let report = self.structural_move_folder(
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFolder,
             true,
-        )
+        )?;
+        self.notify_moved(&report);
+        Ok(report)
     }
 
     /// Move a folder under a new parent ("" = vault root).
@@ -6391,12 +6526,14 @@ impl VaultSession {
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let new_path = child_path(new_parent, leaf_name(path))?;
-        self.structural_move_folder(
+        let report = self.structural_move_folder(
             path,
             &new_path,
             crate::structural::StructuralOpKind::MoveFolder,
             true,
-        )
+        )?;
+        self.notify_moved(&report);
+        Ok(report)
     }
 
     /// Rename a file in place.
@@ -6406,12 +6543,14 @@ impl VaultSession {
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let new_path = sibling_path(path, new_name)?;
-        self.structural_move_file(
+        let report = self.structural_move_file(
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFile,
             true,
-        )
+        )?;
+        self.notify_moved(&report);
+        Ok(report)
     }
 
     /// Move a file under a new parent ("" = vault root).
@@ -6421,12 +6560,14 @@ impl VaultSession {
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let new_path = child_path(new_parent, leaf_name(path))?;
-        self.structural_move_file(
+        let report = self.structural_move_file(
             path,
             &new_path,
             crate::structural::StructuralOpKind::MoveFile,
             true,
-        )
+        )?;
+        self.notify_moved(&report);
+        Ok(report)
     }
 
     /// Move a file to the system trash. Journaled for auditability; NOT
@@ -6462,6 +6603,7 @@ impl VaultSession {
             )
         })?;
         self.bump_bases_generation();
+        self.notify_file_change(FileChangeKind::Deleted, path, None);
         Ok(())
     }
 
@@ -6470,6 +6612,14 @@ impl VaultSession {
     pub fn delete_folder(&self, path: &str) -> Result<(), VaultError> {
         validate_save_path(path)?;
         let conn = self.conn.lock().expect("session connection mutex");
+        // #802: the range delete below erases the paths — capture them
+        // first so each file's Deleted event can fire after commit.
+        let deleted_files: Vec<String> = {
+            let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
+            let mut stmt = conn.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
+            let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
         self.provider.delete(path)?;
         self.with_structural_tx(conn, |tx| {
             let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
@@ -6492,6 +6642,9 @@ impl VaultSession {
             )
         })?;
         self.bump_bases_generation();
+        for file in &deleted_files {
+            self.notify_file_change(FileChangeKind::Deleted, file, None);
+        }
         Ok(())
     }
 
@@ -6633,6 +6786,11 @@ impl VaultSession {
                 }),
             }
         }
+        // #802: the inverse moves above bypass the public wrappers —
+        // emit their per-file Renamed events here. (Rewrite restores
+        // ride `save_text_locked`, the shared seam, and emit
+        // themselves.)
+        self.notify_moved(&report);
         Ok(report)
     }
 
@@ -10608,6 +10766,9 @@ impl VaultSession {
             );
         }
 
+        // #802: the Modified event fired inside `save_text_locked`
+        // above — the canvas serialization commits through the same
+        // seam as every text write, so no extra emission here.
         Ok(CanvasApplyResult {
             new_content_hash: report.new_content_hash,
             inverse,
@@ -10818,6 +10979,9 @@ mod tests {
 
     #[path = "misc.rs"]
     mod misc;
+
+    #[path = "events.rs"]
+    mod events;
 
     #[path = "sync.rs"]
     mod sync;

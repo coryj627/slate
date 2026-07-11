@@ -133,11 +133,12 @@ pub use session::{
     CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
     CanvasWhereAmI, ChangesSinceOpen, ColumnRole, CslStyleInfo, Dashboard, DashboardSection,
     DashboardSectionStatus, DashboardSummary, DeletedFileEntry, DirListing, DirNodeSummary,
-    EventErrorCode, ExportFormat, FileFilter, FileMetadata, FileSummary, NoteLoadBundle,
-    NotePartsBundle, OpAnnotationSummary, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
-    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
-    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
-    SessionConfig, VaultEventListener, VaultSession, VersionSummary,
+    EventErrorCode, ExportFormat, FileChangeEvent, FileChangeKind, FileFilter, FileMetadata,
+    FileSummary, IndexPhase, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary, Page, Paging,
+    RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason,
+    RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress,
+    ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultSession,
+    VersionSummary,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,

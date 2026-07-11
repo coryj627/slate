@@ -1209,4 +1209,66 @@ extension HistoryPanelTests {
                 && handlerRange.lowerBound < subtreeAnchor.lowerBound,
             "observer sits on the always-mounted root")
     }
+
+    // MARK: - VaultEventListener broadening (#802)
+
+    /// uniffi conformance, foreign direction: a Swift adapter
+    /// registered through the FFI hears the core's file-change and
+    /// index-phase events for real session mutations. (The Rust
+    /// direction — every write path's emission — is pinned in
+    /// slate-core's events.rs battery.)
+    func testBroadenedVaultEventsCrossTheFfi() async throws {
+        let (state, _) = try await openVault(announcer: RecordingAnnouncer())
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let changes = Locked<[FileChangeEvent]>([])
+        let phases = Locked<[(IndexPhase, UInt64)]>([])
+        let adapter = VaultEventAdapter(
+            appState: state,
+            onFileChangeHook: { event in changes.mutate { $0.append(event) } },
+            onIndexPhaseHook: { phase, seen in phases.mutate { $0.append((phase, seen)) } })
+        let token = session.registerEventListener(listener: adapter)
+        defer { session.unregisterEventListener(token: token) }
+
+        _ = try session.saveText(path: "e.md", contents: "one\n", expectedContentHash: nil)
+        let report = try session.saveText(
+            path: "e.md", contents: "two\n",
+            expectedContentHash: nil)
+        _ = report
+        _ = try session.renameFile(path: "e.md", newName: "f.md")
+        try session.deleteFile(path: "f.md")
+        _ = try session.scanInitial(cancel: CancelToken())
+
+        let kinds = changes.value.map(\.kind)
+        XCTAssertEqual(
+            kinds, [.created, .modified, .renamed, .deleted],
+            "the four kinds arrive in mutation order")
+        XCTAssertEqual(changes.value[2].path, "f.md")
+        XCTAssertEqual(changes.value[2].previousPath, "e.md")
+        let phaseKinds = phases.value.map(\.0)
+        XCTAssertEqual(
+            phaseKinds,
+            [.scanStarted, .reconcileStarted, .reconcileFinished, .scanFinished])
+        XCTAssertEqual(
+            phases.value.last?.1, 0,
+            "the vault is empty again by scan time — count rides ScanFinished")
+    }
+}
+
+/// Minimal lock box for test observation from nonisolated callbacks.
+final class Locked<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var inner: T
+    init(_ value: T) { inner = value }
+    var value: T {
+        lock.lock()
+        defer { lock.unlock() }
+        return inner
+    }
+    func mutate(_ body: (inout T) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        body(&inner)
+    }
 }
