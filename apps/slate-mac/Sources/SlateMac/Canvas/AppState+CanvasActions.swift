@@ -157,8 +157,11 @@ extension AppState {
             counter += 1
         }
         do {
-            _ = try session.saveText(
-                path: name, contents: "{}\n", expectedContentHash: nil)
+            // create_exclusive (#796): the readText probe above races an
+            // external create of the same name — an unconditional save
+            // would overwrite it with "{}". The no-clobber primitive
+            // surfaces DestinationExists instead.
+            _ = try session.createExclusive(path: name, content: "{}\n")
             openFile(name, target: .currentTab)
             canvasAnnouncer.announce(
                 .confirmation("Created canvas \"\((name as NSString).deletingPathExtension)\"."))
