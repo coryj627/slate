@@ -7656,6 +7656,19 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
         // its byte row as an annotation carrying the action name. A
         // standalone record (its byte entry compacted away) keeps
         // today's own-row rendering.
+        // Fold eligibility (Codoki on #865, both rounds): the target
+        // must be an actual BYTE-level row — WholeFileReplace or
+        // EditBatch by allowlist, so an undecodable Annotated row or a
+        // standalone CanvasApply row can never absorb — non-marker (a
+        // no-op action's record must not vanish into a default-hidden
+        // anchor row), and not already annotated (the T protocol
+        // appends exactly one record per action; a second match is an
+        // anomaly that should stay a visible row).
+        let fold_target = |row: &VersionSummary| {
+            matches!(row.op_kind, OpKind::WholeFileReplace | OpKind::EditBatch)
+                && !row.is_marker
+                && !row.annotations.iter().any(|a| a.kind == "CanvasAction")
+        };
         if inner_kind == OpKind::CanvasApply
             && prev_pair.as_ref()
                 == Some(&(
@@ -7663,16 +7676,7 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
                     entry.content_hash_after.clone(),
                 ))
             && let Some(last) = rows.last_mut()
-            // Absorb into BYTE-level rows only, at most one record per
-            // row (Codoki on #865): a duplicate record must not fold
-            // into a standalone CanvasApply row NOR stack onto an
-            // already-annotated byte row (the T protocol appends
-            // exactly one record per action — a second match is an
-            // anomaly that should stay visible), and a no-op action's
-            // record must not vanish into a default-hidden anchor row.
-            && last.op_kind != OpKind::CanvasApply
-            && !last.is_marker
-            && !last.annotations.iter().any(|a| a.kind == "CanvasAction")
+            && fold_target(last)
         {
             let name = inner_payload
                 .as_deref()
