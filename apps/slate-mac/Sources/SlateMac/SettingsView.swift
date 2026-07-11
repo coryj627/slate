@@ -42,6 +42,10 @@ struct SettingsView: View {
                     .tabItem {
                         SlateSymbol.canvas.label()
                     }
+                HistorySettingsTab()
+                    .tabItem {
+                        SlateSymbol.history.label()
+                    }
             }
         }
         .frame(minWidth: 500, minHeight: 400)
@@ -723,5 +727,80 @@ struct CanvasSettingsTab: View {
             get: { appState.canvasAnnouncer.verbosity },
             set: { appState.setCanvasVerbosity($0) }
         )
+    }
+}
+
+
+// MARK: - History tab (Milestone O-5, #543)
+
+/// Retention window (per-vault, persisted to `.slate/prefs.json`
+/// through the session so unknown keys survive) + the since-open
+/// toggle (host preference — UI + mark writes only).
+struct HistorySettingsTab: View {
+    @EnvironmentObject var appState: AppState
+    @State private var retentionDays: UInt32 = 90
+
+    /// The picker's fixed menu (o_spec §O-5): 30 / 90 (default) /
+    /// 180 / 365 days.
+    static let retentionChoices: [UInt32] = [30, 90, 180, 365]
+
+    static let sinceOpenFooter =
+        "Adds a summary of what changed to the History panel when you open a note."
+
+    var body: some View {
+        Form {
+            Section {
+                // Persistence rides the binding SETTER — only a user
+                // gesture goes through it. Programmatic reseeds (vault
+                // switch below) write the @State directly, so there is
+                // no suppression flag to get out of sync under
+                // coalesced or rapid switches (adversarial round 2).
+                Picker(
+                    "Keep edit history for",
+                    selection: Binding(
+                        get: { retentionDays },
+                        set: { newValue in
+                            retentionDays = newValue
+                            Task {
+                                await appState.applyHistoryRetention(days: newValue)
+                            }
+                        }
+                    )
+                ) {
+                    ForEach(Self.retentionChoices, id: \.self) { days in
+                        Text("\(days) days").tag(days)
+                    }
+                }
+                .disabled(!appState.isVaultOpen)
+            } footer: {
+                if !appState.isVaultOpen {
+                    Text("Open a vault to change its history retention.")
+                }
+            }
+            Section {
+                Toggle(
+                    "Show changes since last open",
+                    isOn: Binding(
+                        get: { appState.historyShowChangesSinceOpen },
+                        set: { appState.setHistoryShowChangesSinceOpen($0) }
+                    )
+                )
+            } footer: {
+                Text(Self.sinceOpenFooter)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            retentionDays = appState.currentHistoryRetentionDays()
+        }
+        .onChange(of: appState.currentVaultURL) { _, _ in
+            // Settings can stay mounted across a vault switch; reseed
+            // from the NEW session (or back to the default when the
+            // vault closed). Direct @State write — the persistence
+            // path is the picker binding's setter, which only user
+            // gestures reach.
+            retentionDays = appState.currentHistoryRetentionDays()
+        }
+        .navigationTitle("History")
     }
 }

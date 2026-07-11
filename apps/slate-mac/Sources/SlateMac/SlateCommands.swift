@@ -44,6 +44,12 @@ enum SlateCommandID {
     /// cross-reference.
     static let refreshSyncDiagnostics = "slate.diagnostics.refreshSync"
 
+    /// History panel reveal (O-5, #543). Same View-menu home as
+    /// `refreshSyncDiagnostics` above (cross-referenced in both
+    /// specs so the two PRs converge on one menu). Row actions
+    /// (Compare/Restore) are NOT commands — they need row context.
+    static let showHistoryPanel = "slate.history.showPanel"
+
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
     // Program rule R1: every canvas action is a registry command; these
@@ -204,6 +210,7 @@ enum SlateCommandID {
         quickOpen,
         toggleSearch,
         refreshSyncDiagnostics,
+        showHistoryPanel,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1101,6 +1108,13 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .view,
         hint: "Re-run sync-system detection and reload the LiveSync config."
     ) { [weak appState] in appState?.refreshSyncDiagnostics() }
+
+    register(
+        SlateCommandID.showHistoryPanel,
+        label: "Show history panel",
+        section: .view,
+        hint: "Open the History leaf in the right pane."
+    ) { [weak appState] in appState?.showHistoryPanel() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 

@@ -132,6 +132,22 @@ enum SlateSymbol: CaseIterable {
     /// Low-risk badge glyph — shape+text, never color alone (m_spec §M-3).
     case riskLow
 
+    // Milestone O local history (O-5, #543) — per the o_spec SlateSymbol
+    // additions table. The three diff* roles cover add/remove/edit tinting
+    // in operation-list diff rows (never color alone — icon shape + text).
+    /// History leaf in the right-pane rail.
+    case history
+    /// "Restore…" — restores a version / recovers a deleted file.
+    case restore
+    /// "Compare" — diffs a version against the current content.
+    case compare
+    /// Added-content diff operation row.
+    case diffAdded
+    /// Removed-content diff operation row.
+    case diffRemoved
+    /// Edited-content diff operation row.
+    case diffEdited
+
     /// The resolved SF Symbol name for the running OS. `private` so call
     /// sites can't reach past the labeled/decorative builders to name a raw
     /// symbol (only the builders below, in this file, use it).
@@ -193,6 +209,12 @@ enum SlateSymbol: CaseIterable {
         case .syncDiagnostics: return "Sync"
         case .riskMedium: return "Medium risk"
         case .riskLow: return "Low risk"
+        case .history: return "History"
+        case .restore: return "Restore"
+        case .compare: return "Compare"
+        case .diffAdded: return "Added"
+        case .diffRemoved: return "Removed"
+        case .diffEdited: return "Edited"
         }
     }
 
@@ -281,6 +303,20 @@ enum SlateSymbol: CaseIterable {
                     "arrow.triangle.2.circlepath")
         case .riskMedium: return ("exclamationmark.circle", "exclamationmark.circle")
         case .riskLow: return ("info.circle", "info.circle")
+
+        // Milestone O (O-5, #543): the leaf glyph is v7-divergent (the
+        // trianglehead counterclockwise clock arrow is SF Symbols 7);
+        // clock.arrow.circlepath is floor-safe. The other five predate
+        // SF Symbols 7, so v7 == fallback (o_spec SlateSymbol table).
+        case .history:
+            return ("clock.arrow.trianglehead.counterclockwise.rotate.90",
+                    "clock.arrow.circlepath")
+        case .restore:
+            return ("arrow.uturn.backward.circle", "arrow.uturn.backward.circle")
+        case .compare: return ("arrow.left.arrow.right", "arrow.left.arrow.right")
+        case .diffAdded: return ("plus.circle", "plus.circle")
+        case .diffRemoved: return ("minus.circle", "minus.circle")
+        case .diffEdited: return ("pencil.circle", "pencil.circle")
         }
     }
 

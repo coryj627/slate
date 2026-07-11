@@ -1121,6 +1121,15 @@ impl VaultSession {
         // fine (default-empty prefs); a malformed file surfaces as
         // `VaultError::PrefsUnreadable`.
         config.citations_prefs = crate::citations::prefs::read_citations_prefs(&root)?;
+        // History prefs (O-5 #543): the `.slate/prefs.json` `history`
+        // section overrides the default retention window; absence
+        // keeps the default. Malformed prefs fail the open loudly —
+        // the citations policy, applied consistently.
+        if let Some(prefs) =
+            crate::history_prefs::read_history_prefs(&root.join(".slate").join("prefs.json"))?
+        {
+            config.oplog_retention_days = prefs.retention_days;
+        }
         let provider = Arc::new(FsVaultProvider::new(root));
         Self::open(provider, config)
     }
@@ -2029,6 +2038,40 @@ impl VaultSession {
     pub fn set_retention_days(&self, days: u32) {
         self.retention_days
             .store(days, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The live history prefs (O-5 #543) — read from the same atomic
+    /// the compaction worker consumes, so it always reflects what the
+    /// session is actually enforcing.
+    pub fn history_prefs(&self) -> crate::history_prefs::HistoryPrefs {
+        crate::history_prefs::HistoryPrefs {
+            retention_days: self.retention_days(),
+        }
+    }
+
+    /// Persist AND apply history prefs (O-5 #543). Writes the
+    /// `history` section of `.slate/prefs.json` FIRST — every other
+    /// top-level key preserved, atomic replace, and an unparseable
+    /// existing file fails the call untouched — then applies the
+    /// retention window live to the compaction worker. Order matters:
+    /// a persist failure leaves the running session on its previous
+    /// setting, never a live-but-unsaved divergence that would
+    /// silently revert at next open.
+    pub fn set_history_prefs(
+        &self,
+        prefs: crate::history_prefs::HistoryPrefs,
+    ) -> Result<(), VaultError> {
+        if prefs.retention_days == 0 {
+            return Err(VaultError::InvalidArgument {
+                message: "history retention_days must be at least 1".into(),
+            });
+        }
+        crate::history_prefs::write_history_prefs(
+            &self.config.cache_dir.join("prefs.json"),
+            &prefs,
+        )?;
+        self.set_retention_days(prefs.retention_days);
+        Ok(())
     }
 
     /// Queue a background compaction for one log (single-flight: a log

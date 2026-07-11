@@ -1915,7 +1915,7 @@ final class AppState: ObservableObject {
     /// Accessibility-announcement seam (M-3, #534; shared with O-5).
     /// The default wraps the global `postAccessibilityAnnouncement`;
     /// tests inject a recording fake to assert the announce gates.
-    private let announcer: AnnouncementPosting
+    let announcer: AnnouncementPosting
 
     init(
         recentsStore: RecentVaultsStore? = nil,
@@ -1940,6 +1940,10 @@ final class AppState: ObservableObject {
         }
         self.externalOpener = externalOpener
         self.preferencesStore = preferencesStore
+        // History leaf (O-5): the since-open toggle is a host pref —
+        // UI + mark writes only, no core behavior.
+        self.historyShowChangesSinceOpen =
+            preferencesStore.loadHistoryShowChangesSinceOpen()
 
         // Command palette recents store — same degraded-fallback
         // pattern as RecentVaultsStore above. Failures here never
@@ -2601,6 +2605,11 @@ final class AppState: ObservableObject {
         diagramBlocksLoadTask = Task { [weak self] in
             await self?.loadCurrentNoteDiagramBlocks(path: path)
         }
+        // History leaf (O-5, #543): version list + the pref-gated
+        // since-open funnel (compute-then-mark), strictly serialized
+        // behind any in-flight load (round 2 — see
+        // scheduleHistoryLoad).
+        scheduleHistoryLoad(path: path)
         // Milestone L (#279): citations for the current note. Same
         // fan-out shape — race-guarded by selectedFilePath == path
         // inside the loader.
@@ -2850,6 +2859,10 @@ final class AppState: ObservableObject {
                     stderr
                 )
             }
+            // History leaf (O-5, #543): register the compaction-error
+            // channel before anything can compact. The adapter hops to
+            // the main actor; the once-per-path gate lives there.
+            registerVaultEventListener(on: session)
             // Drop document handles while `currentSession` still names the
             // previous vault. Calling close on the freshly-opened session
             // would pair old native handles with the wrong registry.
@@ -3235,6 +3248,9 @@ final class AppState: ObservableObject {
         releaseAllBaseDocuments()
         releaseAllBaseEmbedDocuments()
         releaseAllDashboardDocuments()
+        // History leaf (O-5): the event-listener unregister also needs
+        // the live session.
+        unregisterVaultEventListener()
         currentSession = nil
         currentVaultURL = nil
         files = []
@@ -3243,6 +3259,11 @@ final class AppState: ObservableObject {
         syncReport = nil
         liveSyncConfig = nil
         syncDiagnosticsError = nil
+        // History leaf (O-5): reset every history surface (the event
+        // listener was unregistered above, while the session lived).
+        compactionAlertedPaths = []
+        compactionFailure = nil
+        resetHistoryState()
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
@@ -3446,6 +3467,63 @@ final class AppState: ObservableObject {
             scanError = error.localizedDescription
         }
     }
+
+    // MARK: - History leaf (Milestone O-5, #543)
+
+    /// Loaded version-history pages for the selected note, newest
+    /// first ("Show older versions" appends). Reset on selection
+    /// change and vault close.
+    @Published var historyVersions: [VersionSummary] = []
+    /// Opaque next-page cursor; `nil` = no more pages.
+    @Published var historyNextCursor: String?
+    /// Total non-marker versions (the section header count).
+    @Published var historyTotalFiltered: UInt64 = 0
+    @Published var historyLoadError: String?
+    /// Since-last-open verdict for the selected note. Populated ONLY
+    /// when the pref is on — the compute-then-mark funnel order is
+    /// pinned by o_spec §O-4/§O-5 (g3): compute first, then mark;
+    /// mark-first would silently report Unchanged forever.
+    @Published var sinceOpenChanges: ChangesSinceOpen?
+    /// Deleted-file remnants (the "Deleted" segment).
+    @Published var deletedFiles: [DeletedFileEntry] = []
+    @Published var deletedLoadError: String?
+    /// Pending restore confirmation (drives the alert).
+    @Published var historyRestoreRequest: HistoryRestoreRequest?
+    /// History-specific error alert (integrity failure, recover
+    /// errors) — never routed through the generic save-error path.
+    @Published var historyAlert: HistoryAlert?
+    /// Compaction-failure alert payload (the O-2 VaultEventListener
+    /// channel's Mac half).
+    @Published var compactionFailure: CompactionFailure?
+    /// Once-per-(path, session) gate for compaction-failure alerts —
+    /// repeated failures on one file don't re-alert (the announcement-
+    /// gate pattern). Reset with the session.
+    var compactionAlertedPaths: Set<String> = []
+    /// uniffi listener registration token, unregistered on close.
+    var vaultEventListenerToken: UInt64?
+    /// The adapter's lifetime is ours: uniffi keeps a foreign handle,
+    /// but the strong reference lives here.
+    var vaultEventAdapter: VaultEventAdapter?
+    /// Latest-wins sequencing for history loads (the sync-diagnostics
+    /// seq pattern, #638).
+    var historyLoadSeq: UInt64 = 0
+    /// Bumps after a successful restore so the panel moves focus to
+    /// the new head row (WCAG 2.4.3 — the old row's position shifted;
+    /// "return focus" is defined as the new head).
+    @Published var historyFocusHeadToken: UInt64 = 0
+    /// Mirrors `PreferencesStore` key
+    /// `slate.prefs.historyShowChangesSinceOpen`. Drives the UI
+    /// section and the mark writes only — no core behavior.
+    @Published var historyShowChangesSinceOpen: Bool = false
+    /// Task handle for the per-note history load (cancelled with the
+    /// other note-scoped work).
+    var historyLoadTask: Task<Void, Never>?
+    /// O-5 race-test seam — ALWAYS nil in production (the M-3
+    /// `syncDiagnosticsPublishGate` pattern). Awaited between the
+    /// detached compute and the main-actor guards so tests can park a
+    /// load inside the window and prove a stale resume neither
+    /// publishes NOR marks the baseline.
+    var historyPublishGate: (() async -> Void)?
 
     // MARK: - Sync diagnostics (Milestone M-3, #534)
 
@@ -6606,7 +6684,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func filename(of path: String) -> String {
+    func filename(of path: String) -> String {
         (path as NSString).lastPathComponent
     }
 
@@ -7048,7 +7126,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func humanReadable(_ error: VaultError) -> String {
+    func humanReadable(_ error: VaultError) -> String {
         switch error {
         case .Io(let message), .Db(let message), .Trash(let message):
             return message

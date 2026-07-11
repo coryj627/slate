@@ -132,6 +132,20 @@ struct MainSplitView: View {
                 "\(filename(of: conflict.path)) was modified outside the editor since you opened it. Choose how to resolve the conflict."
             )
         }
+        // O-5 (#543): the O-2 compaction-error channel's Mac half —
+        // non-blocking, once per (path, session) (AppState gates), the
+        // core's message verbatim.
+        .alert(
+            "History compaction failed",
+            isPresented: compactionFailurePresented,
+            presenting: appState.compactionFailure
+        ) { _ in
+            Button("OK", role: .cancel) {
+                appState.compactionFailure = nil
+            }
+        } message: { failure in
+            Text(failure.message)
+        }
         // Save-changes prompt for close-vault / file-switch while
         // dirty (#63 + #64). Save is the default action; Cancel is
         // the cancel-role so platform keyboard dismissal leaves
@@ -446,6 +460,13 @@ struct MainSplitView: View {
                     appState.cancelTemplateFlow()
                 }
             }
+        )
+    }
+
+    private var compactionFailurePresented: Binding<Bool> {
+        Binding(
+            get: { appState.compactionFailure != nil },
+            set: { if !$0 { appState.compactionFailure = nil } }
         )
     }
 
