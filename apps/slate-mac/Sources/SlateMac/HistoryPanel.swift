@@ -31,6 +31,10 @@ struct HistoryPanel: View {
     /// The Restore As… destination being edited (#795); seeded from
     /// the prompt's suggestion when it appears.
     @State private var restoreAsDestination: String = ""
+    /// Day groups the user collapsed (#798), keyed by `DayGroup.id` —
+    /// unique per consecutive run, so collapsing one run never hides a
+    /// distant same-day run.
+    @State private var collapsedDayGroups: Set<String> = []
 
     enum Segment: Hashable {
         case thisNote
@@ -216,6 +220,76 @@ struct HistoryPanel: View {
         }
     }
 
+    /// One day's slice of the visible version list (#798). Groups are
+    /// consecutive runs: the input is newest-first by position, and a
+    /// backwards system clock can interleave days — runs preserve list
+    /// order exactly (two same-day runs render as two sections) rather
+    /// than reordering rows under the position-based features (compare
+    /// endpoints, inline-diff anchors, AX focus).
+    struct DayGroup: Equatable {
+        /// Stable across pagination: local-day key + the run's first
+        /// (newest) position. Appending older same-day versions extends
+        /// the run without changing its id, so collapse state holds.
+        let id: String
+        /// "Today", "Yesterday", or the formatted local date.
+        let title: String
+        var versions: [VersionSummary]
+    }
+
+    /// Consecutive-run day grouping (pure, unit-tested).
+    static func dayGroups(
+        _ versions: [VersionSummary],
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) -> [DayGroup] {
+        var groups: [DayGroup] = []
+        var currentDay: Date?
+        for version in versions {
+            let date = Date(timeIntervalSince1970: Double(version.timestampMs) / 1000)
+            let day = calendar.startOfDay(for: date)
+            if day != currentDay {
+                currentDay = day
+                groups.append(
+                    DayGroup(
+                        id: "\(Int(day.timeIntervalSince1970))#\(version.positionFromTail)",
+                        title: dayTitle(day: day, calendar: calendar, now: now),
+                        versions: []))
+            }
+            groups[groups.count - 1].versions.append(version)
+        }
+        return groups
+    }
+
+    /// "Today" / "Yesterday" / full local date (day names help temporal
+    /// orientation for eyes-free review).
+    static func dayTitle(day: Date, calendar: Calendar, now: Date) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(
+            byAdding: .day, value: -1, to: calendar.startOfDay(for: now)),
+            calendar.isDate(day, inSameDayAs: yesterday)
+        {
+            return "Yesterday"
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        formatter.timeStyle = .none
+        formatter.calendar = calendar
+        // The formatter must render in the CALENDAR's zone — its own
+        // default is the process-local zone, which shifts a
+        // calendar-midnight Date across the date line (unit tests
+        // inject UTC and caught exactly that).
+        formatter.timeZone = calendar.timeZone
+        if let locale = calendar.locale { formatter.locale = locale }
+        return formatter.string(from: day)
+    }
+
+    /// The header's spoken contract (pure, unit-tested): title, count,
+    /// and collapse state in one utterance.
+    static func groupHeaderLabel(title: String, count: Int, collapsed: Bool) -> String {
+        let versions = count == 1 ? "1 version" : "\(count) versions"
+        return "\(title), \(versions), \(collapsed ? "collapsed" : "expanded")"
+    }
+
     private var visibleVersions: [VersionSummary] {
         Self.visible(appState.historyVersions, showMarkers: showMarkers)
     }
@@ -265,12 +339,17 @@ struct HistoryPanel: View {
                 if let inline = inlineDiff, inline.anchorPosition == nil {
                     inlineDiffView(inline)
                 }
-                ForEach(visibleVersions, id: \.positionFromTail) { version in
-                    versionRow(version)
-                    if let inline = inlineDiff,
-                        inline.anchorPosition == version.positionFromTail
-                    {
-                        inlineDiffView(inline)
+                ForEach(Self.dayGroups(visibleVersions), id: \.id) { group in
+                    dayGroupHeader(group)
+                    if !collapsedDayGroups.contains(group.id) {
+                        ForEach(group.versions, id: \.positionFromTail) { version in
+                            versionRow(version)
+                            if let inline = inlineDiff,
+                                inline.anchorPosition == version.positionFromTail
+                            {
+                                inlineDiffView(inline)
+                            }
+                        }
                     }
                 }
                 if appState.historyNextCursor != nil {
@@ -283,6 +362,43 @@ struct HistoryPanel: View {
                 }
             }
         }
+    }
+
+    /// Collapsible day header (#798). AX: a real header (VoiceOver's
+    /// headings rotor jumps day to day) whose label speaks title,
+    /// count, and collapse state; the chevron is decorative, mirroring
+    /// the file-tree disclosure convention.
+    @ViewBuilder private func dayGroupHeader(_ group: DayGroup) -> some View {
+        let collapsed = collapsedDayGroups.contains(group.id)
+        Button {
+            if collapsed {
+                collapsedDayGroups.remove(group.id)
+            } else {
+                collapsedDayGroups.insert(group.id)
+            }
+        } label: {
+            HStack(spacing: Tokens.Spacing.xs) {
+                SlateSymbol.disclosure.decorative
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                Text(group.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+                Text("\(group.versions.count)")
+                    .font(.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .accessibilityLabel(
+            Self.groupHeaderLabel(
+                title: group.title, count: group.versions.count, collapsed: collapsed))
+        .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder private func versionRow(_ version: VersionSummary) -> some View {

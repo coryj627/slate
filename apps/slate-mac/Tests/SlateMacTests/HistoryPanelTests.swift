@@ -1048,4 +1048,127 @@ extension HistoryPanelTests {
             AppState.restoredCopyPath(for: "diagram.canvas"),
             "diagram (restored).canvas")
     }
+
+    // MARK: - Day grouping (#798)
+
+    private static func utcCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }
+
+    private static func utcDate(
+        _ year: Int, _ month: Int, _ day: Int, hour: Int = 12
+    ) -> Date {
+        utcCalendar().date(
+            from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    private static func summary(
+        _ position: UInt32, at date: Date, marker: Bool = false
+    ) -> VersionSummary {
+        VersionSummary(
+            positionFromTail: position, contentHashAfter: "h\(position)",
+            timestampMs: Int64(date.timeIntervalSince1970 * 1000), opKind: .editBatch,
+            opCount: 1, byteDelta: 0, annotations: [], isMarker: marker,
+            audioFragment: "f\(position)")
+    }
+
+    /// Consecutive-run grouping: newest-first input, one group per day
+    /// run, order preserved, and a backwards-clock interleave yields
+    /// TWO same-titled groups with distinct ids — never a reorder.
+    func testDayGroupsGroupConsecutiveRunsNewestFirst() {
+        let calendar = Self.utcCalendar()
+        let now = Self.utcDate(2026, 7, 11)
+        let versions = [
+            Self.summary(0, at: Self.utcDate(2026, 7, 11, hour: 10)),
+            Self.summary(1, at: Self.utcDate(2026, 7, 11, hour: 9)),
+            Self.summary(2, at: Self.utcDate(2026, 7, 9)),
+            // Backwards clock: a July 11 timestamp BELOW a July 9 one.
+            Self.summary(3, at: Self.utcDate(2026, 7, 11, hour: 8)),
+            Self.summary(4, at: Self.utcDate(2026, 7, 8)),
+        ]
+        let groups = HistoryPanel.dayGroups(versions, calendar: calendar, now: now)
+        XCTAssertEqual(groups.count, 4)
+        XCTAssertEqual(groups.map(\.title), [
+            "Today", "Thursday, July 9, 2026", "Today", "Wednesday, July 8, 2026",
+        ])
+        XCTAssertEqual(
+            groups.map { $0.versions.map(\.positionFromTail) },
+            [[0, 1], [2], [3], [4]],
+            "list order preserved exactly")
+        XCTAssertEqual(Set(groups.map(\.id)).count, 4, "run ids stay distinct")
+    }
+
+    func testDayTitlesTodayYesterdayAndFormatted() {
+        let calendar = Self.utcCalendar()
+        let now = Self.utcDate(2026, 7, 11)
+        XCTAssertEqual(
+            HistoryPanel.dayTitle(
+                day: calendar.startOfDay(for: now), calendar: calendar, now: now),
+            "Today")
+        XCTAssertEqual(
+            HistoryPanel.dayTitle(
+                day: calendar.startOfDay(for: Self.utcDate(2026, 7, 10)),
+                calendar: calendar, now: now),
+            "Yesterday")
+        XCTAssertEqual(
+            HistoryPanel.dayTitle(
+                day: calendar.startOfDay(for: Self.utcDate(2026, 7, 4)),
+                calendar: calendar, now: now),
+            "Saturday, July 4, 2026")
+    }
+
+    /// The header utterance carries title, count (singular pinned),
+    /// and collapse state — the AX contract for the headings rotor.
+    func testGroupHeaderLabelContract() {
+        XCTAssertEqual(
+            HistoryPanel.groupHeaderLabel(title: "Today", count: 3, collapsed: false),
+            "Today, 3 versions, expanded")
+        XCTAssertEqual(
+            HistoryPanel.groupHeaderLabel(title: "Yesterday", count: 1, collapsed: true),
+            "Yesterday, 1 version, collapsed")
+    }
+
+    /// Grouping composes with the marker filter: hidden markers never
+    /// produce an empty day section.
+    func testDayGroupingComposesWithMarkerFilter() {
+        let calendar = Self.utcCalendar()
+        let now = Self.utcDate(2026, 7, 11)
+        let versions = [
+            Self.summary(0, at: Self.utcDate(2026, 7, 11)),
+            Self.summary(1, at: Self.utcDate(2026, 7, 10), marker: true),
+            Self.summary(2, at: Self.utcDate(2026, 7, 9)),
+        ]
+        let visible = HistoryPanel.visible(versions, showMarkers: false)
+        let groups = HistoryPanel.dayGroups(visible, calendar: calendar, now: now)
+        XCTAssertEqual(groups.map(\.title), ["Today", "Thursday, July 9, 2026"])
+        XCTAssertFalse(
+            groups.contains { $0.versions.isEmpty },
+            "no empty sections from filtered markers")
+    }
+
+    /// Pagination appends older versions; a run's id keys on its first
+    /// (newest) position, so existing groups — and any collapse state
+    /// keyed on them — survive "Show older versions".
+    func testDayGroupIdsStableAcrossPagination() {
+        let calendar = Self.utcCalendar()
+        let now = Self.utcDate(2026, 7, 11)
+        let firstPage = [
+            Self.summary(0, at: Self.utcDate(2026, 7, 11, hour: 10)),
+            Self.summary(1, at: Self.utcDate(2026, 7, 10, hour: 9)),
+        ]
+        let secondPage = firstPage + [
+            Self.summary(2, at: Self.utcDate(2026, 7, 10, hour: 8)),
+            Self.summary(3, at: Self.utcDate(2026, 7, 6)),
+        ]
+        let before = HistoryPanel.dayGroups(firstPage, calendar: calendar, now: now)
+        let after = HistoryPanel.dayGroups(secondPage, calendar: calendar, now: now)
+        XCTAssertEqual(before.map(\.id), Array(after.map(\.id).prefix(2)))
+        XCTAssertEqual(
+            after[1].versions.map(\.positionFromTail), [1, 2],
+            "the Yesterday run extended in place")
+        XCTAssertEqual(after.count, 3)
+    }
 }
