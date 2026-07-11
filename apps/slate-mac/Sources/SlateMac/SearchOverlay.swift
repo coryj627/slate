@@ -145,10 +145,11 @@ struct SearchOverlay: View {
                 SlateSymbol.clearSearch.decorative
                     // The comment below promises a "properly-sized"
                     // button; a bare glyph in a .plain button renders
-                    // ~16pt with no padding. Pin the WCAG 2.5.8
-                    // minimum so the promise is implemented, not
-                    // aspirational.
-                    .frame(minWidth: 24, minHeight: 24)
+                    // ~16pt with no padding. Pin the HIG macOS
+                    // DEFAULT click target (28×28pt; HIG minimum 20,
+                    // WCAG 2.5.8 minimum 24 — 28 clears all three)
+                    // so the promise is implemented, not aspirational.
+                    .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -198,9 +199,9 @@ struct SearchOverlay: View {
                 } label: {
                     SlateSymbol.clearSearch.decorative
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
-                        // WCAG 2.5.8 target-size floor (same as the
-                        // overlay close button above).
-                        .frame(minWidth: 24, minHeight: 24)
+                        // HIG macOS default click target, 28×28pt
+                        // (same as the overlay close button above).
+                        .frame(minWidth: 28, minHeight: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
