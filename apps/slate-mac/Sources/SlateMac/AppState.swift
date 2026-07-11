@@ -3487,6 +3487,10 @@ final class AppState: ObservableObject {
     /// Deleted-file remnants (the "Deleted" segment).
     @Published var deletedFiles: [DeletedFileEntry] = []
     @Published var deletedLoadError: String?
+    /// Pending "Restore As…" destination prompt (#795): raised when a
+    /// deleted-file recovery hits an occupied destination, or from a
+    /// version row's Restore As… action (materialize a copy).
+    @Published var historyRestoreAsPrompt: RestoreAsPrompt?
     /// Pending restore confirmation (drives the alert).
     @Published var historyRestoreRequest: HistoryRestoreRequest?
     /// History-specific error alert (integrity failure, recover

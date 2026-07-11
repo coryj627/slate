@@ -28,6 +28,9 @@ struct HistoryPanel: View {
     /// restore success return focus into the version list — the new
     /// head row (position 0) after a restore.
     @AccessibilityFocusState private var focusedVersion: UInt32?
+    /// The Restore As… destination being edited (#795); seeded from
+    /// the prompt's suggestion when it appears.
+    @State private var restoreAsDestination: String = ""
 
     enum Segment: Hashable {
         case thisNote
@@ -85,6 +88,46 @@ struct HistoryPanel: View {
         } message: { alert in
             Text(alert.message)
         }
+        // Restore As… destination prompt (#795): raised on an occupied
+        // recovery destination or from a version row's Restore As….
+        .alert(
+            "Restore As…",
+            isPresented: restoreAsPresented,
+            presenting: appState.historyRestoreAsPrompt
+        ) { prompt in
+            TextField("Destination path", text: $restoreAsDestination)
+                .accessibilityLabel("Destination path")
+            Button("Cancel", role: .cancel) {
+                appState.historyRestoreAsPrompt = nil
+                focusedVersion = visibleVersions.first?.positionFromTail
+            }
+            Button("Restore") {
+                appState.historyRestoreAsPrompt = nil
+                let destination = restoreAsDestination
+                Task { await appState.performRestoreAs(prompt, destination: destination) }
+            }
+        } message: { prompt in
+            switch prompt.source {
+            case .deletedFile(let path):
+                Text(
+                    "A file already exists at \(path). Restore the deleted file to a different location."
+                )
+            case .version(_, _, let date):
+                Text("Save a copy of the version from \(date) to a new file.")
+            }
+        }
+        .onChange(of: appState.historyRestoreAsPrompt) { _, prompt in
+            if let prompt {
+                restoreAsDestination = prompt.suggestedPath
+            }
+        }
+    }
+
+    private var restoreAsPresented: Binding<Bool> {
+        Binding(
+            get: { appState.historyRestoreAsPrompt != nil },
+            set: { if !$0 { appState.historyRestoreAsPrompt = nil } }
+        )
     }
 
     private var restorePresented: Binding<Bool> {
@@ -271,6 +314,13 @@ struct HistoryPanel: View {
                         versionHash: version.contentHashAfter, formattedDate: date)
                 } label: {
                     SlateSymbol.restore.label("Restore…")
+                }
+                .buttonStyle(.borderless)
+                Button {
+                    appState.requestRestoreAs(
+                        versionHash: version.contentHashAfter, formattedDate: date)
+                } label: {
+                    SlateSymbol.restore.label("Restore As…")
                 }
                 .buttonStyle(.borderless)
             }
