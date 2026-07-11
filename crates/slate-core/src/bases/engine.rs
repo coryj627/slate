@@ -1009,8 +1009,7 @@ fn file_matches_query(expr: &Expr) -> Option<String> {
 pub(crate) fn parse_operator_duration(text: &str) -> Option<i64> {
     let unit = text.chars().last()?;
     let digits = &text[..text.len() - unit.len_utf8()];
-    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit())
-    {
+    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let count: i64 = digits.parse().ok()?;
@@ -1081,24 +1080,24 @@ fn oplog_pushdown_predicate(
         return None;
     };
     let operator = oplog_operator_call(expr)?;
-    let lower = |duration: &str, name: &str| -> Result<i64, String> {
-        parse_operator_duration(duration).map(|w| now_ms.saturating_sub(w)).ok_or_else(|| {
+    let lower =
+        |duration: &str, name: &str| -> Result<i64, String> {
+            parse_operator_duration(duration).map(|w| now_ms.saturating_sub(w)).ok_or_else(|| {
             format!(
                 "{name}: duration {duration:?} must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")"
             )
         })
-    };
+        };
     Some(match operator {
-        OplogOperator::HasChangeSince { duration } => {
-            lower(&duration, "oplog.has_change_since").map(|cutoff| SqlPredicate {
+        OplogOperator::HasChangeSince { duration } => lower(&duration, "oplog.has_change_since")
+            .map(|cutoff| SqlPredicate {
                 clause: "id IN (
                     SELECT file_id FROM oplog_events
                     WHERE event_class = 1 AND ts_ms >= ?
                 )"
                 .to_string(),
                 params: vec![cutoff.to_string()],
-            })
-        }
+            }),
         OplogOperator::HasPropertyChange { key, duration } => {
             lower(&duration, "oplog.has_property_change").map(|cutoff| SqlPredicate {
                 clause: "id IN (

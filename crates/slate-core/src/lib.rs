@@ -59,6 +59,7 @@ pub mod links_db;
 pub mod math;
 pub mod oplog;
 pub mod oplog_compaction;
+pub(crate) mod oplog_events;
 pub mod properties_db;
 pub mod reading;
 pub mod search_db;

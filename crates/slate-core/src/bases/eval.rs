@@ -1806,8 +1806,8 @@ fn eval_method(
                 });
             }
             let duration = expect_text("oplog.has_change_since", &args[0])?;
-            let window_ms = crate::bases::engine::parse_operator_duration(&duration)
-                .ok_or_else(|| {
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
                     invalid_arg(
                         "oplog.has_change_since",
                         "duration must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")",
@@ -1827,8 +1827,8 @@ fn eval_method(
             }
             let key = expect_text("oplog.has_property_change", &args[0])?;
             let duration = expect_text("oplog.has_property_change", &args[1])?;
-            let window_ms = crate::bases::engine::parse_operator_duration(&duration)
-                .ok_or_else(|| {
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
                     invalid_arg(
                         "oplog.has_property_change",
                         "duration must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")",
@@ -1848,8 +1848,8 @@ fn eval_method(
             }
             let pattern = expect_text("oplog.deleted_content_matches", &args[0])?;
             let duration = expect_text("oplog.deleted_content_matches", &args[1])?;
-            let window_ms = crate::bases::engine::parse_operator_duration(&duration)
-                .ok_or_else(|| {
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
                     invalid_arg(
                         "oplog.deleted_content_matches",
                         "duration must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")",

@@ -122,6 +122,54 @@ fn bench_append(c: &mut Criterion) {
     group.finish();
 }
 
+/// O-6 gate (o_spec §O-6): `oplog.has_change_since("7d")` over a
+/// 10k-file vault answers in under 50 ms warm. The filter must stay
+/// ONE indexed SQL query (the `id IN (...)` membership pushdown); a
+/// per-row lookup regression shows up here as a 10k× blowup. 600 of
+/// the files carry events (realistic edit locality); the rest are
+/// scan-indexed only.
+fn bench_temporal_query(c: &mut Criterion) {
+    let mut group = c.benchmark_group("oplog_temporal");
+    group.sample_size(20);
+    let vault = tempfile::tempdir().unwrap();
+    for i in 0..10_000u32 {
+        let dir = vault.path().join(format!("d{:02}", i % 64));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("f{i:05}.md")), b"# seed\nbody\n").unwrap();
+    }
+    let session = VaultSession::from_filesystem(vault.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    for i in (0..10_000u32).step_by(17) {
+        let path = format!("d{:02}/f{i:05}.md", i % 64);
+        session
+            .save_text(&path, &format!("# seed\nbody\nedit {i}\n"), None)
+            .unwrap();
+    }
+
+    let (base, warnings) = slate_core::bases::parse_base(
+        "views:\n  - type: table\n    name: T\n    filters: 'oplog.has_change_since(\"7d\")'\n    order:\n      - file.name\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let query_json = serde_json::to_string(&slate_core::bases::view_query(&base, 0)).unwrap();
+    let handle = session.open_query(&query_json, None).unwrap();
+    // Warm once; the oplog cache carve-out means every iteration below
+    // is a real execution, not a cache hit.
+    let warm = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    assert_eq!(warm.total_count, 589, "10k/17 files carry a recent event");
+
+    group.bench_function("has_change_since_7d_10k_files", |b| {
+        b.iter(|| {
+            let result = session
+                .base_execute(handle, 0, None, None, &CancelToken::new())
+                .unwrap();
+            black_box(result.total_count);
+        })
+    });
+    group.finish();
+}
+
 /// §9.3.3 gate: a 50k-op log compacts in under a second (release,
 /// background thread). The 50k-entry log is assembled as raw frames in
 /// memory (the wire format is pinned by checked-in fixtures) over a
@@ -340,6 +388,7 @@ criterion_group!(
     bench_structured_diff,
     bench_append,
     bench_compact,
-    bench_save_with_big_log
+    bench_save_with_big_log,
+    bench_temporal_query
 );
 criterion_main!(benches);

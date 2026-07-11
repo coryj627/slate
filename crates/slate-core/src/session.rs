@@ -1161,6 +1161,17 @@ impl VaultSession {
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
+        // O-6 (#544): observe a parser bump BEFORE the scan runs — the
+        // scan stamps every row with the new version, erasing the
+        // evidence. Query failure conservatively reads as "bumped"
+        // (regeneration is idempotent).
+        let parser_bumped: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE parser_version != ?1)",
+                [self.config.parser_version],
+                |row| row.get(0),
+            )
+            .unwrap_or(true);
         let report = scan_vault(
             self.provider.as_ref(),
             &mut conn,
@@ -1174,6 +1185,9 @@ impl VaultSession {
         // remnants (O-1 #539). Best-effort: a reconcile failure
         // degrades history features, never the scan itself.
         self.reconcile_oplogs(&mut conn);
+        // O-6 (#544): regenerate the derived temporal-events index if
+        // it's stale. Runs after the reconcile so bindings are fresh.
+        self.rebuild_oplog_events_if_stale(&mut conn, parser_bumped);
         // On-open compaction sweep (O-2 #540): enqueue any bound log
         // whose file size exceeds the byte threshold — stat only, no
         // log reads.
@@ -1227,6 +1241,54 @@ impl VaultSession {
                 }
             }
         }
+    }
+
+    /// O-6 (#544): regenerate the derived `oplog_events` table from
+    /// the bound logs when it is empty (fresh cache — migration 029
+    /// landing, or a cache rebuild) or the parser version bumped this
+    /// open (the derived-cache regeneration convention). One
+    /// transaction end to end: a crash mid-rebuild rolls back and the
+    /// next open retries. Best-effort — failure degrades the temporal
+    /// operators to empty results, never the scan. Unbound remnant
+    /// logs contribute nothing: events only exist for live `files`
+    /// rows, which is all the operators can ever filter.
+    fn rebuild_oplog_events_if_stale(&self, conn: &mut Connection, parser_bumped: bool) {
+        if let Err(e) = self.rebuild_oplog_events_inner(conn, parser_bumped) {
+            log::warn!("oplog_events rebuild failed");
+            log::debug!("oplog_events rebuild failure detail: {e:?}");
+        }
+    }
+
+    fn rebuild_oplog_events_inner(
+        &self,
+        conn: &mut Connection,
+        parser_bumped: bool,
+    ) -> Result<(), VaultError> {
+        let empty: bool =
+            conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM oplog_events)", [], |row| {
+                row.get(0)
+            })?;
+        if !empty && !parser_bumped {
+            return Ok(());
+        }
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM oplog_events", [])?;
+        let bound: Vec<(i64, String)> = tx
+            .prepare("SELECT id, oplog_name FROM files WHERE oplog_name IS NOT NULL")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (file_id, log_name) in bound {
+            // A missing/torn log yields its readable prefix or nothing;
+            // either way the file simply has fewer (or no) events.
+            let entries = match crate::oplog::read_oplog(&self.config.cache_dir, &log_name) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            let events = crate::oplog_events::derive_events_for_log(&entries);
+            insert_oplog_events(&tx, file_id, &events)?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Scan-time op-log reconcile (O-1 #539): bind every on-disk log to
@@ -1729,6 +1791,7 @@ impl VaultSession {
         // diff/encode/append work below swallows its errors.
         if let Some(log_name) = oplog_name.as_deref() {
             self.append_save_to_oplog(
+                conn,
                 file_id,
                 log_name,
                 path,
@@ -2081,6 +2144,7 @@ impl VaultSession {
     #[allow(clippy::too_many_arguments)]
     fn append_save_to_oplog(
         &self,
+        conn: &Connection,
         file_id: i64,
         log_name: &str,
         path: &str,
@@ -2094,6 +2158,11 @@ impl VaultSession {
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
         let cached = state.get(&file_id).cloned();
 
+        // The save's edit ops when the aligned-cache arm computes them —
+        // kept for O-6 event derivation even when the kind decision
+        // lands on a snapshot (the spec's cadence-snapshot sampling).
+        let mut ops_in_hand: Option<Vec<crate::oplog::EditOp>> = None;
+
         // (inner_kind, inner_payload, resets_snapshot_cadence).
         // `None` ⇒ write nothing.
         let decision: Option<(crate::oplog::OpKind, Vec<u8>, bool)> = match (old_contents, &cached)
@@ -2104,6 +2173,7 @@ impl VaultSession {
                     None // identical content — don't grow the log
                 } else {
                     let payload = crate::oplog::encode_edit_batch(&ops);
+                    ops_in_hand = Some(ops);
                     // Count the per-entry framing overhead (body header +
                     // two hex hashes + actor id + length fields + checksum)
                     // alongside the payload so the cadence tracks on-disk
@@ -2194,6 +2264,17 @@ impl VaultSession {
             },
         );
         drop(state);
+
+        // O-6 (#544): populate the derived `oplog_events` index from the
+        // entry just appended. Best-effort exactly like the append: a
+        // failed insert warns and moves on (the table is regenerable
+        // from the logs at the next cache rebuild).
+        let events =
+            crate::oplog_events::derive_events(&entry, ops_in_hand.as_deref(), old_contents);
+        if let Err(e) = insert_oplog_events(conn, file_id, &events) {
+            log::warn!("oplog_events insert failed for file_id={file_id}");
+            log::debug!("oplog_events insert failure detail: {e}");
+        }
 
         // O-2 (#540): the compaction trigger check is pure arithmetic —
         // the returned post-append length against the byte threshold,
@@ -2725,6 +2806,7 @@ impl VaultSession {
 
         if let Some(log_name) = oplog_name.as_deref() {
             self.append_save_to_oplog(
+                &conn,
                 file_id,
                 log_name,
                 path,
@@ -9534,6 +9616,30 @@ impl crate::canvas::model::FileTitleSource for DbTitleSource<'_> {
 }
 
 /// Drop a file's canvas index rows (large-file refuse, file deleted).
+/// Insert derived `oplog_events` rows for one file (O-6 #544). Works
+/// on a bare connection (append path, autocommit) or inside the
+/// rebuild transaction — `Transaction` derefs to `Connection`.
+fn insert_oplog_events(
+    conn: &Connection,
+    file_id: i64,
+    events: &[crate::oplog_events::DerivedEvent],
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for event in events {
+        stmt.execute(rusqlite::params![
+            file_id,
+            event.ts_ms,
+            event.event_class,
+            event.property_key,
+            event.deleted_text,
+        ])?;
+    }
+    Ok(())
+}
+
 fn purge_canvas_rows(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), VaultError> {
     tx.execute(
         "DELETE FROM canvas_nodes WHERE file_id = ?1",
@@ -10201,6 +10307,9 @@ mod tests {
 
     #[path = "oplog_logging.rs"]
     mod oplog_logging;
+
+    #[path = "oplog_temporal.rs"]
+    mod oplog_temporal;
 
     #[path = "composed.rs"]
     mod composed;
