@@ -23,8 +23,14 @@ CREATE TABLE oplog_events (
                                             -- (UTF-8 boundary-safe); NULL when no
                                             -- old content was in hand
 );
+-- (file_id, ts_ms): the row-eval fallback's per-file EXISTS probes.
 CREATE INDEX oplog_events_file_ts ON oplog_events (file_id, ts_ms);
-CREATE INDEX oplog_events_ts ON oplog_events (ts_ms);
+-- (event_class, ts_ms, file_id): COVERS the pushdown membership
+-- subqueries — `WHERE event_class = ? AND ts_ms >= ?` yields file_id
+-- straight from the index, no rowid table lookups (adversarial
+-- round 3: the plain ts_ms index cost a per-row table fetch).
+-- deleted_content_matches still fetches rows for deleted_text.
+CREATE INDEX oplog_events_class_ts ON oplog_events (event_class, ts_ms, file_id);
 
 -- Staleness marker (adversarial review): set when an append-time event
 -- insert fails AFTER its op-log entry landed — the entry is durable but

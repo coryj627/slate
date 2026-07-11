@@ -495,4 +495,10 @@ Same machine/command pattern as the O-1 rows (`--sample-size 10`).
 
 | Bench | p50 (95% CI) | Gate |
 |---|---:|---|
-| `oplog_temporal/has_change_since_7d_10k_files` | **3.17 ms** (3.166–3.177) | o_spec §O-6 "< 50 ms warm" — full `base_execute` over a 10k-file vault, 589 files carrying events; the filter lowers to one indexed `id IN (SELECT … FROM oplog_events)` membership subquery, and the oplog cache carve-out means every iteration is a real execution |
+| `oplog_temporal/has_change_since_7d_10k_files` | **3.31 ms** (3.28–3.35) | o_spec §O-6 "< 50 ms warm" — full `base_execute` over a 10k-file vault, 589 files carrying events; the filter lowers to one indexed `id IN (SELECT … FROM oplog_events)` membership subquery, and the oplog cache carve-out means every iteration is a real execution |
+
+Save-path note (O-6): `oplog_save_path/save_text_hot` 9.33 ms → 9.44 ms (+1.2%)
+with the full O-6 population — event derivation, the mark-before-append
+staleness protocol (the marker commit fsync'd under synchronous=FULL),
+and the per-entry event transaction. No spec gate binds the save path
+here; recorded for the close-out benchmark comparison.

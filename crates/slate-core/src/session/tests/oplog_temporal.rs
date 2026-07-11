@@ -341,6 +341,210 @@ fn deleted_file_events_die_with_the_row_and_recycled_ids_start_clean() {
 }
 
 #[test]
+fn crash_between_append_and_insert_heals_via_the_marker() {
+    // The round-2 adversarial window: `append_entry` is durable on the
+    // filesystem, then the process dies before the event transaction
+    // commits. Mark-before-append pins the on-disk state to exactly
+    // (log has the entry, table lacks its rows, marker set) —
+    // reconstructed here directly — and the next scan must rebuild
+    // from the log and clear the marker. Without the marker this
+    // state is undetectable: the table is non-empty and nothing
+    // bumped.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let r = session.save_text("n.md", "v1\n", None).unwrap();
+    assert_eq!(events_for(&session, "n.md").len(), 1);
+
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let v2 = "v1\nCRASHWORD\n";
+    let entry = crate::oplog::OpLogEntry {
+        timestamp_ms: now_ms(),
+        user_actor_id: "t".into(),
+        op_kind: crate::OpKind::WholeFileReplace,
+        content_hash_before: r.new_content_hash.clone(),
+        content_hash_after: crate::vault::content_hash(v2.as_bytes()),
+        payload_bytes: v2.as_bytes().to_vec(),
+    };
+    crate::oplog::append_entry(&session.config.cache_dir, &stem, "n.md", &entry).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+            .unwrap();
+    }
+    assert_eq!(
+        events_for(&session, "n.md").len(),
+        1,
+        "premise: the crashed save's rows are missing"
+    );
+    let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
+    assert_eq!(paths, vec!["n.md"], "older event still matches");
+
+    // "Restart": the next scan sees the marker and rebuilds.
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let events = events_for(&session, "n.md");
+    assert_eq!(
+        events.len(),
+        2,
+        "the crashed save's row recovered from the log"
+    );
+    let stale: bool = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM oplog_events_stale)", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert!(!stale, "marker cleared by the rebuild");
+}
+
+#[test]
+fn successful_saves_leave_no_marker_residue() {
+    // The mark-before-append protocol must be invisible on the happy
+    // path: every successful save clears its own marker in the event
+    // transaction, and a pre-existing marker from an EARLIER failure
+    // survives an intervening successful save (per-row deletion, not
+    // delete-all — a later save must not forget older staleness).
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.md", "v1\n", None).unwrap();
+    let marker_count = |session: &VaultSession| -> i64 {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM oplog_events_stale", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(marker_count(&session), 0, "happy path leaves nothing");
+
+    // Simulate an older failure's surviving marker, then save again.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+            .unwrap();
+    }
+    let current = session.read_text("n.md").unwrap();
+    session
+        .save_text("n.md", &format!("{current}v2\n"), None)
+        .unwrap();
+    assert_eq!(
+        marker_count(&session),
+        1,
+        "a successful save must not clear another save's marker"
+    );
+}
+
+#[test]
+fn restart_cold_save_with_old_in_hand_still_samples() {
+    // Round 3 (spec conformance): the spec pins deleted_text NULL to
+    // "no old content in hand", NOT to "session cache cold". The first
+    // conflict-checked save after an app restart has the old bytes
+    // (the conflict check read them) even though the oplog state is
+    // cold — deleting a paragraph across a restart must remain
+    // searchable.
+    let tmp = tempfile::tempdir().unwrap();
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let hash;
+    {
+        let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        hash = session
+            .save_text("n.md", &format!("{body}RESTARTWORD\n"), None)
+            .unwrap()
+            .new_content_hash;
+    }
+    // New session = cold oplog state; the save carries the hash check.
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.md", &body, Some(&hash)).unwrap();
+
+    // The entry is a re-anchoring snapshot (cold state), but the row
+    // is sampled: old bytes were in hand.
+    let entries = session.read_oplog("n.md").unwrap();
+    assert_eq!(
+        entries.last().unwrap().op_kind,
+        crate::OpKind::WholeFileReplace
+    );
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("RESTARTWORD", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["n.md"], "restart-boundary deletion searchable");
+
+    // Without a conflict check there are no old bytes — still NULL
+    // (the documented gap, now exactly the spec's matrix). A plain
+    // no-hash edit to the SAME file loses its removed span.
+    let current = session.read_text("n.md").unwrap();
+    session
+        .save_text("n.md", &current.replace("keep line 3\n", ""), None)
+        .unwrap();
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("keep line 3", "1h")"#,
+    );
+    assert_eq!(paths, Vec::<String>::new(), "no-old-bytes save stays NULL");
+}
+
+#[test]
+fn adopted_log_history_survives_a_failed_rebuild_via_the_marker() {
+    // Round 3 High: the reconcile writes adoption bindings in its own
+    // transaction; the rebuild runs in a SEPARATE one. If the rebuild
+    // crashes or busy-fails after the reconcile committed, an
+    // in-memory "adopted" flag dies with it and the adopted history
+    // stays invisible forever (table non-empty, no bump). The marker
+    // is therefore written INSIDE the reconcile transaction. Simulate
+    // the torn state directly: binding committed + marker present +
+    // no rows; the next scan must heal.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let r = session
+        .save_text("adopted.md", &format!("{body}ADOPTWORD\n"), None)
+        .unwrap();
+    session
+        .save_text("adopted.md", &body, Some(&r.new_content_hash))
+        .unwrap();
+    // Keep the table non-empty so emptiness can't mask the trigger.
+    session.save_text("bystander.md", "x\n", None).unwrap();
+
+    // Tear the state: wipe the file's rows (as if only the reconcile
+    // tx — binding + marker — had committed and the rebuild died).
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM oplog_events WHERE file_id = (SELECT id FROM files WHERE path = 'adopted.md')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+            .unwrap();
+    }
+    assert_eq!(
+        filter_paths(
+            &session,
+            r#"oplog.deleted_content_matches("ADOPTWORD", "1h")"#
+        )
+        .0,
+        Vec::<String>::new(),
+        "premise: history invisible in the torn state"
+    );
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let (paths, err) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("ADOPTWORD", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["adopted.md"], "marker-driven rebuild healed");
+}
+
+#[test]
 fn recovered_file_history_is_immediately_queryable() {
     // recover_deleted_file re-binds the remnant log to a NEW files row
     // — the old row's event rows died via the CASCADE. The recovery
@@ -619,6 +823,29 @@ fn invalid_durations_are_in_band_view_errors() {
         r#"oplog.has_change_since("0d") || file.name == "n.md""#,
     );
     assert!(err.is_some(), "row-eval path rejects bad durations too");
+}
+
+#[test]
+fn wrong_arity_errors_identically_in_pushdown_and_row_eval() {
+    // Round 3: the pushdown recognizer must not accept calls row-eval
+    // rejects — an extra argument at a top-level AND used to push down
+    // fine (extra arg ignored) while the identical expression inside
+    // an OR errored. Exact arity or no pushdown: both positions now
+    // produce the same in-band arity error.
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.md", "x\n", None).unwrap();
+
+    for filter in [
+        r#"oplog.has_change_since("7d", "extra")"#,
+        r#"oplog.has_change_since("7d", "extra") || file.name == "n.md""#,
+        r#"oplog.has_property_change("k", "7d", "extra")"#,
+        r#"oplog.deleted_content_matches("pat")"#,
+    ] {
+        let (paths, err) = filter_paths(&session, filter);
+        assert!(paths.is_empty(), "{filter}: no rows on error");
+        assert!(err.is_some(), "{filter}: arity error must surface in-band");
+    }
 }
 
 #[test]
@@ -1041,4 +1268,60 @@ fn operators_compose_with_n_corpus_filters() {
         r#"file.inFolder("Projects") && !oplog.has_change_since("7d")"#,
     );
     assert_eq!(paths, vec!["Projects/Done.md"]);
+
+    // ALL THREE operators composed with tag/property/folder filters
+    // (the milestone DoD line covers each operator, not just
+    // has_change_since — adversarial round 3). Multi-conjunct
+    // pushdown means the operators' bound params ride in plan.params
+    // alongside the tag/property predicates' — a param-ordering bug
+    // in either direction flips these verdicts.
+    session
+        .set_property(
+            "Projects/Active.md",
+            "owner",
+            crate::frontmatter::PropertyValue::Text("cj".into()),
+            None,
+        )
+        .unwrap();
+    let (paths, err) = filter_paths(
+        &session,
+        r#"file.inFolder("Projects") && file.hasTag("urgent") && oplog.has_property_change("owner", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["Projects/Active.md"]);
+    let (paths, _) = filter_paths(
+        &session,
+        r#"status == "done" && oplog.has_property_change("owner", "1h")"#,
+    );
+    assert_eq!(
+        paths,
+        Vec::<String>::new(),
+        "property conjunct filters it out"
+    );
+
+    // deleted_content_matches composed: remove a distinctive word from
+    // the tagged file, then require folder + tag + the deletion.
+    let current = session.read_text("Projects/Active.md").unwrap();
+    let with_word = format!("{current}DOOMEDLINE alpha beta gamma delta\n");
+    let r = session
+        .save_text("Projects/Active.md", &with_word, None)
+        .unwrap();
+    session
+        .save_text("Projects/Active.md", &current, Some(&r.new_content_hash))
+        .unwrap();
+    let (paths, err) = filter_paths(
+        &session,
+        r#"file.inFolder("Projects") && file.hasTag("urgent") && oplog.deleted_content_matches("doomedline", "1h")"#,
+    );
+    assert_eq!(err, None);
+    assert_eq!(paths, vec!["Projects/Active.md"]);
+    let (paths, _) = filter_paths(
+        &session,
+        r#"file.inFolder("Inbox") && oplog.deleted_content_matches("doomedline", "1h")"#,
+    );
+    assert_eq!(
+        paths,
+        Vec::<String>::new(),
+        "folder conjunct filters it out"
+    );
 }

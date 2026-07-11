@@ -132,16 +132,23 @@ pub(crate) fn derive_events(
 /// rule; the prefix's events are still returned.
 pub(crate) fn derive_events_for_log(entries: &[OpLogEntry]) -> Vec<DerivedEvent> {
     let mut events = Vec::new();
-    let mut current: Option<String> = None;
-    for (idx, entry) in entries.iter().enumerate() {
-        events.extend(derive_events(entry, None, current.as_deref()));
-        // Advance the running document. `reconstruct_at_tail` walks its
-        // whole slice, so this loop is O(n²) in entries — acceptable for
-        // the rebuild path (rare: empty table or parser bump), which
-        // amortizes against the vault scan already in progress.
-        match crate::oplog::reconstruct_at_tail(&entries[..=idx]) {
-            Ok(doc) => current = Some(doc),
-            Err(_) => break,
+    // ONE running replay buffer advanced entry by entry — a per-prefix
+    // `reconstruct_at_tail` here is O(n²) on a compacted log (one
+    // anchor + thousands of batches re-replayed each step; measured in
+    // whole seconds per hot log — adversarial round 3). The census
+    // cross-validates this walker against per-prefix reconstruction.
+    let mut buf: Option<crate::text_buffer::TextBuffer> = None;
+    for entry in entries {
+        // Materialize old content only for entries that can sample it
+        // (a content change); touch-only entries skip the copy.
+        let old: Option<String> = if entry.content_hash_before != entry.content_hash_after {
+            buf.as_ref().map(std::string::ToString::to_string)
+        } else {
+            None
+        };
+        events.extend(derive_events(entry, None, old.as_deref()));
+        if crate::oplog::replay_advance(&mut buf, entry).is_err() {
+            break; // clean-prefix rule: derive nothing past a divergence
         }
     }
     events

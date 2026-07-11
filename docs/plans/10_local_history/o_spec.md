@@ -657,17 +657,39 @@ CREATE INDEX oplog_events_ts ON oplog_events (ts_ms);
 - Population on append: after a successful `append_save_to_oplog`, insert rows derived from the
   entry — one class-1 row iff `hash_before != hash_after`, one row per annotation (classes 2-5;
   `PathChanged` markers produce **no** rows). `deleted_text` (normative): the concatenated
-  removed spans of the save's edit ops — available on BOTH the batch path and the cadence-snapshot
-  path, because the session computes `diff_to_ops` before deciding the kind (session.rs:1001-1017);
-  `NULL` when `old_contents` was `None` (cold cache / non-UTF-8 old) — a documented sampling gap:
-  content deleted across a cold-cache save is not searchable. Insert failure = stderr warning,
-  never fatal (regenerable).
-- Population on rebuild: scan reconcile regenerates the table from the logs when it is empty or
-  `parser_version` bumps — `DELETE` all rows, then derive per log (decode annotations + edit-op
-  spans; snapshot-to-snapshot boundaries where ops aren't recorded contribute class-1 rows with
-  `deleted_text NULL`).
+  removed spans of the save's edit ops, sampled whenever the OLD bytes were in hand — the batch
+  path, the cadence-snapshot path (the session computes `diff_to_ops` before deciding the kind),
+  AND the cold/misaligned re-anchoring snapshot of a conflict-checked save (the conflict check
+  read the old bytes; the first save after an app restart is the common divergence). `NULL` only
+  when no old content was in hand (`old_contents == None`: no-hash-check save / non-UTF-8 old) —
+  the documented sampling gap. Population failure = log-facade warning, never fatal
+  (regenerable); durability of the missed rows is the marker protocol's job (below).
+- Population on rebuild: scan reconcile regenerates the table from the logs when it is empty,
+  `parser_version` bumps, or the staleness marker is set — one transaction: `DELETE` all rows
+  (and all marker rows), then derive per log (decode annotations + edit-op spans;
+  snapshot-to-snapshot boundaries where ops aren't recorded contribute class-1 rows with
+  `deleted_text NULL` — the pinned append≠rebuild delta).
 - Anchors and markers (`hash_before == hash_after`) produce no rows — this is the "excludes
   touch-only events" requirement (`05` §8.9) falling out of the hash rule.
+
+Hardening (adversarial reviews, shipped with O-6 — strengthenings of the above, now normative):
+
+- `oplog_events.file_id REFERENCES files(id) ON DELETE CASCADE` (the `open_marks` precedent):
+  SQLite recycles rowids, so without the CASCADE a deleted-then-recreated note could inherit the
+  dead note's event history — the O-1 recycled-id hazard, closed at this layer too. Because the
+  CASCADE erases a recovered file's history rows, `recover_deleted_file`'s binding transaction
+  repopulates them from the re-bound log (before the recovery save's own append row), and a scan
+  reconcile that adopts a log forces the rebuild.
+- `oplog_events_stale` marker table + mark-before-append: a save writes one durable marker row
+  (synchronous=FULL for that commit — the log append is fsynced, so the marker must be too)
+  BEFORE `append_entry`, and clears exactly its own row in the same transaction as the entry's
+  event rows. Any crash, power cut, or reported failure between the durable append and the event
+  commit leaves a marker; any marker triggers the next scan's rebuild, which regenerates from the
+  logs and clears the table. A reconcile adoption writes the marker inside the reconcile
+  transaction (an in-memory flag would die with a crashed/busy-failed rebuild). On an event-
+  transaction failure the save re-arms a marker unconditionally (the pre-append write and the
+  event commit can fail from one shared cause, and a concurrent rebuild may have consumed the
+  original).
 
 ### Operators (surface syntax binds to N's shipped filter grammar; semantics fixed here)
 
@@ -679,6 +701,11 @@ CREATE INDEX oplog_events_ts ON oplog_events (ts_ms);
 
 - Duration grammar: `^([1-9][0-9]*)(h|d|w)$` (hours/days/weeks). Anything else →
   `InvalidQuery { message }` naming the operator and the expected grammar.
+- Lowering shape (as-built note): the table's `EXISTS` form fixes the SEMANTICS; the shipped
+  pushdown emits the equivalent `id IN (SELECT file_id FROM oplog_events WHERE …)` membership
+  subquery, matching the repo's tag/property predicate convention (the row-eval fallback uses the
+  literal `EXISTS` shape). Existential semantics over a NOT NULL column — the two are
+  interchangeable, and the 10k-file bench pins that it stays one indexed query.
 - `pat` is a substring, not a regex/glob. Case-insensitivity is **ASCII-only** (SQLite `LIKE`
   semantics); the reference census implements the identical rule, and the limitation is
   documented (unicode-aware matching is a filed follow-up with the regex variant).

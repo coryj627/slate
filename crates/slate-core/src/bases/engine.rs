@@ -1051,18 +1051,26 @@ fn oplog_operator_call(expr: &Expr) -> Option<OplogOperator> {
     else {
         return None;
     };
+    // Exact arity or no pushdown (adversarial round 3): extra args
+    // must fall through to row-eval, whose arity check rejects them —
+    // otherwise the identical wrong expression works at a top-level
+    // AND but errors inside an OR.
     match name {
-        MethodName::OplogHasChangeSince => Some(OplogOperator::HasChangeSince {
+        MethodName::OplogHasChangeSince if args.len() == 1 => Some(OplogOperator::HasChangeSince {
             duration: literal_text(args.first()?)?,
         }),
-        MethodName::OplogHasPropertyChange => Some(OplogOperator::HasPropertyChange {
-            key: literal_text(args.first()?)?,
-            duration: literal_text(args.get(1)?)?,
-        }),
-        MethodName::OplogDeletedContentMatches => Some(OplogOperator::DeletedContentMatches {
-            pattern: literal_text(args.first()?)?,
-            duration: literal_text(args.get(1)?)?,
-        }),
+        MethodName::OplogHasPropertyChange if args.len() == 2 => {
+            Some(OplogOperator::HasPropertyChange {
+                key: literal_text(args.first()?)?,
+                duration: literal_text(args.get(1)?)?,
+            })
+        }
+        MethodName::OplogDeletedContentMatches if args.len() == 2 => {
+            Some(OplogOperator::DeletedContentMatches {
+                pattern: literal_text(args.first()?)?,
+                duration: literal_text(args.get(1)?)?,
+            })
+        }
         _ => None,
     }
 }
@@ -1080,14 +1088,13 @@ fn oplog_pushdown_predicate(
         return None;
     };
     let operator = oplog_operator_call(expr)?;
-    let lower =
-        |duration: &str, name: &str| -> Result<i64, String> {
-            parse_operator_duration(duration).map(|w| now_ms.saturating_sub(w)).ok_or_else(|| {
+    let lower = |duration: &str, name: &str| -> Result<i64, String> {
+        parse_operator_duration(duration).map(|w| now_ms.saturating_sub(w)).ok_or_else(|| {
             format!(
-                "{name}: duration {duration:?} must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")"
+                "{name}: duration {duration:?} must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")"
             )
         })
-        };
+    };
     Some(match operator {
         OplogOperator::HasChangeSince { duration } => lower(&duration, "oplog.has_change_since")
             .map(|cutoff| SqlPredicate {

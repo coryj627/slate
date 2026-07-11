@@ -1810,7 +1810,7 @@ fn eval_method(
                 crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
                     invalid_arg(
                         "oplog.has_change_since",
-                        "duration must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
                     )
                 })?;
             let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
@@ -1831,7 +1831,7 @@ fn eval_method(
                 crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
                     invalid_arg(
                         "oplog.has_property_change",
-                        "duration must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
                     )
                 })?;
             let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
@@ -1852,7 +1852,7 @@ fn eval_method(
                 crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
                     invalid_arg(
                         "oplog.deleted_content_matches",
-                        "duration must match ^([1-9][0-9]*)(h|d|w)$ (e.g. \"7d\")",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
                     )
                 })?;
             let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
