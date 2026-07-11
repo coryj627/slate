@@ -198,14 +198,15 @@ struct NotePropertiesHeader: View {
                 .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
-            // Header glyph buttons: pin the WCAG 2.5.8 target-size
-            // floor — a bare `.decorative` glyph in a borderless
-            // button renders ~16pt with no padded hit area.
+            // Header glyph buttons: pin the HIG macOS DEFAULT click
+            // target (28×28pt; HIG minimum 20, WCAG 2.5.8 minimum 24
+            // — 28 clears all three). A bare `.decorative` glyph in a
+            // borderless button renders ~16pt with no padded hit area.
             Button {
                 appState.isAddPropertySheetOpen = true
             } label: {
                 SlateSymbol.addProperty.decorative
-                    .frame(minWidth: 24, minHeight: 24)
+                    .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
@@ -216,7 +217,7 @@ struct NotePropertiesHeader: View {
                 appState.isBulkRenameSheetOpen = true
             } label: {
                 SlateSymbol.bulkRename.decorative
-                    .frame(minWidth: 24, minHeight: 24)
+                    .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
@@ -227,7 +228,7 @@ struct NotePropertiesHeader: View {
                 toggleSourceMode()
             } label: {
                 SlateSymbol.showSource.decorative
-                    .frame(minWidth: 24, minHeight: 24)
+                    .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
