@@ -2007,19 +2007,81 @@ impl From<core::EventErrorCode> for EventErrorCode {
     }
 }
 
-/// Session-level error events (O-2 #540) — the minimal `VaultEventListener`
-/// delivery: one method, one code for now. Invoked on a background
-/// worker thread; implementations must be cheap and non-blocking and
-/// marshal to their main actor themselves (the `ScanProgressListener`
-/// contract). `message` is user-facing copy and may name the vault
-/// path.
+/// One Slate-originated file mutation (#802). Mirrors
+/// `slate_core::FileChangeEvent`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FileChangeEvent {
+    pub kind: FileChangeKind,
+    /// Vault-relative. For `Renamed`, the NEW path.
+    pub path: String,
+    /// `Renamed` only: the path moved away from.
+    pub previous_path: Option<String>,
+}
+
+/// What happened to the file (#802). Additive-only — hosts must
+/// tolerate unknown kinds (the `EventErrorCode` convention).
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum FileChangeKind {
+    Created,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+impl From<core::FileChangeEvent> for FileChangeEvent {
+    fn from(e: core::FileChangeEvent) -> Self {
+        Self {
+            kind: match e.kind {
+                core::FileChangeKind::Created => FileChangeKind::Created,
+                core::FileChangeKind::Modified => FileChangeKind::Modified,
+                core::FileChangeKind::Deleted => FileChangeKind::Deleted,
+                core::FileChangeKind::Renamed => FileChangeKind::Renamed,
+            },
+            path: e.path,
+            previous_path: e.previous_path,
+        }
+    }
+}
+
+/// Index lifecycle phases (#802). Additive-only.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum IndexPhase {
+    ScanStarted,
+    ReconcileStarted,
+    ReconcileFinished,
+    ScanFinished,
+}
+
+impl From<core::IndexPhase> for IndexPhase {
+    fn from(p: core::IndexPhase) -> Self {
+        match p {
+            core::IndexPhase::ScanStarted => IndexPhase::ScanStarted,
+            core::IndexPhase::ReconcileStarted => IndexPhase::ReconcileStarted,
+            core::IndexPhase::ReconcileFinished => IndexPhase::ReconcileFinished,
+            core::IndexPhase::ScanFinished => IndexPhase::ScanFinished,
+        }
+    }
+}
+
+/// Session events: errors (O-2 #540) plus, since #802, file-change and
+/// index-phase deliveries. Invoked on a background worker thread — and
+/// the #802 methods may arrive with session locks held — so
+/// implementations must be cheap and non-blocking, marshal to their
+/// main actor themselves, and NEVER call session APIs synchronously
+/// from a callback (the `ScanProgressListener` contract). `message` is
+/// user-facing copy and may name the vault path.
+///
+/// The filesystem watcher is a stub: file-change events cover Slate's
+/// own write paths; external edits surface at the next scan.
 #[uniffi::export(with_foreign)]
 pub trait VaultEventListener: Send + Sync {
     fn on_error(&self, code: EventErrorCode, path: String, message: String);
+    fn on_file_change(&self, event: FileChangeEvent);
+    fn on_index_phase(&self, phase: IndexPhase, files_seen: u64);
 }
 
 /// Bridges core::VaultEventListener calls into the foreign-implemented
-/// uniffi trait, converting the code enum at the boundary.
+/// uniffi trait, converting payloads at the boundary.
 struct VaultEventListenerAdapter {
     foreign: Arc<dyn VaultEventListener>,
 }
@@ -2027,6 +2089,12 @@ struct VaultEventListenerAdapter {
 impl core::VaultEventListener for VaultEventListenerAdapter {
     fn on_error(&self, code: core::EventErrorCode, path: String, message: String) {
         self.foreign.on_error(code.into(), path, message);
+    }
+    fn on_file_change(&self, event: core::FileChangeEvent) {
+        self.foreign.on_file_change(event.into());
+    }
+    fn on_index_phase(&self, phase: core::IndexPhase, files_seen: u64) {
+        self.foreign.on_index_phase(phase.into(), files_seen);
     }
 }
 
