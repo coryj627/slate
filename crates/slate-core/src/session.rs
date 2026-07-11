@@ -2318,9 +2318,27 @@ impl VaultSession {
         // entry durable". Per-connection pragmas; the caller holds
         // the connection mutex, so nothing else sees the toggle.
         let stale_marker_rowid: Option<i64> = {
-            let _ = conn.pragma_update(None, "synchronous", "FULL");
+            // Checked transitions (round 4): a silent enter-FULL
+            // failure would commit the marker unfsynced while this
+            // comment claims power-cut ordering; a silent restore
+            // failure would leave the connection fsync-heavy forever.
+            // Enter failure degrades the guarantee to process-crash-
+            // only — logged, marker still written. Restore failure
+            // retries once, then warns: durability is unaffected,
+            // later writes just pay FULL until restart.
+            if let Err(e) = conn.pragma_update(None, "synchronous", "FULL") {
+                log::warn!(
+                    "oplog_events marker fsync mode unavailable; power-cut window not covered"
+                );
+                log::debug!("synchronous=FULL pragma failure detail: {e}");
+            }
             let inserted = conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", []);
-            let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+            if conn.pragma_update(None, "synchronous", "NORMAL").is_err()
+                && let Err(e) = conn.pragma_update(None, "synchronous", "NORMAL")
+            {
+                log::warn!("connection stuck in synchronous=FULL; writes stay durable but slower");
+                log::debug!("synchronous=NORMAL restore failure detail: {e}");
+            }
             match inserted {
                 Ok(_) => Some(conn.last_insert_rowid()),
                 Err(e) => {

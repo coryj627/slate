@@ -123,13 +123,14 @@ pub(crate) fn derive_events(
     events
 }
 
-/// Walk a whole log in order, deriving every entry's events with old
+/// Walk a whole log in order, deriving EVERY entry's events with old
 /// content reconstructed incrementally — the scan-time rebuild path.
 /// Ops are never "in hand" here: snapshot entries contribute class-1
 /// rows with NULL `deleted_text` (the spec's pinned snapshot-boundary
-/// difference from append-time population). Stops at the first entry
-/// whose prefix can't be replayed, matching the reader's clean-prefix
-/// rule; the prefix's events are still returned.
+/// difference from append-time population). An unreplayable entry
+/// poisons the running document until the next snapshot re-seeds it —
+/// rows keep deriving throughout, only the poisoned span's samples
+/// degrade to NULL (see the divergence note below).
 pub(crate) fn derive_events_for_log(entries: &[OpLogEntry]) -> Vec<DerivedEvent> {
     let mut events = Vec::new();
     // ONE running replay buffer advanced entry by entry — a per-prefix
@@ -137,6 +138,17 @@ pub(crate) fn derive_events_for_log(entries: &[OpLogEntry]) -> Vec<DerivedEvent>
     // anchor + thousands of batches re-replayed each step; measured in
     // whole seconds per hot log — adversarial round 3). The census
     // cross-validates this walker against per-prefix reconstruction.
+    //
+    // Divergence handling (round 4): a failed advance POISONS the
+    // buffer instead of stopping the walk. Every entry still derives
+    // its rows — append-time populated them, and rebuild ≡ append is
+    // the contract — but samples in the poisoned span degrade to NULL
+    // (old content unknown) until the next snapshot re-seeds. This
+    // matches `reconstruct_at_tail`'s semantics, where corruption
+    // before the last anchor is inert: a corrupt old batch here costs
+    // only that span's samples, never the later history. Span
+    // extraction against a captured old is bounds-checked (`str::get`),
+    // so a decodable-but-inapplicable batch cannot emit garbage.
     let mut buf: Option<crate::text_buffer::TextBuffer> = None;
     for entry in entries {
         // Materialize old content only for entries that can sample it
@@ -148,7 +160,7 @@ pub(crate) fn derive_events_for_log(entries: &[OpLogEntry]) -> Vec<DerivedEvent>
         };
         events.extend(derive_events(entry, None, old.as_deref()));
         if crate::oplog::replay_advance(&mut buf, entry).is_err() {
-            break; // clean-prefix rule: derive nothing past a divergence
+            buf = None; // resync at the next snapshot
         }
     }
     events
@@ -341,6 +353,92 @@ mod tests {
         assert!(sample.len() <= DELETED_TEXT_CAP_BYTES);
         assert!(sample.len() > DELETED_TEXT_CAP_BYTES - 4, "cap is tight");
         assert!(sample.chars().all(|c| c == '中'), "boundary-safe");
+    }
+
+    #[test]
+    fn corruption_before_a_later_anchor_is_inert() {
+        // Round 4: `reconstruct_at_tail` ignores corruption before the
+        // last snapshot; the walker must too. A corrupt old batch
+        // poisons SAMPLES until the next snapshot re-seeds — it must
+        // not stop the walk, omit later history, or clear rows that
+        // append-time populated.
+        let v0 = "alpha beta\n";
+        let v2 = "gamma REMOVED delta\n";
+        let v3 = "gamma delta\n";
+        let corrupt_batch = encode_edit_batch(&[crate::oplog::EditOp::Delete {
+            start: 10_000,
+            end: 10_005,
+        }]);
+        let entries = vec![
+            entry(OpKind::WholeFileReplace, "", v0, v0.as_bytes().to_vec()),
+            // Decodes fine, cannot apply (offsets past the end).
+            entry(OpKind::EditBatch, v0, "poisoned", corrupt_batch),
+            // A later valid anchor re-seeds the walk.
+            entry(
+                OpKind::WholeFileReplace,
+                "poisoned",
+                v2,
+                v2.as_bytes().to_vec(),
+            ),
+            entry(
+                OpKind::EditBatch,
+                v2,
+                v3,
+                encode_edit_batch(&crate::diff::diff_to_ops(v2, v3)),
+            ),
+        ];
+        let events = derive_events_for_log(&entries);
+        assert_eq!(events.len(), 4, "every content change emits its row");
+        // The corrupt entry's extraction is bounds-checked: out-of-
+        // range spans contribute nothing, never garbage.
+        assert_eq!(events[1].deleted_text.as_deref(), Some(""));
+        // The post-resync batch samples fully — the later history is
+        // NOT lost to the old corruption.
+        assert!(
+            events[3]
+                .deleted_text
+                .as_deref()
+                .unwrap()
+                .contains("REMOVED"),
+            "resynced span: {:?}",
+            events[3].deleted_text
+        );
+    }
+
+    #[test]
+    fn corruption_poisons_samples_until_resync_not_the_walk() {
+        // No later anchor: rows keep deriving after the corruption,
+        // but their samples are NULL — the running document is
+        // unknown, and honesty beats guessing.
+        let v0 = "keep WIPED keep\n";
+        let v1 = "keep keep\n";
+        let corrupt_batch = encode_edit_batch(&[crate::oplog::EditOp::Delete {
+            start: 10_000,
+            end: 10_005,
+        }]);
+        let entries = vec![
+            entry(OpKind::WholeFileReplace, "", v0, v0.as_bytes().to_vec()),
+            entry(
+                OpKind::EditBatch,
+                v0,
+                v1,
+                encode_edit_batch(&crate::diff::diff_to_ops(v0, v1)),
+            ),
+            entry(OpKind::EditBatch, v1, "poisoned", corrupt_batch),
+            entry(
+                OpKind::EditBatch,
+                "poisoned",
+                "later",
+                encode_edit_batch(&crate::diff::diff_to_ops(v1, v0)),
+            ),
+        ];
+        let events = derive_events_for_log(&entries);
+        assert_eq!(events.len(), 4, "the walk continues past the corruption");
+        assert!(events[1].deleted_text.as_deref().unwrap().contains("WIPED"));
+        assert_eq!(
+            events[3].deleted_text, None,
+            "poisoned span degrades to NULL, never a wrong sample"
+        );
     }
 
     #[test]

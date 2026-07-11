@@ -437,6 +437,18 @@ fn successful_saves_leave_no_marker_residue() {
         1,
         "a successful save must not clear another save's marker"
     );
+
+    // The synchronous-mode toggle must not leak (round 4): after the
+    // save the connection is back on NORMAL (1), not FULL (2).
+    let mode: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(
+        mode, 1,
+        "synchronous restored to NORMAL after the marker commit"
+    );
 }
 
 #[test]
