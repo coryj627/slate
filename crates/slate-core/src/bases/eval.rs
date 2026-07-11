@@ -385,6 +385,23 @@ pub trait VaultLookup {
         })
     }
 
+    /// #800: ∃ a content-change event at or after `cutoff_ms` whose
+    /// sampled deleted_text matches `pattern` as a
+    /// Unicode-case-insensitive regex (see
+    /// [`build_deleted_content_regex`] for the bounds). Cold-cache
+    /// deletions sample NULL and never match — the same documented
+    /// sampling gap as the substring variant.
+    fn oplog_deleted_content_matches_regex(
+        &self,
+        _path: &str,
+        _pattern: &str,
+        _cutoff_ms: i64,
+    ) -> Result<bool, EvalError> {
+        Err(EvalError::FilterOnly {
+            function: "oplog.deleted_content_matches_regex".to_string(),
+        })
+    }
+
     /// `oplog.created_since` (#801). FilterOnly by default.
     fn oplog_created_since(&self, _path: &str, _cutoff_ms: i64) -> Result<bool, EvalError> {
         Err(EvalError::FilterOnly {
@@ -1872,6 +1889,32 @@ fn eval_method(
             let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
             ctx.vault
                 .oplog_deleted_content_matches(&ctx.file.file_path, &pattern, cutoff_ms)
+                .map(Value::Bool)
+        }
+        MethodName::OplogDeletedContentMatchesRegex => {
+            expect_arity("oplog.deleted_content_matches_regex", args.len(), 2, 2)?;
+            if !ctx.filter_position {
+                return Err(EvalError::FilterOnly {
+                    function: "oplog.deleted_content_matches_regex".to_string(),
+                });
+            }
+            let pattern = expect_text("oplog.deleted_content_matches_regex", &args[0])?;
+            let duration = expect_text("oplog.deleted_content_matches_regex", &args[1])?;
+            let window_ms =
+                crate::bases::engine::parse_operator_duration(&duration).ok_or_else(|| {
+                    invalid_arg(
+                        "oplog.deleted_content_matches_regex",
+                        "duration must match ^([1-9][0-9]*)(h|d|w)$ and fit the supported range (e.g. \"7d\")",
+                    )
+                })?;
+            // No compile here: the eval arm runs once per candidate
+            // row, so compiling (even to validate) would cost
+            // O(rows) x compile. The lookup compiles through its
+            // per-query memo BEFORE any event short-circuit, so a bad
+            // pattern still surfaces as the same in-band error.
+            let cutoff_ms = ctx.now_ms.saturating_sub(window_ms);
+            ctx.vault
+                .oplog_deleted_content_matches_regex(&ctx.file.file_path, &pattern, cutoff_ms)
                 .map(Value::Bool)
         }
         MethodName::OplogCreatedSince => {
@@ -4353,6 +4396,40 @@ fn expect_arity(
         expected,
         got,
     })
+}
+
+/// #800: compile the pattern for `oplog.deleted_content_matches_regex`
+/// with bounded execution. The `regex` crate is linear-time by
+/// construction (no backtracking, so no catastrophic blowup on any
+/// input); the bounds cap the compiled artifacts instead: 1 MiB
+/// compiled program, 1 MiB lazy-DFA cache. `case_insensitive` applies
+/// Unicode simple case folding — the same folding family as the FTS
+/// unicode61 tokenizer, and the capability the LIKE-based substring
+/// variant (ASCII-only folding) cannot offer.
+pub(crate) fn build_deleted_content_regex(pattern: &str) -> Result<regex::Regex, String> {
+    #[cfg(test)]
+    {
+        let mut counts = regex_build_counts().lock().expect("build-count mutex");
+        *counts.entry(pattern.to_string()).or_insert(0) += 1;
+    }
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .size_limit(1 << 20)
+        .dfa_size_limit(1 << 20)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+/// Test seam: compilations per raw pattern, so a regression test can
+/// pin "one compile per query per distinct pattern" (the memo
+/// contract) with a test-unique pattern, race-free under the parallel
+/// test runner.
+#[cfg(test)]
+pub(crate) fn regex_build_counts()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, usize>> {
+    static COUNTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+        std::sync::OnceLock::new();
+    COUNTS.get_or_init(Default::default)
 }
 
 fn invalid_arg(function: impl Into<String>, message: impl ToString) -> EvalError {

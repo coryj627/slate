@@ -530,6 +530,7 @@ pub fn execute(
         source_path: ctx.this_path.as_deref().unwrap_or_default(),
         link_index: RefCell::new(None),
         link_resolutions: RefCell::new(BTreeMap::new()),
+        deleted_content_regexes: RefCell::new(BTreeMap::new()),
     };
     let mut resolved_query = None;
     if let QuerySource::Linked { from_path, depth } = &query.source
@@ -3408,6 +3409,7 @@ fn query_mentions_oplog_operator(query: &SlateQuery) -> bool {
                 MethodName::OplogHasChangeSince
                     | MethodName::OplogHasPropertyChange
                     | MethodName::OplogDeletedContentMatches
+                    | MethodName::OplogDeletedContentMatchesRegex
                     | MethodName::OplogCreatedSince
                     | MethodName::OplogUntouchedFor
             )
@@ -3566,6 +3568,10 @@ struct SqlVaultLookup<'a> {
     source_path: &'a str,
     link_index: RefCell<Option<crate::InMemoryVaultIndex>>,
     link_resolutions: RefCell<BTreeMap<(String, String), Option<String>>>,
+    /// #800: compiled patterns for `oplog.deleted_content_matches_regex`,
+    /// memoized per query — row-eval calls this once per candidate row
+    /// and must not recompile each time.
+    deleted_content_regexes: RefCell<BTreeMap<String, std::rc::Rc<regex::Regex>>>,
 }
 
 impl SqlVaultLookup<'_> {
@@ -3701,6 +3707,75 @@ impl VaultLookup for SqlVaultLookup<'_> {
             rusqlite::params![path, cutoff_ms, like_escape(pattern)],
             "oplog.deleted_content_matches",
         )
+    }
+
+    /// #800: regex over the sampled deletions. No SQL lowering exists
+    /// for a regex, so the rows (NULL samples excluded — the documented
+    /// sampling gap) stream through the compiled, memoized pattern in
+    /// Rust. Bounded by [`crate::bases::eval::build_deleted_content_regex`].
+    fn oplog_deleted_content_matches_regex(
+        &self,
+        path: &str,
+        pattern: &str,
+        cutoff_ms: i64,
+    ) -> Result<bool, EvalError> {
+        const FUNCTION: &str = "oplog.deleted_content_matches_regex";
+        let regex = {
+            let mut cache = self.deleted_content_regexes.borrow_mut();
+            match cache.get(pattern) {
+                Some(regex) => std::rc::Rc::clone(regex),
+                None => {
+                    let compiled = crate::bases::eval::build_deleted_content_regex(pattern)
+                        .map_err(|message| EvalError::InvalidArgument {
+                            function: FUNCTION.to_string(),
+                            message,
+                        })?;
+                    let compiled = std::rc::Rc::new(compiled);
+                    cache.insert(pattern.to_string(), std::rc::Rc::clone(&compiled));
+                    compiled
+                }
+            }
+        };
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT e.deleted_text FROM oplog_events e JOIN files f ON f.id = e.file_id
+                 WHERE f.path = ?1 AND e.event_class = 1 AND e.ts_ms >= ?2
+                   AND e.deleted_text IS NOT NULL",
+            )
+            .map_err(|error| EvalError::InvalidArgument {
+                function: FUNCTION.to_string(),
+                message: error.to_string(),
+            })?;
+        let mut rows = stmt
+            .query(rusqlite::params![path, cutoff_ms])
+            .map_err(|error| EvalError::InvalidArgument {
+                function: FUNCTION.to_string(),
+                message: error.to_string(),
+            })?;
+        loop {
+            if self.cancel.is_cancelled() {
+                return Err(EvalError::Cancelled);
+            }
+            let row = rows.next().map_err(|error| EvalError::InvalidArgument {
+                function: FUNCTION.to_string(),
+                message: error.to_string(),
+            })?;
+            let Some(row) = row else { return Ok(false) };
+            // Borrow the sampled text in place (Codoki on #843): a
+            // deletion sample runs up to 4 KiB and this loop visits
+            // every in-window row — no per-row String.
+            let deleted = row
+                .get_ref(0)
+                .and_then(|value| value.as_str().map_err(rusqlite::Error::from))
+                .map_err(|error| EvalError::InvalidArgument {
+                    function: FUNCTION.to_string(),
+                    message: error.to_string(),
+                })?;
+            if regex.is_match(deleted) {
+                return Ok(true);
+            }
+        }
     }
 
     fn oplog_created_since(&self, path: &str, cutoff_ms: i64) -> Result<bool, EvalError> {

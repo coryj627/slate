@@ -9425,6 +9425,7 @@ fn method_source(method: crate::bases::expr::MethodName) -> &'static str {
         MethodName::OplogHasChangeSince => "has_change_since",
         MethodName::OplogHasPropertyChange => "has_property_change",
         MethodName::OplogDeletedContentMatches => "deleted_content_matches",
+        MethodName::OplogDeletedContentMatchesRegex => "deleted_content_matches_regex",
         // Bare names: `expr_to_source` prints `receiver.method(args)`
         // and the receiver already serializes as `oplog` — a prefixed
         // name here would emit `oplog.oplog.created_since(...)`, which
