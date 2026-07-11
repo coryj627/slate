@@ -656,3 +656,71 @@ fn history_prefs_roundtrip_apply_live_and_survive_reopen() {
         "runtime config seeded from prefs"
     );
 }
+
+// --- Restore As… (#795) --------------------------------------------------
+
+#[test]
+fn recover_deleted_file_as_lands_at_the_chosen_path_with_history() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let r = session
+        .save_text("lost.md", &format!("{body}PHOENIX\n"), None)
+        .unwrap();
+    session
+        .save_text("lost.md", &body, Some(&r.new_content_hash))
+        .unwrap();
+    session.delete_file("lost.md").unwrap();
+    // Surface the remnant, THEN a squatter appears at the original
+    // path OUTSIDE the index (external write, no rescan) — the
+    // reachable occupied-destination case. (An INDEXED squatter
+    // quarantines the remnant at the next reconcile — never guess —
+    // so recovery wouldn't offer it at all.)
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let root = session.config.cache_dir.parent().unwrap().to_path_buf();
+    std::fs::write(root.join("lost.md"), b"squatter\n").unwrap();
+
+    // Original-path recovery refuses (no clobber)…
+    assert!(matches!(
+        session.recover_deleted_file("lost.md"),
+        Err(VaultError::DestinationExists { .. })
+    ));
+    assert_eq!(
+        std::fs::read_to_string(root.join("lost.md")).unwrap(),
+        "squatter\n",
+        "refusal wrote nothing"
+    );
+
+    // …and Restore As… lands at the chosen destination with the tail
+    // content, the squatter untouched.
+    session
+        .recover_deleted_file_as("lost.md", "recovered/lost (restored).md")
+        .unwrap();
+    assert_eq!(
+        session.read_text("recovered/lost (restored).md").unwrap(),
+        body
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("lost.md")).unwrap(),
+        "squatter\n"
+    );
+
+    // The remnant log re-bound to the NEW path: pre-delete history is
+    // paged there, and the remnant left the Deleted list.
+    let page = session
+        .list_versions("recovered/lost (restored).md", Paging::first(10))
+        .unwrap();
+    assert!(
+        page.items.len() >= 3,
+        "pre-delete versions + the recovery save: {}",
+        page.items.len()
+    );
+    let deleted = session.list_deleted_files(Paging::first(10)).unwrap();
+    assert!(deleted.items.iter().all(|e| e.path != "lost.md"));
+
+    // Unknown source path is a typed error.
+    assert!(matches!(
+        session.recover_deleted_file_as("nope.md", "anywhere.md"),
+        Err(VaultError::InvalidArgument { .. })
+    ));
+}

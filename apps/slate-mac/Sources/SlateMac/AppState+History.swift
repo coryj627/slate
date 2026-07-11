@@ -44,6 +44,23 @@ struct HistoryAlert: Identifiable, Equatable {
     let message: String
 }
 
+/// A pending "Restore As…" destination prompt (#795).
+struct RestoreAsPrompt: Identifiable, Equatable {
+    enum Source: Equatable {
+        /// Recover a deleted file's tail to a new path (the remnant
+        /// log re-binds — history follows the file).
+        case deletedFile(path: String)
+        /// Materialize one VERSION of a live note as a new file (a
+        /// copy; the original and its history are untouched).
+        case version(path: String, hash: String, formattedDate: String)
+    }
+
+    let id = UUID()
+    let source: Source
+    /// Pre-filled, collision-avoiding destination suggestion.
+    let suggestedPath: String
+}
+
 /// One compaction-failure event (the O-2 channel's Mac half). The
 /// message is the core's copy, presented verbatim.
 struct CompactionFailure: Identifiable, Equatable {
@@ -411,15 +428,103 @@ extension AppState {
             await loadFiles()
             await loadDeletedFiles()
         case .failure(.DestinationExists):
-            historyAlert = HistoryAlert(
-                title: "Can't restore",
-                message:
-                    "A file already exists at \(path). Rename or move it first, then restore."
-            )
+            // #795: offer Restore As… straight from the collision —
+            // the alert copy names the block, the prompt takes a new
+            // destination.
+            historyRestoreAsPrompt = RestoreAsPrompt(
+                source: .deletedFile(path: path),
+                suggestedPath: Self.restoredCopyPath(for: path))
         case .failure(let error):
             historyAlert = HistoryAlert(
                 title: "Can't restore", message: humanReadable(error))
         }
+    }
+
+    // MARK: - Restore As… (#795)
+
+    /// Version-row entry point: materialize `versionHash` of the
+    /// selected note as a new file.
+    func requestRestoreAs(versionHash: String, formattedDate: String) {
+        guard let path = selectedFilePath else { return }
+        historyRestoreAsPrompt = RestoreAsPrompt(
+            source: .version(path: path, hash: versionHash, formattedDate: formattedDate),
+            suggestedPath: Self.restoredCopyPath(for: path))
+    }
+
+    /// Confirmed Restore As…: write to `destination` through the
+    /// no-clobber machinery. Success announces, refreshes, and lands
+    /// selection (and thus focus) on the new file; a collision at the
+    /// CHOSEN destination re-raises the prompt with the standard copy
+    /// on the alert channel.
+    func performRestoreAs(_ prompt: RestoreAsPrompt, destination: String) async {
+        guard let session = currentSession else { return }
+        let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let result: Result<Void, VaultError> =
+            await Task.detached(priority: .userInitiated) {
+                do {
+                    switch prompt.source {
+                    case .deletedFile(let path):
+                        _ = try session.recoverDeletedFileAs(
+                            path: path, destination: trimmed)
+                    case .version(let path, let hash, _):
+                        // versionContent is integrity-verified — wrong
+                        // bytes are never served, so never written.
+                        let content = try session.versionContent(
+                            path: path, versionHash: hash)
+                        _ = try session.createExclusive(
+                            path: trimmed, content: content)
+                    }
+                    return .success(())
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }.value
+        guard currentSession === session else { return }
+
+        switch result {
+        case .success:
+            let sourceName: String
+            switch prompt.source {
+            case .deletedFile(let path): sourceName = filename(of: path)
+            case .version(_, _, let date): sourceName = "version from \(date)"
+            }
+            announcer.post(
+                "Restored \(sourceName) as \(filename(of: trimmed)).", priority: .high)
+            await loadFiles()
+            await loadDeletedFiles()
+            // Selection carries focus to the new file (the funnel).
+            selectedFilePath = trimmed
+        case .failure(.DestinationExists):
+            historyAlert = HistoryAlert(
+                title: "Can't restore",
+                message:
+                    "A file already exists at \(trimmed). Choose a different name.")
+            historyRestoreAsPrompt = prompt
+        case .failure(let error):
+            historyAlert = HistoryAlert(
+                title: "Can't restore", message: humanReadable(error))
+        }
+    }
+
+    /// Collision-avoiding "<stem> (restored).md" suggestion against
+    /// the indexed file set (pure over the published list; the
+    /// no-clobber write still guards the race).
+    static func restoredCopyPath(for path: String, existing: Set<String>? = nil)
+        -> String
+    {
+        let ns = path as NSString
+        let ext = ns.pathExtension.isEmpty ? "md" : ns.pathExtension
+        let stem = ns.deletingPathExtension
+        var candidate = "\(stem) (restored).\(ext)"
+        var counter = 2
+        while existing?.contains(candidate) == true {
+            candidate = "\(stem) (restored \(counter)).\(ext)"
+            counter += 1
+        }
+        return candidate
     }
 
     // MARK: - Settings bridge

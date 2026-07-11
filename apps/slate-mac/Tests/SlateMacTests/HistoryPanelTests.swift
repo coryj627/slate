@@ -518,16 +518,20 @@ final class HistoryPanelTests: XCTestCase {
         XCTAssertEqual(try session.readText(path: "gone.md"), "recover me\n")
         XCTAssertTrue(state.deletedFiles.isEmpty, "list refreshed")
 
-        // Collision: delete again, recreate at the path, then recover.
+        // Collision: delete again, recreate at the path, then recover —
+        // since #795 the collision raises the Restore As… prompt
+        // instead of a dead-end alert.
         try session.deleteFile(path: "gone.md")
         _ = try session.scanInitial(cancel: CancelToken())
         _ = try session.saveText(
             path: "gone.md", contents: "squatter\n", expectedContentHash: nil)
         await state.recoverDeleted(path: "gone.md")
         XCTAssertEqual(
-            state.historyAlert?.message,
-            "A file already exists at gone.md. Rename or move it first, then restore."
-        )
+            state.historyRestoreAsPrompt?.source, .deletedFile(path: "gone.md"))
+        XCTAssertEqual(
+            state.historyRestoreAsPrompt?.suggestedPath, "gone (restored).md")
+        XCTAssertEqual(
+            try session.readText(path: "gone.md"), "squatter\n", "nothing written")
     }
 
     // MARK: - Compaction-error channel
@@ -793,8 +797,13 @@ final class HistoryPanelTests: XCTestCase {
                 "This version can't be restored: its history failed an integrity check."
             ), "the pinned integrity copy")
         XCTAssertTrue(
-            plumbing.contains("Rename or move it first, then restore."),
-            "the pinned DestinationExists copy")
+            plumbing.contains("Choose a different name."),
+            "the pinned chosen-destination collision copy")
+        // The occupied-ORIGINAL collision now raises the Restore As…
+        // prompt (#795); its copy lives in the panel.
+        XCTAssertTrue(
+            source.contains("Restore the deleted file to a different location."),
+            "the pinned Restore As… prompt copy")
     }
 
     /// Settings reseed (adversarial round 1 Medium): the History tab
@@ -851,5 +860,143 @@ final class HistoryPanelTests: XCTestCase {
             now: Date(timeIntervalSince1970: Double(ms) / 1000))
         XCTAssertTrue(relative.contains("hour"), "relative: \(relative)")
         XCTAssertEqual(HistoryPanel.formattedSize(bytes: 0), "Zero KB")
+    }
+}
+
+// MARK: - Restore As… (#795)
+
+extension HistoryPanelTests {
+    func testOccupiedRecoveryRaisesRestoreAsPromptAndCompletes() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, vaultDir) = try await openVault(announcer: announcer)
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let body = (0..<12).map { "keep line \($0)\n" }.joined()
+        let r = try session.saveText(
+            path: "lost.md", contents: body + "PHOENIX\n", expectedContentHash: nil)
+        _ = try session.saveText(
+            path: "lost.md", contents: body, expectedContentHash: r.newContentHash)
+        try session.deleteFile(path: "lost.md")
+        // Surface the remnant, THEN the squatter appears OUTSIDE the
+        // index (external write, no rescan) — the reachable occupied-
+        // destination case. An INDEXED squatter quarantines the
+        // remnant at reconcile (never guess), so recovery wouldn't
+        // list the file at all.
+        _ = try session.scanInitial(cancel: CancelToken())
+        try "squatter\n".write(
+            to: vaultDir.appendingPathComponent("lost.md"),
+            atomically: true, encoding: .utf8)
+
+        await state.recoverDeleted(path: "lost.md")
+        // The collision raises the destination prompt, not a dead-end
+        // alert.
+        XCTAssertNil(state.historyAlert)
+        guard let prompt = state.historyRestoreAsPrompt else {
+            return XCTFail("expected the Restore As… prompt")
+        }
+        XCTAssertEqual(prompt.source, .deletedFile(path: "lost.md"))
+        XCTAssertEqual(prompt.suggestedPath, "lost (restored).md")
+
+        state.historyRestoreAsPrompt = nil
+        await state.performRestoreAs(prompt, destination: "lost-restored.md")
+        XCTAssertEqual(try session.readText(path: "lost-restored.md"), body)
+        XCTAssertEqual(
+            try String(
+                contentsOf: vaultDir.appendingPathComponent("lost.md"),
+                encoding: .utf8),
+            "squatter\n",
+            "the squatter is untouched")
+        XCTAssertTrue(
+            announcer.posts.contains {
+                $0.message == "Restored lost.md as lost-restored.md."
+                    && $0.priority == .high
+            }, "posts: \(announcer.posts)")
+        XCTAssertEqual(
+            state.selectedFilePath, "lost-restored.md",
+            "selection (and focus) land on the new file")
+        XCTAssertTrue(
+            state.deletedFiles.allSatisfy { $0.path != "lost.md" },
+            "the remnant left the Deleted list")
+        // History followed the file to its new path.
+        let page = try session.listVersions(
+            path: "lost-restored.md", paging: Paging(cursor: nil, limit: 10))
+        XCTAssertGreaterThanOrEqual(page.items.count, 3)
+    }
+
+    func testVersionRestoreAsMaterializesACopy() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer) {
+            try self.write("v1 content\n", to: $0, name: "n.md")
+        }
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let r = try session.saveText(
+            path: "n.md", contents: "v1 content\n", expectedContentHash: nil)
+        _ = try session.saveText(
+            path: "n.md", contents: "v2 content\n",
+            expectedContentHash: r.newContentHash)
+
+        state.selectedFilePath = "n.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+
+        state.requestRestoreAs(
+            versionHash: r.newContentHash, formattedDate: "test date")
+        guard let prompt = state.historyRestoreAsPrompt else {
+            return XCTFail("expected the prompt")
+        }
+        XCTAssertEqual(
+            prompt.source,
+            .version(path: "n.md", hash: r.newContentHash, formattedDate: "test date"))
+        state.historyRestoreAsPrompt = nil
+        await state.performRestoreAs(prompt, destination: "n copy.md")
+
+        XCTAssertEqual(try session.readText(path: "n copy.md"), "v1 content\n")
+        XCTAssertEqual(
+            try session.readText(path: "n.md"), "v2 content\n",
+            "the original is untouched")
+        XCTAssertTrue(
+            announcer.posts.contains {
+                $0.message == "Restored version from test date as n copy.md."
+            }, "posts: \(announcer.posts)")
+    }
+
+    func testRestoreAsCollisionReRaisesThePrompt() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer)
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        _ = try session.saveText(
+            path: "gone.md", contents: "recover me\n", expectedContentHash: nil)
+        try session.deleteFile(path: "gone.md")
+        _ = try session.saveText(
+            path: "taken.md", contents: "occupied\n", expectedContentHash: nil)
+        _ = try session.scanInitial(cancel: CancelToken())
+
+        let prompt = RestoreAsPrompt(
+            source: .deletedFile(path: "gone.md"), suggestedPath: "gone (restored).md")
+        await state.performRestoreAs(prompt, destination: "taken.md")
+        XCTAssertEqual(
+            state.historyAlert?.message,
+            "A file already exists at taken.md. Choose a different name.")
+        XCTAssertNotNil(
+            state.historyRestoreAsPrompt, "the prompt re-raises for another try")
+        XCTAssertEqual(
+            try session.readText(path: "taken.md"), "occupied\n", "nothing written")
+    }
+
+    func testRestoredCopyPathSuggestions() {
+        XCTAssertEqual(
+            AppState.restoredCopyPath(for: "notes/n.md"), "notes/n (restored).md")
+        XCTAssertEqual(
+            AppState.restoredCopyPath(
+                for: "n.md", existing: ["n (restored).md", "n (restored 2).md"]),
+            "n (restored 3).md")
+        XCTAssertEqual(
+            AppState.restoredCopyPath(for: "diagram.canvas"),
+            "diagram (restored).canvas")
     }
 }
