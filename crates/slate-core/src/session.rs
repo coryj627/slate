@@ -2282,7 +2282,9 @@ impl VaultSession {
                 size_bytes     = excluded.size_bytes,
                 mtime_ms       = excluded.mtime_ms,
                 ctime_ms       = excluded.ctime_ms,
-                birthtime_ms   = excluded.birthtime_ms,
+                birthtime_ms   = CASE WHEN excluded.birthtime_ms != 0
+                                      THEN excluded.birthtime_ms
+                                      ELSE files.birthtime_ms END,
                 content_hash   = excluded.content_hash,
                 parser_version = excluded.parser_version,
                 indexed_at_ms  = excluded.indexed_at_ms,
@@ -5230,12 +5232,20 @@ fn index_file(
             //      ctime → Windows without, or a future runtime that
             //      drops ctime support) must not clobber a known-good
             //      ctime_ms with a 0 sentinel from the current stat.
+            //   3. (#801) birthtime follows the same two rules:
+            //      migration-030 rows carry 0 until this back-fill
+            //      copies the filesystem birth in — WITHOUT it,
+            //      `created_since` silently omits every unchanged
+            //      pre-upgrade file forever (adversarial review) —
+            //      and a 0 sentinel from a platform that stops
+            //      reporting birth must not clobber a known value.
             tx.execute(
                 "UPDATE files SET
                     indexed_at_ms = ?1,
-                    ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END
+                    ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END,
+                    birthtime_ms = CASE WHEN ?4 != 0 THEN ?4 ELSE birthtime_ms END
                  WHERE path = ?3",
-                rusqlite::params![now, stat.ctime_ms, path],
+                rusqlite::params![now, stat.ctime_ms, path, stat.birthtime_ms],
             )?;
             report.files_skipped += 1;
             return Ok(());
@@ -5278,7 +5288,9 @@ fn index_file(
                 size_bytes     = excluded.size_bytes,
                 mtime_ms       = excluded.mtime_ms,
                 ctime_ms       = excluded.ctime_ms,
-                birthtime_ms   = excluded.birthtime_ms,
+                birthtime_ms   = CASE WHEN excluded.birthtime_ms != 0
+                                      THEN excluded.birthtime_ms
+                                      ELSE files.birthtime_ms END,
                 content_hash   = excluded.content_hash,
                 parser_version = excluded.parser_version,
                 indexed_at_ms  = excluded.indexed_at_ms,
@@ -5344,7 +5356,9 @@ fn index_file(
             size_bytes     = excluded.size_bytes,
             mtime_ms       = excluded.mtime_ms,
             ctime_ms       = excluded.ctime_ms,
-            birthtime_ms   = excluded.birthtime_ms,
+            birthtime_ms   = CASE WHEN excluded.birthtime_ms != 0
+                                  THEN excluded.birthtime_ms
+                                  ELSE files.birthtime_ms END,
             content_hash   = excluded.content_hash,
             parser_version = excluded.parser_version,
             indexed_at_ms  = excluded.indexed_at_ms,
