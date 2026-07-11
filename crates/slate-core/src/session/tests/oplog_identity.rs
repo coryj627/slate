@@ -441,6 +441,41 @@ fn content_salvage_binds_unique_match_and_refuses_ambiguous() {
 }
 
 #[test]
+fn content_salvage_is_rebuild_only_never_on_an_intact_cache() {
+    // The template-twin hazard: on an INTACT cache, delete a note,
+    // then create a different note with byte-identical content
+    // (scan-indexed, never saved). Content salvage must NOT attach the
+    // dead note's history to it — the log stays a remnant.
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        session
+            .save_text("original.md", "template body\n", None)
+            .unwrap();
+        session.delete_file("original.md").unwrap();
+    }
+    // Second open: the cache EXISTS (intact), so salvage is gated off.
+    std::fs::write(tmp.path().join("twin.md"), b"template body\n").unwrap();
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(
+        oplog_name_of(&session, "twin.md"),
+        None,
+        "an intact cache must never content-salvage a dead note's log \
+         onto a byte-identical newcomer"
+    );
+    assert!(
+        session
+            .remnant_logs()
+            .iter()
+            .any(|r| r.effective_path == "original.md"),
+        "the dead note's log must surface as a deleted-file remnant instead"
+    );
+}
+
+#[test]
 fn bare_v1_orphan_after_rebuild_is_quarantined() {
     // A v1 log with no header path, no marker, and no content match:
     // nothing safe to do → invisible (quarantine), never guessed.

@@ -585,6 +585,9 @@ pub struct VaultSession {
     /// (O-1 #539). O-3's deleted-file recovery reads this; O-2's
     /// retention sweep ages entries out on disk.
     remnant_logs: Mutex<Vec<RemnantLog>>,
+    /// True when this open created the cache database (fresh vault or
+    /// rebuild). Gates the reconcile's content salvage — see `open`.
+    cache_created_this_open: bool,
 }
 
 /// A deleted file's surviving op log, discovered by the scan reconcile
@@ -661,6 +664,15 @@ impl VaultSession {
         let db_path = config.cache_dir.join("cache.sqlite");
 
         let mut conn = db::open_database(&db_path, config.max_db_cache_pages)?;
+        // Whether this open CREATED the cache (schema version 0 before
+        // migrating) — i.e. a brand-new vault or a deleted/rebuilt
+        // cache.sqlite. The oplog reconcile's content salvage is gated
+        // on this: on an intact cache an unbound live file is a file
+        // that was never saved through Slate, and attaching any
+        // existing log to it by content coincidence (two notes from
+        // one template!) would be exactly the cross-attach O-1 exists
+        // to prevent. Only a rebuild legitimately orphans bindings.
+        let cache_created_this_open = db::current_version(&conn)? == 0;
         db::migrate(&mut conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
@@ -682,6 +694,7 @@ impl VaultSession {
             oplog_state: Mutex::new(std::collections::HashMap::new()),
             next_oplog_stem_salt: AtomicU64::new(0),
             remnant_logs: Mutex::new(Vec::new()),
+            cache_created_this_open,
             math_prefs,
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
@@ -841,9 +854,12 @@ impl VaultSession {
     ///    after a rebuild).
     /// 3. Adoption: effective path names a live file with
     ///    `oplog_name IS NULL` → claim; no path match → content
-    ///    salvage (exactly ONE unbound live file whose current
-    ///    `content_hash` appears in the log's `hash_after` set → claim;
-    ///    zero or several → no adoption).
+    ///    salvage, but ONLY when this open created the cache (rebuild
+    ///    — the case that legitimately orphans bindings): exactly ONE
+    ///    unbound live file whose current `content_hash` appears in
+    ///    the log's `hash_after` set → claim; zero or several → no
+    ///    adoption. On an intact cache, content coincidence must
+    ///    never re-bind a dead note's log (the template-twin hazard).
     /// 4. Unbound + effective path known + that path is not a live
     ///    file → **deleted-file remnant** ([`RemnantLog`]).
     /// 5. Anything conflicted (two logs claiming one file, a claimed
@@ -856,8 +872,10 @@ impl VaultSession {
             }
             Err(e) => {
                 // Leave the previous remnant set in place — stale data
-                // beats a silently emptied Deleted list.
-                log::warn!("oplog reconcile failed: {e:#?}");
+                // beats a silently emptied Deleted list. The warn stays
+                // path-free (lib.rs privacy rule); detail rides debug.
+                log::warn!("oplog reconcile failed");
+                log::debug!("oplog reconcile failure detail: {e:?}");
             }
         }
     }
@@ -965,18 +983,26 @@ impl VaultSession {
                 continue;
             }
 
-            // Content salvage (cache-rebuild case): exactly one unbound
-            // live file whose current hash this log once produced.
-            let hash_set: std::collections::HashSet<&str> = entries
-                .iter()
-                .map(|e| e.content_hash_after.as_str())
-                .collect();
-            let mut matches = live
-                .iter()
-                .filter(|f| f.oplog_name.is_none() && hash_set.contains(f.content_hash.as_str()));
-            if let (Some(only), None) = (matches.next(), matches.next()) {
-                claims.push((stem.clone(), only.id));
-                continue;
+            // Content salvage — REBUILD-ONLY (red-team hardening over
+            // the spec text): on an intact cache an unbound live file
+            // was never saved through Slate, so a content coincidence
+            // (two notes created from one template) must not attach a
+            // dead note's history to it. Only a rebuild legitimately
+            // orphans bindings; there, exactly one unbound live file
+            // whose current hash this log once produced is safe to
+            // re-bind.
+            if self.cache_created_this_open {
+                let hash_set: std::collections::HashSet<&str> = entries
+                    .iter()
+                    .map(|e| e.content_hash_after.as_str())
+                    .collect();
+                let mut matches = live.iter().filter(|f| {
+                    f.oplog_name.is_none() && hash_set.contains(f.content_hash.as_str())
+                });
+                if let (Some(only), None) = (matches.next(), matches.next()) {
+                    claims.push((stem.clone(), only.id));
+                    continue;
+                }
             }
 
             // Remnant (deleted file) or quarantine.
@@ -5191,6 +5217,12 @@ impl VaultSession {
     /// when the file has no log or the log is empty: there is no
     /// history to re-path.
     ///
+    /// The tail read + marker append are ONE atomic op-log operation
+    /// under the per-log file lock
+    /// ([`crate::oplog::append_path_changed_marker`]) — a
+    /// session-cached tail or an unlocked read could race a concurrent
+    /// writer (another process: the `slate` CLI) and stamp a stale
+    /// hash, breaking the identity axiom (adversarial-review finding).
     /// The in-memory append state is left untouched: the tail hash is
     /// unchanged by construction, so the next save still chains (the
     /// ~100 marker bytes are deliberately not counted into the
@@ -5210,50 +5242,14 @@ impl VaultSession {
             return; // unindexed, or never saved through Slate — no log
         };
 
-        // Tail hash: the in-memory append state when this session has
-        // written to the log; otherwise one forward read (moves are
-        // rare next to saves — acceptable).
-        let cached_tail = {
-            let state = self.oplog_state.lock().expect("oplog state mutex");
-            state.get(&file_id).map(|s| s.last_hash_after.clone())
-        };
-        let tail_hash = match cached_tail {
-            Some(h) => h,
-            None => {
-                match crate::oplog::read_oplog(&self.config.cache_dir, &log_name) {
-                    Ok(entries) => match entries.last() {
-                        Some(e) => e.content_hash_after.clone(),
-                        None => return, // empty log — nothing to re-path
-                    },
-                    Err(e) => {
-                        log::warn!(
-                            "oplog marker tail read failed for file_id={file_id}: {}",
-                            e.kind()
-                        );
-                        log::debug!("oplog marker tail read failure for path {to:?}: {e}");
-                        return;
-                    }
-                }
-            }
-        };
-
-        let payload = crate::oplog::encode_annotated(
-            crate::oplog::OpKind::EditBatch,
-            &crate::oplog::encode_edit_batch(&[]),
-            &[crate::oplog::OpAnnotation::PathChanged {
-                from: from.to_string(),
-                to: to.to_string(),
-            }],
-        );
-        let entry = crate::oplog::OpLogEntry {
-            timestamp_ms: now_ms(),
-            user_actor_id: self.config.user_actor_id.clone(),
-            op_kind: crate::oplog::OpKind::Annotated,
-            content_hash_before: tail_hash.clone(),
-            content_hash_after: tail_hash,
-            payload_bytes: payload,
-        };
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, &log_name, to, &entry) {
+        if let Err(e) = crate::oplog::append_path_changed_marker(
+            &self.config.cache_dir,
+            &log_name,
+            from,
+            to,
+            &self.config.user_actor_id,
+            now_ms(),
+        ) {
             log::warn!(
                 "oplog path marker append failed for file_id={file_id}: {}",
                 e.kind()

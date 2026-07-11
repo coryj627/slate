@@ -703,13 +703,6 @@ pub fn oplog_path_for_name(cache_dir: &Path, log_name: &str) -> PathBuf {
     oplog_dir(cache_dir).join(format!("{log_name}.oplog"))
 }
 
-/// The historical (pre-O-1) name stem for a file id. Used only for
-/// migration-027 stamping and tests that pin the legacy layout — new
-/// logs never get id-derived names.
-pub fn legacy_log_name(file_id: i64) -> String {
-    file_id.to_string()
-}
-
 /// The serialized v2 header block (fixed header + path record +
 /// generation) for a fresh log.
 fn v2_header_block(created_path: &str, generation: u32) -> Vec<u8> {
@@ -893,10 +886,6 @@ pub fn append_entry(
         read_header(&mut file, &path)?;
     }
 
-    let body = serialize_body(entry);
-    let body_len = body.len() as u32;
-    let checksum = body_checksum(&body);
-
     // Assemble the entire framed record in memory and write it with a
     // single syscall. Under O_APPEND, the kernel is responsible for
     // making each write append atomically; using one write() (rather
@@ -904,10 +893,7 @@ pub fn append_entry(
     // concurrent writers up to the OS's atomic-append guarantee. The
     // exclusive lock above is the load-bearing serializer; this
     // single-syscall pattern is belt-and-braces.
-    let mut framed = Vec::with_capacity(4 + body.len() + 4);
-    framed.extend_from_slice(&body_len.to_le_bytes());
-    framed.extend_from_slice(&body);
-    framed.extend_from_slice(&checksum.to_le_bytes());
+    let framed = frame_entry(entry);
     file.write_all(&framed)?;
     file.sync_data()?;
     // Arithmetic, not a second stat: the exclusive lock guarantees no
@@ -929,6 +915,81 @@ pub fn append_entry(
         let _ = fsync_dir(&dir);
     }
     Ok(post_append_len)
+}
+
+/// The on-disk frame for one entry: `body_len | body | body_checksum`.
+fn frame_entry(entry: &OpLogEntry) -> Vec<u8> {
+    let body = serialize_body(entry);
+    let mut framed = Vec::with_capacity(4 + body.len() + 4);
+    framed.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    framed.extend_from_slice(&body);
+    framed.extend_from_slice(&body_checksum(&body).to_le_bytes());
+    framed
+}
+
+/// Atomically append a pure `PathChanged` marker (O-1 #539): the tail
+/// read and the marker append happen under ONE exclusive file lock, so
+/// no concurrent writer — this process or another (the `slate` CLI) —
+/// can slip an entry between "observe the tail hash" and "append the
+/// marker carrying it". Without that atomicity the marker could land
+/// after a newer entry while carrying an older tail hash, and its
+/// prefix reconstruction would no longer hash to its `hash_after` —
+/// the identity-axiom violation the marker hash rule exists to
+/// prevent.
+///
+/// Returns `Ok(None)` — no marker written — when the log is missing or
+/// has no clean entries (there is no history to re-path);
+/// `Ok(Some(post_append_len))` on success. A torn trailing entry is
+/// tolerated exactly as saves tolerate it: the marker chains onto the
+/// clean prefix's tail (it lands after the torn bytes and stays
+/// invisible to readers until compaction heals the log — the same
+/// degradation every post-torn append shares).
+pub fn append_path_changed_marker(
+    cache_dir: &Path,
+    log_name: &str,
+    from: &str,
+    to: &str,
+    user_actor_id: &str,
+    timestamp_ms: i64,
+) -> io::Result<Option<u64>> {
+    let path = oplog_path_for_name(cache_dir, log_name);
+    let mut file = match OpenOptions::new().read(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    file.lock()?;
+
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(None); // header-less empty file — nothing to re-path
+    }
+    read_header(&mut file, &path)?;
+    let entries = read_entries_stream(&mut file, log_name, &path)?;
+    let Some(tail) = entries.last() else {
+        return Ok(None); // no entries — nothing to re-path
+    };
+    let tail_hash = tail.content_hash_after.clone();
+
+    let entry = OpLogEntry {
+        timestamp_ms,
+        user_actor_id: user_actor_id.to_string(),
+        op_kind: OpKind::Annotated,
+        content_hash_before: tail_hash.clone(),
+        content_hash_after: tail_hash,
+        payload_bytes: encode_annotated(
+            OpKind::EditBatch,
+            &encode_edit_batch(&[]),
+            &[OpAnnotation::PathChanged {
+                from: from.to_string(),
+                to: to.to_string(),
+            }],
+        ),
+    };
+    let framed = frame_entry(&entry);
+    file.write_all(&framed)?;
+    file.sync_data()?;
+    Ok(Some(len + framed.len() as u64))
 }
 
 /// Best-effort directory fsync. On Unix, opening the directory as a
@@ -998,14 +1059,26 @@ pub fn read_oplog_with_header(
         Some(h) => h,
         None => return Ok((empty_header(), Vec::new())),
     };
+    let entries = read_entries_stream(&mut file, log_name, &path)?;
+    Ok((header, entries))
+}
 
+/// Walk the entry stream of an already-header-validated open log,
+/// returning the clean prefix. Any torn/corrupt trailing material stops
+/// the walk (reported through the facade — see
+/// [`read_oplog_with_header`]'s degradation contract).
+fn read_entries_stream(
+    file: &mut fs::File,
+    log_name: &str,
+    path: &Path,
+) -> io::Result<Vec<OpLogEntry>> {
     let mut entries: Vec<OpLogEntry> = Vec::new();
     loop {
         let mut len_buf = [0u8; 4];
-        match read_fully(&mut file, &mut len_buf)? {
+        match read_fully(file, &mut len_buf)? {
             ReadOutcome::Eof => break,
             ReadOutcome::Partial => {
-                warn_torn_oplog(log_name, &path, "trailing torn body-length");
+                warn_torn_oplog(log_name, path, "trailing torn body-length");
                 break;
             }
             ReadOutcome::Full => {}
@@ -1014,44 +1087,44 @@ pub fn read_oplog_with_header(
         if body_len > MAX_PLAUSIBLE_BODY_LEN {
             warn_torn_oplog(
                 log_name,
-                &path,
+                path,
                 &format!("implausible body_len={body_len} (max {MAX_PLAUSIBLE_BODY_LEN})"),
             );
             break;
         }
 
         let mut body = vec![0u8; body_len];
-        match read_fully(&mut file, &mut body)? {
+        match read_fully(file, &mut body)? {
             ReadOutcome::Full => {}
             _ => {
-                warn_torn_oplog(log_name, &path, "trailing torn body");
+                warn_torn_oplog(log_name, path, "trailing torn body");
                 break;
             }
         }
 
         let mut sum_buf = [0u8; 4];
-        match read_fully(&mut file, &mut sum_buf)? {
+        match read_fully(file, &mut sum_buf)? {
             ReadOutcome::Full => {}
             _ => {
-                warn_torn_oplog(log_name, &path, "trailing missing checksum");
+                warn_torn_oplog(log_name, path, "trailing missing checksum");
                 break;
             }
         }
         let recorded = u32::from_le_bytes(sum_buf);
         if body_checksum(&body) != recorded {
-            warn_torn_oplog(log_name, &path, "checksum mismatch on trailing entry");
+            warn_torn_oplog(log_name, path, "checksum mismatch on trailing entry");
             break;
         }
 
         match parse_body(&body) {
             Ok(entry) => entries.push(entry),
             Err(e) => {
-                warn_torn_oplog(log_name, &path, &format!("malformed entry body ({e})"));
+                warn_torn_oplog(log_name, path, &format!("malformed entry body ({e})"));
                 break;
             }
         }
     }
-    Ok((header, entries))
+    Ok(entries)
 }
 
 /// Report a recoverable op-log truncation through the [`log`] facade
@@ -2121,6 +2194,94 @@ mod tests {
         let append_err =
             append_entry(tmp.path(), "torn", "note.md", &snapshot_entry("x")).unwrap_err();
         assert_eq!(append_err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn concurrent_appends_and_markers_preserve_identity_axiom() {
+        // Adversarial-review regression: the marker's tail read and its
+        // append must be ONE lock-held operation. If a concurrent
+        // writer could slip an entry between "observe tail" and
+        // "append marker", the marker would carry a stale hash and its
+        // prefix reconstruction would no longer hash to its own
+        // hash_after. Writers here append self-anchoring snapshots
+        // (their hash_after is their own payload's hash), so the axiom
+        // must hold for EVERY entry in any interleaving — a stale
+        // marker is the only way it can break.
+        use std::sync::Barrier;
+        const WRITERS: usize = 4;
+        const MARKERS: usize = 3;
+        const ROUNDS: usize = 12;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_path = tmp.path().to_path_buf();
+        assert!(try_create_log(&tmp_path, "raced", "race.md").unwrap());
+        append_entry(&tmp_path, "raced", "race.md", &snapshot_entry("seed\n")).unwrap();
+
+        let barrier = Arc::new(Barrier::new(WRITERS + MARKERS));
+        let mut handles = Vec::new();
+        for w in 0..WRITERS {
+            let p = tmp_path.clone();
+            let b = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                b.wait();
+                for r in 0..ROUNDS {
+                    let content = format!("writer {w} round {r}\n");
+                    let mut e = snapshot_entry(&content);
+                    e.timestamp_ms = (w * ROUNDS + r) as i64;
+                    append_entry(&p, "raced", "race.md", &e).unwrap();
+                }
+            }));
+        }
+        for m in 0..MARKERS {
+            let p = tmp_path.clone();
+            let b = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                b.wait();
+                for r in 0..ROUNDS {
+                    append_path_changed_marker(
+                        &p,
+                        "raced",
+                        "race.md",
+                        "race2.md",
+                        "marker",
+                        (m * ROUNDS + r) as i64,
+                    )
+                    .unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let entries = read_oplog(&tmp_path, "raced").unwrap();
+        assert_eq!(entries.len(), 1 + WRITERS * ROUNDS + MARKERS * ROUNDS);
+        for i in 0..entries.len() {
+            let prefix = reconstruct_at_tail(&entries[..=i]).unwrap();
+            assert_eq!(
+                content_hash(prefix.as_bytes()),
+                entries[i].content_hash_after,
+                "identity axiom broken at entry {i} (kind {:?})",
+                entries[i].op_kind
+            );
+        }
+    }
+
+    #[test]
+    fn marker_on_missing_or_empty_log_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Missing file → None.
+        assert_eq!(
+            append_path_changed_marker(tmp.path(), "ghost", "a.md", "b.md", "t", 1).unwrap(),
+            None
+        );
+        // Header-only log (no entries) → None.
+        assert!(try_create_log(tmp.path(), "hdr", "a.md").unwrap());
+        assert_eq!(
+            append_path_changed_marker(tmp.path(), "hdr", "a.md", "b.md", "t", 1).unwrap(),
+            None
+        );
+        assert!(read_oplog(tmp.path(), "hdr").unwrap().is_empty());
     }
 
     // --- Wire-format fixtures (checked in, not generated) -------------
