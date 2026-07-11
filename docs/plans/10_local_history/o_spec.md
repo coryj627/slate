@@ -735,4 +735,15 @@ consistency rule DoD §B; the three `diff*` roles cover add/remove/edit tinting.
   tester question #3.
 - Additional temporal operators (`oplog.created_since`, `oplog.untouched_for`) — file with O-6.
 - Broadening `VaultEventListener` toward the full `05` §4.4 sketch (file-change events, index
-  progress) — file with O-2 (`enhancement`).
+  progress) — file with O-2 (`enhancement`). The proposed image-OCR program (specs pending
+  filing as `docs/plans/19_image_ocr/`) is a named second consumer: it needs non-error events
+  (background OCR result committed → live accessibility-label refresh; quiet failure counts; GC
+  prompt triggers), and its mid-session external-replacement trigger is exactly §4.4's
+  file-change events. Keep the code enum + registration/dispatch additive so these arrive
+  without reshaping the O-2 channel — two parallel callback channels is the failure mode.
+- Image-OCR GC ↔ history retention alignment — the OCR program's destructive sidecar GC treats
+  O-5's retention window (`retention_days`) as the shared "recoverable past" horizon: orphaned
+  sidecars stay undeleted at least that long (a Slate-deleted image restored from the system
+  Trash re-validates its orphan by content hash). File with the OCR program when it lands;
+  noted here so O-5's settings copy frames retention as the vault-wide history horizon, not an
+  oplog-only knob.
