@@ -125,6 +125,17 @@ struct HistoryPanel: View {
                 restoreAsDestination = prompt.suggestedPath
             }
         }
+        // Per-note view state resets on EVERY selection transition,
+        // including → nil (vault close/switch). This observer must
+        // live on the always-mounted root: inside the selected-note
+        // subtree it unmounts with the selection, missing exactly the
+        // transition that carries stale state into the next vault
+        // (codex round 2 on #798).
+        .onChange(of: appState.selectedFilePath) { _, _ in
+            comparePositions = []
+            inlineDiff = nil
+            collapsedDayGroups = []
+        }
     }
 
     private var restoreAsPresented: Binding<Bool> {
@@ -191,15 +202,6 @@ struct HistoryPanel: View {
                 // Restore success: focus the new head row (position 0
                 // — the restored state; WCAG 2.4.3).
                 focusedVersion = 0
-            }
-            .onChange(of: appState.selectedFilePath) { _, _ in
-                comparePositions = []
-                inlineDiff = nil
-                // Collapse keys are day+position, which different
-                // notes reuse independently — carried state would open
-                // another note with matching groups already hidden
-                // (codex on #798).
-                collapsedDayGroups = []
             }
         }
     }

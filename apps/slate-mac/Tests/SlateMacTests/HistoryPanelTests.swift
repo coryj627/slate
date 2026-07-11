@@ -1172,25 +1172,41 @@ extension HistoryPanelTests {
         XCTAssertEqual(after.count, 3)
     }
 
-    /// Cross-note leak regression (codex on #798): collapse keys are
-    /// day+position, which different notes reuse independently — the
-    /// note-change handler must reset collapse state alongside compare
-    /// and inline-diff state. Inspection assert on the single handler,
-    /// the same style as the diff-rendering pin.
-    func testNoteSwitchResetsCollapseState() throws {
+    /// Cross-note/vault leak regression (codex rounds 1+2 on #798):
+    /// collapse keys are day+position, which different notes reuse
+    /// independently — so the selection observer must (a) reset all
+    /// three per-note view states and (b) live on the ALWAYS-MOUNTED
+    /// root, not inside the selected-note subtree, which unmounts on
+    /// selection → nil (vault close/switch) and would miss exactly the
+    /// transition that carries stale state into the next vault.
+    /// Inspection asserts, the established §7.3 style.
+    func testSelectionObserverResetsViewStateFromTheRoot() throws {
         let source = try historyPanelSource()
         let handlerRange = try XCTUnwrap(
             source.range(
                 of: #"\.onChange\(of: appState\.selectedFilePath\) \{[^}]*\}"#,
                 options: .regularExpression),
-            "the note-change handler exists")
+            "the selection observer exists")
         let handler = source[handlerRange]
+        for reset in ["collapsedDayGroups = []", "comparePositions = []", "inlineDiff = nil"] {
+            XCTAssertTrue(handler.contains(reset), "resets \(reset): \(handler)")
+        }
+        // Exactly one such observer…
+        XCTAssertNil(
+            source[handlerRange.upperBound...].range(
+                of: #"\.onChange\(of: appState\.selectedFilePath\)"#,
+                options: .regularExpression),
+            "a single selection observer")
+        // …and it lives in `body`'s root modifier chain (after the
+        // restore-as prompt observer, which is on the root), NOT in
+        // thisNoteSegment's conditional subtree.
+        let rootAnchor = try XCTUnwrap(
+            source.range(of: ".onChange(of: appState.historyRestoreAsPrompt)"))
+        let subtreeAnchor = try XCTUnwrap(
+            source.range(of: "private var thisNoteSegment: some View"))
         XCTAssertTrue(
-            handler.contains("collapsedDayGroups = []"),
-            "note switch clears collapse state: \(handler)")
-        XCTAssertTrue(
-            handler.contains("comparePositions = []")
-                && handler.contains("inlineDiff = nil"),
-            "…alongside the existing resets")
+            handlerRange.lowerBound > rootAnchor.lowerBound
+                && handlerRange.lowerBound < subtreeAnchor.lowerBound,
+            "observer sits on the always-mounted root")
     }
 }
