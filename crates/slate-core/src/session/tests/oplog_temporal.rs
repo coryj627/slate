@@ -1099,8 +1099,12 @@ fn census_temporal_operators_vs_reference() {
         // saves, touch-only anchors, and PathChanged markers. Document
         // versions chain so every batch replays.
         let now = now_ms();
+        // Offsets reach ~126 days — beyond the 90-day retention
+        // window — so the census exercises the #831 shared cutoff:
+        // the production rebuild must drop the beyond-window slice
+        // and the reference below drops it by the same rule.
         let mut ts_offsets: Vec<i64> = (0..1 + rng.below(6))
-            .map(|_| (rng.below(4032) as i64 + 1) * 15 * 60_000 + 5 * 60_000)
+            .map(|_| (rng.below(12096) as i64 + 1) * 15 * 60_000 + 5 * 60_000)
             .collect();
         ts_offsets.sort_unstable();
         ts_offsets.reverse(); // oldest first
@@ -1303,11 +1307,20 @@ fn census_temporal_operators_vs_reference() {
                 }
             }
         }
+        // #831: the shared retention rule, applied independently (the
+        // reference's own arithmetic, not the production function).
+        // The 15-min-grid + 5-min-offset discipline keeps every entry
+        // at least 5 minutes from the whole-day cutoff boundary, so
+        // clock drift between scripting and rebuilding cannot flip a
+        // row.
+        let retention_cutoff = now_ms() - 90 * DAY_MS;
+        rows.retain(|(ts, ..)| *ts > retention_cutoff);
         expected_rows.push((path.clone(), rows));
     }
 
     // The rebuilt table must agree with the reference row-for-row —
-    // the derivation half of the census.
+    // the derivation half of the census (including the #831 cutoff:
+    // beyond-window entries stay in the LOG but produce no rows).
     for (path, want) in &expected_rows {
         assert_eq!(&events_for(&session, path), want, "derived rows for {path}");
     }
@@ -2093,5 +2106,126 @@ fn regex_pattern_compiles_once_per_query() {
         counts.get(pattern).copied(),
         Some(1),
         "one compile per query per distinct pattern"
+    );
+}
+
+/// #831: `oplog_events` growth is bounded by the retention window
+/// under ONE shared rule. Producers (rebuild here) never write
+/// beyond-window rows; the scan-time age-out prunes rows that were
+/// legal when written (append-time rows that aged past the window, or
+/// pre-#831 leftovers); and after both, the table equals what a fresh
+/// rebuild regenerates — rebuild ≡ append-plus-age-out.
+#[test]
+fn event_rows_age_out_on_scan_and_rebuild_agrees() {
+    let (_tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let cache_dir = session.config.cache_dir.clone();
+
+    // Bind a log, then replace it wholesale with a constructed history:
+    // one entry far beyond the 90-day window, one within it.
+    session.save_text("n.md", "seed\n", None).unwrap();
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    std::fs::remove_file(crate::oplog::oplog_path_for_name(&cache_dir, &stem)).unwrap();
+    crate::oplog::try_create_log(&cache_dir, &stem, "n.md").unwrap();
+    let now = now_ms();
+    let old_doc = "ancient ANCIENTWORD\n".to_string();
+    let new_doc = "recent RECENTWORD\n".to_string();
+    let entries = vec![
+        crate::oplog::OpLogEntry {
+            timestamp_ms: now - 100 * DAY_MS,
+            user_actor_id: "t".into(),
+            op_kind: crate::OpKind::WholeFileReplace,
+            content_hash_before: crate::vault::content_hash(b"seed\n"),
+            content_hash_after: crate::vault::content_hash(old_doc.as_bytes()),
+            payload_bytes: old_doc.clone().into_bytes(),
+        },
+        crate::oplog::OpLogEntry {
+            timestamp_ms: now - DAY_MS,
+            user_actor_id: "t".into(),
+            op_kind: crate::OpKind::WholeFileReplace,
+            content_hash_before: crate::vault::content_hash(old_doc.as_bytes()),
+            content_hash_after: crate::vault::content_hash(new_doc.as_bytes()),
+            payload_bytes: new_doc.clone().into_bytes(),
+        },
+    ];
+    for entry in &entries {
+        crate::oplog::append_entry(&cache_dir, &stem, "n.md", entry).unwrap();
+    }
+
+    // Producer half: the forced rebuild derives from the full log but
+    // writes only the in-window row.
+    {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_if_stale(&mut conn, true);
+    }
+    let after_rebuild = events_for(&session, "n.md");
+    assert_eq!(after_rebuild.len(), 1, "beyond-window row never produced");
+    assert_eq!(after_rebuild[0].0, now - DAY_MS);
+
+    // Pruner half: an append-time row that has since aged past the
+    // window (simulated directly — exactly what a pre-#831 table
+    // holds). The next scan's age-out removes it.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
+             SELECT id, ?1, 1, NULL, 'stale sample' FROM files WHERE path = 'n.md'",
+            rusqlite::params![now - 95 * DAY_MS],
+        )
+        .unwrap();
+    }
+    assert_eq!(events_for(&session, "n.md").len(), 2, "leftover seeded");
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let after_scan = events_for(&session, "n.md");
+    assert_eq!(after_scan, after_rebuild, "age-out ≡ rebuild, row for row");
+
+    // Operators see exactly the retained window.
+    let (paths, _) = filter_paths(
+        &session,
+        r#"oplog.deleted_content_matches("ANCIENTWORD", "6w")"#,
+    );
+    assert_eq!(
+        paths,
+        Vec::<String>::new(),
+        "beyond-window deletion invisible"
+    );
+    let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("2d")"#);
+    assert_eq!(paths, vec!["n.md"], "in-window change visible");
+
+    // Retention shrink (the O-5 runtime setter): the next scan prunes
+    // to the new window and a rebuild agrees.
+    session.set_retention_days(30);
+    session.save_text("m.md", "other\n", None).unwrap(); // untouched control
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
+             SELECT id, ?1, 1, NULL, NULL FROM files WHERE path = 'n.md'",
+            rusqlite::params![now - 40 * DAY_MS],
+        )
+        .unwrap();
+    }
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        events_for(&session, "n.md"),
+        after_rebuild,
+        "shrunk window prunes the 40-day row"
+    );
+    {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_if_stale(&mut conn, true);
+    }
+    assert_eq!(
+        events_for(&session, "n.md"),
+        after_rebuild,
+        "rebuild under the shrunk window agrees"
     );
 }

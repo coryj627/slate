@@ -672,6 +672,19 @@ CREATE INDEX oplog_events_ts ON oplog_events (ts_ms);
 - Anchors and markers (`hash_before == hash_after`) produce no rows — this is the "excludes
   touch-only events" requirement (`05` §8.9) falling out of the hash rule.
 
+- Retention (#831, one shared rule): event rows are bounded by the SAME retention window that
+  folds the logs, applied by every producer and by a scan-time pruner. `insert_oplog_events`
+  drops rows with `ts <= now − retention` at every call site (append, rebuild, post-compaction
+  regen, deleted-file recovery repopulation — append-time rows are always fresh, so the filter
+  is a no-op there), and each scan `DELETE`s rows past the window. One rule keeps
+  rebuild ≡ append-plus-age-out: the table a rebuild regenerates from logs that still retain
+  older entries equals the table the pruner left behind. Consequences (normative): operator
+  verdicts are bounded by the retention window — a duration longer than retention sees at most
+  the retained events (matching the log-level fold); growing the window back regenerates rows
+  only where the logs still hold the entries (mark-stale ⇒ rebuild), best-effort by design.
+  Derivation always walks the FULL log (samples for in-window rows may need beyond-window
+  entries to reconstruct); the filter applies at insert, never by truncating the walk.
+
 Hardening (adversarial reviews, shipped with O-6 — strengthenings of the above, now normative):
 
 - `oplog_events.file_id REFERENCES files(id) ON DELETE CASCADE` (the `open_marks` precedent):
