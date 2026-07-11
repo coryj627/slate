@@ -798,6 +798,24 @@ fn regen_events_after_compaction(
     log_name: &str,
     marker_rowid: Option<i64>,
 ) -> Result<(), VaultError> {
+    // Hold the LOG's exclusive lock across read + transaction
+    // (milestone re-review High): without it, a save can append entry
+    // N+1 and commit its event row between our read and our
+    // DELETE+reinsert — erasing that row forever with every marker
+    // already cleared. Under the lock a concurrent save blocks at its
+    // own append (milliseconds) and its event insert lands strictly
+    // after this commit. Same lock-then-verify-inode protocol as the
+    // appenders and the compactor; a vanished log aborts (the marker
+    // stays, the scan heals).
+    let log_path = crate::oplog::oplog_path_for_name(cache_dir, log_name);
+    let _log_lock = crate::oplog::open_locked_verified(
+        &log_path,
+        std::fs::OpenOptions::new().read(true).write(true),
+    )
+    .map_err(VaultError::Io)?
+    .ok_or_else(|| VaultError::Trash {
+        message: "log vanished before event regeneration".into(),
+    })?;
     let entries = crate::oplog::read_oplog(cache_dir, log_name).map_err(VaultError::Io)?;
     let events = crate::oplog_events::derive_events_for_log(&entries);
     let tx = conn.transaction()?;
@@ -900,13 +918,27 @@ fn compaction_worker_loop(
                     );
                 }
             };
-            match crate::oplog_compaction::compact_log(
-                &cache_dir,
-                &log_name,
-                &path,
-                &limits,
-                now_ms(),
-            ) {
+            // Fail CLOSED without the marker (milestone re-review
+            // High): a rewrite whose crash window has no durable
+            // trigger would leave stale index rows undetectable
+            // forever. Skip the pass — the claim releases normally
+            // below and the next trigger (a save's threshold check or
+            // the on-open sweep) retries with a working database.
+            let outcome = if marker_rowid.is_none() {
+                log::warn!(
+                    "oplog compaction skipped for file_id={file_id}: staleness marker unavailable"
+                );
+                Ok(crate::oplog_compaction::CompactionOutcome::Missing)
+            } else {
+                crate::oplog_compaction::compact_log(
+                    &cache_dir,
+                    &log_name,
+                    &path,
+                    &limits,
+                    now_ms(),
+                )
+            };
+            match outcome {
                 Ok(crate::oplog_compaction::CompactionOutcome::Rewritten { .. }) => {
                     // Tail hash unchanged by construction; the session
                     // append state still chains and its cadence

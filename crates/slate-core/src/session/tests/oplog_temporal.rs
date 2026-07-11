@@ -1528,3 +1528,70 @@ fn crash_between_rewrite_and_regen_heals_via_the_marker() {
         "healed: the discarded event no longer matches"
     );
 }
+
+#[test]
+fn compaction_racing_saves_never_loses_indexed_events() {
+    // Milestone re-review High: a save landing between the worker's
+    // log read and its DELETE+reinsert must not lose its event row.
+    // The regen holds the log's exclusive lock across read+tx, so a
+    // concurrent save's append (and thus its insert) orders strictly
+    // around it. This test interleaves saves with worker folds and
+    // pins the settle-state invariant: the indexed (ts, class) rows
+    // equal exactly what the FINAL log derives — nothing lost,
+    // nothing orphaned, no markers left.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join(".slate");
+    let mut config = SessionConfig::new(cache_dir);
+    config.oplog_compaction_threshold_bytes = 1024;
+    let provider = std::sync::Arc::new(FsVaultProvider::new(tmp.path().to_path_buf()));
+    let session = VaultSession::open(provider, config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let body: String = (0..12).map(|i| format!("keep line {i}\n")).collect();
+    let mut contents = body;
+    let mut hash = session
+        .save_text("n.md", &contents, None)
+        .unwrap()
+        .new_content_hash;
+    for i in 0..30 {
+        contents.push_str(&format!("racing save number {i} with some padding\n"));
+        hash = session
+            .save_text("n.md", &contents, Some(&hash))
+            .unwrap()
+            .new_content_hash;
+    }
+
+    // Settle: worker drained (no marker rows) AND the index matches
+    // the final log exactly on (ts_ms, event_class).
+    let settled = wait_for(|| {
+        let no_markers: bool = {
+            let conn = session.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM oplog_events_stale)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        if !no_markers {
+            return false;
+        }
+        let indexed: Vec<(i64, u8)> = events_for(&session, "n.md")
+            .iter()
+            .map(|e| (e.0, e.1))
+            .collect();
+        let entries = session.read_oplog("n.md").unwrap();
+        let derived: Vec<(i64, u8)> = crate::oplog_events::derive_events_for_log(&entries)
+            .iter()
+            .map(|e| (e.ts_ms, e.event_class))
+            .collect();
+        indexed == derived
+    });
+    assert!(
+        settled,
+        "index must converge to exactly the final log's derivation"
+    );
+    // The newest save is queryable — the row a lost-update would drop.
+    let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
+    assert_eq!(paths, vec!["n.md"]);
+}
