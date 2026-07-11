@@ -985,6 +985,19 @@ pub fn append_entry(
     Ok(post_append_len)
 }
 
+/// The exact on-disk frame size for one entry, computed arithmetically
+/// — no allocation, no hashing (Codoki PR #791: the size fold needs
+/// per-entry sizes without building frames).
+pub(crate) fn frame_size(entry: &OpLogEntry) -> u64 {
+    let body = 8 // timestamp
+        + 1 // op_kind
+        + 2 + entry.user_actor_id.len()
+        + 2 + entry.content_hash_before.len()
+        + 2 + entry.content_hash_after.len()
+        + 4 + entry.payload_bytes.len();
+    (4 + body + 4) as u64
+}
+
 /// The on-disk frame for one entry: `body_len | body | body_checksum`.
 pub(crate) fn frame_entry(entry: &OpLogEntry) -> Vec<u8> {
     let body = serialize_body(entry);
@@ -2352,6 +2365,18 @@ mod tests {
         );
         assert_eq!(entries.len(), 1);
         assert_eq!(reconstruct_at_tail(&entries).unwrap(), "body\n");
+    }
+
+    #[test]
+    fn frame_size_matches_frame_entry_exactly() {
+        // The arithmetic size (used by the O-2 size fold, Codoki PR
+        // #791) must equal the built frame byte-for-byte.
+        for entry in v2_fixture_entries()
+            .iter()
+            .chain(v1_fixture_entries().iter())
+        {
+            assert_eq!(frame_size(entry), frame_entry(entry).len() as u64);
+        }
     }
 
     #[test]

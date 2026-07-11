@@ -626,7 +626,11 @@ pub struct VaultSession {
     /// Deleted-file remnant logs discovered by the last scan reconcile
     /// (O-1 #539). O-3's deleted-file recovery reads this; O-2's
     /// retention sweep ages entries out on disk.
-    remnant_logs: Mutex<Vec<RemnantLog>>,
+    /// `(generation, remnants)` under ONE mutex: the generation bumps
+    /// with every mutation (reconcile refresh, recovery), and paging
+    /// snapshots both atomically — a cursor can never pair a stale
+    /// snapshot with a newer generation (adversarial review, O-3).
+    remnant_logs: Mutex<(u64, Vec<RemnantLog>)>,
     /// True when this open created the cache database (fresh vault or
     /// rebuild). Gates the reconcile's content salvage — see `open`.
     cache_created_this_open: bool,
@@ -648,6 +652,57 @@ pub struct VaultSession {
     compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>>,
     compaction_shutdown: Arc<std::sync::atomic::AtomicBool>,
     compaction_join: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+/// One annotation on a version row (O-3 #541): `kind` is the stable
+/// tag name; `display` is the UI chip copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpAnnotationSummary {
+    pub kind: String,
+    pub display: String,
+}
+
+/// One row of a file's version history (O-3 #541).
+///
+/// Row identity for lists/selection is `position_from_tail` —
+/// `content_hash_after` is NOT unique per row (an A→B→A history
+/// repeats hashes); the hash is the CONTENT identity used for
+/// `version_content` / `restore_version`, where any occurrence of the
+/// same hash reconstructs the same bytes (enforced by verification).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionSummary {
+    /// 0 = newest.
+    pub position_from_tail: u32,
+    pub content_hash_after: String,
+    pub timestamp_ms: i64,
+    /// The inner kind for `Annotated` entries.
+    pub op_kind: crate::oplog::OpKind,
+    /// Decoded batch len; 0 for pure markers and canvas records; 1 for
+    /// snapshots.
+    pub op_count: u32,
+    /// `len(after) − len(before)`; a snapshot with no prior = its len.
+    pub byte_delta: i64,
+    pub annotations: Vec<OpAnnotationSummary>,
+    /// `hash_before == hash_after` (anchors, PathChanged markers,
+    /// canvas records that changed nothing).
+    pub is_marker: bool,
+    /// e.g. "12 operations, 340 bytes added" — the Swift side prepends
+    /// the date.
+    pub audio_fragment: String,
+}
+
+/// One recoverable (or at least known) deleted file (O-3 #541).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedFileEntry {
+    /// Effective path (last `PathChanged` / header creation path).
+    pub path: String,
+    /// Structural-journal `DeleteFile` timestamp when available;
+    /// `None` after a cache rebuild wiped the journal.
+    pub deleted_at_ms: Option<i64>,
+    /// The tail reconstructs and passes integrity verification.
+    pub recoverable: bool,
+    /// Reconstructed tail length when recoverable.
+    pub size_bytes: Option<u64>,
 }
 
 /// A deleted file's surviving op log, discovered by the scan reconcile
@@ -955,7 +1010,7 @@ impl VaultSession {
             config,
             oplog_state,
             next_oplog_stem_salt: AtomicU64::new(0),
-            remnant_logs: Mutex::new(Vec::new()),
+            remnant_logs: Mutex::new((0, Vec::new())),
             cache_created_this_open,
             event_listeners,
             next_listener_token: AtomicU64::new(1),
@@ -1190,7 +1245,9 @@ impl VaultSession {
     fn reconcile_oplogs(&self, conn: &mut Connection) {
         match self.reconcile_oplogs_inner(conn) {
             Ok(remnants) => {
-                *self.remnant_logs.lock().expect("remnant logs mutex") = remnants;
+                let mut guard = self.remnant_logs.lock().expect("remnant logs mutex");
+                guard.0 += 1;
+                guard.1 = remnants;
             }
             Err(e) => {
                 // Leave the previous remnant set in place — stale data
@@ -1642,94 +1699,7 @@ impl VaultSession {
         let new_hash = crate::vault::content_hash(contents.as_bytes());
 
         let now = now_ms();
-        let (name, extension, is_markdown) = classify_path(path);
-        let is_base = extension.as_deref() == Some("base");
-
-        // Body text for FTS5: only markdown gets indexed; everything
-        // else stores "" so the trigger on `body_text` makes the
-        // file_fts row consistent (or absent, via is_markdown gating
-        // in the migration-006 triggers).
-        let body_text: &str = if is_markdown { contents } else { "" };
-
-        tx.execute(
-            "INSERT INTO files
-                (path, name, extension, size_bytes, mtime_ms, ctime_ms,
-                 content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT(path) DO UPDATE SET
-                name           = excluded.name,
-                extension      = excluded.extension,
-                size_bytes     = excluded.size_bytes,
-                mtime_ms       = excluded.mtime_ms,
-                ctime_ms       = excluded.ctime_ms,
-                content_hash   = excluded.content_hash,
-                parser_version = excluded.parser_version,
-                indexed_at_ms  = excluded.indexed_at_ms,
-                is_markdown    = excluded.is_markdown,
-                body_text      = excluded.body_text",
-            rusqlite::params![
-                path,
-                name,
-                extension,
-                new_stat.size_bytes as i64,
-                new_stat.mtime_ms,
-                new_stat.ctime_ms,
-                new_hash,
-                self.config.parser_version,
-                now,
-                is_markdown as i64,
-                body_text,
-            ],
-        )?;
-        let file_id: i64 = tx.query_row(
-            "SELECT id FROM files WHERE path = ?1",
-            rusqlite::params![path],
-            |row| row.get(0),
-        )?;
-        if is_markdown {
-            // Build a fresh path index from SQLite so link
-            // resolution sees every currently-known file (including
-            // any rows the upsert above just added). This is one
-            // O(N) query per save — N is the indexed-file count,
-            // which is bounded by the vault size. Acceptable for
-            // V1.F; can become an incrementally-maintained snapshot
-            // if save_text ever shows up in profiles.
-            let vault_index = crate::InMemoryVaultIndex::new(
-                tx.prepare("SELECT path FROM files")?
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
-            replace_headings(&tx, file_id, contents)?;
-            crate::links_db::replace_links_for_file(&tx, file_id, path, contents, &vault_index)?;
-            crate::properties_db::replace_properties_for_file(&tx, file_id, contents)?;
-            crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(
-                &tx, file_id, contents,
-            )?;
-            crate::tags_db::replace_tags_for_file(&tx, file_id, contents)?;
-            crate::tasks_db::replace_tasks_for_file(&tx, file_id, contents)?;
-            crate::blocks_db::replace_blocks_for_file(&tx, file_id, contents)?;
-            crate::citations_db::replace_citations_for_file(&tx, file_id, contents)?;
-            crate::bases_db::replace_base_blocks_for_file(&tx, file_id, contents)?;
-        } else if is_base {
-            crate::bases_db::replace_base_file_for_file(
-                &tx,
-                file_id,
-                &name,
-                contents,
-                self.config.parser_version,
-                now,
-            )?;
-        } else if classify_path(path).1.as_deref() == Some("canvas") {
-            // Keep the canvas index coherent even when a `.canvas`
-            // file is written through the generic text-save path
-            // (the canvas-native save lands with #366/#372).
-            crate::canvas_db::replace_canvas_for_file(
-                &tx,
-                file_id,
-                contents,
-                &DbTitleSource { conn: &tx },
-            )?;
-        }
+        let file_id = self.index_saved_file(&tx, path, contents, &new_stat, &new_hash, now)?;
         // Resolve (allocating on first save) the file's op-log name
         // inside the index transaction, so the binding column commits
         // atomically with the save it serves (O-1 #539). Best-effort:
@@ -1892,7 +1862,15 @@ impl VaultSession {
         self.remnant_logs
             .lock()
             .expect("remnant logs mutex")
+            .1
             .clone()
+    }
+
+    /// Atomic `(generation, remnants)` snapshot — the paging path must
+    /// never pair a stale set with a newer generation.
+    fn remnant_snapshot(&self) -> (u64, Vec<RemnantLog>) {
+        let guard = self.remnant_logs.lock().expect("remnant logs mutex");
+        (guard.0, guard.1.clone())
     }
 
     /// Register a session-event listener (O-2 #540). Returns an opaque
@@ -1957,6 +1935,108 @@ impl VaultSession {
             log_name: log_name.to_string(),
             path: path.to_string(),
         });
+    }
+
+    /// The save path's index refresh: upsert the `files` row and
+    /// rebuild every derived index for one file, inside the caller's
+    /// transaction (extracted so `create_exclusive` shares the exact
+    /// machinery — O-3 #541). Returns the file id.
+    fn index_saved_file(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        path: &str,
+        contents: &str,
+        new_stat: &crate::FileStat,
+        new_hash: &str,
+        now: i64,
+    ) -> Result<i64, VaultError> {
+        let (name, extension, is_markdown) = classify_path(path);
+        let is_base = extension.as_deref() == Some("base");
+
+        // Body text for FTS5: only markdown gets indexed; everything
+        // else stores "" so the trigger on `body_text` makes the
+        // file_fts row consistent (or absent, via is_markdown gating
+        // in the migration-006 triggers).
+        let body_text: &str = if is_markdown { contents } else { "" };
+
+        tx.execute(
+            "INSERT INTO files
+                (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+                 content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(path) DO UPDATE SET
+                name           = excluded.name,
+                extension      = excluded.extension,
+                size_bytes     = excluded.size_bytes,
+                mtime_ms       = excluded.mtime_ms,
+                ctime_ms       = excluded.ctime_ms,
+                content_hash   = excluded.content_hash,
+                parser_version = excluded.parser_version,
+                indexed_at_ms  = excluded.indexed_at_ms,
+                is_markdown    = excluded.is_markdown,
+                body_text      = excluded.body_text",
+            rusqlite::params![
+                path,
+                name,
+                extension,
+                new_stat.size_bytes as i64,
+                new_stat.mtime_ms,
+                new_stat.ctime_ms,
+                new_hash,
+                self.config.parser_version,
+                now,
+                is_markdown as i64,
+                body_text,
+            ],
+        )?;
+        let file_id: i64 = tx.query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |row| row.get(0),
+        )?;
+        if is_markdown {
+            // Build a fresh path index from SQLite so link
+            // resolution sees every currently-known file (including
+            // any rows the upsert above just added). This is one
+            // O(N) query per save — N is the indexed-file count,
+            // which is bounded by the vault size. Acceptable for
+            // V1.F; can become an incrementally-maintained snapshot
+            // if save_text ever shows up in profiles.
+            let vault_index = crate::InMemoryVaultIndex::new(
+                tx.prepare("SELECT path FROM files")?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            replace_headings(tx, file_id, contents)?;
+            crate::links_db::replace_links_for_file(tx, file_id, path, contents, &vault_index)?;
+            crate::properties_db::replace_properties_for_file(tx, file_id, contents)?;
+            crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, contents)?;
+            crate::tags_db::replace_tags_for_file(tx, file_id, contents)?;
+            crate::tasks_db::replace_tasks_for_file(tx, file_id, contents)?;
+            crate::blocks_db::replace_blocks_for_file(tx, file_id, contents)?;
+            crate::citations_db::replace_citations_for_file(tx, file_id, contents)?;
+            crate::bases_db::replace_base_blocks_for_file(tx, file_id, contents)?;
+        } else if is_base {
+            crate::bases_db::replace_base_file_for_file(
+                tx,
+                file_id,
+                &name,
+                contents,
+                self.config.parser_version,
+                now,
+            )?;
+        } else if classify_path(path).1.as_deref() == Some("canvas") {
+            // Keep the canvas index coherent even when a `.canvas`
+            // file is written through the generic text-save path
+            // (the canvas-native save lands with #366/#372).
+            crate::canvas_db::replace_canvas_for_file(
+                tx,
+                file_id,
+                contents,
+                &DbTitleSource { conn: tx },
+            )?;
+        }
+        Ok(file_id)
     }
 
     /// Append this save to the file's op log, choosing between a
@@ -2134,6 +2214,377 @@ impl VaultSession {
             return Ok(Vec::new());
         };
         crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)
+    }
+
+    /// Page through `path`'s version history, newest first (O-3 #541).
+    ///
+    /// Markers are included — UI filters them, tests/CLI want the full
+    /// ledger. The opaque cursor embeds the log's header GENERATION: a
+    /// compaction between pages bumps it (O-2) and the next page
+    /// request fails with a typed `InvalidArgument("history changed,
+    /// restart paging")` — the UI reloads page one. (The tail hash
+    /// alone cannot detect compaction: the fold preserves the tail by
+    /// construction.)
+    pub fn list_versions(
+        &self,
+        path: &str,
+        paging: Paging,
+    ) -> Result<Page<VersionSummary>, VaultError> {
+        let log_name = self.bound_log_name(path)?;
+        let Some(log_name) = log_name else {
+            return Ok(Page {
+                items: Vec::new(),
+                next_cursor: None,
+                total_filtered: 0,
+            });
+        };
+        let (header, entries) =
+            crate::oplog::read_oplog_with_header(&self.config.cache_dir, &log_name)
+                .map_err(VaultError::Io)?;
+
+        let start_position: usize = match paging.cursor.as_deref() {
+            None => 0,
+            Some(cursor) => {
+                let parsed = cursor.strip_prefix("v1:").and_then(|rest| {
+                    let (generation, position) = rest.split_once(':')?;
+                    Some((
+                        generation.parse::<u32>().ok()?,
+                        position.parse::<usize>().ok()?,
+                    ))
+                });
+                let Some((cursor_generation, position)) = parsed else {
+                    return Err(VaultError::InvalidArgument {
+                        message: "malformed version-history cursor".into(),
+                    });
+                };
+                if cursor_generation != header.generation {
+                    return Err(VaultError::InvalidArgument {
+                        message: "history changed, restart paging".into(),
+                    });
+                }
+                position
+            }
+        };
+
+        let summaries = version_summaries(&entries);
+        let total = summaries.len() as u64;
+        let limit = (paging.limit as usize).max(1);
+        let page: Vec<VersionSummary> = summaries
+            .into_iter()
+            .skip(start_position)
+            .take(limit)
+            .collect();
+        let next_position = start_position + page.len();
+        let next_cursor = (next_position < total as usize)
+            .then(|| format!("v1:{}:{next_position}", header.generation));
+        Ok(Page {
+            items: page,
+            next_cursor,
+            total_filtered: total,
+        })
+    }
+
+    /// The exact bytes of the version whose `content_hash_after` is
+    /// `version_hash` — **integrity-verified** (O-3 #541): the
+    /// reconstruction is re-hashed and refused with
+    /// [`VaultError::HistoryUnavailable`] on mismatch. Wrong bytes are
+    /// never served. Same-hash duplicates (A→B→A) are safe precisely
+    /// because of this check: any occurrence that passes reconstructs
+    /// the same bytes.
+    pub fn version_content(&self, path: &str, version_hash: &str) -> Result<String, VaultError> {
+        let log_name = self
+            .bound_log_name(path)?
+            .ok_or_else(|| VaultError::InvalidArgument {
+                message: format!("no such version: {path:?} has no history"),
+            })?;
+        let entries =
+            crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)?;
+        if !entries.iter().any(|e| e.content_hash_after == version_hash) {
+            return Err(VaultError::InvalidArgument {
+                message: "no such version".into(),
+            });
+        }
+        let content =
+            crate::oplog::reconstruct_at_hash(&entries, version_hash).ok_or_else(|| {
+                VaultError::HistoryUnavailable {
+                    path: path.to_string(),
+                    reason: format!("version {version_hash} failed to reconstruct"),
+                }
+            })?;
+        if crate::vault::content_hash(content.as_bytes()) != version_hash {
+            return Err(VaultError::HistoryUnavailable {
+                path: path.to_string(),
+                reason: format!("version {version_hash} failed integrity verification"),
+            });
+        }
+        Ok(content)
+    }
+
+    /// Restore `path` to the (verified) version `version_hash` through
+    /// the **standard save machinery** — atomic write, `WriteConflict`
+    /// on `expected_content_hash` mismatch, index refresh, its own
+    /// op-log entry. History is never rewritten: an undo of a restore
+    /// is just another restore (plan decision #5).
+    pub fn restore_version(
+        &self,
+        path: &str,
+        version_hash: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        let content = self.version_content(path, version_hash)?;
+        self.save_text(path, &content, expected_content_hash)
+    }
+
+    /// The recoverable deleted files (O-3 #541): the scan reconcile's
+    /// remnant set joined with structural-journal `DeleteFile` rows for
+    /// timestamps. One row per path — delete → recreate → delete keeps
+    /// the NEWEST remnant (older ones age out via O-2's reclamation).
+    /// Ordered by `deleted_at_ms` desc, unknown timestamps last.
+    /// Out-of-retention remnants don't appear because the sweep has
+    /// already deleted their logs — no retention filter here.
+    ///
+    /// Honesty rule: files deleted having never been saved through
+    /// Slate have no log and are simply absent (the UI carries the
+    /// system-Trash footnote).
+    pub fn list_deleted_files(&self, paging: Paging) -> Result<Page<DeletedFileEntry>, VaultError> {
+        let (generation, remnants) = self.remnant_snapshot();
+        // Newest remnant per path.
+        let mut newest: std::collections::HashMap<String, RemnantLog> =
+            std::collections::HashMap::new();
+        for remnant in remnants {
+            match newest.get(&remnant.effective_path) {
+                Some(existing) if existing.tail_timestamp_ms >= remnant.tail_timestamp_ms => {}
+                _ => {
+                    newest.insert(remnant.effective_path.clone(), remnant);
+                }
+            }
+        }
+
+        // Journal join: stem → newest DeleteFile timestamp.
+        let mut deleted_at_by_stem: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let mut stmt = conn.prepare(
+                "SELECT timestamp_ms, payload FROM structural_ops
+                 WHERE kind = 'delete_file' ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (ts, payload) = row?;
+                if let Some(parsed) = crate::structural::StructuralOpPayload::from_json(&payload)
+                    && let Some(stem) = parsed.oplog_name
+                {
+                    deleted_at_by_stem.insert(stem, ts);
+                }
+            }
+        }
+
+        let mut entries: Vec<DeletedFileEntry> = newest
+            .into_values()
+            .map(|remnant| {
+                // Recoverability = the tail reconstructs AND verifies.
+                let reconstructed = crate::oplog::read_oplog(&self.config.cache_dir, &remnant.stem)
+                    .ok()
+                    .and_then(|entries| crate::oplog::reconstruct_at_tail(&entries).ok())
+                    .filter(|content| {
+                        crate::vault::content_hash(content.as_bytes()) == remnant.tail_hash
+                    });
+                DeletedFileEntry {
+                    path: remnant.effective_path,
+                    deleted_at_ms: deleted_at_by_stem.get(&remnant.stem).copied(),
+                    recoverable: reconstructed.is_some(),
+                    size_bytes: reconstructed.map(|c| c.len() as u64),
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| match (b.deleted_at_ms, a.deleted_at_ms) {
+            (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.path.cmp(&b.path)),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => a.path.cmp(&b.path),
+        });
+
+        let total = entries.len() as u64;
+        let start: usize = match paging.cursor.as_deref() {
+            None => 0,
+            Some(cursor) => {
+                let parsed = cursor.strip_prefix("v1:").and_then(|rest| {
+                    let (cursor_generation, offset) = rest.split_once(':')?;
+                    Some((
+                        cursor_generation.parse::<u64>().ok()?,
+                        offset.parse::<usize>().ok()?,
+                    ))
+                });
+                let Some((cursor_generation, offset)) = parsed else {
+                    return Err(VaultError::InvalidArgument {
+                        message: "malformed deleted-files cursor".into(),
+                    });
+                };
+                if cursor_generation != generation {
+                    return Err(VaultError::InvalidArgument {
+                        message: "deleted files changed, restart paging".into(),
+                    });
+                }
+                offset
+            }
+        };
+        let limit = (paging.limit as usize).max(1);
+        let page: Vec<DeletedFileEntry> = entries.into_iter().skip(start).take(limit).collect();
+        let next = start + page.len();
+        let next_cursor = (next < total as usize).then(|| format!("v1:{generation}:{next}"));
+        Ok(Page {
+            items: page,
+            next_cursor,
+            total_filtered: total,
+        })
+    }
+
+    /// Recover a deleted file: reconstruct the newest matching
+    /// remnant's tail (integrity-verified), create the file
+    /// **exclusively** (never clobbering an occupant), and re-bind the
+    /// remnant log so the recovered file KEEPS its pre-deletion
+    /// history — the recovery save appends onto it (O-3 #541).
+    pub fn recover_deleted_file(&self, path: &str) -> Result<SaveReport, VaultError> {
+        let remnant = self
+            .remnant_logs()
+            .into_iter()
+            .filter(|r| r.effective_path == path)
+            .max_by_key(|r| r.tail_timestamp_ms)
+            .ok_or_else(|| VaultError::InvalidArgument {
+                message: format!("no deleted-file history for {path:?}"),
+            })?;
+        let entries = crate::oplog::read_oplog(&self.config.cache_dir, &remnant.stem)
+            .map_err(VaultError::Io)?;
+        let content = crate::oplog::reconstruct_at_tail(&entries).map_err(|e| {
+            VaultError::HistoryUnavailable {
+                path: path.to_string(),
+                reason: format!("deleted-file history failed to reconstruct: {e}"),
+            }
+        })?;
+        if crate::vault::content_hash(content.as_bytes()) != remnant.tail_hash {
+            return Err(VaultError::HistoryUnavailable {
+                path: path.to_string(),
+                reason: "deleted-file history failed integrity verification".into(),
+            });
+        }
+        let report = self.create_exclusive_binding(path, &content, Some(&remnant.stem))?;
+        // The remnant is a remnant no more (one lock hold: retain +
+        // generation bump are atomic together).
+        {
+            let mut guard = self.remnant_logs.lock().expect("remnant logs mutex");
+            guard.0 += 1;
+            guard.1.retain(|r| r.stem != remnant.stem);
+        }
+        Ok(report)
+    }
+
+    /// Create-if-absent write (O-3 #541): `save_text` silently
+    /// overwrites, so it cannot be used for recovery. Path exists on
+    /// disk or in the index (case-insensitively, the structural-move
+    /// convention) → [`VaultError::DestinationExists`]; else the
+    /// standard atomic-write + index + op-log machinery.
+    pub fn create_exclusive(&self, path: &str, content: &str) -> Result<SaveReport, VaultError> {
+        self.create_exclusive_binding(path, content, None)
+    }
+
+    /// `create_exclusive` with an optional pre-existing op-log binding
+    /// (deleted-file recovery re-attaches the remnant's stem so
+    /// history continues across the delete/recover pair).
+    ///
+    /// One IMMEDIATE transaction end to end (adversarial review): the
+    /// cross-process SQLite write lock is held BEFORE the existence
+    /// checks, so a racing Slate/CLI writer serializes behind it; the
+    /// disk publish itself uses the provider's no-replace primitive
+    /// (`write_file_if_absent` — hard-link on the filesystem
+    /// provider), so even a non-Slate writer in the residual window
+    /// cannot be clobbered. Any failure before commit rolls the whole
+    /// row (including a recovery binding) back — no phantom index
+    /// entries blocking retries. A post-write index failure leaves the
+    /// created file on disk (never delete user bytes on an index
+    /// error); the next scan indexes it.
+    fn create_exclusive_binding(
+        &self,
+        path: &str,
+        content: &str,
+        bind_log: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        validate_save_path(path)?;
+        if content.len() as u64 > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: content.len() as u64,
+            });
+        }
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        // Existence gates INSIDE the cross-process critical section:
+        // the index (case-insensitive — the APFS-aware structural
+        // convention) and the disk.
+        if let Some(existing) = index_entry_case_insensitive(&tx, path)? {
+            return Err(VaultError::DestinationExists { path: existing });
+        }
+        if self.provider.stat(path).is_ok() {
+            return Err(VaultError::DestinationExists {
+                path: path.to_string(),
+            });
+        }
+
+        // No-replace publish: the point of no return for user bytes.
+        self.provider
+            .write_file_if_absent(path, content.as_bytes())?;
+
+        let new_stat = self.provider.stat(path)?;
+        let new_hash = crate::vault::content_hash(content.as_bytes());
+        let now = now_ms();
+        let file_id = self.index_saved_file(&tx, path, content, &new_stat, &new_hash, now)?;
+        if let Some(stem) = bind_log {
+            // Recovery re-binding, atomic with the row itself; the
+            // partial UNIQUE index backstops double-binding.
+            tx.execute(
+                "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
+                rusqlite::params![stem, file_id],
+            )?;
+        }
+        let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
+        tx.commit()?;
+        self.bump_bases_generation();
+
+        if let Some(log_name) = oplog_name.as_deref() {
+            self.append_save_to_oplog(
+                file_id,
+                log_name,
+                path,
+                "",
+                &new_hash,
+                content,
+                None,
+                now,
+                &[],
+            );
+        }
+        Ok(SaveReport {
+            new_content_hash: new_hash,
+            new_size_bytes: new_stat.size_bytes,
+            new_mtime_ms: new_stat.mtime_ms,
+        })
+    }
+
+    /// The `files.oplog_name` binding for `path`; `Ok(None)` covers
+    /// both "unindexed" and "indexed but never saved through Slate".
+    fn bound_log_name(&self, path: &str) -> Result<Option<String>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        Ok(conn
+            .query_row(
+                "SELECT oplog_name FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
     }
 
     /// Page through the indexed files.
@@ -6255,6 +6706,128 @@ fn upsert_dir_row(tx: &rusqlite::Transaction, path: &str) -> Result<(), VaultErr
 }
 
 /// Append one journal row; returns its id.
+/// Build newest-first version rows from an in-order entry list
+/// (O-3 #541). Pure — separately testable; display-only decode
+/// failures degrade to zero-op rows rather than erroring (the
+/// integrity-critical paths do their own verification).
+fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary> {
+    fn annotation_summary(ann: &crate::oplog::OpAnnotation) -> OpAnnotationSummary {
+        use crate::oplog::OpAnnotation;
+        match ann {
+            OpAnnotation::SetProperty { key, .. } => OpAnnotationSummary {
+                kind: "SetProperty".into(),
+                display: format!("Set property '{key}'"),
+            },
+            OpAnnotation::RemoveProperty { key } => OpAnnotationSummary {
+                kind: "RemoveProperty".into(),
+                display: format!("Removed property '{key}'"),
+            },
+            OpAnnotation::ToggleTask { new_status, .. } => OpAnnotationSummary {
+                kind: "ToggleTask".into(),
+                display: match new_status {
+                    'x' | 'X' => "Completed task".to_string(),
+                    ' ' => "Reopened task".to_string(),
+                    other => format!("Changed task status to '{other}'"),
+                },
+            },
+            OpAnnotation::FrontmatterReplace => OpAnnotationSummary {
+                kind: "FrontmatterReplace".into(),
+                display: "Edited properties as source".into(),
+            },
+            OpAnnotation::PathChanged { from, to } => OpAnnotationSummary {
+                kind: "PathChanged".into(),
+                display: format!("Renamed from {from} to {to}"),
+            },
+        }
+    }
+    fn size_phrase(delta: i64) -> String {
+        match delta.cmp(&0) {
+            std::cmp::Ordering::Greater => format!("{delta} bytes added"),
+            std::cmp::Ordering::Less => format!("{} bytes removed", -delta),
+            std::cmp::Ordering::Equal => "no size change".to_string(),
+        }
+    }
+
+    let mut rows: Vec<VersionSummary> = Vec::with_capacity(entries.len());
+    // Forward length tracking: batch deltas are computable from the
+    // ops alone; snapshots reset the running length.
+    let mut prev_len: Option<i64> = None;
+    for (idx, entry) in entries.iter().enumerate() {
+        use crate::oplog::OpKind;
+        let (inner_kind, inner_payload, annotations) = match entry.op_kind {
+            OpKind::Annotated => match crate::oplog::decode_annotated(&entry.payload_bytes) {
+                Ok((kind, payload, anns)) => (
+                    kind,
+                    Some(payload),
+                    anns.iter().map(annotation_summary).collect(),
+                ),
+                // Display-only degradation for an undecodable wrapper.
+                Err(_) => (OpKind::Annotated, None, Vec::new()),
+            },
+            kind => (kind, Some(entry.payload_bytes.clone()), Vec::new()),
+        };
+
+        let (op_count, byte_delta) = match inner_kind {
+            OpKind::WholeFileReplace => {
+                let new_len = inner_payload.as_ref().map_or(0, |p| p.len() as i64);
+                let delta = new_len - prev_len.unwrap_or(0);
+                prev_len = Some(new_len);
+                (1u32, delta)
+            }
+            OpKind::EditBatch => {
+                let ops = inner_payload
+                    .as_deref()
+                    .and_then(|p| crate::oplog::decode_edit_batch(p).ok())
+                    .unwrap_or_default();
+                let delta: i64 = ops
+                    .iter()
+                    .map(|op| match op {
+                        crate::oplog::EditOp::Insert { text, .. } => text.len() as i64,
+                        crate::oplog::EditOp::Delete { start, end } => -((end - start) as i64),
+                        crate::oplog::EditOp::Replace { start, end, text } => {
+                            text.len() as i64 - (end - start) as i64
+                        }
+                    })
+                    .sum();
+                if let Some(len) = prev_len.as_mut() {
+                    *len += delta;
+                }
+                (ops.len() as u32, delta)
+            }
+            // Semantic records change no text.
+            OpKind::CanvasApply | OpKind::Annotated => (0u32, 0i64),
+        };
+        let is_marker = entry.content_hash_before == entry.content_hash_after;
+        let audio_fragment = match inner_kind {
+            OpKind::WholeFileReplace if is_marker => "anchor snapshot".to_string(),
+            OpKind::WholeFileReplace => {
+                format!("snapshot, {} bytes", prev_len.unwrap_or(0))
+            }
+            OpKind::EditBatch if op_count == 0 => "marker".to_string(),
+            OpKind::EditBatch => format!(
+                "{op_count} operation{}, {}",
+                if op_count == 1 { "" } else { "s" },
+                size_phrase(byte_delta)
+            ),
+            OpKind::CanvasApply => "canvas action".to_string(),
+            OpKind::Annotated => "unreadable entry".to_string(),
+        };
+        rows.push(VersionSummary {
+            position_from_tail: (entries.len() - 1 - idx) as u32,
+            content_hash_after: entry.content_hash_after.clone(),
+            timestamp_ms: entry.timestamp_ms,
+            op_kind: inner_kind,
+            op_count,
+            byte_delta,
+            annotations,
+            is_marker,
+            audio_fragment,
+        });
+    }
+    rows.reverse(); // newest first
+    rows
+}
+
 fn journal_append(
     tx: &rusqlite::Transaction,
     kind: crate::structural::StructuralOpKind,
@@ -9446,6 +10019,9 @@ mod tests {
 
     #[path = "oplog_compaction_session.rs"]
     mod oplog_compaction_session;
+
+    #[path = "oplog_history.rs"]
+    mod oplog_history;
 
     #[path = "oplog_logging.rs"]
     mod oplog_logging;

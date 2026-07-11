@@ -188,6 +188,45 @@ impl VaultProvider for FsVaultProvider {
         Ok(())
     }
 
+    fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        // Full content staged in the temp dir, then HARD-LINKED to the
+        // destination: link(2) fails with EEXIST when the target
+        // exists, making the publish step atomic AND no-replace — a
+        // non-Slate writer racing this call cannot be clobbered
+        // (unlike rename, which replaces). The temp entry is unlinked
+        // either way.
+        let tmp_dir = self.tmp_dir();
+        std::fs::create_dir_all(&tmp_dir).map_err(VaultError::Io)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(VaultError::Io)?;
+        }
+        // Unique per CALL, not per path: racing threads staging the
+        // same destination must never share a temp file, or the link
+        // could publish a rival's mid-write bytes (caught by the
+        // no-replace race test).
+        static CREATE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = CREATE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_path = tmp_dir.join(format!("create-{}-{unique}", std::process::id()));
+        {
+            use std::io::Write as _;
+            let mut tmp = std::fs::File::create(&tmp_path).map_err(VaultError::Io)?;
+            tmp.write_all(contents).map_err(VaultError::Io)?;
+            tmp.sync_data().map_err(VaultError::Io)?;
+        }
+        let linked = std::fs::hard_link(&tmp_path, &path);
+        let _ = std::fs::remove_file(&tmp_path);
+        match linked {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(VaultError::DestinationExists {
+                    path: relative.to_string(),
+                })
+            }
+            Err(e) => Err(VaultError::Io(e)),
+        }
+    }
+
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
         let path = self.resolve_for_mutation(relative)?;
         // `symlink_metadata` uses lstat and does not follow symlinks, so

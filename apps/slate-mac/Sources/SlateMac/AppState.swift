@@ -4392,6 +4392,8 @@ final class AppState: ObservableObject {
             return "Preferences file \(path) couldn't be loaded: \(reason)."
         case .DestinationExists(let path):
             return "Something named \(path) already exists there."
+        case .HistoryUnavailable(let path, _):
+            return "History for \(path) is unavailable: it failed an integrity check."
         }
     }
 
@@ -7081,6 +7083,12 @@ final class AppState: ObservableObject {
             return "Preferences file \(path) couldn't be loaded: \(reason)."
         case .DestinationExists(let path):
             return "Something named \(path) already exists there. Choose a different name."
+        case .HistoryUnavailable(let path, _):
+            // O-3 (#541): a version operation failed integrity
+            // verification and refused rather than serving wrong
+            // bytes. The reason string is diagnostic detail; the
+            // user-facing message keeps the O-5 alert's framing.
+            return "History for \(path) is unavailable: it failed an integrity check."
         }
     }
 }

@@ -132,18 +132,18 @@ pub(crate) fn fold_boundary(
     let p_size: Option<usize> = if size_triggered {
         // Retain at most threshold_entries/2 tail entries…
         let mut retained = ((limits.threshold_entries / 2) as usize).min(entries.len() - 1);
-        // …then fewer, until they fit in threshold_bytes/2 (framing
-        // included — frame_entry is the exact on-disk size) or only
-        // the tail entry remains.
+        // …then fewer, until they fit in threshold_bytes/2 or only the
+        // tail entry remains. One arithmetic pass (Codoki PR #791):
+        // the running suffix sum uses exact frame sizes computed
+        // without allocating or hashing, so the shrink walk is O(K),
+        // not O(K²) frame builds.
         let byte_budget = limits.threshold_bytes / 2;
-        loop {
-            let retained_bytes: u64 = entries[entries.len() - retained..]
-                .iter()
-                .map(|e| frame_entry(e).len() as u64)
-                .sum();
-            if retained_bytes <= byte_budget || retained <= 1 {
-                break;
-            }
+        let mut retained_bytes: u64 = entries[entries.len() - retained..]
+            .iter()
+            .map(crate::oplog::frame_size)
+            .sum();
+        while retained_bytes > byte_budget && retained > 1 {
+            retained_bytes -= crate::oplog::frame_size(&entries[entries.len() - retained]);
             retained -= 1;
         }
         Some(entries.len() - 1 - retained)
