@@ -1520,6 +1520,24 @@ fn history_lists_versions_newest_first_in_all_formats() {
     let data = assert_envelope(&limited.get_output().stdout, "history");
     assert_eq!(data["versions"].as_array().unwrap().len(), 1);
     assert_eq!(data["versions"][0]["hash"], hashes[2].as_str());
+    // `total` reports the full history count regardless of truncation
+    // (the count-only probe contract: --limit 1, read total).
+    assert_eq!(data["total"], 3);
+
+    // --limit 0 is a usage error (exit 2): the core clamps a zero page
+    // limit to 1, so zero is not representable — rejecting it beats
+    // emitting an envelope with fabricated contents.
+    slate()
+        .args([
+            "history",
+            vault.path().to_str().unwrap(),
+            "n.md",
+            "--limit",
+            "0",
+        ])
+        .assert()
+        .failure()
+        .code(2);
 }
 
 #[test]

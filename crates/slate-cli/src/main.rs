@@ -135,7 +135,10 @@ enum Command {
         #[arg(long, conflicts_with = "show")]
         restore: Option<String>,
         /// Maximum versions to list (list mode only; newest first).
-        #[arg(long, default_value_t = 50)]
+        /// Must be at least 1 — `total` in the json envelope always
+        /// reports the full history count regardless of truncation,
+        /// so a count-only probe is `--limit 1`.
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..))]
         limit: u32,
         /// Output format.
         #[arg(long, value_enum, default_value_t = OutputFormat::default())]
