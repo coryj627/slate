@@ -977,7 +977,9 @@ extension HistoryPanelTests {
         _ = try session.scanInitial(cancel: CancelToken())
 
         let prompt = RestoreAsPrompt(
-            source: .deletedFile(path: "gone.md"), suggestedPath: "gone (restored).md")
+            source: .deletedFile(path: "gone.md"),
+            suggestedPath: "gone (restored).md",
+            sessionID: ObjectIdentifier(session))
         await state.performRestoreAs(prompt, destination: "taken.md")
         XCTAssertEqual(
             state.historyAlert?.message,
@@ -986,6 +988,53 @@ extension HistoryPanelTests {
             state.historyRestoreAsPrompt, "the prompt re-raises for another try")
         XCTAssertEqual(
             try session.readText(path: "taken.md"), "occupied\n", "nothing written")
+    }
+
+    /// Adversarial review: a prompt staged in vault A and confirmed
+    /// after switching to vault B must do NOTHING — a matching deleted
+    /// path in B would otherwise recover B's unrelated remnant to the
+    /// chosen destination.
+    func testRestoreAsAcrossVaultSwitchIsDropped() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer)
+        guard let sessionA = state.currentSession else {
+            return XCTFail("no session")
+        }
+        _ = try sessionA.saveText(
+            path: "gone.md", contents: "vault A remnant\n", expectedContentHash: nil)
+        try sessionA.deleteFile(path: "gone.md")
+        _ = try sessionA.scanInitial(cancel: CancelToken())
+
+        let prompt = RestoreAsPrompt(
+            source: .deletedFile(path: "gone.md"),
+            suggestedPath: "gone (restored).md",
+            sessionID: ObjectIdentifier(sessionA))
+
+        // Vault B ALSO has a deleted "gone.md" — the collision target.
+        let dirB = FileManager.default.temporaryDirectory
+            .appendingPathComponent("restore-as-b-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dirB, withIntermediateDirectories: true)
+        addTempDirForRestoreAs(dirB)
+        state.openVault(at: dirB)
+        await state.scanTask?.value
+        guard let sessionB = state.currentSession else {
+            return XCTFail("no session B")
+        }
+        _ = try sessionB.saveText(
+            path: "gone.md", contents: "vault B remnant\n", expectedContentHash: nil)
+        try sessionB.deleteFile(path: "gone.md")
+        _ = try sessionB.scanInitial(cancel: CancelToken())
+
+        await state.performRestoreAs(prompt, destination: "gone (restored).md")
+        XCTAssertThrowsError(
+            try sessionB.readText(path: "gone (restored).md"),
+            "vault B must not gain a restored file from vault A's prompt")
+        XCTAssertNil(state.historyAlert)
+    }
+
+    private func addTempDirForRestoreAs(_ dir: URL) {
+        tempDirs.append(dir)
     }
 
     func testRestoredCopyPathSuggestions() {

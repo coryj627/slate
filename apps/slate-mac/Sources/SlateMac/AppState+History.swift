@@ -59,6 +59,11 @@ struct RestoreAsPrompt: Identifiable, Equatable {
     let source: Source
     /// Pre-filled, collision-avoiding destination suggestion.
     let suggestedPath: String
+    /// Identity of the session the prompt was staged against
+    /// (adversarial review): confirming after a vault switch must do
+    /// NOTHING — a matching path/hash in the new vault would
+    /// otherwise recover or copy unrelated data there.
+    let sessionID: ObjectIdentifier
 }
 
 /// One compaction-failure event (the O-2 channel's Mac half). The
@@ -273,6 +278,7 @@ extension AppState {
         deletedFiles = []
         deletedLoadError = nil
         historyRestoreRequest = nil
+        historyRestoreAsPrompt = nil
         historyLoadTask?.cancel()
         historyLoadTask = nil
     }
@@ -433,7 +439,8 @@ extension AppState {
             // destination.
             historyRestoreAsPrompt = RestoreAsPrompt(
                 source: .deletedFile(path: path),
-                suggestedPath: Self.restoredCopyPath(for: path))
+                suggestedPath: Self.restoredCopyPath(for: path),
+                sessionID: ObjectIdentifier(session))
         case .failure(let error):
             historyAlert = HistoryAlert(
                 title: "Can't restore", message: humanReadable(error))
@@ -445,10 +452,11 @@ extension AppState {
     /// Version-row entry point: materialize `versionHash` of the
     /// selected note as a new file.
     func requestRestoreAs(versionHash: String, formattedDate: String) {
-        guard let path = selectedFilePath else { return }
+        guard let path = selectedFilePath, let session = currentSession else { return }
         historyRestoreAsPrompt = RestoreAsPrompt(
             source: .version(path: path, hash: versionHash, formattedDate: formattedDate),
-            suggestedPath: Self.restoredCopyPath(for: path))
+            suggestedPath: Self.restoredCopyPath(for: path),
+            sessionID: ObjectIdentifier(session))
     }
 
     /// Confirmed Restore As…: write to `destination` through the
@@ -457,7 +465,9 @@ extension AppState {
     /// CHOSEN destination re-raises the prompt with the standard copy
     /// on the alert channel.
     func performRestoreAs(_ prompt: RestoreAsPrompt, destination: String) async {
-        guard let session = currentSession else { return }
+        guard let session = currentSession,
+            ObjectIdentifier(session) == prompt.sessionID
+        else { return }
         let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let result: Result<Void, VaultError> =
