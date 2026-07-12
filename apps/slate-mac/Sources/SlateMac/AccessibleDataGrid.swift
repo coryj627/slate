@@ -74,12 +74,25 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     }
 
     /// A named per-row action (AX custom action on every cell).
+    ///
+    /// `isEnabled` filters the action per row: an action that reports
+    /// `false` for a given row is omitted from that row's custom-action
+    /// set, so a screen-reader user never lands on a control that would
+    /// silently do nothing (e.g. "Open" on an unresolved/ghost row that
+    /// has no file). Defaults to always-enabled — existing callers are
+    /// unaffected.
     struct RowAction {
         let name: String
         let action: (Row) -> Void
+        let isEnabled: (Row) -> Bool
 
-        init(_ name: String, action: @escaping (Row) -> Void) {
+        init(
+            _ name: String,
+            isEnabled: @escaping (Row) -> Bool = { _ in true },
+            action: @escaping (Row) -> Void
+        ) {
             self.name = name
+            self.isEnabled = isEnabled
             self.action = action
         }
     }
@@ -143,6 +156,15 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     /// re-sort the stale row snapshot before that owner publishes its result.
     var sortsRowsLocally: Bool
     var onActivate: ((Row) -> Void)?
+    /// Alternate activation (⌘Return / ⌘-double-click) — e.g. "open in a
+    /// new tab" vs `onActivate`'s "open here". Opt-in: when nil, a
+    /// ⌘-modified activation falls back to `onActivate` (unchanged
+    /// behaviour for grids that don't distinguish).
+    var onActivateModified: ((Row) -> Void)?
+    /// When true, right-click / the menu key opens a contextual menu of
+    /// the row's enabled `rowActions`. Opt-in so grids that only wanted
+    /// AX custom actions (Bases, Canvas) are unaffected.
+    var showsRowContextMenu: Bool
     var onEditCell: ((Row, Int) -> Void)?
     var editRequest: Binding<EditRequest?>?
     var onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)?
@@ -170,6 +192,8 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         cellNavigation: Bool = false,
         sortsRowsLocally: Bool = true,
         onActivate: ((Row) -> Void)? = nil,
+        onActivateModified: ((Row) -> Void)? = nil,
+        showsRowContextMenu: Bool = false,
         onEditCell: ((Row, Int) -> Void)? = nil,
         editRequest: Binding<EditRequest?>? = nil,
         onCommitEdit: ((Row, Int, String, EditCommitNavigation) -> Void)? = nil,
@@ -192,6 +216,8 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.cellNavigation = cellNavigation
         self.sortsRowsLocally = sortsRowsLocally
         self.onActivate = onActivate
+        self.onActivateModified = onActivateModified
+        self.showsRowContextMenu = showsRowContextMenu
         self.onEditCell = onEditCell
         self.editRequest = editRequest
         self.onCommitEdit = onCommitEdit
@@ -288,11 +314,30 @@ final class GridTableView: NSTableView {
         }
         super.keyDown(with: event)
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let clicked = row(at: point)
+        guard clicked >= 0 else { return super.menu(for: event) }
+        // Select the clicked row first so the menu — and any follow-on
+        // AX/keyboard action — targets it, matching the file tree's
+        // right-click contract.
+        if selectedRow != clicked {
+            selectRowIndexes(IndexSet(integer: clicked), byExtendingSelection: false)
+        }
+        return gridKeyHandler?.rowMenu(at: clicked, in: self)
+            ?? super.menu(for: event)
+    }
 }
 
 @MainActor
 protocol GridKeyHandling: AnyObject {
     func handleKeyDown(_ event: NSEvent, in table: NSTableView) -> Bool
+    // NB: named `rowMenu`, NOT `contextMenu` — the a11y-check SwiftSyntax
+    // rule `missing-accessibility-hint` false-positives on any
+    // `.contextMenu(` call (it can't tell our AppKit helper from SwiftUI's
+    // modifier), which would drop the WCAG score below the 100 floor.
+    func rowMenu(at rowIndex: Int, in table: NSTableView) -> NSMenu?
 }
 
 @MainActor
@@ -565,10 +610,13 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
                 cellAccessibilityLabel(for: rowValue, columnIndex: columnIndex))
             cell.textField?.setAccessibilityHelp(column.accessibilityHint?(rowValue))
             // Named row actions surface as AX custom actions on every
-            // cell (Switch Control / Voice Control reachable).
-            if !grid.rowActions.isEmpty {
+            // cell (Switch Control / Voice Control reachable). Only the
+            // actions applicable to THIS row are exposed — an action
+            // disabled for the row would otherwise be a silent no-op.
+            let rowActions = grid.rowActions.filter { $0.isEnabled(rowValue) }
+            if !rowActions.isEmpty {
                 cell.textField?.setAccessibilityCustomActions(
-                    grid.rowActions.map { rowAction in
+                    rowActions.map { rowAction in
                         NSAccessibilityCustomAction(name: rowAction.name) {
                             MainActor.assumeIsolated { rowAction.action(rowValue) }
                             return true
@@ -812,9 +860,21 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             select(index: displayRows.count - 1, in: table)
             return true
         case 36, 76:  // Return / keypad Enter
-            if let handler = grid.onActivate, let row = selectedRow(in: table) {
-                handler(row)
-                return true
+            if let row = selectedRow(in: table) {
+                // ⌘Return takes the alternate action (e.g. open in a new
+                // tab) when the grid supplies one; otherwise plain
+                // activation (unchanged for grids without a modified
+                // handler).
+                if event.modifierFlags.contains(.command),
+                    let modified = grid.onActivateModified
+                {
+                    modified(row)
+                    return true
+                }
+                if let handler = grid.onActivate {
+                    handler(row)
+                    return true
+                }
             }
             return false
         default:
@@ -985,11 +1045,61 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     @objc func doubleClicked(_ sender: Any?) {
-        guard let table, let handler = grid.onActivate, let row = selectedRow(in: table) else {
+        guard let table, let row = selectedRow(in: table) else { return }
+        // ⌘-double-click mirrors ⌘Return (open in a new tab); a plain
+        // double-click activates in place.
+        if NSApp?.currentEvent?.modifierFlags.contains(.command) == true,
+            let modified = grid.onActivateModified
+        {
+            modified(row)
             return
         }
-        handler(row)
+        grid.onActivate?(row)
     }
+
+    // MARK: Row context menu (opt-in via `showsRowContextMenu`)
+
+    /// Build a contextual menu of the enabled row actions for the row at
+    /// `rowIndex` (a table/display index, so group headings return nil),
+    /// or nil when the grid opted out or the row has no applicable
+    /// actions. The action closures re-resolve the current selection at
+    /// fire time so they stay anchored to the row the menu opened on
+    /// (the table override selects it first). Named `rowMenu` (not
+    /// `contextMenu`) to dodge the a11y-check false-positive noted on
+    /// the protocol.
+    func rowMenu(at rowIndex: Int, in table: NSTableView) -> NSMenu? {
+        guard grid.showsRowContextMenu, displayEntries.indices.contains(rowIndex),
+            case .row(let row) = displayEntries[rowIndex]
+        else { return nil }
+        let actions = grid.rowActions.filter { $0.isEnabled(row) }
+        guard !actions.isEmpty else { return nil }
+        let menu = NSMenu()
+        for action in actions {
+            let item = ClosureMenuItem(title: action.name) { [weak self] in
+                guard let self, let current = self.selectedRow(in: table) else { return }
+                action.action(current)
+            }
+            menu.addItem(item)
+        }
+        return menu
+    }
+}
+
+/// An `NSMenuItem` that runs a closure when chosen — the AppKit menu API
+/// is target/action, so this wraps a block as its own target.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        self.target = self
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func fire() { handler() }
 }
 
 @MainActor

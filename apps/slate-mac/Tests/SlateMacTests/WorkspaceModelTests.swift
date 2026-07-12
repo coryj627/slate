@@ -732,13 +732,16 @@ final class WorkspaceModelTests: XCTestCase {
             EditorItem.markdown(path: "notes/α β.md"),
             EditorItem.canvas(path: "boards/α plan.canvas"),
             EditorItem.base(path: "queries/reading.base"),
+            EditorItem.graph,
         ] {
             let data = try JSONEncoder().encode(item)
             let decoded = try JSONDecoder().decode(EditorItem.self, from: data)
             XCTAssertEqual(item, decoded)
         }
 
-        let unknown = Data(#"{"kind":"graph","path":"vault.graph"}"#.utf8)
+        // "graph" now decodes (P1-2 realized it); the forward-compat
+        // throw contract needs a STILL-unknown kind as its probe.
+        let unknown = Data(#"{"kind":"excalidraw","path":"vault.excalidraw"}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(EditorItem.self, from: unknown))
     }
 

@@ -470,6 +470,44 @@ final class AppState: ObservableObject {
         connectionsRootPath ?? selectedFilePath
     }
 
+    // MARK: Graph tab, Table mode (Milestone P, P1-2 #555)
+
+    /// The whole-graph snapshot backing the Graph tab's Table mode,
+    /// fetched once per generation and sorted/filtered client-side.
+    @Published var graphTableSnapshot: GraphSnapshot?
+    /// Backend filter (a snapshot re-fetch on change): Attachments /
+    /// Unresolved (= ghosts) / Orphans-only toggles — exactly
+    /// `GraphFilter` semantics (spec §P1-2). Defaults: attachments off,
+    /// ghosts on.
+    @Published var graphTableFilter = GraphFilter(
+        includeAttachments: false, includeGhosts: true, orphansOnly: false)
+    /// Client-side label substring filter (case/diacritic-insensitive),
+    /// applied to the fetched rows without a re-fetch.
+    @Published var graphTableTextFilter: String = ""
+    @Published var graphTableLoading: Bool = false
+    @Published var graphTableError: String?
+    var graphTableLoadSeq: UInt64 = 0
+    var graphTableSeenGraphGeneration: UInt64 = 0
+    /// Race-test seam (post-compute, pre-guard); nil in production.
+    var graphTablePublishGate: (() async -> Void)?
+    /// True when the active tab is the graph tab (gates the
+    /// generation-driven table refresh's announcements).
+    var graphTabActive: Bool {
+        workspace.activeTab?.item == .graph
+    }
+
+    /// True when a `.graph` tab is the active tab of ANY split group —
+    /// i.e. currently rendered somewhere, not merely open in a
+    /// background position. Gates the generation-driven refresh so it
+    /// stops once every graph tab is closed (a stale `graphTableSnapshot`
+    /// is never cleared on close, so keying on it alone leaked a
+    /// forever-refresh with no on-screen consumer — review round 1
+    /// finding 10) while still keeping a graph visible in a non-focused
+    /// pane current.
+    var anyGraphTabVisible: Bool {
+        workspace.model.groupsInOrder.contains { $0.activeTab?.item == .graph }
+    }
+
     /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
     /// focusable transient panel in the canvas container; Esc/Close
     /// dismisses (panel-local, not a t0 M5 ladder rung).
@@ -529,6 +567,10 @@ final class AppState: ObservableObject {
             activateCanvasTab(id, path: path)
             return
         }
+        if case .graph = tab.item {
+            activateGraphTab(id)
+            return
+        }
         guard case .markdown(let path) = tab.item else { return }
         if id == workspace.model.activeGroup.activeTabID, loadedFilePath == path {
             return
@@ -580,6 +622,13 @@ final class AppState: ObservableObject {
     /// a no-op.
     func newTab() {
         guard let item = workspace.activeTab?.item else { return }
+        // The graph is a workspace-global singleton: Duplicate Tab must
+        // not spawn a second graph (round 2 finding 6). It's already the
+        // active tab, so this is a no-op beyond the spoken confirmation.
+        if case .graph = item {
+            graphAnnouncer.announce(.status("The graph is already open."))
+            return
+        }
         // Snapshot the outgoing buffer, then open the duplicate. The
         // selection sink does NOT fire (same path selected), so park and
         // restore in place.
@@ -615,6 +664,12 @@ final class AppState: ObservableObject {
             return
         }
         if case .dashboard = workspace.model.tab(target)?.item {
+            performCloseTab(target)
+            return
+        }
+        // The Graph tab has no editable buffer, so it is never dirty —
+        // closing it must never present the note save gate.
+        if case .graph = workspace.model.tab(target)?.item {
             performCloseTab(target)
             return
         }
@@ -726,7 +781,7 @@ final class AppState: ObservableObject {
     static func fileBackedPath(of item: EditorItem) -> String? {
         switch item {
         case .markdown(let p), .canvas(let p), .base(let p): return p
-        case .savedQuery, .dashboard: return nil
+        case .savedQuery, .dashboard, .graph: return nil
         }
     }
 
@@ -771,6 +826,9 @@ final class AppState: ObservableObject {
                 openDashboard(id: id, name: name, target: .newTab)
                 postAccessibilityAnnouncement(
                     "Reopened \(name).", priority: .medium)
+            case .graph:
+                openGraphTab()
+                postAccessibilityAnnouncement("Reopened Graph.", priority: .medium)
             }
             return
         }
@@ -1249,6 +1307,18 @@ final class AppState: ObservableObject {
     /// fields remain valid — no funnel hop needed; the model split already
     /// moved group focus).
     func splitActivePane(axis: SplitBranch.Axis) {
+        // A split duplicates the active item into the new pane; for the
+        // graph that would violate the workspace-global singleton (round
+        // 2 finding 6). Refuse and say why — the graph opens in one pane;
+        // to see it beside a note, split from the note instead. (An
+        // `openFile(.newSplit)` for a real file falls back to a new tab
+        // via its own capacity check.)
+        if case .graph = workspace.activeTab?.item {
+            postAccessibilityAnnouncement(
+                "The graph opens in a single pane. Split from a note instead.",
+                priority: .medium)
+            return
+        }
         // Park the outgoing pane's buffer FIRST: after the split the
         // original tab is unfocused and renders from its parked document —
         // without this it would show the never-visited placeholder.
@@ -3478,6 +3548,8 @@ final class AppState: ObservableObject {
             // / back-stack / payload before the new vault populates
             // (review round 1 finding 3).
             resetConnectionsState()
+            // Graph tab table (P1-2 #555): same cross-vault isolation.
+            resetGraphTableState()
             // U1-2: tabs belong to a vault; a fresh open starts clean (and
             // must reset BEFORE the selection clear so the funnel doesn't
             // park the previous vault's buffer).
@@ -3863,6 +3935,8 @@ final class AppState: ObservableObject {
         // closing vault must never load or open against the next one
         // (review round 1 finding 3).
         resetConnectionsState()
+        // Graph tab table (P1-2 #555): same cross-vault isolation.
+        resetGraphTableState()
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
@@ -6870,6 +6944,9 @@ final class AppState: ObservableObject {
             case .savedQuery:
                 continue
             case .dashboard:
+                continue
+            case .graph:
+                // Synthetic path; never within a deleted real subtree.
                 continue
             }
         }

@@ -137,7 +137,7 @@ struct WorkspaceStore {
         let tab: Tab?
         init(from decoder: Decoder) throws {
             let decoded = try? Tab(from: decoder)
-            let known = ["markdown", "canvas", "base", "savedQuery", "dashboard"]
+            let known = ["markdown", "canvas", "base", "savedQuery", "dashboard", "graph"]
             self.tab = (decoded.map { known.contains($0.item.kind) } == true) ? decoded : nil
         }
         func encode(to encoder: Encoder) throws {
@@ -352,6 +352,8 @@ struct WorkspaceStore {
             return Item(kind: "savedQuery", path: id, id: id, name: name)
         case .dashboard(let id, let name):
             return Item(kind: "dashboard", path: id, id: id, name: name)
+        case .graph:
+            return Item(kind: "graph", path: "graph:singleton")
         }
     }
 
@@ -363,8 +365,17 @@ struct WorkspaceStore {
     /// invalid snapshots are rejected.
     static func model(from snapshot: Snapshot) -> WorkspaceModel? {
         guard let root = splitNode(from: snapshot.root) else { return nil }
-        let model = WorkspaceModel(
+        var model = WorkspaceModel(
             root: root, activeGroupID: GroupID(raw: snapshot.activeGroup))
+        // Enforce the graph's workspace-global singleton on restore: a
+        // snapshot written by a buggy build (or hand-edited) could hold
+        // more than one `.graph` tab; keep the first in tree order and
+        // close the rest (their panes collapse if that leaves a group
+        // empty). New duplicates are already prevented at the creation
+        // gestures (round 2 finding 6).
+        for extra in model.allTabs.filter({ $0.item == .graph }).dropFirst() {
+            _ = model.closeTab(extra.id)
+        }
         guard model.validate().isEmpty else { return nil }
         return model
     }
@@ -387,6 +398,8 @@ struct WorkspaceStore {
                     item = .dashboard(
                         id: tab.item.id ?? tab.item.path,
                         name: tab.item.name ?? "Dashboard")
+                case "graph":
+                    item = .graph
                 default:
                     item = .markdown(path: tab.item.path)
                 }

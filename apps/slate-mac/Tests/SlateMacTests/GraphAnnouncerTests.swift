@@ -75,6 +75,55 @@ final class GraphAnnouncerTests: XCTestCase {
         XCTAssertEqual(posts().count, 1, "the stale navigation line was dropped, not posted")
     }
 
+    /// Filter-count narration coalesces on its own class so per-keystroke
+    /// filtering announces the resting count once, not every letter
+    /// (review round 1 finding 7).
+    func testFilterCountIsCoalescedFinalStateWins() {
+        let (a, posts) = makeAnnouncer()
+        a.announceFilterCount("40 of 247 shown", gate: { true })
+        a.announceFilterCount("12 of 247 shown", gate: { true })
+        a.announceFilterCount("3 of 247 shown", gate: { true })
+        XCTAssertTrue(posts().isEmpty, "coalesced filter shouldn't post before flush")
+        a.flushForTests()
+        XCTAssertEqual(posts().count, 1, "only the final filter count posts")
+        XCTAssertEqual(posts().first?.0, "3 of 247 shown")
+        XCTAssertEqual(posts().first?.1, .medium)
+    }
+
+    /// The fire-time gate suppresses a queued count when relevance lapses
+    /// (focus moved to another split pane before the debounce fired) —
+    /// round 3 finding 2.
+    func testFilterCountGateSuppressesWhenNoLongerRelevant() {
+        let (a, posts) = makeAnnouncer()
+        var relevant = true
+        a.announceFilterCount("9 of 40 shown", gate: { relevant })
+        relevant = false  // focus left the graph within the debounce window
+        a.flushForTests()
+        XCTAssertTrue(posts().isEmpty, "a count whose gate lapsed must not post")
+    }
+
+    /// `cancelPending` drops queued announcements without posting them —
+    /// so a coalesced count scheduled while the graph was active can't
+    /// fire after the view leaves or the vault closes (round 2 finding 8).
+    func testCancelPendingDropsQueuedAnnouncements() {
+        let (a, posts) = makeAnnouncer()
+        a.announceFilterCount("7 of 20 shown", gate: { true })
+        a.announce(.rowFocused(GraphRowRef(label: "A", linksIn: 0, linksOut: 0, isGhost: false, references: 0, isEmbed: false)))
+        a.cancelPending()
+        a.flushForTests()
+        XCTAssertTrue(posts().isEmpty, "cancelled announcements must never post")
+    }
+
+    /// A filter count and a navigation line coalesce independently — one
+    /// must not swallow the other (distinct event classes).
+    func testFilterAndNavigationCoalesceIndependently() {
+        let (a, posts) = makeAnnouncer()
+        a.announceFilterCount("5 of 9 shown", gate: { true })
+        a.announce(.rowFocused(GraphRowRef(label: "A", linksIn: 0, linksOut: 0, isGhost: false, references: 0, isEmbed: false)))
+        a.flushForTests()
+        XCTAssertEqual(Set(posts().map(\.0)), ["5 of 9 shown", "A, 0 links in, 0 links out"])
+    }
+
     func testSummaryAndReRootPostImmediatelyAtMedium() {
         let (a, posts) = makeAnnouncer()
         a.announce(.summary("247 notes, 1,032 links."))

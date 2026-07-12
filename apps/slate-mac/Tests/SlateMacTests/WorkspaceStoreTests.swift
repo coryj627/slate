@@ -222,10 +222,10 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     func testUnknownTabKindDroppedNotFatal() throws {
-        // Forward compat (#369 inverted the old canvas-drop assertion):
-        // a still-future "graph" tab (Milestone P) round-trips as a DROP,
-        // with the group's active pointer repaired — exactly how a T-era
-        // snapshot degrades in an older build.
+        // Forward compat: a still-future tab kind round-trips as a DROP,
+        // with the group's active pointer repaired — exactly how a
+        // newer-build snapshot degrades in an older one. ("graph" was
+        // this probe until P1-2 realized it; use a still-unknown kind.)
         let groupID = UUID()
         let keepID = UUID()
         let json = """
@@ -234,7 +234,7 @@ final class WorkspaceStoreTests: XCTestCase {
                       "activeTab": "\(UUID().uuidString)",
                       "tabs": [
                         {"id": "\(UUID().uuidString)",
-                         "item": {"kind": "graph", "path": "vault.graph"}},
+                         "item": {"kind": "excalidraw", "path": "vault.excalidraw"}},
                         {"id": "\(keepID.uuidString)",
                          "item": {"kind": "markdown", "path": "kept.md"}}
                       ]}}
@@ -293,6 +293,22 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(
             rebuilt.allTabs.map(\.item),
             [.base(path: "Queries/Reading.base"), .markdown(path: "notes/a.md")])
+        XCTAssertTrue(rebuilt.validate().isEmpty)
+    }
+
+    /// P1-2 (#555): the singleton `.graph` tab round-trips through the
+    /// store (no path payload; the synthetic "graph" key persists it).
+    func testGraphTabRoundTripsThroughWorkspaceStore() throws {
+        var model = WorkspaceModel()
+        _ = model.openTab(.graph)
+        _ = model.openTab(.markdown(path: "notes/a.md"))
+
+        let snapshot = WorkspaceStore.snapshot(of: model)
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WorkspaceStore.Snapshot.self, from: data)
+
+        let rebuilt = try XCTUnwrap(WorkspaceStore.model(from: decoded))
+        XCTAssertEqual(rebuilt.allTabs.map(\.item), [.graph, .markdown(path: "notes/a.md")])
         XCTAssertTrue(rebuilt.validate().isEmpty)
     }
 

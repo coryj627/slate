@@ -139,19 +139,21 @@ struct TabBarView: View {
         }
     }
 
-    /// "tab N of M[, edited][, canvas/base/saved query/dashboard]" — the VoiceOver value for one tab.
+    /// "tab N of M[, edited][, canvas/base/saved query/dashboard/graph]" — the VoiceOver value for one tab.
     /// Static so tests pin the exact strings. The kind rides in the value
     /// (t0 §3 inspectability), not the label, so the speakable name stays
     /// the filename for Voice Control.
     static func accessibilityValue(
         index: Int, count: Int, isDirty: Bool, isCanvas: Bool = false,
-        isBase: Bool = false, isSavedQuery: Bool = false, isDashboard: Bool = false
+        isBase: Bool = false, isSavedQuery: Bool = false, isDashboard: Bool = false,
+        isGraph: Bool = false
     ) -> String {
         "tab \(index + 1) of \(count)" + (isDirty ? ", edited" : "")
             + (isCanvas ? ", canvas" : "")
             + (isBase ? ", base" : "")
             + (isSavedQuery ? ", saved query" : "")
             + (isDashboard ? ", dashboard" : "")
+            + (isGraph ? ", graph" : "")
     }
 
     private func isDirty(_ tab: WorkspaceTab) -> Bool {
@@ -202,6 +204,13 @@ struct TabBarView: View {
                             .font(Tokens.Typography.caption)
                             .foregroundStyle(Tokens.ColorRole.textSecondary)
                     }
+                    if case .graph = tab.item {
+                        // Kind marker (decorative: the AX value carries
+                        // "graph" — see accessibilityValue below).
+                        SlateSymbol.graph.decorative
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    }
                     Text(title(tab))
                         .font(active ? Tokens.Typography.body.weight(.semibold) : Tokens.Typography.body)
                         .foregroundStyle(
@@ -229,7 +238,8 @@ struct TabBarView: View {
                     isCanvas: { if case .canvas = tab.item { return true }; return false }(),
                     isBase: { if case .base = tab.item { return true }; return false }(),
                     isSavedQuery: { if case .savedQuery = tab.item { return true }; return false }(),
-                    isDashboard: { if case .dashboard = tab.item { return true }; return false }())
+                    isDashboard: { if case .dashboard = tab.item { return true }; return false }(),
+                    isGraph: { if case .graph = tab.item { return true }; return false }())
             )
             .accessibilityAddTraits(active ? [.isSelected] : [])
             .accessibilityHint(

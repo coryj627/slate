@@ -88,6 +88,11 @@ private struct TabGroupView: View {
                 document: appState.canvasDocument(for: path),
                 workspace: appState.workspace,
                 tabID: group.activeTab?.id ?? TabID(raw: UUID()))
+        } else if case .graph = group.activeTab?.item {
+            // Milestone P (P1-2 #555): the global graph tab. Must
+            // precede the NoteContentView fallback, or a graph tab
+            // silently renders the note editor.
+            GraphContainerView(tabID: group.activeTab?.id ?? TabID(raw: UUID()))
         } else if isFocused || !hasSplits {
             // The focused pane (or the only pane): the live document.
             NoteContentView(workspace: appState.workspace)

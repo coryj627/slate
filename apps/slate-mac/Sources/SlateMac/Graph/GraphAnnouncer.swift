@@ -57,6 +57,10 @@ enum GraphEvent: Equatable {
     case status(String)
     /// Errors: assertive.
     case error(String)
+    // Filter-count narration is NOT an event: it needs a FIRE-TIME
+    // relevance gate (a coalesced count must not speak after focus leaves
+    // the graph), which an Equatable event can't carry — see
+    // `announceFilterCount(_:gate:)`.
 }
 
 /// The one announcement funnel for every graph surface (mirrors
@@ -69,12 +73,16 @@ final class GraphAnnouncer: ObservableObject {
 
     private enum EventClass: Hashable {
         case navigation
+        case filter
     }
 
     private let post: (String, NSAccessibilityPriorityLevel) -> Void
     private let coalesceWindow: TimeInterval
     private var pending:
-        [EventClass: (work: DispatchWorkItem, text: String, priority: NSAccessibilityPriorityLevel)] = [:]
+        [EventClass: (
+            work: DispatchWorkItem, text: String, priority: NSAccessibilityPriorityLevel,
+            gate: () -> Bool
+        )] = [:]
 
     init(
         verbosity: GraphVerbosity = .standard,
@@ -101,6 +109,18 @@ final class GraphAnnouncer: ObservableObject {
         case .summary, .reRooted, .status:
             post(text, .medium)
         }
+    }
+
+    /// Coalesced filter-count narration (`"{k} of {n} shown"`) with a
+    /// FIRE-TIME relevance gate. Per-keystroke filtering coalesces to the
+    /// resting count (round 1 finding 7), and `gate` is re-evaluated when
+    /// the debounce actually fires — so a count queued while the graph
+    /// was focused is dropped if focus has since moved to another split
+    /// pane (which leaves the graph mounted, so `onDisappear` never runs
+    /// — round 3 finding 2).
+    func announceFilterCount(_ text: String, gate: @escaping () -> Bool) {
+        guard !text.isEmpty else { return }
+        debounce(.filter, text: text, priority: .medium, gate: gate)
     }
 
     // MARK: Grammar assembly (§P1-1 row copy)
@@ -139,15 +159,32 @@ final class GraphAnnouncer: ObservableObject {
     // MARK: Coalescing (mirrors CanvasAnnouncer)
 
     private func debounce(
-        _ eventClass: EventClass, text: String, priority: NSAccessibilityPriorityLevel
+        _ eventClass: EventClass, text: String, priority: NSAccessibilityPriorityLevel,
+        gate: @escaping () -> Bool = { true }
     ) {
         pending[eventClass]?.work.cancel()
+        // The class is `@MainActor` and every caller is therefore on the
+        // main actor (the compiler enforces this — a `@MainActor` method
+        // can't be invoked synchronously off-main), so `pending` is only
+        // ever mutated on the main thread. This DispatchWorkItem is the
+        // one non-isolated closure in the type: it is dispatched ONLY to
+        // `DispatchQueue.main` (the main actor's executor), so
+        // `assumeIsolated` makes that main-actor isolation explicit and
+        // strict-concurrency-safe rather than implicit (Codoki flagged
+        // the implicit form as a data-race risk; the AccessibleDataGrid
+        // custom-action handlers use the same idiom).
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard let entry = self.pending.removeValue(forKey: eventClass) else { return }
-            self.post(entry.text, entry.priority)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                guard let entry = self.pending.removeValue(forKey: eventClass) else { return }
+                // Re-check relevance AT FIRE TIME (round 3 finding 2): a
+                // count queued while the graph was focused is dropped if
+                // the gate no longer holds.
+                guard entry.gate() else { return }
+                self.post(entry.text, entry.priority)
+            }
         }
-        pending[eventClass] = (work, text, priority)
+        pending[eventClass] = (work, text, priority, gate)
         DispatchQueue.main.asyncAfter(deadline: .now() + coalesceWindow, execute: work)
     }
 
@@ -156,12 +193,22 @@ final class GraphAnnouncer: ObservableObject {
         pending = [:]
     }
 
-    /// Test hook: emit pending debounced posts NOW.
+    /// Drop any queued (debounced) announcements WITHOUT posting them —
+    /// called when the graph view disappears or a vault opens/closes, so
+    /// a coalesced count scheduled while the graph was active can't fire
+    /// after the user has moved on (round 2 finding 8).
+    func cancelPending() {
+        flushAllPending()
+    }
+
+    /// Test hook: emit pending debounced posts NOW, honoring each entry's
+    /// fire-time gate (so gating is observable in tests, matching prod).
     func flushForTests() {
         let items = pending
         pending = [:]
         for (_, entry) in items {
             entry.work.cancel()
+            guard entry.gate() else { continue }
             post(entry.text, entry.priority)
         }
     }
