@@ -40,7 +40,15 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             openButtonFocused = true
-            postAccessibilityAnnouncement(welcomeAnnouncement)
+            // #872: on a cold launch that's about to auto-restore the
+            // last vault, WelcomeView renders for a single frame before
+            // the vault takes over — don't announce "Open Vault focused"
+            // into that flash (the vault-open scan announcement follows).
+            // The not-found and no-restore paths genuinely land here, so
+            // they keep the announcement.
+            if !appState.willRestoreVaultOnLaunch {
+                postAccessibilityAnnouncement(welcomeAnnouncement)
+            }
         }
         .alert(
             "Could Not Open Vault",

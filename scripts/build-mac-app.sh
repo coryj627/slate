@@ -117,9 +117,23 @@ if [[ "$BUNDLE" == "1" ]]; then
     echo
     echo "==> Wrapping binary in $APP_BUNDLE"
     rm -rf "$APP_BUNDLE"
-    mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Frameworks"
+    mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Frameworks" \
+        "$APP_BUNDLE/Contents/Resources"
 
     cp -f "$ABS_BINARY" "$APP_BUNDLE/Contents/MacOS/SlateMac"
+
+    # App icon (#875, app-icons.md:16): stage AppIcon.icns into Resources so
+    # Dock / Finder / ⌘-Tab / LaunchServices show the app mark, not the
+    # generic placeholder. The .icns is committed (regenerate with
+    # Resources/generate-app-icon.py); the Info.plist `CFBundleIconFile`
+    # below points at it. This is a PLACEHOLDER mark — swap the .icns for
+    # real brand art without touching this script.
+    APP_ICON="$WORKSPACE_ROOT/$APP_DIR/Resources/AppIcon.icns"
+    if [[ -f "$APP_ICON" ]]; then
+        cp -f "$APP_ICON" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+    else
+        echo "warning: $APP_ICON missing — bundle will show the generic icon" >&2
+    fi
     # The binary links against the dylib at its build path (with `deps/`).
     # We mirror that exact path inside the bundle for the rewrite below,
     # using `target/$PROFILE/libslate_uniffi.dylib` as the source — both
@@ -162,6 +176,10 @@ if [[ "$BUNDLE" == "1" ]]; then
     <string>Slate</string>
     <key>CFBundleExecutable</key>
     <string>SlateMac</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.startingblind.slate.dev</string>
     <key>CFBundleInfoDictionaryVersion</key>

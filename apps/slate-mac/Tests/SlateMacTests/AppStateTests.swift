@@ -25,12 +25,23 @@ final class AppStateTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: tempDir)
+        // Red-team: UserDefaults(suiteName:) domains PERSIST as
+        // ~/Library/Preferences/<suite>.plist — they are not ephemeral.
+        // Remove every suite this case created (mirrors PreferencesStoreTests).
+        for name in createdSuiteNames {
+            UserDefaults.standard.removePersistentDomain(forName: name)
+        }
+        createdSuiteNames = []
         try super.tearDownWithError()
     }
 
+    /// Suite names created by `isolatedPreferences()`, torn down above.
+    private var createdSuiteNames: [String] = []
+
     private func makeAppState(
         seedEntries: [RecentVault] = [],
-        externalOpener: @escaping (URL) -> Bool = { _ in true }
+        externalOpener: @escaping (URL) -> Bool = { _ in true },
+        preferencesStore: PreferencesStore? = nil
     ) throws -> AppState {
         let store = RecentVaultsStore(fileURL: storeFile)
         if !seedEntries.isEmpty {
@@ -41,7 +52,33 @@ final class AppStateTests: XCTestCase {
         // branch without spawning the developer's default browser.
         // Tests that care which URL was passed inject a recording
         // closure of their own.
+        if let preferencesStore {
+            return AppState(
+                recentsStore: store,
+                externalOpener: externalOpener,
+                preferencesStore: preferencesStore
+            )
+        }
         return AppState(recentsStore: store, externalOpener: externalOpener)
+    }
+
+    /// A `PreferencesStore` backed by a throwaway UserDefaults suite so
+    /// the launch tests read a deterministic `restoreVaultOnLaunch`
+    /// value (default ON) and never touch — or depend on — the machine's
+    /// standard defaults. Torn down implicitly (an ephemeral suite).
+    private func isolatedPreferences() -> PreferencesStore {
+        let name = "slate-launch-test-\(UUID().uuidString)"
+        createdSuiteNames.append(name)
+        return PreferencesStore(defaults: UserDefaults(suiteName: name)!)
+    }
+
+    /// A vault directory that actually exists on disk, for the
+    /// launch-restore integration tests.
+    private func makeRealVault(_ name: String) throws -> RecentVault {
+        let dir = tempDir.appendingPathComponent(name)
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true)
+        return RecentVault(url: dir)
     }
 
     /// Codex review (corpus PR): the tree-selection mirror is the
@@ -121,6 +158,279 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(state.missingRecentVault, entry)
         XCTAssertFalse(state.isVaultOpen)
+    }
+
+    // MARK: - Launch restore (#872)
+
+    /// Fixture entries for the pure-decision matrix. Existence is
+    /// supplied by the injected `vaultExists` closure, so these paths
+    /// never need to be real.
+    private var recentAlpha: RecentVault {
+        RecentVault(path: "/tmp/alpha", displayName: "alpha", lastOpenedMs: 200)
+    }
+    private var recentBeta: RecentVault {
+        RecentVault(path: "/tmp/beta", displayName: "beta", lastOpenedMs: 100)
+    }
+
+    func testLaunchDestinationRestoresMostRecentWhenPresent() {
+        let dest = AppState.launchDestination(
+            recents: [recentAlpha, recentBeta],
+            optionHeld: false,
+            vaultExists: { _ in true }
+        )
+        // Decides on `recents.first` (the LRU-front, most-recent entry).
+        XCTAssertEqual(dest, .restore(recentAlpha))
+    }
+
+    func testLaunchDestinationWelcomeWhenOptionHeld() {
+        let dest = AppState.launchDestination(
+            recents: [recentAlpha],
+            optionHeld: true,
+            vaultExists: { _ in true }
+        )
+        XCTAssertEqual(dest, .welcome, "holding ⌥ forces the picker/Welcome")
+    }
+
+    func testLaunchDestinationNotFoundWhenMostRecentMissing() {
+        let dest = AppState.launchDestination(
+            recents: [recentAlpha, recentBeta],
+            optionHeld: false,
+            vaultExists: { _ in false }
+        )
+        // A gone most-recent lands on Welcome via the not-found flow.
+        XCTAssertEqual(dest, .notFound(recentAlpha))
+    }
+
+    func testLaunchDestinationWelcomeWhenNoRecents() {
+        let dest = AppState.launchDestination(
+            recents: [],
+            optionHeld: false,
+            vaultExists: { _ in true }
+        )
+        XCTAssertEqual(dest, .welcome, "nothing to restore → Welcome")
+    }
+
+    func testLaunchDestinationWelcomeWhenRestoreDisabled() {
+        let dest = AppState.launchDestination(
+            recents: [recentAlpha],
+            optionHeld: false,
+            vaultExists: { _ in true },
+            restoreEnabled: false
+        )
+        XCTAssertEqual(dest, .welcome, "the General toggle off → Welcome")
+    }
+
+    func testRestoreOnLaunchReopensMostRecentExistingVault() async throws {
+        let vault = try makeRealVault("launch-vault")
+        let state = try makeAppState(
+            seedEntries: [vault], preferencesStore: isolatedPreferences())
+        XCTAssertTrue(state.restoreVaultOnLaunch, "default ON")
+
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+
+        XCTAssertTrue(state.isVaultOpen, "the most-recent vault reopens on launch")
+        XCTAssertEqual(state.currentVaultURL?.path, vault.path)
+        XCTAssertNil(state.missingRecentVault)
+        await state.scanTask?.value
+    }
+
+    func testRestoreOnLaunchWithOptionHeldStaysOnWelcome() throws {
+        let vault = try makeRealVault("launch-vault-opt")
+        let state = try makeAppState(
+            seedEntries: [vault], preferencesStore: isolatedPreferences())
+
+        state.restoreMostRecentVaultOnLaunch(optionHeld: true)
+
+        XCTAssertFalse(state.isVaultOpen, "⌥ at launch keeps the Welcome screen")
+        XCTAssertNil(state.missingRecentVault)
+    }
+
+    /// Codex red-team (P1): the production vault picker runs a nested
+    /// `runModal()` loop, so the WindowGroup launch `.task` can fire
+    /// WHILE the panel is up. If `pickAndOpenVault` didn't claim the
+    /// launch attempt first, that reentrant restore would open a recent
+    /// vault behind the panel. Model the reentrancy with an injected
+    /// picker that invokes the launch restore before returning nil
+    /// (user cancels) — no vault must end up open.
+    func testManualOpenClaimsLaunchAttemptBeforeModal() throws {
+        let recent = try makeRealVault("reentrant-recent")
+        let state = try makeAppState(
+            seedEntries: [recent], preferencesStore: isolatedPreferences())
+        var restoreOpenedAVault = false
+        state.vaultPicker = {
+            // Simulate the launch .task running inside runModal().
+            state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+            restoreOpenedAVault = state.isVaultOpen
+            return nil  // user cancels the panel
+        }
+
+        state.pickAndOpenVault()
+
+        XCTAssertFalse(
+            restoreOpenedAVault,
+            "the claimed launch attempt must make the reentrant restore a no-op")
+        XCTAssertFalse(
+            state.isVaultOpen,
+            "cancelling the picker leaves NO vault open — nothing restored behind it")
+    }
+
+    /// Codex red-team (round 2): manually opening a MISSING recent (which
+    /// opens nothing, only flags `missingRecentVault`) must still claim
+    /// the launch attempt — otherwise a launch `.task` firing afterward
+    /// would restore the LEADING valid recent and override the user's
+    /// intent.
+    func testManualOpenRecentClaimsLaunchAttemptEvenWhenMissing() throws {
+        let validDir = tempDir.appendingPathComponent("or-valid")
+        try FileManager.default.createDirectory(
+            at: validDir, withIntermediateDirectories: true)
+        let valid = RecentVault(
+            path: validDir.path, displayName: "valid", lastOpenedMs: 2)
+        let missing = RecentVault(
+            path: tempDir.appendingPathComponent("or-gone").path,
+            displayName: "gone", lastOpenedMs: 1)
+        let state = try makeAppState(
+            seedEntries: [valid, missing], preferencesStore: isolatedPreferences())
+        XCTAssertEqual(
+            state.recentVaults.first?.path, valid.path,
+            "premise: the VALID vault is the leading recent a launch would restore")
+
+        // User manually opens the stale non-leading recent before launch.
+        state.openRecent(missing)
+        XCTAssertEqual(state.missingRecentVault?.path, missing.path)
+        XCTAssertFalse(state.isVaultOpen, "the missing entry opens nothing")
+
+        // The launch task fires — it must NOT restore the leading valid vault.
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+        XCTAssertFalse(
+            state.isVaultOpen,
+            "the claimed attempt makes launch restore a no-op — no vault behind the user's intent")
+    }
+
+    /// Red-team: the General-tab toggle handler must both flip the
+    /// @Published mirror AND persist through the store (so the choice
+    /// survives to the NEXT launch) — the disabled-launch test seeds the
+    /// pref directly, bypassing this wrapper, so pin the wrapper here.
+    func testSetRestoreVaultOnLaunchMutatesAndPersists() throws {
+        let prefs = isolatedPreferences()
+        let state = try makeAppState(preferencesStore: prefs)
+        XCTAssertTrue(state.restoreVaultOnLaunch, "default ON")
+
+        state.setRestoreVaultOnLaunch(false)
+        XCTAssertFalse(state.restoreVaultOnLaunch)
+        XCTAssertFalse(
+            prefs.loadRestoreVaultOnLaunch(),
+            "the toggle must persist so it holds next launch")
+
+        state.setRestoreVaultOnLaunch(true)
+        XCTAssertTrue(state.restoreVaultOnLaunch)
+        XCTAssertTrue(prefs.loadRestoreVaultOnLaunch())
+    }
+
+    /// Red-team: `willRestoreVaultOnLaunch` gates WelcomeView's VoiceOver
+    /// announcement suppression during the one-frame flash before an
+    /// auto-restore. It must be true ONLY when a restore will actually
+    /// happen — true for a present recent, false for restore-off /
+    /// missing / no-recents, and false once the launch attempt is spent
+    /// (so the flash is over). (⌥ is not held under XCTest, so the
+    /// option branch is covered by the pure `launchDestination` matrix.)
+    func testWillRestoreVaultOnLaunchTracksWhetherARestoreWillHappen() throws {
+        let present = try makeRealVault("wr-present")
+        let restoring = try makeAppState(
+            seedEntries: [present], preferencesStore: isolatedPreferences())
+        XCTAssertTrue(
+            restoring.willRestoreVaultOnLaunch,
+            "a present recent with restore ON will restore → suppress the flash announcement")
+
+        restoring.setRestoreVaultOnLaunch(false)
+        XCTAssertFalse(
+            restoring.willRestoreVaultOnLaunch,
+            "restore OFF → Welcome, so DON'T suppress the announcement")
+
+        let missing = RecentVault(
+            path: tempDir.appendingPathComponent("wr-gone").path,
+            displayName: "gone", lastOpenedMs: 1)
+        let notFound = try makeAppState(
+            seedEntries: [missing], preferencesStore: isolatedPreferences())
+        XCTAssertFalse(
+            notFound.willRestoreVaultOnLaunch, "a missing recent → not-found, not restore")
+
+        let empty = try makeAppState(preferencesStore: isolatedPreferences())
+        XCTAssertFalse(empty.willRestoreVaultOnLaunch, "no recents → Welcome")
+
+        // Once the launch restore has run (vault open + attempt spent) the
+        // flash is over — never suppress a later Welcome's announcement.
+        restoring.setRestoreVaultOnLaunch(true)
+        restoring.restoreMostRecentVaultOnLaunch(optionHeld: false)
+        XCTAssertTrue(restoring.isVaultOpen, "premise: it restored")
+        XCTAssertFalse(
+            restoring.willRestoreVaultOnLaunch,
+            "the once-guard closes the suppression window after the attempt")
+    }
+
+    func testRestoreOnLaunchWithMissingVaultUsesExistingNotFoundFlow() throws {
+        // A stale most-recent must reuse openRecent's missing-vault
+        // handling — Welcome + the "Vault Not Found" alert — not a new
+        // error path.
+        let missing = RecentVault(
+            path: tempDir.appendingPathComponent("gone").path,
+            displayName: "gone",
+            lastOpenedMs: 1
+        )
+        let state = try makeAppState(
+            seedEntries: [missing], preferencesStore: isolatedPreferences())
+
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+
+        XCTAssertFalse(state.isVaultOpen)
+        XCTAssertEqual(
+            state.missingRecentVault, missing,
+            "a gone most-recent flows through the existing not-found handling")
+    }
+
+    func testRestoreOnLaunchDisabledStaysOnWelcome() throws {
+        let vault = try makeRealVault("launch-vault-off")
+        let prefs = isolatedPreferences()
+        prefs.saveRestoreVaultOnLaunch(false)
+        let state = try makeAppState(seedEntries: [vault], preferencesStore: prefs)
+        XCTAssertFalse(state.restoreVaultOnLaunch)
+
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+
+        XCTAssertFalse(state.isVaultOpen, "the toggle off skips the auto-restore")
+    }
+
+    func testRestoreOnLaunchIsIdempotent() async throws {
+        let vault = try makeRealVault("launch-vault-idem")
+        let state = try makeAppState(
+            seedEntries: [vault], preferencesStore: isolatedPreferences())
+
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+        XCTAssertTrue(state.isVaultOpen)
+        XCTAssertTrue(state.hasAttemptedLaunchRestore)
+        await state.scanTask?.value
+
+        // Close, then call again: the once-guard means the second call
+        // is a no-op (it must not re-open behind a user who closed it).
+        state.closeVault()
+        XCTAssertFalse(state.isVaultOpen)
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+        XCTAssertFalse(state.isVaultOpen, "launch restore runs at most once")
+    }
+
+    func testRestoreOnLaunchNoOpWhenVaultAlreadyOpen() async throws {
+        let vaultA = try makeRealVault("launch-open-a")
+        let vaultB = try makeRealVault("launch-open-b")
+        // Seed B as the most-recent, but open A manually first.
+        let state = try makeAppState(
+            seedEntries: [vaultB], preferencesStore: isolatedPreferences())
+        state.openVault(at: URL(fileURLWithPath: vaultA.path))
+        await state.scanTask?.value
+
+        state.restoreMostRecentVaultOnLaunch(optionHeld: false)
+
+        XCTAssertEqual(
+            state.currentVaultURL?.path, vaultA.path,
+            "an already-open vault must not be clobbered by launch restore")
     }
 
     func testOpenVaultScansAndPopulatesFiles() async throws {

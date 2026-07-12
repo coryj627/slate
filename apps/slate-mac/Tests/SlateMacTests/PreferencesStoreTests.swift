@@ -107,6 +107,24 @@ final class PreferencesStoreTests: XCTestCase {
             "the 'Don't Show Again' choice persists across store instances")
     }
 
+    // MARK: - Restore last vault on launch (#872)
+
+    func testRestoreVaultOnLaunchDefaultsOnAndRoundTrips() {
+        let store = PreferencesStore(defaults: defaults)
+        XCTAssertTrue(
+            store.loadRestoreVaultOnLaunch(),
+            "default ON — a returning user lands back in their vault")
+
+        store.saveRestoreVaultOnLaunch(false)
+        let store2 = PreferencesStore(defaults: defaults)
+        XCTAssertFalse(
+            store2.loadRestoreVaultOnLaunch(),
+            "the opt-out persists across store instances")
+
+        store2.saveRestoreVaultOnLaunch(true)
+        XCTAssertTrue(PreferencesStore(defaults: defaults).loadRestoreVaultOnLaunch())
+    }
+
     // MARK: - Persistence tags
 
     /// Persistence tags are stable strings, independent of the

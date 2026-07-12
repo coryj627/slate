@@ -2076,6 +2076,25 @@ final class AppState: ObservableObject {
             priority: .medium)
     }
 
+    // MARK: Restore last vault on launch (#872)
+
+    /// Whether a cold launch auto-reopens the most-recent vault
+    /// (launching.md: "Restore previous state on restart … avoid making
+    /// people retrace steps"). Mirrors
+    /// `PreferencesStore.restoreVaultOnLaunchKey`; default **ON**. The
+    /// General settings toggle is the discoverable escape hatch; holding
+    /// ⌥ at launch is the transient one. Loaded from `PreferencesStore`
+    /// in `init`; every mutation routes through `setRestoreVaultOnLaunch`.
+    @Published private(set) var restoreVaultOnLaunch: Bool = true
+
+    /// Settings ▸ General toggle handler — persists the host pref and
+    /// mirrors it into the published property the toggle reads. Takes
+    /// effect at the NEXT launch (the decision is made once, early).
+    func setRestoreVaultOnLaunch(_ enabled: Bool) {
+        restoreVaultOnLaunch = enabled
+        preferencesStore.saveRestoreVaultOnLaunch(enabled)
+    }
+
     // MARK: Tasks (#113 + #114 — Milestone G UI)
 
     /// Tasks parsed from the currently-selected note, in document
@@ -2477,6 +2496,12 @@ final class AppState: ObservableObject {
         self.editorTextScale = Self.nearestEditorTextRung(to: preferencesStore.loadEditorTextScale())
         // #855: persisted spell-check opt-in (default OFF).
         self.editorSpellCheckEnabled = preferencesStore.loadEditorSpellCheck()
+        // #872: persisted "reopen last vault at launch" opt-out (default
+        // ON). Read here so the Settings ▸ General toggle and the launch
+        // decision both see the persisted value; the launch restore
+        // itself is triggered by the root view's `.task`, never by init
+        // (so constructing an AppState in tests never opens a vault).
+        self.restoreVaultOnLaunch = preferencesStore.loadRestoreVaultOnLaunch()
         // #881: persisted "Don't Show Again" opt-out for the compaction-
         // failure alert (default OFF).
         self.compactionAlertSuppressed =
@@ -3720,14 +3745,32 @@ final class AppState: ObservableObject {
     /// instead surface the entry through `missingRecentVault` so the
     /// UI can offer removal.
     func openRecent(_ entry: RecentVault) {
-        let url = URL(fileURLWithPath: entry.path)
-        var isDir: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        if !exists || !isDir.boolValue {
+        // #872 Codex red-team: opening a recent IS the user's launch
+        // intent — claim the launch-restore attempt first. This matters
+        // even for a MISSING entry (which only sets `missingRecentVault`
+        // and opens nothing): without the claim, a WindowGroup launch
+        // `.task` firing afterward would restore the leading VALID recent
+        // and override the user's "I tried this stale one" intent. The
+        // launch path already claimed before routing here; this covers a
+        // manual recent-list click.
+        hasAttemptedLaunchRestore = true
+        guard Self.vaultDirectoryExists(entry) else {
             missingRecentVault = entry
             return
         }
-        openVault(at: url)
+        openVault(at: URL(fileURLWithPath: entry.path))
+    }
+
+    /// Whether a directory exists at the entry's path — the existence
+    /// rule `openRecent` enforces, factored out (#872) so the launch
+    /// decision can consult the SAME rule without opening anything.
+    /// Static + side-effect-free so tests drive the launch matrix
+    /// deterministically by injecting a closure instead of the disk.
+    static func vaultDirectoryExists(_ entry: RecentVault) -> Bool {
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: entry.path, isDirectory: &isDir)
+        return exists && isDir.boolValue
     }
 
     /// Show the directory picker and, if the user chose a folder, open
@@ -3740,6 +3783,14 @@ final class AppState: ObservableObject {
     /// thread.
     @MainActor
     func pickAndOpenVault() {
+        // #872 Codex red-team: a manual open IS the user's launch intent —
+        // claim the launch-restore attempt BEFORE presenting the picker.
+        // The production picker runs a nested `runModal()` event loop that
+        // can execute the WindowGroup launch `.task` while the panel is
+        // still up (and `isVaultOpen` is still false); without this claim,
+        // that task would auto-restore a recent vault BEHIND the open
+        // panel — cancelling then strands it open, choosing opens two.
+        hasAttemptedLaunchRestore = true
         guard let url = vaultPicker() else { return }
         openVault(at: url)
     }
@@ -3750,6 +3801,105 @@ final class AppState: ObservableObject {
     /// ⌘O quick-open fallthrough (#863) — never present a modal panel
     /// under XCTest. Same injectable-var convention as `scanClock`.
     var vaultPicker: () -> URL? = { VaultPicker.pick() }
+
+    // MARK: - Launch restore (#872)
+
+    /// Where a cold launch should land. HIG launching.md: "Restore
+    /// previous state on restart … avoid making people retrace steps";
+    /// Obsidian / VS Code reopen the last workspace, the parity
+    /// expectation for a vault app.
+    enum LaunchDestination: Equatable {
+        /// Auto-reopen this vault — it is present on disk.
+        case restore(RecentVault)
+        /// The most-recent vault is gone (folder moved / drive
+        /// unplugged). Land on Welcome AND surface the EXISTING
+        /// not-found flow so the user can prune the stale entry — the
+        /// caller routes this through `openRecent`, which sets
+        /// `missingRecentVault` and never opens a session.
+        case notFound(RecentVault)
+        /// Show the picker / Welcome with no auto-restore: the ⌥ escape
+        /// hatch is held, the "Reopen last vault" setting is off, or
+        /// there is no recent vault to restore.
+        case welcome
+    }
+
+    /// Pure launch decision (#872) — no side effects, no I/O, so the
+    /// whole matrix is unit-testable without an event queue or the
+    /// filesystem. `optionHeld` is the ⌥-at-launch escape hatch;
+    /// `restoreEnabled` is the Settings ▸ General toggle; `vaultExists`
+    /// decides restore vs. the not-found flow for the most-recent entry.
+    static func launchDestination(
+        recents: [RecentVault],
+        optionHeld: Bool,
+        vaultExists: (RecentVault) -> Bool,
+        restoreEnabled: Bool = true
+    ) -> LaunchDestination {
+        // ⌥ held, toggle off, or nothing to restore → a clean Welcome.
+        guard restoreEnabled, !optionHeld, let mostRecent = recents.first else {
+            return .welcome
+        }
+        return vaultExists(mostRecent) ? .restore(mostRecent) : .notFound(mostRecent)
+    }
+
+    /// True once `restoreMostRecentVaultOnLaunch()` has run, so the
+    /// launch hook is idempotent no matter how many times the root
+    /// view's `.task` re-fires across its lifetime.
+    private(set) var hasAttemptedLaunchRestore = false
+
+    /// Launch-time entry point (#872), called once from the root view's
+    /// `.task`. Reopens the most-recent vault unless the ⌥ escape hatch
+    /// is held or Settings ▸ General ▸ "Reopen last vault at launch" is
+    /// off; a stale most-recent falls through the EXISTING not-found
+    /// flow (`openRecent`). Idempotent, and a no-op once a vault is
+    /// already open, so an early manual open can't be clobbered.
+    ///
+    /// `optionHeld` / `vaultExists` are injected — production reads the
+    /// live modifier flags (evaluated at call time, so ⌥ held *during*
+    /// launch is caught) and the filesystem — so the routing is
+    /// unit-testable.
+    func restoreMostRecentVaultOnLaunch(
+        optionHeld: Bool = NSEvent.modifierFlags.contains(.option),
+        vaultExists: (RecentVault) -> Bool = AppState.vaultDirectoryExists
+    ) {
+        guard !hasAttemptedLaunchRestore else { return }
+        hasAttemptedLaunchRestore = true
+        guard !isVaultOpen else { return }
+        switch Self.launchDestination(
+            recents: recentVaults,
+            optionHeld: optionHeld,
+            vaultExists: vaultExists,
+            restoreEnabled: restoreVaultOnLaunch
+        ) {
+        case .restore(let entry), .notFound(let entry):
+            // Both route through `openRecent`: it re-checks existence
+            // (TOCTOU-safe) and either opens the vault or sets
+            // `missingRecentVault` for the Welcome-screen not-found
+            // alert — the "reuse the existing missing-vault handling"
+            // requirement, no new error path.
+            openRecent(entry)
+        case .welcome:
+            break
+        }
+    }
+
+    /// True when a cold launch is *about* to auto-restore an existing
+    /// vault (#872). WelcomeView reads this in `onAppear` to suppress
+    /// its "Open Vault focused" announcement during the one-frame flash
+    /// before the vault opens — the not-found and no-restore paths DO
+    /// land on Welcome, so those keep the announcement. Mirrors the
+    /// `restoreMostRecentVaultOnLaunch` decision (same inputs).
+    var willRestoreVaultOnLaunch: Bool {
+        guard !hasAttemptedLaunchRestore, !isVaultOpen else { return false }
+        switch Self.launchDestination(
+            recents: recentVaults,
+            optionHeld: NSEvent.modifierFlags.contains(.option),
+            vaultExists: AppState.vaultDirectoryExists,
+            restoreEnabled: restoreVaultOnLaunch
+        ) {
+        case .restore: return true
+        case .notFound, .welcome: return false
+        }
+    }
 
     /// User-action wrapper around `closeVault()` / `attemptCloseVault()`
     /// that mirrors what the MainSplitView "Close Vault" toolbar

@@ -3,15 +3,50 @@
 
 import SwiftUI
 
-/// Settings window (Cmd+,). Two tabs:
+/// Shared geometry for every Settings pane (#862).
+///
+/// macOS settings.md: a "toolbar-based multi-pane layout" people "open
+/// and close quickly via keyboard" with "no need to dock or resize it"
+/// — so the panes are a FIXED width with a UNIFORM inset, applied ONCE
+/// at the container, never per-tab. Before #862 the outer container
+/// used a resizable `minWidth`, and `BibliographySettingsTab` wrapped
+/// its own `.padding(20)` + `.frame` on top of it, so tabs sat at
+/// different insets and the window resized as you switched tabs.
+/// This enum is the single source of truth for the chosen VALUES;
+/// `SettingsLayoutTests` additionally pins the WIRING (fixed min==max
+/// width, one container inset, no per-tab title/padding) by source
+/// inspection, so re-introducing that drift fails a test.
+enum SettingsLayout {
+    /// Fixed content width for every pane. A single fixed width (not a
+    /// resizable `minWidth`) stops the window from resizing as tabs
+    /// change — the #862 complaint. 520pt fits the widest pane (the
+    /// Bibliography source rows) without leaving the sparse panes
+    /// (Canvas, Code) too roomy.
+    static let paneWidth: CGFloat = 520
+    /// Uniform inset around the pane content, applied ONCE at the
+    /// TabView container so every tab sits at the same inset.
+    static let inset: CGFloat = 20
+    /// Baseline pane height so short panes don't collapse; taller panes
+    /// (Bibliography with many sources) grow past it. The window fits
+    /// each pane's height — standard macOS settings behavior.
+    static let paneMinHeight: CGFloat = 400
+}
+
+/// Settings window (Cmd+,). Toolbar-based multi-pane layout (macOS
+/// settings.md), with a fixed pane width + uniform inset applied once
+/// here (`SettingsLayout`, #862). Panes:
+/// - **General** — app-wide launch behavior (reopen last vault, #872).
 /// - **Math** — speech style, verbosity, braille code, with a live
 ///   preview of a sample formula so the user hears their selection
 ///   in context.
 /// - **Code** — preamble verbosity for the code-block AT label.
+/// - **Bibliography** — per-vault citation sources + styles.
+/// - **Canvas** — announcement verbosity.
+/// - **History** — retention window + since-open summary toggle.
 ///
 /// All pickers are text-labelled (no icon-only segments) per WCAG
-/// 2.5.3. Live preview re-renders on every change so the user gets
-/// immediate confirmation that the setting took effect.
+/// 2.5.3. Live previews re-render on every change so the user gets
+/// immediate confirmation that a setting took effect.
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
 
@@ -26,6 +61,12 @@ struct SettingsView: View {
         // still get a window-level title for AT.
         VStack(spacing: 0) {
             TabView {
+                // General is the conventional leading pane (macOS
+                // settings). #872's launch toggle lives here.
+                GeneralSettingsTab()
+                    .tabItem {
+                        SlateSymbol.settings.label("General")
+                    }
                 MathSettingsTab()
                     .tabItem {
                         SlateSymbol.math.label()
@@ -48,9 +89,69 @@ struct SettingsView: View {
                     }
             }
         }
-        .frame(minWidth: 500, minHeight: 400)
-        .padding(20)
+        // #862: ONE fixed width + ONE uniform inset for every pane
+        // (macOS settings.md — a fixed, non-resizable multi-pane
+        // window: "no need to … resize it"). Was
+        // `.frame(minWidth: 500 …)`, which let the window resize per
+        // tab, compounded by BibliographySettingsTab's own
+        // `.padding(20)` + `.frame`. The inset now lives here alone;
+        // no tab re-pads.
+        // Pin the width (min == max) so it's fixed/non-resizable, while
+        // a `minHeight` baseline lets taller panes grow — the fixed-
+        // width overload can't also take a flexible `minHeight`.
+        .frame(
+            minWidth: SettingsLayout.paneWidth,
+            maxWidth: SettingsLayout.paneWidth,
+            minHeight: SettingsLayout.paneMinHeight
+        )
+        .padding(SettingsLayout.inset)
+        // #862: a single stable window title for every pane. It used
+        // to appear only on the History tab (which set its own
+        // `.navigationTitle("History")`, diverging from the rest);
+        // handling it once here keeps all tabs consistent
+        // (settings.md: the settings window carries one title).
         .navigationTitle("Slate preferences")
+    }
+}
+
+// MARK: - General tab (#872)
+
+/// App-wide launch behavior. Today one control: whether launch reopens
+/// the most-recent vault (launching.md — "Restore previous state on
+/// restart … avoid making people retrace steps"). Holding ⌥ at launch
+/// is the transient override; this toggle is the persistent,
+/// discoverable one (and the only escape hatch a user who can't hold a
+/// modifier at launch has). Structured like the Canvas/History tabs:
+/// grouped Form, `.isHeader` section header, APCA-safe token footer.
+struct GeneralSettingsTab: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(
+                    "Reopen last vault at launch",
+                    isOn: Binding(
+                        get: { appState.restoreVaultOnLaunch },
+                        set: { appState.setRestoreVaultOnLaunch($0) }
+                    )
+                )
+            } header: {
+                // See the Math tab header for the CI a11y-lint rationale
+                // on keeping the explicit `.isHeader` trait.
+                Text("Launch")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+            } footer: {
+                Text(
+                    "On launch, Slate reopens the vault you had open last so you don't retrace your steps. Hold Option (⌥) while launching to show the welcome screen instead. If the last vault has moved, Slate opens the welcome screen and offers to remove it from your recent vaults."
+                )
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+        }
+        .formStyle(.grouped)
+        .accessibilityLabel("General settings")
     }
 }
 
@@ -408,6 +509,13 @@ struct BibliographySettingsTab: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
+        // #862: no per-tab `.padding(20)` + `.frame` here. The single
+        // uniform inset + fixed width now live once on the SettingsView
+        // container (`SettingsLayout`). This tab used to double-inset and
+        // stretch to `maxWidth: .infinity`, which is exactly what made
+        // the window jump width between tabs. The grouped `form` now
+        // fills the fixed pane like every other tab, and `noVaultState`
+        // keeps its own centering frame.
         Group {
             if appState.currentVaultURL == nil {
                 noVaultState
@@ -415,8 +523,6 @@ struct BibliographySettingsTab: View {
                 form
             }
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var noVaultState: some View {
@@ -810,6 +916,9 @@ struct HistorySettingsTab: View {
             // gestures reach.
             retentionDays = appState.currentHistoryRetentionDays()
         }
-        .navigationTitle("History")
+        // #862: the per-tab `.navigationTitle("History")` was removed —
+        // it diverged from every other pane (which showed the
+        // container's title). The single window title now lives once on
+        // the SettingsView container.
     }
 }
