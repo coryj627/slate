@@ -1,6 +1,6 @@
 # 10 — Milestone O plan: Local history + change tracking
 
-**Status:** 🚧 In progress. O-1 ([#539](https://github.com/coryj627/slate/issues/539)) shipped via [PR #790](https://github.com/coryj627/slate/pull/790) (2026-07-11); O-2–O-5 open; O-6 ([#544](https://github.com/coryj627/slate/issues/544)) blocked on Milestone N. GitHub [milestone 15](https://github.com/coryj627/slate/milestone/15).
+**Status:** ✅ Shipped 2026-07-11 — [milestone 15](https://github.com/coryj627/slate/milestone/15) closed (its nine issues: #539–#544, #832, #835, #837). The nine follow-ups (#795–#802, #831 — tracked outside the milestone) closed alongside, via PRs #838–#846 and #865. **Everything below is the pre-implementation design baseline**, retained as the decision record: where it lists capabilities as future or deferred (`StructuredDiff`, deleted-file recovery, Restore As…, `.canvas`/`.base` history), the shipped behavior supersedes it — consumers (e.g. Milestone W's W4-7) should read the shipped surface (o_spec as amended, tests, help docs), not this plan's deferred-items list.
 **Implements:** `05_locked_architecture_decisions.md` §7.5 (op-log persistence + compaction), §9.3.3 (compaction at scale, hard constraints), §8.9 (op-log-aware temporal queries), the V1 half of §7.3 (structured-diff plumbing, no conflict UI), and the "Local history and recovery" workstream from `03_phase_1_plan.md` §11.
 **Executable spec:** [o_spec.md](o_spec.md).
 
