@@ -523,8 +523,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Tab lifecycle (U1-2, #454)
 
-    /// ⌘T. Until quick-open lands with U1-5, new-tab duplicates the active
-    /// tab's item (the spec's documented stopgap); with no active tab it is
+    /// ⌘T — Duplicate Tab (#863 returned the chord to the tab family;
+    /// Quick Open moved to ⌘O, Obsidian's actual default). Duplicates
+    /// the active tab's item — Slate's "new tab" verb, since a tab
+    /// always hosts an item (u1_spec §U1-2); with no active tab it is
     /// a no-op.
     func newTab() {
         guard let item = workspace.activeTab?.item else { return }
@@ -644,6 +646,82 @@ final class AppState: ObservableObject {
                 successor.map { "Closed \(closedTitle). \($0) is active." }
                     ?? "Closed \(closedTitle).",
                 priority: .medium)
+        }
+    }
+
+    // MARK: - Reopen Closed Tab (#863)
+
+    /// Menu-enablement mirror of `workspace.closedTabs.isEmpty` (#863).
+    /// The File ▸ Reopen Closed Tab item reads THIS property — the menu
+    /// observes `appState`, and `WorkspaceState`'s own `@Published`
+    /// mutations don't forward through `AppState.objectWillChange`
+    /// (the nested-ObservableObject gap), so the signal is re-published
+    /// here. Wired in `init` from `workspace.$closedTabs`.
+    @Published private(set) var canReopenClosedTab = false
+
+    /// ⇧⌘T — Reopen Closed Tab (#863, the macOS/Obsidian convention).
+    /// Pops the per-vault-session closed-tab stack and reopens the
+    /// record through the STANDARD open funnel (`openFile` /
+    /// `openSavedQuery` / `openDashboard` with `.newTab`), so the U1-2
+    /// dedup rule applies unchanged: an item already open in the target
+    /// group activates the existing tab and the popped record is simply
+    /// consumed. A file that no longer exists on disk is announced and
+    /// skipped, and the next record is tried (Reopen never resurrects a
+    /// dead document). Pane placement: the reopen lands in the group
+    /// the tab was closed from when that pane still exists, else the
+    /// active group.
+    /// The on-disk path for file-backed tab items; nil for id-backed
+    /// kinds (saved query / dashboard), whose loaders own missing-state.
+    static func fileBackedPath(of item: EditorItem) -> String? {
+        switch item {
+        case .markdown(let p), .canvas(let p), .base(let p): return p
+        case .savedQuery, .dashboard: return nil
+        }
+    }
+
+    func reopenClosedTab() {
+        guard isVaultOpen else { return }
+        while let record = workspace.popClosedTab() {
+            // Dead-record skip runs BEFORE any pane-focus movement: a
+            // pure skip must be a focus/park no-op. The first draft
+            // parked + focused first, so skipping a deleted file left
+            // the previous pane's buffer rendered under the destination
+            // tab's title (red-team probe, executable repro).
+            if case let fileBacked = record.item,
+                let path = Self.fileBackedPath(of: fileBacked),
+                let vaultURL = currentVaultURL,
+                !FileManager.default.fileExists(
+                    atPath: vaultURL.appendingPathComponent(path).path)
+            {
+                postAccessibilityAnnouncement(
+                    "\(filename(of: path)) no longer exists.",
+                    priority: .medium)
+                continue
+            }
+            if workspace.model.group(record.groupID) != nil,
+                workspace.model.activeGroupID != record.groupID {
+                // Park the outgoing buffer BEFORE moving group focus —
+                // after `focusGroup` the model's active tab is the
+                // destination pane's, and the snapshot guard would
+                // (correctly) refuse to park the old fields under it.
+                parkOutgoingNoteBuffer()
+                workspace.focusGroup(record.groupID)
+            }
+            switch record.item {
+            case .markdown(let path), .canvas(let path), .base(let path):
+                openFile(path, target: .newTab)
+                postAccessibilityAnnouncement(
+                    "Reopened \(filename(of: path)).", priority: .medium)
+            case .savedQuery(let id, let name):
+                openSavedQuery(id: id, name: name, target: .newTab)
+                postAccessibilityAnnouncement(
+                    "Reopened \(name).", priority: .medium)
+            case .dashboard(let id, let name):
+                openDashboard(id: id, name: name, target: .newTab)
+                postAccessibilityAnnouncement(
+                    "Reopened \(name).", priority: .medium)
+            }
+            return
         }
     }
 
@@ -1282,10 +1360,11 @@ final class AppState: ObservableObject {
     var baseQueryBuilderPreviewExecutionObserver:
         (@Sendable (BaseQueryBuilderPreviewExecutionEvent) async -> Void)?
 
-    /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘T opens
-    /// it (via `openQuickSwitcher()`, vault-gated); Esc / opening a file
-    /// closes it. Reset in `closeVault()` for the same stuck-bool reason
-    /// as `isCommandPaletteOpen` — enforced by `CloseVaultSheetParityTests`.
+    /// Drives the quick switcher sheet (U1-5 follow-up #495). ⌘O opens
+    /// it (via `openQuickSwitcher()`, vault-gated; chord moved ⌘T→⌘O by
+    /// #863); Esc / opening a file closes it. Reset in `closeVault()`
+    /// for the same stuck-bool reason as `isCommandPaletteOpen` —
+    /// enforced by `CloseVaultSheetParityTests`.
     @Published var isQuickSwitcherOpen: Bool = false
 
     /// Latest `RenameReport` from `previewPropertyRename` (dry-run)
@@ -1593,6 +1672,79 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: Editor text zoom (#848)
+
+    /// The discrete zoom ladder for in-app editor text zoom. 1.0 is
+    /// the body-text-style base size (which itself tracks the system
+    /// Text Size — the two COMPOSE: zoom multiplies on top, it never
+    /// replaces the accessibility floor). Discrete rungs, not a free
+    /// multiplier, so ⌘=/⌘− feel stepped like every macOS zoom and
+    /// the announced percentages are stable round numbers.
+    static let editorTextScaleSteps: [Double] = [0.9, 1.0, 1.1, 1.25, 1.4, 1.6]
+
+    /// The persisted in-app editor text zoom factor (#848), applied by
+    /// the monospaced EDITOR/CODE surfaces via
+    /// `Tokens.Typography.monospacedBodyNSFont(scale:)` — the NSTextView
+    /// note editor, the code-blocks panel, and the properties-source
+    /// YAML editor. Deliberately NOT the reading surface: reading-mode
+    /// prose is Dynamic-Type-backed and tracks the system Text Size;
+    /// zooming it too would double-scale (see the Zoom In menu item's
+    /// boundary note in `SlateMacApp`). `@Published` so the hosting
+    /// views re-render (and their `updateNSView` re-derives the font)
+    /// on change. Loaded from `PreferencesStore` in `init`; every
+    /// mutation routes through `setEditorTextScale`.
+    @Published private(set) var editorTextScale: Double = 1.0
+
+    /// ⌘= with no canvas tab active (focus-routed in `SlateMacApp`).
+    func editorZoomIn() { stepEditorTextScale(+1) }
+
+    /// ⌘− with no canvas tab active.
+    func editorZoomOut() { stepEditorTextScale(-1) }
+
+    /// ⌘0 with no canvas tab active — reset to the base size.
+    func editorActualSize() { setEditorTextScale(1.0) }
+
+    /// Nearest ladder rung to an arbitrary (possibly hand-edited)
+    /// stored value. Applied at LOAD so the runtime value is always
+    /// on-ladder; static + pure for the boundary tests.
+    static func nearestEditorTextRung(to value: Double) -> Double {
+        editorTextScaleSteps.min {
+            abs($0 - value) < abs($1 - value)
+        } ?? 1.0
+    }
+
+    private func stepEditorTextScale(_ delta: Int) {
+        let steps = Self.editorTextScaleSteps
+        // DIRECTIONAL rung selection, not nearest-then-offset: from an
+        // off-ladder value, nearest-snap could move AGAINST the pressed
+        // direction (Codex counterexample: stored 0.5 + Zoom Out
+        // snapped up to 0.9). Zoom In → first rung strictly above;
+        // Zoom Out → last rung strictly below; pinned at the ends
+        // (announcement still fires — never-silent policy).
+        let target: Double
+        if delta > 0 {
+            target = steps.first(where: { $0 > editorTextScale + 0.0001 })
+                ?? steps[steps.count - 1]
+        } else {
+            target = steps.last(where: { $0 < editorTextScale - 0.0001 })
+                ?? steps[0]
+        }
+        setEditorTextScale(target)
+    }
+
+    private func setEditorTextScale(_ scale: Double) {
+        if editorTextScale != scale {
+            editorTextScale = scale
+            preferencesStore.saveEditorTextScale(scale)
+        }
+        // Announce even when pinned at a ladder end (or already at
+        // 100%): the keypress must never be silent feedback-wise —
+        // the user hears the (unchanged) size instead of nothing.
+        postAccessibilityAnnouncement(
+            "Editor text size \(Int((editorTextScale * 100).rounded())) percent.",
+            priority: .medium)
+    }
+
     // MARK: Tasks (#113 + #114 — Milestone G UI)
 
     /// Tasks parsed from the currently-selected note, in document
@@ -1645,7 +1797,7 @@ final class AppState: ObservableObject {
     /// published binding so we can pair them with the load task.
     @Published private(set) var taskReviewFilter: TaskReviewFilter = .all
     /// Whether the `TasksReviewView` sheet is currently presented.
-    /// Cmd+Shift+T toggles this; the sheet's `onDismiss` also flips
+    /// Command-R toggles this; the sheet's `onDismiss` also flips
     /// it back to false. Setting this `true` does NOT auto-load —
     /// `openTasksReview()` is the public entry point that kicks
     /// the query.
@@ -1964,9 +2116,25 @@ final class AppState: ObservableObject {
         // assignment after init), so loading here doesn't recurse.
         self.mathPrefs = preferencesStore.loadMathPrefs()
         self.codePrefs = preferencesStore.loadCodePrefs()
+        // #848: persisted editor text zoom — applied on top of the
+        // body-text-style base size in `monospacedBodyNSFont(scale:)`.
+        self.editorTextScale = Self.nearestEditorTextRung(to: preferencesStore.loadEditorTextScale())
         self.baseQueries = BaseQueriesState(
             pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
         self.recentVaults = self.recentsStore.load()
+
+        // #863: mirror the closed-tab stack's emptiness into the
+        // published menu-enablement signal. Subscribing to the nested
+        // WorkspaceState publisher (rather than updating at each call
+        // site) covers every mutation path — close pushes, reopen
+        // pops, and the vault close/switch reset — with one wire.
+        workspace.$closedTabs
+            .map { !$0.isEmpty }
+            .removeDuplicates()
+            .sink { [weak self] hasRecords in
+                self?.canReopenClosedTab = hasRecords
+            }
+            .store(in: &subscriptions)
 
         // Watch `selectedFilePath` and (re)trigger note loading on
         // every change. Combine's removeDuplicates avoids reloading
@@ -2096,17 +2264,21 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Entry point for the ⌘T "Quick Open…" command (#495). Opens the
-    /// quick switcher when a vault is open; otherwise announces instead
-    /// of a silent no-op — same vault-scoped-surface reasoning as
-    /// `requestCommandPalette()`. The sheet is only mounted by
-    /// `MainSplitView` (vault open), so this must never flip the bool
-    /// with no vault, or the switcher would auto-present on the next
-    /// vault open.
+    /// Entry point for the ⌘O "Quick Open…" command (#495; chord moved
+    /// ⌘T→⌘O by #863 — Obsidian's actual quick-switcher default, and
+    /// the HIG-truer File ▸ Open). Opens the quick switcher when a
+    /// vault is open. With NO vault it falls through to the vault
+    /// picker (#863's welcome-screen nicety): the switcher sheet is
+    /// only mounted by `MainSplitView`, so the bool must never flip
+    /// here (the #313/#328 stuck-bool hazard, same reasoning as
+    /// `requestCommandPalette()`) — but where the palette announces
+    /// "open a vault first", ⌘O goes one better and OPENS the picker,
+    /// so File ▸ Quick Open… is never a dead chord on the welcome
+    /// screen. Cost, accepted in the decision record: the "Quick
+    /// Open…" label is mildly inaccurate there.
     func openQuickSwitcher() {
         guard isVaultOpen else {
-            postAccessibilityAnnouncement(
-                "Open a vault to quickly open a file.", priority: .high)
+            pickAndOpenVault()
             return
         }
         isQuickSwitcherOpen = true
@@ -3044,7 +3216,7 @@ final class AppState: ObservableObject {
 
     /// Show the directory picker and, if the user chose a folder, open
     /// it as a vault. Centralizes the flow so the WelcomeView button
-    /// and the App-level Cmd+O command share the same code path.
+    /// and the App-level Shift-Command-O command share the same code path.
     ///
     /// `@MainActor` is redundant given the class-level annotation but
     /// is repeated here for self-documenting clarity: this method
@@ -3052,9 +3224,16 @@ final class AppState: ObservableObject {
     /// thread.
     @MainActor
     func pickAndOpenVault() {
-        guard let url = VaultPicker.pick() else { return }
+        guard let url = vaultPicker() else { return }
         openVault(at: url)
     }
+
+    /// Directory-picker seam. Production runs the real `NSOpenPanel`
+    /// wrapper; tests substitute a canned URL (or nil = cancel) so
+    /// flows that fall through to the picker — the welcome screen's
+    /// ⌘O quick-open fallthrough (#863) — never present a modal panel
+    /// under XCTest. Same injectable-var convention as `scanClock`.
+    var vaultPicker: () -> URL? = { VaultPicker.pick() }
 
     /// User-action wrapper around `closeVault()` / `attemptCloseVault()`
     /// that mirrors what the MainSplitView "Close Vault" toolbar
@@ -4886,7 +5065,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Open the vault-wide Tasks Review surface (Cmd+Shift+T or
+    /// Open the vault-wide Tasks Review surface (Command-R or
     /// toolbar). Kicks off the initial `loadVaultTasks` query and
     /// posts a polite VoiceOver announcement so screen-reader
     /// users know the surface opened.

@@ -340,6 +340,18 @@ pane close), announcement strings, appearance snapshots, a11y-check 100.
   here since this PR wires them to *open-into*), `slate.workspace.moveTabLeft/Right`
   (from U1-2), `newTab` (⌘T now = open quick-open palette scoped to files, replacing the
   U1-2 duplicate-tab stopgap).
+
+  *Amendment (2026-07-11, #863):* the ⌘T-for-quick-open allocation above (chosen by
+  #495 on an Obsidian-muscle-memory premise that was factually wrong — Obsidian's
+  default quick-switcher chord is **⌘O**, and Obsidian itself keeps the platform tab
+  conventions) is superseded. New allocation: **⌘O = Quick Open…** (falls through to
+  the vault picker on the welcome screen), **⇧⌘O = Open Vault…**, **⌘T = Duplicate
+  Tab** (back in the tab family; `slate.workspace.newTab` keeps its id and its
+  duplicate semantics), **⇧⌘T = Reopen Closed Tab** (new command
+  `slate.workspace.reopenClosedTab`: a capacity-bounded per-vault-session closed-tab
+  stack in `WorkspaceState`, pushed at the `close(_:)` funnel, reopened through this
+  section's open-target path honoring the U1-2 dedup rule), **⌘R = Show Tasks
+  Review** (was ⇧⌘T). Decision record in #863.
 - Keyboard reachability proof: every target reachable via context menu (VoiceOver
   actions rotor picks up SwiftUI `contextMenu` items) AND palette. Tests assert the
   command registry contains the full set (drift test) and each entry point's ⌘-variant

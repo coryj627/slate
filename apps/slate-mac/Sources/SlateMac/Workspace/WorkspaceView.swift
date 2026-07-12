@@ -117,7 +117,7 @@ private struct ParkedPaneView: View {
     var body: some View {
         if let tab = group.activeTab,
             let document = appState.workspace.document(for: tab.id) {
-            ParkedDocumentView(document: document)
+            ParkedDocumentView(document: document, textScale: appState.editorTextScale)
                 // The NSTextView would swallow mouseDown before any outer
                 // gesture; an unfocused pane's ONLY pointer affordance is
                 // "click to focus", so the editor is click-transparent and
@@ -163,6 +163,10 @@ private struct ParkedPaneView: View {
 /// repaint this pane immediately.
 private struct ParkedDocumentView: View {
     @ObservedObject var document: NoteDocument
+    /// #848: parked panes render at the same zoom as the live editor —
+    /// one scale for every editor surface (ParkedPaneView passes
+    /// `appState.editorTextScale`).
+    var textScale: Double = 1.0
 
     var body: some View {
         NoteEditorView(
@@ -175,7 +179,8 @@ private struct ParkedDocumentView: View {
             scrollAnchorRequest: Empty().eraseToAnyPublisher(),
             lineScrollRequest: Empty().eraseToAnyPublisher(),
             cursorByteOffsetRequest: Empty().eraseToAnyPublisher(),
-            previewEmbedAtCursor: nil
+            previewEmbedAtCursor: nil,
+            textScale: textScale
         )
     }
 }

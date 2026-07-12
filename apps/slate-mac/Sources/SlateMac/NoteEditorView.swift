@@ -84,6 +84,15 @@ struct NoteEditorView: NSViewRepresentable {
     /// selection churn must not invalidate any view.
     var onCaretUTF16Change: ((Int) -> Void)? = nil
 
+    /// In-app editor text zoom factor (#848, `AppState.editorTextScale`).
+    /// Threaded by the hosting view from the published pref — a zoom
+    /// change re-renders the host, re-constructs this representable
+    /// with the new value, and `updateNSView` re-derives the font
+    /// (the same live path Dynamic Type changes take). Defaults to
+    /// 1.0 so contexts without zoom (and existing tests) are
+    /// untouched.
+    var textScale: Double = 1.0
+
     /// System Reduce Motion preference (WCAG 2.3.1). When `true`, the
     /// editor's scroll-routing paths jump instantly instead of using
     /// `NSTextView`'s default animated scroll — vestibular-sensitive
@@ -163,7 +172,8 @@ struct NoteEditorView: NSViewRepresentable {
         // while the reading surface (Dynamic-Type-backed
         // Tokens.Typography) scaled. `updateNSView` re-derives on
         // Dynamic Type changes so the scaling is live (WCAG 1.4.4).
-        textView.font = Tokens.Typography.monospacedBodyNSFont()
+        // `textScale` (#848) multiplies the in-app zoom on top.
+        textView.font = Tokens.Typography.monospacedBodyNSFont(scale: textScale)
         textView.textContainerInset = NSSize(width: 16, height: 16)
         // Soft-wrap. NSTextView defaults vary by SDK; pin
         // explicitly so a vault opened on one macOS version doesn't
@@ -255,9 +265,11 @@ struct NoteEditorView: NSViewRepresentable {
         // method re-runs when the system setting changes (the
         // reduce-motion pattern above); the font re-derives at the
         // new body-style size. Point-size compare keeps the common
-        // keystroke path allocation-free.
+        // keystroke path allocation-free. `textScale` (#848) is the
+        // second observed input: an appState-published zoom change
+        // re-renders the host, which re-runs this with the new value.
         _ = dynamicTypeSize
-        let baseFont = Tokens.Typography.monospacedBodyNSFont()
+        let baseFont = Tokens.Typography.monospacedBodyNSFont(scale: textScale)
         if textView.font?.pointSize != baseFont.pointSize {
             textView.font = baseFont
             context.coordinator.scheduleHighlight(debounced: false)

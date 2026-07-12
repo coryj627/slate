@@ -338,9 +338,9 @@ struct MainSplitView: View {
                     .environmentObject(appState)
             }
         }
-        // Quick switcher (#495). Triggered by ⌘T from the SlateMacApp
-        // CommandGroup; closes via Esc or on opening a file (handled
-        // inside the sheet).
+        // Quick switcher (#495). Triggered by ⌘O from the SlateMacApp
+        // CommandGroup (#863 moved it from ⌘T); closes via Esc or on
+        // opening a file (handled inside the sheet).
         .sheet(isPresented: $appState.isQuickSwitcherOpen) {
             QuickSwitcherView()
                 .environmentObject(appState)
@@ -592,11 +592,12 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.tasksReview.label()
                 }
-                // ⇧⌘T lives on View ▸ Tasks Review (#422 — see the
-                // Save button above). Click/AX-activate only.
+                // ⌘R lives on View ▸ Show Tasks Review (#422 — see the
+                // Save button above; #863 moved the chord off ⇧⌘T).
+                // Click/AX-activate only.
                 .disabled(appState.currentSession == nil)
                 .accessibilityHint(
-                    "Opens the vault-wide tasks review. Command-Shift-T. Escape closes."
+                    "Opens the vault-wide tasks review. Command-R. Escape closes."
                 )
             }
             // Milestone L #282: Citation Summary. Cmd+Shift+J opens

@@ -4,8 +4,9 @@
 import AppKit
 import SwiftUI
 
-/// Modal quick switcher — fuzzy filename quick-open on ⌘T (U1-5
-/// follow-up #495).
+/// Modal quick switcher — fuzzy filename quick-open on ⌘O (U1-5
+/// follow-up #495; chord moved ⌘T→⌘O by #863, Obsidian's actual
+/// quick-switcher default).
 ///
 /// Presentation and interaction mirror `CommandPaletteView` wholesale;
 /// only the payload (vault files, not commands) and the activation
@@ -13,8 +14,9 @@ import SwiftUI
 ///
 /// ## Behaviour
 ///
-/// - Opens via `⌘T` (menu wiring in `SlateMacApp`, gated on
-///   `isVaultOpen`); the search field auto-focuses on appear.
+/// - Opens via `⌘O` (menu wiring in `SlateMacApp`; with no vault the
+///   chord falls through to the vault picker instead — the sheet only
+///   mounts inside a vault); the search field auto-focuses on appear.
 /// - Typing filters the file list via the shared fuzzy matcher with a
 ///   name-over-path bias (`QuickSwitcherModel.score`).
 /// - Arrow ↑ / ↓ moves selection with wrap. Modified arrows (Shift/Cmd/

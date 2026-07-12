@@ -4,7 +4,7 @@ SwiftUI app that hosts the Slate UI on macOS. Calls into the Rust `slate-core` l
 
 ## What it does
 
-- **Welcome screen** with an "Open Vault…" button (Cmd+O). Focus lands on the button on launch.
+- **Welcome screen** with an "Open Vault…" button (Shift-Command-O; plain Command-O on the welcome screen also opens the picker). Focus lands on the button on launch.
 - **Directory-mode picker** (`NSOpenPanel`) selects a folder to use as the vault.
 - **Main split view** opens after a vault is selected: sidebar + detail placeholders today; the file list lands in a follow-up issue.
 - Errors from `VaultSession.open` surface in an accessible alert.

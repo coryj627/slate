@@ -587,6 +587,14 @@ extension AppState {
         for tab in matchingTabs {
             performCloseTab(tab.id)
         }
+        // The entity is GONE — its reopen records must go with it
+        // (both the pushes from the loop above and any older ones).
+        workspace.purgeClosedTabs { record in
+            if case .savedQuery(let recordID, _) = record.item {
+                return BaseExactIdentity.matches(recordID, id)
+            }
+            return false
+        }
         let key = BaseDocumentSource.savedQuery(id: id, name: "").key
         if let doc = baseDocuments[key] {
             if let session = currentSession {
@@ -606,6 +614,12 @@ extension AppState {
         }
         for tab in matchingTabs {
             performCloseTab(tab.id)
+        }
+        workspace.purgeClosedTabs { record in
+            if case .dashboard(let recordID, _) = record.item {
+                return recordID == id
+            }
+            return false
         }
         if let doc = dashboardDocuments[id] {
             if let session = currentSession {

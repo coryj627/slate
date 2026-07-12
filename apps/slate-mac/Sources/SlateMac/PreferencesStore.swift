@@ -85,6 +85,31 @@ final class PreferencesStore {
         defaults.set(enabled, forKey: Self.historyShowChangesSinceOpenKey)
     }
 
+    // MARK: - Editor text zoom (#848)
+
+    /// Bare-double key (like the history bool above): the in-app
+    /// editor text zoom factor, multiplied onto the body-text-style
+    /// base size by `Tokens.Typography.monospacedBodyNSFont(scale:)`.
+    /// 1.0 = no zoom. App-level (UserDefaults), NOT the CLI-shared
+    /// vault `prefs.json` — zoom is a per-machine display preference,
+    /// not vault content.
+    static let editorTextScaleKey = "slate.prefs.editorTextScale"
+
+    func loadEditorTextScale() -> Double {
+        guard
+            let value = defaults.object(forKey: Self.editorTextScaleKey) as? Double,
+            value.isFinite, value > 0
+        else { return 1.0 }
+        // Clamp a hand-edited / corrupt default into a sane band; the
+        // zoom ladder's nearest-rung snap normalizes further on the
+        // first ⌘=/⌘− press.
+        return min(max(value, 0.5), 3.0)
+    }
+
+    func saveEditorTextScale(_ scale: Double) {
+        defaults.set(scale, forKey: Self.editorTextScaleKey)
+    }
+
     // MARK: - Internals
 
     private func decode<T: Codable>(_ type: T.Type, key: String) -> T? {

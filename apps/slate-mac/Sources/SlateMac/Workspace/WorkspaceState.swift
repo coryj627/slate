@@ -88,6 +88,46 @@ final class WorkspaceState: ObservableObject {
     /// `"activeCanvasSurface"` in the snapshot schema.
     @Published private(set) var canvasSurfaces: [TabID: CanvasSurface] = [:]
 
+    // MARK: Closed-tab stack (#863 Reopen Closed Tab)
+
+    /// A closed tab's reopenable snapshot: the item it showed plus the
+    /// group it lived in, so ⇧⌘T can land the reopen back in the pane
+    /// the tab was closed from (when that pane still exists).
+    struct ClosedTabRecord: Equatable {
+        let item: EditorItem
+        let groupID: GroupID
+    }
+
+    /// Bound on `closedTabs` — the reopen stack never grows past this;
+    /// the oldest record is evicted first (a 21st close forgets the
+    /// 1st, exactly the browser-history convention).
+    static let closedTabCapacity = 20
+
+    /// Most-recent-last stack of user-closed tabs (⇧⌘T pops the end).
+    /// Per-vault-session by construction: every user close funnels
+    /// through `close(_:)` below (which pushes), while vault close /
+    /// vault switch go through `reset()` (which clears without
+    /// pushing — those tabs were not closed one-by-one by the user).
+    /// `@Published` so AppState can mirror the emptiness signal into
+    /// its menu-enablement property (`canReopenClosedTab`).
+    @Published private(set) var closedTabs: [ClosedTabRecord] = []
+
+    /// Remove reopen records matching `predicate`. Deletion flows call
+    /// this AFTER auto-closing an entity's tabs: without the purge,
+    /// deleting a saved query/dashboard leaves its just-pushed (and any
+    /// older) records reopenable, and ⇧⌘T resurrects the deleted id as
+    /// a failure tab announcing "Reopened…" (Codex review, chords PR).
+    func purgeClosedTabs(where predicate: (ClosedTabRecord) -> Bool) {
+        closedTabs.removeAll(where: predicate)
+    }
+
+    /// Pop the most recently closed tab's record, or nil when the
+    /// stack is empty. AppState's `reopenClosedTab()` consumes this
+    /// and routes the reopen through the standard open funnel.
+    func popClosedTab() -> ClosedTabRecord? {
+        closedTabs.popLast()
+    }
+
     func canvasSurface(for tabID: TabID) -> CanvasSurface {
         canvasSurfaces[tabID] ?? .outline
     }
@@ -385,6 +425,19 @@ final class WorkspaceState: ObservableObject {
 
     @discardableResult
     func close(_ tabID: TabID) -> WorkspaceModel.CloseOutcome {
+        // #863: record the closing tab for Reopen Closed Tab. Captured
+        // BEFORE the model mutation — the owning group is unknowable
+        // after a collapse. This is the single push point: every user
+        // close flow (⌘W, tab-strip button, context menu, the
+        // save/discard gate resolutions, Close Pane) funnels through
+        // here, while vault close/switch replaces the model wholesale
+        // via `reset()` and therefore never pushes.
+        if let tab = model.tab(tabID), let owner = model.groupContaining(tabID) {
+            closedTabs.append(ClosedTabRecord(item: tab.item, groupID: owner.id))
+            if closedTabs.count > Self.closedTabCapacity {
+                closedTabs.removeFirst(closedTabs.count - Self.closedTabCapacity)
+            }
+        }
         let outcome = model.closeTab(tabID)
         documents[tabID] = nil
         viewModes[tabID] = nil
@@ -404,6 +457,9 @@ final class WorkspaceState: ObservableObject {
         viewModes = [:]
         propertiesCollapsed = []
         canvasSurfaces = [:]
+        // #863: the reopen stack is per-vault-session — tabs from a
+        // closed vault must not resurrect inside the next one.
+        closedTabs = []
         activeLeaf = .outline
         focusRegion = .editor
         lastFocusedGroup = nil

@@ -66,6 +66,8 @@ Rules first — they matter more than any single chord:
 
 **Claimed inventory (today, from `SlateCommands.swift` / `SlateMacApp.swift` + system):** ⇧⌘N (New from Template — note: New *Note* is also here, **not** ⌘N; the app replaces the system `.newItem` group, so **⌘N is currently free**) ⌘O ⌘S ⌘F ⌘J ⇧⌘J ⌘T ⌘W ⇧⌘W ⇧⌘] ⇧⌘[ ⌃⌘← ⌃⌘→ ⌘\ ⌥⌘\ ⌥⌘←→↑↓ ⌥⌘= ⌥⌘- ⇧⌘R ⇧⌘T ⌘, ⌘⇧P ⌘1–9 ⌘Z ⇧⌘Z (+ system edit chords).
 
+*Amendment (2026-07-11, #863):* the inventory line above predates the chord reallocation — ⌘O is now Quick Open (⇧⌘O Open Vault), ⌘T Duplicate Tab, ⇧⌘T Reopen Closed Tab, ⌘R Tasks Review. The line is retained as the historical snapshot the gap analysis was computed against.
+
 **Canvas allocations (proposed here; final binding in the registering PR, drift-tested):**
 
 | Command | Chord | Scope | Notes |

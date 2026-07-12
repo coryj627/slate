@@ -24,8 +24,17 @@ import SwiftUI
 struct CodeBlockView: View {
     let block: CodeBlock
 
+    /// In-app editor text zoom factor (#848). Threaded by hosts on
+    /// the EDITING side (the code-blocks panel passes
+    /// `AppState.editorTextScale`); the reading surface deliberately
+    /// leaves the default 1.0 — reading mode tracks the system Text
+    /// Size wholesale, zoom scales the editing surfaces only (the
+    /// boundary documented on the Zoom In menu item). Keeps the view
+    /// standalone: a plain value, no AppState dependency.
+    var textScale: Double = 1.0
+
     var body: some View {
-        CodeBlockContent(block: block)
+        CodeBlockContent(block: block, textScale: textScale)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
             // The container owns the AT preamble. VO reads
@@ -178,6 +187,9 @@ enum CodeTokenTheme {
 struct CodeBlockContent: NSViewRepresentable {
     let block: CodeBlock
 
+    /// In-app editor text zoom factor (#848) — see `CodeBlockView`.
+    var textScale: Double = 1.0
+
     /// System Text Size dependency — read in `updateNSView` so the
     /// code font re-derives live when the setting changes (WCAG
     /// 1.4.4; the NoteEditorView pattern).
@@ -188,10 +200,13 @@ struct CodeBlockContent: NSViewRepresentable {
     final class Coordinator: NSObject {
         weak var textView: NSTextView?
         var block: CodeBlock?
+        /// Mirrors the view's `textScale` so the out-of-band contrast
+        /// re-render below rebuilds at the current zoom, not 1.0.
+        var textScale: Double = 1.0
 
         @objc func systemContrastChanged() {
             guard let textView, let block else { return }
-            applyAttributedString(to: textView, block: block)
+            applyAttributedString(to: textView, block: block, scale: textScale)
         }
     }
 
@@ -221,7 +236,7 @@ struct CodeBlockContent: NSViewRepresentable {
         // never tracks System Settings ▸ Accessibility ▸ Display ▸
         // Text Size. The body-TEXT-STYLE size does; `updateNSView`
         // re-applies on Dynamic Type changes (WCAG 1.4.4).
-        textView.font = Tokens.Typography.monospacedBodyNSFont()
+        textView.font = Tokens.Typography.monospacedBodyNSFont(scale: textScale)
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.usesFontPanel = false
         textView.usesRuler = false
@@ -243,6 +258,7 @@ struct CodeBlockContent: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.block = block
+        context.coordinator.textScale = textScale
 
         // Re-render token colors when the user toggles Increase
         // Contrast at runtime (audit #252 H1). #416: registered on
@@ -256,7 +272,7 @@ struct CodeBlockContent: NSViewRepresentable {
             object: nil
         )
 
-        applyAttributedString(to: textView, block: block)
+        applyAttributedString(to: textView, block: block, scale: textScale)
         scrollView.documentView = textView
         return scrollView
     }
@@ -264,12 +280,15 @@ struct CodeBlockContent: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.block = block
+        context.coordinator.textScale = textScale
         // Dynamic Type dependency: reading the environment value here
         // re-runs this method when the system Text Size changes, and
         // `applyAttributedString` re-derives the base font (WCAG
         // 1.4.4 — the same live-tracking hook NoteEditorView uses).
+        // `textScale` (#848) is the second observed input — a zoom
+        // change re-renders the host and re-runs this method.
         _ = dynamicTypeSize
-        applyAttributedString(to: textView, block: block)
+        applyAttributedString(to: textView, block: block, scale: textScale)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -282,11 +301,14 @@ struct CodeBlockContent: NSViewRepresentable {
 /// Build the `NSAttributedString` from the block's tokens and apply
 /// it. The full source is written first so ranges uncovered by any
 /// token still render with the default text color.
-private func applyAttributedString(to textView: NSTextView, block: CodeBlock) {
+private func applyAttributedString(
+    to textView: NSTextView, block: CodeBlock, scale: Double = 1.0
+) {
     guard let storage = textView.textStorage else { return }
     let attributed = attributedString(
         for: block,
-        increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+        scale: scale
     )
     storage.beginEditing()
     storage.setAttributedString(attributed)
@@ -297,12 +319,15 @@ private func applyAttributedString(to textView: NSTextView, block: CodeBlock) {
 /// independent of NSTextView so XCTest can assert on attributes
 /// without needing a real view. The `increaseContrast` parameter
 /// lets tests cover both palettes (audit #252 H1/H2) without
-/// depending on the system's actual setting.
-func attributedString(for block: CodeBlock, increaseContrast: Bool = false) -> NSAttributedString {
+/// depending on the system's actual setting. `scale` is the in-app
+/// editor text zoom factor (#848), 1.0 = base size.
+func attributedString(
+    for block: CodeBlock, increaseContrast: Bool = false, scale: Double = 1.0
+) -> NSAttributedString {
     let baseAttributes: [NSAttributedString.Key: Any] = [
         // Body-text-style size (tracks the macOS Text Size setting),
         // matching the editor pane — see the makeNSView note above.
-        .font: Tokens.Typography.monospacedBodyNSFont(),
+        .font: Tokens.Typography.monospacedBodyNSFont(scale: scale),
         .foregroundColor: NSColor.labelColor,
     ]
     let attributed = NSMutableAttributedString(

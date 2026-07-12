@@ -149,7 +149,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 
 ### G — Tasks (M7)
 1. Open `Weekly ToDos.md`; walk to **"Tasks, N open of M tasks"**; rows: **"Open. Submit grant. Due 2026-06-01. Priority high. Repeats every year. Open task."**
-2. Vault-wide: `keys t cmd shift` → **"N tasks shown"**; filter chips **"All, N tasks selected button"**, "Due today", "Overdue", "This week"; rows prefixed by source file.
+2. Vault-wide: `keys r cmd` → **"N tasks shown"**; filter chips **"All, N tasks selected button"**, "Due today", "Overdue", "This week"; rows prefixed by source file.
 3. Toggle: snapshot file → `vo-act` a **"Mark complete button"** → diff shows `- [ ]` → `- [x]` on that line. Restore after.
 4. Anti-probes: the fence-trap and YAML-trap task strings (see vault README) never appear; `[/]` and `[-]` statuses — baseline reads both as "Open task" (tester question, #414).
 

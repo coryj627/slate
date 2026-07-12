@@ -84,7 +84,7 @@ Selection moves; **marks stick**. Press **⌃⌘M** on any card to mark it ("Mar
 
 The visual board pans, zooms, and shows the same selection as everywhere else:
 
-- **⌘= / ⌘- / ⌘0** — zoom in / out / actual size.
+- **⌘= / ⌘- / ⌘0** — zoom in / out / actual size. (The same chords zoom the note editor's text when no canvas tab is active — with a canvas in front, they always drive the canvas viewport.)
 - **⇧1 / ⇧2** — fit the whole canvas / zoom to the selection (same keys as Obsidian).
 - **Viewport Follows Selection** (on by default) keeps whatever you select in view, whichever view you selected it from.
 

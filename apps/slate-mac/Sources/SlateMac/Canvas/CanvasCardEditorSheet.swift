@@ -38,7 +38,8 @@ struct CanvasCardEditorSheet: View {
                 scrollAnchorRequest: Empty().eraseToAnyPublisher(),
                 lineScrollRequest: Empty().eraseToAnyPublisher(),
                 cursorByteOffsetRequest: Empty().eraseToAnyPublisher(),
-                previewEmbedAtCursor: nil
+                previewEmbedAtCursor: nil,
+                textScale: appState.editorTextScale
             )
             .frame(minWidth: 480, minHeight: 280)
             HStack {
