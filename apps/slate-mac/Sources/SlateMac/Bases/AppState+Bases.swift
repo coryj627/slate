@@ -1761,6 +1761,13 @@ extension AppState {
         return text
     }
 
+    /// The reserved "show local graph" row action (Bases gap O15 /
+    /// n3 §N3-4 rule 1), realized now that Milestone P's Connections
+    /// leaf exists: re-root it on the row's note.
+    func basesShowConnections(for row: BasesRow) {
+        reRootConnections(on: row.filePath)
+    }
+
     func basesExportText(format: ExportFormat, includeQuickFilter: Bool = true) throws -> String {
         guard let doc = activeBaseDocument, let session = currentSession else {
             throw BaseActionError.noActiveBase

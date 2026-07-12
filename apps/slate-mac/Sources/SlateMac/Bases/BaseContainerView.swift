@@ -254,6 +254,9 @@ struct BaseContainerView: View {
             .init("Open") { row in _ = appState.basesOpen(row: row.row) },
             .init("Copy link") { row in _ = appState.basesCopyLink(for: row.row) },
             .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
+            // O15 handoff: the reserved "show local graph" slot, now
+            // that Milestone P's Connections leaf exists (P1-1 #554).
+            .init("Show connections") { row in appState.basesShowConnections(for: row.row) },
         ]
         if BaseGridRowActionPolicy.canEditProperty(in: result) {
             actions.append(
@@ -275,6 +278,8 @@ struct BaseContainerView: View {
             .init("Open") { row in _ = appState.basesOpen(row: row.row) },
             .init("Copy link") { row in _ = appState.basesCopyLink(for: row.row) },
             .init("Show backlinks") { row in _ = appState.basesShowBacklinks(for: row.row) },
+            // O15 handoff (P1-1 #554), mirroring the grid actions.
+            .init("Show connections") { row in appState.basesShowConnections(for: row.row) },
         ]
         if BaseGridRowActionPolicy.canEditProperty(in: result) {
             actions.append(

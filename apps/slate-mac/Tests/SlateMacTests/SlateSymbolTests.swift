@@ -62,6 +62,9 @@ final class SlateSymbolTests: XCTestCase {
         // (SF 1); plus.circle is already in the fixture.
         "clock.arrow.circlepath", "arrow.uturn.backward.circle",
         "arrow.left.arrow.right", "minus.circle", "pencil.circle",
+        // Milestone P (P1-1, #554): Connections leaf. arrow.triangle.branch
+        // is SF Symbols 1 (macOS 11), on the macOS 15 floor.
+        "arrow.triangle.branch",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated

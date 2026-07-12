@@ -81,10 +81,11 @@ struct CompactionFailure: Identifiable, Equatable {
 /// closed vault's straggler events go nowhere.
 final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
     private weak var appState: AppState?
-    /// #802 observation seams. Production registration leaves these
-    /// nil — Milestone PD wires the first real consumers (OCR label
-    /// refresh, failure counts, GC prompts); tests observe through
-    /// them today so the uniffi conformance is exercised end to end.
+    /// #802 observation seams. Milestone P (#554) wired the first real
+    /// production consumer here — the Connections leaf's graph-generation
+    /// refresh (see `registerVaultEventListener`); PD (OCR label refresh,
+    /// GC prompts) layers on later. Tests also observe through them so
+    /// the uniffi conformance is exercised end to end.
     let onFileChangeHook: (@Sendable (FileChangeEvent) -> Void)?
     let onIndexPhaseHook: (@Sendable (IndexPhase, UInt64) -> Void)?
 
@@ -638,7 +639,27 @@ extension AppState {
     // MARK: - Vault event listener (O-2 channel, Mac half)
 
     func registerVaultEventListener(on session: VaultSession) {
-        let adapter = VaultEventAdapter(appState: self)
+        // Milestone P (#552/#554) is the first production consumer of
+        // the #802 observation seams: the Connections leaf (and later
+        // graph surfaces) refresh on any committed mutation or scan
+        // completion by re-probing graph_generation(). The hooks arrive
+        // off the session's thread — they MUST NOT call the session
+        // synchronously (the documented contract); marshal to the main
+        // actor, where refreshConnectionsIfGraphChanged dispatches the
+        // generation probe off-main again.
+        let adapter = VaultEventAdapter(
+            appState: self,
+            onFileChangeHook: { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshConnectionsIfGraphChanged()
+                }
+            },
+            onIndexPhaseHook: { [weak self] phase, _ in
+                guard phase == .scanFinished else { return }
+                Task { @MainActor [weak self] in
+                    self?.refreshConnectionsIfGraphChanged()
+                }
+            })
         vaultEventAdapter = adapter
         vaultEventListenerToken = session.registerEventListener(listener: adapter)
     }
