@@ -36,7 +36,16 @@ struct GraphContainerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Graph")
-        .onAppear { appState.loadGraphTable() }
+        // Lazy load ONLY when nothing is loaded or in flight (round 3
+        // finding 1): opening/activating the tab already kicks off a load
+        // via `activateGraphTab`, so an unconditional mount-time load would
+        // start a second redundant snapshot fetch. This still covers
+        // session restore, where the tab mounts with no activation load.
+        .onAppear {
+            if appState.graphTableSnapshot == nil && !appState.graphTableLoading {
+                appState.loadGraphTable()
+            }
+        }
     }
 
     // MARK: Filter bar (spec §P1-2)
@@ -159,9 +168,15 @@ struct GraphTableView: View {
     }
 
     private var filteredRows: [GraphTableRow] {
+        var rows = allRows
+        // Preset kind filter (P1-3 #556): the "unresolved" preset narrows
+        // to ghosts, which the backend GraphFilter can't express.
+        if let kind = appState.graphTableKindFilter {
+            rows = rows.filter { $0.kind == kind }
+        }
         let needle = appState.graphTableTextFilter.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { return allRows }
-        return allRows.filter {
+        guard !needle.isEmpty else { return rows }
+        return rows.filter {
             $0.label.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
     }

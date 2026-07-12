@@ -484,6 +484,17 @@ final class AppState: ObservableObject {
     /// Client-side label substring filter (case/diacritic-insensitive),
     /// applied to the fetched rows without a re-fetch.
     @Published var graphTableTextFilter: String = ""
+    /// Client-side KIND filter (P1-3 #556): non-nil shows only rows of
+    /// that kind — the "unresolved links" preset sets `.ghost` (which
+    /// `GraphFilter` can't express, having no "notes off" flag). Set only
+    /// by presets; cleared by any manual filter-bar toggle so it never
+    /// becomes hidden state the user can't see or undo.
+    @Published var graphTableKindFilter: GraphNodeKind?
+    /// A preset (orphans / unresolved / most-linked) awaiting its
+    /// post-load announcement — set by `openGraphPreset`, consumed once
+    /// the fresh snapshot publishes so the count/hub is spoken from real
+    /// data, not the stale pre-fetch snapshot (P1-3 #556).
+    var graphTablePendingPreset: GraphPreset?
     @Published var graphTableLoading: Bool = false
     @Published var graphTableError: String?
     var graphTableLoadSeq: UInt64 = 0
@@ -736,6 +747,7 @@ final class AppState: ObservableObject {
         releaseCanvasDocumentIfUnreferenced(closedItem)
         releaseBaseDocumentIfUnreferenced(closedItem)
         releaseDashboardDocumentIfUnreferenced(closedItem)
+        releaseGraphStateIfUnreferenced(closedItem)
         if closingActive {
             if let successor = outcome.focusedTab {
                 activateTab(successor)
