@@ -652,12 +652,14 @@ extension AppState {
             onFileChangeHook: { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.refreshConnectionsIfGraphChanged()
+                    self?.refreshGraphTableIfGraphChanged()
                 }
             },
             onIndexPhaseHook: { [weak self] phase, _ in
                 guard phase == .scanFinished else { return }
                 Task { @MainActor [weak self] in
                     self?.refreshConnectionsIfGraphChanged()
+                    self?.refreshGraphTableIfGraphChanged()
                 }
             })
         vaultEventAdapter = adapter

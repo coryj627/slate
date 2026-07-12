@@ -89,6 +89,9 @@ enum SlateSymbol: CaseIterable {
     /// Connections leaf — the active note's local graph neighborhood
     /// (in + out) rendered accessibly (Milestone P, P1-1 #554).
     case connections
+    /// Graph tab — the global graph as a sortable table (Milestone P,
+    /// P1-2 #555).
+    case graph
     /// Embeds leaf — `![[…]]` transclusions in the active note.
     case embed
     /// Diagrams leaf — Mermaid diagram blocks in the active note.
@@ -197,6 +200,7 @@ enum SlateSymbol: CaseIterable {
         case .backlinks: return "Backlinks"
         case .outgoingLinks: return "Outgoing links"
         case .connections: return "Connections"
+        case .graph: return "Graph"
         case .embed: return "Embed"
         case .diagram: return "Diagram"
         case .tasksLeaf: return "Tasks"
@@ -290,6 +294,10 @@ enum SlateSymbol: CaseIterable {
         // `point.3.connected.trianglepath.dotted`; floor-safe (macOS 11+),
         // so v7 == fallback.
         case .connections: return ("arrow.triangle.branch", "arrow.triangle.branch")
+        // Graph tab (P1-2 #555): a scatter of nodes = the global graph.
+        // Distinct from .diagram and .connections; SF Symbols 4
+        // (macOS 14), on the macOS 15 floor, so v7 == fallback.
+        case .graph: return ("chart.dots.scatter", "chart.dots.scatter")
         case .embed: return ("photo.on.rectangle", "photo.on.rectangle")
         case .diagram:
             return ("point.3.connected.trianglepath.dotted",

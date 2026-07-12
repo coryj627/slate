@@ -75,6 +75,11 @@ enum SlateCommandID {
     /// the menu↔palette invariant is CHORD parity, not label parity).
     static let toggleRightPane = "slate.view.toggleRightPane"
 
+    /// Open the global Graph tab (Milestone P, P1-2 #555). View-menu +
+    /// palette, no chord (P1 registers zero new chords). Migrates to
+    /// `CommandSection.graph` with P1-3's presets.
+    static let openGraphTab = "slate.graph.openTab"
+
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
     // Program rule R1: every canvas action is a registry command; these
@@ -255,6 +260,7 @@ enum SlateCommandID {
         showHistoryPanel,
         showConnectionsPanel,
         toggleRightPane,
+        openGraphTab,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1219,6 +1225,13 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌥⌘I",
         hint: "Hide or show the right pane (the panel rail). Option-Command-I."
     ) { [weak appState] in appState?.toggleRightPane() }
+
+    register(
+        SlateCommandID.openGraphTab,
+        label: "Open Graph",
+        section: .view,
+        hint: "Open the global graph as a sortable table."
+    ) { [weak appState] in appState?.openGraphTab() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 

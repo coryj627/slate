@@ -823,6 +823,115 @@ final class AccessibleDataGridTests: XCTestCase {
             "Group: Team B, 2 rows")
     }
 
+    // MARK: Alternate activation + row context menu (round 2 finding 4)
+
+    @MainActor
+    func testCommandReturnTakesModifiedActivation() {
+        var activated: [Int] = []
+        var modified: [Int] = []
+        let grid = AccessibleDataGrid<Row>(
+            columns: [.init("Name") { $0.a }],
+            rows: Self.people,
+            summary: "",
+            accessibilityLabel: "Table",
+            onActivate: { activated.append($0.id) },
+            onActivateModified: { modified.append($0.id) })
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        table.selectRowIndexes([1], byExtendingSelection: false)
+
+        XCTAssertTrue(coordinator.handleKeyDown(Self.returnKeyEvent(), in: table))
+        XCTAssertEqual(activated, [1], "plain Return activates in place")
+        XCTAssertEqual(modified, [])
+
+        XCTAssertTrue(coordinator.handleKeyDown(Self.commandReturnKeyEvent(), in: table))
+        XCTAssertEqual(modified, [1], "⌘Return takes the alternate action")
+        XCTAssertEqual(activated, [1], "⌘Return must not also fire plain activation")
+    }
+
+    @MainActor
+    func testCommandReturnFallsBackToActivateWithoutModifiedHandler() {
+        var activated: [Int] = []
+        let grid = AccessibleDataGrid<Row>(
+            columns: [.init("Name") { $0.a }],
+            rows: Self.people,
+            summary: "",
+            accessibilityLabel: "Table",
+            onActivate: { activated.append($0.id) })
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        table.selectRowIndexes([2], byExtendingSelection: false)
+        // No modified handler → ⌘Return behaves like Return (unchanged
+        // for grids that don't distinguish).
+        XCTAssertTrue(coordinator.handleKeyDown(Self.commandReturnKeyEvent(), in: table))
+        XCTAssertEqual(activated, [2])
+    }
+
+    @MainActor
+    func testRowContextMenuFiltersDisabledActionsAndFiresOnSelectedRow() {
+        var opened: [Int] = []
+        let grid = AccessibleDataGrid<Row>(
+            columns: [.init("Name") { $0.a }],
+            rows: Self.people,  // [Charlie, Ada, Bea]
+            summary: "",
+            accessibilityLabel: "Table",
+            showsRowContextMenu: true,
+            rowActions: [
+                .init("Open") { opened.append($0.id) },
+                .init("Only Ada", isEnabled: { $0.a == "Ada" }) { _ in },
+            ])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        // Charlie (row 0) sees only the unconditional action.
+        XCTAssertEqual(coordinator.rowMenu(at: 0, in: table)?.items.map(\.title), ["Open"])
+        // Ada (row 1) sees both.
+        XCTAssertEqual(
+            coordinator.rowMenu(at: 1, in: table)?.items.map(\.title),
+            ["Open", "Only Ada"])
+
+        // Firing an item runs the action against the SELECTED row.
+        table.selectRowIndexes([1], byExtendingSelection: false)
+        let adaMenu = try! XCTUnwrap(coordinator.rowMenu(at: 1, in: table))
+        adaMenu.performActionForItem(at: 0)
+        XCTAssertEqual(opened, [1], "the menu action targets Ada, the selected row")
+    }
+
+    @MainActor
+    func testRowContextMenuOptOutReturnsNil() {
+        // Default (showsRowContextMenu == false): no contextual menu even
+        // with row actions present (Bases/Canvas keep AX-only actions).
+        let grid = AccessibleDataGrid<Row>(
+            columns: [.init("Name") { $0.a }],
+            rows: Self.people,
+            summary: "",
+            accessibilityLabel: "Table",
+            rowActions: [.init("Open") { _ in }])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        XCTAssertNil(coordinator.rowMenu(at: 0, in: table))
+    }
+
     private static func returnKeyEvent() -> NSEvent {
         NSEvent.keyEvent(
             with: .keyDown,
@@ -849,5 +958,19 @@ final class AccessibleDataGridTests: XCTestCase {
             charactersIgnoringModifiers: "",
             isARepeat: false,
             keyCode: 120)!
+    }
+
+    private static func commandReturnKeyEvent() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36)!
     }
 }

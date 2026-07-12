@@ -235,8 +235,7 @@ struct ConnectionsPanel: View {
             Button("Open") { appState.openFile(path, target: .currentTab) }
             Button("Open in New Tab") { appState.openFile(path, target: .newTab) }
             Button("Show connections") { appState.reRootConnections(on: path) }
-            // "Reveal in File Tree" arrives with P1-2 (shared
-            // reveal-with-expand helper the table also needs).
+            Button("Reveal in File Tree") { appState.revealInFileTree(path) }
         }
     }
 

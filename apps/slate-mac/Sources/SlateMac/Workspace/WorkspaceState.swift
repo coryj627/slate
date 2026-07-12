@@ -198,10 +198,14 @@ final class WorkspaceState: ObservableObject {
     }
 
     /// The tab in the ACTIVE group holding `path`, if any (dedup rule
-    /// scope) — kind-agnostic: a path opens as exactly one item kind, so
-    /// equal paths are one tab (#369 openTab dedup).
+    /// scope) — kind-agnostic across FILE items: a path opens as exactly
+    /// one item kind, so equal paths are one tab (#369 openTab dedup).
+    /// The synthetic `.graph` singleton is deliberately excluded: it is
+    /// never addressed by file path, and matching it here would let a
+    /// real vault file whose path equalled the graph's sentinel hijack
+    /// (or be hijacked by) the graph tab (round 2 finding 5).
     func activeGroupTab(forPath path: String) -> WorkspaceTab? {
-        model.activeGroup.tabs.first { $0.item.path == path }
+        model.activeGroup.tabs.first { $0.item != .graph && $0.item.path == path }
     }
 
     /// The `.base` tab in the active group whose path has the exact UTF-8

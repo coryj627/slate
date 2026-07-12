@@ -320,6 +320,11 @@ final class WorkspaceTabsTests: XCTestCase {
         XCTAssertEqual(
             TabBarView.accessibilityValue(index: 0, count: 1, isDirty: true),
             "tab 1 of 1, edited")
+        // The Graph tab's kind rides in the value string (review round 1
+        // finding 9) — the strip omitted it before.
+        XCTAssertEqual(
+            TabBarView.accessibilityValue(index: 0, count: 2, isDirty: false, isGraph: true),
+            "tab 1 of 2, graph")
     }
 
     func testTabBarRendersInBothAppearances() async throws {

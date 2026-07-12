@@ -46,6 +46,10 @@ enum EditorItem: Hashable, Codable {
     case base(path: String)
     case savedQuery(id: String, name: String)
     case dashboard(id: String, name: String)
+    /// The global graph tab (Milestone P, P1-2 #554/#555). A SINGLETON
+    /// with no path payload — one graph tab per workspace; `openTab`'s
+    /// identity dedup activates the existing tab instead of duplicating.
+    case graph
 
     static func == (lhs: EditorItem, rhs: EditorItem) -> Bool {
         switch (lhs, rhs) {
@@ -63,6 +67,8 @@ enum EditorItem: Hashable, Codable {
                 .dashboard(let rhsID, let rhsName)):
             return BaseExactIdentity.matches(lhsID, rhsID)
                 && BaseExactIdentity.matches(lhsName, rhsName)
+        case (.graph, .graph):
+            return true
         default:
             return false
         }
@@ -87,6 +93,8 @@ enum EditorItem: Hashable, Codable {
             hasher.combine(4)
             BaseExactIdentity.hash(id, into: &hasher)
             BaseExactIdentity.hash(name, into: &hasher)
+        case .graph:
+            hasher.combine(5)
         }
     }
 
@@ -99,6 +107,13 @@ enum EditorItem: Hashable, Codable {
             return "saved-query:\(id)"
         case .dashboard(let id, _):
             return "dashboard:\(id)"
+        case .graph:
+            // Namespaced synthetic key (the savedQuery/dashboard
+            // convention) so the path-keyed dedup in
+            // `activeGroupTab(forPath:)` can't confuse the singleton
+            // graph tab with a real vault file literally named "graph"
+            // (review round 1 finding 5).
+            return "graph:singleton"
         }
     }
 
@@ -106,6 +121,8 @@ enum EditorItem: Hashable, Codable {
         switch self {
         case .savedQuery(_, let name), .dashboard(_, let name):
             return name
+        case .graph:
+            return "Graph"
         case .markdown(let path), .canvas(let path), .base(let path):
             let name = (path as NSString).lastPathComponent
             let withoutExtension = (name as NSString).deletingPathExtension
@@ -135,6 +152,9 @@ enum EditorItem: Hashable, Codable {
                 id: try c.decodeIfPresent(String.self, forKey: .id)
                     ?? c.decode(String.self, forKey: .path),
                 name: try c.decodeIfPresent(String.self, forKey: .name) ?? "Dashboard")
+        case "graph":
+            // Singleton — any `path` field is ignored.
+            self = .graph
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind, in: c,
@@ -164,6 +184,11 @@ enum EditorItem: Hashable, Codable {
             try c.encode(id, forKey: .path)
             try c.encode(id, forKey: .id)
             try c.encode(name, forKey: .name)
+        case .graph:
+            try c.encode("graph", forKey: .kind)
+            // Write the namespaced synthetic path so the Item schema
+            // stays populated; older builds drop the unknown tab.
+            try c.encode("graph:singleton", forKey: .path)
         }
     }
 }
