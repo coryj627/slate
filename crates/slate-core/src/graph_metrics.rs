@@ -87,7 +87,7 @@ impl MetricsSnapshot {
 
         // Union-find over canonical positions for undirected components.
         let mut parent: Vec<usize> = (0..n).collect();
-        fn find(parent: &mut Vec<usize>, mut x: usize) -> usize {
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
             while parent[x] != x {
                 parent[x] = parent[parent[x]];
                 x = parent[x];
@@ -130,14 +130,14 @@ impl MetricsSnapshot {
         let mut component = vec![0u32; n];
         let mut root_label: HashMap<usize, u32> = HashMap::new();
         let mut next_label = 0u32;
-        for i in 0..n {
+        for (i, slot) in component.iter_mut().enumerate() {
             let root = find(&mut parent, i);
             let label = *root_label.entry(root).or_insert_with(|| {
                 let l = next_label;
                 next_label += 1;
                 l
             });
-            component[i] = label;
+            *slot = label;
         }
 
         let pagerank = pagerank_link_subgraph(&link_out);

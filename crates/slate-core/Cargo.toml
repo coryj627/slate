@@ -100,3 +100,7 @@ harness = false
 [[bench]]
 name = "oplog_bench"
 harness = false
+
+[[bench]]
+name = "graph_bench"
+harness = false

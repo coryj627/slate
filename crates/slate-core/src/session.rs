@@ -1291,6 +1291,28 @@ impl VaultSession {
             .unwrap_or(0)
     }
 
+    /// Bench-only seam (#553): drop the built index so the next graph
+    /// query measures a true cold build. Hidden from the API surface;
+    /// no production caller may exist.
+    #[doc(hidden)]
+    pub fn graph_drop_for_bench(&self) {
+        self.graph.lock().expect("graph index mutex").take();
+        self.graph_metrics
+            .lock()
+            .expect("graph metrics mutex")
+            .take();
+    }
+
+    /// Bench-only seam (#553): drop the metrics cache so the next
+    /// metrics query measures a full recompute.
+    #[doc(hidden)]
+    pub fn graph_metrics_drop_for_bench(&self) {
+        self.graph_metrics
+            .lock()
+            .expect("graph metrics mutex")
+            .take();
+    }
+
     /// Filtered whole-graph projection (#552). Deterministic output
     /// order: nodes sorted by key, edges by (source, target, kind).
     pub fn graph_snapshot(
@@ -11016,6 +11038,7 @@ impl VaultSession {
                 |row| row.get(0),
             )
             .optional()?;
+        let mut graph_sink = self.graph_sink();
         let file_id = match existing {
             Some(id) => id,
             None => {
@@ -11040,6 +11063,16 @@ impl VaultSession {
                         stat.birthtime_ms,
                     ],
                 )?;
+                // Open-before-first-scan heal adds a files row the
+                // graph must mirror (#550) — same seam as
+                // ensure_open_base_indexed.
+                graph_sink.stage_with(|| {
+                    Ok(crate::graph::GraphOp::FileAdded {
+                        path: path.to_string(),
+                        is_markdown,
+                        resolved_inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
+                    })
+                })?;
                 tx.query_row(
                     "SELECT id FROM files WHERE path = ?1",
                     rusqlite::params![path],
@@ -11055,6 +11088,7 @@ impl VaultSession {
             &DbTitleSource { conn: &tx },
         )?;
         tx.commit()?;
+        self.graph_apply(graph_sink);
         drop(conn);
 
         let degraded = crate::canvas::is_load_degraded(&warnings);

@@ -947,3 +947,466 @@ mod surface {
         assert_eq!(session.graph_generation(), g1);
     }
 }
+
+// --- P0-4: censuses (#553) — the Wave-1 gate ------------------------------
+
+/// Adversarial censuses per the standing methodology: random walks plus
+/// an exhaustive small-vault sweep, `SLATE_CENSUS_FULL=1` (release) as
+/// the pre-push confirmation scale.
+mod census {
+    use super::*;
+    use crate::graph::GraphFilter;
+
+    fn census_scale() -> u64 {
+        if std::env::var("SLATE_CENSUS_FULL").as_deref() == Ok("1") {
+            300
+        } else {
+            60
+        }
+    }
+
+    struct SplitMix64(u64);
+    impl SplitMix64 {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    /// Name pool: small enough that collisions (parallel references,
+    /// shared ghosts, materialize-a-ghost) happen constantly.
+    fn stem(i: usize) -> String {
+        format!("note{i}")
+    }
+
+    fn random_body(rng: &mut SplitMix64) -> String {
+        let mut body = String::from("# body\n");
+        for _ in 0..rng.below(6) {
+            let target = stem(rng.below(14)); // half the pool never exists
+            match rng.below(5) {
+                0 => body.push_str(&format!("![[{target}]] ")),
+                1 => body.push_str(&format!("[[{target}]] [[{target}]] ")), // parallel
+                2 => body.push_str(&format!("[[dir/{target}]] ")),
+                3 => body.push_str("![[pic.png]] "),
+                _ => body.push_str(&format!("[[{target}]] ")),
+            }
+        }
+        body
+    }
+
+    fn existing_md(session: &VaultSession) -> Vec<String> {
+        let conn = session.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT path FROM files WHERE is_markdown = 1 ORDER BY path")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    /// One random op over the real session APIs. Collisions and
+    /// missing targets are expected — errors that the API surfaces
+    /// (DestinationExists etc.) are fine; what matters is that after
+    /// every SUCCESSFUL mutation the incremental graph still equals a
+    /// rebuild.
+    fn apply_random_op(
+        session: &VaultSession,
+        root: &std::path::Path,
+        rng: &mut SplitMix64,
+    ) -> &'static str {
+        let files = existing_md(session);
+        match rng.below(8) {
+            0 => {
+                let path = format!("note{}.md", rng.below(14));
+                let _ = session.create_exclusive(&path, &random_body(rng));
+                "create"
+            }
+            1 => {
+                if let Some(path) = files.get(rng.below(files.len().max(1))) {
+                    let _ = session.save_text(path, &random_body(rng), None);
+                }
+                "edit-links"
+            }
+            2 => {
+                if let Some(path) = files.get(rng.below(files.len().max(1))) {
+                    let _ = session.rename_file(path, &format!("note{}.md", rng.below(14)));
+                }
+                "rename"
+            }
+            3 => {
+                if let Some(path) = files.get(rng.below(files.len().max(1))) {
+                    let dest = if rng.below(2) == 0 { "dir" } else { "" };
+                    let _ = session.move_file(path, dest);
+                }
+                "move"
+            }
+            4 => {
+                if let Some(path) = files.get(rng.below(files.len().max(1))) {
+                    let _ = session.delete_file(path);
+                }
+                "delete"
+            }
+            5 => {
+                // Materialize a ghost by name, then scan so SQLite
+                // re-resolves (create alone must NOT merge the ghost —
+                // the graph replays SQLite).
+                let path = format!("note{}.md", rng.below(14));
+                let _ = session.create_exclusive(&path, "materialized");
+                let _ = session.scan_initial(&CancelToken::new());
+                "materialize+scan"
+            }
+            6 => {
+                // Attachment arrives out-of-band; scan indexes it.
+                let _ = std::fs::write(root.join("pic.png"), b"png");
+                let _ = session.scan_initial(&CancelToken::new());
+                "attachment+scan"
+            }
+            _ => {
+                // Out-of-band delete; the scan reconcile prunes it.
+                if let Some(path) = files.get(rng.below(files.len().max(1))) {
+                    let _ = std::fs::remove_file(root.join(path));
+                    let _ = session.scan_initial(&CancelToken::new());
+                }
+                "external-delete+scan"
+            }
+        }
+    }
+
+    /// Census 1a: adversarial random walk — after EVERY op the
+    /// incrementally-maintained index deep-equals a fresh build, and
+    /// the incremental path never went defensive.
+    #[test]
+    fn census_graph_matches_rebuild() {
+        for seed in 0..4u64 {
+            let mut rng = SplitMix64(0xC0FFEE ^ seed);
+            let (tmp, session) = make_vault(|p| {
+                p.write_file("note0.md", b"[[note1]] ![[note2]]").unwrap();
+                p.write_file("note1.md", b"[[note0]]").unwrap();
+            });
+            session.scan_initial(&CancelToken::new()).unwrap();
+            let _ = session.with_graph(|g| g.node_count()).unwrap(); // go live
+
+            for op_index in 0..census_scale() {
+                let op = apply_random_op(&session, tmp.path(), &mut rng);
+                assert!(
+                    session.graph_is_built(),
+                    "seed {seed} op {op_index} ({op}): incremental path went defensive"
+                );
+                let fresh = session.graph_rebuild_reference().unwrap();
+                let equal = session.with_graph(|g| g.deep_equals(&fresh)).unwrap();
+                assert!(
+                    equal,
+                    "seed {seed} op {op_index} ({op}): incremental graph diverged from rebuild"
+                );
+            }
+        }
+    }
+
+    /// Census 1b: exhaustive op-pair sweep over a 4-file vault — every
+    /// ordered pair of templated ops, fresh vault per pair, checked
+    /// after each op.
+    #[test]
+    fn census_graph_matches_rebuild_exhaustive_pairs() {
+        type Op = (&'static str, fn(&VaultSession, &std::path::Path));
+        let ops: Vec<Op> = vec![
+            ("create-linked", |s, _| {
+                let _ = s.create_exclusive("note9.md", "[[note0]] [[ghosty]] ![[note1]]");
+            }),
+            ("edit-links", |s, _| {
+                let _ = s.save_text("note0.md", "[[note2]] [[note2]] [[GHOSTY]]", None);
+            }),
+            ("empty-links", |s, _| {
+                let _ = s.save_text("note1.md", "plain text", None);
+            }),
+            ("rename", |s, _| {
+                let _ = s.rename_file("note2.md", "ghosty.md");
+            }),
+            ("move", |s, _| {
+                let _ = s.move_file("note0.md", "dir");
+            }),
+            ("delete", |s, _| {
+                let _ = s.delete_file("note1.md");
+            }),
+            ("recreate-deleted", |s, _| {
+                let _ = s.delete_file("note0.md");
+                let _ = s.create_exclusive("note0.md", "reborn [[note3]]");
+            }),
+            ("materialize+scan", |s, _| {
+                let _ = s.create_exclusive("ghosty.md", "arrived");
+                let _ = s.scan_initial(&CancelToken::new());
+            }),
+            ("external-delete+scan", |s, root| {
+                let _ = std::fs::remove_file(root.join("note3.md"));
+                let _ = s.scan_initial(&CancelToken::new());
+            }),
+        ];
+
+        for (i, (name_a, op_a)) in ops.iter().enumerate() {
+            for (j, (name_b, op_b)) in ops.iter().enumerate() {
+                let (tmp, session) = make_vault(|p| {
+                    p.write_file("note0.md", b"[[note1]] [[ghosty]]").unwrap();
+                    p.write_file("note1.md", b"![[note0]] [[note3]]").unwrap();
+                    p.write_file("note2.md", b"[[note0]] [[note2]]").unwrap();
+                    p.write_file("note3.md", b"[[ghosty]]").unwrap();
+                });
+                session.scan_initial(&CancelToken::new()).unwrap();
+                let _ = session.with_graph(|g| g.node_count()).unwrap();
+
+                for (step, (name, op)) in [(name_a, op_a), (name_b, op_b)].into_iter().enumerate() {
+                    op(&session, tmp.path());
+                    assert!(
+                        session.graph_is_built(),
+                        "pair ({i},{j}) step {step} ({name}): went defensive"
+                    );
+                    let fresh = session.graph_rebuild_reference().unwrap();
+                    let equal = session.with_graph(|g| g.deep_equals(&fresh)).unwrap();
+                    assert!(equal, "pair ({i},{j}) step {step} ({name}): diverged");
+                }
+            }
+        }
+    }
+
+    /// Census 2: same file set, shuffled insertion orders — identical
+    /// sorted node/edge/metric lists.
+    #[test]
+    fn census_graph_permutation_invariance() {
+        let mut rng = SplitMix64(0xDECAF);
+        let base: Vec<(String, String)> = (0..8)
+            .map(|i| {
+                (format!("note{i}.md"), {
+                    let mut rng_local = SplitMix64(0xABCD + i as u64);
+                    random_body(&mut rng_local)
+                })
+            })
+            .collect();
+
+        let build = |ordered: &[(String, String)]| {
+            let (tmp, session) = make_vault(|_| {});
+            for (path, body) in ordered {
+                session.create_exclusive(path, body).unwrap();
+            }
+            // Attachment + scan so ![[pic.png]] references resolve
+            // in every ordering.
+            std::fs::write(tmp.path().join("pic.png"), b"png").unwrap();
+            session.scan_initial(&CancelToken::new()).unwrap();
+            let nodes = session.with_graph(|g| g.canonical_nodes()).unwrap();
+            let edges = session.with_graph(|g| g.canonical_edges()).unwrap();
+            let metrics = session.graph_metrics_snapshot().unwrap();
+            let metric_rows: Vec<_> = nodes
+                .iter()
+                .map(|(k, _, _)| {
+                    let m = metrics.get(k).unwrap();
+                    (
+                        k.clone(),
+                        m.in_links,
+                        m.out_links,
+                        m.in_embeds,
+                        m.out_embeds,
+                        m.component,
+                        m.is_orphan,
+                        m.pagerank.to_bits(),
+                    )
+                })
+                .collect();
+            drop(tmp);
+            (nodes, edges, metric_rows)
+        };
+
+        let reference = build(&base);
+        let shuffles = (census_scale() / 20).max(3);
+        for _ in 0..shuffles {
+            let mut shuffled = base.clone();
+            for i in (1..shuffled.len()).rev() {
+                let j = rng.below(i + 1);
+                shuffled.swap(i, j);
+            }
+            let permuted = build(&shuffled);
+            assert_eq!(reference.0, permuted.0, "node lists must match");
+            assert_eq!(reference.1, permuted.1, "edge lists must match");
+            assert_eq!(reference.2, permuted.2, "metric lists must match");
+        }
+    }
+
+    /// Census 3: degree/orphan/component from MetricsSnapshot ≡ a
+    /// naive recomputation straight from SQLite rows (independent
+    /// implementation: no GraphIndex code paths).
+    #[test]
+    fn census_metrics_match_naive() {
+        let mut rng = SplitMix64(0xFEED);
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("note0.md", b"[[note1]]").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let _ = session.with_graph(|g| g.node_count()).unwrap();
+
+        for op_index in 0..census_scale() / 2 {
+            let op = apply_random_op(&session, tmp.path(), &mut rng);
+            let metrics = session.graph_metrics_snapshot().unwrap();
+
+            // Naive recomputation from raw SQL rows.
+            type NaiveFiles = Vec<(String, bool)>;
+            type NaiveRows = Vec<(String, Option<String>, String, bool)>;
+            let (files, rows): (NaiveFiles, NaiveRows) = {
+                let conn = session.conn.lock().unwrap();
+                let files = conn
+                    .prepare("SELECT path, is_markdown FROM files ORDER BY path")
+                    .unwrap()
+                    .query_map([], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+                    })
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                let rows = conn
+                    .prepare(
+                        "SELECT f.path, l.target_path, l.target_raw, l.is_embed
+                         FROM links l JOIN files f ON f.id = l.source_file_id
+                         WHERE l.is_external = 0",
+                    )
+                    .unwrap()
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, i64>(3)? != 0,
+                        ))
+                    })
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                (files, rows)
+            };
+            let file_set: std::collections::HashSet<&str> =
+                files.iter().map(|(p, _)| p.as_str()).collect();
+            let node_key = |target_path: &Option<String>, raw: &str| -> crate::graph::NodeKey {
+                match target_path {
+                    Some(tp) if file_set.contains(tp.as_str()) => {
+                        crate::graph::NodeKey::Path(tp.clone())
+                    }
+                    _ => crate::graph::NodeKey::Ghost(crate::graph::ghost_key(raw)),
+                }
+            };
+
+            use std::collections::HashMap;
+            let mut naive: HashMap<crate::graph::NodeKey, (u32, u32, u32, u32)> = HashMap::new();
+            for (path, _) in &files {
+                naive.insert(crate::graph::NodeKey::Path(path.clone()), (0, 0, 0, 0));
+            }
+            let mut adjacency: Vec<(crate::graph::NodeKey, crate::graph::NodeKey)> = Vec::new();
+            for (source, target_path, raw, is_embed) in &rows {
+                let source_key = crate::graph::NodeKey::Path(source.clone());
+                let target_key = node_key(target_path, raw);
+                naive.entry(target_key.clone()).or_insert((0, 0, 0, 0));
+                adjacency.push((source_key.clone(), target_key.clone()));
+                if *is_embed {
+                    naive.get_mut(&source_key).unwrap().3 += 1; // out_embeds
+                    naive.get_mut(&target_key).unwrap().2 += 1; // in_embeds
+                } else {
+                    naive.get_mut(&source_key).unwrap().1 += 1; // out_links
+                    naive.get_mut(&target_key).unwrap().0 += 1; // in_links
+                }
+            }
+
+            assert_eq!(
+                metrics.len(),
+                naive.len(),
+                "op {op_index} ({op}): node universe mismatch"
+            );
+            for (key, (in_l, out_l, in_e, out_e)) in &naive {
+                let m = metrics
+                    .get(key)
+                    .unwrap_or_else(|| panic!("op {op_index} ({op}): missing {key:?}"));
+                assert_eq!(
+                    (m.in_links, m.out_links, m.in_embeds, m.out_embeds),
+                    (*in_l, *out_l, *in_e, *out_e),
+                    "op {op_index} ({op}): degrees for {key:?}"
+                );
+                let is_md_note = matches!(key, crate::graph::NodeKey::Path(p)
+                    if files.iter().any(|(fp, md)| fp == p && *md));
+                assert_eq!(
+                    m.is_orphan,
+                    is_md_note && *in_l == 0 && *out_l == 0,
+                    "op {op_index} ({op}): orphan for {key:?}"
+                );
+            }
+
+            // Components: naive undirected BFS grouping compared as
+            // partitions (same members together), then label rule
+            // checked via smallest members.
+            let mut keys: Vec<_> = naive.keys().cloned().collect();
+            keys.sort();
+            let pos: HashMap<_, _> = keys.iter().cloned().zip(0..).collect();
+            let mut adj: Vec<Vec<usize>> = vec![Vec::new(); keys.len()];
+            for (a, b) in &adjacency {
+                let (pa, pb): (usize, usize) = (pos[a], pos[b]);
+                adj[pa].push(pb);
+                adj[pb].push(pa);
+            }
+            let mut comp = vec![usize::MAX; keys.len()];
+            let mut next = 0usize;
+            for start in 0..keys.len() {
+                if comp[start] != usize::MAX {
+                    continue;
+                }
+                let mut queue = vec![start];
+                comp[start] = next;
+                while let Some(v) = queue.pop() {
+                    for &w in &adj[v] {
+                        if comp[w] == usize::MAX {
+                            comp[w] = next;
+                            queue.push(w);
+                        }
+                    }
+                }
+                next += 1;
+            }
+            for (i, key) in keys.iter().enumerate() {
+                let expected = comp[i] as u32;
+                assert_eq!(
+                    metrics.get(key).unwrap().component,
+                    expected,
+                    "op {op_index} ({op}): component label for {key:?}"
+                );
+            }
+        }
+        let _ = session.graph_snapshot(GraphFilter::default()).unwrap();
+    }
+}
+
+/// The open-before-first-scan heals (`open_canvas`,
+/// `ensure_open_base_indexed`) insert files rows outside the scan/save
+/// paths — the graph must mirror them too (#550 hook completeness).
+#[test]
+fn open_canvas_before_scan_mirrors_the_healed_row() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[b]]").unwrap();
+        p.write_file("b.md", b"").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let _ = built_nodes(&session); // index live
+
+    // Canvas lands on disk AFTER the scan; open_canvas heals the
+    // missing files row inside its own transaction.
+    std::fs::write(
+        tmp.path().join("board.canvas"),
+        r#"{"nodes":[],"edges":[]}"#,
+    )
+    .unwrap();
+    session.open_canvas("board.canvas").unwrap();
+    assert_matches_rebuild(&session, "open_canvas heal of an unscanned file");
+    let nodes = built_nodes(&session);
+    assert!(
+        nodes.contains(&(
+            path_key("board.canvas"),
+            NodeKind::Attachment,
+            "board.canvas".to_string()
+        )),
+        "healed canvas row becomes an Attachment node: {nodes:?}"
+    );
+}
