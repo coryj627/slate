@@ -124,11 +124,13 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     // MARK: Rail keyboard navigation (pure — unit-tested)
 
     /// Move the rail highlight one step along the registered leaves for an
-    /// `up`/`down` arrow, clamped at the ends (no wrap — matches a segmented
-    /// picker's arrow-within behavior). `left`/`right` don't move the vertical
-    /// rail. Returns `nil` when there is no move (already at the edge, an
-    /// unregistered origin, or a non-vertical command) so the caller leaves the
-    /// highlight untouched.
+    /// `up`/`down` arrow, clamped at the ends (no wrap). This is a roving
+    /// highlight, NOT a segmented control: a segmented control commits its
+    /// value on each arrow, whereas the rail only MOVES the highlight here and
+    /// waits for Return/Space to activate (#859). `left`/`right` don't move the
+    /// vertical rail. Returns `nil` when there is no move (already at the edge,
+    /// an unregistered origin, or a non-vertical command) so the caller leaves
+    /// the highlight untouched.
     ///
     /// Pure and total over the registered order so the mapping is testable
     /// without a rendered view (`RightPaneViewTests`).
@@ -150,9 +152,13 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
 
 /// The right pane (Milestone U4-1, #470): the active leaf's content filling the
 /// column, a hairline separator, and the vertical icon rail pinned to the
-/// trailing edge (Obsidian parity — the pane collapses leftward). Replaces the
-/// segmented-picker `DetailSidebarColumn` wholesale; the three detail panels it
-/// hosted (outline / citations / bibliography) mount here unchanged.
+/// trailing edge. Obsidian parity — the pane collapses leftward: `MainSplitView`
+/// drives that collapse by forcing the detail column to zero width when
+/// `AppState.isRightPaneVisible` is false (View ▸ Hide Right Pane / ⌥⌘I, #882),
+/// since `NavigationSplitView`'s `columnVisibility` can't hide the detail
+/// column. Replaces the segmented-picker `DetailSidebarColumn` wholesale; the
+/// three detail panels it hosted (outline / citations / bibliography) mount
+/// here unchanged.
 ///
 /// `workspace` is observed directly (not via AppState's publisher): `activeLeaf`
 /// is a nested `@Published` on `WorkspaceState`, and AppState's own publisher
@@ -162,11 +168,23 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
 struct RightPaneView: View {
     @ObservedObject var workspace: WorkspaceState
 
-    /// The rail is a single Tab stop; ↑/↓ move this highlight inside it and
-    /// Space/Return activates the highlighted leaf — matching the segmented
-    /// picker's arrow-within, Tab-out interaction. Nil until the rail takes
-    /// focus, at which point it seeds to the active leaf.
-    @FocusState private var railHighlight: Leaf?
+    /// The rail is a single Tab stop; ↑/↓ move this roving highlight inside it
+    /// (Tab-out to leave) and Space/Return activates the highlighted leaf —
+    /// listbox/toolbar semantics, NOT a segmented control (which would commit
+    /// on each arrow; #859). Nil until the rail takes focus, at which point it
+    /// seeds to the active leaf, and `LeafRailView` paints a focus ring on the
+    /// highlighted item so a sighted keyboard user sees their position before
+    /// activating (WCAG 2.4.7).
+    /// Codex red-team: the rail's keyboard focus is a plain Boolean
+    /// `@FocusState` (`railFocused`), NOT a `@FocusState<Leaf?>`. A
+    /// value-keyed focus binding (`.focused($x, equals: activeLeaf)`)
+    /// registers the rail for ONE value; the moment ↑/↓ moves the
+    /// highlight to a different leaf, SwiftUI finds no view registered
+    /// for that value and DROPS focus — so Return/Space never reached
+    /// the rail. The highlight POSITION is ordinary `@State`; the ring
+    /// and activation read it while `railFocused` owns the focus.
+    @State private var railHighlight: Leaf?
+    @FocusState private var railFocused: Bool
 
     /// Keyboard focus for the leaf-content region (U4-4, #473). ⌘⌥→ off the
     /// rightmost editor group routes focus INTO the leaf; SwiftUI moves
@@ -189,6 +207,7 @@ struct RightPaneView: View {
             LeafRailView(
                 activeLeaf: workspace.activeLeaf,
                 railHighlight: $railHighlight,
+                railFocused: $railFocused,
                 onActivate: activate
             )
             .frame(width: 40)
@@ -216,10 +235,16 @@ struct RightPaneView: View {
         // region when the other doesn't hold it (the state machine in
         // WorkspaceState converges). Post-update (#448-safe).
         .onChange(of: leafFocused) { _, focused in
-            workspace.noteLeafFocusChanged(focused || railHighlight != nil)
+            workspace.noteLeafFocusChanged(focused || railFocused)
         }
-        .onChange(of: railHighlight) { _, rail in
-            workspace.noteLeafFocusChanged(rail != nil || leafFocused)
+        // Codex red-team: rail focus OWNERSHIP is `railFocused` (Bool),
+        // not "a highlight exists" — the highlight is plain state that
+        // can outlive focus. On gaining focus, seed the highlight to the
+        // active leaf so ↑/↓ start from what's shown; on losing it, drop
+        // the highlight so no stale ring paints.
+        .onChange(of: railFocused) { _, focused in
+            workspace.noteLeafFocusChanged(focused || leafFocused)
+            railHighlight = focused ? workspace.activeLeaf : nil
         }
     }
 
@@ -332,10 +357,14 @@ struct RightPaneView: View {
 /// target, the active leaf marked with an `accentText` tint AND a 2pt leading
 /// `accentFill` selection bar (shape + color, never color alone). The whole
 /// rail is one Tab stop and one AX container labeled "Panel rail"; ↑/↓ move a
-/// `@FocusState` highlight inside it, Space/Return activates.
+/// `@FocusState` highlight inside it (shown as a 2pt accent focus ring on the
+/// highlighted item — WCAG 2.4.7), Return/Space activates (#859).
 private struct LeafRailView: View {
     let activeLeaf: Leaf
-    var railHighlight: FocusState<Leaf?>.Binding
+    /// Highlight POSITION — plain state (Codex red-team; see RightPaneView).
+    @Binding var railHighlight: Leaf?
+    /// Rail keyboard-focus OWNERSHIP — a single Boolean focus stop.
+    var railFocused: FocusState<Bool>.Binding
     let onActivate: (Leaf) -> Void
 
     var body: some View {
@@ -352,27 +381,42 @@ private struct LeafRailView: View {
         // Rail glyphs render hierarchical so the larger leaf icons gain depth
         // from a single accent — the Obsidian-rail feel (U5-1, DoD §B).
         .slateSymbolSurface(.rail)
-        // One focus stop for the whole rail: the container is focusable and
-        // owns the highlight; the item Buttons are not individually
-        // focus-reachable by Tab (arrow-within, Tab-out — the segmented picker
-        // it replaces behaved the same). Seed the highlight to the active leaf
-        // when the rail takes focus so ↑/↓ start from what's shown.
+        // One focus stop for the whole rail: the container is the single
+        // focusable, and `railFocused` (Bool) tracks whether it owns
+        // keyboard focus; the item Buttons are not individually
+        // focus-reachable by Tab (arrow-within, Tab-out — the segmented
+        // picker it replaces behaved the same). RightPaneView seeds the
+        // highlight to the active leaf when the rail gains focus so ↑/↓
+        // start from what's shown.
         .focusable()
-        .focused(railHighlight, equals: activeLeaf)
+        .focused(railFocused)
         .onMoveCommand { direction in
-            let origin = railHighlight.wrappedValue ?? activeLeaf
+            let origin = railHighlight ?? activeLeaf
             if let next = Leaf.railMove(from: origin, direction) {
-                railHighlight.wrappedValue = next
+                railHighlight = next
             }
         }
-        // Space / Return activate the highlighted leaf (falling back to the
-        // active leaf if focus just landed). `.defaultAction` is Return; the
-        // Button's own key handling covers Space when highlighted.
+        // Return / Space activate the highlighted leaf for a NON-VoiceOver
+        // keyboard user (#859, WCAG 2.1.1): the item Buttons aren't individual
+        // focus stops (arrow-within, Tab-out), so bare Return/Space on the rail
+        // container would otherwise reach nothing — the `.accessibilityAction(
+        // .default)` below is VoiceOver's activate path only. onKeyPress fires
+        // only while the rail holds keyboard focus, so it can't steal the key
+        // from other surfaces. Falls back to the active leaf if focus just
+        // landed and the highlight hasn't seeded yet.
+        .onKeyPress(.return) {
+            onActivate(railHighlight ?? activeLeaf)
+            return .handled
+        }
+        .onKeyPress(.space) {
+            onActivate(railHighlight ?? activeLeaf)
+            return .handled
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Panel rail")
         .accessibilityHint("Choose which panel is shown")
         .accessibilityAction(.default) {
-            onActivate(railHighlight.wrappedValue ?? activeLeaf)
+            onActivate(railHighlight ?? activeLeaf)
         }
     }
 
@@ -404,6 +448,25 @@ private struct LeafRailView: View {
                     Rectangle()
                         .fill(Tokens.ColorRole.accentFill)
                         .frame(width: activeLeaf == leaf ? 2 : 0)
+                }
+                .overlay {
+                    // Focus indicator (#859, WCAG 2.4.7): the rail is ONE focus
+                    // stop, so the system ring outlines the whole rail and can't
+                    // show WHICH leaf the ↑/↓ highlight is on. Paint a 2pt accent
+                    // ring on the highlighted item — distinct from the active
+                    // leaf's leading bar — so a sighted keyboard user sees their
+                    // position before pressing Return/Space. `accentText` is the
+                    // APCA-gated accent foreground role (never a raw literal);
+                    // decorative (hit-testing off, AX-hidden — the highlight's
+                    // meaning rides the focus/selection semantics VoiceOver reads).
+                    // Gated on `railFocused` so a highlight that outlived focus
+                    // (plain state) never paints a ring while focus is elsewhere.
+                    if railFocused.wrappedValue, railHighlight == leaf {
+                        RoundedRectangle(cornerRadius: Tokens.Radius.small)
+                            .strokeBorder(Tokens.ColorRole.accentText, lineWidth: 2)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
                 .contentShape(Rectangle())
         }

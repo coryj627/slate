@@ -526,6 +526,60 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertTrue(source.contains(".onMoveCommand"))
     }
 
+    /// #859 (WCAG 2.4.7): the rail is one focus stop, so the highlighted-but-
+    /// not-active leaf gets a per-item focus ring, gated on `railFocused` so a
+    /// highlight that outlived focus never paints, using the APCA-gated
+    /// `accentText` role (never a raw literal). Pinned structurally (no
+    /// rendered-focus-tree API); the VoiceOver/keyboard runbook covers behavior.
+    func testRailHighlightedLeafGetsVisibleFocusRing() throws {
+        let source = try rightPaneSource()
+        XCTAssertTrue(
+            source.contains("railFocused.wrappedValue, railHighlight == leaf"),
+            "the ring keys off the arrow-highlighted leaf AND rail focus ownership")
+        XCTAssertTrue(
+            source.contains(".strokeBorder(Tokens.ColorRole.accentText, lineWidth: 2)"),
+            "the focus indicator is a 2pt accentText ring (APCA-gated role, not a literal)")
+        XCTAssertFalse(
+            source.contains("segmented picker's arrow-within"),
+            "the stale segmented-picker-parity claim must be gone (#859): the rail "
+                + "is a roving highlight that activates on Return/Space, not on arrow")
+    }
+
+    /// #859 Codex red-team: rail keyboard focus is a Boolean `@FocusState`
+    /// (`railFocused`), NOT a value-keyed `.focused($x, equals: activeLeaf)` —
+    /// the latter dropped focus the instant ↑/↓ moved the highlight off the
+    /// active leaf, so Return/Space never activated. The highlight position is
+    /// plain state.
+    func testRailFocusIsBooleanOwnershipNotValueKeyed() throws {
+        let source = try rightPaneSource()
+        XCTAssertTrue(
+            source.contains(".focused(railFocused)"),
+            "the rail owns focus via a Boolean @FocusState, decoupled from the highlight")
+        XCTAssertFalse(
+            source.contains(".focused(railHighlight, equals: activeLeaf)"),
+            "the value-keyed focus binding (which dropped focus on ↑/↓) must be gone")
+        XCTAssertTrue(
+            source.contains("@Binding var railHighlight: Leaf?"),
+            "the highlight position is plain state, free to move without losing focus")
+    }
+
+    /// #859 (WCAG 2.1.1): a non-VoiceOver keyboard user activates the
+    /// highlighted leaf with Return/Space. The item Buttons aren't individual
+    /// focus stops, so the rail container wires `.onKeyPress(.return)` /
+    /// `.onKeyPress(.space)` to `onActivate` alongside the VoiceOver-only
+    /// `.accessibilityAction(.default)`.
+    func testRailActivatesHighlightedLeafFromReturnAndSpace() throws {
+        let source = try rightPaneSource()
+        XCTAssertTrue(source.contains(".onKeyPress(.return)"))
+        XCTAssertTrue(source.contains(".onKeyPress(.space)"))
+        XCTAssertTrue(
+            source.contains("onActivate(railHighlight ?? activeLeaf)"),
+            "Return/Space activate the highlighted leaf (falling back to active)")
+        XCTAssertTrue(
+            source.contains(".accessibilityAction(.default)"),
+            "the VoiceOver activate path stays")
+    }
+
     /// The leaf-switch announcement matches the spec phrasing ("<title>
     /// panel.") — the medium-priority live region that replaces the picker's
     /// native announcement.

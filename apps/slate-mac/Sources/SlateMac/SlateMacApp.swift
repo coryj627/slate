@@ -364,6 +364,21 @@ struct SlateMacApp: App {
                 }
                 .disabled(!appState.isVaultOpen)
 
+                // Right-pane hide/reveal (#882, split-views.md:44 — a hideable
+                // pane needs a menu command + keyboard shortcut to reveal).
+                // #868 changeable label (the-menu-bar.md: show/hide titles must
+                // reflect current state); the palette keeps the static "Toggle
+                // Right Pane" noun. ⌥⌘I is the single chord owner (menu-bar-
+                // homed — survives sidebar focus, the #422 lesson). Re-renders
+                // via the isRightPaneVisible publish.
+                Button(
+                    appState.isRightPaneVisible ? "Hide Right Pane" : "Show Right Pane"
+                ) {
+                    appState.toggleRightPane()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(!appState.isVaultOpen)
+
                 Divider()
 
                 // ⌘R / ⇧⌘J / ⌘J migrated from toolbar-button

@@ -616,6 +616,20 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertTrue(appState.isCitationSummaryOpen)
     }
 
+    /// Invoking `slate.view.toggleRightPane` (#882) flips
+    /// `isRightPaneVisible` — the palette twin of View ▸ Hide/Show Right
+    /// Pane (⌥⌘I). The chord wiring itself is covered by the drift/dead-zone
+    /// tests above; this pins the action's observable effect.
+    @MainActor
+    func testInvokingToggleRightPaneFlipsVisibility() async throws {
+        let appState = AppState()
+        XCTAssertTrue(appState.isRightPaneVisible, "the right pane starts visible")
+        try appState.commandRegistry.invokeById(id: SlateCommandID.toggleRightPane)
+        XCTAssertFalse(appState.isRightPaneVisible)
+        try appState.commandRegistry.invokeById(id: SlateCommandID.toggleRightPane)
+        XCTAssertTrue(appState.isRightPaneVisible)
+    }
+
     /// Invoking `slate.editor.addProperty` flips
     /// `isAddPropertySheetOpen`.
     @MainActor

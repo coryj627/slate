@@ -10,8 +10,9 @@ import SwiftUI
 /// label is the citation's `speech_text` (built from structured data
 /// by the renderer in #277), never the visual text — that's the
 /// Milestone L a11y differentiator. Activating a row sets
-/// `AppState.expandedCitation`, which `MainSplitView`'s sheet
-/// modifier surfaces as a `CitationPopover`.
+/// `AppState.expandedCitation` and presents the `CitationPopover`
+/// anchored to that row (#878 — a field-level expansion belongs on its
+/// trigger, not a detached sheet).
 ///
 /// Scope decision: the issue (#279) calls for inline non-editable
 /// citation tokens inside `NoteEditorView`. The math / code / Mermaid
@@ -25,6 +26,19 @@ import SwiftUI
 struct CitationsPanel: View {
     @EnvironmentObject private var appState: AppState
     @State private var announcedFilePath: String?
+
+    /// Which row's `CitationPopover` is open (#878). The list can hold
+    /// duplicate citations (the same `[@key]` cited twice is an equal
+    /// `RenderedCitation`), so the anchor is keyed by the row's stable
+    /// index — `appState.expandedCitation` alone can't disambiguate which
+    /// row to point the arrow at. Cleared together with `expandedCitation`.
+    @State private var expandedIndex: Int?
+
+    /// Focus-return target for the anchored popover (#878, WCAG 2.4.3 +
+    /// 2.1.2): on dismiss, VoiceOver/keyboard focus returns to the row that
+    /// opened it — the contract the sheet path established, now homed on the
+    /// trigger itself.
+    @AccessibilityFocusState private var focusedRow: Int?
 
     var body: some View {
         Group {
@@ -50,6 +64,14 @@ struct CitationsPanel: View {
             // count read out, even if the citation list is the same
             // length.
             announcedFilePath = nil
+        }
+        .onChange(of: appState.expandedCitation) { _, newValue in
+            // #878 red-team: an EXTERNAL clear (⌘J jump-to-bib, note-switch,
+            // vault close) nils `expandedCitation` without invoking the
+            // popover binding's set, so `dismissExpansion` never runs and
+            // this panel-local index stays pointed at the last row. Drop it
+            // here so a later Reading-mode click can't reopen a stale popover.
+            if newValue == nil { expandedIndex = nil }
         }
         .onAppear {
             announceIfNeeded()
@@ -108,16 +130,20 @@ struct CitationsPanel: View {
         List(
             Array(appState.currentNoteCitations.enumerated()),
             id: \.offset
-        ) { _, citation in
-            row(for: citation)
+        ) { item in
+            row(for: item.element, index: item.offset)
         }
         .listStyle(.sidebar)
     }
 
-    private func row(for citation: RenderedCitation) -> some View {
+    private func row(for citation: RenderedCitation, index: Int) -> some View {
         let isUnresolved =
             citation.bibEntry == nil && citation.styleId.isEmpty == false
         return Button {
+            // Row-anchored: this row owns the popover; the detached
+            // fallback in MainSplitView stays closed (#878).
+            expandedIndex = index
+            appState.expandedCitationRowAnchored = true
             appState.expandedCitation = citation
         } label: {
             // Visible: the visual_text from hayagriva
@@ -164,6 +190,59 @@ struct CitationsPanel: View {
                 : citation.speechText
         )
         .accessibilityHint("Activate to expand citation fields.")
+        .accessibilityFocused($focusedRow, equals: index)
+        // popovers.md:21 — "a popover appears above other content when people
+        // click a control." The expansion is a field-level detail of THIS row,
+        // so the popover anchors here (arrow pointing at the row, leading edge
+        // — the panel sits at the trailing edge of the window) instead of the
+        // detached sheet #878 replaced.
+        .popover(
+            isPresented: popoverBinding(index: index),
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .leading
+        ) {
+            CitationPopover(
+                citation: citation,
+                onClose: {
+                    // WCAG 2.4.3 + 2.1.2: return focus to the row anchor.
+                    focusedRow = index
+                    dismissExpansion(returningFocusTo: index)
+                }
+            )
+            .environmentObject(appState)
+        }
+    }
+
+    /// Per-row popover presentation, keyed by the row's stable index so
+    /// duplicate citations don't both present (#878). Dismissal (Close,
+    /// Escape, or an outside click) clears the shared expansion state and
+    /// returns focus to the row.
+    private func popoverBinding(index: Int) -> Binding<Bool> {
+        Binding(
+            // #878 red-team: also gate on the anchor discriminator. Without
+            // it, a Reading-mode expansion (anchored == false) that inherits
+            // a stale `expandedIndex` would re-arm this row's popover AT THE
+            // SAME TIME as MainSplitView's detached fallback — two citation
+            // surfaces for one click. Only a panel-row activation sets
+            // anchored == true, so only it presents here.
+            get: {
+                expandedIndex == index && appState.expandedCitation != nil
+                    && appState.expandedCitationRowAnchored
+            },
+            set: { presented in
+                if !presented { dismissExpansion(returningFocusTo: index) }
+            }
+        )
+    }
+
+    private func dismissExpansion(returningFocusTo index: Int) {
+        expandedIndex = nil
+        appState.expandedCitation = nil
+        appState.expandedCitationRowAnchored = false
+        // WCAG 2.4.3 + 2.1.2: return VoiceOver/keyboard focus to the row that
+        // opened the popover (its anchor) — the focus-return contract the
+        // sheet path established.
+        focusedRow = index
     }
 
     private func announceIfNeeded() {

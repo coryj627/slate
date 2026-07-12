@@ -70,7 +70,19 @@ struct MainSplitView: View {
             // limit, and the workspace close-gate alerts below must live in
             // THIS struct next to the @AccessibilityFocusState they assign
             // (for both the AX behavior and the a11y-check gate).
-            RightPaneView(workspace: appState.workspace)
+            if appState.isRightPaneVisible {
+                RightPaneView(workspace: appState.workspace)
+            } else {
+                // Custom collapse (#882, split-views.md:44): NavigationSplitView
+                // can't hide the DETAIL column via columnVisibility, so the
+                // right pane hides by forcing the detail column to zero width.
+                // Reveal via View ▸ Show Right Pane (⌥⌘I). AX-hidden so a
+                // collapsed pane is absent from VoiceOver's pane navigation.
+                Color.clear
+                    .frame(maxWidth: 0, maxHeight: .infinity)
+                    .navigationSplitViewColumnWidth(0)
+                    .accessibilityHidden(true)
+            }
         }
         .navigationTitle(vaultTitle)
         .toolbar { mainToolbar }
@@ -154,6 +166,19 @@ struct MainSplitView: View {
             presenting: appState.compactionFailure
         ) { _ in
             Button("OK", role: .cancel) {
+                appState.compactionFailure = nil
+            }
+            // #881 suppression (alerts.md:36 — a macOS alert may carry a
+            // suppression control). SwiftUI's `.alert` exposes no NSAlert
+            // suppression-checkbox API, so the affordance is a button with the
+            // standard macOS suppression semantics: it persists the opt-out
+            // (PreferencesStore, app-level like editorSpellCheck) and dismisses.
+            // This alert isn't actionable (alerts.md:27), so once suppressed
+            // the failure routes to the polite, non-interrupting AX
+            // announcement in AppState.handleVaultEvent — o_spec §O-2's "never
+            // silent" contract stays intact.
+            Button("Don't Show Again") {
+                appState.suppressCompactionFailureAlert()
                 appState.compactionFailure = nil
             }
         } message: { failure in
@@ -380,14 +405,21 @@ struct MainSplitView: View {
             QuickSwitcherView()
                 .environmentObject(appState)
         }
-        // Citation expand popover (#279). Triggered by activating a
-        // row in `CitationsPanel`; the sheet binding tracks
-        // `expandedCitation`. Dismissal routes focus back to the
-        // editor (same shape as the embed-preview popover, WCAG
-        // 2.4.3 + 2.1.2).
+        // Citation expand — Reading-mode fallback ONLY (#878). A
+        // `CitationsPanel` row now anchors its own `.popover` (the
+        // popovers.md:21 fix); this detached presentation survives solely
+        // for the inline Reading-mode citation click, whose NSTextView glyph
+        // has no SwiftUI anchor a popover could point at. The
+        // `expandedCitationRowAnchored` gate keeps it from double-presenting
+        // over a panel row's popover. Dismissal routes focus back to the
+        // editor (WCAG 2.4.3 + 2.1.2) — the anchorless surface has no row to
+        // return to, unlike the anchored panel popover.
         .sheet(
             isPresented: Binding(
-                get: { appState.expandedCitation != nil },
+                get: {
+                    appState.expandedCitation != nil
+                        && !appState.expandedCitationRowAnchored
+                },
                 set: { presented in
                     if !presented {
                         appState.expandedCitation = nil
@@ -403,27 +435,6 @@ struct MainSplitView: View {
                         appState.expandedCitation = nil
                         alertFocusReturn = .editor
                     }
-                )
-                .environmentObject(appState)
-            }
-        }
-        // BibliographyPanel entry expansion (#280). Same shape as
-        // expandedCitation above — separate state so the user can
-        // close one without affecting the other.
-        .sheet(
-            isPresented: Binding(
-                get: { appState.expandedBibEntry != nil },
-                set: { presented in
-                    if !presented {
-                        appState.expandedBibEntry = nil
-                    }
-                }
-            )
-        ) {
-            if let entry = appState.expandedBibEntry {
-                CitationPopover(
-                    entry: entry,
-                    onClose: { appState.expandedBibEntry = nil }
                 )
                 .environmentObject(appState)
             }

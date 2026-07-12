@@ -1303,7 +1303,7 @@ final class AppState: ObservableObject {
             postAccessibilityAnnouncement(
                 Self.filesRegionAnnouncement, priority: .medium)
         case .enterLeaf:
-            workspace.focusLeafRegion()
+            focusLeafRegionRevealingPane()
             postAccessibilityAnnouncement(
                 Self.leafRegionAnnouncement(workspace.activeLeaf), priority: .medium)
         case .none:
@@ -1701,10 +1701,34 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Citation the user wants to expand (Cmd+Shift+E / row activation
-    /// in `CitationsPanel`). Drives the `CitationPopover` sheet bound
-    /// in `MainSplitView`.
-    @Published var expandedCitation: RenderedCitation?
+    /// Citation the user wants to expand (row activation in
+    /// `CitationsPanel`, or an inline citation click in Reading mode).
+    /// A `CitationsPanel` row presents the `CitationPopover` anchored to
+    /// itself (#878); Reading mode has no SwiftUI anchor for an inline
+    /// glyph, so it falls back to the detached presentation in
+    /// `MainSplitView` gated on `expandedCitationRowAnchored` below.
+    @Published var expandedCitation: RenderedCitation? {
+        didSet {
+            // #878 red-team: many paths clear this EXTERNALLY (⌘J jump-to-
+            // bib, note-switch `clearTransitionSensitiveCollections`, vault
+            // close) without going through `CitationsPanel.dismissExpansion`,
+            // which is the only site that would reset the anchor. A stale
+            // `true` here would let the panel row popover AND the detached
+            // fallback both present on the next Reading-mode click. Reset the
+            // discriminator whenever the expansion clears so the two gates
+            // stay mutually exclusive.
+            if expandedCitation == nil { expandedCitationRowAnchored = false }
+        }
+    }
+
+    /// Discriminates the two `expandedCitation` triggers (#878). A
+    /// `CitationsPanel` row sets this `true` so it owns the anchored
+    /// `.popover` and `MainSplitView`'s detached fallback stays closed;
+    /// Reading mode leaves it `false` so the fallback presents (an inline
+    /// text glyph has no anchor a popover can point at). Rides
+    /// `expandedCitation`'s publish — the two always change together, and
+    /// its `didSet` above resets this on any external clear.
+    var expandedCitationRowAnchored: Bool = false
 
     // MARK: - Bibliography (Milestone L, #280)
 
@@ -1728,9 +1752,11 @@ final class AppState: ObservableObject {
 
     /// Bibliography entry the user wants to expand from the
     /// BibliographyPanel (vs. the per-note `expandedCitation` set by
-    /// CitationsPanel). Drives the same `CitationPopover` sheet — we
-    /// wrap the entry in a synthetic `RenderedCitation` so the
-    /// popover renders without a separate code path.
+    /// CitationsPanel). Presents the `CitationPopover` anchored to the
+    /// triggering entry row (#878) — we wrap the entry in a synthetic
+    /// `RenderedCitation` so the popover renders without a separate code
+    /// path. Purely BibliographyPanel-driven (no Reading-mode path), so
+    /// there is no detached fallback.
     @Published var expandedBibEntry: BibEntry?
 
     /// Vault-relative paths of every file that cites the
@@ -2025,6 +2051,15 @@ final class AppState: ObservableObject {
     /// `openTasksReview()` is the public entry point that kicks
     /// the query.
     @Published var isTasksReviewOpen: Bool = false
+
+    /// Right-pane (detail column) visibility (#882). `NavigationSplitView`'s
+    /// `columnVisibility` can only hide the sidebar/content columns, never the
+    /// DETAIL column, so `MainSplitView` collapses the right pane to zero width
+    /// when this is `false` (split-views.md:44 — allow pane hiding, provide a
+    /// menu command + keyboard shortcut to reveal). Default visible; session-
+    /// scoped (a fresh launch shows the pane). Flipped by View ▸ Hide/Show
+    /// Right Pane (⌥⌘I) and the `slate.view.toggleRightPane` palette command.
+    @Published var isRightPaneVisible: Bool = true
 
     /// True while the search overlay is visible. Cmd+F toggles;
     /// Esc clears.
@@ -2344,6 +2379,10 @@ final class AppState: ObservableObject {
         self.editorTextScale = Self.nearestEditorTextRung(to: preferencesStore.loadEditorTextScale())
         // #855: persisted spell-check opt-in (default OFF).
         self.editorSpellCheckEnabled = preferencesStore.loadEditorSpellCheck()
+        // #881: persisted "Don't Show Again" opt-out for the compaction-
+        // failure alert (default OFF).
+        self.compactionAlertSuppressed =
+            preferencesStore.loadSuppressCompactionFailureAlert()
         self.baseQueries = BaseQueriesState(
             pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
         self.recentVaults = self.recentsStore.load()
@@ -2647,6 +2686,39 @@ final class AppState: ObservableObject {
         } else {
             isSearchOpen = true
         }
+    }
+
+    /// Toggle the right pane's visibility (#882 — View ▸ Hide/Show Right Pane
+    /// / ⌥⌘I / the palette). Announces the new state so the change is never
+    /// silent for a VoiceOver user (the toggle-feedback policy shared with
+    /// `toggleEditorSpellCheck` / `setEditorTextScale`).
+    func toggleRightPane() {
+        isRightPaneVisible.toggle()
+        // #882 note (Codex red-team): hiding the pane while keyboard focus
+        // is INSIDE it drops focus to the window (recover with Tab, or
+        // ⌥⌘I to bring the pane back). A programmatic move of the real
+        // first responder to the editor is intentionally NOT attempted
+        // here: this app has no editor-focus request seam — even the
+        // spec'd ⌘⌥← "return to editor" only updates region bookkeeping,
+        // never `makeFirstResponder`, and the editor surface is an
+        // NSTextView that owns first responder natively. A model-only
+        // "rescue" would be a no-op that misrepresents where focus is;
+        // adding a real editor-focus anchor risks fighting the NSTextView
+        // and needs on-device VoiceOver verification — deferred to the
+        // region-focus-containment work, tracked separately.
+        postAccessibilityAnnouncement(
+            isRightPaneVisible ? "Right pane shown." : "Right pane hidden.",
+            priority: .medium)
+    }
+
+    /// Reveal the right pane and focus the leaf region — the single entry
+    /// point every leaf-reveal command routes through (#882 red-team: a
+    /// reveal command that only set `activeLeaf` was a dead no-op while the
+    /// pane was hidden). Sets visibility BEFORE focusing so the leaf the
+    /// caller just selected is actually on screen.
+    func focusLeafRegionRevealingPane() {
+        isRightPaneVisible = true
+        workspace.focusLeafRegion()
     }
 
     /// Close the overlay and cancel any in-flight search. Keep
@@ -4057,6 +4129,14 @@ final class AppState: ObservableObject {
     /// repeated failures on one file don't re-alert (the announcement-
     /// gate pattern). Reset with the session.
     var compactionAlertedPaths: Set<String> = []
+    /// The alerts.md:36 "Don't Show Again" opt-out for the compaction-
+    /// failure alert (#881). When true, `handleVaultEvent` routes the
+    /// failure to a polite AX announcement instead of the app-modal alert
+    /// — never silent (o_spec §O-2). Loaded from `PreferencesStore` in
+    /// `init`; set only via `suppressCompactionFailureAlert()` (which
+    /// lives in the AppState+History extension, so this can't be
+    /// `private(set)` — the discipline is by convention).
+    @Published var compactionAlertSuppressed: Bool = false
     /// uniffi listener registration token, unregistered on close.
     var vaultEventListenerToken: UInt64?
     /// The adapter's lifetime is ours: uniffi keeps a foreign handle,

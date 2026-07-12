@@ -216,6 +216,66 @@ final class MenusObservabilityTests: XCTestCase {
         XCTAssertTrue(state.activeTabIsReading)
     }
 
+    // MARK: - #882: Hide/Show Right Pane title input
+
+    /// The View ▸ Hide/Show Right Pane menu title reads
+    /// `isRightPaneVisible`, and `toggleRightPane()` publishes the flip so
+    /// the title (and the zero-width detail collapse in MainSplitView)
+    /// re-render. Default visible → "Hide Right Pane".
+    func testToggleRightPanePublishesVisibilityForTheMenuTitle() {
+        let state = AppState()
+        XCTAssertTrue(
+            state.isRightPaneVisible,
+            "default visible → the menu reads 'Hide Right Pane'")
+
+        var fired = 0
+        let subscription = state.objectWillChange.sink { fired += 1 }
+        defer { subscription.cancel() }
+
+        state.toggleRightPane()
+        XCTAssertFalse(state.isRightPaneVisible, "now hidden → menu reads 'Show Right Pane'")
+        XCTAssertGreaterThan(fired, 0, "the flip must publish so the title re-renders")
+
+        state.toggleRightPane()
+        XCTAssertTrue(state.isRightPaneVisible)
+    }
+
+    /// #882 red-team: a leaf-reveal command must UN-HIDE a hidden pane —
+    /// setting `activeLeaf` alone was a dead no-op while hidden. Every
+    /// reveal routes through `focusLeafRegionRevealingPane()` (or sets
+    /// `isRightPaneVisible = true` inline for the dock leaves).
+    func testRevealCommandsUnhideTheRightPane() {
+        let state = AppState()
+        state.isRightPaneVisible = false
+        state.focusLeafRegionRevealingPane()
+        XCTAssertTrue(state.isRightPaneVisible, "the shared reveal helper un-hides")
+        XCTAssertEqual(state.workspace.focusRegion, .leaf, "and focuses the leaf")
+
+        state.isRightPaneVisible = false
+        state.showHistoryPanel()
+        XCTAssertTrue(state.isRightPaneVisible, "Show History reveals the pane")
+        XCTAssertEqual(state.workspace.activeLeaf, .history)
+    }
+
+    /// #878 red-team: an external clear of `expandedCitation` (⌘J
+    /// jump-to-bib, note-switch, vault close) must reset the row-anchor
+    /// discriminator via its `didSet`, so the panel popover and the
+    /// detached fallback can never both present on the next click.
+    func testExternalExpandedCitationClearResetsRowAnchor() {
+        let state = AppState()
+        let cit = RenderedCitation(
+            raw: "[@k]", visualText: "(k)", speechText: "k",
+            bibEntry: nil, styleId: "apa")
+        state.expandedCitationRowAnchored = true
+        state.expandedCitation = cit
+        XCTAssertTrue(state.expandedCitationRowAnchored, "row activation owns it")
+
+        state.expandedCitation = nil  // the ⌘J / note-switch external clear
+        XCTAssertFalse(
+            state.expandedCitationRowAnchored,
+            "clearing the expansion drops the anchor — no double-present latch")
+    }
+
     // MARK: - #868: Show/Hide Properties Source mirror
 
     /// The AppState surface of the mirror. The view glue is one

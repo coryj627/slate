@@ -555,6 +555,56 @@ final class HistoryPanelTests: XCTestCase {
             state.compactionFailure?.path, "b.md", "a new path re-alerts")
     }
 
+    /// #881: once the user presses "Don't Show Again", a compaction failure
+    /// no longer raises the app-modal alert — but it is NOT silenced. The
+    /// core's verbatim message still reaches the polite AX channel, honoring
+    /// o_spec §O-2's never-silent contract (alerts.md:27 non-interrupting
+    /// path).
+    func testSuppressedCompactionFailureAnnouncesInsteadOfAlerting() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, _) = try await openVault(announcer: announcer)
+
+        state.suppressCompactionFailureAlert()
+        XCTAssertTrue(state.compactionAlertSuppressed)
+        announcer.posts.removeAll()  // ignore any vault-open announcements
+
+        state.handleVaultEvent(
+            code: .compactionFailed, path: "a.md", message: "boom")
+        XCTAssertNil(
+            state.compactionFailure,
+            "suppressed: no app-modal alert (alerts.md:27 — not actionable)")
+        XCTAssertEqual(
+            announcer.posts.map(\.message), ["boom"],
+            "never silent (o_spec §O-2): the verbatim message rides the polite AX channel")
+        XCTAssertEqual(
+            announcer.posts.first?.priority, .medium,
+            "polite (non-interrupting), not assertive")
+    }
+
+    /// The suppression opt-out persists: a fresh AppState over the same prefs
+    /// store loads it (#881), so the choice survives relaunch.
+    func testCompactionSuppressionPersistsAcrossAppStateInit() async throws {
+        let announcer = RecordingAnnouncer()
+        let store = PreferencesStore(
+            defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let first = AppState(
+            recentsStore: nil,
+            externalOpener: { _ in true },
+            preferencesStore: store,
+            announcer: announcer)
+        XCTAssertFalse(first.compactionAlertSuppressed, "default: alert shows")
+        first.suppressCompactionFailureAlert()
+
+        let second = AppState(
+            recentsStore: nil,
+            externalOpener: { _ in true },
+            preferencesStore: store,
+            announcer: announcer)
+        XCTAssertTrue(
+            second.compactionAlertSuppressed,
+            "the persisted opt-out loads on init")
+    }
+
     // MARK: - Settings round-trip
 
     func testRetentionRoundTripsThroughPrefsJson() async throws {

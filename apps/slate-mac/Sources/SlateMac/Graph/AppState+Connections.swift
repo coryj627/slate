@@ -162,7 +162,7 @@ extension AppState {
     func showConnectionsPanel() {
         workspace.activeLeaf = .connections
         loadConnections()
-        workspace.focusLeafRegion()
+        focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
         graphAnnouncer.announce(.status("Connections panel."))
     }
 
@@ -176,7 +176,7 @@ extension AppState {
         // No-op if already rooted here (avoids a self back-step).
         guard connectionsRootPath != path else {
             workspace.activeLeaf = .connections
-            workspace.focusLeafRegion()
+            focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
             return
         }
         // Push BOTH the prior root mode and the note in view, captured
@@ -191,7 +191,7 @@ extension AppState {
         connectionsRootPath = path
         workspace.activeLeaf = .connections
         loadConnections()
-        workspace.focusLeafRegion()
+        focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
         // Label only; the authoritative summary follows from the load.
         graphAnnouncer.announce(.reRooted(label: filename(of: path)))
     }

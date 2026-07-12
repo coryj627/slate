@@ -129,6 +129,27 @@ final class PreferencesStore {
         defaults.set(enabled, forKey: Self.editorSpellCheckKey)
     }
 
+    // MARK: - Compaction-failure alert suppression (#881)
+
+    /// Bare-bool key (the editorSpellCheck pattern above): the
+    /// alerts.md:36 "Don't Show Again" opt-out for the "History
+    /// Compaction Failed" alert. Default OFF — the alert shows until the
+    /// user suppresses it. App-level (UserDefaults), NOT the CLI-shared
+    /// vault `prefs.json`: whether an alert interrupts is a per-machine
+    /// UI preference, not vault content. When suppressed, the failure
+    /// still reaches a polite AX announcement (o_spec §O-2 "never
+    /// silent" — see `AppState.handleVaultEvent`).
+    static let suppressCompactionFailureAlertKey =
+        "slate.prefs.suppressCompactionFailureAlert"
+
+    func loadSuppressCompactionFailureAlert() -> Bool {
+        defaults.bool(forKey: Self.suppressCompactionFailureAlertKey)
+    }
+
+    func saveSuppressCompactionFailureAlert(_ suppressed: Bool) {
+        defaults.set(suppressed, forKey: Self.suppressCompactionFailureAlertKey)
+    }
+
     // MARK: - Internals
 
     private func decode<T: Codable>(_ type: T.Type, key: String) -> T? {

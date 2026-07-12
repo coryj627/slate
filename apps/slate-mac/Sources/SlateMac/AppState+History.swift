@@ -633,7 +633,7 @@ extension AppState {
             workspace.activeLeaf = .history
             postAccessibilityAnnouncement("History panel.", priority: .medium)
         }
-        workspace.focusLeafRegion()
+        focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
     }
 
     // MARK: - Vault event listener (O-2 channel, Mac half)
@@ -681,7 +681,29 @@ extension AppState {
         case .compactionFailed:
             guard !compactionAlertedPaths.contains(path) else { return }
             compactionAlertedPaths.insert(path)
-            compactionFailure = CompactionFailure(path: path, message: message)
+            if compactionAlertSuppressed {
+                // #881: the user pressed "Don't Show Again" (alerts.md:36),
+                // and this alert isn't actionable (alerts.md:27 — a
+                // non-actionable alert must yield a non-interrupting path).
+                // Drop the app-modal interruption but NOT the signal: route
+                // the core's verbatim message to the polite (non-interrupting)
+                // VoiceOver channel so o_spec §O-2's "never silent" contract
+                // holds — a screen-reader user still learns compaction failed;
+                // sighted users chose to stop the interruptions.
+                announcer.post(message, priority: .medium)
+            } else {
+                compactionFailure = CompactionFailure(path: path, message: message)
+            }
         }
+    }
+
+    /// Persist the user's "Don't Show Again" choice from the compaction-
+    /// failure alert (#881, alerts.md:36). Future failures then route to the
+    /// polite AX announcement in `handleVaultEvent` above instead of the
+    /// app-modal alert — never weakening o_spec §O-2's never-silent contract.
+    /// App-level pref (PreferencesStore), like `editorSpellCheckEnabled`.
+    func suppressCompactionFailureAlert() {
+        compactionAlertSuppressed = true
+        preferencesStore.saveSuppressCompactionFailureAlert(true)
     }
 }

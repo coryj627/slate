@@ -16,12 +16,18 @@ import SwiftUI
 /// `.contain`-scoped so VoiceOver can step through fields one at a
 /// time — same anti-blob pattern as `CitationPopover`.
 ///
-/// Activating an entry row sets `AppState.expandedBibEntry`; the
-/// shared `CitationPopover` sheet in `MainSplitView` displays it.
+/// Activating an entry row sets `AppState.expandedBibEntry` and presents
+/// the shared `CitationPopover` anchored to that row (#878 — a field-level
+/// expansion belongs on its trigger, not a detached sheet).
 struct BibliographyPanel: View {
     @EnvironmentObject private var appState: AppState
     @State private var segment: Segment = .entries
     @State private var hasLoaded: Bool = false
+
+    /// Focus-return target for the anchored entry popover (#878, WCAG 2.4.3 +
+    /// 2.1.2): on dismiss, focus returns to the entry row that opened it —
+    /// keyed by the entry's unique key.
+    @AccessibilityFocusState private var focusedEntryKey: String?
 
     enum Segment: Hashable {
         case entries
@@ -155,6 +161,27 @@ struct BibliographyPanel: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(rowAccessibilityLabel(for: entry))
         .accessibilityHint("Activate to expand citation fields.")
+        .accessibilityFocused($focusedEntryKey, equals: entry.key)
+        // popovers.md:21 — the entry expansion is a field-level detail of THIS
+        // row, so the CitationPopover anchors here (arrow on the leading edge,
+        // pointing at the row) rather than the detached sheet #878 replaced.
+        // Entry keys are unique in the filtered list (List id: \.key), so the
+        // row's own key disambiguates the anchor with no local index.
+        .popover(
+            isPresented: entryPopoverBinding(entry),
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .leading
+        ) {
+            CitationPopover(
+                entry: entry,
+                onClose: {
+                    // WCAG 2.4.3 + 2.1.2: return focus to the row anchor.
+                    focusedEntryKey = entry.key
+                    dismissEntryExpansion(returningFocusTo: entry.key)
+                }
+            )
+            .environmentObject(appState)
+        }
         .contextMenu {
             Button("Show files citing this entry") {
                 Task {
@@ -173,6 +200,25 @@ struct BibliographyPanel: View {
                 )
             }
         }
+    }
+
+    /// Per-row popover presentation keyed by the entry's unique key (#878).
+    /// Dismissal (Close, Escape, or an outside click) clears the shared
+    /// `expandedBibEntry` and returns focus to the entry row.
+    private func entryPopoverBinding(_ entry: BibEntry) -> Binding<Bool> {
+        Binding(
+            get: { appState.expandedBibEntry?.key == entry.key },
+            set: { presented in
+                if !presented { dismissEntryExpansion(returningFocusTo: entry.key) }
+            }
+        )
+    }
+
+    private func dismissEntryExpansion(returningFocusTo key: String) {
+        appState.expandedBibEntry = nil
+        // WCAG 2.4.3 + 2.1.2: return focus to the row that opened the popover
+        // — the focus-return contract the sheet path established.
+        focusedEntryKey = key
     }
 
     private func rowTitle(for entry: BibEntry) -> String {
