@@ -8,7 +8,7 @@ Program: [00_program.md](../00_program.md) (decisions 5, 12; DoD §W-C/§W-D). D
 ## W5-1 · Command palette + the chord table — PR 1
 
 1. Palette over the core registry + W0.5-1 ranking/recents; match-range bolding from core data; section grouping; invocation via `CommandAction` round-trip; filter-count announcements via canonical events.
-2. **The chord table, finalized**: the declarative mac-chord → Windows-chord mapping seeded in W1-1 (⌘→Ctrl, ⌥→Alt, documented exceptions where Windows conventions win, e.g. F2 rename) is completed here and becomes load-bearing: it feeds menu accelerators, palette display, spoken hotkeys (W7-3), and help docs (decision 20). No ad-hoc per-view bindings (§W-G-adjacent review gate). *(Stale as of #850: mac now ships F2-rename too — no longer a divergence example; the Windows mapping stands on its own.)*
+2. **The chord table, finalized**: the declarative mac-chord → Windows-chord mapping seeded in W1-1 (⌘→Ctrl, ⌥→Alt, documented exceptions where Windows conventions win, e.g. F2 rename) is completed here and becomes load-bearing: it feeds menu accelerators, palette display, spoken hotkeys (W7-3), and help docs (decision 20). No ad-hoc per-view bindings (§W-G-adjacent review gate). *(Stale as of #850: mac now ships F2-rename too — no longer a divergence example; the Windows mapping stands on its own.)* Live collisions the table must adjudicate as of 2026-07-12 (#863 map): Ctrl+T duplicate-tab vs the Windows new-tab convention; Ctrl+R tasks-review vs refresh; Ctrl+Shift+T reopen-closed-tab happily *matches* convention; Ctrl+O quick-open vs open-file-dialog (defensible — mirrors mac's own ⌘O repurposing).
 3. Windows twins of the three command-drift tests: registration-forward (every registry command reachable), menu-scrape-reverse (every menu item backed by a registry command), help-table (docs match registry + chord table).
 
 - [ ] Palette parity over core ranking; chord table + three drift tests green
@@ -23,6 +23,6 @@ Program: [00_program.md](../00_program.md) (decisions 5, 12; DoD §W-C/§W-D). D
 
 ## W5-4 · File management & bulk operations — PR 4
 
-1. Command-driven file management parity (new note, new folder, rename with link-rewrite, move-to-folder, delete flows incl. confirmation semantics) + bulk rename sheet parity — all mutations via core (same rewrite engine; §W-A rewrite rows).
+1. Command-driven file management parity (new note, new folder, rename with link-rewrite, move-to-folder, delete flows incl. confirmation semantics, Duplicate) + bulk rename sheet parity — all mutations via core (creates via O's never-clobber `create_exclusive`; renames/moves via the same rewrite engine; §W-A rewrite rows).
 
 - [ ] (each) matrix rows green; keyboard-complete; §W-C/§W-D rows green

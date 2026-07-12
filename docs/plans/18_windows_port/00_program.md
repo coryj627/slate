@@ -11,7 +11,7 @@ Everything here inherits the Presentation-Ready DoD (`../08_ui_parity/00_program
 
 ## The moving-target problem, solved structurally
 
-W is sequenced **after** the majority of the standing queue (N Bases, O local history, P graph, R themes, S explain-function, V autocomplete, X LaTeX aids, FL files sidebar, XD Excalidraw viewer) ships on macOS. The parity surface therefore **cannot be frozen in this document**. The program handles that in three ways:
+W is sequenced **after** the majority of the standing queue (N Bases, O local history, P graph, R themes, S explain-function, V autocomplete, X LaTeX aids, FL files sidebar, XD Excalidraw viewer — plus any milestone created after this program: E note export and PD image OCR as of the 2026-07-12 refresh) ships on macOS. The parity surface therefore **cannot be frozen in this document**. The program handles that in three ways:
 
 1. **Workstreams are organized by architectural consumption pattern, not by feature list** — shell/workspace (W1), editor surface (W2), content rendering (W3), panels & data surfaces (W4), commands/search/templates (W5), structural surfaces (W6), UIA program (W7), close-out (W8). A mac feature that ships between now and port start lands as **new rows in an existing workstream**, never a new phase.
 2. **The parity matrix is generated, not written** (W0-4): at port start, an inventory pass over the shipped mac app — command registry dump, leaf/panel/tab inventory, Settings surface, help docs, `slate.cli.v1` surface — produces `parity_matrix.md`, the row-level checklist every W issue burns down. §W-F gates close-out on it.
@@ -38,7 +38,7 @@ W remains parked until **all** of:
 2. **Milestone P shipped with the graph's accessible textual representation canonical in Rust** (07 §3 / §5.4 — this is the single most expensive thing to get wrong before a port; the milestone-22 description makes it an explicit pre-condition).
 3. **The standing queue is majority-shipped** — owner call at unpark time; the parity matrix (W0-4) absorbs whatever the actual state is.
 4. **W0.5 canonicalization landed** (palette ranking, quick-switcher ranking, announcement vocabulary — spec w0 §W0.5; these are mac-side refactors, verifiable with today's mac test suite, and are **explicitly allowed to be worked before unpark**).
-5. **W0-1 binding spike concluded** (also pre-unpark-eligible: it needs a Windows CI runner and `crates/slate-uniffi`, not a Windows app).
+5. **W0-1 binding spike concluded** (also pre-unpark-eligible: it runs on a GitHub-hosted Windows runner in a throwaway workflow per w0 rule 4 — no dependency on W0-2's runner selection — and needs only `crates/slate-uniffi`, not a Windows app).
 
 Items 4–5 are deliberately front-loadable: they de-risk the port while the mac queue finishes, without violating the parking decision (no WPF code, no `apps/slate-windows/` app work).
 
@@ -50,8 +50,8 @@ Items 4–5 are deliberately front-loadable: they de-risk the port while the mac
 |---|------|----------|
 | 1 | Identity | **Milestone W — Windows port.** Specs in `docs/plans/18_windows_port/`; phase prefixes W0–W8 (W0 includes the pre-port W0.5 block). App dir `apps/slate-windows/` per ADR 13 (one native app per `apps/slate-<platform>/`; shares **only** `crates/slate-uniffi`; never reaches into `apps/slate-mac/`). |
 | 2 | Host stack | **WPF, not WinUI 3** (05 §5.4: AvalonEdit's 15+ years of UIA hardening with JAWS/NVDA; churn is the enemy of screen-reader reliability). **AvalonEdit** is the editor surface under declarative WPF chrome. **No webview anywhere** (05 §1.3 prohibition — includes WebView2; §W-G audits it). .NET version: **current LTS at port start**, pinned in W0-2 alongside an AvalonEdit maintenance/compat currency check (07 §4.2). |
-| 3 | Binding | The C# binding is **the #1 reuse risk** (07 §4.1) and is decided by **spike, not doctrine** (W0-1): `uniffi-bindgen-cs` (NordSecurity) vs hand-written `csbindgen` shim, judged on the **callback + object-handle + cancellation** patterns (`VaultSession`/`DocumentBuffer` Arc lifetimes, `ScanProgressListener` foreign callback, `CancelToken`) — not on free functions. Preference order if the spike ties: the generator that keeps **one FFI definition feeding all platforms** (ADR 13 §Consequences). The losing path is recorded in gap_analysis with the evidence. |
-| 4 | Zero re-implementation | **No C# implementation of anything `slate-core` produces**: Markdown/syntax classification (spans come from the #377/#381 span API), structure snapshots, vault scan/index, FTS, citations, tasks, properties, Bases query execution, canvas model/apply, graph model/metrics, palette/switcher ranking, announcement text. Enforced twice: the **differential parity census** (§W-A, machine-checked) and PR review against a pinned "C# may contain" list (UI state machines, view models, UIA peers, marshalling, platform I/O adapters — and nothing else). |
+| 3 | Binding | The C# binding is **the #1 reuse risk** (07 §4.1) and is decided by **spike, not doctrine** (W0-1): `uniffi-bindgen-cs` (NordSecurity) vs hand-written `csbindgen` shim, judged on the **callback + object-handle + cancellation** patterns (`VaultSession`/`DocumentBuffer` Arc lifetimes, the `ScanProgressListener` + `VaultEventListener` foreign callbacks, `CancelToken`) — not on free functions. Preference order if the spike ties: the generator that keeps **one FFI definition feeding all platforms** (ADR 13 §Consequences). The losing path is recorded in gap_analysis with the evidence. |
+| 4 | Zero re-implementation | **No C# implementation of anything `slate-core` produces**: Markdown/syntax classification (spans come from the #377/#381 span API), structure snapshots, vault scan/index, FTS, citations, tasks, properties, Bases query execution, canvas model/apply, graph model/metrics, palette/switcher ranking, announcement text. Enforced twice: the **differential parity census** (§W-A, machine-checked) and PR review against a pinned "C# may contain" list (UI state machines, view models, UIA peers, marshalling, platform I/O adapters, and platform engine adapters **explicitly designated by an upstream milestone's locked decisions** — today only PD's `Windows.Media.Ocr` engine seam, `19_image_ocr` decision 4 — and nothing else). |
 | 5 | Pre-port canonicalization (W0.5) | Push the three known Swift-only logic pockets into `slate-core` before the port: **command-palette fuzzy ranking + recents policy** (`CommandPaletteModel`), **quick-switcher ranking** (`QuickSwitcherModel` — shipped after the portability review, same drift), **a11y announcement vocabulary** (trigger conditions + strings behind `postAccessibilityAnnouncement`). Each lands as: core API + mac consumes it + census/tests prove mac behavior unchanged. Windows then *consumes*, never re-derives. (07 §3 table rows Q + cross-cutting; ADR 13 explicitly lists these as pre-Windows work.) |
 | 6 | UIA doctrine | Same canonical artifacts, second consumer (05 §1.2/§6.4): editor semantic spans → **custom `AutomationPeer` ranges** with semantic descriptions; math → MathML + **MathCAT** speech behind a math peer; grids → **WPF DataGrid** (UIA-native, 05 §8.7 behavior matrix); announcements → **`AutomationPeer.RaiseNotificationEvent`** fed by the W0.5 canonical vocabulary (same trigger, same text as macOS). **JAWS + NVDA are the reference ATs; Narrator is smoke-only.** Heading navigation is *not* ported from the mac outline workaround — Windows ATs navigate headings natively via UIA; the outline sidebar ships as a feature, not as the a11y crutch (07 §3 row B). |
 | 7 | Math & diagrams | Math renders via **WPFMath/xaml-math** from the canonical `{LaTeX, MathML, speech, braille}` artifact (05 §6.2); the 2–4-week math-peer budget from 05 §5.4 is planned as its own issue (W3-2), not absorbed. Mermaid/diagrams render the **canonical Rust-produced SVG** via **SharpVectors** with the canonical description as the accessible name — the JS mermaid engine is never run on Windows (K pipeline doctrine; 07 §3 "Exemplary"). Code blocks render from canonical `{source, syntax_tokens, semantic_spans}`. |
@@ -76,8 +76,8 @@ Items 4–5 are deliberately front-loadable: they de-risk the port while the mac
 ## Phase map, waves & dependencies
 
 ```
-Wave 0 (pre-unpark OK)  W0-1 binding spike ─▶ W0-3 full binding + CI
-                        W0-2 scaffold/CI/CODEOWNERS (needs W0-1 verdict)
+Wave 0 (W0-1/W0.5     ) W0-1 binding spike ─▶ W0-2 scaffold/CI/CODEOWNERS ─▶ W0-3 full binding + censuses
+       (pre-unpark OK )
                         W0.5-1 palette ranking→core ∥ W0.5-2 switcher ranking→core ∥ W0.5-3 announcement vocabulary→core
                         W0-4 parity matrix + budgets (at unpark)
 Wave 1 (shell)          W1-1 app shell + vault lifecycle ─▶ W1-2 files sidebar ─ W1-3 workspace tabs/splits/leaves ─ W1-4 quick switcher
@@ -93,14 +93,14 @@ Wave 8 (close-out)      W8-1 settings/prefs ─ W8-2 theming/contrast ─ W8-3 M
 
 | Wave | Issues | Gate |
 |------|--------|------|
-| 0 — Foundation | W0-1 → { W0-2 ∥ W0-3 } · W0.5-1/2/3 independent · W0-4 last | W0-1, W0.5-* may run **pre-unpark**; W0-4 runs at unpark (it snapshots the real mac surface) |
+| 0 — Foundation | W0-1 → W0-2 → W0-3 · W0.5-1/2/3 independent · W0-4 last | W0-1, W0.5-* may run **pre-unpark**; W0-4 runs at unpark (it snapshots the real mac surface) |
 | 1 — Shell | W1-1 → { W1-2 ∥ W1-3 ∥ W1-4 } | Wave 0 complete |
 | 2 — Editor | W2-1 → W2-2 → { W2-3 ∥ W2-4 ∥ W2-5 } | W1-1 (a window to host in) |
-| 3 — Content | { W3-1..W3-5 } mostly parallel | W2-1 (buffer host); W3-5 embeds need W3-1 |
+| 3 — Content | W3-1 first (the container), then { W3-2..W3-5 } parallel | W2-1 (buffer host); W3-5 embeds need W3-1. W3-1's table rows and W3-5's `.base`-embed rows are **deferred cross-wave rows** that complete after W4-1/W4-6 land (matrix-tracked, not wave-blocking) |
 | 4 — Panels/data | W4-1 → { W4-2..W4-8 } | W1-3 (leaves to dock into); W3 for embedded content |
 | 5 — Commands | { W5-1..W5-4 } | W1 shell; W0.5 ranking (for W5-1) |
 | 6 — Structural | { W6-1 ∥ W6-2 } | W4-1 (canvas table/grid), W5-1 (navigator commands surface) |
-| 7 — UIA program | W7-1 with W2; W7-2/3 with W5; W7-4 rolling, closes each wave | interleaved — each wave's close requires its W7 rows green |
+| 7 — UIA program | W7-1 with W2; **W7-2's dispatcher core with Wave 1** (its full §W-D census with W5); W7-3 with W5; W7-4 rolling, closes each wave | interleaved — each wave's close requires its W7 rows green |
 | 8 — Close-out | W8-1..W8-6 | everything; §W-F needs the matrix at zero |
 
 **Priority note:** if capacity forces a cut line inside a wave, cut feature-conditional rows (*) last-in-first-out and record the waiver in the matrix (§W-F). W8-4/W8-5/W8-6 are never cut — without the differential harness and perf gates the acceptance story collapses to "trust us."
@@ -109,13 +109,13 @@ Wave 8 (close-out)      W8-1 settings/prefs ─ W8-2 theming/contrast ─ W8-3 M
 
 ## Definition of Done — W-specific deltas
 
-*Census convention: as repo-standard (`census_*` fns, `SLATE_CENSUS_FULL=1`; see `../17_bases/00_program.md` DoD preamble). New here: censuses that compare **two platforms' outputs** run in CI as a two-job pipeline (mac job + windows job emit serialized artifacts; a comparison job diffs them).*
+*Census convention: as repo-standard (`census_*` fns, `SLATE_CENSUS_FULL=1`; see `../17_bases/00_program.md` DoD preamble). New here: censuses that compare **two platforms' outputs** run in CI as a three-job pipeline (mac + windows jobs emit serialized artifacts; a comparison job diffs them).*
 
-- **§W-A (differential parity census):** over the shared fixture corpus (and a generated randomized vault), the serialized outputs of every read-side FFI surface — editor spans, structure snapshots, search results, backlinks, task/property/citation rows, Bases result sets, canvas scenes/outlines, graph textual representation — are **byte-identical between macOS and Windows CI**. Any intentional platform difference (path separators in display strings) is normalized by the harness and the normalization list is part of the spec (w8).
+- **§W-A (differential parity census):** over the shared fixture corpus (and a generator-produced vault — deterministic by construction, see W8-4), the serialized outputs of every read-side FFI surface — editor spans, structure snapshots, search results, backlinks, task/property/citation rows, Bases result sets, canvas scenes/outlines, graph textual representation — are **byte-identical between macOS and Windows CI**. Any intentional platform difference (path separators in display strings; surfaces an upstream milestone defines as engine-dependent, e.g. PD's per-engine OCR text) is normalized or excluded by the harness and the normalization list is part of the spec (w8). Line endings are deliberately *not* on that list — LF is canonical on both platforms (decision 9).
 - **§W-B (keystroke budget):** editor keystroke p50 through the C# binding stays within the pinned budget at 100 KB / 1 MB / 8 MB, and stays **flat** (no size-correlated growth beyond the mac profile). Recorded in `BENCHMARKS.md` with runner class, per repo convention.
 - **§W-C (UIA conformance):** per-surface matrix rows (control type, Name/HelpText source, patterns, focus order, notifications) implemented + axe-windows 0 failures in CI + JAWS/NVDA human smoke recorded per surface before its wave closes.
 - **§W-D (announcement parity):** census over the canonical a11y-event corpus — for every event, mac NSAccessibility announcement text == Windows `RaiseNotificationEvent` text (chord substitutions aside), and both fire on the same triggers.
-- **§W-E (binding safety):** C#-side censuses — handle lifetime under GC pressure (no leak, no use-after-free), `CancelToken` mid-scan cancellation, concurrent `ScanProgressListener` callbacks, buffer-vs-editor drift guard — green under load, mirroring the Rust census discipline.
+- **§W-E (binding safety):** C#-side censuses — handle lifetime under GC pressure (no leak, no use-after-free), `CancelToken` mid-scan cancellation, concurrent foreign callbacks across **all three traits** (`ScanProgressListener`, `VaultEventListener` incl. its three methods, `CommandAction` incl. error round-trips), listener registration/unregistration lifetime, buffer-vs-editor drift guard — green under load, mirroring the Rust census discipline.
 - **§W-F (matrix zero):** every `parity_matrix.md` row is shipped-and-checked or owner-waived-with-reason at W8-6. No silent rows.
 - **§W-G (doctrine audit):** dependency audit proves no WebView2/webview; the "C# may contain" review gate (decision 4) has been applied to every PR; a final grep-audit pass over `apps/slate-windows/` for re-implemented core logic is recorded.
 

@@ -7,7 +7,7 @@ Program: [00_program.md](../00_program.md) (decisions 4, 8, 10, 15; DoD §W-A/§
 
 Baseline facts:
 
-- `DocumentBuffer` (slate-uniffi lib.rs:2811) is the stateful editor backend: edit deltas in, spans/structure out, O(edit) (BENCHMARKS: 8 MB keystroke ≈ 245 µs core-side). The mac consumers to mirror: `NoteEditorView` coordinator (delta feed + drift guard + windowed `applyHighlight`), `EditorSpanMapping` (UTF-16 ↔ byte offset mapping), `EditorTextConversions`.
+- `DocumentBuffer` (slate-uniffi lib.rs:3422; anchor current 2026-07-12) is the stateful editor backend: edit deltas in, spans/structure out, O(edit) (BENCHMARKS: 8 MB keystroke ≈ 245 µs core-side). The mac consumers to mirror: `NoteEditorView` coordinator (delta feed + drift guard + windowed `applyHighlight`), `EditorSpanMapping` (UTF-16 ↔ byte offset mapping), `EditorTextConversions`.
 - The release guarantee is census-side, not assertion-side: buffer-vs-stateless, comment-index, and structure censuses — the C# host must not weaken this (its drift guard twin is §W-E).
 - AvalonEdit specifics: its `TextDocument` has its own offset model (UTF-16); `DocumentColorizingTransformer` applies per-line visual styling during render — the natural consumer for windowed span requests (visible range + margin, the mac windowing strategy).
 
@@ -26,7 +26,7 @@ Baseline facts:
 ## W2-2 · Canonical span consumer (#381 — the reuse payoff) — PR 2
 
 1. `DocumentColorizingTransformer` renders from windowed span requests to `DocumentBuffer` (visible range + margin; re-request on scroll/resize/edit — the mac windowing model). **Zero C# tokenization** (§W-G).
-2. Span kinds map to the editor theme palette (same role taxonomy as `EditorSyntaxPalette`; theme values from W8-2 tokens).
+2. Span kinds map to the editor theme palette (same role taxonomy as `EditorSyntaxPalette`); theme values come from the **provisional token set seeded in W1-1** — W8-2 finalizes and contrast-gates those tokens later, it does not first create them.
 3. Per-keystroke recompute stays inside the §W-B budget at all fixture sizes; BenchmarkDotNet run recorded.
 4. §W-A row: span streams for the fixture corpus byte-identical mac↔windows (serialized via the harness).
 5. Semantic span data is retained on the host for W7-1 (the UIA peer consumes the same window the colorizer paints).
@@ -43,7 +43,7 @@ Baseline facts:
 
 ## W2-4 · Autocomplete (Milestone V parity)* — PR 4
 
-1. Consumes V's core completion engine (providers, ranking, trigger model) — the WPF completion window is chrome; V's acceptance semantics (incl. its a11y announcement contract, which V ships via the canonical vocabulary) hold verbatim.
+1. Consumes V's core completion engine (providers, ranking, trigger model) — the WPF completion window is chrome; V's acceptance semantics (incl. its a11y announcement contract, which V ships via the canonical vocabulary) hold verbatim. *(That premise is an obligation on Milestone V — recorded as gap row G15 and filed on V as [#888](https://github.com/coryj627/slate/issues/888).)*
 
 ## W2-5 · LaTeX authoring aids (Milestone X parity)* — PR 5
 

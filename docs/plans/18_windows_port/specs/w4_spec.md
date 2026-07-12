@@ -10,6 +10,7 @@ Program: [00_program.md](../00_program.md) (decisions 4, 13; DoD §W-A/§W-C). B
 1. One wrapped WPF DataGrid component playing the `AccessibleDataGrid` v2 role: 05 §8.7 matrix verbatim — headers announced on entry, cell-by-cell arrow navigation, keyboard sort/filter hooks, row-level actions, separately-addressable summary row, CSV/Markdown export commands, `ColumnRole`-driven row announcements, `audio_description`/`audio_summary` consumption where the surface provides them.
 2. Column virtualization safe for AT (UIA ItemContainerPattern correctness under virtualization is a known WPF trap — test with JAWS/NVDA on 10k-row fixtures before feature grids build on it).
 3. FlaUI conformance suite = the reusable §W-C gate every consuming surface inherits.
+4. **Owns the transferred W3-1 table rows** (program wave table, deferred cross-wave rows): the reading-view tables' substrate-backed acceptance — §W-C included — closes here, not in Wave 3.
 
 - [ ] §8.7 matrix green under FlaUI + human AT smoke on large fixtures
 - [ ] Export commands + announcement grammar parity
@@ -33,11 +34,11 @@ Program: [00_program.md](../00_program.md) (decisions 4, 13; DoD §W-A/§W-C). B
 
 ## W4-6 · Bases grid* — PR 6
 
-1. N parity on the W4-1 substrate: `.base` open-as-tab, views (table + list + fallback banner), quick filter (transient, Ctrl+F grid-scoped), in-grid property editing, embeds (with W3-5), builder + raw-editor authoring surfaces, saved queries/dashboards — exactly N's shipped scope per matrix rows; `BasesResultSet`/`audio_*` artifacts consumed as-is.
+1. N parity on the W4-1 substrate: `.base` open-as-tab, views (table + list + fallback banner), quick filter (transient, Ctrl+F grid-scoped), in-grid property editing, embeds (with W3-5), builder + raw-editor authoring surfaces, saved queries/dashboards — exactly N's shipped scope per matrix rows; `BasesResultSet`/`audio_*` artifacts consumed as-is. **Owns the transferred W3-5 `.base`-embed rows** (deferred cross-wave rows): their acceptance + §W-C close here.
 
 ## W4-7 · Local history* — PR 7
 
-1. O parity: version list/diff/restore surfaces over O's core store; the accessible-diff representation O ships is consumed, not re-derived.
+1. O parity (O shipped 2026-07-11 — conditional in name only): `Leaf.history` with **two segments** ("This note" + "Deleted" — deleted-file recovery), day-grouped version list, structured accessible diff (the `StructuredDiff` FFI — consumed, not re-derived), restore + **Restore As…**, changes-since-last-open (opt-in), markers toggle, `.canvas`/`.base` history coverage (#797).
 
 ## W4-8 · Sync diagnostics — PR 8
 

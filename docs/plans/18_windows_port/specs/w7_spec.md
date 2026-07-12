@@ -1,9 +1,9 @@
 # W7 executable spec — The UIA accessibility program (cross-cutting)
 
-Issues: W7-1 ([#747](https://github.com/coryj627/slate/issues/747)) · W7-2 ([#748](https://github.com/coryj627/slate/issues/748)) · W7-3 ([#749](https://github.com/coryj627/slate/issues/749)) · W7-4 ([#750](https://github.com/coryj627/slate/issues/750)). Milestone: [GH 22](https://github.com/coryj627/slate/milestone/22). One PR per issue, except W7-4: it is a rolling gate that lands one PR per wave-close against the same issue (the W6 stacked-series convention — the issue stays the unit of acceptance).
+Issues: W7-1 ([#747](https://github.com/coryj627/slate/issues/747)) · W7-2 ([#748](https://github.com/coryj627/slate/issues/748)) · W7-3 ([#749](https://github.com/coryj627/slate/issues/749)) · W7-4 ([#750](https://github.com/coryj627/slate/issues/750)). Milestone: [GH 22](https://github.com/coryj627/slate/milestone/22). One PR per issue, except W7-4 (a rolling gate: one PR per wave-close against the same issue) and **W7-2 (two slices against the one issue: the dispatcher core lands with Wave 1, the priority-mapping/coalescing completion + §W-D census land with Wave 5)** — both per the W6 stacked-series convention: the issue stays the unit of acceptance.
 Program: [00_program.md](../00_program.md) (decisions 6, 11; DoD §W-C/§W-D). This wave is **the load-bearing parity** — everything else is furniture if JAWS/NVDA can't drive it.
 
-*Interleaving rule (program wave table): W7-1 lands with Wave 2 (editor), W7-2/W7-3 with Wave 5, and W7-4 rows close per wave — this spec exists so the UIA work has one owner-view, not so it happens last.*
+*Interleaving rule (program wave table): W7-1 lands with Wave 2 (editor); **W7-2's dispatcher core lands with Wave 1** (shell announcements consume it from W1-1 on) while its full §W-D census closes with Wave 5; W7-3 with Wave 5; W7-4 rows close per wave — this spec exists so the UIA work has one owner-view, not so it happens last.*
 
 ## W7-1 · Editor AutomationPeer: semantic ranges — PR 1
 
@@ -15,7 +15,7 @@ Program: [00_program.md](../00_program.md) (decisions 6, 11; DoD §W-C/§W-D). T
 
 ## W7-2 · Notification wiring: canonical events → UIA — PR 2
 
-1. One notification dispatcher: canonical `A11yEvent` (W0.5-3) → `RaiseNotificationEvent` with priority mapping (`AnnouncementPriority` → UIA NotificationProcessing/Kind) and throttling/coalescing parity with mac etiquette (scan progress, filter counts, canvas announcer coalescing).
+1. One notification dispatcher: canonical `A11yEvent` (W0.5-3) → `RaiseNotificationEvent` with priority mapping (`AnnouncementPriority` → UIA NotificationProcessing/Kind) and throttling/coalescing parity with mac etiquette (scan progress, filter counts, canvas announcer coalescing). **Sequencing: the dispatcher core ships with Wave 1** (W1-1 consumes it); this issue completes the priority mapping, coalescing parity, and the census.
 2. §W-D census: full event corpus → same text, same trigger conditions, both platforms.
 
 - [ ] Dispatcher + §W-D census green
