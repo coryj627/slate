@@ -23,6 +23,10 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     case outline
     case backlinks
     case outgoingLinks
+    /// Local graph neighborhood of the active note, in/out (Milestone P,
+    /// P1-1 #554) — registered beside its siblings `.backlinks`/
+    /// `.outgoingLinks`.
+    case connections
     case embeds
     case math
     case code
@@ -49,6 +53,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .outline: return "Outline"
         case .backlinks: return "Backlinks"
         case .outgoingLinks: return "Outgoing links"
+        case .connections: return "Connections"
         case .embeds: return "Embeds"
         case .math: return "Math"
         case .code: return "Code"
@@ -74,6 +79,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .outline: return .outline
         case .backlinks: return .backlinks
         case .outgoingLinks: return .outgoingLinks
+        case .connections: return .connections
         case .embeds: return .embed
         case .math: return .math
         case .code: return .code
@@ -97,8 +103,8 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     /// iterates exactly this list, so an unregistered leaf can never present
     /// a selectable-but-blank icon.
     static let registered: [Leaf] = [
-        .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-        .tasks, .history, .citations, .bibliography, .queries, .basesDock,
+        .outline, .backlinks, .outgoingLinks, .connections, .embeds, .math, .code,
+        .diagrams, .tasks, .history, .citations, .bibliography, .queries, .basesDock,
         .syncDiagnostics,
     ]
 
@@ -284,6 +290,8 @@ struct RightPaneView: View {
             BacklinksPanel()
         case .outgoingLinks:
             OutgoingLinksPanel()
+        case .connections:
+            ConnectionsPanel()
         case .embeds:
             EmbedsPanel()
         case .math:

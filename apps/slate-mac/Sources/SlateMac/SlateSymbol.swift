@@ -86,6 +86,9 @@ enum SlateSymbol: CaseIterable {
     case backlinks
     /// Outgoing-links leaf — links FROM the active note.
     case outgoingLinks
+    /// Connections leaf — the active note's local graph neighborhood
+    /// (in + out) rendered accessibly (Milestone P, P1-1 #554).
+    case connections
     /// Embeds leaf — `![[…]]` transclusions in the active note.
     case embed
     /// Diagrams leaf — Mermaid diagram blocks in the active note.
@@ -193,6 +196,7 @@ enum SlateSymbol: CaseIterable {
         case .outline: return "Outline"
         case .backlinks: return "Backlinks"
         case .outgoingLinks: return "Outgoing links"
+        case .connections: return "Connections"
         case .embed: return "Embed"
         case .diagram: return "Diagram"
         case .tasksLeaf: return "Tasks"
@@ -281,6 +285,11 @@ enum SlateSymbol: CaseIterable {
         // macOS 15 floor, so v7 == fallback until a v7-only glyph is preferred.
         case .backlinks: return ("arrow.uturn.backward", "arrow.uturn.backward")
         case .outgoingLinks: return ("arrow.up.right", "arrow.up.right")
+        // Connections leaf (P1-1 #554): a node fanning out to its
+        // neighbors. Distinct from `.diagram`'s
+        // `point.3.connected.trianglepath.dotted`; floor-safe (macOS 11+),
+        // so v7 == fallback.
+        case .connections: return ("arrow.triangle.branch", "arrow.triangle.branch")
         case .embed: return ("photo.on.rectangle", "photo.on.rectangle")
         case .diagram:
             return ("point.3.connected.trianglepath.dotted",

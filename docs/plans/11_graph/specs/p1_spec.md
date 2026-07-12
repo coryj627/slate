@@ -46,7 +46,9 @@ New `Leaf.connections` (icon: new `SlateSymbol.connections`; label "Connections"
 
 - Row label: `"{label}, {n} links in, {m} links out"`; ghosts: `"{label}, unresolved, {n} references"`; embeds append `", embed"`.
 - On depth change: announce the refreshed neighborhood `audio_summary`.
-- On re-root: `"Connections: {label}"` then summary. All announcements route through the T announcement coordinator (verbosity setting honored).
+- On re-root: `"Connections: {label}"` then summary. All announcements route through the `GraphAnnouncer` (verbosity honored; enforced by `GraphAnnouncerTests.testNoDirectAnnouncementsUnderGraph`).
+
+**Implementation notes (P1-1 landed):** the "Show Connections" reveal is a single `slate.graph.showConnections` command in the `.view` menu (no chord — P1 registers none; the full `CommandSection.graph` + presets + depth commands land with P1-3). Data loads through `graph_neighborhood` for structure + metrics + the pre-rendered `audioSummary` at every depth, with `note_load_bundle` overlaid at depth 1 for per-row snippets. The "Reveal in File Tree" row action is deferred to P1-2, which builds the shared reveal-with-expand helper the graph table also needs (no AppState-level tree-reveal API exists today; faking it as "Open" would mislead). Depth persistence is session-state with a TODO for `.slate/graph.json` (owned by P2-4). The Bases O15 handoff is wired in both grid and list row actions (`basesShowConnections`).
 
 ### Tests
 

@@ -420,6 +420,56 @@ final class AppState: ObservableObject {
     lazy var canvasAnnouncer = CanvasAnnouncer(
         verbosity: preferencesStore.loadCanvasPrefs().verbosity)
 
+    /// The one graph announcement funnel (Milestone P; mirrors
+    /// `canvasAnnouncer`). Connections leaf, graph table, and diagram
+    /// surfaces phrase through it — no graph code posts directly
+    /// (enforced by `GraphAnnouncerTests`). Verbosity persistence
+    /// moves into `.slate/graph.json` with P2-4; `.standard` until then.
+    lazy var graphAnnouncer = GraphAnnouncer()
+
+    // MARK: Connections leaf (Milestone P, P1-1 #554)
+
+    /// Local-graph depth for the Connections leaf (1…3). Persisted
+    /// per-vault; migrates into `.slate/graph.json` with P2-4.
+    @Published var connectionsDepth: Int = 1
+    /// The note the Connections leaf is rooted on. `nil` = follow
+    /// `selectedFilePath`; non-nil after a "Show connections" re-root
+    /// (breadcrumb back-stack in `connectionsBackStack`).
+    @Published var connectionsRootPath: String?
+    /// The neighborhood payload (structure + metrics + pre-rendered
+    /// `audioSummary`) for the current root+depth.
+    @Published var connectionsNeighborhood: GraphNeighborhood?
+    /// Depth-1 snippet source (spec §P1-1: rows show snippets from the
+    /// existing `Backlink`/`OutgoingLink` data at depth 1).
+    @Published var connectionsBundle: NoteLoadBundle?
+    /// The path the currently-published neighborhood/bundle describes.
+    /// The panel renders rows only when this matches the effective
+    /// path, so a note switch never shows B's header over A's rows
+    /// (review round 1 finding 9).
+    @Published var connectionsLoadedPath: String?
+    @Published var connectionsLoading: Bool = false
+    @Published var connectionsError: String?
+    /// Last graph generation the leaf refreshed against — the P0-3
+    /// refresh discriminator (only reload when it moves).
+    var connectionsSeenGraphGeneration: UInt64 = 0
+    /// Newest-wins guard (the O-5 seq pattern).
+    var connectionsLoadSeq: UInt64 = 0
+    /// Re-root breadcrumb: `⌘[` pops back one step. Each entry records
+    /// BOTH the prior root mode (`root`: a path, or `nil` = "was
+    /// following the selection") AND the note that was in view
+    /// (`effective`), so back restores the exact prior view —
+    /// including the originally-selected note when returning to
+    /// follow-mode (review round 3 finding 1).
+    var connectionsBackStack: [(root: String?, effective: String)] = []
+    /// Race-test seam (post-compute, pre-guard); nil in production.
+    var connectionsPublishGate: (() async -> Void)?
+
+    /// The note the Connections leaf currently describes: an explicit
+    /// re-root wins, else the selected note.
+    var connectionsEffectivePath: String? {
+        connectionsRootPath ?? selectedFilePath
+    }
+
     /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
     /// focusable transient panel in the canvas container; Esc/Close
     /// dismisses (panel-local, not a t0 M5 ladder rung).
@@ -3166,6 +3216,10 @@ final class AppState: ObservableObject {
             syncReport = nil
             liveSyncConfig = nil
             syncDiagnosticsError = nil
+            // Connections leaf (P1-1 #554): clear any prior vault's root
+            // / back-stack / payload before the new vault populates
+            // (review round 1 finding 3).
+            resetConnectionsState()
             // U1-2: tabs belong to a vault; a fresh open starts clean (and
             // must reset BEFORE the selection clear so the funnel doesn't
             // park the previous vault's buffer).
@@ -3547,6 +3601,10 @@ final class AppState: ObservableObject {
         compactionAlertedPaths = []
         compactionFailure = nil
         resetHistoryState()
+        // Connections leaf (P1-1 #554): a root/back-stack path from the
+        // closing vault must never load or open against the next one
+        // (review round 1 finding 3).
+        resetConnectionsState()
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would

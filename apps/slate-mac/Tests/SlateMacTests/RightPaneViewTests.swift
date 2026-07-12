@@ -116,9 +116,9 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(
             Leaf.registered,
             [
-                .outline, .backlinks, .outgoingLinks, .embeds, .math, .code, .diagrams,
-                .tasks, .history, .citations, .bibliography, .queries, .basesDock,
-                .syncDiagnostics,
+                .outline, .backlinks, .outgoingLinks, .connections, .embeds, .math,
+                .code, .diagrams, .tasks, .history, .citations, .bibliography,
+                .queries, .basesDock, .syncDiagnostics,
             ])
         // O-5 (#543): history sits BEFORE citations — content leaves,
         // then history, then citations/bibliography (usage-frequency
@@ -126,12 +126,17 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(
             Leaf.registered.firstIndex(of: .history)! + 1,
             Leaf.registered.firstIndex(of: .citations)!)
+        // P1-1 (#554): connections sits beside its siblings, right
+        // after outgoing links.
+        XCTAssertEqual(
+            Leaf.registered.firstIndex(of: .outgoingLinks)! + 1,
+            Leaf.registered.firstIndex(of: .connections)!)
         // Every case is now registered — no leaf presents a selectable-but-
         // blank rail icon.
         for leaf in Leaf.allCases {
             XCTAssertTrue(leaf.isRegistered, "\(leaf) must be registered as of U4-2")
         }
-        XCTAssertEqual(Leaf.allCases.count, 14, "the full leaf vocabulary is declared")
+        XCTAssertEqual(Leaf.allCases.count, 15, "the full leaf vocabulary is declared")
         // The registry is exactly the case set (no duplicates, none missing).
         XCTAssertEqual(Set(Leaf.registered), Set(Leaf.allCases))
         XCTAssertEqual(Leaf.registered.count, Leaf.allCases.count)
@@ -150,6 +155,8 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.outline.symbol, .outline)
         XCTAssertEqual(Leaf.backlinks.symbol, .backlinks)
         XCTAssertEqual(Leaf.outgoingLinks.symbol, .outgoingLinks)
+        XCTAssertEqual(Leaf.connections.symbol, .connections)
+        XCTAssertEqual(Leaf.connections.title, "Connections")
         XCTAssertEqual(Leaf.embeds.symbol, .embed)
         XCTAssertEqual(Leaf.math.symbol, .math)
         XCTAssertEqual(Leaf.code.symbol, .code)

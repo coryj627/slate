@@ -62,6 +62,7 @@ final class LeafPortTests: XCTestCase {
             ("ContentBlockPanels.swift", "Select a note to see its code blocks."),
             ("ContentBlockPanels.swift", "Select a note to see its diagrams."),
             ("TasksPanel.swift", "Select a note to see its tasks."),
+            ("Graph/ConnectionsPanel.swift", "Select a note to see its connections."),
         ]
         for (file, sentence) in expected {
             let source = try panelSource(file)
@@ -119,6 +120,8 @@ final class LeafPortTests: XCTestCase {
         PresentationReady.assertRendersInBothAppearances(CodeBlocksPanel().environmentObject(state))
         PresentationReady.assertRendersInBothAppearances(DiagramsPanel().environmentObject(state))
         PresentationReady.assertRendersInBothAppearances(TasksPanel().environmentObject(state))
+        PresentationReady.assertRendersInBothAppearances(
+            ConnectionsPanel().environmentObject(state))
     }
 
     /// The leaf empty state's text-on-surface pairing clears the DoD §D APCA
@@ -169,7 +172,8 @@ final class LeafPortTests: XCTestCase {
     func testLeafHostInstantiatesAllPortedPanels() throws {
         let source = try rightPaneSource()
         for panel in [
-            "OutlineSidebar()", "BacklinksPanel()", "OutgoingLinksPanel()", "EmbedsPanel()",
+            "OutlineSidebar()", "BacklinksPanel()", "OutgoingLinksPanel()",
+            "ConnectionsPanel()", "EmbedsPanel()",
             "MathBlocksPanel()", "CodeBlocksPanel()", "DiagramsPanel()", "TasksPanel()",
             "CitationsPanel()", "BibliographyPanel()",
         ] {

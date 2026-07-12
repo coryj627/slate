@@ -60,6 +60,13 @@ enum SlateCommandID {
     /// (Compare/Restore) are NOT commands — they need row context.
     static let showHistoryPanel = "slate.history.showPanel"
 
+    /// Connections leaf reveal (Milestone P, P1-1 #554). View-menu +
+    /// palette, no chord (P1 registers zero new chords). The full graph
+    /// command section + presets + depth commands land with P1-3's
+    /// `CommandSection.graph`; this is the minimal reveal so the leaf is
+    /// reachable by command and the Bases row-action handoff has a home.
+    static let showConnectionsPanel = "slate.graph.showConnections"
+
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
     // Program rule R1: every canvas action is a registry command; these
@@ -238,6 +245,7 @@ enum SlateCommandID {
         toggleSearch,
         refreshSyncDiagnostics,
         showHistoryPanel,
+        showConnectionsPanel,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1184,6 +1192,13 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .view,
         hint: "Open the History leaf in the right pane."
     ) { [weak appState] in appState?.showHistoryPanel() }
+
+    register(
+        SlateCommandID.showConnectionsPanel,
+        label: "Show Connections",
+        section: .view,
+        hint: "Open the Connections leaf — the active note's local graph."
+    ) { [weak appState] in appState?.showConnectionsPanel() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 
