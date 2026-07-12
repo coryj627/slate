@@ -15,8 +15,10 @@ struct HistoryPanel: View {
     /// Per-vault-session, deliberately NOT persisted (matches
     /// BibliographyPanel).
     @State private var segment: Segment = .thisNote
-    /// Marker rows (renames) are hidden by default; the section-header
-    /// menu reveals them — they explain gaps ("Renamed from X").
+    /// Marker rows (renames) are hidden by default; the header's
+    /// "Show markers" checkbox reveals them — they explain gaps
+    /// ("Renamed from X"). (o_spec §O-5 as amended 2026-07-11: was a
+    /// section-header menu.)
     @State private var showMarkers = false
     /// "Select for comparison" toggles, by position (hashes repeat
     /// across A→B→A histories; position is the row identity).
@@ -35,6 +37,9 @@ struct HistoryPanel: View {
     /// unique per consecutive run, so collapsing one run never hides a
     /// distant same-day run.
     @State private var collapsedDayGroups: Set<String> = []
+
+    /// RTL-aware disclosure rotation — see the day-header chevron.
+    @Environment(\.layoutDirection) private var layoutDirection
 
     enum Segment: Hashable {
         case thisNote
@@ -302,7 +307,8 @@ struct HistoryPanel: View {
     }
 
     /// Pure marker filter (unit-tested): markers are hidden by default
-    /// and revealed by the section-menu toggle.
+    /// and revealed by the header's "Show markers" checkbox (o_spec
+    /// §O-5 as amended 2026-07-11 — was a section-header menu).
     static func visible(_ versions: [VersionSummary], showMarkers: Bool)
         -> [VersionSummary]
     {
@@ -321,14 +327,14 @@ struct HistoryPanel: View {
                         compareSelected()
                     }
                 }
-                Menu {
-                    Toggle("Show markers", isOn: $showMarkers)
-                } label: {
-                    SlateSymbol.moreActions.image()
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .accessibilityLabel("Version list options")
+                // Direct checkbox, not a single-item ellipsis menu
+                // (pull-down-buttons.md: "for 1–2 items, consider
+                // regular buttons or toggles" — a lone Toggle behind
+                // an ellipsis is a two-click hide of a one-click
+                // control).
+                Toggle("Show markers", isOn: $showMarkers)
+                    .toggleStyle(.checkbox)
+                    .font(Tokens.Typography.caption)
             }
             .padding(.horizontal, 12)
 
@@ -404,7 +410,14 @@ struct HistoryPanel: View {
         } label: {
             HStack(spacing: Tokens.Spacing.xs) {
                 SlateSymbol.disclosure.decorative
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    // RTL-aware sign (right-to-left.md): the mirrored
+                    // base chevron needs the opposite expanded turn —
+                    // the FileTreeSidebar pattern.
+                    .rotationEffect(
+                        .degrees(
+                            collapsed
+                                ? 0
+                                : (layoutDirection == .rightToLeft ? -90 : 90)))
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
                 Text(group.title)

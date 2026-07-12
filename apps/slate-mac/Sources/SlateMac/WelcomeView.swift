@@ -19,6 +19,11 @@ struct WelcomeView: View {
             Button("Open Vault…") {
                 appState.pickAndOpenVault()
             }
+            // Prominent, not merely large (buttons.md: "use a prominent
+            // style for the most likely action… distinguish preferred
+            // actions by style, not size") — this is the screen's single
+            // primary action and was the app's only unprominent primary.
+            .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .focused($openButtonFocused)
             .accessibilityHint(
@@ -38,7 +43,7 @@ struct WelcomeView: View {
             postAccessibilityAnnouncement(welcomeAnnouncement)
         }
         .alert(
-            "Could not open vault",
+            "Could Not Open Vault",
             isPresented: errorAlertPresented,
             presenting: appState.lastError
         ) { _ in
@@ -47,18 +52,18 @@ struct WelcomeView: View {
             Text(message)
         }
         .alert(
-            "Vault not found",
+            "Vault Not Found",
             isPresented: missingVaultAlertPresented,
             presenting: appState.missingRecentVault
         ) { entry in
-            Button("Remove from recent vaults", role: .destructive) {
+            Button("Remove from Recent Vaults", role: .destructive) {
                 appState.removeRecent(path: entry.path)
                 appState.missingRecentVault = nil
                 postAccessibilityAnnouncement(
                     "Removed \(entry.displayName) from recent vaults."
                 )
             }
-            Button("Keep in list", role: .cancel) {
+            Button("Keep in List", role: .cancel) {
                 appState.missingRecentVault = nil
             }
         } message: { entry in

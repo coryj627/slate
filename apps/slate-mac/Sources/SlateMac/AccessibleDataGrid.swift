@@ -251,7 +251,7 @@ private struct GridTable<Row: Identifiable>: NSViewRepresentable {
             let tableColumn = NSTableColumn(
                 identifier: NSUserInterfaceItemIdentifier("col\(index)"))
             tableColumn.title = column.header
-            tableColumn.resizingMask = .autoresizingMask
+            tableColumn.resizingMask = [.autoresizingMask, .userResizingMask]
             if column.sort != nil {
                 // The descriptor's key is our column index; the
                 // coordinator interprets it (comparison happens through
@@ -379,7 +379,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             let tableColumn = table.tableColumns[index]
             tableColumn.identifier = NSUserInterfaceItemIdentifier("col\(index)")
             tableColumn.title = column.header
-            tableColumn.resizingMask = .autoresizingMask
+            tableColumn.resizingMask = [.autoresizingMask, .userResizingMask]
             tableColumn.sortDescriptorPrototype = column.sort == nil
                 ? nil
                 : NSSortDescriptor(key: "\(index)", ascending: true)

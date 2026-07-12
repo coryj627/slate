@@ -116,7 +116,9 @@ struct TabBarView: View {
                         isReading
                             ? Tokens.ColorRole.accentText
                             : Tokens.ColorRole.textPrimary)
-                    .frame(width: 24, height: 24)
+                    // 28pt — the HIG macOS default click target (the
+                    // #866 floor; these two strip buttons were missed).
+                    .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
                     .background(
                         isReading
@@ -238,7 +240,8 @@ struct TabBarView: View {
             } label: {
                 SlateSymbol.closeTab.image(label: "Close tab")
                     .font(.caption2.weight(.bold))
-                    .frame(width: 24, height: 24)
+                    // 28pt — HIG macOS default click target (#866 floor).
+                    .frame(minWidth: 28, minHeight: 28)
                     .contentShape(Rectangle())
             }
             // Close is its own hover/pressed target (U5-2) so it lights up
@@ -263,17 +266,23 @@ struct TabBarView: View {
                 appState.selectTab(id: tab.id)
                 appState.moveActiveTabRight()
             }
-            Divider()
-            Button("Split Right") {
-                appState.selectTab(id: tab.id)
-                appState.splitActivePane(axis: .horizontal)
+            // Context menus HIDE unavailable items rather than dimming
+            // them (context-menus.md:35 — the macOS dim exception covers
+            // only the Cut/Copy/Paste family). The MENU-BAR Split items
+            // keep disabled-not-hidden, which is correct there. The
+            // Divider rides INSIDE the gate so capacity never strands an
+            // orphan separator (Codex review).
+            if !appState.workspace.isAtPaneCapacity {
+                Divider()
+                Button("Split Right") {
+                    appState.selectTab(id: tab.id)
+                    appState.splitActivePane(axis: .horizontal)
+                }
+                Button("Split Down") {
+                    appState.selectTab(id: tab.id)
+                    appState.splitActivePane(axis: .vertical)
+                }
             }
-            .disabled(appState.workspace.isAtPaneCapacity)
-            Button("Split Down") {
-                appState.selectTab(id: tab.id)
-                appState.splitActivePane(axis: .vertical)
-            }
-            .disabled(appState.workspace.isAtPaneCapacity)
         }
     }
 
@@ -295,6 +304,7 @@ struct TabBarView: View {
         .menuStyle(.borderlessButton)
         .frame(width: 28)
         .padding(.trailing, Tokens.Spacing.xs)
-        .help("All tabs")
+        // Verb-first (offering-help.md).
+        .help("Show all open tabs")
     }
 }

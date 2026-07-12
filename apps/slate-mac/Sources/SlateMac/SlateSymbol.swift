@@ -270,7 +270,12 @@ enum SlateSymbol: CaseIterable {
         case .editingMode: return ("square.and.pencil", "pencil")
         case .folder: return ("folder", "folder")
         case .folderOpen: return ("folder.fill", "folder.fill")
-        case .disclosure: return ("chevron.right", "chevron.right")
+        // chevron.forward, NOT chevron.right: forward auto-mirrors under
+        // RTL layout (right→left), which is what makes the layout-aware
+        // ±90° disclosure rotation compose correctly in both directions.
+        // Red-team measured (pixel-hash render): chevron.right does NOT
+        // mirror — with it, the RTL-aware rotation pointed expanded UP.
+        case .disclosure: return ("chevron.forward", "chevron.forward")
         case .outline: return ("list.bullet.indent", "list.bullet.indent")
         // U4-2 leaf roles (u4_spec SlateSymbol table). Each glyph exists on the
         // macOS 15 floor, so v7 == fallback until a v7-only glyph is preferred.

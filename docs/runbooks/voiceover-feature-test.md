@@ -138,7 +138,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 ### E — Full-text search (M5)
 1. From editor focus: `keys f cmd` → **"Search vault edit text"** + hint. (Cmd+F is focus-dependent at baseline — no-op from the sidebar tabs; #414.)
 2. Type `xyzzyplover` (planted ×3 in `Search bait.md`) → `wait-phrase "Search returned"` → **"Search returned N results."**
-3. Tab twice (Close button sits between field and list) → row speaks **"<file>.md: …<snippet>"**.
+3. Tab three times when a query is present (Clear and Close buttons sit between field and list; Clear appears only with text) → row speaks **"<file>.md: …<snippet>"**.
 4. Return **on the field** → **"Opened <file>, line N: …"**.
 
 ### F — Editing (M6) — baseline FAIL #409, re-run after fix
@@ -178,7 +178,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 ### L — Citations + bibliography (M12) — baseline FAIL #411 (config), re-run after contract decision
 1. Precondition: citation config reachable by the app (baseline mismatch: app reads `.slate/prefs.json`; vault ships root `slate.json` → nothing loads).
 2. Open `AI for accessibility — short reflection.md` (3 cites). Citations sidebar tab rows: **"Citation: <key>"**; expanding must yield field-level nodes (title/authors/year) — baseline: **"Unresolved citation: kane2020atai."** for a key present in `library.bib`.
-3. Toolbar **"Citation Summary"** → sheet speaks **"This document has N citations referencing M unique sources."** (works at baseline) + **"Walk through citations button"**.
+3. Toolbar **"Citation Summary"** → sheet speaks **"This note has N citations referencing M unique sources."** (works at baseline) + **"Walk through citations button"**.
 4. Bibliography tab: entries with per-field content (baseline: empty). The planted `[@notinbib2099]` must read as unresolved even after the fix.
 
 ### Q — Command palette (M17)
@@ -207,7 +207,7 @@ issue; the milestone does not close with an open FAIL.
 | U7 | Activate a wikilink in reading mode → land per open rules; activate an internal markdown link | **"Opened <file>."** (+ unresolved links announce **"<target> is unresolved. Cannot open."**, never silent) | pending |
 | U8 | Toggle a task in reading mode (buffer clean) | Checkbox toggles; disabled-while-dirty carries the hint **"Save the note first…"** | pending |
 | U9 | Properties: edit a text property → add one → show source (⌘⇧D) → apply a YAML edit | **"Property <key> updated."** · sheet flow per M4 · **"Showing source"** value on the toggle · apply: **"Properties updated."**; malformed YAML: inline error spoken, nothing written | pending |
-| U10 | Scripted external edit → apply YAML → conflict alert → Keep mine | The property-conflict alert (three buttons) with focus returned to the toggle on resolve | pending |
+| U10 | Scripted external edit → apply YAML → conflict alert → Keep Mine | The property-conflict alert (three buttons) with focus returned to the toggle on resolve | pending |
 | U11 | Leaves: rail arrows across all 10 → each leaf announces + renders | **"<leaf> panel."** per switch; rail is ONE Tab stop (single-focus-stop) | pending |
 | U12 | File management: new folder → rename (inline) → move (picker) → delete | **"Created folder <name>."** · **"Renamed <old> to <new>."** (+ **", updated links in N notes."** when inbound links exist) · **"Moved <name> to <folder>."** · **"Moved <name> to Trash."**; focus per U2-6 (create→new row, delete→sibling) | pending |
 | U13 | Verify a wikilink to the moved/renamed file still resolves (open the citer) | Link opens the moved target (**referential stability** — the U2-3 invariant, census-guaranteed) | auto-PASS (censuses; spot-check live) |

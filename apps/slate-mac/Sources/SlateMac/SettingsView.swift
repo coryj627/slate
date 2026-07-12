@@ -517,7 +517,12 @@ struct BibliographySettingsTab: View {
                 )
             )
             .toggleStyle(.switch)
-            .labelsHidden()
+            // Visible label (toggles.md: "clearly identify what's being
+            // toggled — macOS apps may supply an explicit label"): the
+            // row context (path + format) says nothing about WATCHING,
+            // so a bare switch beside a labeled Remove button was
+            // ambiguous to sighted users. The AX label below stays the
+            // richer AT phrasing.
             .accessibilityLabel(
                 "Watch for changes, \(source.watch ? "on" : "off"), \(source.path)."
             )

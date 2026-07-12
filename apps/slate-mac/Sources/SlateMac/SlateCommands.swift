@@ -25,6 +25,10 @@ enum SlateCommandID {
     static let renameEntry = "slate.file.rename"
     static let moveTo = "slate.file.moveTo"
     static let deleteEntry = "slate.file.delete"
+    // Inspection pair (HIG context-menus.md: every context action needs
+    // a primary-UI home — these two were context-menu-only).
+    static let revealInFinder = "slate.file.revealInFinder"
+    static let copyPath = "slate.file.copyPath"
 
     // Navigation
     static let jumpToBibliography = "slate.navigation.jumpToBibliography"
@@ -206,6 +210,8 @@ enum SlateCommandID {
         renameEntry,
         moveTo,
         deleteEntry,
+        revealInFinder,
+        copyPath,
         jumpToBibliography,
         quickOpen,
         toggleSearch,
@@ -909,7 +915,7 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     register(
         SlateCommandID.basesQuickFilter,
-        label: "Bases: Quick filter",
+        label: "Bases: Quick Filter",
         section: .bases,
         hint: "Focus the active base's temporary quick filter field."
     ) { [weak appState] in appState?.basesFocusQuickFilter() }
@@ -1038,7 +1044,10 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     register(
         SlateCommandID.newFolder,
-        label: "New Folder…",
+        // No ellipsis (menus.md): the folder is created IMMEDIATELY
+        // ("Untitled Folder" + inline rename) — same flow as the
+        // ellipsis-free New Note; nothing gathers input first.
+        label: "New Folder",
         section: .file,
         // No global shortcut (spec §U2-5) — context menu + palette only.
         hint: "Create a new folder in the selected folder, then rename it."
@@ -1054,7 +1063,9 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     register(
         SlateCommandID.moveTo,
-        label: "Move to…",
+        // "Move To…" — the-menu-bar.md's canonical item spelling
+        // (title-style: the last word is always capitalized).
+        label: "Move To…",
         section: .file,
         hotkey: "⇧⌘M",
         hint: "Move the selected file or folder to another folder."
@@ -1071,6 +1082,21 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         // `deliberatelyUnregisteredChords`. The palette row invokes on Return.
         hint: "Move the selected file or folder to the Trash."
     ) { [weak appState] in appState?.deleteSelectedCommand() }
+
+    register(
+        SlateCommandID.revealInFinder,
+        label: "Reveal in Finder",
+        section: .file,
+        // No chord — inspection action; context menu + File menu + palette.
+        hint: "Show the selected file or folder in Finder."
+    ) { [weak appState] in appState?.revealSelectedInFinderCommand() }
+
+    register(
+        SlateCommandID.copyPath,
+        label: "Copy Path",
+        section: .file,
+        hint: "Copy the selected item's full filesystem path."
+    ) { [weak appState] in appState?.copySelectedPathCommand() }
 
     // ----- Navigation -----
 
@@ -1104,14 +1130,16 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     register(
         SlateCommandID.refreshSyncDiagnostics,
-        label: "Refresh sync diagnostics",
+        // Title-style capitalization (menus.md) — was sentence-case
+        // among ~100 Title-Case siblings.
+        label: "Refresh Sync Diagnostics",
         section: .view,
         hint: "Re-run sync-system detection and reload the LiveSync config."
     ) { [weak appState] in appState?.refreshSyncDiagnostics() }
 
     register(
         SlateCommandID.showHistoryPanel,
-        label: "Show history panel",
+        label: "Show History Panel",
         section: .view,
         hint: "Open the History leaf in the right pane."
     ) { [weak appState] in appState?.showHistoryPanel() }

@@ -825,6 +825,7 @@ Applying the project's content-representation principle:
 - "Jump to bibliography entry" command from any citation.
 - Bibliography view with each field separately accessible.
 - Document audio summary: "This document has 23 citations referencing 18 unique sources. Walk through?"
+  *Amendment (2026-07-11, HIG corpus audit):* shipped copy says **“This note has …”** — terminology unified on “note” (writing.md consistency); counts/semantics of the locked decision unchanged.
 - Citation-style switching adapts `speech_text` along with the visual.
 
 **V1.x:**

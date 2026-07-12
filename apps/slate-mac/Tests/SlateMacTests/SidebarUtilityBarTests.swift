@@ -255,13 +255,23 @@ final class SidebarUtilityBarTests: XCTestCase {
         XCTAssertTrue(source.contains("accessibilityElement(children: .contain)"))
         XCTAssertTrue(source.contains(#"accessibilityLabel("Vault utilities")"#))
 
-        // Every control labeled + tooltip'd.
-        for label in ["Settings", "Help", "Switch vault"] {
+        // Every control labeled + tooltip'd. Tooltips are pinned as
+        // exact strings, not label-prefix matches: the HIG-corpus pass
+        // made them VERB-FIRST (offering-help.md — "explain the action
+        // the control initiates"; "don't repeat the control's name"),
+        // so "Help" carries "Open the project README", not "Help…".
+        let controls: [(label: String, tooltip: String)] = [
+            ("Settings", #".help("Open Settings (⌘,)")"#),
+            ("Help", #".help("Open the project README")"#),
+            ("Switch vault", #".help("Switch vault")"#),
+        ]
+        for control in controls {
             XCTAssertTrue(
-                source.contains(#"accessibilityLabel("\#(label)")"#),
-                "missing accessibilityLabel for \(label)")
+                source.contains(#"accessibilityLabel("\#(control.label)")"#),
+                "missing accessibilityLabel for \(control.label)")
             XCTAssertTrue(
-                source.contains(#".help("\#(label)"#), "missing help tooltip for \(label)")
+                source.contains(control.tooltip),
+                "missing help tooltip for \(control.label)")
         }
 
         // Settings sends the SAME selector the command action sends.
