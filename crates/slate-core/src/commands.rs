@@ -52,6 +52,11 @@ pub enum CommandSection {
     /// Excalidraw (Milestone XD); Bases intentionally starts at the next
     /// non-reserved value.
     Bases = 10,
+    /// Graph commands (Milestone P, P1-3 #556) — Open graph, Show
+    /// connections, the orphans/unresolved/hubs presets, and Connections
+    /// deeper/shallower. Registry + palette + menu paths only; P1
+    /// registers zero new chords.
+    Graph = 11,
 }
 
 /// Metadata for a registered command. The action itself lives in

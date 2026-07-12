@@ -4284,6 +4284,8 @@ pub enum CommandSection {
     Canvas,
     /// Bases commands (Milestone N, #702).
     Bases,
+    /// Graph commands (Milestone P, P1-3 #556).
+    Graph,
 }
 
 impl From<core::CommandSection> for CommandSection {
@@ -4299,6 +4301,7 @@ impl From<core::CommandSection> for CommandSection {
             core::CommandSection::Plugins => Self::Plugins,
             core::CommandSection::Canvas => Self::Canvas,
             core::CommandSection::Bases => Self::Bases,
+            core::CommandSection::Graph => Self::Graph,
         }
     }
 }
@@ -4316,6 +4319,7 @@ impl From<CommandSection> for core::CommandSection {
             CommandSection::Plugins => Self::Plugins,
             CommandSection::Canvas => Self::Canvas,
             CommandSection::Bases => Self::Bases,
+            CommandSection::Graph => Self::Graph,
         }
     }
 }
@@ -6764,10 +6768,29 @@ mod tests {
             CommandSection::Plugins,
             CommandSection::Canvas,
             CommandSection::Bases,
+            CommandSection::Graph,
         ] {
             let core: core::CommandSection = sec.into();
             let back: CommandSection = core.into();
             assert_eq!(sec, back);
+        }
+    }
+
+    /// The core `CommandSection` discriminants are a wire contract (the
+    /// palette sorts by them). Graph is 11, and 9 stays reserved for
+    /// Excalidraw (Milestone XD) — never reused (P1-3 #556).
+    #[test]
+    fn command_section_discriminants_are_pinned() {
+        assert_eq!(core::CommandSection::Canvas as u8, 8);
+        assert_eq!(core::CommandSection::Bases as u8, 10);
+        assert_eq!(core::CommandSection::Graph as u8, 11);
+        // 9 is the Excalidraw reservation: no variant claims it.
+        for sec in [
+            core::CommandSection::Canvas,
+            core::CommandSection::Bases,
+            core::CommandSection::Graph,
+        ] {
+            assert_ne!(sec as u8, 9, "discriminant 9 is reserved for Excalidraw");
         }
     }
 

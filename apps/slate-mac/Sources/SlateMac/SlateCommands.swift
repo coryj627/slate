@@ -60,12 +60,25 @@ enum SlateCommandID {
     /// (Compare/Restore) are NOT commands — they need row context.
     static let showHistoryPanel = "slate.history.showPanel"
 
-    /// Connections leaf reveal (Milestone P, P1-1 #554). View-menu +
-    /// palette, no chord (P1 registers zero new chords). The full graph
-    /// command section + presets + depth commands land with P1-3's
-    /// `CommandSection.graph`; this is the minimal reveal so the leaf is
-    /// reachable by command and the Bases row-action handoff has a home.
+    // Graph (Milestone P). Registered under the FFI CommandSection.graph
+    // (landed cross-language with P1-3 #556). P1 registers ZERO new
+    // chords — palette + View-menu are the paths (T rule R1).
+
+    /// Connections leaf reveal (P1-1 #554): reveals + focuses the
+    /// Connections leaf for the active note.
     static let showConnectionsPanel = "slate.graph.showConnections"
+
+    /// Connections depth ±1 (P1-3 #556): the keyboard/palette path to the
+    /// leaf's depth stepper.
+    static let connectionsDeeper = "slate.graph.connectionsDeeper"
+    static let connectionsShallower = "slate.graph.connectionsShallower"
+
+    /// Graph-table presets (P1-3 #556) — parameterizations of the Graph
+    /// tab, not new surfaces. Palette keywords: "orphans", "broken
+    /// links", "hubs".
+    static let graphOrphans = "slate.graph.orphans"
+    static let graphUnresolved = "slate.graph.unresolved"
+    static let graphMostLinked = "slate.graph.mostLinked"
 
     /// Right-pane hide/reveal (#882). ⌥⌘I (inspector/utility-pane idiom —
     /// the right pane hosts the panel rail; distinct from ⌃⌘I Canvas Where
@@ -75,9 +88,8 @@ enum SlateCommandID {
     /// the menu↔palette invariant is CHORD parity, not label parity).
     static let toggleRightPane = "slate.view.toggleRightPane"
 
-    /// Open the global Graph tab (Milestone P, P1-2 #555). View-menu +
-    /// palette, no chord (P1 registers zero new chords). Migrates to
-    /// `CommandSection.graph` with P1-3's presets.
+    /// Open/activate the global Graph tab (P1-2 #555; moved into
+    /// `CommandSection.graph` in P1-3 alongside the presets below).
     static let openGraphTab = "slate.graph.openTab"
 
     // Canvas (Milestone T, #369). Registered under the FFI
@@ -259,6 +271,11 @@ enum SlateCommandID {
         refreshSyncDiagnostics,
         showHistoryPanel,
         showConnectionsPanel,
+        connectionsDeeper,
+        connectionsShallower,
+        graphOrphans,
+        graphUnresolved,
+        graphMostLinked,
         toggleRightPane,
         openGraphTab,
         canvasShowOutline,
@@ -1208,12 +1225,49 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Open the History leaf in the right pane."
     ) { [weak appState] in appState?.showHistoryPanel() }
 
+    // ----- Graph (Milestone P). CommandSection.graph; zero new chords. -----
+
     register(
         SlateCommandID.showConnectionsPanel,
         label: "Show Connections",
-        section: .view,
+        section: .graph,
         hint: "Open the Connections leaf — the active note's local graph."
     ) { [weak appState] in appState?.showConnectionsPanel() }
+
+    register(
+        SlateCommandID.connectionsDeeper,
+        label: "Connections: Deeper",
+        section: .graph,
+        hint: "Increase the Connections leaf depth by one (up to 3 links away)."
+    ) { [weak appState] in appState?.connectionsDeeper() }
+
+    register(
+        SlateCommandID.connectionsShallower,
+        label: "Connections: Shallower",
+        section: .graph,
+        hint: "Decrease the Connections leaf depth by one (down to direct links)."
+    ) { [weak appState] in appState?.connectionsShallower() }
+
+    register(
+        SlateCommandID.graphOrphans,
+        label: "Graph: Orphaned Notes",
+        section: .graph,
+        hint: "Open the graph filtered to orphans — notes with no links in or out."
+    ) { [weak appState] in appState?.openGraphPreset(.orphans) }
+
+    register(
+        SlateCommandID.graphUnresolved,
+        label: "Graph: Unresolved Links",
+        section: .graph,
+        hint: "Open the graph filtered to unresolved targets — broken links."
+    ) { [weak appState] in appState?.openGraphPreset(.unresolved) }
+
+    register(
+        SlateCommandID.graphMostLinked,
+        label: "Graph: Most Linked Notes",
+        section: .graph,
+        hint: "Open the graph sorted by links in — the most-linked notes, the hubs."
+    ) { [weak appState] in appState?.openGraphPreset(.mostLinked) }
 
     register(
         SlateCommandID.toggleRightPane,
@@ -1229,7 +1283,7 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
     register(
         SlateCommandID.openGraphTab,
         label: "Open Graph",
-        section: .view,
+        section: .graph,
         hint: "Open the global graph as a sortable table."
     ) { [weak appState] in appState?.openGraphTab() }
 

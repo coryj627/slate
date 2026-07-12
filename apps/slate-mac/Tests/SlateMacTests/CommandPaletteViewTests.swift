@@ -726,6 +726,9 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertEqual(CommandPaletteModel.title(for: .tasks), "Tasks")
         XCTAssertEqual(CommandPaletteModel.title(for: .settings), "Settings")
         XCTAssertEqual(CommandPaletteModel.title(for: .plugins), "Plugins")
+        XCTAssertEqual(CommandPaletteModel.title(for: .canvas), "Canvas")
+        XCTAssertEqual(CommandPaletteModel.title(for: .bases), "Bases")
+        XCTAssertEqual(CommandPaletteModel.title(for: .graph), "Graph")
     }
 
     // MARK: - Invoke (#315)
