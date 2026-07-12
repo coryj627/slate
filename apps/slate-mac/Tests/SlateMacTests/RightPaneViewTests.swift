@@ -54,13 +54,16 @@ final class RightPaneViewTests: XCTestCase {
     /// (no wrap — a segmented picker's arrow-within behavior). As of U4-2 all
     /// leaves are registered, in the rail/registry order
     /// [outline, backlinks, outgoingLinks, embeds, math, code, diagrams, tasks,
-    /// history, citations, bibliography, queries, basesDock, syncDiagnostics].
+    /// tasksReview, history, citations, bibliography, queries, basesDock,
+    /// syncDiagnostics].
     func testRailMoveSteppingAndClamping() {
         // Down from the top advances; down from the bottom is a no-op (clamp).
         XCTAssertEqual(Leaf.railMove(from: .outline, .down), .backlinks)
         XCTAssertEqual(Leaf.railMove(from: .backlinks, .down), .outgoingLinks)
-        // O-5 (#543): history sits between tasks and citations.
-        XCTAssertEqual(Leaf.railMove(from: .tasks, .down), .history)
+        // #879: tasksReview sits between the note-scoped tasks leaf and history.
+        XCTAssertEqual(Leaf.railMove(from: .tasks, .down), .tasksReview)
+        // O-5 (#543): history sits between tasks(Review) and citations.
+        XCTAssertEqual(Leaf.railMove(from: .tasksReview, .down), .history)
         XCTAssertEqual(Leaf.railMove(from: .history, .down), .citations)
         XCTAssertEqual(Leaf.railMove(from: .citations, .down), .bibliography)
         // N4-3 (#709): queries sits between file-centric panels and sync.
@@ -117,8 +120,8 @@ final class RightPaneViewTests: XCTestCase {
             Leaf.registered,
             [
                 .outline, .backlinks, .outgoingLinks, .connections, .embeds, .math,
-                .code, .diagrams, .tasks, .history, .citations, .bibliography,
-                .queries, .basesDock, .syncDiagnostics,
+                .code, .diagrams, .tasks, .tasksReview, .history, .citations,
+                .bibliography, .queries, .basesDock, .syncDiagnostics,
             ])
         // O-5 (#543): history sits BEFORE citations — content leaves,
         // then history, then citations/bibliography (usage-frequency
@@ -131,12 +134,17 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(
             Leaf.registered.firstIndex(of: .outgoingLinks)! + 1,
             Leaf.registered.firstIndex(of: .connections)!)
+        // #879: the vault-wide Tasks Review leaf sits immediately after the
+        // note-scoped Tasks leaf — both task leaves adjacent in the rail.
+        XCTAssertEqual(
+            Leaf.registered.firstIndex(of: .tasks)! + 1,
+            Leaf.registered.firstIndex(of: .tasksReview)!)
         // Every case is now registered — no leaf presents a selectable-but-
         // blank rail icon.
         for leaf in Leaf.allCases {
             XCTAssertTrue(leaf.isRegistered, "\(leaf) must be registered as of U4-2")
         }
-        XCTAssertEqual(Leaf.allCases.count, 15, "the full leaf vocabulary is declared")
+        XCTAssertEqual(Leaf.allCases.count, 16, "the full leaf vocabulary is declared")
         // The registry is exactly the case set (no duplicates, none missing).
         XCTAssertEqual(Set(Leaf.registered), Set(Leaf.allCases))
         XCTAssertEqual(Leaf.registered.count, Leaf.allCases.count)
@@ -162,6 +170,8 @@ final class RightPaneViewTests: XCTestCase {
         XCTAssertEqual(Leaf.code.symbol, .code)
         XCTAssertEqual(Leaf.diagrams.symbol, .diagram)
         XCTAssertEqual(Leaf.tasks.symbol, .tasksLeaf)
+        XCTAssertEqual(Leaf.tasksReview.symbol, .tasksReviewLeaf)
+        XCTAssertEqual(Leaf.tasksReview.title, "Tasks Review")
         XCTAssertEqual(Leaf.history.symbol, .history)
         XCTAssertEqual(Leaf.history.title, "History")
         XCTAssertEqual(Leaf.citations.symbol, .citationSummary)
@@ -188,6 +198,24 @@ final class RightPaneViewTests: XCTestCase {
         let source = try Self.sourceFile("Sources/SlateMac/Workspace/RightPaneView.swift")
         XCTAssertTrue(source.contains("case .queries"))
         XCTAssertTrue(source.contains("BaseQueriesPanel()"))
+    }
+
+    /// #879: the vault-wide Tasks Review is a first-class right-pane leaf,
+    /// registered right after the note-scoped Tasks leaf and mounted to
+    /// `TasksReviewPanel` — no longer a modal sheet.
+    func testTasksReviewLeafIsRegisteredAndMounted() throws {
+        XCTAssertEqual(Leaf.tasksReview.title, "Tasks Review")
+        XCTAssertEqual(Leaf.tasksReview.symbol, .tasksReviewLeaf)
+        XCTAssertTrue(Leaf.tasksReview.isRegistered)
+        // Rail traversal: tasks → tasksReview → history (both task leaves
+        // adjacent, review before history).
+        XCTAssertEqual(Leaf.railMove(from: .tasks, .down), .tasksReview)
+        XCTAssertEqual(Leaf.railMove(from: .tasksReview, .down), .history)
+        XCTAssertEqual(Leaf.railMove(from: .tasksReview, .up), .tasks)
+
+        let source = try Self.sourceFile("Sources/SlateMac/Workspace/RightPaneView.swift")
+        XCTAssertTrue(source.contains("case .tasksReview"))
+        XCTAssertTrue(source.contains("TasksReviewPanel()"))
     }
 
     /// N4-4 (#710): the docked Bases leaf is distinct from the Queries list

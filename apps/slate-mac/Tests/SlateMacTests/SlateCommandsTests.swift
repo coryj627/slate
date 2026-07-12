@@ -592,16 +592,17 @@ final class SlateCommandsTests: XCTestCase {
     /// `openTasksReview()` has a `guard currentSession != nil` and
     /// the menu item carries `.disabled(appState.currentSession ==
     /// nil)`. The bridge must preserve that semantic; invoking the
-    /// command without a session must not throw AND must leave
-    /// `isTasksReviewOpen` false. Full positive coverage (with a
-    /// vault open) rides the integration suite (#317).
+    /// command without a session must not throw AND must NOT reveal
+    /// the Tasks Review leaf (#879 — it's a leaf now, not a sheet).
+    /// Full positive coverage (with a vault open) rides the
+    /// integration suite (#317).
     @MainActor
     func testInvokingTasksReviewCommandWithNoSessionIsNoOp() async throws {
         let appState = AppState()
-        XCTAssertFalse(appState.isTasksReviewOpen)
+        XCTAssertNotEqual(appState.workspace.activeLeaf, .tasksReview)
         try appState.commandRegistry.invokeById(id: SlateCommandID.tasksReview)
-        XCTAssertFalse(
-            appState.isTasksReviewOpen,
+        XCTAssertNotEqual(
+            appState.workspace.activeLeaf, .tasksReview,
             "tasks review must respect the no-session guard from openTasksReview()"
         )
     }

@@ -32,6 +32,13 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     case code
     case diagrams
     case tasks
+    /// Vault-wide, filterable, paginated task browser (#879) — folded out of
+    /// its former modal `.sheet` into the leaf system (sheets.md:35: a complex
+    /// paginated browser blocks the workspace it reports on; a non-modal leaf
+    /// reports beside it). Registered right AFTER the note-scoped `.tasks` leaf
+    /// so the quick per-note panel and the vault-wide review coexist. Revealed
+    /// by View ▸ Show Tasks Review (⌘R) via `AppState.openTasksReview()`.
+    case tasksReview
     /// Per-note version history + deleted-file recovery (Milestone O-5,
     /// #543) — registered BEFORE `.citations` (usage-frequency order:
     /// content leaves, then history, then citations/bibliography).
@@ -59,6 +66,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .code: return "Code"
         case .diagrams: return "Diagrams"
         case .tasks: return "Tasks"
+        case .tasksReview: return "Tasks Review"
         case .history: return "History"
         case .citations: return "Citations"
         case .bibliography: return "Bibliography"
@@ -85,6 +93,7 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
         case .code: return .code
         case .diagrams: return .diagram
         case .tasks: return .tasksLeaf
+        case .tasksReview: return .tasksReviewLeaf
         case .history: return .history
         case .citations: return .citationSummary
         case .bibliography: return .bibliography
@@ -102,10 +111,12 @@ enum Leaf: String, CaseIterable, Identifiable, Codable {
     /// LAST — vault-level diagnostics, least-frequently visited. The rail
     /// iterates exactly this list, so an unregistered leaf can never present
     /// a selectable-but-blank icon.
+    /// #879 inserts `.tasksReview` right after `.tasks` — the vault-wide review
+    /// sits beside the note-scoped panel so both task leaves are adjacent.
     static let registered: [Leaf] = [
         .outline, .backlinks, .outgoingLinks, .connections, .embeds, .math, .code,
-        .diagrams, .tasks, .history, .citations, .bibliography, .queries, .basesDock,
-        .syncDiagnostics,
+        .diagrams, .tasks, .tasksReview, .history, .citations, .bibliography, .queries,
+        .basesDock, .syncDiagnostics,
     ]
 
     var isRegistered: Bool { Self.registered.contains(self) }
@@ -327,6 +338,8 @@ struct RightPaneView: View {
             DiagramsPanel()
         case .tasks:
             TasksPanel()
+        case .tasksReview:
+            TasksReviewPanel()
         case .history:
             HistoryPanel()
         case .citations:
@@ -430,7 +443,7 @@ private struct LeafRailView: View {
             leaf.symbol.image(label: leaf.title)
                 // A large, Dynamic-Type-scaling glyph (WCAG 1.4.4): a semantic
                 // style + `.imageScale(.large)` is the project's icon-sizing
-                // idiom (TasksPanel, TasksReviewView), never a frozen
+                // idiom (TasksPanel, TasksReviewPanel), never a frozen
                 // `.system(size:)`. `.title2` + `.large` renders ~28pt at the
                 // default size — the u4_spec glyph size — while still scaling.
                 .font(.title2)

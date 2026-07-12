@@ -218,7 +218,7 @@ struct TasksPanel: View {
     /// the same value the user authored.
     ///
     /// The formatter is cached because both `TasksPanel` and
-    /// `TasksReviewView` call this in their row builders — a vault
+    /// `TasksReviewPanel` call this in their row builders — a vault
     /// with several hundred dated tasks would otherwise allocate a
     /// new `DateFormatter` per row on every redraw. `DateFormatter`
     /// is documented thread-safe for `string(from:)` reads after

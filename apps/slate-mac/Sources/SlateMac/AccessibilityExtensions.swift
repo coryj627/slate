@@ -4,7 +4,7 @@
 import SwiftUI
 
 /// Shared accessibility helpers used by multiple surfaces
-/// (`CommandPaletteView`, `TasksReviewView`, `TasksPanel`, …). New
+/// (`CommandPaletteView`, `TasksReviewPanel`, `TasksPanel`, …). New
 /// helpers go here rather than at file scope so neighbouring
 /// features can adopt them without a cross-file import dependency.
 ///
@@ -41,7 +41,7 @@ extension View {
     /// ```
     ///
     /// The current consumers follow this shape: `CommandPaletteView`
-    /// (result row), `TasksReviewView` (filter chip + task toggle),
+    /// (result row), `TasksReviewPanel` (filter chip + task toggle),
     /// and `TasksPanel` (task toggle) — each chains after
     /// `.accessibilityLabel` / `.accessibilityHint` and passes a
     /// `Bool` selection state.
