@@ -200,6 +200,7 @@ a11y-check 100.
   Each mode is one AX tree: the hidden mode is **unmounted** (`if mode == …` — NOT the
   ZStack retention pattern: an offscreen full editor duplicates the whole text tree for
   VO and double-fires publishers; reading-view scroll position is cheap to lose, editor
+  *Amendment (2026-07-12, #856):* superseded — reading-view scroll now parks per tab (`WorkspaceState.readingScrollParks`; transient, never persisted, path-validated, rebound on rename, cleared with `viewModes`) and restores without animation on remount, including reading→reading tab switches (identity keyed per tab+note). The unmount discipline itself stands unchanged.
   caret is preserved in `NoteDocument.lastSelection` on switch-away).
 - Dirty interaction: mode switch never prompts (same document, same buffer); reading
   view renders from `bodyText` (the live buffer — unsaved edits visible in reading

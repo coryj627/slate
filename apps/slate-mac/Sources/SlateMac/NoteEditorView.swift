@@ -82,7 +82,11 @@ struct NoteEditorView: NSViewRepresentable {
     /// exact O(n)-per-keystroke class #404 eliminated. Nil disables.
     /// The value lands in a plain stored var (never a `@Published`) —
     /// selection churn must not invalidate any view.
-    var onCaretUTF16Change: ((Int) -> Void)? = nil
+    var onCaretUTF16Change: ((Int) -> Void)?
+    /// Native context-menu spell toggle → AppState pref (red-team).
+    var onToggleSpellCheckFromNativeMenu: (() -> Void)?
+    /// #855 bottom overscroll; compact hosts (canvas card editor) pass 0.
+    var bottomOverscroll: CGFloat = 120
 
     /// In-app editor text zoom factor (#848, `AppState.editorTextScale`).
     /// Threaded by the hosting view from the published pref — a zoom
@@ -92,6 +96,36 @@ struct NoteEditorView: NSViewRepresentable {
     /// 1.0 so contexts without zoom (and existing tests) are
     /// untouched.
     var textScale: Double = 1.0
+
+    /// Opt-in live spell checking (#855,
+    /// `AppState.editorSpellCheckEnabled`). Threaded exactly like
+    /// `textScale`: the pref is `@Published`, a toggle re-renders the
+    /// host, and `updateNSView` applies the new value to the live
+    /// view (guarded, so the common keystroke path never restamps).
+    /// Defaults to `false` — off is the correct Markdown default, and
+    /// hosts that don't thread the pref (parked read-only panes, the
+    /// canvas card sheet) keep today's behavior.
+    var spellCheckEnabled: Bool = false
+
+    /// Line-height multiple for the note editor (#855). NSTextView's
+    /// default leading (~1.0) is tight for long-form writing; ~1.2 is
+    /// the pragmatic editor norm (WCAG 1.4.8 AAA suggests more
+    /// in-paragraph spacing than the AppKit default provides).
+    /// Applied ONCE per attach/swap via `defaultParagraphStyle` +
+    /// `typingAttributes` + a single storage stamp — NEVER per
+    /// keystroke (the #379/#404 census-gated path stays untouched;
+    /// typed text inherits the style from `typingAttributes`, and the
+    /// highlight overlay is temporary-attribute color/underline only).
+    static let lineHeightMultiple: CGFloat = 1.2
+
+    /// The editor's paragraph style (one shared immutable instance —
+    /// `NSParagraphStyle` is reference-typed and this never mutates
+    /// after init).
+    static let editorParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = lineHeightMultiple
+        return style.copy() as! NSParagraphStyle
+    }()
 
     /// System Reduce Motion preference (WCAG 2.3.1). When `true`, the
     /// editor's scroll-routing paths jump instantly instead of using
@@ -166,6 +200,12 @@ struct NoteEditorView: NSViewRepresentable {
         textView.smartInsertDeleteEnabled = false
         textView.usesFontPanel = false
         textView.usesRuler = false
+        // #855: live spell checking is OPT-IN (default off — Markdown
+        // source squiggles everywhere). Distinct from the automatic
+        // spelling CORRECTION above, which stays off unconditionally:
+        // silent auto-rewrites corrupt Markdown; red squiggles don't.
+        // `updateNSView` re-applies on pref changes.
+        textView.isContinuousSpellCheckingEnabled = spellCheckEnabled
         // Body-text-style size, NOT `NSFont.systemFontSize` — the
         // latter is a fixed 13pt constant that ignores the macOS
         // Text Size setting, which left the WRITING surface pinned
@@ -174,7 +214,20 @@ struct NoteEditorView: NSViewRepresentable {
         // Dynamic Type changes so the scaling is live (WCAG 1.4.4).
         // `textScale` (#848) multiplies the in-app zoom on top.
         textView.font = Tokens.Typography.monospacedBodyNSFont(scale: textScale)
-        textView.textContainerInset = NSSize(width: 16, height: 16)
+        // #855 scroll-past-end: `textContainerInset.height` is
+        // SYMMETRIC (AppKit applies it to both top and bottom), so the
+        // inset carries (top + bottom) / 2 and the
+        // `SlateEditorTextView.textContainerOrigin` override pins the
+        // visual top back to 16pt — the documented override point for
+        // asymmetric insets. Net effect: 16pt above the first line,
+        // 120pt of overscroll below the last line, so the final line
+        // never types against the window edge. (Typewriter mode is
+        // explicitly out of scope — this is the simple documented form.)
+        textView.bottomOverscroll = bottomOverscroll
+        textView.textContainerInset = NSSize(
+            width: 16,
+            height: (SlateEditorTextView.topInset + bottomOverscroll) / 2
+        )
         // Soft-wrap. NSTextView defaults vary by SDK; pin
         // explicitly so a vault opened on one macOS version doesn't
         // surprise the user with horizontal scroll on the next.
@@ -258,6 +311,7 @@ struct NoteEditorView: NSViewRepresentable {
         // flips, so this stays in sync mid-session.
         context.coordinator.reduceMotion = reduceMotion
         context.coordinator.onCaretUTF16Change = onCaretUTF16Change
+        context.coordinator.onToggleSpellCheckFromNativeMenu = onToggleSpellCheckFromNativeMenu
         textView.setAccessibilityLabel(accessibilityLabel)
 
         // Live Text Size tracking (WCAG 1.4.4): reading
@@ -273,6 +327,14 @@ struct NoteEditorView: NSViewRepresentable {
         if textView.font?.pointSize != baseFont.pointSize {
             textView.font = baseFont
             context.coordinator.scheduleHighlight(debounced: false)
+        }
+
+        // #855: live spell-check pref (the textScale pattern above —
+        // the host re-renders on the published toggle and this method
+        // re-runs with the new value). Guarded compare keeps the
+        // common keystroke path a no-op.
+        if textView.isContinuousSpellCheckingEnabled != spellCheckEnabled {
+            textView.isContinuousSpellCheckingEnabled = spellCheckEnabled
         }
 
         // External buffer change (e.g. file reload after a
@@ -302,6 +364,9 @@ struct NoteEditorView: NSViewRepresentable {
             // a buffer rebuilt by `string =` could drop back to the nil
             // `textColor` that reads dim-on-dark (#226/#302).
             textView.textColor = NSColor.textColor
+            // #855: the swapped-in storage carries no paragraph style —
+            // re-stamp the line height (swap path only, never keystrokes).
+            Coordinator.applyEditorParagraphStyle(to: textView)
             let clampedLocation = min(previousRange.location, text.utf16.count)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
             context.coordinator.scheduleHighlight(debounced: false)
@@ -321,6 +386,8 @@ struct NoteEditorView: NSViewRepresentable {
         var previewEmbedAtCursor: ((String, Int) -> Void)?
         /// Continuous caret reporter (U3-2) — see the view property.
         var onCaretUTF16Change: ((Int) -> Void)?
+        /// Native Spelling-menu route (see SlateEditorTextView override).
+        var onToggleSpellCheckFromNativeMenu: (() -> Void)?
         /// Mirror of `@Environment(\.accessibilityReduceMotion)` from
         /// the SwiftUI parent. Refreshed by `updateNSView` so the
         /// scroll-routing methods always see the current value (WCAG
@@ -416,11 +483,18 @@ struct NoteEditorView: NSViewRepresentable {
             textView.typingAttributes = [
                 .font: font,
                 .foregroundColor: NSColor.textColor,
+                // #855: typed/pasted text inherits the line-height
+                // style from here — the keystroke path itself never
+                // restamps anything.
+                .paragraphStyle: NoteEditorView.editorParagraphStyle,
             ]
             if let storage = textView.textStorage {
                 let fullRange = NSRange(location: 0, length: storage.length)
                 storage.removeAttribute(.foregroundColor, range: fullRange)
             }
+            // #855: comfortable prose leading. One stamp per attach —
+            // see `applyEditorParagraphStyle` for the why-both note.
+            Self.applyEditorParagraphStyle(to: textView)
             // Explicit textColor: AppKit's NSTextView leaves `textColor` as nil after
             // the standard init when the storage has no `.foregroundColor` attribute
             // (#226 strips that attribute so the dynamic color resolves correctly).
@@ -490,6 +564,28 @@ struct NoteEditorView: NSViewRepresentable {
             // delegate wiring, so without this a mount followed directly by
             // a reading-mode toggle would park a stale location.
             reportCaretLocation()
+        }
+
+        /// #855: apply the editor line-height style to a (re)bound or
+        /// freshly-swapped buffer. Both legs are needed:
+        /// `defaultParagraphStyle` covers attribute-less rendering and
+        /// future `string =` swaps, while the one-time full-range
+        /// storage stamp makes the current buffer's layout
+        /// deterministic across SDKs (plain-text NSTextView attribute
+        /// propagation is version-wobbly). Runs ONLY on attach and on
+        /// programmatic swaps — never on the keystroke path (typed
+        /// text inherits via `typingAttributes`; the edit fires
+        /// `didProcessEditing` with `.editedAttributes` only, which
+        /// the dirty tracking ignores — it guards on
+        /// `.editedCharacters`).
+        static func applyEditorParagraphStyle(to textView: NSTextView) {
+            textView.defaultParagraphStyle = NoteEditorView.editorParagraphStyle
+            guard let storage = textView.textStorage else { return }
+            storage.addAttribute(
+                .paragraphStyle,
+                value: NoteEditorView.editorParagraphStyle,
+                range: NSRange(location: 0, length: storage.length)
+            )
         }
 
         @objc private func systemColorPreferencesChanged() {
@@ -1169,6 +1265,46 @@ struct NoteEditorView: NSViewRepresentable {
 /// a route back to the SwiftUI layer.
 final class SlateEditorTextView: NSTextView {
     weak var coordinator: NoteEditorView.Coordinator?
+
+    /// The NATIVE context menu retains AppKit's Spelling and Grammar ▸
+    /// Check Spelling While Typing item; unrouted, it flips the view
+    /// flag directly and `updateNSView`'s pref guard silently reverts
+    /// it on the next keystroke (red-team). Route it through the SAME
+    /// AppState pref the Edit-menu item toggles — both checkmarks, the
+    /// live squiggles, and persistence stay in lock-step. (Measured:
+    /// SwiftUI's Edit MENU has no system Spelling submenu, so the
+    /// context menu is the only other entry point.)
+    override func toggleContinuousSpellChecking(_ sender: Any?) {
+        if let route = coordinator?.onToggleSpellCheckFromNativeMenu {
+            route()
+        } else {
+            // Codex review: an unrouted host must keep AppKit's native
+            // behavior, never a silent no-op. (Every production host
+            // now routes; this arm is defense for future hosts.)
+            super.toggleContinuousSpellChecking(sender)
+        }
+    }
+
+    /// #855 scroll-past-end. `textContainerInset.height` pads top AND
+    /// bottom equally, so `makeNSView` sets it to the AVERAGE of these
+    /// two and the `textContainerOrigin` override below pins the top
+    /// back to `topInset` — leaving the remainder (120pt) below the
+    /// last line as bottom overscroll.
+    static let topInset: CGFloat = 16
+    /// Instance-configurable so compact hosts (the canvas card editor
+    /// sheet) opt out; the main editor keeps the 120pt default.
+    var bottomOverscroll: CGFloat = 120
+
+    /// Asymmetric-inset override (see `topInset`). `textContainerOrigin`
+    /// is the documented AppKit customization point for where the text
+    /// container sits inside the view; every layout/caret/scroll path
+    /// consults it, so pinning `y` keeps hit-testing and
+    /// `scrollRangeToVisible` consistent.
+    override var textContainerOrigin: NSPoint {
+        var origin = super.textContainerOrigin
+        origin.y = Self.topInset
+        return origin
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Cmd+E: open the embed-preview popover for the embed

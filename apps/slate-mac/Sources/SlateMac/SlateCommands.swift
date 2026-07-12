@@ -203,6 +203,9 @@ enum SlateCommandID {
     static let editorZoomIn = "slate.editor.zoomIn"
     static let editorZoomOut = "slate.editor.zoomOut"
     static let editorActualSize = "slate.editor.actualSize"
+    /// Opt-in live spell checking (#855). No chord — menu (Edit ▸
+    /// Check Spelling While Typing, live checkmark) + palette only.
+    static let toggleSpellCheck = "slate.editor.toggleSpellCheck"
 
     // Settings
     static let openSettings = "slate.settings.open"
@@ -343,6 +346,7 @@ enum SlateCommandID {
         editorZoomIn,
         editorZoomOut,
         editorActualSize,
+        toggleSpellCheck,
         toggleViewMode,
         togglePropertiesSource,
         openSettings,
@@ -1432,6 +1436,15 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .editor,
         hint: "Reset the editing surfaces' text size to 100 percent."
     ) { [weak appState] in appState?.editorActualSize() }
+
+    register(
+        SlateCommandID.toggleSpellCheck,
+        // Label matches the Edit-menu item verbatim (menu↔palette
+        // unification). No chord (#855) — menu + palette only.
+        label: "Check Spelling While Typing",
+        section: .editor,
+        hint: "Toggle live spell checking in the note editor. Off by default for Markdown source."
+    ) { [weak appState] in appState?.toggleEditorSpellCheck() }
 
     // ----- Settings -----
 

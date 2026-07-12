@@ -67,6 +67,18 @@ struct ReadingView: View {
         var diagramBlocks: [DiagramBlock] = []
         var citations: [RenderedCitation] = []
         var tasks: [TaskItem] = []
+        /// #849: UNRESOLVED outgoing wikilink `targetRaw` values for this
+        /// note (from `appState.currentOutgoingLinks`, the same records
+        /// `OutgoingLinksPanel.isUnresolved` reads). Threaded as a pure
+        /// param into `ReadingInlineMapper` so dangling `[[links]]` render
+        /// in `warningText` before activation.
+        var unresolvedLinkTargets: Set<String> = []
+        /// Codex rounds 2–3 (#849): the note's saved link records,
+        /// kind-partitioned. `nil` = no classification available
+        /// (test/legacy callers — runs style resolved). Non-nil, a
+        /// target with NO same-grammar record styles unresolved,
+        /// because that is exactly what activation announces for it.
+        var linkRecordSets: ReadingLinkRouter.LinkRecordSets? = nil
         /// Mirrors `AppState.hasUnsavedChanges` — task toggles are disabled
         /// while true (same rule + explanation as `TasksPanel`: the toggle's
         /// post-save reload would overwrite the dirty buffer).
@@ -113,6 +125,8 @@ struct ReadingView: View {
             diagramBlocks: [DiagramBlock] = [],
             citations: [RenderedCitation] = [],
             tasks: [TaskItem] = [],
+            unresolvedLinkTargets: Set<String> = [],
+            linkRecordSets: ReadingLinkRouter.LinkRecordSets? = nil,
             isDocumentDirty: Bool = false,
             onToggleTask: @escaping (TaskItem) -> Void = { _ in },
             taskLineOffset: Int = 0,
@@ -130,6 +144,8 @@ struct ReadingView: View {
             self.diagramBlocks = diagramBlocks
             self.citations = citations
             self.tasks = tasks
+            self.unresolvedLinkTargets = unresolvedLinkTargets
+            self.linkRecordSets = linkRecordSets
             self.isDocumentDirty = isDocumentDirty
             self.onToggleTask = onToggleTask
             self.taskLineOffset = taskLineOffset
@@ -151,6 +167,16 @@ struct ReadingView: View {
     let onSwitchToEditing: () -> Void
     let router: ReadingLinkRouter
     let context: ReadingBlockContext
+    /// #856: block index to restore on mount (the per-tab park in
+    /// `WorkspaceState.readingScrollParks`). Nil = no park → mount at
+    /// the top, exactly today's behavior. The restore is a plain state
+    /// assignment — never wrapped in `withAnimation` — so it lands
+    /// instantly (Reduce Motion honored by construction).
+    let initialScrollBlockIndex: Int?
+    /// #856: continuous topmost-visible-block report, fed by
+    /// `scrollPosition(id:)`. The host parks it (plain dictionary
+    /// write, no publish) for the next reading remount of this tab.
+    let onScrollBlockChange: ((Int) -> Void)?
 
     /// Reference-typed memo so the (synchronous, pure) block parse survives
     /// SwiftUI re-initializations of this struct. `@State` keeps the box
@@ -175,6 +201,12 @@ struct ReadingView: View {
     /// fallback.
     @State private var completedEmbedKeys: Set<String> = []
 
+    /// #856: the block index `scrollPosition(id:)` is currently
+    /// anchored on. Seeded from `initialScrollBlockIndex` on mount
+    /// (restore), updated by the scroll view as the user scrolls,
+    /// reported outward via `onScrollBlockChange`.
+    @State private var scrolledBlockIndex: Int?
+
     init(
         text: String,
         pathLabel: String,
@@ -183,7 +215,9 @@ struct ReadingView: View {
         onRetry: @escaping () -> Void = {},
         onSwitchToEditing: @escaping () -> Void = {},
         router: ReadingLinkRouter = .inert,
-        context: ReadingBlockContext = ReadingBlockContext()
+        context: ReadingBlockContext = ReadingBlockContext(),
+        initialScrollBlockIndex: Int? = nil,
+        onScrollBlockChange: ((Int) -> Void)? = nil
     ) {
         self.text = text
         self.pathLabel = pathLabel
@@ -193,6 +227,8 @@ struct ReadingView: View {
         self.onSwitchToEditing = onSwitchToEditing
         self.router = router
         self.context = context
+        self.initialScrollBlockIndex = initialScrollBlockIndex
+        self.onScrollBlockChange = onScrollBlockChange
     }
 
     var body: some View {
@@ -279,6 +315,10 @@ struct ReadingView: View {
                         tableCells: parsed.tableCells[index])
                 }
             }
+            // #856: the ForEach's positional ids (the block indices)
+            // become scroll targets, so `scrollPosition(id:)` below
+            // tracks the topmost visible block continuously.
+            .scrollTargetLayout()
             .padding(Tokens.Spacing.lg)
             // Measure cap (WCAG 1.4.8 / typographic 45–90ch band): the
             // column tops out at `readingMeasure` and centers in wider
@@ -289,6 +329,24 @@ struct ReadingView: View {
             // containers, so they lose nothing.
             .frame(maxWidth: Tokens.Layout.readingMeasure, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        // #856: continuous topmost-block tracking + park reporting.
+        // `.top` anchor = "the block at the top edge", matching the
+        // caret-park mental model (where was I reading?).
+        .scrollPosition(id: $scrolledBlockIndex, anchor: .top)
+        .onChange(of: scrolledBlockIndex) { _, newValue in
+            guard let newValue else { return }
+            onScrollBlockChange?(newValue)
+        }
+        .onAppear {
+            // Restore the parked offset on remount — WITHOUT animation
+            // (plain assignment, never `withAnimation`): the toggle
+            // must land instantly for everyone, which also honors
+            // Reduce Motion for free. Clamped defensively: the park is
+            // path-validated by the host, but a live-buffer edit can
+            // still shrink the block count between parks.
+            guard let initial = initialScrollBlockIndex, initial > 0 else { return }
+            scrolledBlockIndex = min(initial, max(parsed.blocks.count - 1, 0))
         }
         .background(Tokens.ColorRole.surface)
         .accessibilityElement(children: .contain)
@@ -375,7 +433,10 @@ struct ReadingView: View {
         _ slice: String, font: Font = Tokens.Typography.body,
         strikethrough: Bool = false
     ) -> some View {
-        let mapped = ReadingInlineMapper.map(slice: slice, citations: context.citations)
+        let mapped = ReadingInlineMapper.map(
+            slice: slice, citations: context.citations,
+            unresolvedTargets: context.unresolvedLinkTargets,
+            recordSets: context.linkRecordSets)
         return Text(mapped.attributed)
             .font(font)
             .foregroundStyle(Tokens.ColorRole.textPrimary)

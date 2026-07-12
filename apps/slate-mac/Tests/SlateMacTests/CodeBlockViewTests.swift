@@ -30,6 +30,21 @@ final class CodeBlockViewTests: XCTestCase {
         )
     }
 
+    // MARK: - Copy affordance (#854)
+
+    /// The visible Copy button and the context-menu item share one
+    /// action: plain-text source to the general pasteboard (never the
+    /// attributed form — pasted code must not carry highlight colors).
+    func testCopyCodePutsPlainSourceOnPasteboard() {
+        let source = "fn main() {\n    println!(\"hi\");\n}\n"
+        let view = CodeBlockView(block: makeBlock(source: source, language: "rust"))
+        NSPasteboard.general.clearContents()
+        view.copyCode()
+        XCTAssertEqual(
+            NSPasteboard.general.string(forType: .string), source,
+            "the copy affordance writes the raw source verbatim")
+    }
+
     // MARK: - AT preamble
 
     /// Headline contract: VoiceOver hears `"Code block, <language>,

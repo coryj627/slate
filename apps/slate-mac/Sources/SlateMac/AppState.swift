@@ -1423,6 +1423,13 @@ final class AppState: ObservableObject {
     /// unresolved, and external in document order. Same lifecycle as
     /// `currentBacklinks`.
     @Published private(set) var currentOutgoingLinks: [OutgoingLink] = []
+    /// Which note `currentOutgoingLinks` belongs to (Codex round 2).
+    /// The array is intentionally RETAINED across note transitions
+    /// (#90 panel anti-flicker), so the reading surface needs this
+    /// ownership marker to refuse classifying/activating against a
+    /// previous note's records mid-transition. Stamped only by the
+    /// query landing (both arms), cleared with the array.
+    @Published private(set) var currentOutgoingLinksPath: String?
     /// True while a backlinks/outgoing fetch is in flight. The panels
     /// use this to decide whether to show a `ProgressView`.
     @Published private(set) var isLoadingLinks: Bool = false
@@ -1768,6 +1775,31 @@ final class AppState: ObservableObject {
         // the user hears the (unchanged) size instead of nothing.
         postAccessibilityAnnouncement(
             "Editor text size \(Int((editorTextScale * 100).rounded())) percent.",
+            priority: .medium)
+    }
+
+    // MARK: Editor spell check (#855)
+
+    /// Opt-in live spell checking for the note editor (#855). Default
+    /// OFF (see `PreferencesStore.editorSpellCheckKey` — Markdown
+    /// source squiggles everywhere). `@Published` so the Edit-menu
+    /// checkmark re-renders and `NoteContentView`'s host re-runs
+    /// `NoteEditorView.updateNSView` with the new value (the
+    /// `editorTextScale` live-application pattern). Loaded from
+    /// `PreferencesStore` in `init`; every mutation routes through
+    /// `toggleEditorSpellCheck`.
+    @Published private(set) var editorSpellCheckEnabled: Bool = false
+
+    /// Edit ▸ Check Spelling While Typing / the palette command.
+    /// Persists + announces — the toggle is never silent feedback-wise
+    /// (the `setEditorTextScale` policy).
+    func toggleEditorSpellCheck() {
+        editorSpellCheckEnabled.toggle()
+        preferencesStore.saveEditorSpellCheck(editorSpellCheckEnabled)
+        postAccessibilityAnnouncement(
+            editorSpellCheckEnabled
+                ? "Check spelling while typing on."
+                : "Check spelling while typing off.",
             priority: .medium)
     }
 
@@ -2145,6 +2177,8 @@ final class AppState: ObservableObject {
         // #848: persisted editor text zoom — applied on top of the
         // body-text-style base size in `monospacedBodyNSFont(scale:)`.
         self.editorTextScale = Self.nearestEditorTextRung(to: preferencesStore.loadEditorTextScale())
+        // #855: persisted spell-check opt-in (default OFF).
+        self.editorSpellCheckEnabled = preferencesStore.loadEditorSpellCheck()
         self.baseQueries = BaseQueriesState(
             pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
         self.recentVaults = self.recentsStore.load()
@@ -2616,6 +2650,7 @@ final class AppState: ObservableObject {
             // the panels to drop their contents synchronously.
             currentBacklinks = []
             currentOutgoingLinks = []
+            currentOutgoingLinksPath = nil
             currentNoteProperties = []
             currentNoteEmbedResolutions = [:]
             pendingEmbedPreview = nil
@@ -2675,6 +2710,17 @@ final class AppState: ObservableObject {
         clearPendingCursorByteOffset()
         linksLoadTask?.cancel()
         linksLoadTask = nil
+        // Codex round 6: the embeds + citations legs were missing from
+        // this list. Active-note DELETION retains `selectedFilePath`
+        // for the missing-file tab, so an uncancelled in-flight leg
+        // still passes its `selectedFilePath == path` guard and could
+        // publish resolutions/citations for the deleted note beside
+        // the error tab. (The embeds entry guard's isCancelled check
+        // is what this cancellation arms.)
+        embedsLoadTask?.cancel()
+        embedsLoadTask = nil
+        citationsLoadTask?.cancel()
+        citationsLoadTask = nil
         tasksLoadTask?.cancel()
         tasksLoadTask = nil
         // Audit #257 M1: orphaned content-pipeline tasks would otherwise
@@ -2768,8 +2814,29 @@ final class AppState: ObservableObject {
     /// code, diagrams, citations). Shared by the selection funnel and
     /// `activateTab`; every loader carries its own race guard.
     private func fireCollectionLoads(path: String) {
+        // Codex round 5: cancel the previous fan-out before replacing
+        // it. The per-loader race guards drop stale RESULTS, but a
+        // dropped chain still had side effects — the old links leg
+        // chained a fresh embeds task even when its own result was
+        // rejected, and that late orphan could flip isLoadingEmbeds
+        // AFTER the newer chain had already finished, stranding the
+        // flag with no newer task left to clear it. Cancellation (plus
+        // the chain gate and the embeds entry guard below) closes the
+        // set-after-newer-finished window. `scheduleHistoryLoad`
+        // serializes itself and is left alone.
+        linksLoadTask?.cancel()
+        embedsLoadTask?.cancel()
+        tasksLoadTask?.cancel()
+        mathBlocksLoadTask?.cancel()
+        codeBlocksLoadTask?.cancel()
+        diagramBlocksLoadTask?.cancel()
+        citationsLoadTask?.cancel()
         linksLoadTask = Task { [weak self] in
             await self?.loadCurrentLinks(path: path)
+            // Codex round 5: a cancelled links leg must not chain an
+            // embeds leg — its result was dropped, and the chain it
+            // would spawn is exactly the orphan described above.
+            guard !Task.isCancelled else { return }
             // Chain the embed-resolution load on after links — we
             // need the outgoing-links query result (specifically
             // `is_embed = true` rows) before we know what to resolve.
@@ -3497,6 +3564,7 @@ final class AppState: ObservableObject {
         noteLoadError = nil
         currentBacklinks = []
         currentOutgoingLinks = []
+        currentOutgoingLinksPath = nil
         currentNoteProperties = []
         currentNoteEmbedResolutions = [:]
         pendingEmbedPreview = nil
@@ -3957,6 +4025,10 @@ final class AppState: ObservableObject {
     /// we publish are from the same observation.
     func loadCurrentNote(path: String) async {
         guard let session = currentSession else { return }
+        // Codex round 7: a task cancelled BEFORE its body ran must not
+        // set the spinner it will never clear (this loader clears
+        // explicitly at landing, not via defer — audit #201's race).
+        guard !Task.isCancelled else { return }
         isLoadingNote = true
 
         // Capture (text, headings, contentHash) in one detached
@@ -4038,6 +4110,10 @@ final class AppState: ObservableObject {
     /// in V1 territory and will get a "+ more" affordance later.
     func loadCurrentLinks(path: String) async {
         guard let session = currentSession else { return }
+        // Codex round 7: same late-body guard as `loadCurrentNote` —
+        // explicit-clear loaders must never set a flag under a
+        // cancellation they'll drop at landing.
+        guard !Task.isCancelled else { return }
         isLoadingLinks = true
 
         // Pull links + properties under a single mutex acquisition.
@@ -4074,11 +4150,16 @@ final class AppState: ObservableObject {
         case .success(let (backlinks, outgoing, properties)):
             currentBacklinks = backlinks
             currentOutgoingLinks = outgoing
+            currentOutgoingLinksPath = path
             currentNoteProperties = properties
             linksLoadError = nil
         case .failure(let error):
             currentBacklinks = []
             currentOutgoingLinks = []
+            // Failure is still an ANSWER for this note (empty records
+            // + error surface) — stamp ownership so reading classifies
+            // against it rather than a previous note's records.
+            currentOutgoingLinksPath = path
             currentNoteProperties = []
             linksLoadError = humanReadable(error)
         }
@@ -4133,6 +4214,12 @@ final class AppState: ObservableObject {
                 }
                 return (key, [], link.displayText)
             }
+        // Codex round 5, entry guard: an orphaned chain task (created
+        // by a links leg whose result was already dropped) must not
+        // clear the NEW note's resolutions through the empty-targets
+        // path, nor set the loading flag after the newer chain has
+        // finished. Mirrors the landing guard below.
+        guard !Task.isCancelled, selectedFilePath == path else { return }
         if embedTargets.isEmpty {
             currentNoteEmbedResolutions = [:]
             embedsLoadError = nil
@@ -6238,9 +6325,6 @@ final class AppState: ObservableObject {
     func deleteEntry(path: String, isDirectory: Bool) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
         isMutatingStructure = true
-        // Snapshot which open tabs point at the doomed path(s) BEFORE the delete
-        // so the active-tab error flip and the parked-doc drop are exact.
-        let deletedActive = self.loadedFilePath.map { Self.pathIsWithin($0, path: path, isDirectory: isDirectory) } ?? false
         let task = Task { [weak self] in
             let outcome: Result<Void, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -6255,10 +6339,34 @@ final class AppState: ObservableObject {
             guard let self, self.currentSession === session else { return }
             switch outcome {
             case .success:
+                // Codex round 8: active-tab ownership is decided AT
+                // COMPLETION, against the LIVE selection — the old
+                // call-time `loadedFilePath` capture was stale in both
+                // directions. Select-then-delete before the load
+                // lands: captured false, the cleanup was skipped and
+                // the doomed read published the deleted note.
+                // Delete-then-switch-away: captured true, the
+                // completion clobbered the NEW note's state with the
+                // deleted-note error. Round 9: the compare is the
+                // ACTIVE MARKDOWN TAB's own path — `selectedFilePath`
+                // is a transient mirror during dirty navigation (it
+                // briefly holds the requested destination while the
+                // tab stays put and the rollback is async), so the
+                // workspace tab identity is the durable truth.
+                // Markdown-gated keeps the old semantics for
+                // base/canvas actives (their documents are handled by
+                // the invalidate loop below).
+                let activeWasDeleted: Bool
+                if case .markdown(let activePath) = self.workspace.activeTab?.item {
+                    activeWasDeleted = Self.pathIsWithin(
+                        activePath, path: path, isDirectory: isDirectory)
+                } else {
+                    activeWasDeleted = false
+                }
                 // Flip open tabs to the error state. The ACTIVE tab's document
                 // lives in AppState's fields; parked tabs drop so re-activation
                 // re-reads from disk and fails into `noteLoadError`.
-                self.dropOpenTabsForDeletedPath(path, isDirectory: isDirectory, activeWasDeleted: deletedActive)
+                self.dropOpenTabsForDeletedPath(path, isDirectory: isDirectory, activeWasDeleted: activeWasDeleted)
                 let parent = TreeMutation.parentPath(of: path) ?? ""
                 self.publishTreeMutation(
                     .delete(path: path, parent: parent, wasDirectory: isDirectory),
@@ -6363,6 +6471,16 @@ final class AppState: ObservableObject {
         guard let activeID = workspace.model.activeGroup.activeTabID,
             changed.contains(activeID)
         else { return }
+        // Codex round 3: the link-record OWNERSHIP marker follows the
+        // rename with the live fields. `loadedFilePath` is updated
+        // first, so the selection sink takes its same-file early
+        // return and NO new link query restamps the marker — left
+        // behind, every reading link classifies unresolved and
+        // refuses activation until an unrelated reload.
+        let ownershipLanded = currentOutgoingLinksPath == selectedFilePath
+        if ownershipLanded {
+            currentOutgoingLinksPath = newPath
+        }
         if case .markdown = workspace.activeTab?.item {
             loadedFilePath = newPath
         } else {
@@ -6376,6 +6494,21 @@ final class AppState: ObservableObject {
         }
         if !selectionMatches {
             selectedFilePath = newPath
+        }
+        // Codex rounds 4+5: the fan-out legs race the rename
+        // INDEPENDENTLY — the links marker landing says nothing about
+        // math/tasks/code/diagrams/citations, and any leg that lands
+        // late is dropped by its guard with its isLoading flag left
+        // for a "newer task" that otherwise never comes. Re-fire the
+        // whole fan-out for the new path unconditionally:
+        // fireCollectionLoads cancels the previous legs, every loader
+        // carries its own race guard, and a rename is rare enough
+        // that the extra query burst is irrelevant. (The marker
+        // retarget above still matters: it keeps reading
+        // classification correct in the window before the refired
+        // links leg lands.)
+        if case .markdown = workspace.activeTab?.item {
+            fireCollectionLoads(path: newPath)
         }
     }
 
@@ -6407,8 +6540,21 @@ final class AppState: ObservableObject {
             }
         }
         if activeWasDeleted {
-            let deletedName = loadedFilePath.map { ($0 as NSString).lastPathComponent }
+            // `loadedFilePath` may be nil when the doomed load never
+            // landed (round 8: select-then-delete) — fall back to the
+            // selection the ownership check was made against.
+            let deletedName = (loadedFilePath ?? selectedFilePath)
+                .map { ($0 as NSString).lastPathComponent }
             cancelNoteScopedWork()
+            // Codex round 7: note/links/embeds clear their spinners
+            // explicitly at landing (audit #201 — a deferred clear
+            // raced the next task's set), relying on "a newer task
+            // will clear" after a dropped landing. Deletion is the one
+            // path with NO newer task — clear the trio here. (The
+            // other legs self-clear via defer, audit #257 M2.)
+            isLoadingNote = false
+            isLoadingLinks = false
+            isLoadingEmbeds = false
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
