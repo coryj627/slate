@@ -1028,40 +1028,86 @@ final class SlateCommandsTests: XCTestCase {
         )
     }
 
-    // MARK: - Quick switcher registry (#495)
+    // MARK: - Quick switcher registry (#495, chords per #863)
 
     /// `slate.workspace.quickOpen` is registered, labelled "Quick
-    /// Open…", grouped under Navigation, and carries ⌘T — the chord
-    /// ⌘T moved to it from New Tab.
+    /// Open…", grouped under Navigation, and carries ⌘O — Obsidian's
+    /// actual quick-switcher default (#863 superseded #495's ⌘T).
     @MainActor
-    func testQuickOpenCommandIsRegisteredWithCommandT() throws {
+    func testQuickOpenCommandIsRegisteredWithCommandO() throws {
         let appState = AppState()
         let cmd = appState.commandRegistry.list().first { $0.id == SlateCommandID.quickOpen }
         let quickOpen = try XCTUnwrap(cmd, "quickOpen must be registered")
         XCTAssertEqual(quickOpen.label, "Quick Open…")
         XCTAssertEqual(quickOpen.section, .navigation)
-        XCTAssertEqual(quickOpen.hotkeyHint, "⌘T", "⌘T maps to Quick Open, not New Tab")
+        XCTAssertEqual(quickOpen.hotkeyHint, "⌘O", "⌘O maps to Quick Open (#863)")
     }
 
-    /// The former New Tab command keeps its id + duplicate-tab
-    /// behavior but is relabelled "Duplicate Tab" and has NO hotkey
-    /// (⌘T moved to Quick Open).
+    /// The Duplicate Tab command keeps the `newTab` id (stability
+    /// contract) and carries ⌘T — the chord returned to the tab
+    /// family when Quick Open moved to ⌘O (#863).
     @MainActor
-    func testDuplicateTabCommandRelabelledAndHasNoHotkey() throws {
+    func testDuplicateTabCommandCarriesCommandT() throws {
         let appState = AppState()
         let cmd = appState.commandRegistry.list().first { $0.id == SlateCommandID.newTab }
         let dup = try XCTUnwrap(cmd, "the newTab id must still be registered")
         XCTAssertEqual(dup.label, "Duplicate Tab")
-        XCTAssertNil(dup.hotkeyHint, "New Tab lost ⌘T when Quick Open claimed it")
+        XCTAssertEqual(dup.hotkeyHint, "⌘T", "⌘T is Duplicate Tab again (#863)")
     }
 
-    /// Cross-check: exactly one registered command claims ⌘T, and it's
-    /// quickOpen — no accidental double-binding survived the move.
+    /// Reopen Closed Tab (#863): registered in the View section with
+    /// ⇧⌘T — the macOS/Obsidian convention next to Close Tab.
+    @MainActor
+    func testReopenClosedTabCommandIsRegisteredWithShiftCommandT() throws {
+        let appState = AppState()
+        let cmd = appState.commandRegistry.list().first {
+            $0.id == SlateCommandID.reopenClosedTab
+        }
+        let reopen = try XCTUnwrap(cmd, "reopenClosedTab must be registered")
+        XCTAssertEqual(reopen.label, "Reopen Closed Tab")
+        XCTAssertEqual(reopen.section, .view)
+        XCTAssertEqual(reopen.hotkeyHint, "⇧⌘T")
+    }
+
+    // MARK: - Single-claimant cross-checks (#863)
+    //
+    // Each reallocated chord must have exactly ONE registry claimant —
+    // no accidental double-binding survived the move. Exact-string
+    // filters: "⌘R" does not match "⌥⌘R"/"⇧⌘R"/"⌃⌘R" and so on.
+
     @MainActor
     func testExactlyOneCommandClaimsCommandT() {
         let appState = AppState()
         let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘T" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.newTab])
+    }
+
+    @MainActor
+    func testExactlyOneCommandClaimsCommandO() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘O" }
         XCTAssertEqual(claimants.map(\.id), [SlateCommandID.quickOpen])
+    }
+
+    @MainActor
+    func testExactlyOneCommandClaimsShiftCommandO() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⇧⌘O" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.openVault])
+    }
+
+    @MainActor
+    func testExactlyOneCommandClaimsCommandR() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘R" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.tasksReview])
+    }
+
+    @MainActor
+    func testExactlyOneCommandClaimsShiftCommandT() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⇧⌘T" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.reopenClosedTab])
     }
 
     // MARK: - Unknown id

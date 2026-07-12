@@ -7,9 +7,10 @@ import SwiftUI
 ///
 /// The single window hosts a `RootView` that picks between the welcome
 /// screen and the open-vault split view based on `AppState`. App-level
-/// commands replace the default File menu so the only first-class
-/// action is "Open Vault…" (Cmd+O), which works globally regardless of
-/// what's focused.
+/// commands replace the default File menu. File ▸ Open is ⌘O = "Quick
+/// Open…" (the documents users open all day are notes; #863) — on the
+/// welcome screen it falls through to the vault picker, so the chord
+/// works globally; "Open Vault…" itself lives on ⇧⌘O.
 @main
 struct SlateMacApp: App {
     @StateObject private var appState = AppState()
@@ -46,10 +47,15 @@ struct SlateMacApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {
+                // ⇧⌘O (#863; was ⌘O): opening a vault is app-level and
+                // rare — bare ⌘O now belongs to Quick Open below, the
+                // Obsidian-parity quick-switcher chord. The welcome
+                // screen's buttons and File ▸ Open Recent keep vault
+                // opening one gesture away.
                 Button("Open Vault…") {
                     appState.pickAndOpenVault()
                 }
-                .keyboardShortcut("o", modifiers: [.command])
+                .keyboardShortcut("o", modifiers: [.command, .shift])
 
                 // Standard File ▸ Open Recent submenu (HIG: apps that
                 // open documents/folders provide one, with Clear Menu
@@ -157,22 +163,27 @@ struct SlateMacApp: App {
                 // inside a vault; Close Window remains reachable at ⌘⇧W.
                 // Disabled (not hidden) without a vault so the shortcuts
                 // aren't silent no-ops on the welcome screen.
-                // Quick switcher (#495). ⌘T fuzzy-opens a note by name.
-                // Enabled whenever a vault is open — it doesn't need an
-                // active tab (unlike Duplicate Tab below); `openQuickSwitcher()`
-                // self-guards on the vault too.
+                // Quick switcher (#495). ⌘O fuzzy-opens a note by name —
+                // Obsidian's default quick-switcher chord AND the HIG-truer
+                // File ▸ Open (#863 superseded #495's ⌘T choice; Obsidian
+                // itself keeps ⌘T for the tab family). Enabled ALWAYS: with
+                // no vault, `openQuickSwitcher()` falls through to the
+                // vault picker (the requestCommandPalette welcome-guard
+                // pattern, upgraded from an announcement), so ⌘O is never
+                // dead on the welcome screen.
                 Button("Quick Open…") {
                     appState.openQuickSwitcher()
                 }
-                .keyboardShortcut("t", modifiers: [.command])
-                .disabled(!appState.isVaultOpen)
+                .keyboardShortcut("o", modifiers: [.command])
 
-                // ⌘T moved to Quick Open (#495); this keeps the duplicate-
-                // current-note-into-a-new-tab behavior under a clearer label
-                // with no hotkey.
+                // ⌘T (#863): returned to the tab family as Duplicate Tab —
+                // Slate's "new tab" verb, since a tab always hosts an item
+                // (u1_spec §U1-2: there is no empty-tab page; if one ever
+                // lands, it inherits ⌘T).
                 Button("Duplicate Tab") {
                     appState.newTab()
                 }
+                .keyboardShortcut("t", modifiers: [.command])
                 .disabled(!appState.isVaultOpen || appState.workspace.activeTab == nil)
 
                 Button("Close Tab") {
@@ -180,6 +191,20 @@ struct SlateMacApp: App {
                 }
                 .keyboardShortcut("w", modifiers: [.command])
                 .disabled(!appState.isVaultOpen || appState.workspace.activeTab == nil)
+
+                // ⇧⌘T (#863): Reopen Closed Tab, the macOS/Obsidian
+                // convention next to Close Tab. Pops the per-vault-session
+                // closed-tab stack (WorkspaceState.closedTabs) through the
+                // standard open funnel — dedup and pane placement honored.
+                // Disabled when the stack is empty; `canReopenClosedTab`
+                // is AppState's published mirror of that emptiness
+                // (workspace's own @Published fields aren't observed by
+                // the menu — the nested-ObservableObject gap).
+                Button("Reopen Closed Tab") {
+                    appState.reopenClosedTab()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(!appState.isVaultOpen || !appState.canReopenClosedTab)
 
                 Button("Close Window") {
                     NSApplication.shared.keyWindow?.performClose(nil)
@@ -289,7 +314,7 @@ struct SlateMacApp: App {
 
                 Divider()
 
-                // ⇧⌘T / ⇧⌘J / ⌘J migrated from toolbar-button
+                // ⌘R / ⇧⌘J / ⌘J migrated from toolbar-button
                 // registrations (the #422 dead-zone — see the File ▸
                 // Save note). The toolbar buttons remain click/AX
                 // affordances; each chord's single owner is its menu
@@ -299,10 +324,15 @@ struct SlateMacApp: App {
                 // for action items") — the palette keeps the noun forms
                 // ("Tasks Review") as its search-friendly names; the
                 // registry invariant is chord parity, not label parity.
+                // ⌘R (#863; was ⇧⌘T, freed for Reopen Closed Tab): bare
+                // ⌘R was unbound, carries no system-wide macOS claim in
+                // a non-browser app, and R = Review. Its R-family
+                // neighbors are all differently scoped (⌥⌘R Rename,
+                // ⇧⌘R Bulk Rename Properties, ⌃⌘R Canvas Resize).
                 Button("Show Tasks Review") {
                     appState.openTasksReview()
                 }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .keyboardShortcut("r", modifiers: [.command])
                 .disabled(appState.currentSession == nil)
 
                 Button("Show Citation Summary") {
@@ -367,27 +397,60 @@ struct SlateMacApp: App {
                 .keyboardShortcut("n", modifiers: [.control, .option, .command])
                 .disabled(appState.activeCanvasDocument == nil)
 
-                // #520 viewport chords: one modifier apart from the
-                // ⌥⌘=/⌥⌘- pane-grow chords — the drift test asserts
-                // both exist and differ. Disabled unless a canvas tab
-                // is active, so note-editing keeps the keys free.
-                Button("Canvas: Zoom In") {
-                    appState.canvasZoomIn()
+                // ⌘= / ⌘- / ⌘0 (#848; formerly the canvas-scoped "Canvas:
+                // Zoom …" items, #520): the app's conventional zoom
+                // chords, focus-routed EXACTLY like Undo/Redo above —
+                // a canvas tab owns them (`canvasZoomIn()` etc., the
+                // #520 viewport behavior unchanged); every other surface
+                // gets editor text zoom (`editorZoomIn()` etc., a
+                // persisted scale over the body-style base size).
+                // One menu owner per chord; the registry keeps the
+                // canvas-scoped commands as the palette equivalents
+                // (canvas program rule R1) with these chords as their
+                // hotkeyHints. Enabled whenever a vault is open, so ⌘=
+                // is never a silent no-op while note-editing (#848's
+                // founding complaint). Still one modifier apart from
+                // the ⌥⌘=/⌥⌘- pane-grow chords.
+                //
+                // ZOOM BOUNDARY (documented decision, #848): editor
+                // text zoom scales the monospaced EDITING surfaces —
+                // the NSTextView note editor (active and parked panes),
+                // the code-blocks panel, the properties-source YAML
+                // editor, and the canvas card editor. Reading mode
+                // deliberately does NOT zoom: its prose is Dynamic-Type-
+                // backed and already tracks the system Text Size
+                // (WCAG 1.4.4), so zooming it too would double-scale.
+                // Obsidian's zoom is window-wide; Slate trades that
+                // parity for not fighting the system setting.
+                Button("Zoom In") {
+                    if appState.activeCanvasDocument != nil {
+                        appState.canvasZoomIn()
+                    } else {
+                        appState.editorZoomIn()
+                    }
                 }
                 .keyboardShortcut("=", modifiers: [.command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(!appState.isVaultOpen)
 
-                Button("Canvas: Zoom Out") {
-                    appState.canvasZoomOut()
+                Button("Zoom Out") {
+                    if appState.activeCanvasDocument != nil {
+                        appState.canvasZoomOut()
+                    } else {
+                        appState.editorZoomOut()
+                    }
                 }
                 .keyboardShortcut("-", modifiers: [.command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(!appState.isVaultOpen)
 
-                Button("Canvas: Actual Size") {
-                    appState.canvasActualSize()
+                Button("Actual Size") {
+                    if appState.activeCanvasDocument != nil {
+                        appState.canvasActualSize()
+                    } else {
+                        appState.editorActualSize()
+                    }
                 }
                 .keyboardShortcut("0", modifiers: [.command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(!appState.isVaultOpen)
 
                 Divider()
 

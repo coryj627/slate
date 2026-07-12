@@ -184,7 +184,10 @@ struct CodeBlocksPanel: View {
                     Array(panelBlocks.enumerated()), id: \.offset
                 ) { _, block in
                     VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-                        CodeBlockView(block: block)
+                        // #848: the code-blocks panel rides the editing
+                        // surface's zoom (reading-mode code blocks stay
+                        // on the system Text Size — see CodeBlockView).
+                        CodeBlockView(block: block, textScale: appState.editorTextScale)
                         BlockRowFooter(line: block.line, kindLabel: "Code block")
                     }
                     .padding(.vertical, Tokens.Spacing.xxs)

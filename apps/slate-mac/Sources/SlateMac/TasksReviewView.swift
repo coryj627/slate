@@ -4,7 +4,7 @@
 import SwiftUI
 
 /// Vault-wide Tasks Review surface (#114). Sheet presented from
-/// `MainSplitView` via the toolbar button or Cmd+Shift+T. Shows
+/// `MainSplitView` via the toolbar button or Command-R. Shows
 /// every task in the vault filtered by `TaskReviewFilter`, lets
 /// the user toggle from the review, and routes row activation
 /// back into the editor at the task's line.
@@ -40,7 +40,7 @@ struct TasksReviewView: View {
         .onAppear {
             // Re-announce on appear so VoiceOver users land in the
             // right context even when the sheet is presented
-            // programmatically (e.g. via Cmd+Shift+T).
+            // programmatically (e.g. via Command-R).
             postAccessibilityAnnouncement(
                 "Tasks review opened. \(appState.taskReviewFilter.displayName). \(taskCountAnnouncement(appState.vaultTasks.count))",
                 priority: .high

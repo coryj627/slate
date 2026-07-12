@@ -32,8 +32,10 @@ enum SlateCommandID {
 
     // Navigation
     static let jumpToBibliography = "slate.navigation.jumpToBibliography"
-    /// Quick switcher — fuzzy filename quick-open (#495). ⌘T. Grouped
-    /// under Navigation (it navigates to a file); the palette sorts
+    /// Quick switcher — fuzzy filename quick-open (#495). ⌘O (#863
+    /// moved it from ⌘T: Obsidian's default quick-switcher chord is
+    /// ⌘O, and ⌘T returned to the tab family). Grouped under
+    /// Navigation (it navigates to a file); the palette sorts
     /// Navigation high. The id keeps the `slate.workspace.` prefix
     /// because it's a workspace surface, even though its palette section
     /// is Navigation — id prefix and section don't have to agree.
@@ -159,6 +161,10 @@ enum SlateCommandID {
     // gesture would be noise; Next/Previous cover palette navigation).
     static let newTab = "slate.workspace.newTab"
     static let closeTab = "slate.workspace.closeTab"
+    /// Reopen Closed Tab (#863). ⇧⌘T — the macOS/Obsidian convention.
+    /// Pops the per-vault-session closed-tab stack through the
+    /// standard open funnel (dedup + pane placement honored).
+    static let reopenClosedTab = "slate.workspace.reopenClosedTab"
     static let nextTab = "slate.workspace.nextTab"
     static let previousTab = "slate.workspace.previousTab"
     static let moveTabLeft = "slate.workspace.moveTabLeft"
@@ -186,6 +192,13 @@ enum SlateCommandID {
     static let bulkRenameProperties = "slate.editor.bulkRenameProperties"
     static let toggleViewMode = "slate.editor.toggleViewMode"
     static let togglePropertiesSource = "slate.editor.togglePropertiesSource"
+    // Editor zoom (#848) — palette twins of the focus-routed menu items
+    // (red-team F3 on the chords PR: the canvas zoom rows are silent
+    // no-ops off-canvas, leaving palette-first users without an editor
+    // zoom path). No hotkeyHints: the unified menu items own ⌘=/⌘−/⌘0.
+    static let editorZoomIn = "slate.editor.zoomIn"
+    static let editorZoomOut = "slate.editor.zoomOut"
+    static let editorActualSize = "slate.editor.actualSize"
 
     // Settings
     static let openSettings = "slate.settings.open"
@@ -300,6 +313,7 @@ enum SlateCommandID {
         basesBuilderRemoveCondition,
         newTab,
         closeTab,
+        reopenClosedTab,
         nextTab,
         previousTab,
         moveTabLeft,
@@ -321,6 +335,9 @@ enum SlateCommandID {
         citationSummary,
         addProperty,
         bulkRenameProperties,
+        editorZoomIn,
+        editorZoomOut,
+        editorActualSize,
         toggleViewMode,
         togglePropertiesSource,
         openSettings,
@@ -506,9 +523,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Walk the outgoing chain, announcing each hop and the visited count."
     ) { [weak appState] in appState?.canvasTracePath() }
 
-    // Viewport (#520). ⌘=/⌘-/⌘0 bind in the menu scoped to canvas
-    // tabs; ⇧1/⇧2 are typing keys on the visual surface only (R2) —
-    // these palette rows are the always-available equivalents.
+    // Viewport (#520). ⌘=/⌘-/⌘0 bind in the menu as the unified,
+    // focus-routed Zoom In / Zoom Out / Actual Size items (#848):
+    // the chords drive the canvas viewport when a canvas tab is
+    // active and editor text zoom otherwise, Undo/Redo-style. These
+    // canvas-scoped palette rows keep the chords as hotkeyHints —
+    // they ARE what the chord does on a canvas — and remain the
+    // always-available equivalents (R1); ⇧1/⇧2 are typing keys on
+    // the visual surface only (R2).
     register(
         SlateCommandID.canvasZoomIn,
         label: "Canvas: Zoom In",
@@ -1112,7 +1134,9 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         SlateCommandID.quickOpen,
         label: "Quick Open…",
         section: .navigation,
-        hotkey: "⌘T",
+        // ⌘O (#863; was ⌘T) — menu↔palette chord parity with the
+        // File ▸ Quick Open… item.
+        hotkey: "⌘O",
         hint: "Fuzzy-find a note by name and open it. Return opens it in the current tab."
     ) { [weak appState] in appState?.openQuickSwitcher() }
 
@@ -1150,10 +1174,11 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         SlateCommandID.newTab,
         label: "Duplicate Tab",
         section: .view,
-        // ⌘T moved to Quick Open (#495); this keeps its duplicate-tab
-        // behavior under the clearer "Duplicate Tab" label with no
-        // hotkey. The New-Tab menu item in SlateMacApp likewise dropped
-        // its ⌘T binding.
+        // ⌘T (#863): the chord returned to the tab family when Quick
+        // Open moved to ⌘O (Obsidian's actual quick-switcher default).
+        // Duplicate Tab is Slate's "new tab" verb — a tab always hosts
+        // an item (u1_spec §U1-2).
+        hotkey: "⌘T",
         hint: "Duplicate the current note into a new tab."
     ) { [weak appState] in appState?.newTab() }
 
@@ -1164,6 +1189,16 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌘W",
         hint: "Close the active tab. Prompts if it has unsaved changes."
     ) { [weak appState] in appState?.requestCloseTab() }
+
+    register(
+        SlateCommandID.reopenClosedTab,
+        label: "Reopen Closed Tab",
+        section: .view,
+        // ⇧⌘T (#863): the macOS/Obsidian convention, next to Close
+        // Tab in the File menu.
+        hotkey: "⇧⌘T",
+        hint: "Reopen the most recently closed tab. Files that no longer exist are skipped."
+    ) { [weak appState] in appState?.reopenClosedTab() }
 
     register(
         SlateCommandID.nextTab,
@@ -1298,7 +1333,8 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         SlateCommandID.openVault,
         label: "Open Vault…",
         section: .vault,
-        hotkey: "⌘O",
+        // ⇧⌘O (#863; was ⌘O — bare ⌘O is Quick Open now).
+        hotkey: "⇧⌘O",
         hint: "Show the open-folder picker."
     ) { [weak appState] in appState?.pickAndOpenVault() }
 
@@ -1363,6 +1399,27 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Open the bulk-rename sheet to rename a property across the vault."
     ) { [weak appState] in appState?.isBulkRenameSheetOpen = true }
 
+    register(
+        SlateCommandID.editorZoomIn,
+        label: "Editor: Zoom In",
+        section: .editor,
+        hint: "Increase the editing surfaces' text size one step."
+    ) { [weak appState] in appState?.editorZoomIn() }
+
+    register(
+        SlateCommandID.editorZoomOut,
+        label: "Editor: Zoom Out",
+        section: .editor,
+        hint: "Decrease the editing surfaces' text size one step."
+    ) { [weak appState] in appState?.editorZoomOut() }
+
+    register(
+        SlateCommandID.editorActualSize,
+        label: "Editor: Actual Size",
+        section: .editor,
+        hint: "Reset the editing surfaces' text size to 100 percent."
+    ) { [weak appState] in appState?.editorActualSize() }
+
     // ----- Settings -----
 
     register(
@@ -1420,7 +1477,10 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         SlateCommandID.tasksReview,
         label: "Tasks Review",
         section: .tasks,
-        hotkey: "⇧⌘T",
+        // ⌘R (#863; was ⇧⌘T, freed for Reopen Closed Tab). R = Review;
+        // bare ⌘R was unbound and has no system-wide macOS claim in a
+        // non-browser app.
+        hotkey: "⌘R",
         hint: "Open the vault-wide tasks review."
     ) { [weak appState] in appState?.openTasksReview() }
 }

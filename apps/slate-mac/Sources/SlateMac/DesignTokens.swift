@@ -74,9 +74,18 @@ enum Tokens {
         /// `\.dynamicTypeSize` changes (the reduce-motion
         /// updateNSView pattern) so AppKit surfaces scale live, like
         /// the SwiftUI roles above.
-        static func monospacedBodyNSFont() -> NSFont {
+        ///
+        /// `scale` (#848): the in-app editor text zoom factor
+        /// (`AppState.editorTextScale`, ⌘=/⌘−/⌘0), MULTIPLIED onto the
+        /// body-style size so system Text Size keeps scaling underneath
+        /// — zoom composes with the accessibility floor, never replaces
+        /// it. Pure by design: callers thread the pref in (the views
+        /// re-run `updateNSView` when the published pref changes); the
+        /// function never reads stored state itself.
+        static func monospacedBodyNSFont(scale: Double = 1.0) -> NSFont {
             NSFont.monospacedSystemFont(
-                ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize
+                    * CGFloat(scale),
                 weight: .regular
             )
         }

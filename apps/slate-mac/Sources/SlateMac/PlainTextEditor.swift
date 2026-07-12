@@ -24,6 +24,11 @@ struct PlainTextEditor: NSViewRepresentable {
     @Binding var text: String
     let accessibilityLabel: String
 
+    /// In-app editor text zoom factor (#848) — the NoteEditorView
+    /// threading pattern: the host passes `AppState.editorTextScale`
+    /// and a zoom change re-runs `updateNSView` with the new value.
+    var textScale: Double = 1.0
+
     /// System Text Size dependency — read in `updateNSView` so the
     /// font re-derives live (WCAG 1.4.4; the NoteEditorView pattern).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -64,7 +69,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.usesRuler = false
         textView.usesFindBar = false
 
-        textView.font = Tokens.Typography.monospacedBodyNSFont()
+        textView.font = Tokens.Typography.monospacedBodyNSFont(scale: textScale)
         // Explicit dynamic color — the nil default reads dim-on-dark
         // (the #226/#302 NSTextView gotcha).
         textView.textColor = NSColor.textColor
@@ -86,9 +91,10 @@ struct PlainTextEditor: NSViewRepresentable {
         context.coordinator.text = $text
         textView.setAccessibilityLabel(accessibilityLabel)
 
-        // Live Text Size tracking (the NoteEditorView pattern).
+        // Live Text Size tracking (the NoteEditorView pattern);
+        // `textScale` (#848) is the second observed input.
         _ = dynamicTypeSize
-        let baseFont = Tokens.Typography.monospacedBodyNSFont()
+        let baseFont = Tokens.Typography.monospacedBodyNSFont(scale: textScale)
         if textView.font?.pointSize != baseFont.pointSize {
             textView.font = baseFont
         }

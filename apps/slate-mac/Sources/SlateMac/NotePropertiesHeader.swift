@@ -152,7 +152,10 @@ struct NotePropertiesHeader: View {
             // that edits frontmatter as raw source.
             PlainTextEditor(
                 text: $sourceDraft,
-                accessibilityLabel: "Properties source, YAML"
+                accessibilityLabel: "Properties source, YAML",
+                // #848: the YAML source editor is an editing surface —
+                // it zooms with the note editor.
+                textScale: appState.editorTextScale
             )
             .frame(minHeight: 80, maxHeight: Self.rowAreaMaxHeight)
             if let error = appState.propertiesSourceError {

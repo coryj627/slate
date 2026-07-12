@@ -237,7 +237,10 @@ struct NoteContentView: View {
             },
             onCaretUTF16Change: { [appState] location in
                 appState.noteEditorCaretDidMove(toUTF16: location)
-            }
+            },
+            // #848: in-app zoom — published, so a ⌘=/⌘−/⌘0 change
+            // re-renders this host and the editor re-derives its font.
+            textScale: appState.editorTextScale
         )
         .onAppear { _ = text }
         .accessibilityFocused($popoverFocusReturn, equals: .editor)

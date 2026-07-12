@@ -47,13 +47,22 @@ final class QuickSwitcherActivationTests: XCTestCase {
 
     // MARK: - Open gate
 
-    func testOpenQuickSwitcherWithNoVaultDoesNotOpen() {
+    func testOpenQuickSwitcherWithNoVaultFallsThroughToVaultPicker() {
+        // #863 nicety: ⌘O on the welcome screen must never be dead —
+        // with no vault, openQuickSwitcher() routes to the vault
+        // picker instead of flipping the (unmounted) sheet's bool.
         let state = AppState()
         XCTAssertFalse(state.isVaultOpen)
+        var pickerInvocations = 0
+        state.vaultPicker = {
+            pickerInvocations += 1
+            return nil  // user cancels the panel
+        }
         state.openQuickSwitcher()
+        XCTAssertEqual(pickerInvocations, 1, "no vault → the picker is the fallthrough")
         XCTAssertFalse(
             state.isQuickSwitcherOpen,
-            "with no vault, the gate announces instead of flipping the bool")
+            "the switcher bool must never flip with no vault (the #313/#328 stuck-bool hazard)")
     }
 
     func testIsQuickSwitcherOpenDefaultsToFalse() {
