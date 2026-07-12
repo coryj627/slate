@@ -371,6 +371,8 @@ pane close), announcement strings, appearance snapshots, a11y-check 100.
                                                                  "path": "notes/a.md" } } ] } ] } }
 ```
 
+  *Amendment (2026-07-12, #873, revised same day):* top-level `"expandedDirPaths": [String]` — vault-relative dir paths in EXPANSION-RECENCY order (oldest→newest), optional/additive (absent = none, unknown fields dropped — the sparse version-tolerance contract). Write: order-preserving dedup (last occurrence wins) then cap 500 keeping the newest suffix. Read: entries must be non-empty, ≤ 1024 chars, relative (no leading `/`), no `..` components; same dedup+cap. Paths, not `dirs.id` rowids: SQLite reuses rowids after deletes, so a persisted id could expand an unrelated new folder.
+
 - Save: debounced 500ms after any workspace mutation + on vault close + `applicationWillTerminate`.
 - Restore on vault open: decode → drop tabs whose `item` kind is unknown (forward-compat
   with N/T/P discriminators) → validate() → if violations, fall back to fresh default

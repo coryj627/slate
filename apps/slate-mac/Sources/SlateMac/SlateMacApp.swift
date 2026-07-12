@@ -155,6 +155,21 @@ struct SlateMacApp: App {
                 }
                 .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
 
+                // Duplicate (#853): file-only (folders are out of the
+                // issue's scope), selection-scoped like the pair above.
+                // No chord — ⌘D belongs to nothing here yet and the
+                // #863 chord map stays untouched. The palette row and
+                // the tree context menu are the other two homes
+                // (context-menus.md redundancy rule).
+                Button("Duplicate") {
+                    appState.duplicateSelectedCommand()
+                }
+                .disabled(
+                    !appState.isVaultOpen
+                        || appState.treeSelectedNode == nil
+                        || appState.treeSelectedNode?.isDirectory == true
+                )
+
                 Divider()
 
                 // Workspace tab lifecycle (U1-2, #454). Menu items beat the

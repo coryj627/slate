@@ -915,6 +915,17 @@ final class AppState: ObservableObject {
                 self?.saveWorkspaceLayout()
             }
             .store(in: &subscriptions)
+        // #873: the file tree's expanded-folder set persists too. Same
+        // debounced path — an expand/collapse burst coalesces into one
+        // write, and any concurrent layout churn shares it.
+        $treeExpandedDirPaths
+            .dropFirst()
+            .removeDuplicates()
+            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.saveWorkspaceLayout()
+            }
+            .store(in: &subscriptions)
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil,
             queue: .main
@@ -925,6 +936,16 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The file tree's expanded-folder PATHS in recency order (#873):
+    /// the sidebar mirrors its view-model's path ledger here on every
+    /// expansion change AND explicitly after mutation reconciliation
+    /// (id-stable renames change no id set — Codex round 6), a
+    /// post-update mutation point (#448 discipline);
+    /// `wireWorkspacePersistence` saves it on the shared debounced
+    /// path, and `restoreWorkspaceLayout` refills it so the sidebar's
+    /// `bind(to:)` rehydrates instead of resetting to [].
+    @Published var treeExpandedDirPaths: [String] = []
+
     func saveWorkspaceLayout() {
         guard let vaultURL = currentVaultURL else { return }
         let store = WorkspaceStore(vaultRoot: vaultURL)
@@ -934,7 +955,8 @@ final class AppState: ObservableObject {
                     of: workspace.model, activeLeaf: workspace.activeLeaf.rawValue,
                     viewModes: workspace.viewModes,
                     propertiesCollapsed: workspace.propertiesCollapsed,
-                    canvasSurfaces: workspace.canvasSurfaces))
+                    canvasSurfaces: workspace.canvasSurfaces,
+                    expandedDirPaths: treeExpandedDirPaths))
         } catch {
             // Layout persistence must never interrupt the user; the next
             // clean save wins.
@@ -951,6 +973,10 @@ final class AppState: ObservableObject {
         // (Leaf.init(persisted:)). Assigning before the empty-model guard means
         // the remembered panel survives even a vault reopened with no tabs.
         workspace.activeLeaf = Leaf(persisted: snapshot.activeLeaf)
+        // #873: likewise the expanded-folder set — assigned before the model
+        // guard so expansion survives a vault reopened with no restorable
+        // tabs. The sidebar's bind(to:) consumes this when it rehydrates.
+        treeExpandedDirPaths = WorkspaceStore.expandedDirPaths(from: snapshot)
         guard let restored = WorkspaceStore.model(from: snapshot),
             !restored.isEmpty
         else { return }
@@ -3085,6 +3111,12 @@ final class AppState: ObservableObject {
             // and a stale vault-A node would resolve against vault B's
             // root (cross-vault path leak).
             treeSelectedNode = nil
+            // #873: vault A's expansion ids must not leak into vault B —
+            // reset before restoreWorkspaceLayout refills from B's snapshot.
+            treeExpandedDirPaths = []
+            // #860: a staged folder-delete confirmation belongs to the old
+            // vault's tree; drop it so the alert can't fire cross-vault.
+            pendingFolderDelete = nil
             scanProgress = nil
             scanAnnouncementCount = 0
             scanAnnouncementLastMessage = nil
@@ -3458,6 +3490,8 @@ final class AppState: ObservableObject {
         pendingTabCloseAfterSave = nil
         selectedFilePath = nil
         treeSelectedNode = nil
+        treeExpandedDirPaths = []  // #873: expansion dies with the vault
+        pendingFolderDelete = nil  // #860: staged confirmation dies with it
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
@@ -5893,6 +5927,114 @@ final class AppState: ObservableObject {
         return task
     }
 
+    // MARK: Duplicate (#853)
+
+    /// Duplicate the FILE at `path` to a collision-safe sibling
+    /// ("name copy.md", "name copy 2.md", …). Folders are out of scope
+    /// (#853 notes the file-only cut).
+    ///
+    /// Backend-safe by construction: the copy is written with
+    /// `create_exclusive` (the O-3 no-clobber primitive, #793/#796 context),
+    /// so a name race against a file the index hasn't seen yet surfaces
+    /// `DestinationExists` — the loop then advances to the next candidate
+    /// instead of truncating anything. On success: refreshes the tree level +
+    /// moves selection to the copy (the U2-6 funnel, via a `.createNote`
+    /// mutation — a duplicate IS a created note), and announces
+    /// "Duplicated <src> as <copy>.".
+    @discardableResult
+    func duplicateEntry(path: String) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        isMutatingStructure = true
+        let sourceName = (path as NSString).lastPathComponent
+        let parent = TreeMutation.parentPath(of: path) ?? ""
+        let task = Task { [weak self] in
+            let outcome: Result<String, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    let content = try session.readText(path: path)
+                    // Seed the collision set from the live level listing
+                    // (files AND folders — a folder named "a copy" blocks
+                    // that name too). The index can lag disk; the exclusive-
+                    // create below is the authoritative guard.
+                    var existing = Set<String>()
+                    if let listing = try? session.listDirChildren(
+                        parentPath: parent,
+                        paging: Paging(cursor: nil, limit: FileTreeViewModel.levelPageLimit))
+                    {
+                        for dir in listing.dirs { existing.insert(dir.name.lowercased()) }
+                        for file in listing.files.items { existing.insert(file.name.lowercased()) }
+                    }
+                    // Exclusive-create loop: on DestinationExists (an
+                    // un-indexed on-disk sibling), record the candidate as
+                    // taken and re-derive. Bounded so a pathological
+                    // directory can't spin forever.
+                    for _ in 0..<200 {
+                        let candidate = Self.duplicateName(
+                            for: sourceName, existingLowercasedNames: existing)
+                        let candidatePath = Self.joinVaultPath(parent, candidate)
+                        do {
+                            _ = try session.createExclusive(
+                                path: candidatePath, content: content)
+                            return .success(candidatePath)
+                        } catch VaultError.DestinationExists {
+                            existing.insert(candidate.lowercased())
+                        }
+                    }
+                    return .failure(
+                        .Io(message: "could not find a free name after 200 attempts"))
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success(let copyPath):
+                let copyName = (copyPath as NSString).lastPathComponent
+                self.publishTreeMutation(.createNote(path: copyPath), rewrittenCount: 0)
+                self.postMutationAnnouncement("Duplicated \(sourceName) as \(copyName).")
+                await self.loadFiles()
+            case .failure(let error):
+                self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "duplicate", name: sourceName, error: error)
+            }
+            self.isMutatingStructure = false
+        }
+        return task
+    }
+
+    /// Pure: the next collision-safe duplicate name for `name` given the
+    /// (lowercased) sibling names already taken. Finder-parity naming:
+    /// "a.md" → "a copy.md" → "a copy 2.md" → "a copy 3.md" — a source that
+    /// already ends in " copy" / " copy N" re-uses its base rather than
+    /// stacking ("a copy.md" duplicates to "a copy 2.md", not
+    /// "a copy copy.md"). Static + nonisolated (pure string work) so the
+    /// naming rule is regression-locked without a vault AND callable from
+    /// the detached mutation task (the `humanReadableVaultError` pattern).
+    nonisolated static func duplicateName(
+        for name: String, existingLowercasedNames: Set<String>
+    ) -> String {
+        let ns = name as NSString
+        let ext = ns.pathExtension
+        var stem = ns.deletingPathExtension
+        // Strip an existing " copy" / " copy N" suffix from the stem.
+        if stem.hasSuffix(" copy") {
+            stem = String(stem.dropLast(" copy".count))
+        } else if let range = stem.range(of: #" copy \d+$"#, options: .regularExpression) {
+            stem = String(stem[stem.startIndex..<range.lowerBound])
+        }
+        func candidate(_ n: Int?) -> String {
+            let base = n.map { "\(stem) copy \($0)" } ?? "\(stem) copy"
+            return ext.isEmpty ? base : "\(base).\(ext)"
+        }
+        if !existingLowercasedNames.contains(candidate(nil).lowercased()) {
+            return candidate(nil)
+        }
+        var n = 2
+        while existingLowercasedNames.contains(candidate(n).lowercased()) { n += 1 }
+        return candidate(n)
+    }
+
     // MARK: Rename
 
     /// Rename the file or folder at `path` to `newName` (a single path
@@ -6012,6 +6154,81 @@ final class AppState: ObservableObject {
     }
 
     // MARK: Delete
+
+    /// A non-empty folder delete awaiting user confirmation (#860). Set by
+    /// `requestDeleteEntry` when the target is a folder with children; the
+    /// MainSplitView alert consumes it (Move to Trash confirms, Cancel
+    /// drops). Files and empty folders never stage — they keep the
+    /// no-confirm Finder-parity path (a file trash is recoverable; a whole
+    /// subtree moving on one chord is the heavier loss-of-context event).
+    struct PendingFolderDelete: Equatable, Identifiable {
+        let path: String
+        /// Immediate (non-recursive) child count — the "its N items" the
+        /// alert message speaks. Advisory: the delete itself takes the whole
+        /// subtree regardless.
+        let itemCount: Int
+        var id: String { path }
+        var name: String { (path as NSString).lastPathComponent }
+    }
+
+    @Published var pendingFolderDelete: PendingFolderDelete?
+
+    /// The single delete entry point every surface routes through (#860):
+    /// tree ⌘⌫ / rotor / context menu, and the menu/palette command. A
+    /// folder with children stages `pendingFolderDelete` (confirmation
+    /// alert) instead of deleting; everything else falls straight through to
+    /// `deleteEntry`. `knownChildCount` lets the tree pass its node's cached
+    /// immediate count; callers without one (the selection-scoped command)
+    /// leave it nil and a shallow FileManager enumerate fills in.
+    func requestDeleteEntry(path: String, isDirectory: Bool, knownChildCount: Int? = nil) {
+        guard isVaultOpen else { return }
+        if isDirectory {
+            // A cached count of ZERO is treated as unknown: the tree's
+            // itemCount can be stale (folder filled externally since the
+            // fetch), and a stale zero would BYPASS the confirmation —
+            // trashing a non-empty folder unprompted. Only the zero case
+            // re-probes; a stale positive merely over-confirms (harmless).
+            let count = knownChildCount.flatMap { $0 > 0 ? $0 : nil }
+                ?? shallowChildCount(ofFolder: path)
+            if count > 0 {
+                pendingFolderDelete = PendingFolderDelete(path: path, itemCount: count)
+                return
+            }
+        }
+        pendingStructuralTaskForTesting = deleteEntry(path: path, isDirectory: isDirectory)
+    }
+
+    /// Alert "Move to Trash" — run the staged folder delete through the
+    /// normal funnel (announcement + tree focus move ride along unchanged).
+    func confirmPendingFolderDelete() {
+        guard let pending = pendingFolderDelete else { return }
+        pendingFolderDelete = nil
+        pendingStructuralTaskForTesting = deleteEntry(path: pending.path, isDirectory: true)
+    }
+
+    /// Alert "Cancel" — nothing is deleted.
+    func cancelPendingFolderDelete() {
+        pendingFolderDelete = nil
+    }
+
+    /// Immediate child count of a vault folder via a shallow FileManager
+    /// enumerate (hidden entries COUNT — a folder holding only `.env`
+    /// must confirm; only Finder-noise `.DS_Store` is ignored — and
+    /// Hidden entries count (only `.DS_Store` is ignored); an unreadable
+    /// directory reads as NON-empty (fail-closed → the confirmation), so
+    /// unknown never bypasses the prompt.
+    private func shallowChildCount(ofFolder path: String) -> Int {
+        guard let url = currentVaultURL?.appendingPathComponent(path) else { return 1 }
+        // Hidden entries COUNT (Codex P1: a folder holding only `.env` or
+        // `.git` must still confirm — those are exactly the deletions that
+        // hurt); only the Finder-noise `.DS_Store` is ignored. Enumeration
+        // failure fails CLOSED (treated as non-empty → confirmation), not
+        // open — the alert is the safe side of "unknown".
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: nil)
+        else { return 1 }
+        return contents.filter { $0.lastPathComponent != ".DS_Store" }.count
+    }
 
     /// Send the file or folder at `path` to the system trash. Any open tab
     /// holding the file (or a descendant of the folder) flips to the missing-
@@ -6206,7 +6423,8 @@ final class AppState: ObservableObject {
     // MARK: Path helpers
 
     /// Join a parent path ("" = root) and a final component into a vault path.
-    static func joinVaultPath(_ parent: String, _ name: String) -> String {
+    /// `nonisolated`: pure string work, used from the detached duplicate task.
+    nonisolated static func joinVaultPath(_ parent: String, _ name: String) -> String {
         parent.isEmpty ? name : "\(parent)/\(name)"
     }
 
@@ -6343,10 +6561,30 @@ final class AppState: ObservableObject {
     }
 
     /// ⌘⌫ (tree-focused) / context-menu "Move to Trash" — delete the selected
-    /// node. The command-surface funnel for `deleteEntry`.
+    /// node. Routes through `requestDeleteEntry` so a non-empty folder
+    /// stages the #860 confirmation; files and empty folders delete
+    /// immediately as before. No cached child count here (the selection
+    /// mirror carries only path + kind) — the FileManager fallback counts.
     func deleteSelectedCommand() {
         guard isVaultOpen, let node = treeSelectedNode else { return }
-        pendingStructuralTaskForTesting = deleteEntry(path: node.path, isDirectory: node.isDirectory)
+        requestDeleteEntry(path: node.path, isDirectory: node.isDirectory)
+    }
+
+    /// File ▸ Duplicate / palette / context menu — duplicate the selected
+    /// FILE next to itself (#853). Folder selections no-op (folders are out
+    /// of #853's scope); the menu items are disabled for them, and the
+    /// palette row falls through here harmlessly.
+    func duplicateSelectedCommand() {
+        guard isVaultOpen, let node = treeSelectedNode else { return }
+        guard !node.isDirectory else {
+            // The palette row can't gray out per-selection like the menu
+            // items do — a silent no-op there reads as breakage, so the
+            // folder case announces its scope (red-team).
+            postAccessibilityAnnouncement(
+                "Duplicate applies to files only.", priority: .medium)
+            return
+        }
+        pendingStructuralTaskForTesting = duplicateEntry(path: node.path)
     }
 
     /// Every folder path in the vault (vault-relative, sorted case-insensitive,

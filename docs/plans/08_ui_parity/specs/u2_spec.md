@@ -162,6 +162,8 @@ CREATE TABLE structural_ops (
   folder — move succeeds (moves don't read content), hash-dependent undo then reports
   the conflict.
 
+  *Amendment (2026-07-12, #860):* a folder WITH children now stages a confirmation alert before the trash ("Delete folder …?" — Move to Trash destructive / Cancel; Escape deletes nothing; AX focus returns to the tree on both buttons). Files and empty folders keep the direct Finder-parity path; a cached zero child-count re-probes before skipping the prompt. Announcement + focus contracts unchanged after confirm.
+
 ## U2-3 · Backend: link integrity on move/rename (#461) — PR 3 ⚠ RED-TEAM
 
 The correctness lynchpin. Invariant (**referential stability**): for every link L that
@@ -312,6 +314,8 @@ machine, 10k-file fixture renders root in < 1s in tests and only fetches expande
   buffer is still valid; content-hash conflict machinery keeps saves correct since hash
   travels with content, not path). If the file was deleted: tab flips to the U1-6
   error-state pane.
+
+  *Amendment (2026-07-12, #850):* F2 now BEGINS INLINE RENAME — supplementing, not replacing, the context menu / palette / ⌘⌥R routes (the rejection above concerned Return-as-rename). Exact shipped key semantics: file SELECTION opens immediately (arrows/click/type-select); Space/Return toggle a selected FOLDER's disclosure; Return on a file adds no action. Type-select (printable-prefix jump among visible rows, repeated-character cycling, ~1s reset, Shift/Caps-Lock tolerated, Space excluded) landed in the same change, with scroll-to-reveal on landing.
 
 Tests: each command end-to-end against a temp vault (create/rename/move/delete file+
 folder), collision + invalid-name error surfacing, keyboard-only walkthrough test

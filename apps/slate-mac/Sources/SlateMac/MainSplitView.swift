@@ -292,6 +292,41 @@ struct MainSplitView: View {
                 "\(filename(of: conflict.path)) was modified outside the editor while you were editing the `\(conflict.key)` property. Choose how to resolve."
             )
         }
+        // Non-empty-folder delete confirmation (#860). Files and empty
+        // folders keep the no-confirm Finder-parity path; a folder with
+        // children is the heavier loss-of-context event, so it prompts.
+        // Two-button destructive shape (alerts.md): the destructive verb
+        // is explicit ("Move to Trash", never "OK"), Cancel is the
+        // cancel-role so Escape/accidental dismissal deletes nothing.
+        .alert(
+            "Delete folder \u{201C}\(appState.pendingFolderDelete?.name ?? "")\u{201D}?",
+            isPresented: pendingFolderDeletePresented,
+            presenting: appState.pendingFolderDelete
+        ) { _ in
+            // Focus returns to the TREE, not the editor: this alert is
+            // always staged from a tree operation, and the ⌘⌥←-style
+            // focusTreeRegion bridge is the established route (red-team;
+            // the shared .editor default fits the other alerts, which
+            // ARE editor-scoped).
+            Button("Move to Trash", role: .destructive) {
+                appState.confirmPendingFolderDelete()
+                appState.workspace.focusTreeRegion()
+            }
+            .accessibilityHint(
+                "Move the folder and everything inside it to the Trash."
+            )
+            Button("Cancel", role: .cancel) {
+                appState.cancelPendingFolderDelete()
+                appState.workspace.focusTreeRegion()
+            }
+            .accessibilityHint(
+                "Keep the folder. Nothing is deleted."
+            )
+        } message: { pending in
+            Text(
+                "Moves the folder and its \(pending.itemCount) \(pending.itemCount == 1 ? "item" : "items") to the Trash."
+            )
+        }
     }
 
     private var splitViewWithSheets: some View {
@@ -500,6 +535,20 @@ struct MainSplitView: View {
             set: { presented in
                 if !presented {
                     appState.currentPropertyEditConflict = nil
+                }
+            }
+        )
+    }
+
+    /// #860: the non-empty-folder delete confirmation. Dismissal from
+    /// outside (Escape) routes through the cancel resolver — nothing is
+    /// ever deleted by a dismissal.
+    private var pendingFolderDeletePresented: Binding<Bool> {
+        Binding(
+            get: { appState.pendingFolderDelete != nil },
+            set: { presented in
+                if !presented {
+                    appState.cancelPendingFolderDelete()
                 }
             }
         )
