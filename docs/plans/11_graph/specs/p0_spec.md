@@ -63,8 +63,16 @@ pub enum NodeKind { Note, Attachment, Ghost }
 pub struct NodeData {
     pub key: NodeKey,
     pub kind: NodeKind,
-    /// Display label: file stem for Path nodes; the *first-seen authored*
-    /// `target_raw` (anchor-stripped, original case) for ghosts.
+    /// Display label. Notes: file stem (markdown extension dropped).
+    /// Attachments: final path component WITH extension (stems collide
+    /// across extensions; matches Obsidian). Ghosts: the
+    /// lexicographically-smallest *currently-authored* variant of
+    /// `target_raw` (anchor-stripped, original case) among the ghost's
+    /// live references — NOT "first-seen", which is unstable under both
+    /// insertion-order permutation (census §P-C would fail on rebuild)
+    /// and incremental maintenance (deep_equals would fail vs rebuild).
+    /// Maintaining it incrementally requires a per-ghost variant
+    /// refcount (BTreeMap<String, u32>) beside the node.
     pub label: String,
 }
 
