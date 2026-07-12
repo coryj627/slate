@@ -29,6 +29,10 @@ enum SlateCommandID {
     // a primary-UI home — these two were context-menu-only).
     static let revealInFinder = "slate.file.revealInFinder"
     static let copyPath = "slate.file.copyPath"
+    /// Duplicate the selected FILE (#853) — context menu + File menu +
+    /// palette, same three homes the inspection pair got. File-only;
+    /// folders are out of #853's scope.
+    static let duplicateEntry = "slate.file.duplicate"
 
     // Navigation
     static let jumpToBibliography = "slate.navigation.jumpToBibliography"
@@ -225,6 +229,7 @@ enum SlateCommandID {
         deleteEntry,
         revealInFinder,
         copyPath,
+        duplicateEntry,
         jumpToBibliography,
         quickOpen,
         toggleSearch,
@@ -1119,6 +1124,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .file,
         hint: "Copy the selected item's full filesystem path."
     ) { [weak appState] in appState?.copySelectedPathCommand() }
+
+    register(
+        SlateCommandID.duplicateEntry,
+        label: "Duplicate",
+        section: .file,
+        // No chord (#853) — menu + palette + context menu only.
+        hint: "Duplicate the selected file as a copy next to it."
+    ) { [weak appState] in appState?.duplicateSelectedCommand() }
 
     // ----- Navigation -----
 

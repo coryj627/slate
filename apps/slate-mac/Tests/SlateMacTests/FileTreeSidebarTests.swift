@@ -392,6 +392,19 @@ final class FileTreeSidebarTests: XCTestCase {
     // MARK: - PresentationReady (spec: appearance snapshots, both appearances)
 
     /// A sidebar rendered against a small real vault, in both appearances.
+    // MARK: - Type-select modifier gate (red-team: shift/caps must pass)
+
+    func testTypeSelectAllowsShiftAndCapsLockOnly() {
+        XCTAssertTrue(FileTreeSidebar.typeSelectModifiersAllowed([]))
+        XCTAssertTrue(FileTreeSidebar.typeSelectModifiersAllowed([.shift]))
+        XCTAssertTrue(FileTreeSidebar.typeSelectModifiersAllowed([.capsLock]))
+        XCTAssertTrue(FileTreeSidebar.typeSelectModifiersAllowed([.shift, .capsLock]))
+        XCTAssertFalse(FileTreeSidebar.typeSelectModifiersAllowed([.command]))
+        XCTAssertFalse(FileTreeSidebar.typeSelectModifiersAllowed([.option]))
+        XCTAssertFalse(FileTreeSidebar.typeSelectModifiersAllowed([.control]))
+        XCTAssertFalse(FileTreeSidebar.typeSelectModifiersAllowed([.shift, .command]))
+    }
+
     // MARK: - Delete-command modifier gate (spec §U2-5: the chord is ⌘⌫)
 
     /// A bare ⌫ keyDown must NOT delete — Finder ignores the unmodified
@@ -487,5 +500,508 @@ final class FileTreeSidebarTests: XCTestCase {
             ("row subtitle on surface", .tokenTextSecondary, .tokenSurface),
             ("error message on surface", .tokenDestructiveText, .tokenSurface),
         ])
+    }
+
+    // MARK: - Type-select matcher (#850, pure — the moveOutcome pattern)
+
+    /// A single-character buffer advances: the scan starts AFTER the current
+    /// selection, so repeated presses of one letter cycle through its
+    /// matches — and wrap back around past the end.
+    func testTypeSelectSingleCharAdvancesFromSelectionAndWraps() {
+        let names = ["alpha", "beta", "banana", "gamma"]
+        // From "beta" (index 1), "b" advances to "banana" (index 2)…
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "b", selectedIndex: 1), 2)
+        // …and from "banana" (index 2), "b" wraps back to "beta" (index 1).
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "b", selectedIndex: 2), 1)
+        // No selection: the scan starts at the top.
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "b", selectedIndex: nil), 1)
+    }
+
+    /// Case- and diacritic-insensitive: "re" finds "README.md", "e" finds
+    /// "Éclair.md".
+    func testTypeSelectIsCaseAndDiacriticInsensitive() {
+        let names = ["Éclair.md", "README.md", "zoo.md"]
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "re", selectedIndex: nil), 1)
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "e", selectedIndex: nil), 0)
+        // The fold works in both directions: an accented prefix matches an
+        // unaccented name.
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: ["reveal.md"], prefix: "ré", selectedIndex: nil),
+            0)
+    }
+
+    /// A refining (multi-character) buffer stays on the current row while it
+    /// still matches — "r" landed on "readme.md"; growing to "re" must not
+    /// jump away.
+    func testTypeSelectRefiningBufferStaysOnMatchingSelection() {
+        let names = ["notes", "readme.md", "recipes.md"]
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "re", selectedIndex: 1), 1)
+    }
+
+    /// A refining buffer that the current row no longer matches scans onward
+    /// (wrapping): from "rust.md", "re" moves to "readme.md".
+    func testTypeSelectRefiningBufferMovesWhenSelectionStopsMatching() {
+        let names = ["readme.md", "rust.md", "zoo.md"]
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "re", selectedIndex: 1), 0)
+    }
+
+    /// Folder and file names participate alike — `names` is the flattened
+    /// visible-row list, so a folder is just another candidate.
+    func testTypeSelectMatchesFolderAndFileNamesAlike() {
+        let names = ["Projects", "alpha.md", "projects-notes.md"]
+        // The folder wins first…
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "pro", selectedIndex: nil), 0)
+        // …and single-char cycling from the folder reaches the file.
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "p", selectedIndex: 0), 2)
+        // A refining buffer the folder still matches stays put (Finder).
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: names, prefix: "pro", selectedIndex: 0), 0)
+    }
+
+    /// No match / empty inputs return nil (the keystroke is still consumed by
+    /// the view — Finder-style — but the selection stays put).
+    func testTypeSelectNoMatchAndEmptyGuards() {
+        XCTAssertNil(
+            FileTreeSidebar.typeSelectIndex(
+                names: ["alpha", "beta"], prefix: "q", selectedIndex: 0))
+        XCTAssertNil(FileTreeSidebar.typeSelectIndex(names: [], prefix: "a", selectedIndex: nil))
+        XCTAssertNil(
+            FileTreeSidebar.typeSelectIndex(names: ["alpha"], prefix: "", selectedIndex: nil))
+        // An out-of-bounds selection index (stale after a level refetch)
+        // degrades to a top-of-list scan, never a crash.
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(names: ["alpha"], prefix: "a", selectedIndex: 99), 0)
+    }
+
+    /// F2 is delivered as the AppKit function-key scalar (U+F705) —
+    /// regression-lock the constant the `.onKeyPress(keys:)` gate matches on.
+    func testF2KeyEquivalentIsTheAppKitFunctionKeyScalar() {
+        XCTAssertEqual(
+            FileTreeSidebar.f2Key.character, Character(UnicodeScalar(0xF705)!))
+    }
+
+    /// Space must never reach type-select — it belongs to folder disclosure
+    /// (shipped semantics, #850 keeps them unchanged).
+    func testTypeSelectCharactersExcludeWhitespaceAndControls() {
+        XCTAssertFalse(FileTreeSidebar.typeSelectCharacters.contains(" "))
+        XCTAssertFalse(FileTreeSidebar.typeSelectCharacters.contains("\n"))
+        XCTAssertFalse(FileTreeSidebar.typeSelectCharacters.contains("\u{7F}"))
+        XCTAssertTrue(FileTreeSidebar.typeSelectCharacters.contains("a"))
+        XCTAssertTrue(FileTreeSidebar.typeSelectCharacters.contains("7"))
+        XCTAssertTrue(FileTreeSidebar.typeSelectCharacters.contains("-"))
+    }
+
+    // MARK: - Spring-load re-collapse set (#851, pure)
+
+    /// A cancelled/exited drag (nil destination) re-collapses every folder
+    /// the drag spring-opened.
+    func testSpringRecollapseAllOnCancelledDrag() {
+        XCTAssertEqual(
+            FileTreeSidebar.springFoldersToRecollapse(
+                openedPaths: ["a", "a/b", "c"], destinationFolder: nil),
+            ["a", "a/b", "c"])
+    }
+
+    /// A drop into (or beneath) a spring-opened folder keeps that folder's
+    /// chain open — the user is about to look inside it.
+    func testSpringKeepsDestinationChainOpen() {
+        // Drop directly INTO the spring-opened folder.
+        XCTAssertEqual(
+            FileTreeSidebar.springFoldersToRecollapse(
+                openedPaths: ["a", "c"], destinationFolder: "a"),
+            ["c"])
+        // Drop deeper inside it: both ancestors stay open.
+        XCTAssertEqual(
+            FileTreeSidebar.springFoldersToRecollapse(
+                openedPaths: ["a", "a/b", "c"], destinationFolder: "a/b"),
+            ["c"])
+    }
+
+    /// A drop at the vault root ("" — the tree background) landed in none of
+    /// the spring-opened folders: all of them re-collapse.
+    func testSpringRootDropRecollapsesEverything() {
+        XCTAssertEqual(
+            FileTreeSidebar.springFoldersToRecollapse(
+                openedPaths: ["a", "a/b"], destinationFolder: ""),
+            ["a", "a/b"])
+    }
+
+    /// Path-boundary discipline: a destination "Projects/x" is NOT within a
+    /// spring-opened folder "Pro" — prefix matching is per component, not
+    /// per character.
+    func testSpringRecollapseRespectsPathComponentBoundaries() {
+        XCTAssertEqual(
+            FileTreeSidebar.springFoldersToRecollapse(
+                openedPaths: ["Pro"], destinationFolder: "Projects/x"),
+            ["Pro"])
+    }
+
+    // MARK: - Expansion-state restore (#873)
+
+    /// `bind`/`bindForTesting` with restored ids materializes exactly the
+    /// reachable expanded chain — one fetch per expanded level, nothing for
+    /// collapsed siblings (the lazy 10k budget holds through a restore).
+    func testBindRestoresExpandedChainLazily() {
+        let spy = FetchSpy([
+            "": listing(dirs: [dir(1, "a"), dir(3, "other")], files: [file("root.md")]),
+            "a": listing(dirs: [dir(2, "a/b")], files: [file("a/x.md")]),
+            "a/b": listing(dirs: [], files: [file("a/b/y.md")]),
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch, restoringExpandedDirPaths: ["a", "a/b"])
+
+        XCTAssertEqual(spy.calls, ["", "a", "a/b"], "restored chain fetches level by level")
+        XCTAssertTrue(vm.expanded.contains(.dir(1)))
+        XCTAssertTrue(vm.expanded.contains(.dir(2)))
+        // "other" (id 3) was not restored: collapsed, never fetched.
+        XCTAssertFalse(vm.expanded.contains(.dir(3)))
+        XCTAssertEqual(
+            vm.visibleRows.map(\.path),
+            ["a", "a/b", "a/b/y.md", "a/x.md", "other", "root.md"],
+            "pre-order walk shows the restored expansion")
+    }
+
+    /// A restored PATH whose parent is NOT restored stays dormant (no fetch)
+    /// until the parent expands — then it reappears expanded, exactly like
+    /// an in-session collapse/re-expand.
+    func testRestoredIdUnderCollapsedParentStaysDormantUntilParentExpands() {
+        let spy = FetchSpy([
+            "": listing(dirs: [dir(1, "a")], files: []),
+            "a": listing(dirs: [dir(2, "a/b")], files: []),
+            "a/b": listing(dirs: [], files: [file("a/b/y.md")]),
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch, restoringExpandedDirPaths: ["a/b"])
+
+        XCTAssertEqual(spy.calls, [""], "nothing beneath a collapsed parent is fetched")
+        XCTAssertTrue(vm.pendingExpandedPaths.contains("a/b"), "dormant as a pending PATH")
+        XCTAssertEqual(vm.visibleRows.map(\.path), ["a"])
+
+        // Expanding the parent materializes its level AND cascades into the
+        // remembered child expansion.
+        vm.expand(vm.rootLevel[0])
+        XCTAssertEqual(spy.calls, ["", "a", "a/b"])
+        XCTAssertEqual(vm.visibleRows.map(\.path), ["a", "a/b", "a/b/y.md"])
+    }
+
+    /// Paths that no longer resolve are harmless: no fetch, no phantom
+    /// rows; they linger only in the capped pending set.
+    func testUnknownRestoredIdsAreHarmless() {
+        let spy = FetchSpy([
+            "": listing(dirs: [dir(1, "a")], files: []),
+            "a": listing(dirs: [], files: [file("a/x.md")]),
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch, restoringExpandedDirPaths: ["a", "ghost"])
+
+        XCTAssertEqual(spy.calls, ["", "a"], "the unknown path costs nothing")
+        XCTAssertEqual(vm.visibleRows.map(\.path), ["a", "a/x.md"])
+    }
+
+    /// The persisted mirror is the dir PATHS (materialized ∪ dormant),
+    /// sorted (deterministic file form).
+    func testExpandedDirPathsMirrorIsSortedAndIncludesDormant() {
+        let spy = FetchSpy([
+            "": listing(dirs: [dir(7, "b"), dir(3, "a")], files: [])
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch, restoringExpandedDirPaths: ["ghost/dir"])
+        vm.expand(vm.rootLevel[0])  // "b"
+        vm.expand(vm.rootLevel[1])  // "a"
+        // RECENCY order (oldest→newest): restored dormant first, then the
+        // session expansions in the order they happened (Codex r3 — the
+        // cap evicts from the FRONT, so order is the eviction policy).
+        XCTAssertEqual(vm.expandedDirPaths, ["ghost/dir", "b", "a"])
+    }
+
+    /// Codex round 2 (probe-proven): SQLite reuses INTEGER PRIMARY KEY
+    /// rowids after deletes. Expansion must NOT follow a recycled id to
+    /// an unrelated folder: invalidation demotes the deleted folder's
+    /// expansion to a path, and a NEW folder arriving under the same id
+    /// stays collapsed.
+    func testRecycledDirIDDoesNotInheritExpansion() {
+        // Plain closure fetcher (no FetchSpy: the table is phase-dependent).
+        var phase2 = false
+        var calls: [String] = []
+        let fetcher: (String) throws -> DirListing = { parent in
+            calls.append(parent)
+            if parent.isEmpty {
+                return phase2
+                    ? self.listing(dirs: [self.dir(2, "c")], files: [])
+                    : self.listing(dirs: [self.dir(2, "b")], files: [])
+            }
+            return self.listing(dirs: [], files: [self.file("\(parent)/x.md")])
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: fetcher)
+        vm.expand(vm.rootLevel[0])  // expand "b" (id 2)
+        XCTAssertTrue(vm.expanded.contains(.dir(2)))
+
+        // "b" is deleted externally; "c" is created and REUSES id 2.
+        phase2 = true
+        vm.treeInvalidation(parent: nil)
+
+        XCTAssertFalse(
+            vm.expanded.contains(.dir(2)),
+            "the recycled id must not resurrect b's expansion onto c")
+        XCTAssertTrue(
+            vm.pendingExpandedPaths.contains("b"),
+            "the deleted folder survives only as an inert pending path")
+        XCTAssertEqual(
+            vm.visibleRows.map(\.path), ["c"],
+            "c renders collapsed — no phantom children fetch")
+        XCTAssertFalse(
+            calls.contains("c"),
+            "lazy-fetch holds: the recycled folder's children are never fetched (Codex r3)")
+    }
+
+    /// Codex round 3: NESTED mutations use targeted invalidation
+    /// (`treeInvalidation(parent:)`) — the demote must run there too, or
+    /// a recycled child id under that parent inherits expansion.
+    func testRecycledNestedDirIDDoesNotInheritExpansion() {
+        var phase2 = false
+        let fetcher: (String) throws -> DirListing = { parent in
+            if parent.isEmpty {
+                return self.listing(dirs: [self.dir(1, "a")], files: [])
+            }
+            if parent == "a" {
+                return phase2
+                    ? self.listing(dirs: [self.dir(2, "a/c")], files: [])
+                    : self.listing(dirs: [self.dir(2, "a/b")], files: [])
+            }
+            return self.listing(dirs: [], files: [])
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: fetcher)
+        vm.expand(vm.rootLevel[0])                       // a
+        vm.expand(vm.visibleRows.first { $0.path == "a/b" }!)  // a/b (id 2)
+        XCTAssertTrue(vm.expanded.contains(.dir(2)))
+
+        phase2 = true
+        vm.treeInvalidation(parent: .dir(1))             // a's level changed
+
+        XCTAssertFalse(
+            vm.expanded.contains(.dir(2)),
+            "a/c must not inherit a/b's expansion via the recycled id")
+        XCTAssertTrue(vm.pendingExpandedPaths.contains("a/b"))
+        XCTAssertEqual(vm.visibleRows.map(\.path), ["a", "a/c"])
+    }
+
+    // MARK: - Expansion follows mutations (Codex round 4)
+
+    /// Rename: the expanded folder's path (and descendants) remap, so the
+    /// reloaded level re-promotes at the NEW path — no collapse, no
+    /// tombstone.
+    func testRemapExpansionFollowsRenameIncludingDescendants() {
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: ["a/b", "a/b/deep", "other"])
+        vm.remapExpansion(fromPrefix: "a/b", to: "a/c")
+        XCTAssertEqual(
+            Set(vm.pendingExpandedPaths), ["a/c", "a/c/deep", "other"])
+        XCTAssertEqual(vm.expansionRecency, ["a/c", "a/c/deep", "other"])
+        // Prefix means PATH COMPONENT prefix: "a/bx" must not remap.
+        vm.remapExpansion(fromPrefix: "a/c", to: "a/b")
+        let vm2 = FileTreeViewModel()
+        vm2.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: ["a/bx"])
+        vm2.remapExpansion(fromPrefix: "a/b", to: "a/z")
+        XCTAssertEqual(vm2.expansionRecency, ["a/bx"], "component boundary respected")
+    }
+
+    /// Delete: the subtree's expansion bookkeeping drops entirely — no
+    /// pending tombstones eating cap slots.
+    func testRemoveExpansionDropsDeletedSubtree() {
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: ["gone", "gone/child", "kept"])
+        vm.removeExpansion(underPrefix: "gone")
+        XCTAssertEqual(vm.expansionRecency, ["kept"])
+        XCTAssertEqual(vm.pendingExpandedPaths, ["kept"])
+    }
+
+    /// Targeted invalidation also drops DESCENDANT caches: a recycled id
+    /// must not serve the deleted folder's stale children on next expand.
+    func testRecycledNestedIDDoesNotServeStaleChildren() {
+        var phase2 = false
+        var calls: [String] = []
+        let fetcher: (String) throws -> DirListing = { parent in
+            calls.append(parent)
+            if parent.isEmpty {
+                return self.listing(dirs: [self.dir(1, "a")], files: [])
+            }
+            if parent == "a" {
+                return phase2
+                    ? self.listing(dirs: [self.dir(2, "a/c")], files: [])
+                    : self.listing(dirs: [self.dir(2, "a/b")], files: [])
+            }
+            if parent == "a/b" {
+                return self.listing(dirs: [], files: [self.file("a/b/stale.md")])
+            }
+            if parent == "a/c" {
+                return self.listing(dirs: [], files: [self.file("a/c/fresh.md")])
+            }
+            return self.listing(dirs: [], files: [])
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: fetcher)
+        vm.expand(vm.rootLevel[0])
+        vm.expand(vm.visibleRows.first { $0.path == "a/b" }!)
+        XCTAssertTrue(vm.visibleRows.map(\.path).contains("a/b/stale.md"))
+
+        phase2 = true
+        vm.treeInvalidation(parent: .dir(1))
+        vm.expand(vm.visibleRows.first { $0.path == "a/c" }!)
+        XCTAssertTrue(
+            vm.visibleRows.map(\.path).contains("a/c/fresh.md"),
+            "the recycled id must fetch C's REAL children, not serve B's cache")
+        XCTAssertFalse(vm.visibleRows.map(\.path).contains("a/b/stale.md"))
+    }
+
+    /// Codex round 5: the REAL mutation ordering — invalidation reloads
+    /// the level synchronously BEFORE the remap runs. The remap's
+    /// re-adoption sweep must promote the renamed folder on the
+    /// already-landed level (and fetch its children).
+    func testRenameOrderingKeepsFolderExpandedThroughInvalidateReloadRemap() {
+        var renamed = false
+        let fetcher: (String) throws -> DirListing = { parent in
+            if parent.isEmpty {
+                return self.listing(dirs: [self.dir(1, "a")], files: [])
+            }
+            if parent == "a" {
+                return renamed
+                    ? self.listing(dirs: [self.dir(9, "a/c")], files: [])
+                    : self.listing(dirs: [self.dir(2, "a/b")], files: [])
+            }
+            if parent == "a/c" {
+                return self.listing(dirs: [], files: [self.file("a/c/kid.md")])
+            }
+            if parent == "a/b" {
+                return self.listing(dirs: [], files: [self.file("a/b/kid.md")])
+            }
+            return self.listing(dirs: [], files: [])
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: fetcher)
+        vm.expand(vm.rootLevel[0])
+        vm.expand(vm.visibleRows.first { $0.path == "a/b" }!)
+
+        // Exactly handleTreeMutation's sequence for a rename:
+        renamed = true
+        vm.treeInvalidation(parent: .dir(1))          // reload lands FIRST
+        vm.remapExpansion(fromPrefix: "a/b", to: "a/c")  // then the remap
+
+        XCTAssertTrue(
+            vm.visibleRows.map(\.path).contains("a/c/kid.md"),
+            "the renamed folder stays expanded with children fetched")
+        XCTAssertFalse(vm.pendingExpandedPaths.contains("a/b"), "no tombstone")
+    }
+
+    /// Codex round 6: production renames PRESERVE the dir id — the
+    /// `expanded` ID SET can be identical pre/post reconciliation, so
+    /// the persisted-path source (`expandedDirPaths`) must reflect the
+    /// new path anyway (the view syncs the mirror explicitly because
+    /// `.onChange(of: expanded)` can't fire in this case).
+    func testStableIDRenameUpdatesPathLedgerDespiteUnchangedIDSet() {
+        var renamed = false
+        let fetcher: (String) throws -> DirListing = { parent in
+            if parent.isEmpty {
+                return self.listing(dirs: [self.dir(1, "a")], files: [])
+            }
+            if parent == "a" {
+                // SAME id 2 both phases — the production rename shape.
+                return renamed
+                    ? self.listing(dirs: [self.dir(2, "a/c")], files: [])
+                    : self.listing(dirs: [self.dir(2, "a/b")], files: [])
+            }
+            return self.listing(dirs: [], files: [])
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: fetcher)
+        vm.expand(vm.rootLevel[0])
+        vm.expand(vm.visibleRows.first { $0.path == "a/b" }!)
+        let idSetBefore = vm.expanded
+
+        renamed = true
+        vm.treeInvalidation(parent: .dir(1))
+        vm.remapExpansion(fromPrefix: "a/b", to: "a/c")
+
+        XCTAssertEqual(vm.expanded, idSetBefore, "the id set really is unchanged")
+        XCTAssertTrue(vm.expandedDirPaths.contains("a/c"))
+        XCTAssertFalse(
+            vm.expandedDirPaths.contains("a/b"),
+            "the path ledger moved even though the id set didn't")
+    }
+
+    /// Same ordering for a cross-parent MOVE (two levels invalidate).
+    func testMoveOrderingKeepsFolderExpandedAcrossParents() {
+        var moved = false
+        let fetcher: (String) throws -> DirListing = { parent in
+            if parent.isEmpty {
+                return self.listing(
+                    dirs: [self.dir(1, "src"), self.dir(5, "dst")], files: [])
+            }
+            if parent == "src" {
+                return moved
+                    ? self.listing(dirs: [], files: [])
+                    : self.listing(dirs: [self.dir(2, "src/pack")], files: [])
+            }
+            if parent == "dst" {
+                return moved
+                    ? self.listing(dirs: [self.dir(8, "dst/pack")], files: [])
+                    : self.listing(dirs: [], files: [])
+            }
+            if parent.hasSuffix("/pack") {
+                return self.listing(dirs: [], files: [self.file("\(parent)/kid.md")])
+            }
+            return self.listing(dirs: [], files: [])
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: fetcher)
+        vm.expand(vm.rootLevel[0])  // src
+        vm.expand(vm.rootLevel[1])  // dst
+        vm.expand(vm.visibleRows.first { $0.path == "src/pack" }!)
+
+        moved = true
+        vm.treeInvalidation(parent: .dir(1))  // source level
+        vm.treeInvalidation(parent: .dir(5))  // destination level
+        vm.remapExpansion(fromPrefix: "src/pack", to: "dst/pack")
+
+        XCTAssertTrue(
+            vm.visibleRows.map(\.path).contains("dst/pack/kid.md"),
+            "the moved folder arrives expanded at its destination")
+        XCTAssertFalse(vm.pendingExpandedPaths.contains("src/pack"))
+    }
+
+    // MARK: - Type-select buffer semantics (Codex round 2)
+
+    /// Repeating the same character cycles (buffer holds ONE char, so the
+    /// matcher's advance-from-selection lands the next match); a different
+    /// character refines the prefix.
+    func testTypeSelectBufferRepeatCyclesAndRefines() {
+        XCTAssertEqual(
+            FileTreeSidebar.nextTypeSelectBuffer(current: "", incoming: "b"), "b")
+        XCTAssertEqual(
+            FileTreeSidebar.nextTypeSelectBuffer(current: "b", incoming: "b"), "b",
+            "repeat = cycle, not the dead-end prefix bb")
+        XCTAssertEqual(
+            FileTreeSidebar.nextTypeSelectBuffer(current: "b", incoming: "B"), "B",
+            "case-insensitive repeat still cycles")
+        XCTAssertEqual(
+            FileTreeSidebar.nextTypeSelectBuffer(current: "b", incoming: "e"), "be")
+        XCTAssertEqual(
+            FileTreeSidebar.nextTypeSelectBuffer(current: "be", incoming: "t"), "bet")
     }
 }

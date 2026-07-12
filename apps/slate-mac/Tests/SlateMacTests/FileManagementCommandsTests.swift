@@ -424,4 +424,234 @@ final class FileManagementCommandsTests: XCTestCase {
             failed: [])
         XCTAssertEqual(AppState.distinctRewrittenCount(report), 2, "counts DISTINCT files")
     }
+
+    // MARK: - Duplicate (#853)
+
+    /// The pure naming rule: Finder-parity " copy" suffixing with base
+    /// normalization (a source already named "… copy" doesn't stack).
+    func testDuplicateNamePure() {
+        // Free name: first candidate wins.
+        XCTAssertEqual(
+            AppState.duplicateName(for: "a.md", existingLowercasedNames: ["a.md"]),
+            "a copy.md")
+        // "a copy.md" taken → numbered.
+        XCTAssertEqual(
+            AppState.duplicateName(
+                for: "a.md", existingLowercasedNames: ["a.md", "a copy.md"]),
+            "a copy 2.md")
+        XCTAssertEqual(
+            AppState.duplicateName(
+                for: "a.md",
+                existingLowercasedNames: ["a.md", "a copy.md", "a copy 2.md"]),
+            "a copy 3.md")
+        // Duplicating a copy re-uses the base — never "a copy copy.md".
+        XCTAssertEqual(
+            AppState.duplicateName(
+                for: "a copy.md", existingLowercasedNames: ["a.md", "a copy.md"]),
+            "a copy 2.md")
+        XCTAssertEqual(
+            AppState.duplicateName(
+                for: "a copy 2.md",
+                existingLowercasedNames: ["a copy 2.md"]),
+            "a copy.md")
+        // Case-insensitive collision (APFS default).
+        XCTAssertEqual(
+            AppState.duplicateName(
+                for: "Note.md", existingLowercasedNames: ["note copy.md"]),
+            "Note copy 2.md")
+        // No extension degrades gracefully.
+        XCTAssertEqual(
+            AppState.duplicateName(for: "raw", existingLowercasedNames: ["raw"]),
+            "raw copy")
+    }
+
+    func testDuplicateFileCreatesCopyWithSameContentAndAnnounces() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md", "other.md"])
+        await state.duplicateEntry(path: "a.md")?.value
+
+        XCTAssertTrue(fileExists(vault, "a copy.md"), "copy created on disk")
+        XCTAssertNil(state.lastError)
+        let source = try String(
+            contentsOf: vault.appendingPathComponent("a.md"), encoding: .utf8)
+        let copy = try String(
+            contentsOf: vault.appendingPathComponent("a copy.md"), encoding: .utf8)
+        XCTAssertEqual(copy, source, "byte-for-byte content copy")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement, "Duplicated a.md as a copy.md.",
+            "verbatim announcement (spec §U2-6 discipline)")
+        guard case .createNote(let path)? = state.treeMutation?.kind else {
+            return XCTFail("expected a createNote tree mutation for the copy")
+        }
+        XCTAssertEqual(path, "a copy.md", "focus funnel targets the copy")
+    }
+
+    func testDuplicateInSubfolderStaysInSubfolder() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md"])
+        await state.duplicateEntry(path: "proj/a.md")?.value
+        XCTAssertTrue(fileExists(vault, "proj/a copy.md"), "sibling of the source")
+        XCTAssertNil(state.lastError)
+    }
+
+    func testDuplicateAutoSuffixesAgainstIndexedSiblings() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md", "a copy.md"])
+        await state.duplicateEntry(path: "a.md")?.value
+        XCTAssertTrue(fileExists(vault, "a copy 2.md"))
+        XCTAssertNil(state.lastError)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Duplicated a.md as a copy 2.md.")
+    }
+
+    /// The exclusive-create race (#793 context): a sibling that exists ON
+    /// DISK but not in the index (external create after the scan) must not
+    /// be clobbered — `create_exclusive` surfaces DestinationExists and the
+    /// loop advances to the next candidate.
+    func testDuplicateRaceAgainstUnindexedSiblingAdvancesNotClobbers() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        // Drop "a copy.md" behind the index's back.
+        try "EXTERNAL — must survive\n".write(
+            to: vault.appendingPathComponent("a copy.md"),
+            atomically: true, encoding: .utf8)
+
+        await state.duplicateEntry(path: "a.md")?.value
+
+        XCTAssertNil(state.lastError)
+        XCTAssertTrue(fileExists(vault, "a copy 2.md"), "loop advanced past the race")
+        let external = try String(
+            contentsOf: vault.appendingPathComponent("a copy.md"), encoding: .utf8)
+        XCTAssertEqual(
+            external, "EXTERNAL — must survive\n",
+            "the un-indexed sibling was never truncated")
+    }
+
+    func testDuplicateCommandActsOnSelectionAndIgnoresFolders() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md", "b.md"])
+        // A folder selection must no-op (folders are out of #853's scope).
+        state.treeSelectedNode = AppState.TreeSelection(path: "proj", isDirectory: true)
+        try state.commandRegistry.invokeById(id: SlateCommandID.duplicateEntry)
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertFalse(fileExists(vault, "proj copy"), "no folder duplicate")
+
+        // A file selection duplicates through the registry.
+        state.treeSelectedNode = AppState.TreeSelection(path: "b.md", isDirectory: false)
+        try state.commandRegistry.invokeById(id: SlateCommandID.duplicateEntry)
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertTrue(fileExists(vault, "b copy.md"))
+    }
+
+    // MARK: - Non-empty-folder delete confirmation (#860)
+
+    /// A folder with children STAGES the confirmation — nothing is deleted
+    /// until the alert's Move to Trash resolves it.
+    func testRequestDeleteFolderWithChildrenStagesConfirmation() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md", "proj/b.md"])
+        state.requestDeleteEntry(path: "proj", isDirectory: true)
+        XCTAssertEqual(
+            state.pendingFolderDelete,
+            AppState.PendingFolderDelete(path: "proj", itemCount: 2),
+            "staged with the FileManager shallow count")
+        XCTAssertTrue(fileExists(vault, "proj/a.md"), "nothing deleted yet")
+
+        state.confirmPendingFolderDelete()
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertNil(state.pendingFolderDelete)
+        XCTAssertFalse(fileExists(vault, "proj/a.md"), "confirmed → trashed")
+        XCTAssertEqual(state.lastMutationAnnouncement, "Moved proj to Trash.")
+    }
+
+    func testCancelPendingFolderDeleteKeepsEverything() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md"])
+        state.requestDeleteEntry(path: "proj", isDirectory: true)
+        XCTAssertNotNil(state.pendingFolderDelete)
+
+        state.cancelPendingFolderDelete()
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertNil(state.pendingFolderDelete)
+        XCTAssertTrue(fileExists(vault, "proj/a.md"), "cancel deletes nothing")
+    }
+
+    /// Empty folders keep the no-confirm Finder-parity path.
+    func testRequestDeleteEmptyFolderSkipsConfirmation() async throws {
+        let (state, vault) = try await makeVault(files: ["keep.md"])
+        await state.createFolder(name: "empty", in: "")?.value
+        XCTAssertTrue(fileExists(vault, "empty"))
+
+        state.requestDeleteEntry(path: "empty", isDirectory: true)
+        XCTAssertNil(state.pendingFolderDelete, "0 children ⇒ no alert")
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertFalse(fileExists(vault, "empty"), "deleted directly")
+    }
+
+    /// Files never stage, regardless of route.
+    func testRequestDeleteFileSkipsConfirmation() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        state.requestDeleteEntry(path: "a.md", isDirectory: false)
+        XCTAssertNil(state.pendingFolderDelete)
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertFalse(fileExists(vault, "a.md"))
+    }
+
+    /// Positive cached counts are trusted verbatim (no filesystem probe);
+    /// a cached ZERO re-probes — a stale zero must never bypass the
+    /// confirmation and trash a non-empty folder unprompted (red-team).
+    func testRequestDeleteHonorsKnownChildCount() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md"])
+        // knownChildCount: 0 with a child actually on disk: the zero is
+        // treated as unknown, the probe finds the child, the alert stages.
+        state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: 0)
+        let pending = try XCTUnwrap(state.pendingFolderDelete)
+        XCTAssertEqual(pending.itemCount, 1)
+        state.cancelPendingFolderDelete()
+
+        // HIDDEN-only contents still confirm (Codex r2/r3: .skipsHiddenFiles
+        // made a folder holding only `.env` fail OPEN — exactly the
+        // deletions that hurt). .DS_Store alone would NOT count.
+        try FileManager.default.moveItem(
+            at: vault.appendingPathComponent("proj/a.md"),
+            to: vault.appendingPathComponent("proj/.env"))
+        state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: nil)
+        let hiddenPending = try XCTUnwrap(
+            state.pendingFolderDelete, "hidden-only folder must still confirm")
+        XCTAssertEqual(hiddenPending.itemCount, 1)
+        state.confirmPendingFolderDelete()
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertFalse(fileExists(vault, "proj"))
+
+        // knownChildCount: 3 stages without touching the filesystem — the
+        // path doesn't even exist anymore.
+        state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: 3)
+        XCTAssertEqual(
+            state.pendingFolderDelete,
+            AppState.PendingFolderDelete(path: "proj", itemCount: 3))
+        state.cancelPendingFolderDelete()
+    }
+
+    /// The registry's Move to Trash routes folder selections through the
+    /// same staging funnel (#860 covers every surface, not just the tree).
+    func testDeleteCommandStagesForNonEmptyFolderSelection() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md"])
+        state.treeSelectedNode = AppState.TreeSelection(path: "proj", isDirectory: true)
+        try state.commandRegistry.invokeById(id: SlateCommandID.deleteEntry)
+        XCTAssertNotNil(state.pendingFolderDelete, "palette/menu path stages too")
+        XCTAssertTrue(fileExists(vault, "proj/a.md"))
+        state.cancelPendingFolderDelete()
+    }
+
+    // MARK: - Expansion persistence (#873, AppState round trip)
+
+    /// The expanded-folder mirror persists through workspace.json and
+    /// rehydrates across a close/reopen cycle: closeVault saves the live
+    /// set FIRST (the U1-6 order), the teardown resets the mirror, and
+    /// restoreWorkspaceLayout refills it before any view could bind the
+    /// tree.
+    func testTreeExpansionPersistsAcrossVaultReopen() async throws {
+        let (state, vault) = try await makeVault(files: ["proj/a.md"])
+        state.treeExpandedDirPaths = ["proj", "archive"]
+        state.closeVault()
+        XCTAssertEqual(state.treeExpandedDirPaths, [], "mirror dies with the vault")
+
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        XCTAssertEqual(
+            state.treeExpandedDirPaths, ["proj", "archive"],
+            "restored in recency order, synchronously inside openVault")
+    }
 }

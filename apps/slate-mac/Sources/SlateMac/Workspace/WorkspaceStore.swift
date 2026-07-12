@@ -22,6 +22,13 @@ struct WorkspaceStore {
     static let maxFileBytes = 256 * 1024
     static let schemaVersion = 1
 
+    /// Cap on the persisted expanded-folder PATH list (#873; paths in
+    /// expansion-recency order — see `expandedDirPaths`). Defensive: a
+    /// hostile or pathological workspace.json must not balloon the tree's
+    /// restore work; 500 expanded folders is far beyond any real session.
+    /// The cap keeps the newest SUFFIX (recency is the eviction policy).
+    static let maxExpandedDirs = 500
+
     let vaultRoot: URL
 
     var fileURL: URL {
@@ -36,6 +43,20 @@ struct WorkspaceStore {
         var root: Node
         /// Per-tab view state (U3 extends this with `mode`).
         var activeLeaf: String?
+        /// Expanded file-tree folders (#873, Codex rounds 2–6):
+        /// vault-relative directory PATHS in expansion-RECENCY order
+        /// (oldest→newest). Optional + additive — pre-#873 snapshots
+        /// decode unchanged; older builds ignore the key (the
+        /// `mode`/`propsCollapsed` version-tolerance contract). Write:
+        /// order-preserving last-wins dedup, then a SUFFIX cap of
+        /// `maxExpandedDirs` (newest survive). Read: entries must be
+        /// non-empty, ≤ 1024 chars, relative (no leading `/`), free of
+        /// `..` components; same dedup + suffix cap. Paths, not
+        /// `dirs.id` rowids: SQLite reuses rowids after deletes, so a
+        /// persisted id could expand an unrelated new folder; a path
+        /// that no longer resolves stays a dormant pending entry (never
+        /// fetched) until evicted.
+        var expandedDirPaths: [String]?
     }
 
     indirect enum Node: Codable, Equatable {
@@ -159,7 +180,8 @@ struct WorkspaceStore {
         of model: WorkspaceModel, activeLeaf: String? = nil,
         viewModes: [TabID: NoteViewMode] = [:],
         propertiesCollapsed: Set<TabID> = [],
-        canvasSurfaces: [TabID: CanvasSurface] = [:]
+        canvasSurfaces: [TabID: CanvasSurface] = [:],
+        expandedDirPaths: [String] = []
     ) -> Snapshot {
         Snapshot(
             version: schemaVersion,
@@ -168,7 +190,44 @@ struct WorkspaceStore {
                 of: modelRoot(model), viewModes: viewModes,
                 propertiesCollapsed: propertiesCollapsed,
                 canvasSurfaces: canvasSurfaces),
-            activeLeaf: activeLeaf)
+            activeLeaf: activeLeaf,
+            // Sparse like the per-tab state: absent when nothing is expanded.
+            // ORDER IS RECENCY (oldest→newest, the VM's ledger): dedupe
+            // preserving first-kept-last-wins, then cap by keeping the
+            // SUFFIX so the newest expansions survive (Codex round 3 —
+            // a lexicographic sort evicted the newest path at entry 501).
+            expandedDirPaths: expandedDirPaths.isEmpty
+                ? nil
+                : Array(orderedDedup(expandedDirPaths).suffix(maxExpandedDirs)))
+    }
+
+    /// Read-side validation for the persisted paths: vault-RELATIVE
+    /// (no leading slash), no traversal components, non-empty, bounded
+    /// length — a hostile workspace.json can name nothing outside the
+    /// vault and can't bloat memory. (The old rowid caveat is gone:
+    /// paths survive cache rebuilds by construction.)
+    static func expandedDirPaths(from snapshot: Snapshot) -> [String] {
+        Array(
+            orderedDedup(
+                (snapshot.expandedDirPaths ?? [])
+                    .filter { path in
+                        !path.isEmpty && path.count <= 1024
+                            && !path.hasPrefix("/")
+                            && !path.split(separator: "/").contains("..")
+                    }
+            ).suffix(maxExpandedDirs))
+    }
+
+    /// Order-preserving dedup keeping the LAST occurrence (recency wins:
+    /// a re-expanded path's newest position is its position). Hostile
+    /// duplicates therefore can't consume multiple cap slots.
+    static func orderedDedup(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for path in paths.reversed() where seen.insert(path).inserted {
+            out.append(path)
+        }
+        return out.reversed()
     }
 
     /// The per-tab collapsed set captured in a snapshot (U3-3). Sparse:

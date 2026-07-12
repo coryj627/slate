@@ -99,12 +99,17 @@ final class FileTreeViewModel: ObservableObject {
     /// Test seam: bind to an explicit fetcher instead of a live session. The
     /// tree behaves identically (root loads immediately); only the source of
     /// `DirListing`s differs. `session` stays nil, so no FFI is touched.
-    func bindForTesting(fetcher: @escaping (String) throws -> DirListing) {
+    func bindForTesting(
+        fetcher: @escaping (String) throws -> DirListing,
+        restoringExpandedDirPaths: [String] = []
+    ) {
         self.session = nil
         self.fetcher = fetcher
         rootLevel = []
         children = [:]
         expanded = []
+        pendingExpandedPaths = Set(restoringExpandedDirPaths)
+        expansionRecency = restoringExpandedDirPaths
         fetchState = [:]
         loadRoot()
     }
@@ -121,8 +126,10 @@ final class FileTreeViewModel: ObservableObject {
     /// (a folder rarely holds thousands of *immediate* children); this bound is
     /// generous and the API sorts + pages for us. The tree does not paginate
     /// within a level in U2-4 — a `next_cursor` beyond this bound is a recorded
-    /// follow-up, not a correctness gap for realistic vaults.
-    static let levelPageLimit: UInt32 = 5000
+    /// follow-up, not a correctness gap for realistic vaults. `nonisolated`
+    /// (immutable constant, the `rootFetchKey` precedent) so the detached
+    /// duplicate task (#853) can share the same level-listing bound.
+    nonisolated static let levelPageLimit: UInt32 = 5000
 
     enum FetchState: Equatable {
         case loading
@@ -135,14 +142,27 @@ final class FileTreeViewModel: ObservableObject {
     /// Point the tree at a session (or nil to clear). Resets all cached state
     /// and loads the root level. `FileTreeSidebar` calls this only on vault
     /// change, so re-entrancy on the same session isn't a concern here.
-    func bind(to session: VaultSession?) {
+    ///
+    /// #873: `restoringExpandedDirPaths` rehydrates the persisted expansion
+    /// state instead of resetting to []. The whole set is adopted up front;
+    /// the post-fetch cascade in `loadRoot`/`loadChildren` then materializes
+    /// exactly the reachable expanded chains (an id under a collapsed parent
+    /// stays dormant, exactly like an in-session collapse — re-expanding the
+    /// parent reveals it expanded). Ids that no longer exist match no node
+    /// and cost nothing; the persistence cap bounds any accumulation.
+    func bind(to session: VaultSession?, restoringExpandedDirPaths: [String] = []) {
         self.session = session
         rootLevel = []
         children = [:]
         expanded = []
+        pendingExpandedPaths = Set(restoringExpandedDirPaths)
+        expansionRecency = restoringExpandedDirPaths
         fetchState = [:]
         guard let session else {
             fetcher = nil
+            expanded = []
+            pendingExpandedPaths = []
+            expansionRecency = []
             return
         }
         // Route level fetches through the session. `Paging` with a nil cursor
@@ -167,6 +187,8 @@ final class FileTreeViewModel: ObservableObject {
             let listing = try fetcher("")
             rootLevel = Self.nodes(from: listing, depth: 0)
             fetchState[Self.rootFetchKey] = nil
+            adoptPendingExpansions(in: rootLevel)
+            materializeExpandedChildren(in: rootLevel)
         } catch {
             rootLevel = []
             fetchState[Self.rootFetchKey] = .failed(message: Self.message(for: error))
@@ -183,10 +205,150 @@ final class FileTreeViewModel: ObservableObject {
         fetchState[node.nodeID] = .loading
         do {
             let listing = try fetcher(node.path)
-            children[node.nodeID] = Self.nodes(from: listing, depth: node.depth + 1)
+            let level = Self.nodes(from: listing, depth: node.depth + 1)
+            children[node.nodeID] = level
             fetchState[node.nodeID] = nil
+            adoptPendingExpansions(in: level)
+            materializeExpandedChildren(in: level)
         } catch {
             fetchState[node.nodeID] = .failed(message: Self.message(for: error))
+        }
+    }
+
+    /// After a level lands, fetch the children of any of its directories
+    /// that are already in `expanded` but not yet materialized (#873). This
+    /// is what makes the restored (and the in-session collapsed-then-
+    /// re-expanded) expansion state lazy-safe: a persisted chain
+    /// root → A → A/B materializes exactly A then A/B, one level per fetch,
+    /// while an id whose parent stays collapsed costs nothing. Recursion
+    /// depth is bounded by the expanded set (≤ the persistence cap) and
+    /// paths form a tree, so no cycles. Cached levels no-op in
+    /// `loadChildren`, so re-walks (rescans, re-expands) don't refetch.
+    private func materializeExpandedChildren(in level: [TreeNode]) {
+        for child in level
+        where child.isDirectory
+            && expanded.contains(child.nodeID)
+            && children[child.nodeID] == nil
+        {
+            loadChildren(of: child)
+        }
+    }
+
+    /// Persisted-expansion staging (#873, Codex round 2): paths, not
+    /// rowids. `expanded` holds ONLY materialized nodes; anything not
+    /// yet (or no longer) materialized lives here as a vault-relative
+    /// dir path. Landing levels promote pending paths into `expanded`;
+    /// invalidation DEMOTES cached expanded subtrees back to paths.
+    /// This kills the rowid-reuse hazard outright (SQLite INTEGER
+    /// PRIMARY KEY reuses ids after delete — probe-proven): a deleted
+    /// folder's entry survives only as a path that nothing ever
+    /// re-materializes, and a recycled id can't inherit expansion.
+    var pendingExpandedPaths: Set<String> = []
+
+    /// Expansion RECENCY ledger (Codex round 3): ordered oldest→newest,
+    /// deduped; the persisted array preserves this order so the 500-cap
+    /// evicts the OLDEST expansions (a lexicographic sort evicted the
+    /// newest — the exact keep-newest regression the id era already
+    /// fixed once). Expand appends/moves-to-end; collapse removes;
+    /// demotion keeps position (still logically expanded).
+    private(set) var expansionRecency: [String] = []
+
+    /// The persistence payload: the recency ledger filtered to paths
+    /// that are still live (materialized-expanded or pending).
+    var expandedDirPaths: [String] {
+        let materialized = Set(expanded.compactMap { id -> String? in
+            guard case .dir = id else { return nil }
+            return node(for: id)?.path
+        })
+        let live = materialized.union(pendingExpandedPaths)
+        return expansionRecency.filter { live.contains($0) }
+    }
+
+    private func recencyTouch(_ path: String) {
+        expansionRecency.removeAll { $0 == path }
+        expansionRecency.append(path)
+    }
+
+    /// Promote pending paths that just materialized in `level`.
+    private func adoptPendingExpansions(in level: [TreeNode]) {
+        guard !pendingExpandedPaths.isEmpty else { return }
+        for row in level where row.isDirectory {
+            if pendingExpandedPaths.remove(row.path) != nil {
+                expanded.insert(row.nodeID)
+            }
+        }
+    }
+
+    /// Rewrite expansion bookkeeping after a rename/move: the exact old
+    /// path and every descendant prefix follow the entity to its new
+    /// path, in BOTH the pending set and the recency ledger — without
+    /// this, a renamed expanded folder collapsed and its old path
+    /// lingered as a persisted tombstone (Codex round 4).
+    func remapExpansion(fromPrefix old: String, to new: String) {
+        func remap(_ path: String) -> String? {
+            if path == old { return new }
+            if path.hasPrefix(old + "/") { return new + path.dropFirst(old.count) }
+            return nil
+        }
+        pendingExpandedPaths = Set(pendingExpandedPaths.map { remap($0) ?? $0 })
+        expansionRecency = expansionRecency.map { remap($0) ?? $0 }
+        // Ordering (Codex round 5): the mutation's invalidation has
+        // ALREADY reloaded the level synchronously — the new row landed
+        // before this remap, so its adoption pass found nothing. Re-run
+        // adoption over every loaded level so the remapped path
+        // promotes (and its children fetch) immediately.
+        reAdoptPendingExpansions()
+    }
+
+    /// Re-run pending-path adoption + expanded-child materialization over
+    /// all currently loaded levels. Values are snapshotted first —
+    /// materialization appends NEW cache entries mid-sweep.
+    private func reAdoptPendingExpansions() {
+        guard !pendingExpandedPaths.isEmpty else { return }
+        adoptPendingExpansions(in: rootLevel)
+        materializeExpandedChildren(in: rootLevel)
+        for level in Array(children.values) {
+            adoptPendingExpansions(in: level)
+            materializeExpandedChildren(in: level)
+        }
+    }
+
+    /// Drop expansion bookkeeping for a deleted subtree — tombstones
+    /// would otherwise sit in the pending set consuming cap slots.
+    func removeExpansion(underPrefix prefix: String) {
+        func hit(_ path: String) -> Bool {
+            path == prefix || path.hasPrefix(prefix + "/")
+        }
+        pendingExpandedPaths = pendingExpandedPaths.filter { !hit($0) }
+        expansionRecency.removeAll(where: hit)
+    }
+
+    /// Drop the cached child levels (and fetch state) of every dir under
+    /// `rows`, recursively. Partner of `demoteExpandedSubtree` on the
+    /// targeted-invalidation path: without it, a recycled id could serve
+    /// the DELETED folder's stale cached children on next expand.
+    private func dropDescendantCaches(rows: [TreeNode]) {
+        for row in rows where row.isDirectory {
+            if let kids = children[row.nodeID] {
+                dropDescendantCaches(rows: kids)
+            }
+            children[row.nodeID] = nil
+            fetchState[row.nodeID] = nil
+        }
+    }
+
+    /// Demote every cached, expanded dir under `rows` (recursively) to a
+    /// pending path — called before a cache drop so ids never outlive
+    /// their materialization (the reuse guard), while surviving folders
+    /// re-promote when the refetched level lands.
+    private func demoteExpandedSubtree(rows: [TreeNode]) {
+        for row in rows where row.isDirectory {
+            if expanded.remove(row.nodeID) != nil {
+                pendingExpandedPaths.insert(row.path)
+            }
+            if let kids = children[row.nodeID] {
+                demoteExpandedSubtree(rows: kids)
+            }
         }
     }
 
@@ -198,6 +360,7 @@ final class FileTreeViewModel: ObservableObject {
     func expand(_ node: TreeNode) {
         guard case .directory = node.kind else { return }
         expanded.insert(node.nodeID)
+        recencyTouch(node.path)
         loadChildren(of: node)  // no-op when cached
     }
 
@@ -206,6 +369,7 @@ final class FileTreeViewModel: ObservableObject {
     func collapse(_ node: TreeNode) {
         guard case .directory = node.kind else { return }
         expanded.remove(node.nodeID)
+        expansionRecency.removeAll { $0 == node.path }
     }
 
     /// Toggle disclosure for a directory row (Space/Return, disclosure action).
@@ -241,18 +405,26 @@ final class FileTreeViewModel: ObservableObject {
             // Root (and everything below) may have changed. Refetch root now;
             // drop all child caches so each refetches on its next expand, and
             // refetch the ones that are currently expanded immediately.
-            let expandedChildKeys = children.keys.filter { expanded.contains($0) }
+            // Demote BEFORE the drop (reuse guard — see pendingExpandedPaths):
+            // surviving folders re-promote as their refetched levels land,
+            // and materializeExpandedChildren then refetches each promoted
+            // level in turn — level by level, lazily. (An id-keyed refetch
+            // loop here would resolve RECYCLED ids to unrelated new folders
+            // and eagerly fetch their children — Codex round 3.)
+            demoteExpandedSubtree(rows: rootLevel)
             children.removeAll()
             fetchState = fetchState.filter { $0.key == Self.rootFetchKey }
             loadRoot()
-            for key in expandedChildKeys {
-                if let node = node(for: key) {
-                    loadChildren(of: node)
-                }
-            }
             return
         }
-        // A single level changed. Drop its cache; refetch iff it's disclosed.
+        // A single level changed. Demote the DESCENDANT expansion to paths
+        // first (nested reuse guard — the parent itself stays expanded;
+        // Codex round 3: without this, a recycled child id inherited the
+        // deleted sibling's expansion), then drop the cache and refetch iff
+        // the parent is disclosed.
+        let oldRows = children[parent] ?? []
+        demoteExpandedSubtree(rows: oldRows)
+        dropDescendantCaches(rows: oldRows)
         children[parent] = nil
         fetchState[parent] = nil
         if expanded.contains(parent), let node = node(for: parent) {
@@ -562,6 +734,35 @@ struct FileTreeSidebar: View {
     /// (that would replace the error tab). Cleared the moment it's consumed.
     @State private var suppressOpenForPostMutationFocus = false
 
+    // MARK: Type-select state (#850)
+
+    /// The accumulating type-select prefix. Typing appends; ~1s of quiet
+    /// (`typeSelectResetTask`) clears it, per the Finder/NSOutlineView staple.
+    @State private var typeSelectBuffer = ""
+    @State private var typeSelectResetTask: Task<Void, Never>?
+
+    // MARK: Drag-and-drop feedback state (#851)
+
+    /// Folder rows currently targeted by a live drag (per-row `isTargeted`
+    /// mirror). Drives the selection-token drop wash and the spring-load
+    /// timers.
+    @State private var dropTargetedNodes: Set<NodeID> = []
+    /// The root (list background) drop target's `isTargeted` mirror.
+    @State private var rootDropTargeted = false
+    /// Folders this drag session spring-opened (hover ≥ `springLoadDelay` on
+    /// a collapsed folder). Re-collapsed at session end unless the drop
+    /// landed inside them (`springFoldersToRecollapse`).
+    @State private var springOpenedDirs: Set<NodeID> = []
+    /// Pending spring-load timers, one per hovered collapsed folder.
+    @State private var springLoadTasks: [NodeID: Task<Void, Never>] = [:]
+    /// Fires when every drop target has gone quiet: SwiftUI has no drag-
+    /// session-cancelled callback, so a short "nothing targeted anymore"
+    /// grace window is how a drag that leaves the tree (or is cancelled)
+    /// gets its spring-opened folders re-collapsed. Row-to-row moves flicker
+    /// targets off for a frame or two — far under the window — so they
+    /// don't end the session.
+    @State private var dragSessionEndTask: Task<Void, Never>?
+
     /// The `List` row id / selection key. A real tree node (`.node`) or a
     /// per-level loading/error placeholder derived from its parent level id so
     /// it's stable across renders. Only `.node(.file(_))` selections ever drive
@@ -612,13 +813,30 @@ struct FileTreeSidebar: View {
         .onAppear {
             // Bind the tree to whatever session is already open when the
             // sidebar mounts (re-entering a vault view with files loaded).
-            tree.bind(to: appState.currentSession)
+            // #873: rehydrate the persisted expansion state instead of
+            // resetting — `restoreWorkspaceLayout` filled the mirror before
+            // any view update could run this.
+            tree.bind(
+                to: appState.currentSession,
+                restoringExpandedDirPaths: appState.treeExpandedDirPaths)
             listSelection = rowID(forPath: appState.selectedFilePath)
         }
         .onChange(of: appState.currentVaultURL) {
             // Each new vault gets a fresh tree and its own count announcement.
             didAnnounceCount = false
-            tree.bind(to: appState.currentSession)
+            typeSelectBuffer = ""  // #850: a prefix never spans vaults
+            tree.bind(
+                to: appState.currentSession,
+                restoringExpandedDirPaths: appState.treeExpandedDirPaths)
+        }
+        // #873: mirror every expansion change (user toggles, restores,
+        // move-reveals, spring-loads) into AppState, whose debounced
+        // workspace-save path persists it. Post-update mutation point (#448).
+        .onChange(of: tree.expanded) { _, _ in
+            let paths = tree.expandedDirPaths
+            if appState.treeExpandedDirPaths != paths {
+                appState.treeExpandedDirPaths = paths
+            }
         }
         .onChange(of: appState.isScanning) { _, scanning in
             // Announce once the scan finishes — at that point `files` has been
@@ -752,7 +970,13 @@ struct FileTreeSidebar: View {
             guard fileTreeFocused, let node = selectedTreeNode,
                 Self.deleteCommandAllowed(event: NSApp.currentEvent)
             else { return }
-            appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+            // #860: the request funnel stages a confirmation for a
+            // non-empty folder; files + empty folders keep the direct
+            // Finder-parity path. The node's cached immediate count rides
+            // along so no filesystem probe is needed here.
+            appState.requestDeleteEntry(
+                path: node.path, isDirectory: node.isDirectory,
+                knownChildCount: node.isDirectory ? node.itemCount : nil)
         }
         // Explicit ⌘⌫ delivery: SwiftUI routes a COMMAND-modified ⌫ through
         // the key-press path, not (reliably) the delete-command path — with
@@ -767,7 +991,10 @@ struct FileTreeSidebar: View {
                 press.modifiers.contains(.command),
                 let node = selectedTreeNode
             else { return .ignored }
-            appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+            // #860: same staging funnel as the delete-command path above.
+            appState.requestDeleteEntry(
+                path: node.path, isDirectory: node.isDirectory,
+                knownChildCount: node.isDirectory ? node.itemCount : nil)
             return .handled
         }
         // Space/Return toggle the selected FOLDER's disclosure — the
@@ -785,12 +1012,64 @@ struct FileTreeSidebar: View {
             tree.toggle(node)
             return .handled
         }
+        // F2 begins inline rename of the selected node (#850) — the cross-
+        // app rename fallback the app's own grid already honors
+        // (AccessibleDataGrid handles Return/F2). Return stays UNCHANGED
+        // here: selection opens files and Space/Return toggles folders
+        // (shipped semantics above). Gated exactly like every other tree
+        // key path: never while the RenameField is up (focus-WITHIN — see
+        // `treeKeyInterceptionActive`), never with modifiers down.
+        .onKeyPress(keys: [Self.f2Key]) { press in
+            guard
+                Self.treeKeyInterceptionActive(
+                    fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil),
+                Self.typeSelectModifiersAllowed(press.modifiers),
+                let node = selectedTreeNode
+            else { return .ignored }
+            beginRename(node)
+            return .handled
+        }
+        // Type-select (#850): printable characters accumulate into a prefix
+        // buffer (~1s quiet resets it) that jumps the selection to the next
+        // VISIBLE row — folder or file — whose name matches, wrapping
+        // around (the Finder/NSOutlineView staple; on a 10k vault arrowing
+        // was the only in-tree option). Space is deliberately NOT here — it
+        // belongs to folder disclosure above. Gated like every tree key
+        // path: a modifier chord or an active rename must fall through
+        // untouched (a List-level onKeyPress sees keys BEFORE the rename
+        // field editor does).
+        .onKeyPress(characters: Self.typeSelectCharacters, phases: .down) { press in
+            guard
+                Self.treeKeyInterceptionActive(
+                    fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil),
+                Self.typeSelectModifiersAllowed(press.modifiers)
+            else { return .ignored }
+            handleTypeSelect(press.characters, proxy: proxy)
+            return .handled
+        }
         // Root drop target: a node dropped on the tree background (not on a
         // folder row) moves to the vault root. Folder rows have their own
-        // `.onDrop` that wins when the drop lands on them.
+        // `.onDrop` that wins when the drop lands on them. #851: targeting
+        // is mirrored into `rootDropTargeted` for the drop-destination ring
+        // below and for the drag-session bookkeeping.
         .onDrop(
-            of: [Self.nodeUTType], isTargeted: nil,
+            of: [Self.nodeUTType], isTargeted: rootDropBinding,
             perform: { providers in handleDrop(providers, into: "") })
+        // #851: HIG drag-and-drop "highlight the destination" for the root
+        // target — a selection-token ring hugging the tree, visible while
+        // the drag would drop at the vault root. Decorative drag feedback
+        // (hit-testing off; the drag itself is the interaction).
+        .overlay {
+            if rootDropTargeted {
+                RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                    .strokeBorder(Tokens.ColorRole.selection, lineWidth: 2)
+                    .padding(1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         // Complex-gesture disclosure (WCAG 3.3.2) for the container-level
         // drop target above.
         .accessibilityHint(
@@ -925,6 +1204,27 @@ struct FileTreeSidebar: View {
         // destination); everything else dirties one. `nil` = the root level.
         for parent in mutation.affectedParents {
             tree.treeInvalidation(parent: parentNodeID(forPath: parent))
+        }
+        // Expansion follows the entity (Codex round 4): invalidation just
+        // demoted the affected subtree to OLD paths — rewrite them for
+        // rename/move so the reloaded level re-promotes at the NEW path;
+        // drop them for delete so tombstones can't eat cap slots.
+        switch mutation.kind {
+        case let .rename(oldPath, newPath),
+            let .move(oldPath, newPath, _, _):
+            tree.remapExpansion(fromPrefix: oldPath, to: newPath)
+        case let .delete(path, _, wasDirectory) where wasDirectory:
+            tree.removeExpansion(underPrefix: path)
+        default:
+            break
+        }
+        // Explicit mirror sync (Codex round 6): production rename/move
+        // PRESERVES the dir id, so the reconciled `expanded` set can be
+        // identical pre/post and `.onChange(of: tree.expanded)` never
+        // fires — the path ledger changed even though the id set didn't.
+        let paths = tree.expandedDirPaths
+        if appState.treeExpandedDirPaths != paths {
+            appState.treeExpandedDirPaths = paths
         }
         applyPostMutationFocus(mutation, deleteTarget: preInvalidationDeleteTarget, proxy: proxy)
     }
@@ -1142,6 +1442,18 @@ struct FileTreeSidebar: View {
                 listSelection = .node(node.nodeID)
                 tree.toggle(node)
             }
+            // #851: HIG drag-and-drop "highlight the destination" — the
+            // selection-token wash (rounded like every control fill, U5-2)
+            // while a live drag would drop INTO this folder. Decorative
+            // drag feedback, hidden from AX (the row's hint already
+            // discloses the drop affordance).
+            .background {
+                if dropTargetedNodes.contains(node.nodeID) {
+                    RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                        .fill(Tokens.ColorRole.selection)
+                        .accessibilityHidden(true)
+                }
+            }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(node.name)
@@ -1153,7 +1465,10 @@ struct FileTreeSidebar: View {
             // rename/move/delete/new without the pointer context menu.
             .accessibilityAction(named: Text("Rename")) { beginRename(node) }
             .accessibilityAction(named: Text("Move to Trash")) {
-                appState.deleteEntry(path: node.path, isDirectory: true)
+                // #860: staged confirmation for a non-empty folder.
+                appState.requestDeleteEntry(
+                    path: node.path, isDirectory: true,
+                    knownChildCount: node.itemCount)
             }
             .accessibilityAction(named: Text("New Note in Folder")) {
                 appState.createNote(in: node.path)
@@ -1167,9 +1482,12 @@ struct FileTreeSidebar: View {
             .contextMenu { fileManagementMenu(for: node) }
             // Drag source: a folder can be dragged onto another folder / root.
             .onDrag { dragItem(for: node) }
-            // Drop target: dropping a file/folder onto this folder moves it here.
+            // Drop target: dropping a file/folder onto this folder moves it
+            // here. #851: per-row targeting drives the wash above and the
+            // spring-load timer (hover ≥ 600ms on a collapsed folder
+            // expands it so nested collapsed destinations are reachable).
             .onDrop(
-                of: [Self.nodeUTType], isTargeted: nil,
+                of: [Self.nodeUTType], isTargeted: dropTargetBinding(for: node),
                 perform: { providers in handleDrop(providers, into: node.path) })
         }
     }
@@ -1240,11 +1558,17 @@ struct FileTreeSidebar: View {
             .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(
-                "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, move, and delete actions are in the context menu.")
+                "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, duplicate, move, and delete actions are in the context menu.")
             // U2-5 file-management rotor actions.
             .accessibilityAction(named: Text("Rename")) { beginRename(node) }
+            // #853: rotor parity with the context menu's Duplicate.
+            .accessibilityAction(named: Text("Duplicate")) {
+                appState.duplicateEntry(path: node.path)
+            }
             .accessibilityAction(named: Text("Move to Trash")) {
-                appState.deleteEntry(path: node.path, isDirectory: false)
+                // #860 funnel — a file never stages, but every surface
+                // routes through the single entry point.
+                appState.requestDeleteEntry(path: node.path, isDirectory: false)
             }
             .help(node.path)
             .contextMenu {
@@ -1376,9 +1700,25 @@ struct FileTreeSidebar: View {
             // identical feedback from every surface (red-team F7).
             appState.copyAbsolutePath(vaultRelative: node.path)
         }
+        // #853: Duplicate, files only (folders are out of the issue's
+        // scope). Plain Button like the inspection pair — the u2_spec
+        // symbol table maps SlateSymbol roles to the original mutation
+        // verbs; menu-bar + palette homes exist per the context-menus.md
+        // redundancy rule (this one acts on the CLICKED node, those on
+        // the selection).
+        if !node.isDirectory {
+            Button("Duplicate") {
+                appState.duplicateEntry(path: node.path)
+            }
+        }
         Divider()
         Button(role: .destructive) {
-            appState.deleteEntry(path: node.path, isDirectory: node.isDirectory)
+            // #860: non-empty folders stage a confirmation; files and
+            // empty folders keep the direct path. The clicked node's
+            // cached immediate count rides along.
+            appState.requestDeleteEntry(
+                path: node.path, isDirectory: node.isDirectory,
+                knownChildCount: node.isDirectory ? node.itemCount : nil)
         } label: {
             SlateSymbol.trash.label("Move to Trash")
         }
@@ -1401,6 +1741,12 @@ struct FileTreeSidebar: View {
     /// node's path under the private UTType. Also records the source in AppState
     /// so the drop handler knows whether the dragged node is a directory.
     private func dragItem(for node: TreeNode) -> NSItemProvider {
+        // #851: a NEW drag beginning with leftovers from a previous session
+        // (a cancel the watchdog hasn't reaped yet) settles the old one
+        // first — its spring-opened folders re-collapse (no drop landed).
+        if !springOpenedDirs.isEmpty || !springLoadTasks.isEmpty {
+            endDragSession(dropDestination: nil)
+        }
         appState.dragSourceNode = AppState.TreeSelection(
             path: node.path, isDirectory: node.isDirectory)
         let provider = NSItemProvider()
@@ -1423,6 +1769,11 @@ struct FileTreeSidebar: View {
     private func handleDrop(_ providers: [NSItemProvider], into destinationFolder: String) -> Bool {
         guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(Self.nodeUTType) })
         else { return false }
+        // #851: the drag session ends HERE with a known destination —
+        // spring-opened folders that the drop did NOT land in re-collapse;
+        // the destination's own chain stays open (the user is about to see
+        // the moved node inside it).
+        endDragSession(dropDestination: destinationFolder)
         provider.loadDataRepresentation(forTypeIdentifier: Self.nodeUTType) { data, _ in
             guard let data, let path = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor in
@@ -1441,6 +1792,134 @@ struct FileTreeSidebar: View {
             }
         }
         return true
+    }
+
+    // MARK: - Drop feedback + spring-loading (#851)
+
+    /// Hover dwell on a COLLAPSED folder before it spring-opens mid-drag.
+    /// 600ms — long enough that sweeping a drag across the tree doesn't
+    /// rifle folders open, short enough to feel like Finder's spring.
+    static let springLoadDelay: Duration = .milliseconds(600)
+
+    /// Quiet window after the last drop target deactivates before the drag
+    /// session is considered over (left the tree / cancelled). Row-to-row
+    /// moves flicker targets off for at most a frame or two (~16–33ms), so
+    /// 300ms cleanly separates "between rows" from "gone".
+    static let dragSessionEndGrace: Duration = .milliseconds(300)
+
+    /// Pure (#851): of the folders a drag spring-opened, the ones to
+    /// re-collapse once the session ends. A folder stays open only when the
+    /// drop landed in it or somewhere beneath it (`destinationFolder` is
+    /// vault-relative, "" = root); a cancelled/exited drag
+    /// (`destinationFolder == nil`) re-collapses everything. Static so the
+    /// set semantics are regression-locked without a live drag (the
+    /// `moveOutcome` pattern).
+    static func springFoldersToRecollapse(
+        openedPaths: [String], destinationFolder: String?
+    ) -> [String] {
+        guard let destination = destinationFolder else { return openedPaths }
+        return openedPaths.filter { opened in
+            !(destination == opened || destination.hasPrefix(opened + "/"))
+        }
+    }
+
+    /// Per-row `isTargeted` binding for a folder row's drop target: mirrors
+    /// into `dropTargetedNodes` (the wash), arms/cancels the spring-load
+    /// timer, and feeds the session-end watchdog. Binding setters run
+    /// outside the view-update transaction (#448-safe).
+    private func dropTargetBinding(for node: TreeNode) -> Binding<Bool> {
+        Binding(
+            get: { dropTargetedNodes.contains(node.nodeID) },
+            set: { targeted in
+                if targeted {
+                    dropTargetedNodes.insert(node.nodeID)
+                    dragSessionEndTask?.cancel()
+                    dragSessionEndTask = nil
+                    scheduleSpringLoad(for: node)
+                } else {
+                    dropTargetedNodes.remove(node.nodeID)
+                    springLoadTasks[node.nodeID]?.cancel()
+                    springLoadTasks[node.nodeID] = nil
+                    scheduleDragSessionEndCheck()
+                }
+            })
+    }
+
+    /// The root drop target's `isTargeted` binding — same bookkeeping as the
+    /// rows, driving the root ring instead of a row wash. The root never
+    /// spring-loads (there is nothing to open).
+    private var rootDropBinding: Binding<Bool> {
+        Binding(
+            get: { rootDropTargeted },
+            set: { targeted in
+                rootDropTargeted = targeted
+                if targeted {
+                    dragSessionEndTask?.cancel()
+                    dragSessionEndTask = nil
+                } else {
+                    scheduleDragSessionEndCheck()
+                }
+            })
+    }
+
+    /// Arm the spring-load timer for a hovered COLLAPSED folder: after
+    /// `springLoadDelay` of continuous targeting it expands and is recorded
+    /// in `springOpenedDirs` so the session end can restore it. Folders the
+    /// user already expanded are never recorded — they were open before the
+    /// drag and must stay open after it.
+    private func scheduleSpringLoad(for node: TreeNode) {
+        guard node.isDirectory, !tree.expanded.contains(node.nodeID) else { return }
+        let id = node.nodeID
+        springLoadTasks[id]?.cancel()
+        springLoadTasks[id] = Task { @MainActor in
+            try? await Task.sleep(for: Self.springLoadDelay)
+            guard !Task.isCancelled,
+                dropTargetedNodes.contains(id),
+                !tree.expanded.contains(id)
+            else { return }
+            tree.expand(node)
+            springOpenedDirs.insert(id)
+        }
+    }
+
+    /// Start (restarting) the session-end watchdog: if no target goes live
+    /// again within `dragSessionEndGrace`, the drag left the tree or was
+    /// cancelled — settle the session with no destination.
+    private func scheduleDragSessionEndCheck() {
+        dragSessionEndTask?.cancel()
+        dragSessionEndTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.dragSessionEndGrace)
+            guard !Task.isCancelled else { return }
+            if dropTargetedNodes.isEmpty && !rootDropTargeted {
+                endDragSession(dropDestination: nil)
+            }
+        }
+    }
+
+    /// Settle the drag session: cancel timers, clear the target mirrors, and
+    /// re-collapse the spring-opened folders the drop did NOT land in
+    /// (`springFoldersToRecollapse`; nil destination ⇒ all of them).
+    private func endDragSession(dropDestination: String?) {
+        dragSessionEndTask?.cancel()
+        dragSessionEndTask = nil
+        for task in springLoadTasks.values { task.cancel() }
+        springLoadTasks = [:]
+        dropTargetedNodes = []
+        rootDropTargeted = false
+        guard !springOpenedDirs.isEmpty else { return }
+        let opened: [(id: NodeID, path: String)] = springOpenedDirs.compactMap { id in
+            tree.node(for: id).map { (id, $0.path) }
+        }
+        let recollapse = Set(
+            Self.springFoldersToRecollapse(
+                openedPaths: opened.map(\.path),
+                destinationFolder: dropDestination))
+        for entry in opened where recollapse.contains(entry.path) {
+            if let node = tree.node(for: entry.id) {
+                tree.collapse(node)
+            }
+        }
+        springOpenedDirs = []
     }
 
     /// Inline "Loading…" row shown under a folder whose children are being
@@ -1600,10 +2079,148 @@ struct FileTreeSidebar: View {
     ///
     /// Static + pure so the two-flag semantics are regression-locked by
     /// a unit test (the `deleteCommandAllowed` pattern).
+    /// Typing-state modifiers (Shift, Caps Lock) pass; chord modifiers
+    /// (⌘⌥⌃) reject — shifted characters must type-select and caps lock
+    /// must not kill F2/type-select (red-team probe), while real chords
+    /// fall through to their owners. Static + pure (the
+    /// `treeKeyInterceptionActive` pattern).
+    static func typeSelectModifiersAllowed(_ modifiers: EventModifiers) -> Bool {
+        modifiers.subtracting([.shift, .capsLock]).isEmpty
+    }
+
     static func treeKeyInterceptionActive(
         fileTreeFocused: Bool, isRenaming: Bool
     ) -> Bool {
         fileTreeFocused && !isRenaming
+    }
+
+    // MARK: - Type-select + F2 (#850)
+
+    /// F2 as a SwiftUI `KeyEquivalent`: AppKit delivers function keys as
+    /// Unicode scalars in the F700 block (`NSF2FunctionKey` = U+F705), and
+    /// `onKeyPress(keys:)` matches on exactly that character.
+    static let f2Key = KeyEquivalent(Character(UnicodeScalar(UInt16(NSF2FunctionKey))!))
+
+    /// Quiet time before the type-select prefix buffer resets (~the
+    /// NSTableView/Finder cadence).
+    static let typeSelectResetDelay: Duration = .seconds(1)
+
+    /// The characters that feed type-select: letters, digits, punctuation,
+    /// symbols. Deliberately NOT whitespace — Space belongs to folder
+    /// disclosure (shipped semantics, unchanged) and control keys belong to
+    /// navigation.
+    static let typeSelectCharacters: CharacterSet = {
+        var set = CharacterSet.alphanumerics
+        set.formUnion(.punctuationCharacters)
+        set.formUnion(.symbols)
+        return set
+    }()
+
+    /// Case/diacritic fold for type-select matching ("é" matches "e",
+    /// "READ" matches "rea"). Locale-independent so tests are deterministic
+    /// across machines.
+    static func typeSelectFold(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    /// Pure (#850): the visible-row index a type-select buffer lands on, or
+    /// nil when nothing matches. Semantics (Finder/NSOutlineView):
+    ///   - a single-character buffer advances — the scan starts AFTER the
+    ///     current selection, so pressing "r" repeatedly cycles through the
+    ///     r-names;
+    ///   - a multi-character (refining) buffer stays on the current row
+    ///     while it still matches ("r" landed on readme.md; "re" must not
+    ///     jump away), else scans onward;
+    ///   - the scan wraps around the full visible list (folder AND file
+    ///     names — `names` is the flattened visible rows in order).
+    /// Static so the matcher is regression-locked without a running List
+    /// (the `moveOutcome` pattern).
+    static func typeSelectIndex(
+        names: [String], prefix: String, selectedIndex: Int?
+    ) -> Int? {
+        guard !prefix.isEmpty, !names.isEmpty else { return nil }
+        let foldedPrefix = typeSelectFold(prefix)
+        func matches(_ index: Int) -> Bool {
+            typeSelectFold(names[index]).hasPrefix(foldedPrefix)
+        }
+        if prefix.count > 1, let sel = selectedIndex, names.indices.contains(sel),
+            matches(sel)
+        {
+            return sel
+        }
+        let anchor: Int
+        if let sel = selectedIndex, names.indices.contains(sel) {
+            anchor = (sel + 1) % names.count
+        } else {
+            anchor = 0
+        }
+        for offset in 0..<names.count {
+            let index = (anchor + offset) % names.count
+            if matches(index) { return index }
+        }
+        return nil
+    }
+
+    /// Apply one type-select keystroke: grow the buffer, re-arm the reset
+    /// timer, and move the selection to the match among the VISIBLE rows.
+    /// Landing on a file flows through the normal selection funnel
+    /// (`.onChange(of: listSelection)` opens it, and the existing
+    /// tree-focused announcement path speaks "Selected: <name>" exactly
+    /// once — no separate announcement here, so no double-speak); landing
+    /// on a folder selects it silently, exactly like arrowing onto it.
+    /// Next buffer state for an incoming type-select character: repeating
+    /// the SAME character cycles (buffer stays that single character, and
+    /// the matcher's advance-from-selection walk lands the next match —
+    /// the Finder/NSTableView idiom); any other character refines the
+    /// prefix. Static + pure (Codex round 2: "bb" used to dead-end).
+    static func nextTypeSelectBuffer(current: String, incoming: String) -> String {
+        if !current.isEmpty,
+            current.allSatisfy({ String($0).caseInsensitiveCompare(incoming) == .orderedSame }) {
+            return incoming
+        }
+        return current + incoming
+    }
+
+    private func handleTypeSelect(_ characters: String, proxy: ScrollViewProxy) {
+        typeSelectResetTask?.cancel()
+        typeSelectBuffer = Self.nextTypeSelectBuffer(
+            current: typeSelectBuffer, incoming: characters)
+        typeSelectResetTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.typeSelectResetDelay)
+            guard !Task.isCancelled else { return }
+            typeSelectBuffer = ""
+        }
+        let rows = tree.visibleRows
+        let selectedIndex: Int? = {
+            guard case let .node(id) = listSelection else { return nil }
+            return rows.firstIndex(where: { $0.nodeID == id })
+        }()
+        guard
+            let index = Self.typeSelectIndex(
+                names: rows.map(\.name), prefix: typeSelectBuffer,
+                selectedIndex: selectedIndex)
+        else { return }
+        let target = rows[index].nodeID
+        let moved = listSelection != .node(target)
+        if moved {
+            listSelection = .node(target)
+        }
+        // Reveal + MATERIALIZE the landing (red-team probe: without the
+        // scroll, a long jump leaves the viewport unmoved, AppKit never
+        // applies the row selection, and the next native arrow snaps the
+        // binding to row 0 — the applyPostMutationFocus lesson).
+        proxy.scrollTo(RowID.node(target), anchor: .center)
+        // Folder landings produce no selectedFilePath change, so the
+        // tree-focused selection announcement never fires — speak them
+        // here or type-select is indistinguishable from a dead buffer
+        // for VoiceOver users (file landings speak via the existing
+        // path; this branch must not double-speak them).
+        // Only on a CHANGED landing — prefix refinement that stays on the
+        // same row must not re-announce (Codex round 2: chatter).
+        if moved, case .dir = target,
+            let row = rows.first(where: { $0.nodeID == target }) {
+            postAccessibilityAnnouncement("Selected: \(row.name), folder", priority: .medium)
+        }
     }
 
     /// →/← handling for the tree (macOS custom-row outline navigation). The

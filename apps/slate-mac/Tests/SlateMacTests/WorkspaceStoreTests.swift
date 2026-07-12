@@ -106,6 +106,90 @@ final class WorkspaceStoreTests: XCTestCase {
         }
     }
 
+    // MARK: Expanded-folder persistence (#873)
+
+    /// The expanded-folder PATH set (#873, Codex round 2: paths, not
+    /// reusable rowids) rides the snapshot and survives the disk
+    /// round-trip, layout untouched.
+    func testExpandedDirPathsRoundTripThroughDisk() throws {
+        let store = WorkspaceStore(vaultRoot: tempDir)
+        let model = depthThreeModel()
+        try store.save(
+            WorkspaceStore.snapshot(
+                of: model, expandedDirPaths: ["notes", "notes/deep", "archive"]))
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(
+            WorkspaceStore.expandedDirPaths(from: loaded),
+            ["notes", "notes/deep", "archive"],
+            "recency order round-trips verbatim — order IS the eviction policy")
+        XCTAssertEqual(WorkspaceStore.model(from: loaded), model, "layout unaffected")
+    }
+
+    /// Version tolerance: a snapshot without the key decodes unchanged and
+    /// reads back empty — never a decode failure, never a phantom expansion.
+    /// (This also covers pre-paths snapshots that carried the retired
+    /// `expandedDirs` id key: unknown keys drop, expansion starts fresh.)
+    func testSnapshotWithoutExpandedDirPathsKeyDecodesAsEmpty() throws {
+        let groupID = UUID()
+        let json = """
+            {"version": 1, "activeGroup": "\(groupID.uuidString)",
+             "root": {"kind": "group", "id": "\(groupID.uuidString)",
+                      "tabs": []},
+             "expandedDirs": [3, 7]}
+            """
+        let snapshot = try JSONDecoder().decode(
+            WorkspaceStore.Snapshot.self, from: Data(json.utf8))
+        XCTAssertNil(snapshot.expandedDirPaths)
+        XCTAssertEqual(WorkspaceStore.expandedDirPaths(from: snapshot), [])
+    }
+
+    /// Sparse-write discipline: nothing expanded ⇒ no key in the file.
+    func testEmptyExpandedDirPathsIsNotWritten() throws {
+        let snapshot = WorkspaceStore.snapshot(
+            of: depthThreeModel(), expandedDirPaths: [])
+        XCTAssertNil(snapshot.expandedDirPaths)
+        let data = try JSONEncoder().encode(snapshot)
+        let raw = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertFalse(raw.contains("expandedDirPaths"))
+    }
+
+    /// Defensive bounds: cap on write; hostile payloads (absolute paths,
+    /// traversal, empties, oversized entries) are filtered on read so a
+    /// tampered workspace.json can name nothing outside the vault.
+    func testExpandedDirPathsCappedOnWriteAndFilteredOnRead() throws {
+        let oversized = (1...600).map { "dir-\($0)" }
+        let snapshot = WorkspaceStore.snapshot(
+            of: depthThreeModel(), expandedDirPaths: oversized)
+        XCTAssertEqual(
+            snapshot.expandedDirPaths?.count, WorkspaceStore.maxExpandedDirs)
+
+        var hostile = snapshot
+        hostile.expandedDirPaths = [
+            "", "/etc", "a/../../escape", "ok/child",
+            String(repeating: "x", count: 2000),
+        ]
+        let read = WorkspaceStore.expandedDirPaths(from: hostile)
+        XCTAssertEqual(read, ["ok/child"], "only the well-formed relative path survives")
+    }
+
+    /// Codex round 3: the cap keeps the NEWEST expansions (recency order,
+    /// suffix cap) — entry 501 survives, the oldest evicts; duplicates
+    /// collapse to their newest position and can't eat cap slots.
+    func testExpandedDirPathsCapKeepsNewestAndDedupes() throws {
+        let old = (1...WorkspaceStore.maxExpandedDirs).map { "old-\($0)" }
+        let snapshot = WorkspaceStore.snapshot(
+            of: depthThreeModel(), expandedDirPaths: old + ["z-newest"])
+        let written = try XCTUnwrap(snapshot.expandedDirPaths)
+        XCTAssertEqual(written.count, WorkspaceStore.maxExpandedDirs)
+        XCTAssertEqual(written.last, "z-newest", "the newest expansion survives entry 501")
+        XCTAssertFalse(written.contains("old-1"), "the oldest evicts")
+
+        XCTAssertEqual(
+            WorkspaceStore.orderedDedup(["a", "b", "a", "c", "b"]),
+            ["a", "c", "b"],
+            "last occurrence wins; order otherwise preserved")
+    }
+
     // MARK: Degradations
 
     func testUnknownVersionYieldsNil() throws {

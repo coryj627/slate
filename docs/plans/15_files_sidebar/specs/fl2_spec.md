@@ -44,6 +44,7 @@ Tests: set-selection state transitions (click, ⇧-click, ⌘-click, ⇧↑↓, 
 **Context-menu completeness** (single selection):
 
 4. **Duplicate** (files only): copy `<stem> 2.<ext>` (increment until free — Finder convention) in the same folder via core read+create (no link rewrite: duplicates keep their outgoing links verbatim); announce + select the copy.
+   *Amendment (2026-07-12, #853):* Duplicate SHIPPED ahead of FL with a `<stem> copy.<ext>` suffix walk (not `<stem> 2.<ext>`) over exclusive-create, via context menu + File menu + palette + rotor. When FL lands, inherit the shipped naming — do not introduce the ` 2` convention alongside it. Folders remain unshipped.
 5. **Reveal in Finder**: `NSWorkspace.shared.activateFileViewerSelecting` on the absolute URL (files and folders).
 6. **Copy Wikilink** (markdown files): `[[stem]]` when the stem is unique vault-wide under the resolver's case-insensitive convention, else `[[<vault-relative path sans .md>]]`; uniqueness via one indexed query. **Copy Path**: vault-relative path verbatim. Both announce `"Copied."`.
 7. **Name-validity warnings** in `RenameField` (and the new-folder/new-note flows): live inline warning line for `/` `:` `\0` (filesystem) and `[ ] # ^ |` (link-breaking) — warn-don't-block until commit; committing a filesystem-invalid name keeps the existing error path. AX: warning is a live region, polite.
@@ -60,6 +61,7 @@ Tests: batch move/delete outcome aggregation + announce strings; duplicate suffi
 1. **New Note from Template…** on folder rows + palette. Reuses the existing template picker view and `list_templates`/`render_template` (baseline facts) — no sidebar-private template list (locked decision 14). Flow: pick template → name prompt (default `Untitled`) → `render_template` with `{{title}}` = chosen name → create in folder → open → caret at `cursor_byte_offset` when present. Empty `Templates/` ⇒ item disabled with tooltip/AX hint "No templates in Templates/".
 2. **Finder drop-in** (locked decision 13): accept `.fileURL` drops on folder rows and tree background (= root). Files **copy** into the vault via `FileManager` (never move; security-scoped access if sandboxed); collision → ` 2` suffix walk; directories copy recursively. After the copy batch, trigger the existing rescan/invalidation seam for the target level and announce `"Imported 3 files into Research."`. Drops of already-in-vault URLs are ignored (internal moves use the private UTType path).
 3. Drop feedback: folder rows highlight on hover (existing internal-drag affordance reused); spring-loaded expansion explicitly **out of scope** (FL has no hover-timer interactions; keyboard path is Move To…).
+   *Amendment (2026-07-12, #851):* superseded — drop-target highlight AND spring-loaded expansion (600ms, watchdog re-collapse) shipped via the tree-UX PR. FL inherits both; the out-of-scope premise no longer holds.
 4. AX: import announce; a failed/partial import lists failures in one alert.
 
 Tests: template render→create→caret; empty-templates disabled state; import collision suffix; directory recursion; in-vault URL ignored; partial-failure aggregation.
