@@ -23,6 +23,9 @@ regex = { workspace = true }
 ropey = { workspace = true }
 similar = { workspace = true }
 unicode-normalization = { workspace = true }
+# GraphIndex adjacency storage (Milestone P #550) — see the workspace
+# manifest for the StableDiGraph / page_rank-holes rationale.
+petgraph = { workspace = true }
 # Logging facade (#507). Non-fatal library diagnostics route through
 # `log::warn!` / `log::debug!`; these are no-ops unless a host installs a
 # sink. See the "Diagnostics & the logging facade" note in lib.rs for the

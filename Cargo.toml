@@ -86,6 +86,21 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # transitively (via `idna`); pinning it as a direct dep is cheap.
 unicode-normalization = "0.1"
 regex = "1.12.4"
+# petgraph backs Milestone P's GraphIndex (#550): StableDiGraph keeps
+# node indices stable across removals, which the incremental link-graph
+# mirror relies on. default-features = false sheds graphmap /
+# matrix_graph; keep `std` explicitly — it is a default feature at
+# 0.8.x and dropping it silently switches petgraph to its no_std/
+# hashbrown internals. algo::page_rank is ungated and iteration-based
+# (damping_factor, nb_iter) at 0.8.3 but iterates 0..node_count via
+# from_index, so it must only ever run on a compact hole-free Graph,
+# never on the live StableDiGraph (p0_spec §P0-2). parallel_page_rank
+# is rayon-gated and must stay unused (determinism, DoD §P-C).
+# MIT OR Apache-2.0 — compatible inbound for AGPL-3.0-or-later.
+petgraph = { version = "0.8", default-features = false, features = [
+    "stable_graph",
+    "std",
+] }
 
 # --- Diagnostics facade (#507) ----------------------------------------
 # `log` is the crate-wide logging facade slate-core routes its non-fatal

@@ -3,14 +3,20 @@
 
 //! SQLite storage + query surface for note-to-note links.
 //!
-//! Schema lives in `migrations/004_links.sql`. Rows are written
-//! exclusively by the scanner on its slow path; nothing else touches
-//! the table. The query side serves the backlinks panel, outgoing-
-//! links panel, and unresolved-links audit (issues #51, #52).
+//! Schema lives in `migrations/004_links.sql`. Bulk rows are written
+//! by [`replace_links_for_file`] (save path, scan slow path, purge);
+//! two narrower mutations exist beside it: [`re_resolve_unresolved_links`]
+//! flips NULL `target_path`s to resolved, and the move flow's bulk
+//! inbound repoint (`finish_structural_move`) rewrites `target_path`
+//! old → new. FK CASCADE additionally erases a deleted file's rows.
+//! The query side serves the backlinks panel, outgoing-links panel,
+//! unresolved-links audit (issues #51, #52), and the graph mirror's
+//! replay hooks (Milestone P #550).
 
 use rusqlite::{Connection, Transaction, params};
 
 use crate::VaultError;
+use crate::graph::{GraphLinkRow, InboundRow};
 use crate::link_resolver::{InMemoryVaultIndex, ResolvedLink, resolve_link};
 use crate::links::{LinkAnchor, LinkKind, extract_links};
 use crate::session::{Page, Paging};
@@ -66,8 +72,13 @@ pub struct UnresolvedLink {
 /// extracted from `markdown_source`. Resolution runs against
 /// `index` (the snapshot of vault paths captured at scan start).
 ///
-/// Called by the scanner's slow path; the fast path never touches
-/// this table so unchanged files don't churn link rows.
+/// Called by the scanner's slow path and the save/purge paths; the
+/// scan fast path never touches this table so unchanged files don't
+/// churn link rows.
+///
+/// Returns the graph-relevant projection of exactly the rows it
+/// wrote, so the session's `GraphIndex` hook can replay the committed
+/// state without re-reading anything (Milestone P #550).
 //
 // 5 params is one over clippy's default ceiling but the bundling
 // options (a borrow-laden struct, or splitting tx out) hurt
@@ -81,14 +92,14 @@ pub(crate) fn replace_links_for_file(
     source_path: &str,
     markdown_source: &str,
     index: &InMemoryVaultIndex,
-) -> Result<(), VaultError> {
+) -> Result<Vec<GraphLinkRow>, VaultError> {
     tx.execute(
         "DELETE FROM links WHERE source_file_id = ?1",
         params![source_file_id],
     )?;
     let parsed = extract_links(markdown_source);
     if parsed.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut stmt = tx.prepare_cached(
         "INSERT INTO links (
@@ -97,6 +108,7 @@ pub(crate) fn replace_links_for_file(
             display_text
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?;
+    let mut written = Vec::with_capacity(parsed.len());
     for (ordinal, link) in parsed.into_iter().enumerate() {
         let resolved = resolve_link(&link.target_raw, link.anchor.clone(), source_path, index);
         let (target_path, is_external) = match &resolved {
@@ -121,8 +133,67 @@ pub(crate) fn replace_links_for_file(
             link.span_end as i64,
             link.display_text,
         ])?;
+        written.push(GraphLinkRow {
+            target_path,
+            target_raw: link.target_raw,
+            is_embed: link.is_embed,
+            is_external,
+        });
     }
-    Ok(())
+    Ok(written)
+}
+
+/// The graph-relevant projection of one source's current rows, in
+/// ordinal order — the replay payload after `re_resolve_unresolved_links`
+/// touches a source the graph hook didn't just rewrite itself.
+pub(crate) fn graph_linkset_for(
+    tx: &Transaction,
+    source_path: &str,
+) -> Result<Vec<GraphLinkRow>, VaultError> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT links.target_path, links.target_raw, links.is_embed, links.is_external
+         FROM links
+         JOIN files ON files.id = links.source_file_id
+         WHERE files.path = ?1
+         ORDER BY links.ordinal ASC",
+    )?;
+    let rows = stmt.query_map(params![source_path], |row| {
+        Ok(GraphLinkRow {
+            target_path: row.get::<_, Option<String>>(0)?,
+            target_raw: row.get::<_, String>(1)?,
+            is_embed: row.get::<_, i64>(2)? != 0,
+            is_external: row.get::<_, i64>(3)? != 0,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(VaultError::from)
+}
+
+/// Every internal row pointing AT `target_path`, in deterministic
+/// `(source path, ordinal)` order. Captured by the graph hooks
+/// in-transaction — before a CASCADE delete erases the target's
+/// `files` row, or right after a file (re)appears at a path that
+/// dangling rows still name (p0_spec P0-1 rule 1a).
+pub(crate) fn graph_inbound_rows(
+    conn: &Connection,
+    target_path: &str,
+) -> Result<Vec<InboundRow>, VaultError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT files.path, links.target_raw, links.is_embed
+         FROM links
+         JOIN files ON files.id = links.source_file_id
+         WHERE links.target_path = ?1 AND links.is_external = 0
+         ORDER BY files.path ASC, links.ordinal ASC",
+    )?;
+    let rows = stmt.query_map(params![target_path], |row| {
+        Ok(InboundRow {
+            source_path: row.get::<_, String>(0)?,
+            target_raw: row.get::<_, String>(1)?,
+            is_embed: row.get::<_, i64>(2)? != 0,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(VaultError::from)
 }
 
 /// After the initial scan completes, re-resolve any link whose
@@ -132,7 +203,11 @@ pub(crate) fn replace_links_for_file(
 /// Pure SQL pass — reads every unresolved internal link, runs the
 /// resolver against the now-complete vault index, and updates rows
 /// that newly resolve.
-pub(crate) fn re_resolve_unresolved_links(tx: &Transaction) -> Result<(), VaultError> {
+///
+/// Returns the sorted, distinct source paths whose rows actually
+/// changed, so the graph hook can replay each affected linkset
+/// (Milestone P #550). Empty when nothing resolved.
+pub(crate) fn re_resolve_unresolved_links(tx: &Transaction) -> Result<Vec<String>, VaultError> {
     let paths: Vec<String> = tx
         .prepare("SELECT path FROM files")?
         .query_map([], |row| row.get::<_, String>(0))?
@@ -157,18 +232,22 @@ pub(crate) fn re_resolve_unresolved_links(tx: &Transaction) -> Result<(), VaultE
         .collect::<Result<Vec<_>, _>>()?;
 
     if rows.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
+    let mut affected: Vec<String> = Vec::new();
     let mut update = tx.prepare("UPDATE links SET target_path = ?1 WHERE rowid = ?2")?;
     for (rowid, source_path, target_raw, anchor_str) in rows {
         let anchor = deserialize_anchor(anchor_str.as_deref());
         let resolved = resolve_link(&target_raw, anchor, &source_path, &index);
         if let ResolvedLink::Resolved { target_path, .. } = resolved {
             update.execute(params![target_path, rowid])?;
+            affected.push(source_path);
         }
     }
-    Ok(())
+    affected.sort();
+    affected.dedup();
+    Ok(affected)
 }
 
 /// All outgoing links from `source_path`, in document order.

@@ -665,6 +665,18 @@ pub struct VaultSession {
     /// Coarse session-local generation for Bases query caches. Bumped after
     /// index-changing writes so cache lookups stay O(1) at large vault sizes.
     bases_generation: AtomicU64,
+    /// In-memory adjacency mirror of the links table (Milestone P
+    /// #550). `None` until the first graph query (`with_graph`), then
+    /// maintained by replaying committed writes: hooked helpers stage
+    /// ops into a stack-owned [`GraphOpSink`] while a write
+    /// transaction is open, and `graph_apply` applies the batch only
+    /// after the commit succeeds.
+    ///
+    /// LOCK ORDER: `conn` before `graph`, always — every graph build
+    /// and query acquires the connection first, and hooks stage while
+    /// the connection lock is already held. Never acquire `conn`
+    /// while holding `graph`.
+    graph: Mutex<Option<crate::graph::GraphIndex>>,
     /// Monotonic salt for new op-log name stems (O-1 #539): stems derive
     /// from `blake3(path ‖ now_ms ‖ salt)`, so even two allocations for
     /// the same path in the same millisecond differ.
@@ -1131,6 +1143,80 @@ impl VaultSession {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    // --- GraphIndex plumbing (Milestone P #550) -------------------------
+
+    /// Open a staging sink for one hooked mutation. Live only when
+    /// the index has been built — cold sessions stage nothing and pay
+    /// nothing (DoD §P-E). Caller must already hold the connection
+    /// lock (LOCK ORDER on the `graph` field).
+    fn graph_sink(&self) -> crate::graph::GraphOpSink {
+        let live = self.graph.lock().expect("graph index mutex").is_some();
+        crate::graph::GraphOpSink::new(live)
+    }
+
+    /// Apply one committed mutation's staged ops. Call ONLY after the
+    /// enclosing transaction committed (rule 3a); error paths drop
+    /// the sink instead. A poisoned sink (a hooked path that
+    /// reported-and-continued on error) or a replay that does not fit
+    /// the current graph drops the index — the next query rebuilds
+    /// lazily, so corruption is never left standing.
+    fn graph_apply(&self, sink: crate::graph::GraphOpSink) {
+        let (live, poisoned, ops) = sink.into_parts();
+        if !live {
+            return;
+        }
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        if poisoned {
+            *guard = None;
+            return;
+        }
+        if ops.is_empty() {
+            return;
+        }
+        if let Some(index) = guard.as_mut()
+            && index.apply_batch(ops).is_err()
+        {
+            *guard = None;
+        }
+    }
+
+    /// Run `f` against the graph index, building it on first use.
+    /// Acquires the connection lock first (LOCK ORDER), so a build
+    /// can never interleave with a mutation's stage/apply window.
+    ///
+    /// Consumed by tests today; P0-3's uniffi surface (#552) becomes
+    /// the first production caller — remove the allowance then.
+    #[allow(dead_code)]
+    pub(crate) fn with_graph<R>(
+        &self,
+        f: impl FnOnce(&crate::graph::GraphIndex) -> R,
+    ) -> Result<R, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        if guard.is_none() {
+            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
+        }
+        Ok(f(guard.as_ref().expect("graph index just ensured")))
+    }
+
+    /// Fresh rebuild straight from SQLite, bypassing (and not
+    /// touching) the cached index — the census oracle
+    /// (`census_graph_matches_rebuild` compares this against the
+    /// incrementally-maintained index after every op).
+    #[allow(dead_code)] // test/census seam (P0-4)
+    pub(crate) fn graph_rebuild_reference(&self) -> Result<crate::graph::GraphIndex, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::graph::GraphIndex::build(&conn)
+    }
+
+    /// Whether the lazily-built index currently exists — censuses use
+    /// this to assert the incremental path stayed live (no silent
+    /// fall-back to rebuilds) across a mutation sequence.
+    #[allow(dead_code)] // test/census seam (P0-4)
+    pub(crate) fn graph_is_built(&self) -> bool {
+        self.graph.lock().expect("graph index mutex").is_some()
+    }
+
     /// Open or create a vault session against the given provider.
     ///
     /// Creates `config.cache_dir` if missing, opens/creates the SQLite
@@ -1225,6 +1311,7 @@ impl VaultSession {
             next_oplog_stem_salt: AtomicU64::new(0),
             remnant_logs: Mutex::new((0, Vec::new())),
             cache_created_this_open,
+            graph: Mutex::new(None),
             event_listeners,
             next_listener_token: AtomicU64::new(1),
             retention_days,
@@ -1398,6 +1485,7 @@ impl VaultSession {
             log::debug!("oplog_events parser-bump marker failure detail: {e}");
             force_rebuild = true;
         }
+        let mut graph_sink = self.graph_sink();
         let report = scan_vault(
             self.provider.as_ref(),
             &mut conn,
@@ -1405,7 +1493,9 @@ impl VaultSession {
             self.config.large_file_refuse_bytes,
             cancel,
             listener.as_deref(),
+            &mut graph_sink,
         )?;
+        self.graph_apply(graph_sink);
         self.bump_bases_generation();
         // Re-attach op logs to live files and surface deleted-file
         // remnants (O-1 #539). Best-effort: a reconcile failure
@@ -2074,13 +2164,24 @@ impl VaultSession {
         let new_hash = crate::vault::content_hash(contents.as_bytes());
 
         let now = now_ms();
-        let file_id = self.index_saved_file(&tx, path, contents, &new_stat, &new_hash, now)?;
+        let mut graph_sink = self.graph_sink();
+        let file_id = self.index_saved_file(
+            &tx,
+            path,
+            contents,
+            &new_stat,
+            &new_hash,
+            now,
+            existed,
+            &mut graph_sink,
+        )?;
         // Resolve (allocating on first save) the file's op-log name
         // inside the index transaction, so the binding column commits
         // atomically with the save it serves (O-1 #539). Best-effort:
         // `None` skips the append below exactly like an append failure.
         let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
         tx.commit()?;
+        self.graph_apply(graph_sink);
         self.bump_bases_generation();
 
         // Op-log append: best-effort (#378). A logging-disk hiccup must
@@ -2415,6 +2516,12 @@ impl VaultSession {
     /// rebuild every derived index for one file, inside the caller's
     /// transaction (extracted so `create_exclusive` shares the exact
     /// machinery — O-3 #541). Returns the file id.
+    ///
+    /// `existed` is the caller's in-transaction pre-upsert existence
+    /// check (the #802 Created/Modified discriminator — reused here
+    /// for the graph FileAdded hook). `graph_sink` stages the graph
+    /// replay ops; the caller applies them post-commit (#550).
+    #[allow(clippy::too_many_arguments)] // cohesive save-index seam
     fn index_saved_file(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -2423,9 +2530,24 @@ impl VaultSession {
         new_stat: &crate::FileStat,
         new_hash: &str,
         now: i64,
+        existed: bool,
+        graph_sink: &mut crate::graph::GraphOpSink,
     ) -> Result<i64, VaultError> {
         let (name, extension, is_markdown) = classify_path(path);
         let is_base = extension.as_deref() == Some("base");
+
+        // A brand-new files row becomes a graph node; the inbound
+        // snapshot heals dangling rows that still name this path from
+        // before an earlier delete (p0_spec rule 1a).
+        if !existed {
+            graph_sink.stage_with(|| {
+                Ok(crate::graph::GraphOp::FileAdded {
+                    path: path.to_string(),
+                    is_markdown,
+                    resolved_inbound: crate::links_db::graph_inbound_rows(tx, path)?,
+                })
+            })?;
+        }
 
         // Body text for FTS5: only markdown gets indexed; everything
         // else stores "" so the trigger on `body_text` makes the
@@ -2486,7 +2608,12 @@ impl VaultSession {
                     .collect::<Result<Vec<_>, _>>()?,
             );
             replace_headings(tx, file_id, contents)?;
-            crate::links_db::replace_links_for_file(tx, file_id, path, contents, &vault_index)?;
+            let written =
+                crate::links_db::replace_links_for_file(tx, file_id, path, contents, &vault_index)?;
+            graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
+                source_path: path.to_string(),
+                rows: written,
+            });
             crate::properties_db::replace_properties_for_file(tx, file_id, contents)?;
             crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, contents)?;
             crate::tags_db::replace_tags_for_file(tx, file_id, contents)?;
@@ -3344,7 +3471,19 @@ impl VaultSession {
         let new_stat = self.provider.stat(path)?;
         let new_hash = crate::vault::content_hash(content.as_bytes());
         let now = now_ms();
-        let file_id = self.index_saved_file(&tx, path, content, &new_stat, &new_hash, now)?;
+        let mut graph_sink = self.graph_sink();
+        // `existed = false` by construction: the case-insensitive index
+        // gate above already rejected any pre-existing row.
+        let file_id = self.index_saved_file(
+            &tx,
+            path,
+            content,
+            &new_stat,
+            &new_hash,
+            now,
+            false,
+            &mut graph_sink,
+        )?;
         if let Some(stem) = bind_log {
             // Recovery re-binding, atomic with the row itself; the
             // partial UNIQUE index backstops double-binding.
@@ -3384,6 +3523,7 @@ impl VaultSession {
         }
         let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
         tx.commit()?;
+        self.graph_apply(graph_sink);
         self.bump_bases_generation();
 
         if let Some(log_name) = oplog_name.as_deref() {
@@ -4978,6 +5118,7 @@ impl VaultSession {
 
 // --- Internal: scan ---
 
+#[allow(clippy::too_many_arguments)] // shared scanner state; bundling adds friction
 fn scan_vault(
     provider: &dyn VaultProvider,
     conn: &mut Connection,
@@ -4985,6 +5126,7 @@ fn scan_vault(
     large_file_refuse_bytes: u64,
     cancel: &CancelToken,
     listener: Option<&dyn ScanProgressListener>,
+    graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<ScanReport, VaultError> {
     /// Fires `Cancelled` to the listener and returns Err. Only
     /// valid AFTER `Started` has been emitted — see the contract on
@@ -5119,6 +5261,7 @@ fn scan_vault(
                         &mut report,
                         &vault_index,
                         large_file_refuse_bytes,
+                        graph_sink,
                     ) {
                         // NotFound here means the file vanished between
                         // the directory listing and the stat/read — a
@@ -5135,6 +5278,11 @@ fn scan_vault(
                         ) {
                             seen_files.remove(&path);
                         }
+                        // The failed file's writes may have partially
+                        // landed in this (continuing) transaction with
+                        // their graph ops only partially staged — the
+                        // replay is no longer trustworthy (#550).
+                        graph_sink.poison();
                         report.errors.push(format!("{path}: {e}"));
                     }
                     indexed_count += 1;
@@ -5178,7 +5326,8 @@ fn scan_vault(
     // (`ON DELETE CASCADE`), FTS is maintained by the migration-006
     // DELETE trigger. Skipped when any directory listing failed
     // (`walk_complete`): a partial walk must not evict live rows.
-    if walk_complete && let Err(e) = prune_unseen_files(&tx, &seen_files) {
+    if walk_complete && let Err(e) = prune_unseen_files(&tx, &seen_files, graph_sink) {
+        graph_sink.poison();
         report.errors.push(format!("prune stale files: {e}"));
     }
 
@@ -5188,10 +5337,33 @@ fn scan_vault(
     // happen inside the same transaction so they commit atomically
     // with the rest of the scan; a cancel beforehand short-circuits
     // through `bail_cancelled_after_started!` and skips this step.
-    if let Err(e) = crate::links_db::re_resolve_unresolved_links(&tx) {
-        report
-            .errors
-            .push(format!("re-resolve unresolved links: {e}"));
+    match crate::links_db::re_resolve_unresolved_links(&tx) {
+        Ok(resolved_sources) => {
+            if graph_sink.live() {
+                for source in &resolved_sources {
+                    let staged = graph_sink.stage_with(|| {
+                        Ok(crate::graph::GraphOp::LinksetChanged {
+                            source_path: source.clone(),
+                            rows: crate::links_db::graph_linkset_for(&tx, source)?,
+                        })
+                    });
+                    if let Err(e) = staged {
+                        graph_sink.poison();
+                        report.errors.push(format!("graph re-resolve replay: {e}"));
+                        break;
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // The pass updates row-by-row; an error mid-way leaves a
+            // partial (still-committing) result the graph can't
+            // replay faithfully.
+            graph_sink.poison();
+            report
+                .errors
+                .push(format!("re-resolve unresolved links: {e}"));
+        }
     }
 
     // Canvas index pass (#361). Runs after the walk for the same
@@ -5311,9 +5483,13 @@ fn upsert_dir(
 fn prune_unseen_files(
     tx: &rusqlite::Transaction,
     seen_files: &std::collections::HashSet<String>,
+    graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
-    let stale: Vec<i64> = {
-        let mut stmt = tx.prepare("SELECT id, path FROM files")?;
+    // ORDER BY path: deterministic prune (and graph-replay) order —
+    // the plain files scan iterates in rowid order, which depends on
+    // insertion history.
+    let stale: Vec<(i64, String)> = {
+        let mut stmt = tx.prepare("SELECT id, path FROM files ORDER BY path ASC")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -5321,12 +5497,21 @@ fn prune_unseen_files(
         for row in rows {
             let (id, path) = row?;
             if !seen_files.contains(&path) {
-                stale.push(id);
+                stale.push((id, path));
             }
         }
         stale
     };
-    for id in stale {
+    for (id, path) in stale {
+        // Inbound snapshot BEFORE the delete: the FK cascade emits no
+        // per-row signal, and rows pointing at this path stay
+        // resolved-but-dangling (#550, p0_spec rule 1a).
+        graph_sink.stage_with(|| {
+            Ok(crate::graph::GraphOp::FileRemoved {
+                inbound: crate::links_db::graph_inbound_rows(tx, &path)?,
+                path: path.clone(),
+            })
+        })?;
         tx.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
     }
     Ok(())
@@ -5384,6 +5569,7 @@ fn index_file(
     report: &mut ScanReport,
     vault_index: &crate::InMemoryVaultIndex,
     large_file_refuse_bytes: u64,
+    graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     let stat = provider.stat(path)?;
     // Case-fold the extension so macOS (APFS) and Windows (NTFS) files
@@ -5420,6 +5606,19 @@ fn index_file(
         })
         .optional()?;
     let replacing_existing_file = existing.is_some();
+    // A file the index has never seen becomes a graph node on every
+    // path below that upserts its row (normal and oversized alike);
+    // existing files never reach those paths without a row already
+    // present, and the fast path returns before any write (#550).
+    if !replacing_existing_file {
+        graph_sink.stage_with(|| {
+            Ok(crate::graph::GraphOp::FileAdded {
+                path: path.to_string(),
+                is_markdown,
+                resolved_inbound: crate::links_db::graph_inbound_rows(tx, path)?,
+            })
+        })?;
+    }
     if let Some((db_mtime_ms, db_size_bytes, db_ctime_ms)) = existing {
         let mtime_size_match = i64::try_from(stat.size_bytes).is_ok_and(|stat_size_bytes| {
             db_mtime_ms == stat.mtime_ms && db_size_bytes == stat_size_bytes
@@ -5531,7 +5730,7 @@ fn index_file(
             rusqlite::params![path],
             |row| row.get(0),
         )?;
-        purge_markdown_derivatives(tx, file_id, path, vault_index)?;
+        purge_markdown_derivatives(tx, file_id, path, vault_index, graph_sink)?;
         purge_canvas_rows(tx, file_id)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
         report.files_indexed += 1;
@@ -5613,6 +5812,7 @@ fn index_file(
             body_text.as_str(),
             vault_index,
             replacing_existing_file,
+            graph_sink,
         )?;
     } else if is_base {
         let file_id: i64 = tx
@@ -5680,9 +5880,15 @@ fn index_markdown_derivatives(
     body_text: &str,
     vault_index: &crate::InMemoryVaultIndex,
     replacing_existing_file: bool,
+    graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, body_text)?;
-    crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
+    let written =
+        crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
+    graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
+        source_path: path.to_string(),
+        rows: written,
+    });
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
     if replacing_existing_file {
         crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, body_text)?;
@@ -5750,9 +5956,14 @@ fn purge_markdown_derivatives(
     file_id: i64,
     path: &str,
     vault_index: &crate::InMemoryVaultIndex,
+    graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, "")?;
     crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
+    graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
+        source_path: path.to_string(),
+        rows: Vec::new(),
+    });
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
     crate::dql_inline_fields_db::mark_dql_inline_fields_incomplete_for_file(tx, file_id)?;
     crate::tags_db::replace_tags_for_file(tx, file_id, "")?;
@@ -6378,6 +6589,7 @@ fn refresh_text_derived_indexes_after_reclassification(
     is_markdown: bool,
     parser_version: u32,
     large_file_refuse_bytes: u64,
+    graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     let vault_index = crate::InMemoryVaultIndex::new(
         tx.prepare("SELECT path FROM files")?
@@ -6395,7 +6607,7 @@ fn refresh_text_derived_indexes_after_reclassification(
 
     if !is_markdown && !is_base {
         write_body(tx, "")?;
-        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index, graph_sink)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
         return Ok(());
     }
@@ -6403,7 +6615,7 @@ fn refresh_text_derived_indexes_after_reclassification(
     let stat = provider.stat(path)?;
     if stat.size_bytes > large_file_refuse_bytes {
         write_body(tx, "")?;
-        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index, graph_sink)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
         return Ok(());
     }
@@ -6411,7 +6623,7 @@ fn refresh_text_derived_indexes_after_reclassification(
     let content = provider.read_file_with_cap(path, large_file_refuse_bytes)?;
     if content.len() as u64 > large_file_refuse_bytes {
         write_body(tx, "")?;
-        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index, graph_sink)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
         return Ok(());
     }
@@ -6419,11 +6631,19 @@ fn refresh_text_derived_indexes_after_reclassification(
     let source = String::from_utf8_lossy(&content);
     if is_markdown {
         write_body(tx, source.as_ref())?;
-        index_markdown_derivatives(tx, file_id, path, source.as_ref(), &vault_index, true)?;
+        index_markdown_derivatives(
+            tx,
+            file_id,
+            path,
+            source.as_ref(),
+            &vault_index,
+            true,
+            graph_sink,
+        )?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
     } else {
         write_body(tx, "")?;
-        purge_markdown_derivatives(tx, file_id, path, &vault_index)?;
+        purge_markdown_derivatives(tx, file_id, path, &vault_index, graph_sink)?;
         crate::bases_db::replace_base_file_for_file(
             tx,
             file_id,
@@ -6589,7 +6809,17 @@ impl VaultSession {
             .optional()?
             .flatten();
         self.provider.delete(path)?;
+        let mut graph_sink = self.graph_sink();
         self.with_structural_tx(conn, |tx| {
+            // Inbound snapshot BEFORE the delete: the FK cascade emits
+            // no per-row signal, and rows pointing here stay
+            // resolved-but-dangling (#550, p0_spec rule 1a).
+            graph_sink.stage_with(|| {
+                Ok(crate::graph::GraphOp::FileRemoved {
+                    path: path.to_string(),
+                    inbound: crate::links_db::graph_inbound_rows(tx, path)?,
+                })
+            })?;
             tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
             journal_append(
                 tx,
@@ -6602,6 +6832,7 @@ impl VaultSession {
                 },
             )
         })?;
+        self.graph_apply(graph_sink);
         self.bump_bases_generation();
         self.notify_file_change(FileChangeKind::Deleted, path, None);
         Ok(())
@@ -6625,7 +6856,20 @@ impl VaultSession {
             rows.collect::<Result<_, _>>()?
         };
         self.provider.delete(path)?;
+        let mut graph_sink = self.graph_sink();
         self.with_structural_tx(conn, |tx| {
+            // Per-file removal replay, snapshotted BEFORE the range
+            // delete (#550): the graph mirrors the cascade one victim
+            // at a time; inbound rows from co-deleted files are
+            // skipped at apply time when their source is already gone.
+            for file in &deleted_files {
+                graph_sink.stage_with(|| {
+                    Ok(crate::graph::GraphOp::FileRemoved {
+                        path: file.clone(),
+                        inbound: crate::links_db::graph_inbound_rows(tx, file)?,
+                    })
+                })?;
+            }
             let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
             tx.execute(
                 "DELETE FROM files WHERE path >= ?1 AND path < ?2",
@@ -6645,6 +6889,7 @@ impl VaultSession {
                 },
             )
         })?;
+        self.graph_apply(graph_sink);
         self.bump_bases_generation();
         for file in &deleted_files {
             self.notify_file_change(FileChangeKind::Deleted, file, None);
@@ -6853,7 +7098,7 @@ impl VaultSession {
         };
 
         self.provider.rename(from, to)?;
-        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx| {
+        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx, _sink| {
             rename_prefix_in_index(tx, from, to)
         })
     }
@@ -6897,40 +7142,49 @@ impl VaultSession {
         let large_file_refuse_bytes = self.config.large_file_refuse_bytes;
         self.provider.rename(from, to)?;
         let moved = vec![(from.to_string(), to.to_string())];
-        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, move |tx| {
-            let (name, extension, is_markdown) = classify_path(to);
-            let is_base = extension.as_deref() == Some("base");
-            if old_is_base || is_base || old_is_markdown != is_markdown {
-                tx.execute(
-                    "UPDATE files SET path = ?1, name = ?2, extension = ?3
+        self.finish_structural_move(
+            conn,
+            kind,
+            from,
+            to,
+            moved,
+            plan_rewrites,
+            move |tx, sink| {
+                let (name, extension, is_markdown) = classify_path(to);
+                let is_base = extension.as_deref() == Some("base");
+                if old_is_base || is_base || old_is_markdown != is_markdown {
+                    tx.execute(
+                        "UPDATE files SET path = ?1, name = ?2, extension = ?3
                      WHERE path = ?4",
-                    rusqlite::params![to, name, extension, from],
-                )?;
-                let file_id: i64 = tx.query_row(
-                    "SELECT id FROM files WHERE path = ?1",
-                    rusqlite::params![to],
-                    |row| row.get(0),
-                )?;
-                refresh_text_derived_indexes_after_reclassification(
-                    tx,
-                    provider.as_ref(),
-                    file_id,
-                    to,
-                    &name,
-                    extension.as_deref(),
-                    is_markdown,
-                    parser_version,
-                    large_file_refuse_bytes,
-                )?;
-            } else {
-                tx.execute(
-                    "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+                        rusqlite::params![to, name, extension, from],
+                    )?;
+                    let file_id: i64 = tx.query_row(
+                        "SELECT id FROM files WHERE path = ?1",
+                        rusqlite::params![to],
+                        |row| row.get(0),
+                    )?;
+                    refresh_text_derived_indexes_after_reclassification(
+                        tx,
+                        provider.as_ref(),
+                        file_id,
+                        to,
+                        &name,
+                        extension.as_deref(),
+                        is_markdown,
+                        parser_version,
+                        large_file_refuse_bytes,
+                        sink,
+                    )?;
+                } else {
+                    tx.execute(
+                        "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
                      WHERE path = ?5",
-                    rusqlite::params![to, name, extension, is_markdown as i64, from],
-                )?;
-            }
-            Ok(())
-        })
+                        rusqlite::params![to, name, extension, is_markdown as i64, from],
+                    )?;
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Shared tail of every move/rename (U2-2 index update + U2-3 link
@@ -6957,19 +7211,48 @@ impl VaultSession {
         to: &str,
         moved: Vec<(String, String)>,
         plan_rewrites: bool,
-        update_index: impl FnOnce(&rusqlite::Transaction) -> Result<(), VaultError>,
+        update_index: impl FnOnce(
+            &rusqlite::Transaction,
+            &mut crate::graph::GraphOpSink,
+        ) -> Result<(), VaultError>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let mut graph_sink = self.graph_sink();
         let tx1 = (|| -> Result<(), VaultError> {
             let tx = conn.transaction()?;
-            update_index(&tx)?;
+            // Graph replay order (#550): rename ops FIRST, so a
+            // reclassification's LinksetChanged (staged inside
+            // `update_index`) lands on the already-renamed node. The
+            // node's kind follows `classify_path` — the same rule the
+            // SQL rename applies.
+            for (old, new) in &moved {
+                graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
+                    old_path: old.clone(),
+                    new_path: new.clone(),
+                    is_markdown: classify_path(new).2,
+                });
+            }
+            update_index(&tx, &mut graph_sink)?;
             {
+                // Bulk inbound repoint: in-graph edges follow the
+                // renamed node's identity, so FileRenamed above
+                // already mirrors this statement.
                 let mut stmt =
                     tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
                 for (old, new) in &moved {
                     stmt.execute(rusqlite::params![new, old])?;
                 }
             }
-            crate::links_db::re_resolve_unresolved_links(&tx)?;
+            let resolved_sources = crate::links_db::re_resolve_unresolved_links(&tx)?;
+            if graph_sink.live() {
+                for source in &resolved_sources {
+                    graph_sink.stage_with(|| {
+                        Ok(crate::graph::GraphOp::LinksetChanged {
+                            source_path: source.clone(),
+                            rows: crate::links_db::graph_linkset_for(&tx, source)?,
+                        })
+                    })?;
+                }
+            }
             tx.commit()?;
             Ok(())
         })();
@@ -6977,6 +7260,7 @@ impl VaultSession {
             let _ = self.provider.rename(to, from);
             return Err(e);
         }
+        self.graph_apply(graph_sink);
 
         // Re-path each moved file's history (O-1 #539): a pure
         // `PathChanged` marker per file, appended before any rewrite
@@ -8075,6 +8359,7 @@ impl VaultSession {
         let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
+        let mut graph_sink = self.graph_sink();
         index_file(
             &tx,
             self.provider.as_ref(),
@@ -8085,8 +8370,10 @@ impl VaultSession {
             &mut report,
             &vault_index,
             self.config.large_file_refuse_bytes,
+            &mut graph_sink,
         )?;
         tx.commit()?;
+        self.graph_apply(graph_sink);
         self.bump_bases_generation();
         Ok(())
     }
@@ -11061,4 +11348,7 @@ mod tests {
 
     #[path = "bases.rs"]
     mod bases;
+
+    #[path = "graph.rs"]
+    mod graph;
 }
