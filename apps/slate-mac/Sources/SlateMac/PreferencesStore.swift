@@ -110,6 +110,25 @@ final class PreferencesStore {
         defaults.set(scale, forKey: Self.editorTextScaleKey)
     }
 
+    // MARK: - Editor spell check (#855)
+
+    /// Bare-bool key (the history-toggle pattern above): live spell
+    /// checking (`NSTextView.isContinuousSpellCheckingEnabled`) in the
+    /// note editor. Default OFF — Markdown source is full of tokens a
+    /// spell checker red-squiggles (fences, wikilinks, frontmatter
+    /// keys), so prose writers opt in explicitly via Edit ▸ Check
+    /// Spelling While Typing. App-level (UserDefaults), not vault
+    /// content — a per-machine writing preference like the zoom above.
+    static let editorSpellCheckKey = "slate.prefs.editorSpellCheck"
+
+    func loadEditorSpellCheck() -> Bool {
+        defaults.bool(forKey: Self.editorSpellCheckKey)
+    }
+
+    func saveEditorSpellCheck(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.editorSpellCheckKey)
+    }
+
     // MARK: - Internals
 
     private func decode<T: Codable>(_ type: T.Type, key: String) -> T? {

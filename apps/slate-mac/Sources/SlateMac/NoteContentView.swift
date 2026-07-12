@@ -140,8 +140,10 @@ struct NoteContentView: View {
             // U3-2 (#466): one mode mounted at a time — `if` (never the
             // ZStack-retention pattern): an offscreen editor duplicates the
             // whole text tree for VO and double-fires publishers; the
-            // reading view's scroll position is cheap to lose, and the
-            // editor caret round-trips via AppState's caret park.
+        // Unmount rationale unchanged (AX-tree duplication, double-fired
+        // publishers); the COSTS are now covered: the reading scroll
+        // round-trips via the #856 per-tab park (readingScrollParks),
+        // and the editor caret via AppState's caret park.
             if workspace.activeViewMode == .reading {
                 readingSurface(text)
             } else {
@@ -152,7 +154,21 @@ struct NoteContentView: View {
 
     /// The rendered read-only surface (U3-1's ReadingView, live buffer in).
     private func readingSurface(_ text: String) -> some View {
-        ReadingView(
+        // #856: per-tab reading-scroll park (the caret-park sibling).
+        // Captured continuously below, restored on remount, validated
+        // against the note path so a note switch never restores a
+        // stale offset.
+        let tabID = workspace.model.activeGroup.activeTabID
+        let notePath = appState.selectedFilePath
+        // Codex round 2: the record arrays may still belong to the
+        // PREVIOUS note during a transition (#90 retention). Until
+        // ownership matches, supply empty sets: every run classifies
+        // unresolved — exactly what activation announces in that
+        // window (the live router gates on the same predicate).
+        let linkRecordsCurrent = ReadingLinkRouter.recordsBelongToNote(
+            recordsPath: appState.currentOutgoingLinksPath,
+            notePath: notePath)
+        return ReadingView(
             text: text,
             pathLabel: displayName,
             onSwitchToEditing: { [appState] in
@@ -165,6 +181,20 @@ struct NoteContentView: View {
                 diagramBlocks: appState.currentNoteDiagramBlocks,
                 citations: appState.currentNoteCitations,
                 tasks: appState.currentNoteTasks,
+                // #849: unresolved wikilinks render in warningText —
+                // sourced exactly the way OutgoingLinksPanel reads
+                // `isUnresolved` (the note's saved link records).
+                // Codex rounds 1–3 (#849): kind-partitioned record
+                // sets — the classifier and the live router share one
+                // grammar-exact record match, so styling and activation
+                // can never disagree. The EMPTY value mid-transition
+                // classifies every run unresolved, exactly what
+                // activation announces then (the router gates on the
+                // same ownership predicate).
+                linkRecordSets: linkRecordsCurrent
+                    ? ReadingLinkRouter.LinkRecordSets(
+                        records: appState.currentOutgoingLinks)
+                    : ReadingLinkRouter.LinkRecordSets(),
                 isDocumentDirty: appState.hasUnsavedChanges,
                 onToggleTask: { [appState] item in
                     appState.toggleCurrentTask(item)
@@ -193,8 +223,24 @@ struct NoteContentView: View {
                 baseEmbedHandleProvider: { [appState] request, thisPath in
                     appState.baseEmbedHandle(for: request, thisPath: thisPath)
                 }
-            )
+            ),
+            // #856: restore the parked offset (nil when none / other
+            // note), and park continuously as the user scrolls. The
+            // park is transient WorkspaceState (cleared with viewModes).
+            initialScrollBlockIndex: tabID.flatMap {
+                workspace.parkedReadingScroll(for: $0, path: notePath)
+            },
+            onScrollBlockChange: { [workspace] index in
+                guard let tabID, let notePath else { return }
+                workspace.parkReadingScroll(
+                    blockIndex: index, path: notePath, for: tabID)
+            }
         )
+        // #856 red-team: reading→reading TAB SWITCHES don't remount an
+        // unkeyed view (restore was onAppear-only), bleeding the prior
+        // note's offset. Keying identity per (tab, note) forces the
+        // remount → park-restore path on every switch.
+        .id("reading-\(tabID.map(String.init(describing:)) ?? "none")-\(notePath ?? "")")
         .accessibilityFocused($readingSurfaceFocused)
         .onAppear {
             // Mode flip → focus lands in the new surface (WCAG 2.4.3).
@@ -238,9 +284,19 @@ struct NoteContentView: View {
             onCaretUTF16Change: { [appState] location in
                 appState.noteEditorCaretDidMove(toUTF16: location)
             },
+            // Native context-menu Spelling toggle → the SAME published
+            // pref as the Edit-menu item (red-team: unrouted, the
+            // updateNSView guard silently reverted it next keystroke).
+            onToggleSpellCheckFromNativeMenu: { [appState] in
+                appState.toggleEditorSpellCheck()
+            },
             // #848: in-app zoom — published, so a ⌘=/⌘−/⌘0 change
             // re-renders this host and the editor re-derives its font.
-            textScale: appState.editorTextScale
+            textScale: appState.editorTextScale,
+            // #855: opt-in live spell checking — published, so the
+            // Edit-menu toggle re-renders this host and the editor
+            // applies the new value in updateNSView.
+            spellCheckEnabled: appState.editorSpellCheckEnabled
         )
         .onAppear { _ = text }
         .accessibilityFocused($popoverFocusReturn, equals: .editor)

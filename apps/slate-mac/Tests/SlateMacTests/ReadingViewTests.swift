@@ -328,6 +328,302 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(styledRuns, 2)
     }
 
+    // MARK: - Unresolved wikilink styling (#849)
+
+    /// Foreground color of the FIRST link run whose activation URL routes
+    /// to the given wiki target (base form).
+    private func linkRunColor(
+        in mapped: ReadingInlineMapper.Mapped, target: String
+    ) -> Color? {
+        for run in mapped.attributed.runs {
+            guard let link = run.link,
+                case .wiki(let t, _) = ReadingLinkRouter.disposition(for: link),
+                ReadingLinkRouter.baseTarget(of: t) == target
+            else { continue }
+            return mapped.attributed[run.range][
+                AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self]
+        }
+        return nil
+    }
+
+    /// With membership, a dangling wikilink renders in warningText (the
+    /// editor's U5-3 treatment) while resolved siblings keep accent — and
+    /// the underline stays on BOTH (the affordance is never color-only).
+    func testMapperStylesUnresolvedWikilinkWithWarningText() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "See [[Missing]] and [[There]].",
+            unresolvedTargets: ["Missing"])
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "Missing"),
+            Tokens.ColorRole.warningText)
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "There"),
+            Tokens.ColorRole.accentText)
+        for run in mapped.attributed.runs where run.link != nil {
+            XCTAssertNotNil(
+                mapped.attributed[run.range][
+                    AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self],
+                "underline marks activatable on resolved AND unresolved runs")
+        }
+    }
+
+    /// Without membership nothing changes — the empty default is exactly
+    /// the pre-#849 rendering.
+    func testMapperWithoutMembershipKeepsAccentStyling() {
+        let mapped = ReadingInlineMapper.map(slice: "See [[Missing]].")
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "Missing"),
+            Tokens.ColorRole.accentText)
+    }
+
+    /// Key normalization: the run's target carries the anchor
+    /// (`Note#Section`); the membership key is the router's resolution key
+    /// — the anchor-STRIPPED base form `links.rs` stores as `targetRaw` —
+    /// so styling and activation agree about the same run.
+    func testUnresolvedMembershipUsesRouterBaseTargetKey() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "[[Missing#Section]]",
+            unresolvedTargets: ["Missing"])
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "Missing"),
+            Tokens.ColorRole.warningText,
+            "anchor forms resolve through the base-target key, like the router")
+    }
+
+    /// Case sensitivity: the router's record match is case-SENSITIVE
+    /// (`targetRaw ==`), so membership must be too — a different-cased
+    /// entry must NOT mark the run, or styling would disagree with
+    /// activation.
+    /// Codex rounds 1+2: the match keys are EXACT per grammar. Wiki
+    /// grammar cuts at `#` (an earlier `^` stays in the base), else the
+    /// first `^` (legacy block ref); markdown grammar never cuts at `^`.
+    /// The verbatim defense closes each list.
+    func testCandidateKeysAreExactPerGrammar() {
+        XCTAssertEqual(
+            ReadingLinkRouter.candidateKeys(for: "note^draft#sec", grammar: .wikilink),
+            ["note^draft", "note^draft#sec"],
+            "wiki grammar cuts at # even with an earlier ^")
+        XCTAssertEqual(
+            ReadingLinkRouter.candidateKeys(for: "note^block", grammar: .wikilink),
+            ["note", "note^block"],
+            "legacy block ref cuts FIRST — no markdown-form shadow record")
+        XCTAssertEqual(
+            ReadingLinkRouter.candidateKeys(for: "note#^block", grammar: .wikilink),
+            ["note", "note#^block"],
+            "canonical block ref cuts at the #")
+        XCTAssertEqual(
+            ReadingLinkRouter.candidateKeys(
+                for: "note^draft.md", grammar: .markdownDestination),
+            ["note^draft.md"],
+            "a bare ^ is a legal markdown path character — never cut")
+        XCTAssertEqual(
+            ReadingLinkRouter.candidateKeys(
+                for: "note^draft.md#sec", grammar: .markdownDestination),
+            ["note^draft.md", "note^draft.md#sec"])
+        XCTAssertEqual(
+            ReadingLinkRouter.candidateKeys(for: "note", grammar: .wikilink),
+            ["note"])
+    }
+
+    /// Codex round 2: record-ownership predicate — stale (previous
+    /// note's) records must never classify or activate.
+    func testRecordsBelongToNote() {
+        XCTAssertTrue(
+            ReadingLinkRouter.recordsBelongToNote(
+                recordsPath: "a.md", notePath: "a.md"))
+        XCTAssertFalse(
+            ReadingLinkRouter.recordsBelongToNote(
+                recordsPath: "a.md", notePath: "b.md"))
+        XCTAssertFalse(
+            ReadingLinkRouter.recordsBelongToNote(
+                recordsPath: nil, notePath: "a.md"))
+        XCTAssertFalse(
+            ReadingLinkRouter.recordsBelongToNote(recordsPath: nil, notePath: nil),
+            "no loaded records never owns anything")
+    }
+
+    /// End-to-end `#`-outranks-`^` for wiki runs: `[[note^draft#sec]]`
+    /// must match a record keyed `note^draft` (links.rs cuts at the #;
+    /// the old first-marker cut searched for `note` and missed).
+    func testWikiHashOutranksCaretEndToEnd() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "[[note^draft#sec]]",
+            unresolvedTargets: ["note^draft"])
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "note^draft"),
+            Tokens.ColorRole.warningText,
+            "the record key is the hash-cut base — the ^ stays in it")
+    }
+
+    /// A `^` in a markdown destination: Foundation's URL bridging
+    /// percent-encodes the authored bytes inside the native markdown
+    /// parse, BEFORE the mapper sees the link — so resolving `^`-paths
+    /// authored as markdown links is a platform limitation, not a
+    /// grammar bug. What MUST hold is agreement: activation through
+    /// `candidateKeys` finds no record for the mangled form and
+    /// announces unresolved, so styling (known set supplied) must
+    /// warn — never resolved accent. Pinned so a bridging change in a
+    /// future SDK is noticed.
+    func testMarkdownCaretPathStylingAgreesWithActivation() {
+        var sets = ReadingLinkRouter.LinkRecordSets()
+        sets.knownMarkdown = ["note^draft.md"]
+        let mapped = ReadingInlineMapper.map(
+            slice: "See [t](note^draft.md#sec).", recordSets: sets)
+        var sawWikiRun = false
+        for run in mapped.attributed.runs {
+            guard let link = run.link,
+                case .wiki = ReadingLinkRouter.disposition(for: link)
+            else { continue }
+            sawWikiRun = true
+            XCTAssertEqual(
+                mapped.attributed[run.range][
+                    AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self],
+                Tokens.ColorRole.warningText,
+                "whatever form the bridging produced, never a resolved accent")
+        }
+        XCTAssertTrue(
+            sawWikiRun,
+            "the rewritten markdown run must survive with a wiki route")
+    }
+
+    /// Codex review: a run with NO saved record activates as
+    /// "unresolved. Cannot open." (live-buffer text the index hasn't
+    /// seen, or a query that hasn't landed) — accent styling would lie.
+    /// With the known set supplied, missing-record runs style
+    /// unresolved; recorded runs follow their record.
+    func testMissingRecordStylesUnresolvedWhenRecordSetsSupplied() {
+        let missing = ReadingInlineMapper.map(
+            slice: "[[Ghost]]",
+            recordSets: ReadingLinkRouter.LinkRecordSets())
+        XCTAssertEqual(
+            linkRunColor(in: missing, target: "Ghost"),
+            Tokens.ColorRole.warningText,
+            "no record → activation announces unresolved → styling agrees")
+
+        var known = ReadingLinkRouter.LinkRecordSets()
+        known.knownWikilink = ["Ghost"]
+        let resolved = ReadingInlineMapper.map(
+            slice: "[[Ghost]]", recordSets: known)
+        XCTAssertEqual(
+            linkRunColor(in: resolved, target: "Ghost"),
+            Tokens.ColorRole.accentText)
+
+        var dangling = known
+        dangling.unresolvedWikilink = ["Ghost"]
+        let recorded = ReadingInlineMapper.map(
+            slice: "[[Ghost]]", recordSets: dangling)
+        XCTAssertEqual(
+            linkRunColor(in: recorded, target: "Ghost"),
+            Tokens.ColorRole.warningText)
+    }
+
+    /// Codex round 3: the sets are KIND-partitioned — a saved markdown
+    /// record must never vouch for an unsaved wikilink spelling the
+    /// same characters (activation applies the same rule through
+    /// `recordKindMatches`).
+    func testStylingNeverClassifiesAcrossGrammars() {
+        var sets = ReadingLinkRouter.LinkRecordSets()
+        sets.knownMarkdown = ["note^block"]
+        let mapped = ReadingInlineMapper.map(
+            slice: "[[note^block]]", recordSets: sets)
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "note"),
+            Tokens.ColorRole.warningText,
+            "the markdown record is the OTHER grammar's — record-less here")
+    }
+
+    /// And the record-sets builder itself partitions by `kind`,
+    /// skipping embeds and externals.
+    func testLinkRecordSetsPartitionByKind() {
+        let records = [
+            OutgoingLink(
+                targetPath: "n.md", targetRaw: "n", targetAnchor: nil,
+                kind: "wikilink", isEmbed: false, isExternal: false,
+                isUnresolved: false, snippet: "", ordinal: 0,
+                displayText: nil),
+            OutgoingLink(
+                targetPath: nil, targetRaw: "m.md", targetAnchor: nil,
+                kind: "markdown", isEmbed: false, isExternal: false,
+                isUnresolved: true, snippet: "", ordinal: 1,
+                displayText: nil),
+            OutgoingLink(
+                targetPath: nil, targetRaw: "e", targetAnchor: nil,
+                kind: "wikilink", isEmbed: true, isExternal: false,
+                isUnresolved: false, snippet: "", ordinal: 2,
+                displayText: nil),
+            OutgoingLink(
+                targetPath: nil, targetRaw: "https://x", targetAnchor: nil,
+                kind: "markdown", isEmbed: false, isExternal: true,
+                isUnresolved: false, snippet: "", ordinal: 3,
+                displayText: nil),
+        ]
+        let sets = ReadingLinkRouter.LinkRecordSets(records: records)
+        XCTAssertEqual(sets.knownWikilink, ["n"])
+        XCTAssertEqual(sets.unresolvedWikilink, [])
+        XCTAssertEqual(sets.knownMarkdown, ["m.md"])
+        XCTAssertEqual(sets.unresolvedMarkdown, ["m.md"])
+    }
+
+    /// Red-team probe (confirmed): whitespace-padded and anchored
+    /// targets must trim to the router's key — `[[ Missing ]]` and
+    /// `[[Missing #Section]]` are the same unresolved target.
+    func testUnresolvedMembershipTrimsWhitespaceLikeLinksRs() {
+        let padded = ReadingInlineMapper.map(
+            slice: "[[ Missing ]]",
+            unresolvedTargets: ["Missing"])
+        XCTAssertEqual(
+            linkRunColor(in: padded, target: "Missing"),
+            Tokens.ColorRole.warningText,
+            "padded target trims to the unresolved key")
+        let anchored = ReadingInlineMapper.map(
+            slice: "[[Missing #Section]]",
+            unresolvedTargets: ["Missing"])
+        XCTAssertEqual(
+            linkRunColor(in: anchored, target: "Missing"),
+            Tokens.ColorRole.warningText,
+            "space-before-anchor trims to the base target")
+    }
+
+    func testUnresolvedMembershipIsCaseSensitiveLikeTheRouter() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "[[Missing]]",
+            unresolvedTargets: ["missing"])
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "Missing"),
+            Tokens.ColorRole.accentText,
+            "case-mismatched membership must not style the run unresolved")
+    }
+
+    /// Internal markdown links rewritten onto the wiki scheme take the
+    /// same unresolved treatment — they activate through the same router
+    /// branch.
+    func testUnresolvedStylingCoversRewrittenMarkdownLinks() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "See [t](gone.md).",
+            unresolvedTargets: ["gone.md"])
+        XCTAssertEqual(
+            linkRunColor(in: mapped, target: "gone.md"),
+            Tokens.ColorRole.warningText)
+    }
+
+    /// The unresolved state is announced, not color-only: the run carries
+    /// the AX custom-text suffix.
+    func testUnresolvedRunCarriesAccessibilitySuffix() {
+        let mapped = ReadingInlineMapper.map(
+            slice: "[[Missing]]",
+            unresolvedTargets: ["Missing"])
+        var found = false
+        for run in mapped.attributed.runs where run.link != nil {
+            if mapped.attributed[run.range][
+                AttributeScopes.AccessibilityAttributes.TextCustomAttribute.self]
+                == ["Unresolved link"]
+            {
+                found = true
+            }
+        }
+        XCTAssertTrue(found, "unresolved runs carry the AX custom-text suffix")
+    }
+
     /// Internal markdown destinations (scheme-less; Slate semantics:
     /// vault-rooted/basename, stored literally) are rewritten onto the wiki
     /// scheme so they activate — never styled-then-dead.
@@ -335,9 +631,10 @@ final class ReadingViewTests: XCTestCase {
         let mapped = ReadingInlineMapper.map(slice: "See [t](note.md).")
         let links = mapped.attributed.runs.compactMap(\.link)
         XCTAssertEqual(links.count, 1)
-        XCTAssertEqual(links[0].scheme, ReadingLinkRouter.wikiScheme)
+        XCTAssertEqual(links[0].scheme, ReadingLinkRouter.wikiMarkdownScheme)
         XCTAssertEqual(
-            ReadingLinkRouter.disposition(for: links[0]), .wiki("note.md"))
+            ReadingLinkRouter.disposition(for: links[0]),
+            .wiki("note.md", .markdownDestination))
     }
 
     /// The authored destination travels VERBATIM — fragments kept (markdown
@@ -349,13 +646,13 @@ final class ReadingViewTests: XCTestCase {
             anchored.attributed.runs.compactMap(\.link).compactMap {
                 ReadingLinkRouter.disposition(for: $0)
             },
-            [.wiki("note.md#sec")])
+            [.wiki("note.md#sec", .markdownDestination)])
         let escaped = ReadingInlineMapper.map(slice: "[t](my%20note.md)")
         XCTAssertEqual(
             escaped.attributed.runs.compactMap(\.link).compactMap {
                 ReadingLinkRouter.disposition(for: $0)
             },
-            [.wiki("my%20note.md")])
+            [.wiki("my%20note.md", .markdownDestination)])
     }
 
     /// Non-activatable destinations lose the link attribute entirely: no
@@ -393,7 +690,8 @@ final class ReadingViewTests: XCTestCase {
         let links = mapped.attributed.runs.compactMap(\.link)
         XCTAssertEqual(links.count, 1)
         XCTAssertEqual(
-            ReadingLinkRouter.disposition(for: links[0]), .wiki("note.md"))
+            ReadingLinkRouter.disposition(for: links[0]),
+            .wiki("note.md", .markdownDestination))
         XCTAssertTrue(
             String(mapped.attributed.characters).contains("about #intro"),
             "label text renders verbatim")
@@ -461,7 +759,11 @@ final class ReadingViewTests: XCTestCase {
         func disposition(_ s: String) -> ReadingLinkRouter.Disposition {
             ReadingLinkRouter.disposition(for: URL(string: s)!)
         }
-        XCTAssertEqual(disposition("slate-wiki://Note%20One"), .wiki("Note One"))
+        XCTAssertEqual(
+            disposition("slate-wiki://Note%20One"), .wiki("Note One", .wikilink))
+        XCTAssertEqual(
+            disposition("slate-wikimd://note%5Emine.md"),
+            .wiki("note^mine.md", .markdownDestination))
         XCTAssertEqual(disposition("slate-embed://img.png"), .embed("img.png"))
         XCTAssertEqual(disposition("slate-tag://alpha"), .tag("alpha"))
         XCTAssertEqual(
@@ -486,7 +788,7 @@ final class ReadingViewTests: XCTestCase {
         }
         let recorder = Recorder()
         let router = ReadingLinkRouter(
-            openWikiLink: { recorder.events.append("wiki:\($0)") },
+            openWikiLink: { target, _ in recorder.events.append("wiki:\(target)") },
             openEmbed: { recorder.events.append("embed:\($0)") },
             openTag: { recorder.events.append("tag:\($0)") },
             expandCitation: { recorder.events.append("cite:\($0)") }
@@ -530,7 +832,8 @@ final class ReadingViewTests: XCTestCase {
     @MainActor
     func testLiveRouterUnknownWikiTargetDoesNotNavigate() {
         let appState = AppState()
-        ReadingLinkRouter.live(appState: appState).openWikiLink("Nowhere")
+        ReadingLinkRouter.live(appState: appState)
+            .openWikiLink("Nowhere", .wikilink)
         XCTAssertNil(appState.selectedFilePath)
     }
 
@@ -572,11 +875,137 @@ final class ReadingViewTests: XCTestCase {
             appState.currentOutgoingLinks[0].targetAnchor,
             LinkAnchor(kind: "heading", text: "sec"))
 
-        ReadingLinkRouter.live(appState: appState).openWikiLink("note.md#sec")
+        ReadingLinkRouter.live(appState: appState)
+            .openWikiLink("note.md#sec", .markdownDestination)
         // Base-form match resolves and navigates to the target note.
         XCTAssertEqual(
             appState.lastActivatedLinkOutcome, .openedInternal("note.md"))
         XCTAssertEqual(appState.selectedFilePath, "note.md")
+    }
+
+    /// Codex round 2, grammar retention end-to-end against a real
+    /// vault: a note holding BOTH `[[note^block]]` (Rust records
+    /// targetRaw `note` — wiki grammar cuts at the `^`) and
+    /// `[m](note^block)` (records targetRaw `note^block` verbatim).
+    /// Activating the WIKILINK must select the wiki-grammar record and
+    /// open `note.md` — a grammar-blind key list matched the markdown
+    /// sibling's record first.
+    @MainActor
+    func testLiveRouterGrammarDisambiguatesCaretCollision() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-reading-caret-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("# Note\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+        try Data("# Shadow\n".utf8)
+            .write(to: vault.appendingPathComponent("note^block.md"))
+        try Data("[[note^block]] and [m](note^block)".utf8)
+            .write(to: vault.appendingPathComponent("source.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents.json"))
+        let appState = AppState(
+            recentsStore: store, externalOpener: { _ in true })
+        appState.openVault(at: vault)
+        await appState.scanTask?.value
+        appState.selectedFilePath = "source.md"
+        await appState.linksLoadTask?.value
+        XCTAssertEqual(
+            Set(appState.currentOutgoingLinks.map(\.targetRaw)),
+            ["note", "note^block"],
+            "Rust keys the two grammars differently — the collision premise")
+
+        ReadingLinkRouter.live(appState: appState)
+            .openWikiLink("note^block", .wikilink)
+        XCTAssertEqual(
+            appState.selectedFilePath, "note.md",
+            "the wikilink resolves through ITS grammar's record")
+    }
+
+    /// Codex round 3, the live-buffer variant: ONLY the markdown link
+    /// is saved; a `[[note^block]]` typed in the dirty buffer is
+    /// record-less and must REFUSE — the saved markdown record's
+    /// verbatim `note^block` row is the other grammar's and must never
+    /// be hijacked.
+    @MainActor
+    func testLiveRouterUnsavedWikilinkNeverHijacksMarkdownRecord() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-reading-hijack-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("# Shadow\n".utf8)
+            .write(to: vault.appendingPathComponent("note^block.md"))
+        try Data("only [m](note^block) saved".utf8)
+            .write(to: vault.appendingPathComponent("source.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents.json"))
+        let appState = AppState(
+            recentsStore: store, externalOpener: { _ in true })
+        appState.openVault(at: vault)
+        await appState.scanTask?.value
+        appState.selectedFilePath = "source.md"
+        await appState.linksLoadTask?.value
+        XCTAssertEqual(
+            appState.currentOutgoingLinks.map(\.kind), ["markdown"],
+            "premise: only the markdown record exists")
+
+        ReadingLinkRouter.live(appState: appState)
+            .openWikiLink("note^block", .wikilink)
+        XCTAssertEqual(
+            appState.selectedFilePath, "source.md",
+            "record-less wikilink refuses — no cross-grammar hijack")
+    }
+
+    /// Codex round 2, stale-record refusal: records for `source.md` are
+    /// loaded, selection moves on, and the incoming note's query has
+    /// not landed. Activating a target that matches the RETAINED
+    /// records must refuse (missing-record announce), never navigate
+    /// through another note's records.
+    @MainActor
+    func testLiveRouterRefusesStaleRecordsDuringTransition() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-reading-stale-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("# Note\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+        try Data("# Third\n".utf8)
+            .write(to: vault.appendingPathComponent("third.md"))
+        try Data("go [[third]]".utf8)
+            .write(to: vault.appendingPathComponent("source.md"))
+
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents.json"))
+        let appState = AppState(
+            recentsStore: store, externalOpener: { _ in true })
+        appState.openVault(at: vault)
+        await appState.scanTask?.value
+        appState.selectedFilePath = "source.md"
+        await appState.linksLoadTask?.value
+        XCTAssertEqual(appState.currentOutgoingLinksPath, "source.md")
+
+        // Move selection; the new query is scheduled but has NOT run —
+        // no await between here and the activation (MainActor-serial).
+        appState.selectedFilePath = "note.md"
+        ReadingLinkRouter.live(appState: appState)
+            .openWikiLink("third", .wikilink)
+        XCTAssertEqual(
+            appState.selectedFilePath, "note.md",
+            "no navigation through the previous note's retained records")
     }
 
     // MARK: - Block-source helpers

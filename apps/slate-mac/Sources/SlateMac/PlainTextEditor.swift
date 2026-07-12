@@ -64,6 +64,12 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
+        // #855: deliberately NOT wired to the app-level spell-check
+        // opt-in (`AppState.editorSpellCheckEnabled`). This surface
+        // edits STRUCTURED text (YAML frontmatter) — keys and values
+        // are identifiers, not prose, so live spell checking stays
+        // always-off here regardless of the note-editor pref.
+        textView.isContinuousSpellCheckingEnabled = false
         textView.smartInsertDeleteEnabled = false
         textView.usesFontPanel = false
         textView.usesRuler = false

@@ -39,7 +39,17 @@ struct CanvasCardEditorSheet: View {
                 lineScrollRequest: Empty().eraseToAnyPublisher(),
                 cursorByteOffsetRequest: Empty().eraseToAnyPublisher(),
                 previewEmbedAtCursor: nil,
-                textScale: appState.editorTextScale
+                // Codex review: route the NATIVE context-menu spelling
+                // toggle through the same app pref as the main editor —
+                // unrouted it was a silent no-op here (updateNSView's
+                // pref guard reverts the raw view flag).
+                onToggleSpellCheckFromNativeMenu: { [appState] in
+                    appState.toggleEditorSpellCheck()
+                },
+                // Compact host: no 120pt overscroll spill (red-team).
+                bottomOverscroll: 0,
+                textScale: appState.editorTextScale,
+                spellCheckEnabled: appState.editorSpellCheckEnabled
             )
             .frame(minWidth: 480, minHeight: 280)
             HStack {
