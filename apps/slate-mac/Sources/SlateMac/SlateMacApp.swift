@@ -213,8 +213,9 @@ struct SlateMacApp: App {
                 // standard open funnel — dedup and pane placement honored.
                 // Disabled when the stack is empty; `canReopenClosedTab`
                 // is AppState's published mirror of that emptiness
-                // (workspace's own @Published fields aren't observed by
-                // the menu — the nested-ObservableObject gap).
+                // (predates the #868 objectWillChange bridge, which now
+                // also forwards workspace publishes to this menu; the
+                // mirror stays as the tested, named Bool surface).
                 Button("Reopen Closed Tab") {
                     appState.reopenClosedTab()
                 }
@@ -245,8 +246,19 @@ struct SlateMacApp: App {
             // chain (NSTextView's NSUndoManager) everywhere else. One
             // owner for the chord; the buttons forward faithfully so
             // note-editor undo behaves exactly as before.
+            // #867: the titles carry the action name — NSUndoManager's
+            // own localized composition on the responder path ("Undo
+            // Typing"), the canvas stack's recorded verb when a canvas
+            // surface owns the chord ("Undo Create card"). Rule
+            // (undo-and-redo.md): "In menu items, use descriptive
+            // labels"; the-menu-bar.md: "Undo | Append action name".
+            // Focus ROUTING is #372, byte-for-byte unchanged — only
+            // title and enablement are new. Re-render pulse:
+            // appState.undoMenuTick (the #867 notification pipeline)
+            // plus every other appState publish; the titles are
+            // computed live at render.
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo") {
+                Button(appState.undoMenuItemTitle) {
                     if appState.undoTargetsCanvas {
                         appState.canvasUndo()
                     } else {
@@ -254,8 +266,9 @@ struct SlateMacApp: App {
                     }
                 }
                 .keyboardShortcut("z", modifiers: [.command])
+                .disabled(!appState.undoMenuItemEnabled)
 
-                Button("Redo") {
+                Button(appState.redoMenuItemTitle) {
                     if appState.undoTargetsCanvas {
                         appState.canvasRedo()
                     } else {
@@ -263,6 +276,7 @@ struct SlateMacApp: App {
                     }
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!appState.redoMenuItemEnabled)
             }
 
             CommandGroup(after: .toolbar) {
@@ -271,14 +285,37 @@ struct SlateMacApp: App {
                 // shortcut (duplicate shortcuts across split panes are
                 // undefined in SwiftUI). Menu-bar placement also keeps the
                 // chord alive with sidebar focus (the #422 lesson).
-                Button("Toggle Reading Mode") {
+                // #868: changeable label (menus.md — "a single item
+                // whose label changes with state"; the-menu-bar.md:
+                // show/hide titles must reflect current state). The
+                // title names the DIRECTION the action will take, read
+                // from the ACTIVE tab's mode; re-renders via the #868
+                // workspace→appState objectWillChange bridge. No tab
+                // reads as .editing → "Enter Reading Mode" (the action
+                // no-ops there; enablement scope unchanged from #466).
+                // The PALETTE keeps the static "Toggle Reading Mode"
+                // noun — searchable and state-free; the menu↔palette
+                // registry invariant is CHORD parity, not label parity.
+                Button(
+                    appState.activeTabIsReading
+                        ? "Exit Reading Mode" : "Enter Reading Mode"
+                ) {
                     appState.toggleViewMode()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!appState.isVaultOpen)
 
                 // U3-4 (#468): single ⌘⇧D owner, same rationale as ⌘⇧E.
-                Button("Show Properties Source") {
+                // #868 changeable label: Show ⇄ Hide from the published
+                // mirror of the widget's view-local source-mode @State
+                // (appState.propertiesSourceShowing; NotePropertiesHeader
+                // remains the single mutator). No note → mirror false →
+                // "Show Properties Source". Palette noun stays static,
+                // as above.
+                Button(
+                    appState.propertiesSourceShowing
+                        ? "Hide Properties Source" : "Show Properties Source"
+                ) {
                     appState.togglePropertiesSourceCommand()
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])

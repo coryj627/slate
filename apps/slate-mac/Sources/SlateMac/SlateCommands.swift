@@ -1377,6 +1377,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Save the current note to disk."
     ) { [weak appState] in appState?.saveCurrentNote() }
 
+    // #868: the MENU items for these two are changeable labels
+    // (Enter/Exit Reading Mode, Show/Hide Properties Source — see
+    // SlateMacApp); the palette deliberately keeps the static nouns
+    // below. A palette row is found by typing its name, so a
+    // state-dependent label would make the command unfindable in
+    // half its states — and the menu↔palette registry invariant is
+    // CHORD parity, not label parity (the Tasks-Review verb/noun
+    // split precedent).
     register(
         SlateCommandID.toggleViewMode,
         label: "Toggle Reading Mode",

@@ -652,11 +652,12 @@ final class AppState: ObservableObject {
     // MARK: - Reopen Closed Tab (#863)
 
     /// Menu-enablement mirror of `workspace.closedTabs.isEmpty` (#863).
-    /// The File ▸ Reopen Closed Tab item reads THIS property — the menu
-    /// observes `appState`, and `WorkspaceState`'s own `@Published`
-    /// mutations don't forward through `AppState.objectWillChange`
-    /// (the nested-ObservableObject gap), so the signal is re-published
-    /// here. Wired in `init` from `workspace.$closedTabs`.
+    /// The File ▸ Reopen Closed Tab item reads THIS property. Predates
+    /// the #868 workspace→appState objectWillChange bridge (which alone
+    /// would now re-render the menu on stack changes); kept because the
+    /// mirror is the tested, named Bool surface the menu reads — no
+    /// reason to re-derive emptiness at the call site. Wired in `init`
+    /// from `workspace.$closedTabs`.
     @Published private(set) var canReopenClosedTab = false
 
     /// ⇧⌘T — Reopen Closed Tab (#863, the macOS/Obsidian convention).
@@ -841,6 +842,14 @@ final class AppState: ObservableObject {
     /// The ACTIVE tab's view mode — what `NoteContentView` renders.
     var activeViewMode: NoteViewMode { workspace.activeViewMode }
 
+    /// #868 menu-title seam: TRUE when the active tab shows reading
+    /// mode. A computed read of workspace state — no mirror needed,
+    /// because the init-time workspace→appState objectWillChange
+    /// bridge re-renders the menu on every mode flip. No tab reads
+    /// as false ("Enter Reading Mode", matching `activeViewMode`'s
+    /// `.editing` default for an empty workspace).
+    var activeTabIsReading: Bool { activeViewMode == .reading }
+
     /// ⌘⇧E / toolbar toggle: flip the active tab between editing and
     /// reading. No-ops without a renderable note (no tab, load error, or
     /// nothing loaded) — the button and command are enabled in the same
@@ -891,6 +900,112 @@ final class AppState: ObservableObject {
     /// helper is a no-op under XCTest (no NSApp), so the exact string must
     /// be observable here (same pattern as `lastMutationAnnouncement`).
     private(set) var lastViewModeAnnouncement: String?
+
+    // MARK: - Undo/Redo menu observability (#867)
+
+    /// Re-render pulse for the Edit ▸ Undo/Redo titles. The state those
+    /// titles derive from lives OUTSIDE appState's published surface —
+    /// responder-chain `NSUndoManager`s and `CanvasDocument`'s session
+    /// stacks — so this tick republishes "the undo world changed" into
+    /// the object the `.commands` builder observes. Bumped (debounced)
+    /// by the NSUndoManager-notification pipeline wired in `init` and
+    /// by the canvas mutation funnel (`noteUndoStacksChanged`). The
+    /// VALUE is meaningless; only the publish matters — the titles
+    /// below are computed live at menu render.
+    @Published private(set) var undoMenuTick = 0
+
+    /// Feed for the init pipeline above — merged with the NSUndoManager
+    /// notifications ahead of the shared debounce.
+    private let undoMenuSubject = PassthroughSubject<Void, Never>()
+
+    /// Canvas funnel entry (#867): the canvas undo/redo stacks mutated
+    /// (`canvasApply` / `canvasUndo` / `canvasRedo`) — request an
+    /// undo-menu re-render pulse. Coalesced by the init pipeline's
+    /// debounce, so callers fire per-mutation without menu churn.
+    func noteUndoStacksChanged() {
+        undoMenuSubject.send()
+    }
+
+    /// The undo manager the responder chain would hand ⌘Z to: the key
+    /// window's first responder's (NSTextView supplies its own), else
+    /// the key window's on-demand manager. Nil under XCTest (no NSApp —
+    /// same guard discipline as `postAccessibilityAnnouncement`) or
+    /// with no key window at render time.
+    var responderChainUndoManager: UndoManager? {
+        guard let window = NSApp?.keyWindow else { return nil }
+        return window.firstResponder?.undoManager ?? window.undoManager
+    }
+
+    /// Edit ▸ Undo title (#867): a canvas-focused tab uses the canvas
+    /// stack's recorded verb (the t3 layer-2 names — "create card",
+    /// "delete \"X\""); everywhere else NSUndoManager composes its own
+    /// localized full title ("Undo Typing") — descriptive labels per
+    /// undo-and-redo.md, the-menu-bar.md ("Undo | Append action name").
+    var undoMenuItemTitle: String {
+        if undoTargetsCanvas {
+            return Self.canvasUndoRedoMenuTitle(
+                base: "Undo", actionName: activeCanvasDocument?.undoStack.last?.name)
+        }
+        return Self.responderUndoMenuTitle(responderChainUndoManager)
+    }
+
+    /// ⇧⌘Z symmetric to `undoMenuItemTitle`.
+    var redoMenuItemTitle: String {
+        if undoTargetsCanvas {
+            return Self.canvasUndoRedoMenuTitle(
+                base: "Redo", actionName: activeCanvasDocument?.redoStack.last?.name)
+        }
+        return Self.responderRedoMenuTitle(responderChainUndoManager)
+    }
+
+    /// Enablement (#867): the responder path mirrors the system Edit
+    /// menu — plain, disabled "Undo" when the resolved manager
+    /// positively reports `canUndo == false`. An UNRESOLVABLE manager
+    /// (no key window at render time — e.g. the app inactive) stays
+    /// ENABLED with the plain title: ⌘Z then no-ops harmlessly through
+    /// `sendAction`, which beats a stale-disabled item deadening the
+    /// chord (first-responder moves don't publish, so a nil read must
+    /// never latch the item off). The canvas path stays ALWAYS enabled:
+    /// empty-stack ⌘Z announces "Nothing to undo." (t0 §1.3) — a
+    /// deliberate VoiceOver affordance a disabled item would silence.
+    var undoMenuItemEnabled: Bool {
+        if undoTargetsCanvas { return true }
+        guard let manager = responderChainUndoManager else { return true }
+        return manager.canUndo
+    }
+
+    /// ⇧⌘Z symmetric to `undoMenuItemEnabled`.
+    var redoMenuItemEnabled: Bool {
+        if undoTargetsCanvas { return true }
+        guard let manager = responderChainUndoManager else { return true }
+        return manager.canRedo
+    }
+
+    /// Pure title composer (#867), extracted for direct testing:
+    /// "Undo" + a canvas action name — "delete \"My Card\"" becomes
+    /// "Undo Delete \"My Card\"". Only the LEADING character is
+    /// uppercased: the t3 action names embed user-typed card titles
+    /// that must pass through verbatim, so full Title Case is off the
+    /// table. Nil/empty (empty stack) falls back to the bare verb.
+    static func canvasUndoRedoMenuTitle(base: String, actionName: String?) -> String {
+        guard let name = actionName, !name.isEmpty else { return base }
+        return "\(base) \(name.prefix(1).uppercased())\(name.dropFirst())"
+    }
+
+    /// Pure title composer (#867) for the responder path: NSUndoManager
+    /// composes and localizes the full title itself ("Undo Typing" via
+    /// `undoMenuItemTitle`). With nothing to undo the item reads plain
+    /// "Undo", matching its disabled state (system behavior).
+    static func responderUndoMenuTitle(_ manager: UndoManager?) -> String {
+        guard let manager, manager.canUndo else { return "Undo" }
+        return manager.undoMenuItemTitle
+    }
+
+    /// Redo twin of `responderUndoMenuTitle`.
+    static func responderRedoMenuTitle(_ manager: UndoManager?) -> String {
+        guard let manager, manager.canRedo else { return "Redo" }
+        return manager.redoMenuItemTitle
+    }
 
     // MARK: - Workspace persistence (U1-6, #458)
 
@@ -2183,6 +2298,34 @@ final class AppState: ObservableObject {
             pinnedSavedQueryIDs: preferencesStore.loadBaseQueryPrefs().pinnedSavedQueryIDs)
         self.recentVaults = self.recentsStore.load()
 
+        // #868: bridge the nested WorkspaceState's change signal into
+        // this object's own. `workspace` is a `let` sub-ObservableObject,
+        // and SwiftUI's `.commands` menu builder observes only `appState`
+        // — so menu content that reads workspace state (the Duplicate
+        // Tab / Close Tab `activeTab == nil` enablement, the #868
+        // state-reflecting Reading Mode title) never re-evaluated when
+        // ONLY the workspace published (the nested-ObservableObject
+        // gap). Forwarding objectWillChange closes that seam for every
+        // current and future workspace-reading menu item in one wire.
+        //
+        // #448 (publish-in-view-update) analysis: this forward is a
+        // WILL-change relay — synchronous, same call stack — so it
+        // publishes in exactly the transaction context of the source
+        // publish and adds no hazard beyond those the workspace's own
+        // publishes already carry. WorkspaceState's @Published
+        // mutations run in action contexts (every mutation funnels
+        // through WorkspaceState methods called from AppState command /
+        // click handlers — the U1 funnel discipline) or in post-update
+        // `.onChange` mirrors (the U4-4 passive region mirrors; the
+        // properties-header expansion Binding setter fires on user
+        // interaction) — none run inside a view-update transaction,
+        // which is the #448 class. If a future workspace writer
+        // violates that, the fix belongs at that call site (the
+        // FileTreeSidebar local-@State + .onChange pattern), not here.
+        workspace.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &subscriptions)
+
         // #863: mirror the closed-tab stack's emptiness into the
         // published menu-enablement signal. Subscribing to the nested
         // WorkspaceState publisher (rather than updating at each call
@@ -2194,6 +2337,44 @@ final class AppState: ObservableObject {
             .sink { [weak self] hasRecords in
                 self?.canReopenClosedTab = hasRecords
             }
+            .store(in: &subscriptions)
+
+        // #867: menu-title observability for Undo/Redo. The state the
+        // Edit ▸ Undo/Redo titles derive from lives OUTSIDE appState's
+        // published surface — NSUndoManager instances down the
+        // responder chain, and CanvasDocument's session stacks — so
+        // nothing re-rendered the menu when an undo stack changed.
+        // Observe the undo-manager lifecycle notifications with
+        // object: nil (ANY manager: the note editor's, the YAML
+        // source editor's, a sheet field editor's) plus a window-key
+        // bump (key-window changes swap which manager the responder
+        // path reads, without any undo notification), and merge the
+        // canvas mutation funnel (`noteUndoStacksChanged`). Debounce-
+        // lite: the notifications fire per undo GROUP — NSTextView
+        // coalesces typing into per-burst groups, so the raw cadence
+        // is human-scale already; 50 ms on the main queue folds a
+        // group's open/close pair into one tick.
+        //
+        // #448: the notifications post from undo registration / undo
+        // execution (event handling, never view updates), and the
+        // debounce hop makes the eventual publish async on the main
+        // queue — post-update by construction.
+        let undoEventNames: [Notification.Name] = [
+            .NSUndoManagerDidOpenUndoGroup,
+            .NSUndoManagerDidCloseUndoGroup,
+            .NSUndoManagerDidUndoChange,
+            .NSUndoManagerDidRedoChange,
+            NSWindow.didBecomeKeyNotification,
+        ]
+        var undoEventPublishers: [AnyPublisher<Void, Never>] = undoEventNames.map {
+            NotificationCenter.default.publisher(for: $0, object: nil)
+                .map { _ in () }
+                .eraseToAnyPublisher()
+        }
+        undoEventPublishers.append(undoMenuSubject.eraseToAnyPublisher())
+        Publishers.MergeMany(undoEventPublishers)
+            .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
+            .sink { [weak self] in self?.undoMenuTick &+= 1 }
             .store(in: &subscriptions)
 
         // Watch `selectedFilePath` and (re)trigger note loading on
@@ -2750,6 +2931,11 @@ final class AppState: ObservableObject {
         bodyByteOffset = 0
         bodyLineOffset = 0
         propertiesSourceError = nil
+        // #868: the menu-title mirror resets with the note — the widget
+        // self-hides on `loadedFilePath == nil` WITHOUT firing its
+        // `.onChange(of: isSourceMode)` (a removed view's onChange never
+        // fires), so the transition funnel owns this edge.
+        propertiesSourceShowing = false
         loadedFilePath = nil
         hasUnsavedChanges = false
         currentSaveConflict = nil
@@ -4093,6 +4279,16 @@ final class AppState: ObservableObject {
             loadedFilePath = nil
             hasUnsavedChanges = false
             currentNoteHeadings = []
+            // #868 red-team (Codex): a load FAILURE for the mounted path
+            // (a same-path conflict reload whose file was externally
+            // deleted/corrupted) tears the note down here without going
+            // through `clearActiveNoteFields`, and NoteContentView
+            // unmounts the properties widget before its `.onChange` can
+            // reset the mirror — the same wrong-direction "Hide
+            // Properties Source" latch the delete arm had. Reset both
+            // mirror fields on the error mount.
+            propertiesSourceShowing = false
+            propertiesSourceError = nil
             noteLoadError = humanReadable(error)
         }
         isLoadingNote = false
@@ -6560,6 +6756,19 @@ final class AppState: ObservableObject {
             currentNoteContentHash = nil
             hasUnsavedChanges = false
             currentNoteHeadings = []
+            // #868 red-team: this delete arm clears a BESPOKE field
+            // list (not `clearActiveNoteFields`), so it must also reset
+            // the properties-source mirror + inline error the funnel
+            // resets there. NoteContentView flips to the error pane and
+            // UNMOUNTS NotePropertiesHeader, so the widget's
+            // `.onChange(of: isSourceMode)` never fires — leaving
+            // `propertiesSourceShowing` stuck true would latch the
+            // View ▸ "Hide Properties Source" title wrong-direction
+            // over a note that no longer exists (the exact "worse than
+            // static" failure #868 calls out), and ⇧⌘D would no-op
+            // against the `loadedFilePath != nil` guard.
+            propertiesSourceShowing = false
+            propertiesSourceError = nil
             loadedFilePath = nil
             noteLoadError =
                 "\(deletedName ?? "This note") was moved to Trash and is no longer available."
@@ -6850,6 +7059,27 @@ final class AppState: ObservableObject {
     func togglePropertiesSourceCommand() {
         guard loadedFilePath != nil, noteLoadError == nil else { return }
         propertiesSourceToggleRequest &+= 1
+    }
+
+    /// #868: published mirror of the properties widget's view-local
+    /// source-mode `@State`. The DRAFT must stay in the view (#448:
+    /// uncommitted user input never rides a `@Published`), but the
+    /// View ▸ Show/Hide Properties Source title needs the direction —
+    /// so the widget mirrors JUST the bool through
+    /// `notePropertiesSourceModeChanged` from a post-update
+    /// `.onChange(of: isSourceMode)` (plus an `.onAppear` resync for
+    /// mount gaps). `clearActiveNoteFields` also resets it on note
+    /// transitions: the widget self-hides without firing its onChange
+    /// when the note vanishes (same belt as `propertiesSourceError`).
+    @Published private(set) var propertiesSourceShowing = false
+
+    /// The widget's single-writer seam for the mirror above — the view
+    /// remains the owner of the real state; AppState only reflects it.
+    /// The equality guard makes the `.onAppear` resync publish-free on
+    /// the common (already-in-sync) mount path.
+    func notePropertiesSourceModeChanged(_ showing: Bool) {
+        guard propertiesSourceShowing != showing else { return }
+        propertiesSourceShowing = showing
     }
 
     /// Inline error for the show-source editor (U3-4): the Rust

@@ -28,9 +28,11 @@ import SwiftUI
 ///   in the pinned header path).
 struct NotePropertiesHeader: View {
     @EnvironmentObject private var appState: AppState
-    /// Observed directly for per-tab expansion state — nested
-    /// ObservableObject changes are not forwarded through `appState`
-    /// (the U1 WorkspaceTreeView lesson).
+    /// Observed directly for per-tab expansion state (the U1
+    /// WorkspaceTreeView lesson). The #868 bridge now ALSO forwards
+    /// workspace publishes through `appState` coarsely; direct
+    /// observation stays — it keeps this widget's dependency explicit
+    /// rather than riding the whole-appState invalidation.
     @ObservedObject var workspace: WorkspaceState
 
     /// See the type doc — hugs small content, scrolls long lists.
@@ -94,6 +96,23 @@ struct NotePropertiesHeader: View {
                 sourceDraft = ""
                 pendingFieldsSwitch = false
                 appState.clearPropertiesSourceError()
+            }
+            // #868: mirror the source-mode bool into appState so the
+            // View ▸ Show/Hide Properties Source title tracks it. ONE
+            // wire covers every mutation site (toggle, commit, note
+            // switch, Discard, Cancel); post-update mutation point
+            // (#448). The view stays the owner of the real state —
+            // appState only reflects. `.onAppear` resyncs after mount
+            // gaps (this widget self-hides while no note is loaded, a
+            // stretch whose onChange events never fire;
+            // `clearActiveNoteFields` resets the mirror on that edge,
+            // and the setter's equality guard keeps the common
+            // already-in-sync appear publish-free).
+            .onChange(of: isSourceMode) {
+                appState.notePropertiesSourceModeChanged(isSourceMode)
+            }
+            .onAppear {
+                appState.notePropertiesSourceModeChanged(isSourceMode)
             }
             .alert(
                 "Apply property source changes?",
