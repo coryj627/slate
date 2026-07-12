@@ -13,7 +13,7 @@ Baseline facts (verified 2026-07-06, this worktree):
 - Tags: `tags` table + `file_tags` semantics from #564–#567 (frontmatter + inline, nested-child matching per search_db.rs:60) — **do not re-litigate**.
 - Tasks: `tasks` table, migration 008 (+ 009/010 indexes): `ordinal` (stable per parser version), `text` (metadata-stripped), `status_char` (verbatim 1-char), `completed` (derived, indexed), `due_ms`, `scheduled_ms`, `priority` (Tasks-plugin emoji set), `recurrence`, `line`, `byte_offset`.
 - FTS: `files_fts` FTS5 + `full_text_search` with `CancelToken` per-row checks and `SearchScope` (search_db.rs:117); its `QueryResultSet {rows, summary}` (:100) is the FTS shape and is **not** retrofitted (decision 7).
-- Links: `links` table (`resolved_path` indexed) — feeds `file.links`, `file.backlinks`, `hasLink`, `linksTo`.
+- Links: `links` table (`target_path` indexed — `resolved_path` is only the LinkValue FFI field name) — feeds `file.links`, `file.backlinks`, `hasLink`, `linksTo`.
 - No load-everything: paging is mandatory on list-like operations (05 §9.3.1); the engine streams candidates in batches.
 - Budgets (05 §9.5): indexed structured query < 50 ms @ 10k, < 200 ms @ 50k; memory budgets per SessionConfig (05 §9.3.5).
 

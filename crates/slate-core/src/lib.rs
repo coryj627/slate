@@ -51,6 +51,8 @@ mod dql_inline_fields_db;
 pub mod editor_spans;
 pub mod embeds;
 pub mod frontmatter;
+pub mod graph;
+pub mod graph_metrics;
 pub mod history_prefs;
 mod line_index;
 pub mod link_resolver;

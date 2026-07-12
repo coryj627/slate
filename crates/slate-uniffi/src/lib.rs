@@ -692,6 +692,34 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    /// Filtered whole-graph projection (Milestone P #552). Sync —
+    /// the host dispatches off-main per the AppState pattern.
+    pub fn graph_snapshot(&self, filter: GraphFilter) -> Result<GraphSnapshot, VaultError> {
+        Ok(self.inner.graph_snapshot(filter.into())?.into())
+    }
+
+    /// Depth-limited (1..=3, clamped) undirected neighborhood of one
+    /// note (#552). The filter applies before traversal.
+    pub fn graph_neighborhood(
+        &self,
+        path: String,
+        depth: u32,
+        filter: GraphFilter,
+    ) -> Result<GraphNeighborhood, VaultError> {
+        Ok(self
+            .inner
+            .graph_neighborhood(&path, depth, filter.into())?
+            .into())
+    }
+
+    /// Cheap graph-change probe (#552): bumps once per applied
+    /// mutation batch; 0 until the first graph query builds the
+    /// index. The refresh contract: re-query on VaultEventListener
+    /// file-change / scan-finished events, refresh surfaces on change.
+    pub fn graph_generation(&self) -> u64 {
+        self.inner.graph_generation()
+    }
+
     /// Paged list of files whose frontmatter contains property `key`
     /// with a value matching `value` (case-insensitive). For list /
     /// tag_list properties, each element is searched independently.
@@ -2026,6 +2054,170 @@ pub enum FileChangeKind {
     Modified,
     Deleted,
     Renamed,
+}
+
+// --- Graph surface (Milestone P #552) ----------------------------------
+
+/// Node kind in the link graph. Mirrors `slate_core::graph::NodeKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphNodeKind {
+    Note,
+    Attachment,
+    Ghost,
+}
+
+impl From<core::graph::NodeKind> for GraphNodeKind {
+    fn from(k: core::graph::NodeKind) -> Self {
+        match k {
+            core::graph::NodeKind::Note => GraphNodeKind::Note,
+            core::graph::NodeKind::Attachment => GraphNodeKind::Attachment,
+            core::graph::NodeKind::Ghost => GraphNodeKind::Ghost,
+        }
+    }
+}
+
+/// Edge kind in the link graph. Mirrors `slate_core::graph::EdgeKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphEdgeKind {
+    Link,
+    Embed,
+}
+
+impl From<core::graph::EdgeKind> for GraphEdgeKind {
+    fn from(k: core::graph::EdgeKind) -> Self {
+        match k {
+            core::graph::EdgeKind::Link => GraphEdgeKind::Link,
+            core::graph::EdgeKind::Embed => GraphEdgeKind::Embed,
+        }
+    }
+}
+
+/// One graph node with its metrics (#552). `id` is stable while the
+/// snapshot's `generation` is unchanged — a generation change may
+/// reassign ids, so re-fetch instead of caching ids across
+/// generations; never stable across sessions. Mirrors
+/// `slate_core::graph::GraphNode`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct GraphNode {
+    pub id: u64,
+    /// `None` for ghosts.
+    pub path: Option<String>,
+    pub label: String,
+    pub kind: GraphNodeKind,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub in_embeds: u32,
+    pub out_embeds: u32,
+    pub component: u32,
+    pub is_orphan: bool,
+    pub pagerank: f64,
+    /// `files.mtime_ms`; `None` for ghosts.
+    pub modified_ms: Option<i64>,
+}
+
+impl From<core::graph::GraphNode> for GraphNode {
+    fn from(n: core::graph::GraphNode) -> Self {
+        GraphNode {
+            id: n.id,
+            path: n.path,
+            label: n.label,
+            kind: n.kind.into(),
+            in_links: n.in_links,
+            out_links: n.out_links,
+            in_embeds: n.in_embeds,
+            out_embeds: n.out_embeds,
+            component: n.component,
+            is_orphan: n.is_orphan,
+            pagerank: n.pagerank,
+            modified_ms: n.modified_ms,
+        }
+    }
+}
+
+/// One collapsed edge (#552): parallel references share an edge with
+/// a reference count. Mirrors `slate_core::graph::GraphEdge`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct GraphEdge {
+    pub source_id: u64,
+    pub target_id: u64,
+    pub kind: GraphEdgeKind,
+    pub count: u32,
+}
+
+impl From<core::graph::GraphEdge> for GraphEdge {
+    fn from(e: core::graph::GraphEdge) -> Self {
+        GraphEdge {
+            source_id: e.source_id,
+            target_id: e.target_id,
+            kind: e.kind.into(),
+            count: e.count,
+        }
+    }
+}
+
+/// Projection filter (#552). Defaults: attachments off, ghosts on,
+/// all notes. Mirrors `slate_core::graph::GraphFilter`.
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct GraphFilter {
+    pub include_attachments: bool,
+    pub include_ghosts: bool,
+    pub orphans_only: bool,
+}
+
+impl From<GraphFilter> for core::graph::GraphFilter {
+    fn from(f: GraphFilter) -> Self {
+        core::graph::GraphFilter {
+            include_attachments: f.include_attachments,
+            include_ghosts: f.include_ghosts,
+            orphans_only: f.orphans_only,
+        }
+    }
+}
+
+/// Whole-graph projection under a filter (#552). Node order is
+/// key-sorted; edge order is (source, target, kind) — deterministic.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct GraphSnapshot {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub generation: u64,
+    /// Pre-rendered VoiceOver summary, e.g. `"247 notes, 1,032 links.
+    /// 12 orphans, 3 unresolved targets."` (format normative in
+    /// p0_spec §P0-3).
+    pub audio_summary: String,
+}
+
+impl From<core::graph::GraphSnapshot> for GraphSnapshot {
+    fn from(s: core::graph::GraphSnapshot) -> Self {
+        GraphSnapshot {
+            nodes: s.nodes.into_iter().map(Into::into).collect(),
+            edges: s.edges.into_iter().map(Into::into).collect(),
+            generation: s.generation,
+            audio_summary: s.audio_summary,
+        }
+    }
+}
+
+/// Depth-limited neighborhood of one note (#552).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct GraphNeighborhood {
+    pub center_id: u64,
+    pub depth: u32,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub audio_summary: String,
+}
+
+impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
+    fn from(n: core::graph::GraphNeighborhood) -> Self {
+        GraphNeighborhood {
+            center_id: n.center_id,
+            depth: n.depth,
+            nodes: n.nodes.into_iter().map(Into::into).collect(),
+            edges: n.edges.into_iter().map(Into::into).collect(),
+            audio_summary: n.audio_summary,
+        }
+    }
 }
 
 impl From<core::FileChangeEvent> for FileChangeEvent {

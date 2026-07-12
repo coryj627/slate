@@ -522,3 +522,49 @@ never the keystroke path.
 
 Full-scale release censuses at close: op-log identity/compaction/history/
 temporal batteries 137 tests green; Mac suite 87 suites; `a11y-check` 100.0.
+
+## Milestone P — P0 graph backend baselines (2026-07-12)
+
+First recorded baselines for the graph backend (#550–#553): `GraphIndex`
+(petgraph `StableDiGraph` mirror of the links table), `MetricsSnapshot`
+(degrees / components / orphans / hand-rolled 40-iteration PageRank), and
+the P0-3 query surface. Fixture: `benches/common::generate_linked_vault`
+(hub topology, ~3 outlinks/file). Run via
+`cargo bench -p slate-core --bench graph_bench` (`make bench` remains
+scan_bench-only). Apple silicon, release profile.
+
+| Benchmark | Mean (95% CI) | Notes |
+|---|---:|---|
+| `graph_build/1000` | **1.98 ms** (1.82–2.17) | cold build + first snapshot |
+| `graph_build/10000` | **35.35 ms** (33.78–37.48) | scales ~linearly |
+| `graph_build/50000` | **175.39 ms** (173.18–177.46) | worst-case lazy rebuild cost |
+| `graph_snapshot_default_filter/10000` | **8.00 ms** (7.95–8.05) | warm index; per-generation refresh cost |
+| `graph_neighborhood_d2/10000` | **8.44 ms** (8.37–8.53) | depth-2 BFS rooted at the vault hub (worst case) |
+| `metrics_full/10000` | **5.24 ms** (5.22–5.26) | full recompute incl. PageRank ×40 |
+| `metrics_full/50000` | **28.72 ms** (28.65–28.80) | " |
+
+**Save-path gate (DoD §P-E, O(changed-file)):** identical alternating-body
+save loop on the same 10k vault, index live vs never built:
+
+| Variant | Mean (95% CI) |
+|---|---:|
+| `linkset_change_incremental/10000` (index live) | **14.975 ms** (14.870–15.078) |
+| `linkset_change_unbuilt/10000` (hooks no-op) | **14.772 ms** (14.630–14.912) |
+| **Graph increment** | **+0.203 ms (+1.4%)** — inside the < 1 ms budget |
+
+(The absolute save numbers sit above O's 9.44 ms `save_text_hot` because
+this fixture's saves are genuine content changes on a 10k vault — diff,
+op-log append, full derivative reindex, and the save path's documented
+O(N) vault-index snapshot — none of which is graph work; the controlled
+delta above is the graph's whole cost.)
+
+**Scan path (hooks unbuilt = structurally free):**
+
+| Benchmark | This branch | Standing baseline | Delta |
+|---|---:|---:|---|
+| `first_open_and_scan/10000` | **1.7518 s** (1.7442–1.7598) | 1.7096 s (N-final, 2026-07-10) | **+2.5%** — inside the 5% budget (decision 16); cross-day comparison, and the only new unbuilt-path work is two bounded allocations (written-rows vec on the slow path, re-resolve affected-sources vec) |
+
+Note for future filtered runs: criterion name filters skip measurements
+but not group setup — a filtered `graph_bench` run still pays every
+group's vault generation + scan priming (both 50k primes included).
+Split hot groups into their own bench binary if this becomes a habit.
