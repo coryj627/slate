@@ -113,13 +113,15 @@ Bases should be treated as a core data platform, not a secondary feature.
 
 - Plugin-added/custom views through a native extension API.
 - Dataview query migration layer.
-- Graph-derived fields in Bases: `file.inDegree`, `file.outDegree`, `file.isOrphan`, `file.cluster`, `file.shortestPathTo(...)`.
+- Graph-derived fields in Bases: `file.inDegree`, `file.outDegree`, `file.isOrphan`, `file.cluster`, `file.shortestPathTo(...)`. *(Update 2026-07-11: `inDegree`/`outDegree` shipped early with Milestone N as embed-inclusive links-table counts — see `11_graph/00_program.md` §N for the semantics delta; the remaining three await Milestone P's metrics substrate, reserved as N-E5.)*
 
 Official Bases docs establish database-like views over Markdown and properties, `.base` YAML syntax, filters, formulas, summaries, file/note/formula properties, and table/list/cards/map layouts. See O2 and O3.
 
 ---
 
 ## 7. Graph roadmap
+
+> **⚠️ Superseded (2026-07-04, owner decision):** the phase ordering below is inverted by [`11_graph/00_program.md`](11_graph/00_program.md) — the accessible relational model (Milestone P Waves 1–2) ships **before** the visual diagram, which arrives as a projection of it. The capability list below remains a useful parity inventory; the build order does not.
 
 Graph is central for sighted adoption and must be visually credible early. Accessibility can mature later, but the data model must be accessible from day one.
 
