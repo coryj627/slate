@@ -557,3 +557,184 @@ mod properties {
         }
     }
 }
+
+// --- P0-2: metrics (#551) ------------------------------------------------
+
+mod metrics {
+    use super::*;
+
+    #[test]
+    fn golden_metrics_on_the_p0_1_fixture() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file(
+                "a.md",
+                b"[[b]] and [[b]] again, embed ![[b]], ghost [[Missing Note]], \
+                  image ![[pic.png]], external [x](https://example.com)",
+            )
+            .unwrap();
+            p.write_file("b.md", b"back to [[a]]").unwrap();
+            p.write_file("pic.png", b"\x89PNG").unwrap();
+            p.write_file("loner.md", b"no links here").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let m = session.graph_metrics_snapshot().unwrap();
+        assert_eq!(m.note_count, 3);
+        assert_eq!(m.attachment_count, 1);
+        assert_eq!(m.ghost_count, 1);
+        assert_eq!(m.edge_count, 6); // 2+1 to b, 1 pic, 1 ghost, 1 back
+        assert_eq!(m.orphan_count, 1); // loner.md
+        assert_eq!(m.component_count, 2); // {a,b,pic,ghost} + {loner}
+
+        let a = m.get(&path_key("a.md")).unwrap();
+        assert_eq!(
+            (a.in_links, a.out_links, a.in_embeds, a.out_embeds),
+            (1, 3, 0, 2),
+            "degrees are reference-distinct sums of counts"
+        );
+        assert!(!a.is_orphan);
+
+        let b = m.get(&path_key("b.md")).unwrap();
+        // [[b]] x2 are Link-kind; ![[b]] lands in in_embeds.
+        assert_eq!(
+            (b.in_links, b.out_links, b.in_embeds, b.out_embeds),
+            (2, 1, 1, 0)
+        );
+
+        let pic = m.get(&path_key("pic.png")).unwrap();
+        assert_eq!((pic.in_links, pic.in_embeds), (0, 1));
+        assert!(!pic.is_orphan, "attachments are never orphans");
+
+        let loner = m.get(&path_key("loner.md")).unwrap();
+        assert!(loner.is_orphan);
+        assert_ne!(a.component, loner.component);
+        assert_eq!(a.component, b.component);
+
+        // PageRank: sums to 1 within 1e-9 across every node.
+        let sum: f64 = [
+            path_key("a.md"),
+            path_key("b.md"),
+            path_key("pic.png"),
+            path_key("loner.md"),
+            ghost("missing note"),
+        ]
+        .iter()
+        .map(|k| m.get(k).unwrap().pagerank)
+        .sum();
+        assert!((sum - 1.0).abs() < 1e-9, "pagerank sum {sum}");
+    }
+
+    #[test]
+    fn orphan_iff_zero_link_degree_embeds_dont_rescue() {
+        let (_tmp, session) = make_vault(|p| {
+            // embedded-only note: embeds don't rescue.
+            p.write_file("a.md", b"![[b]]").unwrap();
+            p.write_file("b.md", b"").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let m = session.graph_metrics_snapshot().unwrap();
+        let a = m.get(&path_key("a.md")).unwrap();
+        let b = m.get(&path_key("b.md")).unwrap();
+        assert!(a.is_orphan, "embed-only out-degree doesn't rescue");
+        assert!(b.is_orphan, "embed-only in-degree doesn't rescue");
+        assert_eq!(m.orphan_count, 2);
+        // ...but the pair still shares a component via the embed edge.
+        assert_eq!(a.component, b.component);
+    }
+
+    #[test]
+    fn component_labels_are_permutation_invariant_and_pagerank_bit_identical() {
+        let files: Vec<(&str, &str)> = vec![
+            ("a.md", "[[b]]"),
+            ("b.md", "[[a]]"),
+            ("c.md", "[[d]] [[ghosty]]"),
+            ("d.md", ""),
+            ("e.md", ""),
+        ];
+        let snapshot = |ordered: &[(&str, &str)]| {
+            let (tmp, session) = make_vault(|_| {});
+            for (path, body) in ordered {
+                session.create_exclusive(path, body).unwrap();
+            }
+            session.scan_initial(&CancelToken::new()).unwrap();
+            let m = session.graph_metrics_snapshot().unwrap();
+            drop(tmp);
+            m
+        };
+        let m1 = snapshot(&files);
+        let mut rev = files.clone();
+        rev.reverse();
+        let m2 = snapshot(&rev);
+
+        for key in [
+            path_key("a.md"),
+            path_key("b.md"),
+            path_key("c.md"),
+            path_key("d.md"),
+            path_key("e.md"),
+            ghost("ghosty"),
+        ] {
+            let x = m1.get(&key).unwrap();
+            let y = m2.get(&key).unwrap();
+            assert_eq!(x.component, y.component, "component label for {key:?}");
+            assert_eq!(
+                x.pagerank.to_bits(),
+                y.pagerank.to_bits(),
+                "pagerank must be bit-identical for {key:?}"
+            );
+        }
+        assert_eq!(m1.component_count, m2.component_count);
+        // Deterministic labeling rule: components ordered by their
+        // lexicographically-smallest member key. {a,b} < {c,d,ghosty} < {e}.
+        assert_eq!(m1.get(&path_key("a.md")).unwrap().component, 0);
+        assert_eq!(m1.get(&path_key("c.md")).unwrap().component, 1);
+        assert_eq!(m1.get(&path_key("e.md")).unwrap().component, 2);
+    }
+
+    #[test]
+    fn delete_then_measure_survives_index_holes() {
+        // The petgraph page_rank-on-holes hazard class: metrics after
+        // node removals must equal metrics on a fresh build.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"[[b]] [[c]]").unwrap();
+            p.write_file("b.md", b"[[c]]").unwrap();
+            p.write_file("c.md", b"[[a]]").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let _ = session.graph_metrics_snapshot().unwrap(); // build + warm cache
+
+        session.delete_file("b.md").unwrap();
+        assert_matches_rebuild(&session, "delete before metrics");
+        let live = session.graph_metrics_snapshot().unwrap();
+        let fresh_index = session.graph_rebuild_reference().unwrap();
+        let fresh = crate::graph_metrics::MetricsSnapshot::compute(&fresh_index);
+        assert_eq!(
+            *live, fresh,
+            "metrics with holes must equal fresh-build metrics"
+        );
+    }
+
+    #[test]
+    fn metrics_cache_invalidates_on_generation_change() {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("a.md", b"[[b]]").unwrap();
+            p.write_file("b.md", b"").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let m1 = session.graph_metrics_snapshot().unwrap();
+        let m1_again = session.graph_metrics_snapshot().unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&m1, &m1_again),
+            "same generation must hit the cache"
+        );
+
+        session.save_text("a.md", "[[b]] [[b]]", None).unwrap();
+        let m2 = session.graph_metrics_snapshot().unwrap();
+        assert!(
+            !std::sync::Arc::ptr_eq(&m1, &m2),
+            "generation bump must recompute"
+        );
+        assert_eq!(m2.get(&path_key("b.md")).unwrap().in_links, 2);
+    }
+}

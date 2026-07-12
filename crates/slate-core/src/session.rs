@@ -672,11 +672,16 @@ pub struct VaultSession {
     /// transaction is open, and `graph_apply` applies the batch only
     /// after the commit succeeds.
     ///
-    /// LOCK ORDER: `conn` before `graph`, always — every graph build
-    /// and query acquires the connection first, and hooks stage while
-    /// the connection lock is already held. Never acquire `conn`
-    /// while holding `graph`.
+    /// LOCK ORDER: `conn` before `graph` before `graph_metrics`,
+    /// always — every graph build and query acquires the connection
+    /// first, and hooks stage while the connection lock is already
+    /// held. Never acquire an earlier lock while holding a later one.
     graph: Mutex<Option<crate::graph::GraphIndex>>,
+    /// Metrics over the graph (#551), cached per graph generation —
+    /// the `(generation, data)`-under-one-mutex shape (`remnant_logs`
+    /// precedent). Invalidated implicitly: a generation mismatch on
+    /// read recomputes.
+    graph_metrics: Mutex<Option<(u64, std::sync::Arc<crate::graph_metrics::MetricsSnapshot>)>>,
     /// Monotonic salt for new op-log name stems (O-1 #539): stems derive
     /// from `blake3(path ‖ now_ms ‖ salt)`, so even two allocations for
     /// the same path in the same millisecond differ.
@@ -1168,6 +1173,13 @@ impl VaultSession {
         let mut guard = self.graph.lock().expect("graph index mutex");
         if poisoned {
             *guard = None;
+            // A rebuilt index restarts at generation 0, which could
+            // falsely validate a cached snapshot — drop the cache with
+            // the index (LOCK ORDER: graph → graph_metrics).
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
             return;
         }
         if ops.is_empty() {
@@ -1177,6 +1189,10 @@ impl VaultSession {
             && index.apply_batch(ops).is_err()
         {
             *guard = None;
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
         }
     }
 
@@ -1195,6 +1211,12 @@ impl VaultSession {
         let mut guard = self.graph.lock().expect("graph index mutex");
         if guard.is_none() {
             *guard = Some(crate::graph::GraphIndex::build(&conn)?);
+            // Fresh index restarts at generation 0 — a surviving
+            // cached snapshot would falsely validate against it.
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
         }
         Ok(f(guard.as_ref().expect("graph index just ensured")))
     }
@@ -1215,6 +1237,39 @@ impl VaultSession {
     #[allow(dead_code)] // test/census seam (P0-4)
     pub(crate) fn graph_is_built(&self) -> bool {
         self.graph.lock().expect("graph index mutex").is_some()
+    }
+
+    /// Metrics snapshot for the current graph, cached per generation
+    /// (#551). Builds the graph on first use; recomputes only when
+    /// the generation moved. LOCK ORDER: conn → graph → graph_metrics.
+    ///
+    /// Consumed by tests today; P0-3's uniffi surface (#552) becomes
+    /// the first production caller — remove the allowance then.
+    #[allow(dead_code)]
+    pub(crate) fn graph_metrics_snapshot(
+        &self,
+    ) -> Result<std::sync::Arc<crate::graph_metrics::MetricsSnapshot>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        if guard.is_none() {
+            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
+            // Same rebuilt-generation-0 hazard as with_graph.
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
+        }
+        let index = guard.as_ref().expect("graph index just ensured");
+        let generation = index.generation();
+        let mut cache = self.graph_metrics.lock().expect("graph metrics mutex");
+        if let Some((cached_generation, snapshot)) = cache.as_ref()
+            && *cached_generation == generation
+        {
+            return Ok(std::sync::Arc::clone(snapshot));
+        }
+        let snapshot = std::sync::Arc::new(crate::graph_metrics::MetricsSnapshot::compute(index));
+        *cache = Some((generation, std::sync::Arc::clone(&snapshot)));
+        Ok(snapshot)
     }
 
     /// Open or create a vault session against the given provider.
@@ -1312,6 +1367,7 @@ impl VaultSession {
             remnant_logs: Mutex::new((0, Vec::new())),
             cache_created_this_open,
             graph: Mutex::new(None),
+            graph_metrics: Mutex::new(None),
             event_listeners,
             next_listener_token: AtomicU64::new(1),
             retention_days,
