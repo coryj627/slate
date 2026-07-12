@@ -72,11 +72,12 @@ struct SplitContainerView: View {
                     onDrag: { delta in
                         dragDivider(at: index, delta: delta, contentLength: contentLength)
                     },
-                    onEnd: { dragWeights = nil },
+                    onEnd: { commitDrag(at: index) },
                     onAdjust: { step in
                         // VoiceOver adjustable action: shift a resize-step of
                         // the PAIR's span between the two neighbors — the
-                        // same math as a drag of that distance.
+                        // same math as a drag of that distance. A discrete
+                        // step commits immediately (there's no gesture end).
                         let pair = (dragWeights ?? branch.weights)[index]
                             + (dragWeights ?? branch.weights)[index + 1]
                         dragDivider(
@@ -84,7 +85,7 @@ struct SplitContainerView: View {
                             delta: CGFloat(step * WorkspaceModel.resizeStep * pair)
                                 * contentLength,
                             contentLength: contentLength)
-                        dragWeights = nil
+                        commitDrag(at: index)
                     })
             }
         }
@@ -92,8 +93,9 @@ struct SplitContainerView: View {
 
     /// Move the divider between children `index` and `index+1` by `delta`
     /// points: weight shifts between exactly those two children, both
-    /// clamped to the model floor. Commit continuously so the model (and
-    /// the census-checked invariants) always reflect what's on screen.
+    /// clamped to the model floor. Writes ONLY the local `dragWeights`
+    /// override that drives on-screen layout; the model commit is
+    /// deferred to `commitDrag` at gesture end (see its note).
     private func dragDivider(at index: Int, delta: CGFloat, contentLength: CGFloat) {
         guard contentLength > 0 else { return }
         var weights = dragWeights ?? branch.weights
@@ -105,9 +107,28 @@ struct SplitContainerView: View {
         weights[index] = newLeft
         weights[index + 1] = pair - newLeft
         dragWeights = weights
-        if let firstGroup = Self.firstGroupID(in: branch.children[index]) {
-            appState.workspace.setWeights(weights, forSplitContaining: firstGroup)
-        }
+    }
+
+    /// Commit the live drag weights to the model ONCE — at gesture end or
+    /// per VoiceOver step — then release the local override.
+    ///
+    /// #868 red-team: the previous code committed on EVERY pointer tick,
+    /// publishing `WorkspaceState.model` per event. The new
+    /// workspace→appState `objectWillChange` bridge amplifies each such
+    /// publish into a whole-app invalidation plus a full `.commands`
+    /// rebuild, so a single divider drag re-rendered the menu bar and
+    /// every appState-observing view at pointer-event rate (jank on
+    /// large vaults). On-screen tracking already rides `dragWeights`
+    /// (`body` reads `dragWeights ?? branch.weights` — never the model
+    /// mid-drag), so deferring the commit is visually transparent; the
+    /// final model state and the `setWeights` `validate()` assert are
+    /// unchanged.
+    private func commitDrag(at index: Int) {
+        defer { dragWeights = nil }
+        guard let weights = dragWeights,
+            let firstGroup = Self.firstGroupID(in: branch.children[index])
+        else { return }
+        appState.workspace.setWeights(weights, forSplitContaining: firstGroup)
     }
 
     private static func firstGroupID(in node: SplitNode) -> GroupID? {

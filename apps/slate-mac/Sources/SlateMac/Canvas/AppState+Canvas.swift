@@ -233,6 +233,10 @@ extension AppState {
             doc.undoStack.append((name: action.name, inverse: result.inverse))
             doc.redoStack = []
             doc.reloadAfterMutation(session: session)
+            // #867: the stacks are plain vars (never @Published — views
+            // don't render them), so the Undo/Redo menu titles need an
+            // explicit pulse from this funnel.
+            noteUndoStacksChanged()
             return true
         } catch let error as VaultError {
             if case .WriteConflict = error {
@@ -268,6 +272,7 @@ extension AppState {
             let result = try session.canvasApply(handle: handle, action: entry.inverse)
             doc.redoStack.append((name: entry.name, inverse: result.inverse))
             doc.reloadAfterMutation(session: session)
+            noteUndoStacksChanged()  // #867 menu-title pulse
             canvasAnnouncer.announce(.confirmation(CanvasAnnouncer.undidText(actionName: entry.name)))
         } catch {
             // Stale undo after an external change: conflict surfaces,
@@ -295,6 +300,7 @@ extension AppState {
             let result = try session.canvasApply(handle: handle, action: entry.inverse)
             doc.undoStack.append((name: entry.name, inverse: result.inverse))
             doc.reloadAfterMutation(session: session)
+            noteUndoStacksChanged()  // #867 menu-title pulse
             canvasAnnouncer.announce(.confirmation(CanvasAnnouncer.redidText(actionName: entry.name)))
         } catch {
             doc.redoStack.append(entry)
@@ -305,13 +311,33 @@ extension AppState {
 
     /// The responder-chain seam (#372): ⌘Z drives the canvas stack when
     /// a canvas surface owns focus, the standard responder chain
-    /// otherwise (NSTextView editors keep their NSUndoManager). Wave 4's
-    /// inline text-card editor refines this with a first-responder
-    /// text-view check.
+    /// otherwise (NSTextView editors keep their NSUndoManager).
     var undoTargetsCanvas: Bool {
         guard activeCanvasDocument != nil else { return false }
-        // Inside the inline editor (Wave 4) the editor's undo wins;
-        // today the only canvas text surface is the read-only detail.
+        // #867 red-team (BROKEN): the card-editor / prompt / picker
+        // sheets put their own editors in first-responder position
+        // while the canvas TAB stays active — ⌘Z must drive the
+        // sheet's responder chain (an NSTextView carries its own
+        // NSUndoManager), and the Edit menu must advertise ITS verbs,
+        // never the canvas stack's. These sheets are AppState
+        // @Published, so setting/clearing one publishes → the bridge
+        // re-renders `.commands` → the title, enablement, AND ⌘Z
+        // routing flip together (never a title/action split), and the
+        // gate is observable headless.
+        //
+        // The BROADER focus problem — a Settings field or other
+        // auxiliary key window owning keyboard focus while a canvas
+        // tab is active — is #372's route-by-active-tab-not-focus
+        // behavior (byte-for-byte unchanged by this PR) and can't be
+        // closed here without a PUBLISHED first-responder signal: a
+        // `NSApp.keyWindow.firstResponder` read is unpublished, so
+        // the render-time title would bake one undo domain while the
+        // press-time action re-evaluates the other. Deferred to the
+        // #372 focus-routing refinement; PR5 fixes only the
+        // publishable modal-sheet case.
+        if canvasCardEditor != nil || canvasPrompt != nil || canvasCardPicker != nil {
+            return false
+        }
         return true
     }
 }
