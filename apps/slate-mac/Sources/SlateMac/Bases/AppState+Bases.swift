@@ -789,6 +789,7 @@ extension AppState {
             path: path,
             name: name ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension))
         workspace.activeLeaf = .basesDock
+        isRightPaneVisible = true  // #882: un-hide the pane on reveal
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
 
@@ -799,6 +800,7 @@ extension AppState {
         }
         basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
         workspace.activeLeaf = .basesDock
+        isRightPaneVisible = true  // #882: un-hide the pane on reveal
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
 
@@ -809,6 +811,7 @@ extension AppState {
         }
         basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
         workspace.activeLeaf = .basesDock
+        isRightPaneVisible = true  // #882: un-hide the pane on reveal
         scheduleBasesDockFollowActiveRefresh(delayNanoseconds: refreshDelayNanoseconds)
     }
 
@@ -1755,7 +1758,7 @@ extension AppState {
     func basesShowBacklinks(for row: BasesRow) -> String {
         openFile(row.filePath, target: .currentTab)
         workspace.activeLeaf = .backlinks
-        workspace.focusLeafRegion()
+        focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
         let text = "Backlinks for \(displayNameWithoutExtension(row.filePath))."
         postBaseActionAnnouncement(text)
         return text

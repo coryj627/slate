@@ -119,6 +119,23 @@ struct CanvasOutlineView: View {
             appState.canvasModeStep(dx: 0, dy: 1, large: press.modifiers.contains(.shift))
             return .handled
         }
+        // Return opens the selected row for a keyboard-only (non-VoiceOver)
+        // user (#861, WCAG 2.1.1): double-click and the AX "Open" action
+        // already cover pointer + VoiceOver, but bare Return from the outline
+        // reached nothing. Defer to CanvasContainerView's Return-commits-the-
+        // active-spatial-mode path (#521) by returning `.ignored` whenever a
+        // mode is active — that press belongs to move/resize/connect, and
+        // `.ignored` lets it bubble to the container's `.onKeyPress(.return)`.
+        .onKeyPress(.return) {
+            let modeActive = appState.canvasModeController(for: document).active != nil
+            guard
+                Self.returnOpensRow(modeActive: modeActive, selected: selection.selected),
+                let selected = selection.selected,
+                let row = rows.first(where: { $0.nodeId == selected })
+            else { return .ignored }
+            onActivate(row)
+            return .handled
+        }
         .accessibilityRotor("Cards") {
             ForEach(rows.filter { $0.kind != "group" }, id: \.nodeId) { row in
                 AccessibilityRotorEntry(Text(row.title), id: row.nodeId, in: rotorSpace)
@@ -322,6 +339,15 @@ struct CanvasOutlineView: View {
     }
 
     // MARK: Selection & activation
+
+    /// Whether an outline-scoped Return should open the selected row (#861).
+    /// True only when no spatial mode holds the keyboard — a mode's Return
+    /// commits move/resize/connect (#521), so that press must bubble to the
+    /// container — AND a node row is selected. Pure so the WCAG 2.1.1
+    /// activation rule is unit-tested without a rendered List.
+    static func returnOpensRow(modeActive: Bool, selected: String?) -> Bool {
+        !modeActive && selected != nil
+    }
 
     private var selectionBinding: Binding<String?> {
         Binding(

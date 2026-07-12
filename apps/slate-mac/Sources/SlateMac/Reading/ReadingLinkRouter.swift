@@ -374,9 +374,12 @@ extension ReadingLinkRouter {
             },
             expandCitation: { [weak appState] raw in
                 guard let appState else { return }
-                // Same activation as a CitationsPanel row: set
-                // `expandedCitation`; MainSplitView's sheet presents the
-                // CitationPopover (full Milestone L speech treatment).
+                // Set `expandedCitation` to open the CitationPopover (full
+                // Milestone L speech treatment). Unlike a CitationsPanel row,
+                // an inline Reading-mode glyph is an NSTextView attachment with
+                // no SwiftUI anchor, so this stays NOT row-anchored (#878):
+                // `MainSplitView`'s detached fallback presents it, gated on
+                // `expandedCitationRowAnchored == false`.
                 // `RenderedCitation.raw` is the stable lookup key.
                 guard
                     let citation = appState.currentNoteCitations.first(
@@ -386,6 +389,7 @@ extension ReadingLinkRouter {
                         "Citation is not loaded yet.")
                     return
                 }
+                appState.expandedCitationRowAnchored = false
                 appState.expandedCitation = citation
             }
         )

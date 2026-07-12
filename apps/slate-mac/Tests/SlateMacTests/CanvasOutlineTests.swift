@@ -156,6 +156,56 @@ final class CanvasOutlineTests: XCTestCase {
         }
     }
 
+    // MARK: - #861: Return activates the selected outline row
+
+    /// The pure activation rule (WCAG 2.1.1): Return opens the selected row
+    /// only when NO spatial mode holds the keyboard and a row is selected.
+    func testReturnOpensRowDecision() {
+        XCTAssertTrue(
+            CanvasOutlineView.returnOpensRow(modeActive: false, selected: "q"),
+            "no mode + a selection → Return opens the row")
+        XCTAssertFalse(
+            CanvasOutlineView.returnOpensRow(modeActive: true, selected: "q"),
+            "an active spatial mode owns Return (it commits move/resize/connect)")
+        XCTAssertFalse(
+            CanvasOutlineView.returnOpensRow(modeActive: false, selected: nil),
+            "nothing selected → nothing to open")
+        XCTAssertFalse(
+            CanvasOutlineView.returnOpensRow(modeActive: true, selected: nil))
+    }
+
+    /// Structural pin (no rendered-key-event surface in XCTest): the outline
+    /// wires `.onKeyPress(.return)` to `onActivate`, gated on the mode being
+    /// inactive, and returns `.ignored` when a mode is active so the press
+    /// bubbles to CanvasContainerView's spatial-mode-commit handler (#861).
+    func testOutlineReturnHandlerWiring() throws {
+        let source = try Self.canvasOutlineSource()
+        XCTAssertTrue(source.contains(".onKeyPress(.return)"))
+        XCTAssertTrue(source.contains("returnOpensRow(modeActive:"))
+        XCTAssertTrue(
+            source.contains("canvasModeController(for: document).active != nil"),
+            "the guard reads whether a spatial mode is active")
+        XCTAssertTrue(
+            source.contains("onActivate(row)"),
+            "Return opens the selected row through the same activation path")
+        XCTAssertTrue(
+            source.contains("else { return .ignored }"),
+            "mode-active / no-selection presses must bubble to the container")
+    }
+
+    private static func canvasOutlineSource() throws -> String {
+        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent(
+                "Sources/SlateMac/Canvas/CanvasOutlineView.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor = cursor.deletingLastPathComponent()
+        }
+        throw CocoaError(.fileNoSuchFile)
+    }
+
     func testTwoThousandNodeOutlineStaysResponsive() async throws {
         // §K: the outline data path at the scale budget. Load the
         // committed 2,000-node fixture through the real session.

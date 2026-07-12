@@ -67,6 +67,14 @@ enum SlateCommandID {
     /// reachable by command and the Bases row-action handoff has a home.
     static let showConnectionsPanel = "slate.graph.showConnections"
 
+    /// Right-pane hide/reveal (#882). ⌥⌘I (inspector/utility-pane idiom —
+    /// the right pane hosts the panel rail; distinct from ⌃⌘I Canvas Where
+    /// Am I, and collision-free against every existing chord). The
+    /// menu item's Hide/Show title reflects state; the palette keeps the
+    /// static "Toggle Right Pane" noun (the toggleViewMode precedent —
+    /// the menu↔palette invariant is CHORD parity, not label parity).
+    static let toggleRightPane = "slate.view.toggleRightPane"
+
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
     // Program rule R1: every canvas action is a registry command; these
@@ -246,6 +254,7 @@ enum SlateCommandID {
         refreshSyncDiagnostics,
         showHistoryPanel,
         showConnectionsPanel,
+        toggleRightPane,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1199,6 +1208,17 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .view,
         hint: "Open the Connections leaf — the active note's local graph."
     ) { [weak appState] in appState?.showConnectionsPanel() }
+
+    register(
+        SlateCommandID.toggleRightPane,
+        // Static noun for the palette (searchable, state-free); the menu
+        // item owns the Hide/Show state-reflecting title. ⌥⌘I is the
+        // single chord owner (menu-bar-homed — the #422 lesson).
+        label: "Toggle Right Pane",
+        section: .view,
+        hotkey: "⌥⌘I",
+        hint: "Hide or show the right pane (the panel rail). Option-Command-I."
+    ) { [weak appState] in appState?.toggleRightPane() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 

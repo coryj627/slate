@@ -92,6 +92,21 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store2.loadBaseQueryPrefs(), prefs)
     }
 
+    // MARK: - Compaction-failure alert suppression (#881)
+
+    func testSuppressCompactionFailureAlertDefaultsOffAndRoundTrips() {
+        let store = PreferencesStore(defaults: defaults)
+        XCTAssertFalse(
+            store.loadSuppressCompactionFailureAlert(),
+            "the alert shows until the user opts out")
+
+        store.saveSuppressCompactionFailureAlert(true)
+        let store2 = PreferencesStore(defaults: defaults)
+        XCTAssertTrue(
+            store2.loadSuppressCompactionFailureAlert(),
+            "the 'Don't Show Again' choice persists across store instances")
+    }
+
     // MARK: - Persistence tags
 
     /// Persistence tags are stable strings, independent of the
