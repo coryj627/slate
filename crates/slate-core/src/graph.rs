@@ -14,7 +14,7 @@
 //! (`files.id`, then `(source_file_id, ordinal)`); `by_key` is storage
 //! only — anything that enumerates nodes sorts by [`NodeKey`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use petgraph::Direction;
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
@@ -219,6 +219,88 @@ impl GraphOpSink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayMismatch;
 
+/// Projection filter (P0-3 #552). Defaults match the program's
+/// scoped-view stance: attachments off, ghosts on, all notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphFilter {
+    pub include_attachments: bool,
+    pub include_ghosts: bool,
+    pub orphans_only: bool,
+}
+
+impl Default for GraphFilter {
+    fn default() -> Self {
+        GraphFilter {
+            include_attachments: false,
+            include_ghosts: true,
+            orphans_only: false,
+        }
+    }
+}
+
+/// One node of a projection payload (P0-3). Field semantics follow
+/// p0_spec §P0-3 verbatim; `id` is the StableGraph index — stable
+/// within a session, NOT across sessions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNode {
+    pub id: u64,
+    /// `None` for ghosts.
+    pub path: Option<String>,
+    pub label: String,
+    pub kind: NodeKind,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub in_embeds: u32,
+    pub out_embeds: u32,
+    pub component: u32,
+    pub is_orphan: bool,
+    pub pagerank: f64,
+    /// `files.mtime_ms`; `None` for ghosts.
+    pub modified_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphEdge {
+    pub source_id: u64,
+    pub target_id: u64,
+    pub kind: EdgeKind,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphSnapshot {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub generation: u64,
+    /// Pre-rendered VoiceOver summary — format normative in
+    /// p0_spec §P0-3.
+    pub audio_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNeighborhood {
+    pub center_id: u64,
+    pub depth: u32,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub audio_summary: String,
+}
+
+/// `1032` → `"1,032"` — the `%n` grouped-decimal convention of the
+/// normative audio-summary formats.
+pub fn grouped_decimal(n: u64) -> String {
+    let digits = n.to_string();
+    let bytes = digits.as_bytes();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
 /// Canonical edge form: `(source_key, target_key, kind, count,
 /// ghost-variant refcounts)` — see [`GraphIndex::canonical_edges`].
 pub type CanonicalEdge = (NodeKey, NodeKey, EdgeKind, u32, BTreeMap<String, u32>);
@@ -411,6 +493,124 @@ impl GraphIndex {
 
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
+    }
+
+    // --- filtered projections (P0-3 #552) --------------------------------
+
+    /// Nodes surviving `filter`, as `(id, &NodeData)` sorted by key.
+    /// The id is the `StableGraph` index — stable within a session,
+    /// NOT across sessions (p0_spec §P0-3).
+    ///
+    /// Filter composition (normative): `orphans_only` keeps orphan
+    /// Notes only, then kind filters apply; excluded-kind nodes drop
+    /// with their incident edges.
+    pub fn filtered_nodes(
+        &self,
+        filter: &GraphFilter,
+        is_orphan: impl Fn(&NodeKey) -> bool,
+    ) -> Vec<(u64, &NodeData)> {
+        let mut nodes: Vec<(u64, &NodeData)> = self
+            .graph
+            .node_indices()
+            .filter_map(|i| {
+                let data = &self.graph[i];
+                let keep_kind = match data.kind {
+                    NodeKind::Note => true,
+                    NodeKind::Attachment => filter.include_attachments,
+                    NodeKind::Ghost => filter.include_ghosts,
+                };
+                let keep = keep_kind
+                    && (!filter.orphans_only
+                        || (matches!(data.kind, NodeKind::Note) && is_orphan(&data.key)));
+                keep.then_some((i.index() as u64, data))
+            })
+            .collect();
+        nodes.sort_by(|a, b| a.1.key.cmp(&b.1.key));
+        nodes
+    }
+
+    /// Edges among `surviving` node ids, as
+    /// `(source_id, target_id, kind, count)` sorted by
+    /// `(source key, target key, kind)` (deterministic output order,
+    /// p0_spec §P0-3).
+    pub fn edges_among(&self, surviving: &HashSet<u64>) -> Vec<(u64, u64, EdgeKind, u32)> {
+        let mut edges: Vec<(&NodeKey, &NodeKey, u64, u64, EdgeKind, u32)> = self
+            .graph
+            .edge_indices()
+            .filter_map(|e| {
+                let (a, b) = self.graph.edge_endpoints(e).expect("live edge");
+                let (sa, sb) = (a.index() as u64, b.index() as u64);
+                if surviving.contains(&sa) && surviving.contains(&sb) {
+                    let d = &self.graph[e];
+                    Some((
+                        &self.graph[a].key,
+                        &self.graph[b].key,
+                        sa,
+                        sb,
+                        d.kind,
+                        d.count,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        edges.sort_by(|x, y| (x.0, x.1, x.4).cmp(&(y.0, y.1, y.4)));
+        edges
+            .into_iter()
+            .map(|(_, _, s, t, k, c)| (s, t, k, c))
+            .collect()
+    }
+
+    /// Undirected BFS from `center`, depth-limited, `filter` applied
+    /// BEFORE traversal — an excluded node is never walked through
+    /// (p0_spec §P0-3). Returns surviving node ids (center included)
+    /// or `None` when the center itself doesn't survive the filter.
+    pub fn neighborhood_ids(
+        &self,
+        center: &NodeKey,
+        depth: u32,
+        filter: &GraphFilter,
+        is_orphan: impl Fn(&NodeKey) -> bool,
+    ) -> Option<HashSet<u64>> {
+        let &center_idx = self.by_key.get(center)?;
+        let allowed: HashSet<NodeIndex> = self
+            .filtered_nodes(filter, is_orphan)
+            .into_iter()
+            .map(|(id, _)| NodeIndex::new(id as usize))
+            .collect();
+        if !allowed.contains(&center_idx) {
+            return None;
+        }
+        let mut seen: HashSet<NodeIndex> = HashSet::from([center_idx]);
+        let mut frontier = vec![center_idx];
+        for _ in 0..depth {
+            let mut next = Vec::new();
+            for &node in &frontier {
+                for neighbor in self
+                    .graph
+                    .neighbors_directed(node, Direction::Outgoing)
+                    .chain(self.graph.neighbors_directed(node, Direction::Incoming))
+                {
+                    if allowed.contains(&neighbor) && seen.insert(neighbor) {
+                        next.push(neighbor);
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Some(seen.into_iter().map(|i| i.index() as u64).collect())
+    }
+
+    /// Node lookup by id (the `filtered_nodes` id space).
+    pub fn node_by_id(&self, id: u64) -> Option<&NodeData> {
+        let idx = NodeIndex::new(id as usize);
+        self.graph.contains_node(idx).then(|| &self.graph[idx])
+    }
+
+    /// Id lookup by key.
+    pub fn id_of(&self, key: &NodeKey) -> Option<u64> {
+        self.by_key.get(key).map(|i| i.index() as u64)
     }
 
     // --- internal construction/mutation ---------------------------------

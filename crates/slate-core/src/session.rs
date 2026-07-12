@@ -1239,14 +1239,29 @@ impl VaultSession {
         self.graph.lock().expect("graph index mutex").is_some()
     }
 
+    /// Metrics for an already-ensured index, cached per generation
+    /// (#551). LOCK ORDER: caller holds conn and graph; this takes
+    /// graph_metrics last.
+    fn graph_metrics_cached(
+        &self,
+        index: &crate::graph::GraphIndex,
+    ) -> std::sync::Arc<crate::graph_metrics::MetricsSnapshot> {
+        let generation = index.generation();
+        let mut cache = self.graph_metrics.lock().expect("graph metrics mutex");
+        if let Some((cached_generation, snapshot)) = cache.as_ref()
+            && *cached_generation == generation
+        {
+            return std::sync::Arc::clone(snapshot);
+        }
+        let snapshot = std::sync::Arc::new(crate::graph_metrics::MetricsSnapshot::compute(index));
+        *cache = Some((generation, std::sync::Arc::clone(&snapshot)));
+        snapshot
+    }
+
     /// Metrics snapshot for the current graph, cached per generation
     /// (#551). Builds the graph on first use; recomputes only when
     /// the generation moved. LOCK ORDER: conn → graph → graph_metrics.
-    ///
-    /// Consumed by tests today; P0-3's uniffi surface (#552) becomes
-    /// the first production caller — remove the allowance then.
-    #[allow(dead_code)]
-    pub(crate) fn graph_metrics_snapshot(
+    pub fn graph_metrics_snapshot(
         &self,
     ) -> Result<std::sync::Arc<crate::graph_metrics::MetricsSnapshot>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
@@ -1260,22 +1275,160 @@ impl VaultSession {
                 .take();
         }
         let index = guard.as_ref().expect("graph index just ensured");
-        let generation = index.generation();
-        let mut cache = self.graph_metrics.lock().expect("graph metrics mutex");
-        if let Some((cached_generation, snapshot)) = cache.as_ref()
-            && *cached_generation == generation
-        {
-            return Ok(std::sync::Arc::clone(snapshot));
+        Ok(self.graph_metrics_cached(index))
+    }
+
+    /// Cheap generation probe (#552): 0 when the index was never
+    /// built. The Swift refresh contract re-queries this on
+    /// VaultEventListener file-change / scan-finished events and
+    /// refreshes surfaces only on change.
+    pub fn graph_generation(&self) -> u64 {
+        self.graph
+            .lock()
+            .expect("graph index mutex")
+            .as_ref()
+            .map(|g| g.generation())
+            .unwrap_or(0)
+    }
+
+    /// Filtered whole-graph projection (#552). Deterministic output
+    /// order: nodes sorted by key, edges by (source, target, kind).
+    pub fn graph_snapshot(
+        &self,
+        filter: crate::graph::GraphFilter,
+    ) -> Result<crate::graph::GraphSnapshot, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        if guard.is_none() {
+            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
         }
-        let snapshot = std::sync::Arc::new(crate::graph_metrics::MetricsSnapshot::compute(index));
-        *cache = Some((generation, std::sync::Arc::clone(&snapshot)));
-        Ok(snapshot)
+        let index = guard.as_ref().expect("graph index just ensured");
+        let metrics = self.graph_metrics_cached(index);
+
+        let filtered =
+            index.filtered_nodes(&filter, |key| metrics.get(key).is_some_and(|m| m.is_orphan));
+        let surviving: std::collections::HashSet<u64> =
+            filtered.iter().map(|(id, _)| *id).collect();
+        let raw_edges = index.edges_among(&surviving);
+
+        let mtimes = file_mtimes(&conn)?;
+        let nodes: Vec<crate::graph::GraphNode> = filtered
+            .iter()
+            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
+            .collect();
+        let edges: Vec<crate::graph::GraphEdge> = raw_edges
+            .into_iter()
+            .map(
+                |(source_id, target_id, kind, count)| crate::graph::GraphEdge {
+                    source_id,
+                    target_id,
+                    kind,
+                    count,
+                },
+            )
+            .collect();
+
+        let audio_summary = snapshot_audio_summary(&nodes, &edges, filter);
+        Ok(crate::graph::GraphSnapshot {
+            nodes,
+            edges,
+            generation: index.generation(),
+            audio_summary,
+        })
+    }
+
+    /// Depth-limited undirected neighborhood of `path` (#552). Depth
+    /// clamps to 1..=3; the filter applies BEFORE traversal. Unknown
+    /// (or filtered-out) center → `VaultError::InvalidPath`.
+    pub fn graph_neighborhood(
+        &self,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+    ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
+        let depth = depth.clamp(1, 3);
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        if guard.is_none() {
+            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
+        }
+        let index = guard.as_ref().expect("graph index just ensured");
+        let metrics = self.graph_metrics_cached(index);
+
+        let center_key = crate::graph::NodeKey::Path(path.to_string());
+        let is_orphan = |key: &crate::graph::NodeKey| metrics.get(key).is_some_and(|m| m.is_orphan);
+        let member_ids = index
+            .neighborhood_ids(&center_key, depth, &filter, is_orphan)
+            .ok_or_else(|| VaultError::InvalidPath {
+                path: path.to_string(),
+                reason: "no such note in the graph under the active filter".into(),
+            })?;
+        let center_id = index
+            .id_of(&center_key)
+            .expect("center survived the filter");
+
+        // Key-sorted node order = filtered_nodes retained to members.
+        let filtered = index.filtered_nodes(&filter, is_orphan);
+        let mtimes = file_mtimes(&conn)?;
+        let nodes: Vec<crate::graph::GraphNode> = filtered
+            .iter()
+            .filter(|(id, _)| member_ids.contains(id))
+            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
+            .collect();
+        let edges: Vec<crate::graph::GraphEdge> = index
+            .edges_among(&member_ids)
+            .into_iter()
+            .map(
+                |(source_id, target_id, kind, count)| crate::graph::GraphEdge {
+                    source_id,
+                    target_id,
+                    kind,
+                    count,
+                },
+            )
+            .collect();
+
+        let center = metrics.get(&center_key).expect("center has metrics");
+        let center_label = index
+            .node_by_id(center_id)
+            .expect("center node live")
+            .label
+            .clone();
+        let note_count = nodes
+            .iter()
+            .filter(|n| matches!(n.kind, crate::graph::NodeKind::Note))
+            .count() as u64;
+        let audio_summary = format!(
+            "{}: {} links in, {} links out. Showing {} notes within {} links.",
+            center_label,
+            crate::graph::grouped_decimal(u64::from(center.in_links)),
+            crate::graph::grouped_decimal(u64::from(center.out_links)),
+            crate::graph::grouped_decimal(note_count),
+            depth,
+        );
+        Ok(crate::graph::GraphNeighborhood {
+            center_id,
+            depth,
+            nodes,
+            edges,
+            audio_summary,
+        })
     }
 
     /// Open or create a vault session against the given provider.
     ///
     /// Creates `config.cache_dir` if missing, opens/creates the SQLite
     /// database under it, and applies all pending schema migrations.
+    // (graph payload helpers live below as free fns: `file_mtimes`,
+    // `graph_node_payload`, `snapshot_audio_summary`.)
     pub fn open(
         provider: Arc<dyn VaultProvider>,
         config: SessionConfig,
@@ -5170,6 +5323,91 @@ impl VaultSession {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::citations_db::list_citations_in_file(&conn, path)
     }
+}
+
+// --- Internal: graph payload assembly (P0-3 #552) ---
+
+/// `path → mtime_ms` for every indexed file — the `modified_ms`
+/// source for graph payloads (one query per snapshot; ghosts have no
+/// row and stay `None`).
+fn file_mtimes(conn: &Connection) -> Result<std::collections::HashMap<String, i64>, VaultError> {
+    let mut stmt = conn.prepare_cached("SELECT path, mtime_ms FROM files")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut out = std::collections::HashMap::new();
+    for row in rows {
+        let (path, mtime) = row?;
+        out.insert(path, mtime);
+    }
+    Ok(out)
+}
+
+fn graph_node_payload(
+    id: u64,
+    data: &crate::graph::NodeData,
+    metrics: &crate::graph_metrics::MetricsSnapshot,
+    mtimes: &std::collections::HashMap<String, i64>,
+) -> crate::graph::GraphNode {
+    let path = match &data.key {
+        crate::graph::NodeKey::Path(p) => Some(p.clone()),
+        crate::graph::NodeKey::Ghost(_) => None,
+    };
+    let m = metrics.get(&data.key);
+    crate::graph::GraphNode {
+        id,
+        modified_ms: path.as_deref().and_then(|p| mtimes.get(p).copied()),
+        path,
+        label: data.label.clone(),
+        kind: data.kind,
+        in_links: m.map_or(0, |m| m.in_links),
+        out_links: m.map_or(0, |m| m.out_links),
+        in_embeds: m.map_or(0, |m| m.in_embeds),
+        out_embeds: m.map_or(0, |m| m.out_embeds),
+        component: m.map_or(0, |m| m.component),
+        is_orphan: m.is_some_and(|m| m.is_orphan),
+        pagerank: m.map_or(0.0, |m| m.pagerank),
+    }
+}
+
+/// Normative snapshot summary (p0_spec §P0-3):
+/// `"{n} notes, {e} links. {o} orphans, {g} unresolved targets."` —
+/// counts describe the FILTERED payload; the second sentence is
+/// omitted when both counts are 0; `" Filtered."` appends when the
+/// filter deviates from the defaults.
+fn snapshot_audio_summary(
+    nodes: &[crate::graph::GraphNode],
+    edges: &[crate::graph::GraphEdge],
+    filter: crate::graph::GraphFilter,
+) -> String {
+    use crate::graph::{NodeKind, grouped_decimal};
+    let notes = nodes
+        .iter()
+        .filter(|n| matches!(n.kind, NodeKind::Note))
+        .count() as u64;
+    let ghosts = nodes
+        .iter()
+        .filter(|n| matches!(n.kind, NodeKind::Ghost))
+        .count() as u64;
+    let orphans = nodes.iter().filter(|n| n.is_orphan).count() as u64;
+    let references: u64 = edges.iter().map(|e| u64::from(e.count)).sum();
+
+    let mut summary = format!(
+        "{} notes, {} links.",
+        grouped_decimal(notes),
+        grouped_decimal(references)
+    );
+    if orphans > 0 || ghosts > 0 {
+        summary.push_str(&format!(
+            " {} orphans, {} unresolved targets.",
+            grouped_decimal(orphans),
+            grouped_decimal(ghosts)
+        ));
+    }
+    if filter != crate::graph::GraphFilter::default() {
+        summary.push_str(" Filtered.");
+    }
+    summary
 }
 
 // --- Internal: scan ---

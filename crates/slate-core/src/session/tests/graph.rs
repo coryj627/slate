@@ -738,3 +738,212 @@ mod metrics {
         assert_eq!(m2.get(&path_key("b.md")).unwrap().in_links, 2);
     }
 }
+
+// --- P0-3: query surface (#552) -------------------------------------------
+
+mod surface {
+    use super::*;
+    use crate::graph::GraphFilter;
+
+    fn fixture() -> (tempfile::TempDir, VaultSession) {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file(
+                "a.md",
+                b"[[b]] and [[b]] again, embed ![[b]], ghost [[Missing Note]], \
+                  image ![[pic.png]], external [x](https://example.com)",
+            )
+            .unwrap();
+            p.write_file("b.md", b"back to [[a]]").unwrap();
+            p.write_file("pic.png", b"\x89PNG").unwrap();
+            p.write_file("loner.md", b"nothing").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        (tmp, session)
+    }
+
+    #[test]
+    fn snapshot_default_filter_shape_and_summary() {
+        let (_tmp, session) = fixture();
+        let snap = session.graph_snapshot(GraphFilter::default()).unwrap();
+
+        // Defaults: attachments OFF (pic.png and its edge drop),
+        // ghosts ON.
+        let labels: Vec<&str> = snap.nodes.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(labels, vec!["a", "b", "loner", "Missing Note"]);
+        // a->b Link(2), a->b Embed(1), a->ghost Link(1), b->a Link(1);
+        // the pic.png embed dropped with its excluded node.
+        assert_eq!(snap.edges.len(), 4);
+        // Summary counts describe the FILTERED payload; 5 references
+        // survive (2+1 to b, 1 ghost, 1 back).
+        assert_eq!(
+            snap.audio_summary,
+            "3 notes, 5 links. 1 orphans, 1 unresolved targets."
+        );
+        let ghost_node = snap.nodes.iter().find(|n| n.path.is_none()).unwrap();
+        assert!(matches!(ghost_node.kind, crate::graph::NodeKind::Ghost));
+        assert!(ghost_node.modified_ms.is_none());
+        let a = snap.nodes.iter().find(|n| n.label == "a").unwrap();
+        assert!(a.modified_ms.is_some(), "real files carry mtime");
+        assert!(a.pagerank > 0.0);
+    }
+
+    #[test]
+    fn snapshot_edge_count_expectation_pinned() {
+        let (_tmp, session) = fixture();
+        let snap = session.graph_snapshot(GraphFilter::default()).unwrap();
+        // Collapsed edges under the default filter: a->b (Link,2),
+        // a->b (Embed,1), a->ghost (Link,1), b->a (Link,1). The
+        // pic.png embed dropped with its node.
+        assert_eq!(snap.edges.len(), 4);
+        let refs: u64 = snap.edges.iter().map(|e| u64::from(e.count)).sum();
+        assert_eq!(refs, 5);
+    }
+
+    #[test]
+    fn filters_compose_attachments_ghosts_orphans() {
+        let (_tmp, session) = fixture();
+
+        let with_attachments = session
+            .graph_snapshot(GraphFilter {
+                include_attachments: true,
+                ..GraphFilter::default()
+            })
+            .unwrap();
+        assert!(
+            with_attachments.nodes.iter().any(|n| n.label == "pic.png"),
+            "attachments included on demand"
+        );
+        assert!(
+            with_attachments.audio_summary.ends_with(" Filtered."),
+            "non-default filter appends ' Filtered.': {}",
+            with_attachments.audio_summary
+        );
+
+        let no_ghosts = session
+            .graph_snapshot(GraphFilter {
+                include_ghosts: false,
+                ..GraphFilter::default()
+            })
+            .unwrap();
+        assert!(
+            no_ghosts.nodes.iter().all(|n| n.path.is_some()),
+            "ghost nodes drop with their incident edges"
+        );
+        let refs: u64 = no_ghosts.edges.iter().map(|e| u64::from(e.count)).sum();
+        assert_eq!(refs, 4, "ghost edge dropped");
+
+        let orphans = session
+            .graph_snapshot(GraphFilter {
+                orphans_only: true,
+                ..GraphFilter::default()
+            })
+            .unwrap();
+        let labels: Vec<&str> = orphans.nodes.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["loner"],
+            "orphans_only keeps orphan notes only"
+        );
+        assert!(orphans.edges.is_empty());
+        assert_eq!(
+            orphans.audio_summary,
+            "1 notes, 0 links. 1 orphans, 0 unresolved targets. Filtered."
+        );
+    }
+
+    #[test]
+    fn neighborhood_depth_clamp_and_traversal_gating() {
+        // Chain: left -> mid.png <- right (embeds through an
+        // attachment). With attachments on, right is 2 away from
+        // left THROUGH mid; with attachments off, unreachable.
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("left.md", b"![[mid.png]]").unwrap();
+            p.write_file("right.md", b"![[mid.png]]").unwrap();
+            p.write_file("mid.png", b"x").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+
+        let through = session
+            .graph_neighborhood(
+                "left.md",
+                2,
+                GraphFilter {
+                    include_attachments: true,
+                    ..GraphFilter::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(through.nodes.len(), 3);
+
+        let gated = session
+            .graph_neighborhood("left.md", 2, GraphFilter::default())
+            .unwrap();
+        assert_eq!(
+            gated.nodes.len(),
+            1,
+            "filter applies BEFORE traversal — excluded nodes are never walked through"
+        );
+
+        // Depth clamps into 1..=3 (0 -> 1, 99 -> 3).
+        let clamped_low = session
+            .graph_neighborhood(
+                "left.md",
+                0,
+                GraphFilter {
+                    include_attachments: true,
+                    ..GraphFilter::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(clamped_low.depth, 1);
+        assert_eq!(clamped_low.nodes.len(), 2, "depth 1 reaches mid only");
+        let clamped_high = session
+            .graph_neighborhood("left.md", 99, GraphFilter::default())
+            .unwrap();
+        assert_eq!(clamped_high.depth, 3);
+    }
+
+    #[test]
+    fn neighborhood_summary_verbatim_and_unknown_path_errors() {
+        let (_tmp, session) = fixture();
+        let hood = session
+            .graph_neighborhood("b.md", 1, GraphFilter::default())
+            .unwrap();
+        assert_eq!(
+            hood.audio_summary,
+            "b: 2 links in, 1 links out. Showing 2 notes within 1 links."
+        );
+        assert_eq!(
+            hood.center_id,
+            session
+                .graph_snapshot(GraphFilter::default())
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.label == "b")
+                .unwrap()
+                .id
+        );
+
+        let err = session
+            .graph_neighborhood("nope.md", 1, GraphFilter::default())
+            .unwrap_err();
+        assert!(matches!(err, VaultError::InvalidPath { .. }));
+    }
+
+    #[test]
+    fn generation_probe_is_zero_cold_and_bumps_per_batch() {
+        let (_tmp, session) = fixture();
+        assert_eq!(session.graph_generation(), 0, "0 before first build");
+        let g0 = session
+            .graph_snapshot(GraphFilter::default())
+            .unwrap()
+            .generation;
+        session.save_text("loner.md", "[[a]]", None).unwrap();
+        let g1 = session.graph_generation();
+        assert_eq!(g1, g0 + 1, "one bump per applied batch");
+        // Non-mutating queries don't bump.
+        let _ = session.graph_snapshot(GraphFilter::default()).unwrap();
+        assert_eq!(session.graph_generation(), g1);
+    }
+}
