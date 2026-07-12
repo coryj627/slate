@@ -590,6 +590,26 @@ struct SlateMacApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(appState.currentSession == nil)
+
+                Divider()
+
+                // #855: opt-in live spell checking. A menu-hosted
+                // Toggle renders as a checkmark item; the pref is
+                // `@Published` on appState, so the checkmark re-renders
+                // live. No chord — Edit menu + palette
+                // (`slate.editor.toggleSpellCheck`) only. Default OFF:
+                // Markdown source red-squiggles fences/wikilinks/keys,
+                // so prose writers opt in. Applied live through
+                // `NoteEditorView.updateNSView`; the YAML
+                // properties-source editor (`PlainTextEditor`) stays
+                // always-off — structured text is never prose.
+                Toggle(
+                    "Check Spelling While Typing",
+                    isOn: Binding(
+                        get: { appState.editorSpellCheckEnabled },
+                        set: { _ in appState.toggleEditorSpellCheck() }
+                    )
+                )
             }
 
             // Help ▸ Slate Help (HIG: the Help menu's first item is

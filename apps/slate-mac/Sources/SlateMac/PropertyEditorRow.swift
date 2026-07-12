@@ -29,6 +29,8 @@ struct PropertyEditorRow: View {
     @State private var draft: PropertyEditDraft
     @State private var pendingDelete: Bool = false
     @State private var inputValidationError: String?
+    /// One-slot newest-wins re-commit (see commitDraft's coalescing note).
+    @State private var pendingRecommitDraft: PropertyEditDraft?
 
     /// Focus-return target for the delete-confirmation dialog
     /// (WCAG 2.4.3 / 2.1.2). The Cancel and Delete branches both
@@ -131,7 +133,7 @@ struct PropertyEditorRow: View {
     private var editor: some View {
         switch draft {
         case .scalarText(let kind):
-            scalarTextEditor(kind: kind)
+            scalarEditor(kind: kind)
         case .integer:
             integerEditor()
         case .float:
@@ -148,6 +150,140 @@ struct PropertyEditorRow: View {
     }
 
     // MARK: Per-variant editors
+
+    /// #857: date/datetime kinds whose STORED value parses cleanly get
+    /// the platform `DatePicker` (which also validates for free — no
+    /// more shape-valid nonsense like `2026-13-40` committing). The
+    /// gate reads the stored property, NOT the mutable draft (Codex
+    /// review) — see `storedValueTakesDatePicker`.
+    /// Anything that does NOT parse — malformed, non-conforming, or
+    /// empty — keeps the raw `TextField` verbatim: a picker over an
+    /// unparseable value would have to invent a date, and this row
+    /// never destroys data it can't represent.
+    @ViewBuilder
+    private func scalarEditor(kind: ScalarTextKind) -> some View {
+        switch kind.kind {
+        case "date" where Self.storedValueTakesDatePicker(storedDraft, kind: "date"):
+            datePickerEditor()
+        case "datetime"
+        where Self.storedValueTakesDatePicker(storedDraft, kind: "datetime"):
+            datetimePickerEditor()
+        default:
+            scalarTextEditor(kind: kind)
+        }
+    }
+
+    /// The STORED value's draft form — picker-eligibility input only;
+    /// the editable state stays in `draft`.
+    private var storedDraft: PropertyEditDraft {
+        PropertyEditDraft.from(property: property)
+    }
+
+    /// Codex review: eligibility gates on the STORED value, never the
+    /// in-flight draft — correcting a malformed stored date inside the
+    /// raw TextField must not swap the field out from under the edit
+    /// before commit (the gate re-evaluates when the property reloads
+    /// from disk after a successful commit). Static + pure so the gate
+    /// itself is pinned by tests.
+    static func storedValueTakesDatePicker(
+        _ stored: PropertyEditDraft, kind: String
+    ) -> Bool {
+        guard case .scalarText(let k) = stored, k.kind == kind else { return false }
+        switch kind {
+        case "date":
+            return PropertyDateEditing.date(fromDateString: k.value) != nil
+        case "datetime":
+            return PropertyDateEditing.datetime(fromString: k.value) != nil
+        default:
+            return false
+        }
+    }
+
+    /// #857: `date` kind — textual field-style picker (the
+    /// BaseQueryBuilderSheet DatePicker shape). Commits immediately on
+    /// change, like the boolean toggle: a picked date has no
+    /// intermediate edit state worth preserving.
+    private func datePickerEditor() -> some View {
+        DatePicker(
+            "",
+            selection: Binding(
+                get: {
+                    if case .scalarText(let k) = draft,
+                        let date = PropertyDateEditing.date(fromDateString: k.value)
+                    {
+                        return date
+                    }
+                    return Date()
+                },
+                set: { newDate in
+                    draft = .scalarText(
+                        ScalarTextKind(
+                            kind: "date",
+                            value: PropertyDateEditing.dateString(from: newDate)))
+                    commitDraft()
+                }
+            ),
+            displayedComponents: [.date]
+        )
+        .datePickerStyle(.field)
+        .labelsHidden()
+        .accessibilityLabel(typeCuedLabel)
+        // Newest-wins re-commit when the in-flight edit clears (see
+        // commitDraft's coalescing note — rapid picker bursts).
+        .onChange(of: appState.isEditingProperty) { _, editing in
+            guard !editing, let pending = pendingRecommitDraft else { return }
+            pendingRecommitDraft = nil
+            draft = pending
+            commitDraft()
+        }
+    }
+
+    /// #857: `datetime` kind — same picker plus hour-and-minute. The
+    /// serialized FORM is preserved from the stored value (ISO-8601
+    /// with timezone stays ISO-8601 UTC; naive local stays naive
+    /// local) so a picker edit never silently rewrites the property's
+    /// datetime dialect.
+    private func datetimePickerEditor() -> some View {
+        DatePicker(
+            "",
+            selection: Binding(
+                get: {
+                    if case .scalarText(let k) = draft,
+                        let parsed = PropertyDateEditing.datetime(fromString: k.value)
+                    {
+                        return parsed.date
+                    }
+                    return Date()
+                },
+                set: { newDate in
+                    var form = PropertyDateEditing.DatetimeForm.localNaive
+                    if case .scalarText(let k) = draft,
+                        let parsed = PropertyDateEditing.datetime(fromString: k.value)
+                    {
+                        form = parsed.form
+                    }
+                    draft = .scalarText(
+                        ScalarTextKind(
+                            kind: "datetime",
+                            value: PropertyDateEditing.datetimeString(
+                                from: newDate, form: form)))
+                    commitDraft()
+                }
+            ),
+            displayedComponents: [.date, .hourAndMinute]
+        )
+        .datePickerStyle(.field)
+        .labelsHidden()
+        .accessibilityLabel(typeCuedLabel)
+        // Newest-wins re-commit when the in-flight edit clears (see
+        // commitDraft's coalescing note — rapid picker bursts).
+        .onChange(of: appState.isEditingProperty) { _, editing in
+            guard !editing, let pending = pendingRecommitDraft else { return }
+            pendingRecommitDraft = nil
+            draft = pending
+            commitDraft()
+        }
+    }
 
     private func scalarTextEditor(kind: ScalarTextKind) -> some View {
         // Bound to a Binding<String> derived from `draft` so the
@@ -387,12 +523,20 @@ struct PropertyEditorRow: View {
     /// Validate the draft, convert to FFI `PropertyValue`, and call
     /// AppState. Validation errors surface inline; nothing flushes
     /// to disk until the user resolves them.
+    /// Coalescing (red-team #857): `setProperty` returns nil while an
+    /// earlier edit is in flight (`isEditingProperty` guard). A rapid
+    /// DatePicker burst used to DROP later picks — the earlier commit's
+    /// reload then visibly reverted the control. One-slot newest-wins
+    /// re-commit when the in-flight edit completes.
     private func commitDraft() {
         inputValidationError = nil
         let currentDraft: PropertyEditDraft = self.draft
         switch currentDraft.toPropertyValue() {
         case .success(let value):
-            appState.setProperty(path: path, key: property.key, value: value)
+            if appState.setProperty(path: path, key: property.key, value: value) == nil,
+                appState.isEditingProperty {
+                pendingRecommitDraft = currentDraft
+            }
         case .failure(let error):
             inputValidationError = error.message
         }
@@ -574,6 +718,86 @@ struct ScalarTextKind: Equatable {
 /// while carrying a UI-ready message string.
 struct PropertyEditValidationError: Error, Equatable {
     let message: String
+}
+
+/// #857: pure parse/serialize for the date & datetime DatePicker
+/// editors. Internal (not nested in the view) so the round-trip and
+/// malformed-fallback contracts are unit-testable without rendering.
+///
+/// Accepted forms mirror `PropertyValueDisplay` exactly (the row and
+/// the read-only display must agree on what "conforming" means):
+///  - date: strict `yyyy-MM-dd`, parsed in `TimeZone.current` (the
+///    Codoki PR 83 lesson — UTC parsing drifts the rendered day for
+///    users west of UTC). Calendar-validated by `DateFormatter`'s
+///    non-lenient parse, so `2026-13-40` — which the shape check
+///    `looksLikeDate` accepts — correctly fails here and keeps the
+///    raw TextField.
+///  - datetime: ISO-8601 with timezone (`2026-07-11T09:30:00Z` /
+///    `…+02:00`) or the naive local form (`2026-07-11T09:30:00`).
+///    The parsed FORM is reported so serialization preserves the
+///    stored dialect.
+enum PropertyDateEditing {
+
+    /// Which datetime dialect the stored value used — serialization
+    /// preserves it (`iso8601` re-emits with a UTC `Z` suffix; a
+    /// non-UTC stored offset normalizes to `Z` only when the user
+    /// actually edits the value, never on load).
+    enum DatetimeForm: Equatable {
+        case iso8601
+        case localNaive
+    }
+
+    static func date(fromDateString string: String) -> Date? {
+        dateParser.date(from: string)
+    }
+
+    static func dateString(from date: Date) -> String {
+        dateParser.string(from: date)
+    }
+
+    static func datetime(fromString string: String) -> (date: Date, form: DatetimeForm)? {
+        if let date = isoParser.date(from: string) {
+            return (date, .iso8601)
+        }
+        if let date = localNaiveParser.date(from: string) {
+            return (date, .localNaive)
+        }
+        return nil
+    }
+
+    static func datetimeString(from date: Date, form: DatetimeForm) -> String {
+        switch form {
+        case .iso8601:
+            return isoParser.string(from: date)
+        case .localNaive:
+            return localNaiveParser.string(from: date)
+        }
+    }
+
+    // Cached formatters (the PropertyValueDisplay pattern — expensive
+    // to construct). `en_US_POSIX` pins digit shapes; NOT lenient, so
+    // out-of-calendar values fail parse instead of wrapping.
+    private static let dateParser: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone.current
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    private static let isoParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static let localNaiveParser: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        f.timeZone = TimeZone.current
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
 }
 
 private func decodeStringArray(json: String) -> [String] {

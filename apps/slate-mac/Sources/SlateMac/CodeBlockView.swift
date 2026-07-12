@@ -34,9 +34,23 @@ struct CodeBlockView: View {
     var textScale: Double = 1.0
 
     var body: some View {
-        CodeBlockContent(block: block, textScale: textScale)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+        VStack(alignment: .trailing, spacing: 0) {
+            // #854: visible copy affordance. Every mainstream rendered-
+            // code surface shows a top-trailing Copy button; before
+            // this, copy was context-menu-only (invisible to pointer
+            // users). Always-visible (not hover-revealed): hover
+            // reveal hides the affordance from touch/switch users and
+            // from anyone who doesn't think to probe, for near-zero
+            // chrome savings on a block that already owns its row.
+            // IN layout, never an overlay (Codex review): an overlay
+            // sat on top of the first code line and swallowed pointer
+            // selection under its hit region. The context-menu path
+            // below stays for keyboard / Voice Control parity.
+            copyButton
+            CodeBlockContent(block: block, textScale: textScale)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
             // The container owns the AT preamble. VO reads
             // "Code block, rust, 5 lines" before the user enters.
             //
@@ -53,13 +67,20 @@ struct CodeBlockView: View {
             // NSScrollView allows horizontal scroll). VO users
             // wouldn't otherwise know — autohidesScrollers means
             // the scrollbar doesn't announce. The hint covers it.
-            .accessibilityHint("Long lines scroll horizontally. Right-click to copy the source.")
+            // #854: hint updated — the primary copy path is now the
+            // visible button; the context menu remains as the
+            // secondary route.
+            .accessibilityHint(
+                "Long lines scroll horizontally. Use the Copy button or right-click to copy the source."
+            )
             // Audit #252 L4: keyboard / Voice Control users can't
             // reach NSTextView's mouse-selection affordance. A
             // context menu with "Copy code" gives mouse,
             // keyboard, and Voice Control users a uniform path.
+            // (#854 routes it through `copyCode()` so both paths
+            // announce identically.)
             .contextMenu {
-                Button("Copy code") { copyCodeToPasteboard() }
+                Button("Copy code") { copyCode() }
             }
             // NOTE: `.textSelection(.enabled)` is NOT applied at
             // container level. SwiftUI's container-scoped text
@@ -113,6 +134,35 @@ struct CodeBlockView: View {
             count += 1
         }
         return count
+    }
+
+    /// #854: the visible copy affordance. Quiet chrome (caption font,
+    /// secondary tint — the code content stays the star) but a full
+    /// 28pt hit target. Shares `copyCodeToPasteboard()` with the
+    /// context-menu path and announces the result so the action is
+    /// never silent for AT users.
+    private var copyButton: some View {
+        Button {
+            copyCode()
+        } label: {
+            Text("Copy")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+                .frame(minWidth: 28, minHeight: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 4)
+        .accessibilityLabel("Copy code")
+        .accessibilityHint("Copies the code block source as plain text.")
+        .help("Copy code")
+    }
+
+    /// Copy + announce (#854). Internal (not private) so the test
+    /// suite can drive the button's action directly.
+    func copyCode() {
+        copyCodeToPasteboard()
+        postAccessibilityAnnouncement("Code copied.", priority: .medium)
     }
 
     /// Copy the raw (un-attributed) source to the pasteboard. Plain

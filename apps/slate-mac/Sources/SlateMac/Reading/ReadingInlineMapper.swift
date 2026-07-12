@@ -59,7 +59,22 @@ enum ReadingInlineMapper {
     /// Map one source slice. `citations` supplies the speech/visual text for
     /// citation runs (matched by `RenderedCitation.raw` — the record carries
     /// no byte offset); an unmatched citation degrades to its raw text.
-    static func map(slice: String, citations: [RenderedCitation] = []) -> Mapped {
+    ///
+    /// `unresolvedTargets` (#849) is the set of UNRESOLVED outgoing-link
+    /// `targetRaw` values for the owning note (sourced the way
+    /// `OutgoingLinksPanel` reads `isUnresolved` —
+    /// `appState.currentOutgoingLinks`). Wiki-scheme runs whose target is a
+    /// member render in `warningText` (underline kept — the affordance is
+    /// never color-only) instead of accent, matching the editor's U5-3
+    /// unresolved treatment, so a dangling `[[Missing Note]]` is
+    /// distinguishable BEFORE activation. Membership uses the router's
+    /// exact resolution key (see `isUnresolvedWikiLink`). Pure param —
+    /// empty set (the default) styles everything as before.
+    static func map(
+        slice: String, citations: [RenderedCitation] = [],
+        unresolvedTargets: Set<String> = [],
+        recordSets: ReadingLinkRouter.LinkRecordSets? = nil
+    ) -> Mapped {
         // Two Rust authorities compose here: the highlight classifier for
         // Slate tokens, plus the CommonMark link/image spans it intentionally
         // omits — those arrive only as exclusion ranges (isMappableKind
@@ -105,7 +120,9 @@ enum ReadingInlineMapper {
             attributed = AttributedString(slice)
         }
 
-        style(&attributed, runs: runs)
+        style(
+            &attributed, runs: runs, unresolvedTargets: unresolvedTargets,
+            recordSets: recordSets)
         return Mapped(attributed: attributed, runs: runs)
     }
 
@@ -238,13 +255,19 @@ enum ReadingInlineMapper {
         }
         inner = inner.dropFirst(2).dropLast(2)
         guard !inner.isEmpty else { return nil }
+        // Whitespace-trim mirrors links.rs (red-team probe: `[[ Missing ]]`
+        // and `[[Missing #Anchor]]` styled as RESOLVED because the Swift
+        // side kept padding the Rust resolver strips — styling and
+        // activation disagreed).
         if let pipe = inner.firstIndex(of: "|") {
             let target = String(inner[inner.startIndex..<pipe])
+                .trimmingCharacters(in: .whitespaces)
             let alias = String(inner[inner.index(after: pipe)...])
+                .trimmingCharacters(in: .whitespaces)
             guard !target.isEmpty else { return nil }
             return (target, alias.isEmpty ? nil : alias)
         }
-        return (String(inner), nil)
+        return (String(inner).trimmingCharacters(in: .whitespaces), nil)
     }
 
     /// Divide a confirmed `.embed` span (`![[…]]`) interior into target +
@@ -314,7 +337,45 @@ enum ReadingInlineMapper {
 
     // MARK: - Styling
 
-    private static func style(_ attributed: inout AttributedString, runs: [MappedRun]) {
+    /// #849: does this routing URL activate as a wiki link the router would
+    /// announce as unresolved? Match keys come from
+    /// `ReadingLinkRouter.candidateKeys` — the SAME ordered list the live
+    /// router matches records with — and are case-SENSITIVE exactly like
+    /// the router's `targetRaw ==` compare, so styling and activation can
+    /// never disagree about the same run. With `recordSets` supplied
+    /// (the production path), a run whose target has NO record of ITS
+    /// OWN GRAMMAR classifies unresolved: that run ACTIVATES as
+    /// "unresolved. Cannot open." — live-buffer links the saved index
+    /// hasn't seen — so accent styling would lie, and a record of the
+    /// OTHER grammar must never vouch for it (Codex round 3: the sets
+    /// are kind-partitioned exactly like the router's record match).
+    static func isUnresolvedWikiLink(
+        _ link: URL, unresolvedTargets: Set<String>,
+        recordSets: ReadingLinkRouter.LinkRecordSets? = nil
+    ) -> Bool {
+        guard
+            case .wiki(let target, let grammar) =
+                ReadingLinkRouter.disposition(for: link)
+        else { return false }
+        let keys = ReadingLinkRouter.candidateKeys(for: target, grammar: grammar)
+        if let recordSets {
+            // Full classification: the first key with a SAME-GRAMMAR
+            // record decides.
+            let known = recordSets.known(for: grammar)
+            for key in keys where known.contains(key) {
+                return recordSets.unresolved(for: grammar).contains(key)
+            }
+            return true
+        }
+        // Membership-only (legacy/test callers without record sets).
+        return keys.contains { unresolvedTargets.contains($0) }
+    }
+
+    private static func style(
+        _ attributed: inout AttributedString, runs: [MappedRun],
+        unresolvedTargets: Set<String> = [],
+        recordSets: ReadingLinkRouter.LinkRecordSets? = nil
+    ) {
         // Snapshot the link runs before mutating: rewriting/removing `.link`
         // re-segments the run collection, so never mutate while iterating it.
         // Attribute-only mutation moves no characters, so the captured ranges
@@ -324,6 +385,10 @@ enum ReadingInlineMapper {
                 run.link.map { (run.range, $0) }
             }
         for (range, link) in linkRuns {
+            // The URL the run will ACTIVATE with — reassigned by the
+            // internal-markdown rewrite below, so the #849 unresolved
+            // check always sees the routed (slate-wiki) form.
+            var effectiveLink = link
             if case .discard = ReadingLinkRouter.disposition(for: link) {
                 if let rewritten = internalMarkdownDestination(link) {
                     // Scheme-less markdown destination: Slate semantics are
@@ -334,6 +399,7 @@ enum ReadingInlineMapper {
                     attributed[range][
                         AttributeScopes.FoundationAttributes.LinkAttribute.self
                     ] = rewritten
+                    effectiveLink = rewritten
                 } else {
                     // file: / javascript: / unknown schemes, protocol-relative
                     // `//host`, fragment-only `#anchor`: never activatable
@@ -353,12 +419,28 @@ enum ReadingInlineMapper {
             // pairing in `Tokens.contrastPairings`. Explicit attribute keys:
             // the dynamic-member spellings are ambiguous between the SwiftUI
             // and AppKit attribute scopes.
+            //
+            // #849: a wiki run the router would refuse to open renders in
+            // `warningText` (also a gated pairing on `surface` — the U5-3
+            // editor treatment) so the unresolved STATE is visible before
+            // activation, with an AX custom-text suffix for parity; the
+            // underline stays — it marks "activatable" (activation still
+            // announces "unresolved. Cannot open."), and dropping it would
+            // make the state color-only.
+            let unresolved = isUnresolvedWikiLink(
+                effectiveLink, unresolvedTargets: unresolvedTargets,
+                recordSets: recordSets)
             attributed[range][
                 AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self
-            ] = Tokens.ColorRole.accentText
+            ] = unresolved ? Tokens.ColorRole.warningText : Tokens.ColorRole.accentText
             attributed[range][
                 AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self
             ] = Text.LineStyle(pattern: .solid)
+            if unresolved {
+                attributed[range][
+                    AttributeScopes.AccessibilityAttributes.TextCustomAttribute.self
+                ] = ["Unresolved link"]
+            }
             if link.scheme?.lowercased() == ReadingLinkRouter.citeScheme,
                 let mapped = runs.first(where: { $0.url == link })
             {
@@ -385,8 +467,11 @@ enum ReadingInlineMapper {
         guard !raw.isEmpty, !raw.hasPrefix("//"), !raw.hasPrefix("#") else {
             return nil
         }
+        // Grammar-retaining scheme (Codex round 2): the router must
+        // apply MARKDOWN anchor-cut rules to this destination, never
+        // the wikilink ones — `^` stays in the path here.
         return ReadingLinkRouter.encodedURL(
-            scheme: ReadingLinkRouter.wikiScheme, target: raw)
+            scheme: ReadingLinkRouter.wikiMarkdownScheme, target: raw)
     }
 
     // MARK: - Small helpers

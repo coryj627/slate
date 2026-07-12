@@ -36,9 +36,80 @@ struct ReadingLinkRouter {
     static let embedScheme = "slate-embed"
     static let tagScheme = "slate-tag"
     static let citeScheme = "slate-cite"
+    /// Codex round 2: internal MARKDOWN destinations rewritten by the
+    /// mapper ride their own scheme so the routed value retains its
+    /// source grammar — `^` is an anchor marker in wikilink grammar but
+    /// a legal path character in a markdown destination, and one shared
+    /// scheme made `[[note^block]]` able to activate a sibling
+    /// `[m](note^block)` record.
+    static let wikiMarkdownScheme = "slate-wikimd"
+
+    /// Which authoring grammar produced a wiki-routed target — decides
+    /// the anchor-cut rules `candidateKeys` applies.
+    enum WikiTargetGrammar: Equatable {
+        case wikilink
+        case markdownDestination
+    }
+
+    /// Does a record's authoring kind (`links_db.rs`: "wikilink" /
+    /// "markdown") match the grammar that routed the activation? Codex
+    /// round 3: matching on `targetRaw` alone let an UNSAVED
+    /// `[[note^block]]` activate a saved `[m](note^block)` record
+    /// through the verbatim arm — a cross-grammar record hit is always
+    /// the wrong record.
+    static func recordKindMatches(
+        _ kind: String, grammar: WikiTargetGrammar
+    ) -> Bool {
+        switch grammar {
+        case .wikilink: return kind == "wikilink"
+        case .markdownDestination: return kind == "markdown"
+        }
+    }
+
+    /// Kind-partitioned record sets for the styling classifier (Codex
+    /// round 3 — one flat set let a run of one grammar classify
+    /// against the other grammar's records). The EMPTY value is the
+    /// honest "no records for this note" classification (every run
+    /// unresolved), used while `currentOutgoingLinks` still belongs to
+    /// a previous note.
+    struct LinkRecordSets: Equatable {
+        var knownWikilink: Set<String> = []
+        var unresolvedWikilink: Set<String> = []
+        var knownMarkdown: Set<String> = []
+        var unresolvedMarkdown: Set<String> = []
+
+        init() {}
+
+        init(records: [OutgoingLink]) {
+            for record in records where !record.isEmbed && !record.isExternal {
+                switch record.kind {
+                case "wikilink":
+                    knownWikilink.insert(record.targetRaw)
+                    if record.isUnresolved {
+                        unresolvedWikilink.insert(record.targetRaw)
+                    }
+                case "markdown":
+                    knownMarkdown.insert(record.targetRaw)
+                    if record.isUnresolved {
+                        unresolvedMarkdown.insert(record.targetRaw)
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        func known(for grammar: WikiTargetGrammar) -> Set<String> {
+            grammar == .wikilink ? knownWikilink : knownMarkdown
+        }
+
+        func unresolved(for grammar: WikiTargetGrammar) -> Set<String> {
+            grammar == .wikilink ? unresolvedWikilink : unresolvedMarkdown
+        }
+    }
 
     /// Wikilink target (anchor form, e.g. `Note#Section`), decoded.
-    var openWikiLink: (String) -> Void
+    var openWikiLink: (String, WikiTargetGrammar) -> Void
     /// Embed target (cache-key form `target#suffix`), decoded.
     var openEmbed: (String) -> Void
     /// Tag name WITHOUT the leading `#`.
@@ -51,7 +122,7 @@ struct ReadingLinkRouter {
     /// fixtures; U3-1 ships `ReadingView` unmounted, so nothing user-facing
     /// routes through this.
     static let inert = ReadingLinkRouter(
-        openWikiLink: { _ in },
+        openWikiLink: { _, _ in },
         openEmbed: { _ in },
         openTag: { _ in },
         expandCitation: { _ in }
@@ -84,15 +155,72 @@ struct ReadingLinkRouter {
         return encoded.removingPercentEncoding ?? ""
     }
 
-    /// Strip a wikilink anchor suffix (`#heading` / `^block`) so the
-    /// remainder matches `OutgoingLink.targetRaw`, which the links pipeline
-    /// stores WITHOUT the anchor (split into `targetAnchor` —
-    /// `links.rs::split_wikilink_body`).
+    /// Strip a WIKILINK anchor suffix: `#heading` first, `^block` only
+    /// when no `#` exists — the exact `links.rs::split_wikilink_body`
+    /// precedence (Codex review: a first-marker cut turned
+    /// `note^draft#sec` into `note`). Display/name derivations for
+    /// wiki-grammar strings (embed titles) use this; RECORD MATCHING
+    /// must go through `candidateKeys(for:)`, which also covers the
+    /// markdown-destination grammar where `^` is a path character.
     static func baseTarget(of target: String) -> String {
-        if let cut = target.firstIndex(where: { $0 == "#" || $0 == "^" }) {
-            return String(target[target.startIndex..<cut])
+        // Trim mirrors links.rs (red-team: padded targets left styling
+        // and activation disagreeing).
+        let trimmed = target.trimmingCharacters(in: .whitespaces)
+        if let hash = trimmed.firstIndex(of: "#") {
+            return String(trimmed[trimmed.startIndex..<hash])
+                .trimmingCharacters(in: .whitespaces)
         }
-        return target
+        if let caret = trimmed.firstIndex(of: "^") {
+            return String(trimmed[trimmed.startIndex..<caret])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
+    }
+
+    /// Ordered record-match keys for one routed target, EXACT per
+    /// grammar (Codex round 2 — a grammar-blind list let a wikilink
+    /// activate a markdown sibling's record): wikilink grammar cuts the
+    /// anchor at the first `#`, else the first `^` (legacy block ref) —
+    /// `links.rs::split_wikilink_body`; markdown-destination grammar
+    /// cuts ONLY at `#`, `^` is a legal path character
+    /// (`links.rs::split_markdown_target`). The verbatim target closes
+    /// each list as the pre-#509 defense (rows still carrying a
+    /// fragment in `targetRaw`). One list for the live router's record
+    /// match AND the mapper's styling classification — agreement by
+    /// construction.
+    static func candidateKeys(
+        for target: String, grammar: WikiTargetGrammar
+    ) -> [String] {
+        let trimmed = target.trimmingCharacters(in: .whitespaces)
+        var keys: [String] = []
+        func push(_ key: String) {
+            if !key.isEmpty, !keys.contains(key) { keys.append(key) }
+        }
+        switch grammar {
+        case .wikilink:
+            push(baseTarget(of: trimmed))
+        case .markdownDestination:
+            if let hash = trimmed.firstIndex(of: "#") {
+                push(
+                    String(trimmed[trimmed.startIndex..<hash])
+                        .trimmingCharacters(in: .whitespaces))
+            }
+        }
+        push(trimmed)
+        return keys
+    }
+
+    /// Codex round 2: `AppState.currentOutgoingLinks` is intentionally
+    /// retained from the PREVIOUS note while the incoming note's query
+    /// runs (#90 panel anti-flicker). The reading surface must never
+    /// classify or activate against another note's records — until
+    /// ownership matches, every run is treated as record-less
+    /// (unresolved), on BOTH the styling and activation sides. The
+    /// window is the link query's IO — typically a few milliseconds.
+    static func recordsBelongToNote(
+        recordsPath: String?, notePath: String?
+    ) -> Bool {
+        recordsPath != nil && recordsPath == notePath
     }
 
     // MARK: - Dispatch
@@ -101,7 +229,7 @@ struct ReadingLinkRouter {
     /// `OpenURLAction.Result` is not `Equatable` — the routing TABLE is this
     /// pure, assertable function; `route` merely executes it.
     enum Disposition: Equatable {
-        case wiki(String)
+        case wiki(String, WikiTargetGrammar)
         case embed(String)
         case tag(String)
         case citation(String)
@@ -117,7 +245,10 @@ struct ReadingLinkRouter {
     static func disposition(for url: URL) -> Disposition {
         guard let scheme = url.scheme?.lowercased() else { return .discard }
         switch scheme {
-        case Self.wikiScheme: return .wiki(Self.decodedTarget(from: url))
+        case Self.wikiScheme:
+            return .wiki(Self.decodedTarget(from: url), .wikilink)
+        case Self.wikiMarkdownScheme:
+            return .wiki(Self.decodedTarget(from: url), .markdownDestination)
         case Self.embedScheme: return .embed(Self.decodedTarget(from: url))
         case Self.tagScheme: return .tag(Self.decodedTarget(from: url))
         case Self.citeScheme: return .citation(Self.decodedTarget(from: url))
@@ -131,8 +262,8 @@ struct ReadingLinkRouter {
     /// everything else is discarded (see the type doc's safety rationale).
     func route(_ url: URL) -> OpenURLAction.Result {
         switch Self.disposition(for: url) {
-        case .wiki(let target):
-            openWikiLink(target)
+        case .wiki(let target, let grammar):
+            openWikiLink(target, grammar)
             return .handled
         case .embed(let target):
             openEmbed(target)
@@ -163,21 +294,35 @@ extension ReadingLinkRouter {
     @MainActor
     static func live(appState: AppState) -> ReadingLinkRouter {
         ReadingLinkRouter(
-            openWikiLink: { [weak appState] target in
+            openWikiLink: { [weak appState] target, grammar in
                 guard let appState else { return }
+                guard Self.recordsBelongToNote(
+                    recordsPath: appState.currentOutgoingLinksPath,
+                    notePath: appState.selectedFilePath)
+                else {
+                    // Mid-transition (stale records) = record-less: the
+                    // same announce the missing-record arm below gives.
+                    postAccessibilityAnnouncement(
+                        "\(target) is unresolved. Cannot open.")
+                    return
+                }
                 // Match the note's own outgoing-link record and reuse
                 // `openLink` wholesale — it resolves, navigates via
                 // `openFile(_:target:)` honoring `openTargetFromCurrentEvent`,
-                // announces, and records the outcome seam. Both wikilink and
-                // markdown records are now anchor-STRIPPED (links.rs #509), so
-                // the base form is the match. Keep the verbatim arm as defense
-                // for any pre-migration rows still carrying a `#fragment` in
-                // targetRaw mid-transition.
-                let base = Self.baseTarget(of: target)
-                if let link = appState.currentOutgoingLinks.first(where: {
-                    !$0.isEmbed
-                        && ($0.targetRaw == base || $0.targetRaw == target)
-                }) {
+                // announces, and records the outcome seam. `candidateKeys`
+                // carries the anchor-strip grammar for BOTH origins the wiki
+                // scheme routes (wikilinks cut at `#`, `^` only as the
+                // no-`#` legacy block ref; markdown keeps `^` in the path)
+                // plus the pre-migration verbatim defense.
+                if let link = Self.candidateKeys(for: target, grammar: grammar)
+                    .lazy.compactMap({ key in
+                        appState.currentOutgoingLinks.first {
+                            !$0.isEmbed && $0.targetRaw == key
+                                && Self.recordKindMatches(
+                                    $0.kind, grammar: grammar)
+                        }
+                    }).first
+                {
                     appState.openLink(link)
                 } else {
                     // The live buffer can hold a link the saved-state link
@@ -189,10 +334,20 @@ extension ReadingLinkRouter {
             },
             openEmbed: { [weak appState] target in
                 guard let appState else { return }
-                let base = Self.baseTarget(of: target)
-                if let link = appState.currentOutgoingLinks.first(where: {
-                    $0.isEmbed && $0.targetRaw == base
-                }), let path = link.targetPath {
+                // Embed bodies are always wikilink grammar (`![[…]]`).
+                if Self.recordsBelongToNote(
+                    recordsPath: appState.currentOutgoingLinksPath,
+                    notePath: appState.selectedFilePath),
+                    let link = Self.candidateKeys(
+                        for: target, grammar: .wikilink)
+                    .lazy.compactMap({ key in
+                        appState.currentOutgoingLinks.first {
+                            $0.isEmbed && $0.targetRaw == key
+                                && Self.recordKindMatches(
+                                    $0.kind, grammar: .wikilink)
+                        }
+                    }).first, let path = link.targetPath
+                {
                     // Same entry point the embed panel + preview popover use:
                     // navigates + announces "Opened embed source".
                     appState.openEmbedTarget(path)

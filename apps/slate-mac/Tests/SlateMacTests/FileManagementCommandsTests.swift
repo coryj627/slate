@@ -209,6 +209,183 @@ final class FileManagementCommandsTests: XCTestCase {
             "the tab's EditorItem was retargeted, not closed")
     }
 
+    /// Codex round 3: the link-record OWNERSHIP marker must follow a
+    /// rename of the active note. `loadedFilePath` updates before
+    /// `selectedFilePath`, so the selection sink early-returns and no
+    /// new link query restamps it — a stale marker left every reading
+    /// link warning-styled and refusing activation.
+    func testRenameRetargetsLinkRecordOwnership() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.linksLoadTask?.value
+        XCTAssertEqual(state.currentOutgoingLinksPath, "a.md")
+
+        await state.renameEntry(path: "a.md", isDirectory: false, to: "alpha.md")?.value
+
+        XCTAssertEqual(
+            state.currentOutgoingLinksPath, "alpha.md",
+            "reading classification keeps working through the rename")
+    }
+
+    /// Codex round 4: rename RACING the in-flight link query. The old
+    /// query's result is dropped by its race guard (selection moved),
+    /// which also leaves `isLoadingLinks` true assuming a newer task
+    /// exists — the retarget must BE that newer task. Whichever side
+    /// wins the race, ownership must land on the new path and the
+    /// loading flag must clear.
+    func testRenameDuringInFlightLinkQueryHealsOwnership() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        // Deliberately NOT awaiting linksLoadTask here.
+        await state.renameEntry(path: "a.md", isDirectory: false, to: "alpha.md")?.value
+        await state.linksLoadTask?.value
+        await state.embedsLoadTask?.value
+
+        XCTAssertEqual(state.currentOutgoingLinksPath, "alpha.md")
+        XCTAssertFalse(state.isLoadingLinks, "no stuck loading flag either way")
+        XCTAssertFalse(
+            state.isLoadingEmbeds,
+            "the orphaned old chain must not re-strand the embeds flag")
+    }
+
+    /// Codex round 6: active-note deletion retains `selectedFilePath`
+    /// for the missing-file error tab, so the path guards alone can't
+    /// drop an in-flight embeds/citations leg — deletion must CANCEL
+    /// them (cancelNoteScopedWork omitted both). This pins the
+    /// contract: after delete, both handles are cancelled and cleared,
+    /// and the embeds entry guard's isCancelled check does the rest
+    /// for any leg already past its spawn point.
+    func testDeleteCancelsEmbedAndCitationLegs() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        await state.linksLoadTask?.value
+        XCTAssertNotNil(state.embedsLoadTask, "premise: the chain assigned the leg")
+        XCTAssertNotNil(state.citationsLoadTask)
+
+        await state.deleteEntry(path: "a.md", isDirectory: false)?.value
+
+        XCTAssertNil(state.embedsLoadTask, "delete cancels + clears the embeds leg")
+        XCTAssertNil(state.citationsLoadTask, "and the citations leg")
+        XCTAssertFalse(state.isLoadingEmbeds)
+    }
+
+    /// Codex round 9: ownership compares the ACTIVE MARKDOWN TAB's
+    /// path, not `selectedFilePath` — during dirty navigation the
+    /// selection is a transient mirror (it briefly holds the requested
+    /// destination while the tab stays put and the rollback is async).
+    /// Deleting the dirty note while such a mirror points elsewhere
+    /// must still flip THIS tab to the error state, never leave the
+    /// deleted file's dirty buffer standing.
+    func testDeleteOfDirtyNoteDuringDirtyNavStillFlipsToError() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("# a.md\nEDITED, unsaved\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        let deletion = state.deleteEntry(path: "a.md", isDirectory: false)
+        // Dirty nav: the mirror flips to b.md; the tab stays a.md and
+        // the rollback lands asynchronously. No suspension between the
+        // delete and this write, so the completion can observe the
+        // disagreement window.
+        state.selectedFilePath = "b.md"
+        await deletion?.value
+
+        XCTAssertNotNil(state.noteLoadError, "the deleted tab flips to the error state")
+        XCTAssertNil(state.currentNoteText, "the deleted file's dirty buffer is dropped")
+        XCTAssertFalse(state.hasUnsavedChanges)
+    }
+
+    /// Codex round 8, direction one: select a note and delete it
+    /// IMMEDIATELY — before the note load lands. The stale call-time
+    /// `loadedFilePath` capture said "not active", skipped the whole
+    /// cleanup, and the doomed read then published the deleted note's
+    /// content. Ownership is now decided at completion against the
+    /// live selection: whichever side wins the load/delete race, the
+    /// tab must end in the error state, never showing deleted content.
+    func testImmediateDeleteAfterSelectShowsErrorNotDeletedContent() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        let doomedLoad = state.noteLoadTask
+
+        await state.deleteEntry(path: "a.md", isDirectory: false)?.value
+        await doomedLoad?.value
+
+        XCTAssertNil(state.currentNoteText, "the doomed load must not publish deleted content")
+        XCTAssertNotNil(state.noteLoadError, "the tab flips to the missing-file error state")
+        XCTAssertFalse(state.isLoadingNote)
+    }
+
+    /// Codex round 8, direction two: delete the loaded note, then
+    /// switch selection BEFORE the deletion completes. The stale
+    /// capture said "active" and the completion clobbered the NEW
+    /// note's state with the deleted-note error. Deterministic: no
+    /// suspension between deleteEntry() and the selection switch, so
+    /// the MainActor completion always observes the new selection.
+    func testDeleteCompletionNeverClobbersASwitchedSelection() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+
+        let deletion = state.deleteEntry(path: "a.md", isDirectory: false)
+        state.selectedFilePath = "b.md"
+        await deletion?.value
+        await state.noteLoadTask?.value
+
+        XCTAssertNil(state.noteLoadError, "b.md must not be labeled as deleted")
+        XCTAssertEqual(state.loadedFilePath, "b.md")
+        XCTAssertNotNil(state.currentNoteText, "b.md's buffer survives the completion")
+    }
+
+    /// Codex round 7: delete while the fan-out is MID-FLIGHT (nothing
+    /// awaited past the note load). The explicit-clear loaders (note,
+    /// links, embeds) relied on "a newer task will clear the spinner"
+    /// after a dropped landing — deletion has no newer task, so the
+    /// delete site clears the trio and the loaders' entry guards stop
+    /// a cancelled late-starting body from re-setting one. Whatever
+    /// the interleaving, no spinner may survive the delete.
+    func testDeleteMidFlightFanOutStrandsNoSpinner() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        await state.noteLoadTask?.value
+        // Capture the handles cancelNoteScopedWork is about to nil so
+        // the orphans can be awaited to land (and drop) AFTER delete.
+        let links = state.linksLoadTask
+        let embeds = state.embedsLoadTask
+
+        await state.deleteEntry(path: "a.md", isDirectory: false)?.value
+        await links?.value
+        await embeds?.value
+
+        XCTAssertFalse(state.isLoadingNote)
+        XCTAssertFalse(state.isLoadingLinks)
+        XCTAssertFalse(state.isLoadingEmbeds)
+        XCTAssertFalse(state.isLoadingTasks)
+        XCTAssertFalse(state.isLoadingMathBlocks)
+        XCTAssertFalse(state.isLoadingCodeBlocks)
+        XCTAssertFalse(state.isLoadingDiagramBlocks)
+        XCTAssertFalse(state.isLoadingCitations)
+    }
+
+    /// Codex round 5: a CANCELLED links leg must not chain an embeds
+    /// leg — the chain it would spawn is the orphan that could flip
+    /// `isLoadingEmbeds` after the newer chain already finished.
+    /// Cancelling before the task body runs is deterministic (the
+    /// cancellation flag is set while this test still owns the actor).
+    func testCancelledLinksLegDoesNotChainEmbeds() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.selectedFilePath = "a.md"
+        state.linksLoadTask?.cancel()
+        await state.linksLoadTask?.value
+        XCTAssertNil(
+            state.embedsLoadTask,
+            "no embeds leg is spawned for a cancelled links leg")
+        XCTAssertFalse(state.isLoadingEmbeds)
+    }
+
     func testMoveRetargetsTheOpenActiveTab() async throws {
         let (state, _) = try await makeVault(files: ["a.md", "dest/x.md"])
         state.selectedFilePath = "a.md"

@@ -65,6 +65,44 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    // MARK: Reading scroll park (#856)
+
+    /// One parked reading-scroll position: the topmost visible block
+    /// index of a tab's `ReadingView`, plus the note path it belongs
+    /// to — restore validates the path so a note switch inside the
+    /// same tab never restores another note's offset.
+    struct ReadingScrollPark: Equatable {
+        let path: String
+        let blockIndex: Int
+    }
+
+    /// Per-tab reading-scroll park (#856) — the reading-mode sibling
+    /// of the U3-2 caret park: editing→reading→editing preserves the
+    /// caret; this preserves the reading offset across the reverse
+    /// round trip. TRANSIENT by design: never persisted to
+    /// workspace.json (a stale block index against a since-edited
+    /// file would restore garbage), NOT `@Published` (continuous
+    /// scroll reporting must not invalidate views — the caret-park
+    /// rule), and cleared exactly where `viewModes` entries die (tab
+    /// close, vault reset, session adopt) plus on note switch via the
+    /// path check + the replace purge below.
+    private(set) var readingScrollParks: [TabID: ReadingScrollPark] = [:]
+
+    /// Park the topmost visible reading block for `tabID`. Continuous
+    /// caller (every scroll-position change while reading); cheap
+    /// dictionary write, no publish.
+    func parkReadingScroll(blockIndex: Int, path: String, for tabID: TabID) {
+        readingScrollParks[tabID] = ReadingScrollPark(path: path, blockIndex: blockIndex)
+    }
+
+    /// The parked block index for `tabID`, or nil when nothing is
+    /// parked or the park belongs to a different note (path changed
+    /// under the same tab — the #856 "clear on note switch" rule).
+    func parkedReadingScroll(for tabID: TabID, path: String?) -> Int? {
+        guard let park = readingScrollParks[tabID], park.path == path else { return nil }
+        return park.blockIndex
+    }
+
     /// Per-tab properties-widget expansion (U3-3, #467). Sparse like
     /// `viewModes`: only COLLAPSED tabs have an entry — expanded is the
     /// default and the absent-key state in workspace.json.
@@ -320,6 +358,13 @@ final class WorkspaceState: ObservableObject {
         // Only tabs that were actually retargeted are touched (the ACTIVE tab
         // has no `documents` entry while active — AppState owns its fields).
         for tabID in changed {
+            // Rebind reading-scroll parks alongside documents (red-team:
+            // a rename while the note was parked in reading mode
+            // orphaned the offset — park.path kept the OLD path).
+            if let park = readingScrollParks[tabID], park.path == old {
+                readingScrollParks[tabID] = ReadingScrollPark(
+                    path: new, blockIndex: park.blockIndex)
+            }
             guard let old = documents[tabID] else { continue }
             let rebound = NoteDocument(id: tabID, path: new)
             rebound.text = old.text
@@ -396,6 +441,9 @@ final class WorkspaceState: ObservableObject {
             // Same tab, new item: the old item's parked snapshot (keyed by
             // this tab id) no longer describes the tab's content.
             documents[previous.id] = nil
+            // #856: same rule for the reading-scroll park (belt — the
+            // path check in `parkedReadingScroll` is the braces).
+            readingScrollParks[previous.id] = nil
         }
     }
 
@@ -441,6 +489,7 @@ final class WorkspaceState: ObservableObject {
         let outcome = model.closeTab(tabID)
         documents[tabID] = nil
         viewModes[tabID] = nil
+        readingScrollParks[tabID] = nil
         propertiesCollapsed.remove(tabID)
         canvasSurfaces[tabID] = nil
         assert(model.validate().isEmpty)
@@ -455,6 +504,7 @@ final class WorkspaceState: ObservableObject {
         model = WorkspaceModel()
         documents = [:]
         viewModes = [:]
+        readingScrollParks = [:]
         propertiesCollapsed = []
         canvasSurfaces = [:]
         // #863: the reopen stack is per-vault-session — tabs from a
@@ -480,6 +530,9 @@ final class WorkspaceState: ObservableObject {
         assert(restored.validate().isEmpty)
         model = restored
         documents = [:]
+        // #856: transient by contract — a restored session starts with
+        // no reading-scroll parks (never persisted; see the property doc).
+        readingScrollParks = [:]
         let knownIDs = Set(restored.allTabs.map(\.id))
         viewModes = restoredModes
             .filter { knownIDs.contains($0.key) && $0.value != .editing }
