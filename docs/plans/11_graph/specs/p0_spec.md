@@ -92,7 +92,7 @@ pub struct EdgeData { pub kind: EdgeKind, pub count: u32 }
    3a. **Transaction discipline (normative):** graph mutations must never outlive a rolled-back transaction. Hooks stage a pending batch while the tx is open; the batch applies to the `GraphIndex` only after the enclosing commit succeeds, and on any failure the pending batch is dropped and the index resets to `None` (lazy rebuild repairs). Hooks mutate in-memory graph state ONLY — they MUST NOT call `notify_file_change` or any listener fan-out: the seam in `save_text_locked` stays the sole emission seat and dispatch stays strictly post-commit (#802 invariants — do not weaken; extend the events.rs seam test to assert exactly one Modified per save with the graph index built).
    If the index is `None` (never queried), hooks are no-ops: laziness means cold sessions pay zero cost.
 4. **Determinism:** iteration order in build is `files.id` then `(source_file_id, ordinal)` — SQL `ORDER BY` explicit, never map order. `by_key` is storage only; anything enumerating nodes sorts by key.
-5. **Generation:** bumps once per applied batch; exposed for cheap "did anything change" checks by the FFI layer and Swift refresh logic.
+5. **Generation:** bumps once per applied batch **that actually changes graph-visible state** — a same-content re-save (identical linkset) or an already-empty purge applies its op but leaves every payload untouched, so it must not advance the discriminator (review round 3). Exposed for cheap "did anything change" checks by the FFI layer and Swift refresh logic. **Session-monotonic (review round 1, finding 2):** the session keeps a generation floor — every rebuild seats at `floor + 1` and a defensive drop bumps the floor — so a rebuilt index can never reuse an already-observed generation and silently mask changes. Graph-visible metadata changes with no structural delta (an existing non-markdown file's mtime moving — `modified_ms` in payloads) stage a `MetadataTouched` op **gated on the mtime actually differing** (a ctime-only change like `chmod` leaves `modified_ms` unchanged and must not bump — review round 3, finding 2); a staged `MetadataTouched` always counts as a real change.
 
 ### Tests (PR 1)
 
@@ -134,7 +134,7 @@ Records (slate-uniffi/src/lib.rs, mirror + `From` per convention):
 
 ```rust
 pub struct GraphNode {   // uniffi::Record
-    pub id: u64,                    // StableGraph index; stable within a session, NOT across sessions
+    pub id: u64,                    // StableGraph index; stable while `generation` is unchanged (rebuilds may reassign); never stable across sessions
     pub path: Option<String>,       // None for ghosts
     pub label: String,
     pub kind: GraphNodeKind,        // Note | Attachment | Ghost

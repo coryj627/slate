@@ -2092,8 +2092,11 @@ impl From<core::graph::EdgeKind> for GraphEdgeKind {
     }
 }
 
-/// One graph node with its metrics (#552). `id` is stable within a
-/// session, NOT across sessions. Mirrors `slate_core::graph::GraphNode`.
+/// One graph node with its metrics (#552). `id` is stable while the
+/// snapshot's `generation` is unchanged — a generation change may
+/// reassign ids, so re-fetch instead of caching ids across
+/// generations; never stable across sessions. Mirrors
+/// `slate_core::graph::GraphNode`.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct GraphNode {
     pub id: u64,

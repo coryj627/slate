@@ -148,6 +148,14 @@ pub enum GraphOp {
         new_path: String,
         is_markdown: bool,
     },
+    /// Graph-visible metadata changed without any structural delta —
+    /// an EXISTING non-markdown file's slow-path rescan or re-save
+    /// updated `files.mtime_ms`, which snapshots surface as
+    /// `modified_ms`. Applying the (empty) op still bumps the batch
+    /// generation, so the refresh contract's discriminator sees the
+    /// change (review round 1 finding 3). Markdown files don't need
+    /// it: their re-index always stages `LinksetChanged`.
+    MetadataTouched,
 }
 
 /// Stack-owned staging buffer for one mutation's graph ops
@@ -240,7 +248,10 @@ impl Default for GraphFilter {
 
 /// One node of a projection payload (P0-3). Field semantics follow
 /// p0_spec §P0-3 verbatim; `id` is the StableGraph index — stable
-/// within a session, NOT across sessions.
+/// while `generation` is unchanged. A generation change may reassign
+/// ids (a defensive rebuild compacts StableGraph holes), so consumers
+/// re-fetch rather than caching ids across generations. Never stable
+/// across sessions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphNode {
     pub id: u64,
@@ -407,6 +418,14 @@ impl GraphIndex {
         self.generation
     }
 
+    /// Seat the generation counter. The session calls this exactly
+    /// once per (re)build with `floor + 1`, so a rebuilt index never
+    /// reuses an already-observed generation (the refresh contract's
+    /// change discriminator — review round 1 finding 2).
+    pub(crate) fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
     /// Apply one batch of staged ops in order, then bump the
     /// generation once. Returns [`ReplayMismatch`] on an
     /// internal-consistency violation (a replayed op that does not
@@ -414,10 +433,11 @@ impl GraphIndex {
     /// index (lazy rebuild repairs) — corruption is never left
     /// standing.
     pub fn apply_batch(&mut self, ops: Vec<GraphOp>) -> Result<(), ReplayMismatch> {
+        let mut changed = false;
         for op in ops {
-            match op {
+            changed |= match op {
                 GraphOp::LinksetChanged { source_path, rows } => {
-                    self.apply_linkset_change(&source_path, &rows)?;
+                    self.apply_linkset_change(&source_path, &rows)?
                 }
                 GraphOp::FileAdded {
                     path,
@@ -425,9 +445,11 @@ impl GraphIndex {
                     resolved_inbound,
                 } => {
                     self.apply_file_added(&path, is_markdown, &resolved_inbound)?;
+                    true
                 }
                 GraphOp::FileRemoved { path, inbound } => {
                     self.apply_file_removed(&path, &inbound)?;
+                    true
                 }
                 GraphOp::FileRenamed {
                     old_path,
@@ -435,10 +457,22 @@ impl GraphIndex {
                     is_markdown,
                 } => {
                     self.apply_file_renamed(&old_path, &new_path, is_markdown)?;
+                    true
                 }
-            }
+                // Structurally a no-op, but only ever STAGED when a
+                // graph-visible field (mtime → modified_ms) actually
+                // moved (review round 3), so it genuinely marks the
+                // payload as changed.
+                GraphOp::MetadataTouched => true,
+            };
         }
-        self.generation += 1;
+        // Bump only on a real change: an identical re-save or an
+        // already-empty purge leaves the graph — and every payload it
+        // produces — untouched, so the refresh discriminator must not
+        // advance (review round 3 findings 1–2).
+        if changed {
+            self.generation += 1;
+        }
         Ok(())
     }
 
@@ -498,8 +532,9 @@ impl GraphIndex {
     // --- filtered projections (P0-3 #552) --------------------------------
 
     /// Nodes surviving `filter`, as `(id, &NodeData)` sorted by key.
-    /// The id is the `StableGraph` index — stable within a session,
-    /// NOT across sessions (p0_spec §P0-3).
+    /// The id is the `StableGraph` index — stable while the
+    /// generation is unchanged; rebuilds may reassign (p0_spec
+    /// §P0-3).
     ///
     /// Filter composition (normative): `orphans_only` keeps orphan
     /// Notes only, then kind filters apply; excluded-kind nodes drop
@@ -717,11 +752,16 @@ impl GraphIndex {
     /// diff against current out-edges, apply. A ghost node is removed
     /// when its last in-edge goes; a Path node is never removed by
     /// link changes.
+    /// Returns whether the graph actually changed (an edge added,
+    /// removed, or whose count/variants moved). Re-applying an
+    /// identical linkset — a same-content re-save, or purging an
+    /// already-empty one — reports `false` so the batch does not bump
+    /// the generation spuriously (gpt-5.6-sol review round 3).
     fn apply_linkset_change(
         &mut self,
         source_path: &str,
         rows: &[GraphLinkRow],
-    ) -> Result<(), ReplayMismatch> {
+    ) -> Result<bool, ReplayMismatch> {
         let source = match self.by_key.get(&NodeKey::Path(source_path.to_string())) {
             Some(&idx) => idx,
             None => {
@@ -732,6 +772,7 @@ impl GraphIndex {
                 return Err(ReplayMismatch);
             }
         };
+        let mut changed = false;
 
         // New multiset: (target key, kind) → (count, variants).
         let mut wanted: BTreeMap<(NodeKey, EdgeKind), (u32, BTreeMap<String, u32>)> =
@@ -768,13 +809,19 @@ impl GraphIndex {
             match wanted.remove(&(target_key.clone(), kind)) {
                 Some((count, variants)) => {
                     let data = &mut self.graph[edge_id];
-                    data.count = count;
-                    data.variants = variants;
+                    // An update to identical (count, variants) is a
+                    // no-op — don't flag it as a change.
+                    if data.count != count || data.variants != variants {
+                        changed = true;
+                        data.count = count;
+                        data.variants = variants;
+                    }
                     if matches!(target_key, NodeKey::Ghost(_)) {
                         touched_ghosts.push(target);
                     }
                 }
                 None => {
+                    changed = true;
                     self.graph.remove_edge(edge_id);
                     if matches!(target_key, NodeKey::Ghost(_)) {
                         touched_ghosts.push(target);
@@ -784,6 +831,7 @@ impl GraphIndex {
         }
         // Remaining wanted entries are new edges.
         for ((target_key, kind), (count, variants)) in wanted {
+            changed = true;
             let target = match &target_key {
                 NodeKey::Path(_) => self.by_key[&target_key],
                 NodeKey::Ghost(g) => {
@@ -808,7 +856,10 @@ impl GraphIndex {
         for ghost in touched_ghosts {
             self.gc_or_relabel_ghost(ghost);
         }
-        Ok(())
+        // Any ghost relabel or gc above is downstream of an edge
+        // mutation on THIS source, which already set `changed` — a
+        // ghost's label can only move when one of its in-edges did.
+        Ok(changed)
     }
 
     fn apply_file_added(

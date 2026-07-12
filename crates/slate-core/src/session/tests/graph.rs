@@ -1020,7 +1020,7 @@ mod census {
         rng: &mut SplitMix64,
     ) -> &'static str {
         let files = existing_md(session);
-        match rng.below(8) {
+        match rng.below(11) {
             0 => {
                 let path = format!("note{}.md", rng.below(14));
                 let _ = session.create_exclusive(&path, &random_body(rng));
@@ -1039,6 +1039,10 @@ mod census {
                 "rename"
             }
             3 => {
+                // Ensure the destination folder can exist so moves
+                // genuinely succeed some of the time (review round 1
+                // finding 4: silent-failure ops are no coverage).
+                let _ = session.create_folder("dir");
                 if let Some(path) = files.get(rng.below(files.len().max(1))) {
                     let dest = if rng.below(2) == 0 { "dir" } else { "" };
                     let _ = session.move_file(path, dest);
@@ -1065,6 +1069,48 @@ mod census {
                 let _ = std::fs::write(root.join("pic.png"), b"png");
                 let _ = session.scan_initial(&CancelToken::new());
                 "attachment+scan"
+            }
+            7 => {
+                // Folder mutations: rename the populated folder away
+                // and back, or delete it outright.
+                match rng.below(3) {
+                    0 => {
+                        let _ = session.rename_folder("dir", "dir2");
+                    }
+                    1 => {
+                        let _ = session.rename_folder("dir2", "dir");
+                    }
+                    _ => {
+                        let _ = session.delete_folder("dir");
+                    }
+                }
+                "folder-op"
+            }
+            8 => {
+                // Markdown -> .base reclassification rename (purges
+                // text derivatives through the reclassification path).
+                if let Some(path) = files.get(rng.below(files.len().max(1))) {
+                    let stem = path.rsplit('/').next().unwrap().trim_end_matches(".md");
+                    let _ = session.rename_file(path, &format!("{stem}.base"));
+                }
+                "reclassify"
+            }
+            9 => {
+                // Open-before-scan heals, both flavors (each inserts a
+                // files row outside scan/save — distinct hooks).
+                if rng.below(2) == 0 {
+                    let name = format!("board{}.canvas", rng.below(3));
+                    let _ = std::fs::write(root.join(&name), r#"{"nodes":[],"edges":[]}"#);
+                    let _ = session.open_canvas(&name);
+                } else {
+                    let name = format!("view{}.base", rng.below(3));
+                    let _ = std::fs::write(
+                        root.join(&name),
+                        "filters:\n  and: []\nviews:\n  - type: table\n    name: All\n",
+                    );
+                    let _ = session.open_base(&name);
+                }
+                "open-heal"
             }
             _ => {
                 // Out-of-band delete; the scan reconcile prunes it.
@@ -1144,6 +1190,34 @@ mod census {
                 let _ = std::fs::remove_file(root.join("note3.md"));
                 let _ = s.scan_initial(&CancelToken::new());
             }),
+            ("folder-populate", |s, _| {
+                let _ = s.create_folder("dir");
+                let _ = s.move_file("note0.md", "dir");
+            }),
+            ("folder-rename", |s, _| {
+                let _ = s.create_folder("dir");
+                let _ = s.move_file("note1.md", "dir");
+                let _ = s.rename_folder("dir", "dir2");
+            }),
+            ("folder-delete", |s, _| {
+                let _ = s.create_folder("dir");
+                let _ = s.move_file("note2.md", "dir");
+                let _ = s.delete_folder("dir");
+            }),
+            ("reclassify-to-base", |s, _| {
+                let _ = s.rename_file("note2.md", "note2.base");
+            }),
+            ("canvas-heal", |s, root| {
+                let _ = std::fs::write(root.join("board.canvas"), r#"{"nodes":[],"edges":[]}"#);
+                let _ = s.open_canvas("board.canvas");
+            }),
+            ("base-heal", |s, root| {
+                let _ = std::fs::write(
+                    root.join("view.base"),
+                    "filters:\n  and: []\nviews:\n  - type: table\n    name: All\n",
+                );
+                let _ = s.open_base("view.base");
+            }),
         ];
 
         for (i, (name_a, op_a)) in ops.iter().enumerate() {
@@ -1187,6 +1261,12 @@ mod census {
 
         let build = |ordered: &[(String, String)]| {
             let (tmp, session) = make_vault(|_| {});
+            session.scan_initial(&CancelToken::new()).unwrap();
+            // Build the index BEFORE the creates so every op below
+            // exercises the INCREMENTAL path — a cold-graph run would
+            // only test build-order invariance (review round 1
+            // finding 4).
+            let _ = session.with_graph(|g| g.node_count()).unwrap();
             for (path, body) in ordered {
                 session.create_exclusive(path, body).unwrap();
             }
@@ -1194,6 +1274,10 @@ mod census {
             // in every ordering.
             std::fs::write(tmp.path().join("pic.png"), b"png").unwrap();
             session.scan_initial(&CancelToken::new()).unwrap();
+            assert!(
+                session.graph_is_built(),
+                "permutation census must stay on the incremental path"
+            );
             let nodes = session.with_graph(|g| g.canonical_nodes()).unwrap();
             let edges = session.with_graph(|g| g.canonical_edges()).unwrap();
             let metrics = session.graph_metrics_snapshot().unwrap();
@@ -1246,6 +1330,11 @@ mod census {
 
         for op_index in 0..census_scale() / 2 {
             let op = apply_random_op(&session, tmp.path(), &mut rng);
+            assert!(
+                session.graph_is_built(),
+                "op {op_index} ({op}): metrics census must stay on the \
+                 incremental path, not silently rebuild"
+            );
             let metrics = session.graph_metrics_snapshot().unwrap();
 
             // Naive recomputation from raw SQL rows.
@@ -1379,9 +1468,9 @@ mod census {
     }
 }
 
-/// The open-before-first-scan heals (`open_canvas`,
-/// `ensure_open_base_indexed`) insert files rows outside the scan/save
-/// paths — the graph must mirror them too (#550 hook completeness).
+/// `open_canvas`'s open-before-first-scan heal inserts a files row
+/// outside the scan/save paths — the graph must mirror it (#550 hook
+/// completeness). The sibling `open_base` heal has its own test below.
 #[test]
 fn open_canvas_before_scan_mirrors_the_healed_row() {
     let (tmp, session) = make_vault(|p| {
@@ -1409,4 +1498,247 @@ fn open_canvas_before_scan_mirrors_the_healed_row() {
         )),
         "healed canvas row becomes an Attachment node: {nodes:?}"
     );
+}
+
+/// `open_base`'s open-before-scan heal (`ensure_open_base_indexed`)
+/// also inserts a files row outside scan/save — the graph must mirror
+/// it (round 2 finding 1: this path was previously uncovered).
+#[test]
+fn open_base_before_scan_mirrors_the_healed_row() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[b]]").unwrap();
+        p.write_file("b.md", b"").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let _ = built_nodes(&session); // index live
+
+    // A .base lands after the scan; open_base heals the missing files
+    // row inside ensure_open_base_indexed's own transaction.
+    std::fs::write(
+        tmp.path().join("view.base"),
+        "filters:\n  and: []\nviews:\n  - type: table\n    name: All\n",
+    )
+    .unwrap();
+    session.open_base("view.base").unwrap();
+    assert_matches_rebuild(&session, "open_base heal of an unscanned file");
+    let nodes = built_nodes(&session);
+    assert!(
+        nodes
+            .iter()
+            .any(|(k, kind, _)| *k == path_key("view.base") && *kind == NodeKind::Attachment),
+        "healed .base row becomes an Attachment node: {nodes:?}"
+    );
+}
+
+/// The generation discriminator bumps on a genuine `modified_ms`
+/// (mtime) move but NOT on a slow-path rescan that leaves both the
+/// linkset and `modified_ms` untouched (review rounds 2–4). Driven
+/// through the scan path with `File::set_modified`-pinned mtimes so
+/// slow-path entry and the no-bump/must-bump split are deterministic,
+/// not wall-clock-dependent.
+#[test]
+fn generation_tracks_modified_ms_not_slow_path_entry() {
+    use std::time::{Duration, SystemTime};
+
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"![[pic.png]]").unwrap();
+        p.write_file("pic.png", b"binary").unwrap();
+    });
+    let pic = tmp.path().join("pic.png");
+    let mtime_ms = |t: SystemTime| {
+        t.duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    };
+    // Pin the attachment's mtime to a fixed, distinctly-old value.
+    let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    std::fs::File::open(&pic)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let attachments = || {
+        session
+            .graph_snapshot(crate::graph::GraphFilter {
+                include_attachments: true,
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let g0 = attachments().generation;
+
+    // Slow path, but modified_ms UNCHANGED: rewrite the attachment's
+    // CONTENT (size differs → the fast-path (mtime,size,ctime) key
+    // differs on size → slow path is entered deterministically), then
+    // re-pin mtime to the same old value. A non-markdown attachment
+    // has no links, so nothing structural changes and modified_ms is
+    // unchanged — the generation must hold regardless of scan path.
+    std::fs::write(&pic, b"different bytes, larger").unwrap();
+    std::fs::File::open(&pic)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        session.graph_generation(),
+        g0,
+        "a slow-path rescan with unchanged modified_ms must not bump"
+    );
+    assert!(
+        session.graph_is_built(),
+        "the no-op scan must not drop the index"
+    );
+
+    // A GENUINE mtime move: the discriminator must advance and the
+    // surfaced modified_ms must reflect the new mtime.
+    let newer = old + Duration::from_secs(60);
+    std::fs::File::open(&pic)
+        .unwrap()
+        .set_modified(newer)
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let snap = attachments();
+    assert!(
+        snap.generation > g0,
+        "a real modified_ms change must bump the generation"
+    );
+    assert_eq!(
+        snap.nodes
+            .iter()
+            .find(|n| n.label == "pic.png")
+            .and_then(|n| n.modified_ms),
+        Some(mtime_ms(newer)),
+        "the surfaced modified_ms reflects the new mtime"
+    );
+}
+
+/// A structural link change bumps the generation even when
+/// `modified_ms` is held fixed, and a prose-only slow-path rescan
+/// with identical links AND fixed mtime does not — the two bump
+/// sources (structural vs modified_ms) are independent (review round
+/// 4). Scan-path driven with a pinned mtime for determinism.
+#[test]
+fn structural_change_bumps_independent_of_mtime() {
+    use std::time::{Duration, SystemTime};
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[b]]").unwrap();
+        p.write_file("b.md", b"").unwrap();
+        p.write_file("d.md", b"").unwrap();
+    });
+    let a = tmp.path().join("a.md");
+    let old = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000);
+    std::fs::File::open(&a).unwrap().set_modified(old).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let g0 = session
+        .graph_snapshot(crate::graph::GraphFilter::default())
+        .unwrap()
+        .generation;
+
+    // Prose-only change, mtime pinned: links identical, modified_ms
+    // unchanged → no bump (size differs → slow path is entered, so
+    // this proves the structural-no-op gate, not the fast path).
+    std::fs::write(&a, b"[[b]] with extra prose that changes size").unwrap();
+    std::fs::File::open(&a).unwrap().set_modified(old).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        session.graph_generation(),
+        g0,
+        "prose-only rescan with identical links + fixed mtime must not bump"
+    );
+
+    // Link change, mtime STILL pinned: b → d is a real structural
+    // delta, so it bumps even though modified_ms didn't move.
+    std::fs::write(&a, b"[[d]] with extra prose that changes size!").unwrap();
+    std::fs::File::open(&a).unwrap().set_modified(old).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        session.graph_generation() > g0,
+        "a structural link change must bump even with mtime fixed"
+    );
+    let edges = built_edges(&session);
+    assert!(
+        edges.contains(&(path_key("a.md"), path_key("d.md"), EdgeKind::Link, 1))
+            && !edges.contains(&(path_key("a.md"), path_key("b.md"), EdgeKind::Link, 1)),
+        "the link actually moved b → d: {edges:?}"
+    );
+}
+
+/// Oversized-file purge rides the hooks (finding 4: the census op
+/// pools couldn't afford default-threshold bodies, so the purge path
+/// gets its own census with a tiny refuse threshold).
+#[test]
+fn census_oversize_purge_matches_rebuild() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.md"), "[[big]] [[b]]").unwrap();
+    std::fs::write(tmp.path().join("b.md"), "[[a]]").unwrap();
+    std::fs::write(tmp.path().join("big.md"), "[[a]] small for now").unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    let mut config = SessionConfig::new(tmp.path().join(".slate"));
+    config.large_file_refuse_bytes = 256;
+    let session = VaultSession::open(std::sync::Arc::new(provider), config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let _ = session.with_graph(|g| g.node_count()).unwrap(); // live
+
+    // Grow big.md past the threshold out-of-band; the scan's slow
+    // path takes the oversized branch and purges its derivatives
+    // (out-edges empty; the node itself stays).
+    let huge = format!("[[a]] {}", "x".repeat(512));
+    std::fs::write(tmp.path().join("big.md"), &huge).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(session.graph_is_built(), "oversize purge went defensive");
+    let fresh = session.graph_rebuild_reference().unwrap();
+    assert!(
+        session.with_graph(|g| g.deep_equals(&fresh)).unwrap(),
+        "oversize purge diverged from rebuild"
+    );
+    let edges = built_edges(&session);
+    assert!(
+        !edges.iter().any(|(s, _, _, _)| *s == path_key("big.md")),
+        "oversized file keeps its node but loses its out-edges: {edges:?}"
+    );
+
+    // Shrink back under the threshold: derivatives reindex.
+    std::fs::write(tmp.path().join("big.md"), "[[a]] back").unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(session.graph_is_built());
+    let fresh = session.graph_rebuild_reference().unwrap();
+    assert!(session.with_graph(|g| g.deep_equals(&fresh)).unwrap());
+}
+
+/// Review round 1 finding 5: with the graph LIVE, a save still emits
+/// exactly one Modified through the #802 seam — graph hooks stage
+/// in-memory ops only and never touch the listener fan-out.
+#[test]
+fn live_graph_save_emits_exactly_one_modified() {
+    use std::sync::Mutex as StdMutex;
+    struct Recorder(StdMutex<Vec<FileChangeEvent>>);
+    impl VaultEventListener for Recorder {
+        fn on_error(&self, _c: EventErrorCode, _p: String, _m: String) {}
+        fn on_file_change(&self, event: FileChangeEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[b]]").unwrap();
+        p.write_file("b.md", b"").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let _ = session.with_graph(|g| g.node_count()).unwrap(); // hooks LIVE
+
+    let recorder = std::sync::Arc::new(Recorder(StdMutex::new(Vec::new())));
+    let token = session.register_event_listener(recorder.clone());
+    session
+        .save_text("a.md", "[[b]] and [[ghost]]", None)
+        .unwrap();
+    let events = recorder.0.lock().unwrap().clone();
+    session.unregister_event_listener(token);
+
+    assert_eq!(
+        events.len(),
+        1,
+        "exactly one event per save with the graph live: {events:?}"
+    );
+    assert_eq!(events[0].kind, FileChangeKind::Modified);
+    assert_eq!(events[0].path, "a.md");
 }

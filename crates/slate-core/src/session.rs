@@ -677,6 +677,14 @@ pub struct VaultSession {
     /// first, and hooks stage while the connection lock is already
     /// held. Never acquire an earlier lock while holding a later one.
     graph: Mutex<Option<crate::graph::GraphIndex>>,
+    /// Session-monotonic generation floor (gpt-5.6-sol review round 1
+    /// finding 2): rebuilds must NEVER reuse an already-observed
+    /// generation, or the refresh contract's change discriminator
+    /// silently misses changes. Invariant: whenever the index exists,
+    /// `index.generation() == floor`; a defensive drop bumps the
+    /// floor so probes read "changed"; every rebuild starts at
+    /// `floor + 1`. Only touched under the `graph` lock.
+    graph_generation_floor: AtomicU64,
     /// Metrics over the graph (#551), cached per graph generation —
     /// the `(generation, data)`-under-one-mutex shape (`remnant_logs`
     /// precedent). Invalidated implicitly: a generation mismatch on
@@ -1159,8 +1167,53 @@ impl VaultSession {
         crate::graph::GraphOpSink::new(live)
     }
 
+    /// Drop the graph index defensively: bump the generation floor so
+    /// probes read "changed" (a dropped index means the graph's state
+    /// is unknown — review round 1 finding 2), and drop the metrics
+    /// cache with it (LOCK ORDER: graph → graph_metrics; caller holds
+    /// the graph lock).
+    fn graph_drop_locked(&self, guard: &mut Option<crate::graph::GraphIndex>) {
+        *guard = None;
+        self.graph_generation_floor
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.graph_metrics
+            .lock()
+            .expect("graph metrics mutex")
+            .take();
+    }
+
+    /// Build the index if absent, seating its generation at
+    /// `floor + 1` — a rebuilt index must never reuse an
+    /// already-observed generation (review round 1 finding 2). Caller
+    /// holds conn then graph (LOCK ORDER).
+    fn graph_ensure_built(
+        &self,
+        conn: &Connection,
+        guard: &mut Option<crate::graph::GraphIndex>,
+    ) -> Result<(), VaultError> {
+        if guard.is_none() {
+            let mut index = crate::graph::GraphIndex::build(conn)?;
+            let generation = self
+                .graph_generation_floor
+                .load(std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            index.set_generation(generation);
+            self.graph_generation_floor
+                .store(generation, std::sync::atomic::Ordering::SeqCst);
+            *guard = Some(index);
+            // A fresh build invalidates any surviving metrics cache
+            // (its generation belongs to the previous index).
+            self.graph_metrics
+                .lock()
+                .expect("graph metrics mutex")
+                .take();
+        }
+        Ok(())
+    }
+
     /// Apply one committed mutation's staged ops. Call ONLY after the
-    /// enclosing transaction committed (rule 3a); error paths drop
+    /// enclosing transaction committed (rule 3a) and while the
+    /// connection lock is still held (finding 1); error paths drop
     /// the sink instead. A poisoned sink (a hooked path that
     /// reported-and-continued on error) or a replay that does not fit
     /// the current graph drops the index — the next query rebuilds
@@ -1172,27 +1225,21 @@ impl VaultSession {
         }
         let mut guard = self.graph.lock().expect("graph index mutex");
         if poisoned {
-            *guard = None;
-            // A rebuilt index restarts at generation 0, which could
-            // falsely validate a cached snapshot — drop the cache with
-            // the index (LOCK ORDER: graph → graph_metrics).
-            self.graph_metrics
-                .lock()
-                .expect("graph metrics mutex")
-                .take();
+            self.graph_drop_locked(&mut guard);
             return;
         }
         if ops.is_empty() {
             return;
         }
-        if let Some(index) = guard.as_mut()
-            && index.apply_batch(ops).is_err()
-        {
-            *guard = None;
-            self.graph_metrics
-                .lock()
-                .expect("graph metrics mutex")
-                .take();
+        if let Some(index) = guard.as_mut() {
+            match index.apply_batch(ops) {
+                Ok(()) => {
+                    // Keep the floor in lockstep with the live index.
+                    self.graph_generation_floor
+                        .store(index.generation(), std::sync::atomic::Ordering::SeqCst);
+                }
+                Err(_) => self.graph_drop_locked(&mut guard),
+            }
         }
     }
 
@@ -1209,15 +1256,7 @@ impl VaultSession {
     ) -> Result<R, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        if guard.is_none() {
-            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
-            // Fresh index restarts at generation 0 — a surviving
-            // cached snapshot would falsely validate against it.
-            self.graph_metrics
-                .lock()
-                .expect("graph metrics mutex")
-                .take();
-        }
+        self.graph_ensure_built(&conn, &mut guard)?;
         Ok(f(guard.as_ref().expect("graph index just ensured")))
     }
 
@@ -1266,14 +1305,7 @@ impl VaultSession {
     ) -> Result<std::sync::Arc<crate::graph_metrics::MetricsSnapshot>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        if guard.is_none() {
-            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
-            // Same rebuilt-generation-0 hazard as with_graph.
-            self.graph_metrics
-                .lock()
-                .expect("graph metrics mutex")
-                .take();
-        }
+        self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
         Ok(self.graph_metrics_cached(index))
     }
@@ -1283,12 +1315,17 @@ impl VaultSession {
     /// VaultEventListener file-change / scan-finished events and
     /// refreshes surfaces only on change.
     pub fn graph_generation(&self) -> u64 {
-        self.graph
-            .lock()
-            .expect("graph index mutex")
-            .as_ref()
-            .map(|g| g.generation())
-            .unwrap_or(0)
+        let guard = self.graph.lock().expect("graph index mutex");
+        match guard.as_ref() {
+            Some(index) => index.generation(),
+            // Absent index: report the floor. 0 only before the first
+            // build; after a defensive drop the bumped floor tells the
+            // refresh contract "changed" instead of masking it
+            // (review round 1 finding 2).
+            None => self
+                .graph_generation_floor
+                .load(std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     /// Bench-only seam (#553): drop the built index so the next graph
@@ -1296,11 +1333,8 @@ impl VaultSession {
     /// no production caller may exist.
     #[doc(hidden)]
     pub fn graph_drop_for_bench(&self) {
-        self.graph.lock().expect("graph index mutex").take();
-        self.graph_metrics
-            .lock()
-            .expect("graph metrics mutex")
-            .take();
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        self.graph_drop_locked(&mut guard);
     }
 
     /// Bench-only seam (#553): drop the metrics cache so the next
@@ -1321,13 +1355,7 @@ impl VaultSession {
     ) -> Result<crate::graph::GraphSnapshot, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        if guard.is_none() {
-            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
-            self.graph_metrics
-                .lock()
-                .expect("graph metrics mutex")
-                .take();
-        }
+        self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
         let metrics = self.graph_metrics_cached(index);
 
@@ -1375,13 +1403,7 @@ impl VaultSession {
         let depth = depth.clamp(1, 3);
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        if guard.is_none() {
-            *guard = Some(crate::graph::GraphIndex::build(&conn)?);
-            self.graph_metrics
-                .lock()
-                .expect("graph metrics mutex")
-                .take();
-        }
+        self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
         let metrics = self.graph_metrics_cached(index);
 
@@ -1542,6 +1564,7 @@ impl VaultSession {
             remnant_logs: Mutex::new((0, Vec::new())),
             cache_created_this_open,
             graph: Mutex::new(None),
+            graph_generation_floor: AtomicU64::new(0),
             graph_metrics: Mutex::new(None),
             event_listeners,
             next_listener_token: AtomicU64::new(1),
@@ -2778,6 +2801,31 @@ impl VaultSession {
                     resolved_inbound: crate::links_db::graph_inbound_rows(tx, path)?,
                 })
             })?;
+        } else if graph_sink.live() {
+            // Existing file (markdown OR not): `files.mtime_ms`
+            // (surfaced as `modified_ms`) may have moved — a
+            // graph-visible payload delta independent of any link
+            // change. Stage MetadataTouched so the generation bumps
+            // (review round 4: a prose-only note edit keeps the same
+            // links, so LinksetChanged below is a no-op, but
+            // modified_ms still moved). Gated on the mtime ACTUALLY
+            // differing from the stored row — the upsert below hasn't
+            // run yet, so this reads the PRIOR value: two saves within
+            // one millisecond tick leave modified_ms identical, and
+            // bumping there would cause the very repaint the
+            // discriminator suppresses (round 3 finding 2). Markdown
+            // files ALSO stage LinksetChanged below (a link change
+            // bumps even if — impossibly — mtime were unchanged).
+            let prior_mtime_ms: Option<i64> = tx
+                .query_row(
+                    "SELECT mtime_ms FROM files WHERE path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if prior_mtime_ms != Some(new_stat.mtime_ms) {
+                graph_sink.stage(|| crate::graph::GraphOp::MetadataTouched);
+            }
         }
 
         // Body text for FTS5: only markdown gets indexed; everything
@@ -5922,6 +5970,9 @@ fn index_file(
         })
         .optional()?;
     let replacing_existing_file = existing.is_some();
+    // Prior mtime, for the metadata-touch gate below — captured
+    // before `existing` is consumed by the fast path.
+    let prior_mtime_ms = existing.map(|(m, _, _)| m);
     // A file the index has never seen becomes a graph node on every
     // path below that upserts its row (normal and oversized alike);
     // existing files never reach those paths without a row already
@@ -5976,6 +6027,22 @@ fn index_file(
             report.files_skipped += 1;
             return Ok(());
         }
+    }
+
+    // Past the fast path with an EXISTING file whose mtime moved:
+    // `files.mtime_ms` (surfaced as `modified_ms`) changed, which is a
+    // graph-visible payload delta independent of any structural
+    // (links) change. Stage MetadataTouched uniformly here — before
+    // the oversized/normal branch split — so it covers markdown,
+    // non-markdown, AND oversized files alike (review round 4: gating
+    // the generation bump on structural change alone dropped
+    // modified_ms bumps for identical-linkset markdown saves and
+    // already-empty oversized rescans). Gated on the mtime ACTUALLY
+    // moving: a size- or ctime-only slow-path entry (cp -p, chmod)
+    // leaves modified_ms untouched and must not bump (round 3).
+    // New files staged FileAdded above instead.
+    if replacing_existing_file && prior_mtime_ms != Some(stat.mtime_ms) {
+        graph_sink.stage(|| crate::graph::GraphOp::MetadataTouched);
     }
 
     // Refuse to read files past the configured size threshold. The
@@ -6105,6 +6172,10 @@ fn index_file(
         body_text,
         stat.birthtime_ms,
     ])?;
+
+    // (MetadataTouched for an existing file whose mtime moved was
+    // staged uniformly after the fast path above — it covers this
+    // normal branch and the oversized early-return alike.)
 
     // For Markdown files, parse + persist headings, links, and
     // frontmatter properties in the same transaction as the files
@@ -7013,12 +7084,12 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
             return Err(VaultError::DestinationExists { path: existing });
         }
         self.provider.create_dir(path)?;
-        self.with_structural_tx(conn, |tx| {
+        self.with_structural_tx(&mut conn, |tx| {
             upsert_dir_row(tx, path)?;
             journal_append(
                 tx,
@@ -7110,7 +7181,7 @@ impl VaultSession {
     /// undoable via `undo_structural` (the bytes are in the trash).
     pub fn delete_file(&self, path: &str) -> Result<(), VaultError> {
         validate_save_path(path)?;
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
         // Capture the op-log binding before the row goes: the journal
         // row is then the durable stem↔path association for a deleted
         // file (O-1 #539 — the `.oplog` itself is deliberately left in
@@ -7126,7 +7197,7 @@ impl VaultSession {
             .flatten();
         self.provider.delete(path)?;
         let mut graph_sink = self.graph_sink();
-        self.with_structural_tx(conn, |tx| {
+        self.with_structural_tx(&mut conn, |tx| {
             // Inbound snapshot BEFORE the delete: the FK cascade emits
             // no per-row signal, and rows pointing here stay
             // resolved-but-dangling (#550, p0_spec rule 1a).
@@ -7148,7 +7219,11 @@ impl VaultSession {
                 },
             )
         })?;
+        // Apply while the connection lock is still held: no reader can
+        // observe committed-DB-plus-stale-index (gpt-5.6-sol review
+        // round 1, finding 1).
         self.graph_apply(graph_sink);
+        drop(conn);
         self.bump_bases_generation();
         self.notify_file_change(FileChangeKind::Deleted, path, None);
         Ok(())
@@ -7158,7 +7233,7 @@ impl VaultSession {
     /// undoable via `undo_structural`.
     pub fn delete_folder(&self, path: &str) -> Result<(), VaultError> {
         validate_save_path(path)?;
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
         // #802: the range delete below erases the paths — capture them
         // first so each file's Deleted event can fire after commit.
         // In-memory and O(folder size) by design (Codoki on #846): a
@@ -7173,7 +7248,7 @@ impl VaultSession {
         };
         self.provider.delete(path)?;
         let mut graph_sink = self.graph_sink();
-        self.with_structural_tx(conn, |tx| {
+        self.with_structural_tx(&mut conn, |tx| {
             // Per-file removal replay, snapshotted BEFORE the range
             // delete (#550): the graph mirrors the cascade one victim
             // at a time; inbound rows from co-deleted files are
@@ -7205,7 +7280,9 @@ impl VaultSession {
                 },
             )
         })?;
+        // Under the still-held connection lock (review round 1 #1).
         self.graph_apply(graph_sink);
+        drop(conn);
         self.bump_bases_generation();
         for file in &deleted_files {
             self.notify_file_change(FileChangeKind::Deleted, file, None);
@@ -7284,7 +7361,8 @@ impl VaultSession {
                     });
                 }
                 self.provider.delete(&payload.from)?;
-                self.with_structural_tx(conn, |tx| {
+                let mut conn = conn;
+                self.with_structural_tx(&mut conn, |tx| {
                     tx.execute(
                         "DELETE FROM dirs WHERE path = ?1",
                         rusqlite::params![payload.from],
@@ -7913,10 +7991,16 @@ impl VaultSession {
         );
     }
 
-    /// Run `body` inside one transaction on the already-locked connection.
+    /// Run `body` inside one transaction on the already-locked
+    /// connection. Borrows rather than consumes the caller's guard
+    /// (gpt-5.6-sol adversarial review, Wave 1 round 1 finding 1):
+    /// callers that stage graph ops must keep the connection lock
+    /// held through `graph_apply`, otherwise a concurrent
+    /// `graph_snapshot` can acquire conn+graph in the gap and read a
+    /// stale index against the already-committed database.
     fn with_structural_tx<T>(
         &self,
-        mut conn: std::sync::MutexGuard<'_, Connection>,
+        conn: &mut Connection,
         body: impl FnOnce(&rusqlite::Transaction) -> Result<T, VaultError>,
     ) -> Result<T, VaultError> {
         let tx = conn.transaction()?;
