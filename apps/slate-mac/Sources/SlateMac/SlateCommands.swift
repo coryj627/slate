@@ -1563,6 +1563,8 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         // bare ⌘R was unbound and has no system-wide macOS claim in a
         // non-browser app.
         hotkey: "⌘R",
-        hint: "Open the vault-wide tasks review."
+        // #879: reveals the vault-wide Tasks Review leaf in the right pane
+        // (no longer a modal sheet).
+        hint: "Open the vault-wide Tasks Review leaf in the right pane."
     ) { [weak appState] in appState?.openTasksReview() }
 }

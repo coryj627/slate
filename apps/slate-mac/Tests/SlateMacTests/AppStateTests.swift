@@ -2644,7 +2644,9 @@ final class AppStateTests: XCTestCase {
         XCTAssertNotNil(state.currentNoteContentHash)
     }
 
-    func testOpenTasksReviewKicksLoadAndFlipsSheetState() async throws {
+    /// #879: openTasksReview now REVEALS the `Leaf.tasksReview` right-pane leaf
+    /// (un-hiding a hidden pane) and kicks the load — no modal sheet bool.
+    func testOpenTasksReviewRevealsLeafAndKicksLoad() async throws {
         let vault = tempDir.appendingPathComponent("review-vault")
         try FileManager.default.createDirectory(
             at: vault,
@@ -2658,14 +2660,100 @@ final class AppStateTests: XCTestCase {
         state.openVault(at: vault)
         await state.scanTask?.value
 
-        XCTAssertFalse(state.isTasksReviewOpen)
+        XCTAssertNotEqual(state.workspace.activeLeaf, .tasksReview)
+        // Hide the pane first so we can prove the reveal un-hides it (#882).
+        state.isRightPaneVisible = false
         state.openTasksReview()
-        XCTAssertTrue(state.isTasksReviewOpen)
+        XCTAssertEqual(
+            state.workspace.activeLeaf, .tasksReview,
+            "openTasksReview must select the Tasks Review leaf")
+        XCTAssertTrue(
+            state.isRightPaneVisible,
+            "revealing a leaf must un-hide a hidden right pane (#882)")
         await state.vaultTasksLoadTask?.value
 
         XCTAssertEqual(state.vaultTasks.count, 1)
         XCTAssertEqual(state.vaultTasks.first?.task.text, "only task")
         XCTAssertEqual(state.taskReviewFilter, .all)
+    }
+
+    /// #879 red-team (BROKEN): the leaf is a first-class rail entry now, so
+    /// it's reachable WITHOUT `openTasksReview` — a rail click, a keyboard
+    /// activate, or a layout restore that sets `activeLeaf = .tasksReview`.
+    /// Those paths must still populate the panel; the panel's
+    /// leaf-became-active hook calls `ensureVaultTasksLoaded()`, which this
+    /// test drives directly (simulating any non-command reveal).
+    func testReachingLeafOutsideCommandLoadsVaultTasks() async throws {
+        let vault = tempDir.appendingPathComponent("rail-reveal-vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try "- [ ] rail task\n".data(using: .utf8)!.write(
+            to: vault.appendingPathComponent("a.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        // Reveal the way the rail / restore does: set the leaf directly,
+        // NOT through openTasksReview.
+        state.workspace.activeLeaf = .tasksReview
+        XCTAssertTrue(state.vaultTasks.isEmpty, "premise: no command load happened")
+        state.ensureVaultTasksLoaded()
+        await state.vaultTasksLoadTask?.value
+
+        XCTAssertEqual(
+            state.vaultTasks.count, 1,
+            "a non-command reveal must still populate the panel — no false empty state")
+        XCTAssertEqual(state.vaultTasks.first?.task.text, "rail task")
+    }
+
+    /// #879 red-team: `ensureVaultTasksLoaded` no-ops with no session (the
+    /// panel's mount-time `.task` fires at app startup before any vault is
+    /// open — it must not crash or spuriously load).
+    func testEnsureVaultTasksLoadedNoOpsWithoutSession() {
+        let state = try! makeAppState()
+        XCTAssertNil(state.vaultTasksLoadTask)
+        state.workspace.activeLeaf = .tasksReview
+        state.ensureVaultTasksLoaded()
+        XCTAssertNil(state.vaultTasksLoadTask, "no session → no load kicked")
+    }
+
+    /// #879 Codex red-team (High): switching vaults must reset the review
+    /// surface, or the empty/no-error reveal guards reject a reload and the
+    /// new vault shows the PREVIOUS vault's rows. Direct Open Vault bypasses
+    /// closeVault, so the reset lives in openVault too.
+    func testVaultSwitchResetsReviewSoNextRevealLoadsNewVault() async throws {
+        let vaultA = tempDir.appendingPathComponent("vault-A")
+        let vaultB = tempDir.appendingPathComponent("vault-B")
+        for (v, text) in [(vaultA, "alpha task"), (vaultB, "beta task")] {
+            try FileManager.default.createDirectory(
+                at: v, withIntermediateDirectories: true)
+            try "- [ ] \(text)\n".data(using: .utf8)!.write(
+                to: v.appendingPathComponent("a.md"))
+        }
+
+        let state = try makeAppState()
+        state.openVault(at: vaultA)
+        await state.scanTask?.value
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(state.vaultTasks.first?.task.text, "alpha task")
+
+        // Switch vaults directly (no closeVault) — the review state must reset.
+        state.openVault(at: vaultB)
+        await state.scanTask?.value
+        XCTAssertTrue(
+            state.vaultTasks.isEmpty,
+            "the vault switch cleared vault A's rows")
+        XCTAssertNil(state.vaultTasksLoadError)
+
+        // Reveal the way the rail does — the reset lets ensure re-query.
+        state.workspace.activeLeaf = .tasksReview
+        state.ensureVaultTasksLoaded()
+        await state.vaultTasksLoadTask?.value
+        XCTAssertEqual(
+            state.vaultTasks.first?.task.text, "beta task",
+            "the reveal loaded vault B — never vault A's stale rows")
     }
 
     func testApplyTaskReviewFilterRequeriesWithNewWindow() async throws {
@@ -2740,9 +2828,12 @@ final class AppStateTests: XCTestCase {
 
         state.openTaskRowInEditor(row)
 
-        // Activation closes the sheet, switches selection, and
-        // schedules the scroll for after the new file's load.
-        XCTAssertFalse(state.isTasksReviewOpen)
+        // #879: activation switches selection + schedules the scroll, but the
+        // review is a NON-MODAL leaf now, so it STAYS selected beside the
+        // editor (the user can click through several tasks in a row).
+        XCTAssertEqual(
+            state.workspace.activeLeaf, .tasksReview,
+            "the non-modal review leaf must stay selected after activating a row")
         XCTAssertEqual(state.selectedFilePath, "b.md")
         await state.noteLoadTask?.value
         // The inner Task that awaits the load + sends the scroll

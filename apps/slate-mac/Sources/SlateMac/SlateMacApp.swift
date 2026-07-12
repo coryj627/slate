@@ -396,6 +396,9 @@ struct SlateMacApp: App {
                 // a non-browser app, and R = Review. Its R-family
                 // neighbors are all differently scoped (⌥⌘R Rename,
                 // ⇧⌘R Bulk Rename Properties, ⌃⌘R Canvas Resize).
+                // #879: this now REVEALS the `Leaf.tasksReview` right-pane
+                // leaf (un-hiding the pane) rather than presenting a sheet
+                // — same "Show <panel>" verb as Show History Panel above.
                 Button("Show Tasks Review") {
                     appState.openTasksReview()
                 }

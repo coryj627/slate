@@ -2088,7 +2088,7 @@ final class AppState: ObservableObject {
     @Published private(set) var vaultTasks: [TaskWithLocation] = []
     /// True while `loadVaultTasks()` is in flight (i.e. the
     /// initial query for the current filter). The
-    /// `TasksReviewView` uses this to show a loading placeholder
+    /// `TasksReviewPanel` uses this to show a loading placeholder
     /// when there are no rows yet. Held separately from
     /// `isLoadingMoreVaultTasks` so the "Load more" affordance
     /// doesn't replace the empty-state spinner mid-flow.
@@ -2115,12 +2115,11 @@ final class AppState: ObservableObject {
     /// writes from the UI go through the setter rather than the
     /// published binding so we can pair them with the load task.
     @Published private(set) var taskReviewFilter: TaskReviewFilter = .all
-    /// Whether the `TasksReviewView` sheet is currently presented.
-    /// Command-R toggles this; the sheet's `onDismiss` also flips
-    /// it back to false. Setting this `true` does NOT auto-load —
-    /// `openTasksReview()` is the public entry point that kicks
-    /// the query.
-    @Published var isTasksReviewOpen: Bool = false
+    // #879: Tasks Review is no longer a modal sheet — it's the `Leaf.tasksReview`
+    // right-pane leaf. Its "is showing" state IS `workspace.activeLeaf ==
+    // .tasksReview` (with the pane visible), so the old `isTasksReviewOpen`
+    // sheet bool is gone. `openTasksReview()` reveals the leaf + kicks the
+    // query; there is no sheet bool to reset on vault close.
 
     /// Right-pane (detail column) visibility (#882). `NavigationSplitView`'s
     /// `columnVisibility` can only hide the sidebar/content columns, never the
@@ -2255,6 +2254,23 @@ final class AppState: ObservableObject {
     /// `applyTaskReviewFilter`). Tests await this to deterministically
     /// observe filter-switch results.
     private(set) var vaultTasksLoadTask: Task<Void, Never>?
+
+    /// Handle on the in-flight "Load more" page (#879 Codex red-team). The
+    /// review is now a persistent leaf, so a fresh first-page load (⌘R, a
+    /// reveal, a filter change, a vault switch) can race an in-flight
+    /// "Load more" — an untracked page task would append its old cursor
+    /// page AFTER the fresh page one. Storing the handle lets the fresh-
+    /// load paths cancel it; `performLoadMoreVaultTasks`'s `Task.isCancelled`
+    /// guard then drops the stale append.
+    private(set) var vaultTasksLoadMoreTask: Task<Void, Never>?
+
+    /// Monotonic epoch for the vault-tasks first-page query (#879 Codex
+    /// red-team). A CANCELLED/superseded `loadVaultTasks` runs its
+    /// unconditional `defer` clear late — without ownership it would wipe a
+    /// NEWER load's `isLoadingVaultTasks` (and drop a stale publish onto the
+    /// new vault). Each load captures the epoch it bumped; its defer +
+    /// publish only fire while it's still the current one.
+    private var vaultTasksLoadGeneration: Int = 0
 
     /// Handle on the most recent per-task toggle. Toggles serialise
     /// through the FFI's session mutex anyway, but holding the
@@ -3550,6 +3566,11 @@ final class AppState: ObservableObject {
             resetConnectionsState()
             // Graph tab table (P1-2 #555): same cross-vault isolation.
             resetGraphTableState()
+            // #879 Codex red-team: the vault-wide Tasks Review surface must
+            // die with the previous vault too — direct Open Vault routes
+            // here without `closeVault`, so a stale review would survive and
+            // its reload guards would reject re-querying the new vault.
+            resetVaultTasksReviewState()
             // U1-2: tabs belong to a vault; a fresh open starts clean (and
             // must reset BEFORE the selection clear so the funnel doesn't
             // park the previous vault's buffer).
@@ -3818,8 +3839,9 @@ final class AppState: ObservableObject {
         linksLoadTask = nil
         tasksLoadTask?.cancel()
         tasksLoadTask = nil
-        vaultTasksLoadTask?.cancel()
-        vaultTasksLoadTask = nil
+        // #879: Tasks Review is a leaf now; its query teardown is the single
+        // `closeTasksReview()` helper (cancels the in-flight page load).
+        closeTasksReview()
         taskToggleTask?.cancel()
         taskToggleTask = nil
         // Audit #260: embed-resolution batch keeps grabbing the
@@ -3853,8 +3875,9 @@ final class AppState: ObservableObject {
         // while the sheet is presented would otherwise leave the
         // bool stuck `true`, and the next vault open would re-
         // present an empty / stale sheet against the new vault's
-        // state. `isCitationSummaryOpen` / `isTasksReviewOpen` are
-        // reset further down in this method (search for `= false`),
+        // state. `isCitationSummaryOpen` is reset further down in
+        // this method (search for `= false`); `isTasksReviewOpen` is
+        // gone (#879 — Tasks Review is a leaf, not a sheet),
         // and `isSearchOpen` via the `closeSearchOverlay()` call
         // above. The full set is enforced by
         // `CloseVaultSheetParityTests` — a structural drift test
@@ -4008,16 +4031,12 @@ final class AppState: ObservableObject {
         linksLoadError = nil
         currentNoteTasks = []
         tasksLoadError = nil
-        vaultTasks = []
-        vaultTasksLoadError = nil
-        // #160 pagination state — reset alongside the rest of the
-        // review-surface bookkeeping so reopening on a different
-        // vault doesn't carry forward a cursor from the old one.
-        vaultTasksNextCursor = nil
-        vaultTasksTotalFiltered = 0
-        isLoadingMoreVaultTasks = false
-        taskReviewFilter = .all
-        isTasksReviewOpen = false
+        // #160 / #879: clear the whole review surface (rows, error,
+        // pagination cursor, total, filter) and cancel both query legs so
+        // reopening on a different vault can't carry state forward. Shared
+        // with `openVault` (Codex red-team — direct Open Vault bypasses
+        // this close path).
+        resetVaultTasksReviewState()
         isScanning = false
         isLoadingNote = false
         isLoadingLinks = false
@@ -5594,26 +5613,93 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Open the vault-wide Tasks Review surface (Command-R or
-    /// toolbar). Kicks off the initial `loadVaultTasks` query and
-    /// posts a polite VoiceOver announcement so screen-reader
-    /// users know the surface opened.
+    /// Reveal the vault-wide Tasks Review leaf (View ▸ Show Tasks Review / ⌘R
+    /// / toolbar). #879: this used to present a modal sheet; it now selects the
+    /// `Leaf.tasksReview` right-pane leaf, un-hides a hidden pane (the #882
+    /// leaf-reveal invariant — routes through `focusLeafRegionRevealingPane()`
+    /// like `showHistoryPanel` / `showConnectionsPanel`), kicks a fresh
+    /// `loadVaultTasks` query, and posts a polite VoiceOver announcement. The
+    /// no-session guard is preserved (the menu item + toolbar button also
+    /// `.disabled` without a session).
     func openTasksReview() {
         guard currentSession != nil else { return }
-        isTasksReviewOpen = true
+        workspace.activeLeaf = .tasksReview
+        // ⌘R / menu / toolbar forces a FRESH load. Cancel any in-flight
+        // query first (#879 red-team: a rapid double ⌘R otherwise leaks
+        // the prior task; an in-flight "Load more" would append a stale
+        // page after the fresh first page).
+        vaultTasksLoadTask?.cancel()
         vaultTasksLoadTask = Task { [weak self] in
             await self?.loadVaultTasks()
         }
+        focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
         postAccessibilityAnnouncement(
-            "Tasks review opened. \(taskReviewFilter.displayName).",
+            "Tasks review. \(taskReviewFilter.displayName).",
             priority: .medium
         )
     }
 
-    /// Close the review surface. Idempotent; safe to call from the
-    /// sheet's onDismiss without an existence check.
+    /// #879 red-team: Tasks Review is now a first-class rail leaf, so it's
+    /// revealed WITHOUT `openTasksReview` — a rail click, a keyboard
+    /// activate, or a layout restore that sets `activeLeaf = .tasksReview`.
+    /// Those paths never kicked the vault query, so the panel showed a
+    /// false "No tasks" empty state on a vault that has tasks. This
+    /// idempotent kicker (called when the leaf becomes active) loads only
+    /// when a load is both needed and possible.
+    ///
+    /// The review is a SNAPSHOT: it loads on its FIRST reveal per vault
+    /// (rail / keyboard / restore / ⌘R) and re-queries on a filter change.
+    /// A vault SWITCH resets it (`resetVaultTasksReviewState`) so the next
+    /// reveal re-queries the new vault (Codex red-team: the empty/no-error
+    /// guards would otherwise reject a reload and show the previous vault's
+    /// rows). To refresh its rows against the CURRENT vault thereafter,
+    /// press ⌘R (`openTasksReview` forces a fresh load) or switch the
+    /// filter — re-revealing an already-loaded review keeps its loaded
+    /// pages (this guard's `vaultTasks.isEmpty` makes it a no-op). It does
+    /// NOT live-subscribe to editor edits: an auto-refresh-on-save was
+    /// removed because it reset paging on every unrelated prose save and
+    /// re-queried a hidden pane (Codex red-team).
+    func ensureVaultTasksLoaded() {
+        guard currentSession != nil,
+            vaultTasks.isEmpty,
+            !isLoadingVaultTasks,
+            vaultTasksLoadError == nil
+        else { return }
+        vaultTasksLoadTask?.cancel()
+        vaultTasksLoadMoreTask?.cancel()
+        vaultTasksLoadTask = Task { [weak self] in
+            await self?.loadVaultTasks()
+        }
+    }
+
+    /// Clear the vault-wide Tasks Review surface. Called on vault CLOSE and
+    /// on vault SWITCH (`openVault`) — Codex red-team: direct Open Vault
+    /// bypasses `closeVault`, so without a reset here the review's
+    /// empty/no-error guards reject a reload and the new vault shows the
+    /// previous vault's rows (or its error) indefinitely. Cancels both
+    /// query legs so a late page can't append across the switch.
+    func resetVaultTasksReviewState() {
+        // Supersede any in-flight load so its late defer/publish are inert.
+        vaultTasksLoadGeneration += 1
+        vaultTasksLoadTask?.cancel()
+        vaultTasksLoadTask = nil
+        vaultTasksLoadMoreTask?.cancel()
+        vaultTasksLoadMoreTask = nil
+        vaultTasks = []
+        vaultTasksLoadError = nil
+        vaultTasksNextCursor = nil
+        vaultTasksTotalFiltered = 0
+        isLoadingMoreVaultTasks = false
+        isLoadingVaultTasks = false
+        taskReviewFilter = .all
+    }
+
+    /// Tear down the vault-wide tasks query. #879: the review is now a non-modal
+    /// leaf, so there's no sheet to "close" — activating a task row keeps the
+    /// leaf beside the editor. This cancels the in-flight load (the
+    /// `loadVaultTasks` `defer` then clears the spinner) and is the single
+    /// teardown the vault-reset path routes through. Idempotent.
     func closeTasksReview() {
-        isTasksReviewOpen = false
         vaultTasksLoadTask?.cancel()
         vaultTasksLoadTask = nil
     }
@@ -5649,17 +5735,35 @@ final class AppState: ObservableObject {
     /// total filtered count returned by the FFI so the review
     /// surface can show pagination affordances (#160).
     func loadVaultTasks() async {
+        // #879 Codex red-team (round 3): bail BEFORE touching any shared
+        // state if this task was already superseded. Cooperative
+        // cancellation does NOT stop an unstarted task body from running,
+        // and actor jobs aren't FIFO — so a cancelled predecessor could
+        // otherwise bump the generation AFTER its replacement, fail its own
+        // publish (cancelled) while superseding the replacement (stale
+        // epoch), and strand the review empty.
+        guard !Task.isCancelled else { return }
         guard let session = currentSession else { return }
         let filter = taskReviewFilter.toFFIFilter()
         let activeFilter = taskReviewFilter
+        // #879 Codex red-team: a fresh first page invalidates any in-flight
+        // "Load more" — cancel it HERE (the one funnel every first-page
+        // caller reaches, incl. the review-row toggle's direct
+        // `await loadVaultTasks()`) and clear its flag, so a stale page can
+        // neither append after page one nor leak `isLoadingMoreVaultTasks`.
+        vaultTasksLoadMoreTask?.cancel()
+        isLoadingMoreVaultTasks = false
+        // Generation ownership (#879 Codex red-team): only the LATEST load
+        // owns `isLoadingVaultTasks` and the publish below.
+        vaultTasksLoadGeneration += 1
+        let generation = vaultTasksLoadGeneration
         isLoadingVaultTasks = true
-        // #159: clear the spinner on EVERY exit path. The primary
-        // stuck case was `closeTasksReview()` mid-load — it cancels
-        // the task but doesn't reset the flag, so the cancelled
-        // path's early `guard` return leaked it true forever.
-        // `defer` runs on MainActor at function exit regardless of
-        // which return arm we hit.
-        defer { isLoadingVaultTasks = false }
+        // #159: clear the spinner on EVERY exit path — but only while THIS
+        // load is still current, so a superseded load's late `defer`
+        // can't wipe a newer one's spinner (Codex red-team).
+        defer {
+            if generation == vaultTasksLoadGeneration { isLoadingVaultTasks = false }
+        }
 
         let pageSize = Self.vaultTasksPageSize
         let result: Result<TaskWithLocationPage, VaultError> = await Task.detached(
@@ -5687,6 +5791,7 @@ final class AppState: ObservableObject {
         // rows to `vaultTasks` would pollute the new vault's
         // surface with the old vault's tasks (#164 Codoki).
         guard !Task.isCancelled,
+              generation == vaultTasksLoadGeneration,
               taskReviewFilter == activeFilter,
               currentSession === session
         else { return }
@@ -5731,6 +5836,10 @@ final class AppState: ObservableObject {
                 activeFilter: activeFilter
             )
         }
+        // #879 Codex red-team: track the handle so a fresh first-page load
+        // can cancel this page — its `Task.isCancelled` guard then drops a
+        // stale append that would otherwise land after the fresh page one.
+        vaultTasksLoadMoreTask = task
         return task
     }
 
@@ -5740,7 +5849,11 @@ final class AppState: ObservableObject {
         cursor: String,
         activeFilter: TaskReviewFilter
     ) async {
-        defer { isLoadingMoreVaultTasks = false }
+        // #879 Codex red-team: a SUPERSEDED (cancelled) page must not clear
+        // the flag a newer "Load more" owns — that would defeat the
+        // reentrancy guard and permit a duplicate page request. A fresh
+        // first-page load already cleared the flag when it cancelled us.
+        defer { if !Task.isCancelled { isLoadingMoreVaultTasks = false } }
         let pageSize = Self.vaultTasksPageSize
         let result: Result<TaskWithLocationPage, VaultError> = await Task.detached(
             priority: .userInitiated
@@ -5879,15 +5992,18 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Activate a `TasksReviewView` row: switch the file
+    /// Activate a `TasksReviewPanel` row: switch the file
     /// selection (if needed) and scroll the editor to the task's
-    /// line. Closes the review sheet so the user lands on the
-    /// editor. Same selection+scroll pattern as the search-overlay
+    /// line. #879: the review is a non-modal leaf now, so this NO
+    /// LONGER tears the review down — the leaf stays beside the
+    /// editor so the user can click through several tasks in a row
+    /// (the whole point of taking it out of the blocking sheet). The
+    /// in-flight load is left running so the leaf keeps populating.
+    /// Same selection+scroll pattern as the search-overlay
     /// activation flow.
     func openTaskRowInEditor(_ row: TaskWithLocation) {
         let target = row.path
         let line = Int(row.task.line)
-        closeTasksReview()
 
         // If we're already on the file, just scroll.
         if selectedFilePath == target {

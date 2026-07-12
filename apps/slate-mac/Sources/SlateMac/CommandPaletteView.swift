@@ -573,4 +573,4 @@ struct CommandPaletteView: View {
 
 // `accessibilityIsSelected(_:)` View extension lives in
 // `AccessibilityExtensions.swift` so the other call sites
-// (TasksReviewView, TasksPanel) can share one source of truth.
+// (TasksReviewPanel, TasksPanel) can share one source of truth.

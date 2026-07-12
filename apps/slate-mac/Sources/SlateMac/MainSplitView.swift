@@ -364,10 +364,10 @@ struct MainSplitView: View {
             TemplatePromptSheet()
                 .environmentObject(appState)
         }
-        .sheet(isPresented: $appState.isTasksReviewOpen) {
-            TasksReviewView()
-                .environmentObject(appState)
-        }
+        // #879: Tasks Review is no longer a sheet — it's the `Leaf.tasksReview`
+        // right-pane leaf (mounted in `RightPaneView`), revealed by
+        // `openTasksReview()`. The blocking modal a paginated vault browser
+        // shouldn't be (sheets.md:35) is gone.
         .sheet(isPresented: $appState.isAddPropertySheetOpen) {
             AddPropertySheet()
                 .environmentObject(appState)
@@ -654,10 +654,11 @@ struct MainSplitView: View {
                 }
                 // ⌘R lives on View ▸ Show Tasks Review (#422 — see the
                 // Save button above; #863 moved the chord off ⇧⌘T).
-                // Click/AX-activate only.
+                // Click/AX-activate only. #879: reveals the Tasks Review
+                // right-pane leaf (no longer a sheet — nothing to Escape).
                 .disabled(appState.currentSession == nil)
                 .accessibilityHint(
-                    "Opens the vault-wide tasks review. Command-R. Escape closes."
+                    "Reveals the vault-wide Tasks Review panel in the right pane. Command-R."
                 )
             }
             // Milestone L #282: Citation Summary. Cmd+Shift+J opens

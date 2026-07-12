@@ -100,6 +100,13 @@ enum SlateSymbol: CaseIterable {
     /// (same metaphor, same glyph — the DoD §B consistency rule); the two
     /// roles stay distinct so their labels differ ("Tasks" vs "Tasks Review").
     case tasksLeaf
+    /// Vault-wide Tasks Review leaf in the right-pane rail (#879). Distinct
+    /// glyph from `.tasksLeaf`/`.tasksReview`'s `checklist` ON PURPOSE: the
+    /// note-scoped Tasks leaf and this vault-wide review leaf sit side by side
+    /// in the rail, so two identical icons would be unreadable. `list.bullet.
+    /// rectangle` reads as a browsable list-of-lists surface — the paginated
+    /// vault-wide browser — and is floor-safe (SF Symbols 1, macOS 11).
+    case tasksReviewLeaf
     /// Show-source YAML toggle in the properties widget header (U3-4,
     /// #468). `v7 == fallback` (curlybraces exists on the macOS 15 floor).
     case showSource
@@ -204,6 +211,7 @@ enum SlateSymbol: CaseIterable {
         case .embed: return "Embed"
         case .diagram: return "Diagram"
         case .tasksLeaf: return "Tasks"
+        case .tasksReviewLeaf: return "Tasks Review"
         case .showSource: return "Show source"
         case .settings: return "Settings"
         case .help: return "Help"
@@ -304,6 +312,10 @@ enum SlateSymbol: CaseIterable {
                     "point.3.connected.trianglepath.dotted")
         // Shares `.tasksReview`'s glyph deliberately (DoD §B).
         case .tasksLeaf: return ("checklist", "checklist")
+        // Distinct from `.tasksLeaf`'s `checklist` (#879 — see the case doc):
+        // the two task leaves must be tellable apart in the rail. Floor-safe
+        // (SF Symbols 1), so v7 == fallback.
+        case .tasksReviewLeaf: return ("list.bullet.rectangle", "list.bullet.rectangle")
         case .showSource: return ("curlybraces", "curlybraces")
         case .settings: return ("gearshape", "gearshape")
         case .help: return ("questionmark.circle", "questionmark.circle")

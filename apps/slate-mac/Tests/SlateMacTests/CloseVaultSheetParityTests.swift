@@ -79,13 +79,11 @@ final class CloseVaultSheetParityTests: XCTestCase {
         XCTAssertFalse(state.isCitationSummaryOpen)
     }
 
-    func testCloseVaultResetsIsTasksReviewOpen() {
-        // Already covered upstream, pinned here for parity contract.
-        let state = AppState()
-        state.isTasksReviewOpen = true
-        state.closeVault()
-        XCTAssertFalse(state.isTasksReviewOpen)
-    }
+    // #879: `isTasksReviewOpen` is gone — Tasks Review is a right-pane leaf
+    // (`Leaf.tasksReview`), not a sheet, so there's no sheet bool to reset on
+    // vault close. Its in-flight query is torn down via `closeTasksReview()`
+    // inside the vault-reset cancel block (covered by
+    // `AppStateTests.testCloseTasksReviewMidLoadClearsSpinner`).
 
     func testCloseVaultResetsIsCommandPaletteOpen() {
         // Already covered in CommandPaletteViewTests, pinned here

@@ -68,6 +68,9 @@ final class SlateSymbolTests: XCTestCase {
         // Milestone P (P1-2, #555): Graph tab. chart.dots.scatter is
         // SF Symbols 4 (macOS 14), on the macOS 15 floor.
         "chart.dots.scatter",
+        // #879: vault-wide Tasks Review leaf. list.bullet.rectangle is
+        // SF Symbols 1 (macOS 11), on the macOS 15 floor.
+        "list.bullet.rectangle",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated
