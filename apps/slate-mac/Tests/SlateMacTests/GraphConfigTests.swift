@@ -77,6 +77,39 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "this is not json {{{")
     }
 
+    func testRefusesToDowngradeANewerVersionFile() throws {
+        // A newer Slate wrote version 999 with a section we don't model.
+        // Reading must REFUSE (not silently downgrade to defaults) and a
+        // write must REFUSE to clobber it — the file stays byte-intact
+        // (review finding 2).
+        let slate = tempDir.appendingPathComponent(".slate")
+        try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
+        let url = slate.appendingPathComponent("graph.json")
+        let future = #"{"version":999,"mode":"diagram","futureSection":{"x":1}}"#
+        try future.write(to: url, atomically: true, encoding: .utf8)
+
+        let store = GraphConfigStore(vaultRoot: tempDir)
+        XCTAssertThrowsError(try store.read(), "a newer version is not downgraded on read")
+        XCTAssertThrowsError(try store.write(.default), "a newer version is not clobbered on write")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), future)
+    }
+
+    func testForcesChangePhraseNamesTheOneChangedControl() {
+        let base = GraphForcesConfig.default  // all 0.5
+        var repel = base
+        repel.repel = 0.7
+        XCTAssertEqual(AppState.forcesChangePhrase(old: base, new: repel), "Repel force 70 percent")
+        var center = base
+        center.center = 0.25
+        XCTAssertEqual(
+            AppState.forcesChangePhrase(old: base, new: center), "Center force 25 percent")
+        var dist = base
+        dist.linkDistance = 1.0
+        XCTAssertEqual(
+            AppState.forcesChangePhrase(old: base, new: dist), "Link distance 100 percent")
+        XCTAssertNil(AppState.forcesChangePhrase(old: base, new: base), "no change ⇒ nothing spoken")
+    }
+
     func testClampsOutOfRangeValues() throws {
         let slate = tempDir.appendingPathComponent(".slate")
         try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)

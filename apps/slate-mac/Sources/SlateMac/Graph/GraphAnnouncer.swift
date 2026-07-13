@@ -74,6 +74,13 @@ final class GraphAnnouncer: ObservableObject {
     private enum EventClass: Hashable {
         case navigation
         case filter
+        /// A force slider's "control value" during a drag — coalesces to
+        /// the resting value (P2-4 finding 8).
+        case forceValue
+        /// The one "settled" state posted after the layout converges
+        /// (separate class from `.forceValue` so the settled message can't
+        /// cancel — or be cancelled by — the value message; P2-4 finding 8).
+        case settle
     }
 
     private let post: (String, NSAccessibilityPriorityLevel) -> Void
@@ -121,6 +128,21 @@ final class GraphAnnouncer: ObservableObject {
     func announceFilterCount(_ text: String, gate: @escaping () -> Bool) {
         guard !text.isEmpty else { return }
         debounce(.filter, text: text, priority: .medium, gate: gate)
+    }
+
+    /// A force slider's changed "control value" (e.g. "Repel force 70
+    /// percent"), coalesced so a drag posts once at its resting value
+    /// rather than per tick (P2-4 finding 8).
+    func announceForceValue(_ text: String) {
+        guard !text.isEmpty else { return }
+        debounce(.forceValue, text: text, priority: .medium)
+    }
+
+    /// The layout's final "settled" state, posted (coalesced) once the
+    /// re-heated layout converges (P2-4 finding 8).
+    func announceSettle(_ text: String) {
+        guard !text.isEmpty else { return }
+        debounce(.settle, text: text, priority: .medium)
     }
 
     // MARK: Grammar assembly (§P1-1 row copy)

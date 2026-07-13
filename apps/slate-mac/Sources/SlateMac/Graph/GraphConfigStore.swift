@@ -41,6 +41,17 @@ struct GraphConfigStore {
             throw PrefsJsonStoreError.parseFailed(
                 path: url.path, reason: "expected a JSON object at the top level")
         }
+        // Refuse to interpret a FORWARD-version file: a newer Slate may have
+        // redefined a known section's schema, so decoding it here and later
+        // re-encoding at our version would silently downgrade (destroy) that
+        // data. Surface it as a parse failure so the caller marks the config
+        // read-only and never rewrites the file (finding 2).
+        if let v = root["version"] as? Int, v > GraphConfig.version {
+            throw PrefsJsonStoreError.parseFailed(
+                path: url.path,
+                reason: "graph.json is a newer version (\(v) > \(GraphConfig.version)); "
+                    + "not downgrading")
+        }
         return Self.decode(root)
     }
 
@@ -52,11 +63,22 @@ struct GraphConfigStore {
 
         var root: [String: Any] = [:]
         if FileManager.default.fileExists(atPath: url.path) {
-            let data = try? Data(contentsOf: url)
-            let parsed = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) }
-            if let dict = parsed as? [String: Any] {
-                root = dict  // preserve unknown keys
-            } else if data != nil {
+            // Read the existing file THROWINGLY: a file that exists but can't
+            // be read (permissions, transient I/O) must NOT be treated like a
+            // missing file and overwritten — that would clobber whatever it
+            // holds. Refuse instead (finding 2). `try?` here was the bug.
+            let data: Data
+            do {
+                data = try Data(contentsOf: url)
+            } catch {
+                throw PrefsJsonStoreError.writeFailed(
+                    path: url.path,
+                    reason: "existing graph.json is unreadable; refusing to overwrite: "
+                        + error.localizedDescription)
+            }
+            guard let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+                let dict = parsed as? [String: Any]
+            else {
                 // The file exists but isn't a JSON object — refuse to
                 // clobber it (O-5 rule); a newer schema or hand-edit
                 // shouldn't be silently destroyed.
@@ -64,6 +86,17 @@ struct GraphConfigStore {
                     path: url.path,
                     reason: "existing graph.json is unparseable; refusing to overwrite")
             }
+            // A FORWARD-version file: refuse to downgrade it (finding 2). We
+            // can preserve unknown TOP-LEVEL keys, but a newer version may
+            // have changed a KNOWN section's meaning, so re-encoding at our
+            // version would corrupt it.
+            if let v = dict["version"] as? Int, v > GraphConfig.version {
+                throw PrefsJsonStoreError.writeFailed(
+                    path: url.path,
+                    reason: "existing graph.json is a newer version (\(v) > "
+                        + "\(GraphConfig.version)); refusing to downgrade")
+            }
+            root = dict  // preserve unknown keys
         }
 
         Self.encode(config, into: &root)
@@ -166,5 +199,28 @@ struct GraphConfigStore {
             return fallback
         }
         return min(hi, max(lo, d))
+    }
+}
+
+/// Serializes every `graph.json` write app-wide (Milestone P, P2-4 #560,
+/// finding 3). The atomic temp+rename already prevents TORN JSON, but two
+/// debounced saves whose read-merge-write cycles overlap could still lose
+/// an update (both read the same base, the slower rename wins with the
+/// older payload). Funnelling all writes through one actor makes the
+/// read-merge-write atomic w.r.t. other writes in THIS process — a `write`
+/// runs to completion before the next queued one starts.
+///
+/// SINGLE-INSTANCE scope: Slate's Mac app is single-instance, so this is
+/// the only writer of any vault's `graph.json`; cross-PROCESS contention
+/// (two app instances on one vault) is out of scope and not locked (unlike
+/// `prefs.json`, which the Rust core co-writes and therefore flocks).
+/// Persistence is best-effort — a failed write (e.g. the refuse-to-clobber
+/// guard) is swallowed here; the caller's `graphConfigWritable` gate is the
+/// authoritative protection.
+actor GraphConfigWriter {
+    static let shared = GraphConfigWriter()
+
+    func write(vault: URL, config: GraphConfig) {
+        try? GraphConfigStore(vaultRoot: vault).write(config)
     }
 }

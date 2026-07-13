@@ -8,7 +8,7 @@ import AppKit
 /// Connections depth that P1-1 owned. Serialized to `.slate/graph.json`
 /// v1 (single-writer: only the Mac app writes it, so no lock — a separate
 /// file from `prefs.json` precisely to avoid contending on its flock).
-struct GraphConfig: Equatable {
+struct GraphConfig: Equatable, Sendable {
     static let version = 1
 
     var filters: GraphFilterConfig
@@ -44,7 +44,7 @@ struct GraphConfig: Equatable {
 /// Table's `GraphFilter`) plus the client-side name query. The SAME
 /// predicate the Table applies, so both projections show one node set
 /// (spec §P2-4 "single source of truth").
-struct GraphFilterConfig: Equatable {
+struct GraphFilterConfig: Equatable, Sendable {
     var includeAttachments: Bool
     var includeGhosts: Bool
     var orphansOnly: Bool
@@ -55,25 +55,19 @@ struct GraphFilterConfig: Equatable {
         includeAttachments: false, includeGhosts: true, orphansOnly: false, nameQuery: "")
 
     /// The backend projection filter (drops the client-only name query).
+    /// The client-side name needle is applied by the ONE shared predicate
+    /// `AppState.graphNameMatches` (both Table and Diagram call it), so the
+    /// single-source-of-truth invariant lives in exactly one place.
     var backend: GraphFilter {
         GraphFilter(
             includeAttachments: includeAttachments, includeGhosts: includeGhosts,
             orphansOnly: orphansOnly)
     }
-
-    /// The ONE predicate both Table and Diagram apply to a node — the
-    /// single source of truth (spec §P2-4). Backend-kind is already
-    /// applied by the projection; this is the client-side name needle.
-    func matches(label: String) -> Bool {
-        let needle = nameQuery.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { return true }
-        return label.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-    }
 }
 
 /// Display knobs (spec §P2-4). Multipliers are 0.5…2.0 with a 1.0
 /// default; text-fade is the zoom below which labels hide.
-struct GraphDisplay: Equatable {
+struct GraphDisplay: Equatable, Sendable {
     var arrows: Bool
     var textFadeZoom: Double
     var nodeSizeMultiplier: Double
@@ -85,7 +79,7 @@ struct GraphDisplay: Equatable {
 
 /// The four Obsidian-parity force sliders (0…1), mirrored into the
 /// kernel's `LayoutForces`.
-struct GraphForcesConfig: Equatable {
+struct GraphForcesConfig: Equatable, Sendable {
     var center: Double
     var repel: Double
     var link: Double
@@ -103,7 +97,7 @@ struct GraphForcesConfig: Equatable {
 /// One colour-group rule: a label substring query → a palette colour +
 /// ring style. First match wins (Obsidian parity). The ring style is a
 /// SECOND channel so colour is never the sole signal (WCAG 1.4.1).
-struct GraphGroup: Equatable {
+struct GraphGroup: Equatable, Sendable {
     var query: String
     var colorToken: GraphColorToken
     var ringStyle: GraphRingStyle
@@ -112,7 +106,7 @@ struct GraphGroup: Equatable {
 /// An 8-slot colour palette, each slot a system-managed colour that
 /// clears APCA in both appearances (asserted in tests). Raw values are
 /// the stable tokens persisted in `graph.json`.
-enum GraphColorToken: String, CaseIterable {
+enum GraphColorToken: String, CaseIterable, Sendable {
     case red, orange, yellow, green, teal, blue, purple, pink
 
     var color: NSColor {
@@ -133,7 +127,7 @@ enum GraphColorToken: String, CaseIterable {
 
 /// The ring styles that carry group membership without relying on colour
 /// (spec §P2-4). Cycled automatically as groups are added.
-enum GraphRingStyle: String, CaseIterable {
+enum GraphRingStyle: String, CaseIterable, Sendable {
     case solid, dashed, double, dotted
 
     /// The `CAShapeLayer.lineDashPattern` for this style (nil = solid);

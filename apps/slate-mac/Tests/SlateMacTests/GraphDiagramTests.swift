@@ -444,6 +444,87 @@ final class GraphDiagramTests: XCTestCase {
             view.nodeStyleForTesting(nodeId: dID)?.fill, GraphColorToken.green.color.cgColor)
     }
 
+    func testGroupedNodeRingIsThickerThanUngroupedEvenWhenSolid() throws {
+        // A SOLID-ring group must still be distinguishable from an
+        // ungrouped node WITHOUT relying on colour — the ring is heavier
+        // (review finding 7a, WCAG 1.4.1). This is the case the reviewer
+        // flagged: solid dash == ungrouped dash, so width must differ.
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphConfig.groups = [
+            GraphGroup(query: "a", colorToken: .green, ringStyle: .solid)
+        ]
+        view.tickOnceForTesting()
+        let snap = try session.graphSnapshot(filter: filter)
+        let aID = snap.nodes.first { $0.label == "a" }!.id
+        let dID = snap.nodes.first { $0.label == "d" }!.id
+        let grouped = try XCTUnwrap(view.nodeLineWidthForTesting(nodeId: aID))
+        let ungrouped = try XCTUnwrap(view.nodeLineWidthForTesting(nodeId: dID))
+        XCTAssertGreaterThan(
+            grouped, ungrouped, "a solid-ring group reads without colour via a heavier ring")
+    }
+
+    func testNameFilterCollapsesTierBToTheVisibleSet() throws {
+        // A name filter that drops a Tier-B graph below the threshold must
+        // render Tier A over exactly the matching nodes — the tier
+        // decision, the count, and the AX tree all key off the VISIBLE set
+        // (review finding 5), not the raw 1,501-node topology.
+        let session = try makeSession()
+        let base = try makeModel(session)
+        let n = GraphDiagramModel.tierBThreshold + 1  // 1,501
+        var ids: [UInt64] = []
+        var byID: [UInt64: GraphNode] = [:]
+        var positions: [UInt64: CGPoint] = [:]
+        for i in 1...n {
+            let id = UInt64(i)
+            ids.append(id)
+            let label = i <= 3 ? "keep\(i)" : "n\(i)"
+            byID[id] = GraphNode(
+                id: id, path: "n\(id).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
+                inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true, pagerank: 0, modifiedMs: nil)
+            positions[id] = CGPoint(x: Double(i), y: Double(i))
+        }
+        let big = GraphDiagramModel(
+            session: base.session, filter: filter, nodeIDs: ids, nodesByID: byID, edges: [],
+            generation: 1)
+        let (state, view) = makeView(big)
+        view.injectPositionsForTesting(positions)
+        XCTAssertTrue(view.isTierBForTesting(), "1,501 unfiltered ⇒ Tier B")
+
+        state.graphTableTextFilter = "keep"
+        view.injectPositionsForTesting(positions)  // drive a deterministic rebuild
+        XCTAssertFalse(view.isTierBForTesting(), "3 visible ⇒ Tier A")
+        XCTAssertEqual(view.visibleNodeCountForTesting(), 3)
+        XCTAssertEqual(
+            view.axChildCountForTesting(), 3, "per-node AX for the 3 visible, not a summary element")
+    }
+
+    func testDiagramHonoursThePresetKindFilterLikeTheTable() throws {
+        // The Unresolved preset sets `graphTableKindFilter = .ghost`; the
+        // Diagram must apply it too, so both projections show one node set
+        // (review finding 5). A note linking a missing target yields one
+        // note + one ghost.
+        let vault = tempDir.appendingPathComponent("kind-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# A\n[[Missing Target]]\n".write(
+            to: vault.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let session = try VaultSession.openFilesystem(rootPath: vault.path)
+        try session.scanInitial(cancel: CancelToken())
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        view.tickOnceForTesting()
+        let ghosts = Set(model.nodesByID.values.filter { $0.kind == .ghost }.map(\.id))
+        XCTAssertFalse(ghosts.isEmpty, "fixture has an unresolved target")
+        XCTAssertGreaterThan(view.nodeFramesForTesting().count, ghosts.count, "notes shown too")
+
+        state.graphTableKindFilter = .ghost
+        view.tickOnceForTesting()  // rebuild
+        XCTAssertEqual(
+            Set(view.nodeFramesForTesting().keys), ghosts,
+            "with the .ghost kind filter the Diagram shows exactly the ghosts, as the Table would")
+    }
+
     func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
         let session = try makeSession()
         let model = try makeModel(session)

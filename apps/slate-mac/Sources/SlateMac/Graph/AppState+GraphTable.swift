@@ -70,10 +70,19 @@ extension AppState {
         clearActiveNoteFields()
         workspace.select(id)
         clearTransitionSensitiveCollections()
-        // Load the persisted graph config (filters/mode/depth) BEFORE the
-        // table load, so the first snapshot fetch uses the saved filter
-        // (P2-4 #560). Once per vault.
+        // Load the persisted graph config OBJECT (safety net — the eager
+        // vault-open load normally already did this), then, for a PLAIN
+        // open (no pending preset), restore the persisted backend + name
+        // filter into the live Table state BEFORE the fetch. Doing this on
+        // every plain activation — not once per vault — is what makes
+        // close→reopen and preset→plain both return to the saved filter
+        // rather than a transient preset's (P2-4 #560, review finding 4).
+        // A preset activation sets its own filter + marker and must not be
+        // overwritten here.
         ensureGraphConfigLoaded()
+        if graphTablePendingPreset == nil {
+            applyPersistedGraphFilter()
+        }
         loadGraphTable()
     }
 

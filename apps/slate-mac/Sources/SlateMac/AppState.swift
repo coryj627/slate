@@ -550,6 +550,20 @@ final class AppState: ObservableObject {
     /// ONCE per vault (a per-activate reload would revert a debounced,
     /// not-yet-written filter/force edit when the user tab-switches).
     var graphConfigVaultURL: URL?
+    /// The vault the currently-pending debounced save targets. A save for a
+    /// DIFFERENT vault is NEVER cancelled by a new edit (it captured its own
+    /// root+snapshot), so a fast vault switch can't drop vault A's final
+    /// write (P2-4 review finding 3).
+    var graphConfigSavePendingVault: URL?
+    /// False when this vault's `graph.json` is unreadable / unparseable /
+    /// a NEWER version — the file is then treated as read-only so a save
+    /// can never clobber whatever a newer Slate (or a human) put there
+    /// (P2-4 review finding 2). Reset true on each successful load.
+    var graphConfigWritable = true
+    /// Set when a forces edit re-heats the layout; the renderer announces a
+    /// single "settled" state once the layout converges, then clears it
+    /// (P2-4 review finding 8 — the settled-state announcement).
+    var graphForcesSettlePending = false
 
     /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
     /// focusable transient panel in the canvas container; Esc/Close
@@ -3904,10 +3918,16 @@ final class AppState: ObservableObject {
             resetGraphTableState()
             // Graph tab diagram (P2-3 #559): tear down the layout session too.
             resetGraphDiagramState()
-            // Graph config (P2-4 #560): the next vault reloads its own
-            // graph.json (a pending debounced save still targets the OLD
-            // vault via its captured root, so no edit is lost).
-            graphConfigVaultURL = nil
+            // Graph config (P2-4 #560): EAGERLY load the new vault's
+            // graph.json now — `currentVaultURL` already names it (set
+            // above). Loading here (not lazily on first Graph-tab open)
+            // means `graphConfig`/`connectionsDepth` always match the
+            // current vault, so a Connections-depth edit BEFORE the Graph
+            // tab is ever opened can't persist vault A's stale aggregate
+            // into vault B (review finding 1). A pending debounced save
+            // still targets the OLD vault via its captured root and is NOT
+            // cancelled here, so no edit is lost (review finding 3).
+            loadGraphConfig()
             // #871: the structural (file-op) undo/redo stacks are per-vault —
             // a direct Open Vault / Open Recent reaches here WITHOUT
             // `closeVault`, so an inverse move/rename staged against vault A
@@ -4457,8 +4477,14 @@ final class AppState: ObservableObject {
         resetGraphTableState()
         // Graph tab diagram (P2-3 #559): tear down the layout session too.
         resetGraphDiagramState()
-        // Graph config (P2-4 #560): next vault reloads its own graph.json.
+        // Graph config (P2-4 #560): no vault now, so drop the in-memory
+        // config to defaults and un-stamp the vault marker. A pending
+        // debounced save still targets the CLOSING vault via its captured
+        // root and completes normally (not cancelled), so its final edit
+        // isn't lost (review finding 3).
+        graphConfig = .default
         graphConfigVaultURL = nil
+        graphConfigWritable = true
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
