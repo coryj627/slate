@@ -352,6 +352,34 @@ struct MainSplitView: View {
                 "Moves the folder and its \(pending.itemCount) \(pending.itemCount == 1 ? "item" : "items") to the Trash."
             )
         }
+        // #852: batch-delete confirmation — the batch analog of the #860 single
+        // folder prompt. Staged only when the multi-selection includes a
+        // non-empty folder (`requestBatchDelete`); an all-files batch trashes
+        // straight through. Same two-button destructive shape (alerts.md):
+        // explicit "Move to Trash", cancel-role Cancel so Escape trashes
+        // nothing. Focus returns to the tree, like the single prompt.
+        .alert(
+            "Move \(appState.pendingBatchDelete?.itemCount ?? 0) items to Trash?",
+            isPresented: pendingBatchDeletePresented,
+            presenting: appState.pendingBatchDelete
+        ) { _ in
+            Button("Move to Trash", role: .destructive) {
+                appState.confirmPendingBatchDelete()
+                appState.workspace.focusTreeRegion()
+            }
+            .accessibilityHint(
+                "Move the selected items, including folders and their contents, to the Trash."
+            )
+            Button("Cancel", role: .cancel) {
+                appState.cancelPendingBatchDelete()
+                appState.workspace.focusTreeRegion()
+            }
+            .accessibilityHint("Keep the items. Nothing is deleted.")
+        } message: { pending in
+            Text(
+                "Moves \(pending.itemCount) items to the Trash, including \(pending.nonEmptyFolderCount) \(pending.nonEmptyFolderCount == 1 ? "folder" : "folders") with contents."
+            )
+        }
     }
 
     private var splitViewWithSheets: some View {
@@ -479,6 +507,23 @@ struct MainSplitView: View {
                     .environmentObject(appState)
             }
         }
+        // #852: the BATCH Move-to-folder picker — same sheet, batch initializer.
+        // Presented when the file-tree's batch context menu sets
+        // `pendingBatchMove`; commit routes the whole selection through
+        // `batchMove` (one summary announcement).
+        .sheet(
+            isPresented: Binding(
+                get: { appState.pendingBatchMove != nil },
+                set: { presented in
+                    if !presented { appState.pendingBatchMove = nil }
+                }
+            )
+        ) {
+            if let batch = appState.pendingBatchMove {
+                MoveToFolderSheet(batch: batch)
+                    .environmentObject(appState)
+            }
+        }
         // Link-rewrite partial-failure alert (U2-5, #463). A move/rename stood
         // but some notes' links to it couldn't be updated — list exactly which,
         // never silent (spec §U2-5).
@@ -560,6 +605,19 @@ struct MainSplitView: View {
             set: { presented in
                 if !presented {
                     appState.cancelPendingFolderDelete()
+                }
+            }
+        )
+    }
+
+    /// #852: the batch-delete confirmation. Dismissal from outside (Escape)
+    /// routes through the cancel resolver — nothing is deleted by a dismissal.
+    private var pendingBatchDeletePresented: Binding<Bool> {
+        Binding(
+            get: { appState.pendingBatchDelete != nil },
+            set: { presented in
+                if !presented {
+                    appState.cancelPendingBatchDelete()
                 }
             }
         )

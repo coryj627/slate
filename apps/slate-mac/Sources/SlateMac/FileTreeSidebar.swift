@@ -717,6 +717,43 @@ struct FileTreeSidebar: View {
     /// discipline — the mechanism is identical; only the selection *key*
     /// generalized from a path string to a `RowID`.)
     @State private var listSelection: RowID?
+    /// #852: the BATCH selection set. A plain click / keyboard nav keeps this at
+    /// exactly `[listSelection]` (or empty) — the single-select-opens path is
+    /// unchanged. ⌘-click toggles a row, ⇧-click range-selects; once it holds ≥2
+    /// rows the open is SUPPRESSED and the row context menu arms batch Move /
+    /// Trash over the whole set. `listSelection` stays the FOCUS row (the anchor
+    /// / last-clicked single node) that `mirrorTreeSelectionToAppState` feeds to
+    /// the single-item commands (Reveal, Copy Path, Rename) — batch actions act
+    /// on the Set, single-item commands on the focus. Local `@State`, never a
+    /// published field, so none of this trips the #448 publish-in-view-update
+    /// rule (identical discipline to `listSelection`).
+    @State private var multiSelection: Set<RowID> = []
+    /// #852: the range anchor for ⇧-click — the last PLAIN or ⌘ click (never a
+    /// ⇧-click, so successive ⇧-clicks grow/shrink one contiguous range from a
+    /// fixed pivot, the Finder/NSTableView idiom). NOTE: a ⌘-REMOVE makes the
+    /// removed (now DESELECTED) row the anchor, so the anchor is NOT always a
+    /// `multiSelection` member — hence its own independent path snapshot below.
+    @State private var selectionAnchor: RowID?
+    /// #852 (Codex round-5 finding): the anchor's path AT THE TIME IT WAS SET —
+    /// an INDEPENDENT snapshot, because the anchor can be a DESELECTED row that
+    /// `selectionPaths` (per-selected-row) doesn't cover. Without it a reused
+    /// SQLite dir id sitting as a stale anchor would seed a ⇧-range at an
+    /// UNRELATED folder (then ⌘⌫ trashes it). Reconciled on every tree change and
+    /// remapped across known moves, exactly like the selected-row snapshots.
+    @State private var selectionAnchorPath: String?
+    /// #852 (Codex finding 4): each selected row's path AT SELECTION TIME. SQLite
+    /// directory ids are REUSED, so after a rescan a selected dir id can repoint
+    /// at an unrelated folder; this snapshot lets us drop such rows (their
+    /// current path no longer matches) from the fill / `.isSelected` / batch
+    /// targets, and reconcile the set on every tree change. Files are path-keyed
+    /// (`.file(path:)`), so they're inherently stable.
+    @State private var selectionPaths: [RowID: String] = [:]
+    /// #852: one-shot suppression consumed by `.onChange(of: listSelection)`. A
+    /// ⌘/⇧ multi-select click moves the focus (`listSelection`) but must NOT run
+    /// the open path — the gesture decides open/no-open itself (a live ⌘ during
+    /// the onChange would otherwise mis-route the focus move to a new tab). Same
+    /// one-shot shape as `suppressOpenForPostMutationFocus`.
+    @State private var suppressOpenForSelectionChange = false
     /// Keyboard focus on the file tree — gates the #418 selection announcements
     /// to list-driven changes only.
     @FocusState private var fileTreeFocused: Bool
@@ -772,6 +809,207 @@ struct FileTreeSidebar: View {
         case node(NodeID)
         case loading(parent: NodeID)
         case error(parent: NodeID)
+    }
+
+    // MARK: - Multi-select model (#852)
+
+    /// The kind of pointer click, decoded from the LIVE modifier flags at tap
+    /// time. Native `List(selection: Set<>)` ⌘/⇧-click can't drive this — the
+    /// #643 gotcha means Slate selects from a tap handler, not native List
+    /// selection — so the handler reads `NSApp.currentEvent?.modifierFlags`
+    /// itself and folds the result through `applySelectionClick`.
+    enum SelectionClick: Equatable {
+        /// Plain click → select ONLY this row (the single-select-opens path).
+        case plain
+        /// ⌘-click → toggle this row in the set (add / remove).
+        case toggle
+        /// ⇧-click → range from the anchor to this row, inclusive.
+        case range
+    }
+
+    /// The result of folding a click into the selection: the new set, the new
+    /// range anchor, and the FOCUS row (what the single-item command mirror and
+    /// the highlight track). Kept as a value so the whole mapping is unit-tested
+    /// without a running `List`.
+    struct SelectionOutcome: Equatable {
+        let selection: Set<RowID>
+        let anchor: RowID?
+        let focus: RowID?
+    }
+
+    /// Decode a `SelectionClick` from a live event's modifier flags. ⇧ wins over
+    /// ⌘ (a ⇧⌘-click range-selects rather than toggling) — a deliberate
+    /// simplification of Finder's "add range" so the two multi gestures stay
+    /// distinct and testable. Static + pure (the `deleteCommandAllowed` pattern).
+    static func selectionClick(from event: NSEvent?) -> SelectionClick {
+        let flags = event?.modifierFlags ?? []
+        if flags.contains(.shift) { return .range }
+        if flags.contains(.command) { return .toggle }
+        return .plain
+    }
+
+    /// Pure (#852): fold one pointer click into `(selection, anchor, focus)`.
+    /// `order` is the flattened VISIBLE selectable-row order (used only for
+    /// ⇧-range). Semantics mirror Finder/NSTableView:
+    ///   - `.plain`  → selection = `[clicked]`; anchor = clicked; focus = clicked.
+    ///   - `.toggle` → clicked ∈ selection ? remove : add. Anchor becomes clicked
+    ///                 (a ⌘-click re-pivots the range). Focus = clicked when it
+    ///                 stays selected, else the LAST still-selected row in visible
+    ///                 order (nil once the set empties) — a sensible single-item
+    ///                 command target after a removal.
+    ///   - `.range`  → the inclusive span between the anchor and clicked over
+    ///                 `order`; the anchor is UNCHANGED so successive ⇧-clicks
+    ///                 grow/shrink from one pivot; focus = clicked. With no usable
+    ///                 anchor (nil or off-list — e.g. the first gesture is a
+    ///                 ⇧-click) it degrades to a plain selection of clicked and
+    ///                 adopts it as the anchor.
+    /// Static so it's regression-locked without a `List` (the `moveOutcome`
+    /// pattern).
+    static func applySelectionClick(
+        order: [RowID], current: Set<RowID>, anchor: RowID?,
+        clicked: RowID, click: SelectionClick
+    ) -> SelectionOutcome {
+        switch click {
+        case .plain:
+            return SelectionOutcome(selection: [clicked], anchor: clicked, focus: clicked)
+        case .toggle:
+            var next = current
+            if next.contains(clicked) {
+                next.remove(clicked)
+                let focus = order.last(where: { next.contains($0) })
+                return SelectionOutcome(selection: next, anchor: clicked, focus: focus)
+            }
+            next.insert(clicked)
+            return SelectionOutcome(selection: next, anchor: clicked, focus: clicked)
+        case .range:
+            guard let anchor, let ai = order.firstIndex(of: anchor),
+                let ci = order.firstIndex(of: clicked)
+            else {
+                return SelectionOutcome(selection: [clicked], anchor: clicked, focus: clicked)
+            }
+            let lo = min(ai, ci), hi = max(ai, ci)
+            return SelectionOutcome(
+                selection: Set(order[lo...hi]), anchor: anchor, focus: clicked)
+        }
+    }
+
+    /// Pure (#852, Codex finding 4): the selected rows in LIVE visible-row order,
+    /// PRE-deduplication, pruned to (a) rows still present in the visible tree
+    /// and (b) rows whose CURRENT path still matches the `snapshot` taken at
+    /// selection time. (b) drops a REUSED SQLite dir id now pointing at an
+    /// UNRELATED folder after a rescan — that folder was never selected, so it
+    /// must not paint the fill / carry `.isSelected` / become a batch target.
+    /// This is the "what's VISUALLY selected" set: multi-select MODE
+    /// (`hasMultiSelection`) and the "N items selected" announcement use its
+    /// COUNT (a folder + a child inside it are TWO visible selected rows →
+    /// multi, Codex finding 3).
+    static func prunedSelection(
+        visibleOrder: [(rowID: RowID, path: String, isDirectory: Bool)],
+        selection: Set<RowID>,
+        snapshot: [RowID: String]
+    ) -> [AppState.TreeSelection] {
+        visibleOrder.compactMap { row -> AppState.TreeSelection? in
+            guard selection.contains(row.rowID) else { return nil }
+            guard snapshot[row.rowID] == row.path else { return nil }
+            return AppState.TreeSelection(path: row.path, isDirectory: row.isDirectory)
+        }
+    }
+
+    /// Pure (#852, Codex finding 4): the batch OPERATION targets —
+    /// `prunedSelection` deduplicated to top-level entries (a folder + a
+    /// descendant collapse to just the folder). Deterministic order. The
+    /// "Move N items" menu label uses its COUNT — distinct from the pre-dedup
+    /// mode count above (Codex finding 3: a folder+child reads "2 items
+    /// selected" but "Move 1 Item").
+    static func batchTargets(
+        visibleOrder: [(rowID: RowID, path: String, isDirectory: Bool)],
+        selection: Set<RowID>,
+        snapshot: [RowID: String]
+    ) -> [AppState.TreeSelection] {
+        AppState.topLevelSelection(
+            prunedSelection(visibleOrder: visibleOrder, selection: selection, snapshot: snapshot))
+    }
+
+    /// Pure (#852, Codex finding 4): reconcile a selection after a tree change —
+    /// drop any selected RowID whose id now resolves to a DIFFERENT path than its
+    /// `snapshot` (a reused dir id repointed at an unrelated folder). An id that
+    /// doesn't resolve at all (a level mid-refetch) is KEPT (transient), so a
+    /// benign rescan never clears a still-valid selection. Returns survivors +
+    /// the pruned snapshot; the caller re-anchors if the anchor was dropped.
+    static func reconcileSelection(
+        selection: Set<RowID>, snapshot: [RowID: String], resolve: (RowID) -> String?
+    ) -> (selection: Set<RowID>, snapshot: [RowID: String]) {
+        var survivors: Set<RowID> = []
+        var kept: [RowID: String] = [:]
+        for rowID in selection {
+            let snapPath = snapshot[rowID]
+            let current = resolve(rowID)
+            if let current, let snapPath, current != snapPath { continue }  // repointed → drop
+            survivors.insert(rowID)
+            kept[rowID] = snapPath ?? current
+        }
+        return (survivors, kept)
+    }
+
+    /// Pure (#852, Codex round-5): whether a range ANCHOR survives a tree-change
+    /// reconcile. Mirrors the per-row rule: it survives when there's no snapshot
+    /// to check, or it can't currently be resolved (transient, mid-refetch), or
+    /// it still resolves to its snapshot path. It is CLEARED only on a CONFIRMED
+    /// mismatch — a reused id now resolving to a DIFFERENT path than the one the
+    /// anchor was set at. Static → directly unit-tested.
+    static func anchorSurvivesReconcile(snapshot: String?, resolved: String?) -> Bool {
+        guard let snapshot, let resolved else { return true }
+        return resolved == snapshot
+    }
+
+    /// Pure (#852, Codex round-4 finding 2 + round-5): remap a selection across a
+    /// KNOWN in-app rename/move (`oldPath` → `newPath`), which deliberately
+    /// PRESERVES a directory's id while changing its path. For each entry whose
+    /// snapshot path is `oldPath` or a descendant of it, rewrite the snapshot to
+    /// the corresponding new path — and, for FILE entries (whose RowID encodes
+    /// the path), rewrite the RowID too; DIR entries keep their id-based RowID.
+    /// `focus` and the range `anchor` are remapped alongside — the anchor via its
+    /// OWN `anchorSnapshot`, because it may be a DESELECTED row (a ⌘-remove) that
+    /// isn't in `snapshot`, and a deselected DESCENDANT anchor under a moved
+    /// folder must still follow the move. Static → directly unit-tested.
+    static func remapSelectionForMove(
+        selection: Set<RowID>, snapshot: [RowID: String],
+        focus: RowID?, anchor: RowID?, anchorSnapshot: String?,
+        oldPath: String, newPath: String
+    ) -> (
+        selection: Set<RowID>, snapshot: [RowID: String],
+        focus: RowID?, anchor: RowID?, anchorSnapshot: String?
+    ) {
+        func remappedPath(_ path: String) -> String? {
+            if path == oldPath { return newPath }
+            if path.hasPrefix(oldPath + "/") { return newPath + path.dropFirst(oldPath.count) }
+            return nil  // unaffected by this rename/move
+        }
+        /// Remap a single row given its snapshot path (works for a deselected
+        /// anchor too, whose snapshot lives outside `snapshot`).
+        func remap(_ rowID: RowID, _ snapPath: String?) -> (row: RowID, snapshot: String?) {
+            guard let snapPath, let newSnap = remappedPath(snapPath) else { return (rowID, snapPath) }
+            if case .node(.file) = rowID { return (.node(.file(path: newSnap)), newSnap) }
+            return (rowID, newSnap)  // dir id preserved across rename/move
+        }
+        var newSelection: Set<RowID> = []
+        var newSnapshot: [RowID: String] = [:]
+        var rowMap: [RowID: RowID] = [:]
+        for rowID in selection {
+            let (newRow, newSnap) = remap(rowID, snapshot[rowID])
+            newSelection.insert(newRow)
+            if let newSnap { newSnapshot[newRow] = newSnap }
+            rowMap[rowID] = newRow
+        }
+        // The anchor may be DESELECTED → remap via its OWN snapshot (falling back
+        // to the selected-row remap when it happens to also be selected).
+        let (newAnchor, newAnchorSnap): (RowID?, String?)
+        if let anchor {
+            (newAnchor, newAnchorSnap) = remap(anchor, anchorSnapshot ?? snapshot[anchor])
+        } else {
+            (newAnchor, newAnchorSnap) = (nil, nil)
+        }
+        return (newSelection, newSnapshot, focus.map { rowMap[$0] ?? $0 }, newAnchor, newAnchorSnap)
     }
 
     var body: some View {
@@ -855,6 +1093,11 @@ struct FileTreeSidebar: View {
             // seam; U2-5 wires the per-mutation arm from AppState.
             if !scanning && appState.currentSession != nil {
                 tree.treeInvalidation(parent: nil)
+                // #852 (Codex round-4 finding 1): the reused-id reconcile does NOT
+                // run here — `treeInvalidation` schedules an ASYNC refetch, so ids
+                // wouldn't yet resolve to the new reality. It runs on
+                // `.onChange(of: tree.visibleRows)` (below), which fires once the
+                // refetch lands and resolution is fresh.
             }
         }
     }
@@ -968,16 +1211,12 @@ struct FileTreeSidebar: View {
         // event; non-key deliveries (a VoiceOver/AX delete action, a menu
         // `delete:`) carry no matching keyDown and pass through.
         .onDeleteCommand {
-            guard fileTreeFocused, let node = selectedTreeNode,
+            guard fileTreeFocused, selectedTreeNode != nil,
                 Self.deleteCommandAllowed(event: NSApp.currentEvent)
             else { return }
-            // #860: the request funnel stages a confirmation for a
-            // non-empty folder; files + empty folders keep the direct
-            // Finder-parity path. The node's cached immediate count rides
-            // along so no filesystem probe is needed here.
-            appState.requestDeleteEntry(
-                path: node.path, isDirectory: node.isDirectory,
-                knownChildCount: node.isDirectory ? node.itemCount : nil)
+            // #852: the WHOLE multi-selection when ≥2 rows are selected, else
+            // the single focused node — both through the #860 delete funnel.
+            requestDeleteFromKeyboard()
         }
         // Explicit ⌘⌫ delivery: SwiftUI routes a COMMAND-modified ⌫ through
         // the key-press path, not (reliably) the delete-command path — with
@@ -990,12 +1229,10 @@ struct FileTreeSidebar: View {
                     fileTreeFocused: fileTreeFocused,
                     isRenaming: appState.renamingNode != nil),
                 press.modifiers.contains(.command),
-                let node = selectedTreeNode
+                selectedTreeNode != nil
             else { return .ignored }
-            // #860: same staging funnel as the delete-command path above.
-            appState.requestDeleteEntry(
-                path: node.path, isDirectory: node.isDirectory,
-                knownChildCount: node.isDirectory ? node.itemCount : nil)
+            // #852/#860: batch when multi-selected, else single — same funnel.
+            requestDeleteFromKeyboard()
             return .handled
         }
         // Space/Return toggle the selected FOLDER's disclosure — the
@@ -1085,6 +1322,22 @@ struct FileTreeSidebar: View {
         .onChange(of: appState.treeMutation?.token) { _, _ in
             handleTreeMutation(proxy: proxy)
         }
+        // #852 (Codex round-4 finding 1): reconcile the selection against reused
+        // SQLite directory ids whenever the visible rows settle (an external
+        // replace / rescan refetch). This fires AFTER the refetch has landed —
+        // unlike the scan-finish path, where ids wouldn't yet resolve to the new
+        // reality — so a repointed id resolves to its NEW path here and is
+        // dropped (with the native focus re-anchored). A KNOWN in-app rename/move
+        // already remapped its snapshots in `handleTreeMutation`, so its entries
+        // resolve to a matching path and survive this reconcile untouched.
+        .onChange(of: tree.visibleRows) { _, _ in
+            reconcileSelectionAfterTreeChange()
+            // Re-sync the single-item command mirror against the refreshed paths
+            // (a folder rename keeps its dir id → the focus `listSelection` never
+            // changed → `.onChange(of: listSelection)` never fired → the mirror
+            // would keep the OLD path). Idempotent: a no-op when unchanged.
+            mirrorTreeSelectionToAppState(listSelection)
+        }
         // Vault switch: the row highlight must not survive into the next
         // vault — AppState clears its `treeSelectedNode` mirror on the
         // lifecycle paths (Codex review: stale mirrors let Copy Path /
@@ -1092,6 +1345,10 @@ struct FileTreeSidebar: View {
         // view-side highlight resets with it.
         .onChange(of: appState.currentVaultURL) { _, _ in
             listSelection = nil
+            // #852: the batch set + anchor + path snapshots belong to the old
+            // vault's rows.
+            setMultiSelection([])
+            setSelectionAnchor(nil)
         }
         // User-driven selection: push it onto AppState here, outside the list's
         // update transaction, so handleSelectionChange runs in a well-defined
@@ -1102,7 +1359,21 @@ struct FileTreeSidebar: View {
         .onChange(of: listSelection) { _, newSelection in
             // Mirror the selection (file OR folder) to AppState so the file-
             // management commands know their target. Placeholders clear it.
+            // The focus (single node) mirrors for single-item commands; the
+            // BATCH actions read `multiSelection` (#852).
             mirrorTreeSelectionToAppState(newSelection)
+            // #852: a ⌘/⇧ multi-select gesture manages the set + open itself
+            // (`applyMultiSelectClick`) — consume its one-shot suppression and
+            // don't re-open or collapse here.
+            if suppressOpenForSelectionChange {
+                suppressOpenForSelectionChange = false
+                return
+            }
+            // #852: any OTHER focus change (keyboard arrow, type-select,
+            // programmatic open, plain click) is SINGLE — collapse any lingering
+            // batch set to this one row so batch state never outlives it.
+            setMultiSelection(newSelection.map { [$0] } ?? [])
+            setSelectionAnchor(newSelection)
             // Post-delete focus moved the highlight to a sibling — honor the
             // one-shot suppression so the deleted note's error tab isn't
             // replaced by opening the sibling. Consume the flag either way.
@@ -1142,6 +1413,16 @@ struct FileTreeSidebar: View {
             // highlight (search-open, template-create, dirty-gate rollback).
             // Guarded so it doesn't fight the user-driven write above.
             let mirrored = rowID(forPath: newPath)
+            // #852 (Codex finding 2a): a programmatic / single open collapses the
+            // batch set to the single focus UNCONDITIONALLY — even when
+            // `listSelection` is ALREADY the mirrored row (a same-value
+            // assignment below wouldn't fire `.onChange(of: listSelection)`, so
+            // the collapse there is skipped and a stale {A,B} would let a later
+            // ⌘⌫ trash rows the user can't see selected). This handler only fires
+            // when `selectedFilePath` actually changes (a real open), so it never
+            // clobbers an in-progress ⌘/⇧ multi-select (those suppress the open).
+            setMultiSelection(mirrored.map { [$0] } ?? [])
+            setSelectionAnchor(mirrored)
             if listSelection != mirrored {
                 listSelection = mirrored
             }
@@ -1165,11 +1446,301 @@ struct FileTreeSidebar: View {
         }  // ScrollViewReader
     }
 
-    /// The tree node (file or folder) currently selected, if the selection is a
-    /// real node (not a loading/error placeholder). Command targets read this.
+    /// The tree node (file or folder) currently selected — the single-item
+    /// command target (⌘⌫ delete, move, Reveal, Copy Path, Rename). FAIL-CLOSED
+    /// (#852, Codex round-4 finding 1): resolves through `pathValidatedNode`, so
+    /// if `listSelection`'s id now points at a DIFFERENT path than the one it was
+    /// selected at (a reused SQLite dir id repointed by an external replace), it
+    /// resolves to NOTHING rather than the unrelated folder — a single-item
+    /// delete/move can NEVER act on a reused id even if `listSelection` lags the
+    /// reconcile.
     private var selectedTreeNode: TreeNode? {
-        guard case let .node(id) = listSelection else { return nil }
-        return tree.node(for: id)
+        guard let listSelection else { return nil }
+        return pathValidatedNode(for: listSelection)
+    }
+
+    /// Resolve `rowID` to its live `TreeNode`, but only if its id still resolves
+    /// to the path it was SELECTED at (`selectionPaths`) — the fail-closed guard
+    /// against a reused directory id (#852, Codex round-4 finding 1). A row with
+    /// no snapshot (a fresh, not-yet-snapshotted selection) resolves normally.
+    private func pathValidatedNode(for rowID: RowID) -> TreeNode? {
+        guard case let .node(id) = rowID, let node = tree.node(for: id) else { return nil }
+        if let snapshot = selectionPaths[rowID], snapshot != node.path { return nil }
+        return node
+    }
+
+    // MARK: - Tap dispatch (#852)
+
+    /// The flattened VISIBLE selectable-row order — the pivot space for a
+    /// ⇧-range. Placeholders (loading/error) aren't selectable, so only real
+    /// node rows appear (a range from A to C spans the B nodes between them, not
+    /// a mid-fetch spinner).
+    private var visibleRowOrder: [RowID] {
+        tree.visibleRows.map { .node($0.nodeID) }
+    }
+
+    /// The flattened visible rows as (rowID, path, isDirectory) tuples — the
+    /// input to the pure `prunedSelection`/`batchTargets`.
+    private var visibleRowTuples: [(rowID: RowID, path: String, isDirectory: Bool)] {
+        tree.visibleRows.map {
+            (rowID: RowID.node($0.nodeID), path: $0.path, isDirectory: $0.isDirectory)
+        }
+    }
+
+    /// The selected rows currently VISIBLE + path-valid, PRE-dedup — "what the
+    /// user sees selected". Its COUNT drives multi-select MODE + the count
+    /// announcement (#852, Codex findings 3 & 4).
+    private var prunedSelectedNodes: [AppState.TreeSelection] {
+        Self.prunedSelection(
+            visibleOrder: visibleRowTuples, selection: multiSelection, snapshot: selectionPaths)
+    }
+
+    /// Multi-select MODE = ≥2 VISUALLY selected rows (pruned, path-valid,
+    /// PRE-dedup). A folder + a child inside it are TWO visible selected rows →
+    /// multi, even though the OPERATION (`selectedNodesForBatch`) dedups to just
+    /// the folder — so ⌘⌫ correctly trashes the folder as a batch rather than
+    /// falling to the child's single-item path (#852, Codex finding 3).
+    private var hasMultiSelection: Bool { prunedSelectedNodes.count >= 2 }
+
+    /// The tree nodes the batch Move/Trash actions OPERATE on: `prunedSelectedNodes`
+    /// deduplicated to top-level entries — see the pure `batchTargets`. The
+    /// "Move N Items" menu label uses THIS count (deduped), distinct from the
+    /// pre-dedup mode count above (#852, Codex findings 3 & 4).
+    private var selectedNodesForBatch: [AppState.TreeSelection] {
+        AppState.topLevelSelection(prunedSelectedNodes)
+    }
+
+    /// Set the batch selection AND snapshot each member's current path (#852,
+    /// Codex finding 4): dir ids are SQLite-reused, so a later rescan can repoint
+    /// an id at an unrelated folder — the snapshot lets `prunedSelection` /
+    /// `reconcileSelection` drop such rows (they no longer resolve to the path
+    /// they were selected at). Files are path-keyed already, so their snapshot is
+    /// their own path.
+    private func setMultiSelection(_ newSelection: Set<RowID>) {
+        multiSelection = newSelection
+        var snapshot: [RowID: String] = [:]
+        for rowID in newSelection {
+            if let path = resolvedPath(of: rowID) { snapshot[rowID] = path }
+        }
+        selectionPaths = snapshot
+    }
+
+    /// Set the range anchor AND snapshot its current path (#852, Codex round-5).
+    /// ALWAYS routed through here — including when the anchor is a ⌘-REMOVED
+    /// (deselected) row — so `selectionAnchorPath` is never missing and a reused
+    /// dir id sitting as a stale anchor can be detected + cleared / remapped.
+    private func setSelectionAnchor(_ anchor: RowID?) {
+        selectionAnchor = anchor
+        selectionAnchorPath = anchor.flatMap { resolvedPath(of: $0) }
+    }
+
+    /// The anchor path-VALIDATED for a ⇧-range computation (fail-closed): if the
+    /// anchor id no longer resolves to its snapshot path (a reused id), return
+    /// nil so the range degrades to a plain selection of the clicked row rather
+    /// than silently starting at an UNRELATED entity (#852, Codex round-5).
+    private func pathValidatedAnchor() -> RowID? {
+        guard let anchor = selectionAnchor else { return nil }
+        return Self.anchorSurvivesReconcile(
+            snapshot: selectionAnchorPath, resolved: resolvedPath(of: anchor)) ? anchor : nil
+    }
+
+    /// The CURRENT path a selected RowID resolves to: for a file the path IS the
+    /// id (stable); for a dir, resolved live through the tree (its id can be
+    /// reused). Nil for a placeholder or an unmaterialized level.
+    private func resolvedPath(of rowID: RowID) -> String? {
+        guard case let .node(id) = rowID else { return nil }
+        if case let .file(path) = id { return path }
+        return tree.node(for: id)?.path
+    }
+
+    /// The GENERIC reconcile for UNEXPLAINED tree changes (an external replace /
+    /// rescan, driven by `.onChange(of: tree.visibleRows)` once the refetch has
+    /// landed so ids resolve to the NEW reality). Drops any selected id now
+    /// resolving to a DIFFERENT path than its snapshot (a reused dir id repointed
+    /// at an unrelated folder). Known in-app rename/move is handled separately by
+    /// `remapSelectionForKnownMove` BEFORE this ever sees a mismatch.
+    ///
+    /// #852 Codex round-4 finding 1: if the dropped id was the FOCUS, re-anchor
+    /// `listSelection` to a surviving path-valid row (or clear it) and suppress
+    /// the open — otherwise the native `List` keeps highlighting the reused
+    /// folder and `selectedTreeNode` would resolve it (the fail-closed guard is
+    /// the backstop; this is the primary fix).
+    private func reconcileSelectionAfterTreeChange() {
+        // #852 (Codex round-5): reconcile the ANCHOR FIRST and INDEPENDENTLY — it
+        // may be a DESELECTED row (a ⌘-remove), so it isn't covered by the
+        // selected-row snapshots, and it must be validated EVEN when the selected
+        // set is unchanged (the early-return below must not skip it). Clear a
+        // confirmed reused id; keep a transiently-unresolvable anchor (mid-refetch).
+        reconcileAnchorAfterTreeChange()
+        let (survivors, snapshot) = Self.reconcileSelection(
+            selection: multiSelection, snapshot: selectionPaths,
+            resolve: { resolvedPath(of: $0) })
+        guard survivors != multiSelection else { return }  // nothing repointed
+        multiSelection = survivors
+        selectionPaths = snapshot
+        // Re-anchor the NATIVE focus if it was the dropped (repointed) id.
+        if let focus = listSelection, !survivors.contains(focus) {
+            let newFocus = visibleRowOrder.first { survivors.contains($0) }
+            suppressOpenForSelectionChange = true
+            listSelection = newFocus  // onChange mirrors it; suppress prevents opening `new`
+        }
+    }
+
+    /// Validate the range anchor against its independent snapshot on a tree
+    /// change (#852, Codex round-5): a reused dir id (current path ≠ snapshot) is
+    /// CLEARED so a later ⇧-range can't start at the unrelated folder; a
+    /// transiently-unresolvable anchor (mid-refetch) is KEPT. Runs unconditionally
+    /// — the anchor can be a deselected row the selection reconcile never touches.
+    private func reconcileAnchorAfterTreeChange() {
+        guard let anchor = selectionAnchor else { return }
+        if !Self.anchorSurvivesReconcile(
+            snapshot: selectionAnchorPath, resolved: resolvedPath(of: anchor)) {
+            setSelectionAnchor(nil)
+        }
+    }
+
+    /// Remap the selection across a KNOWN in-app rename/move (#852, Codex
+    /// round-4 finding 2) — a directory keeps its id but changes its path, so the
+    /// generic reconcile would misread it as a reused id and DROP it. Instead we
+    /// rewrite the affected entries' snapshots (and file RowIDs) to the new
+    /// paths, keeping them selected + anchored under the new path. The mirror +
+    /// native focus are re-synced by `handleTreeMutation` explicitly (a dir's
+    /// same-id focus is a same-value no-op that wouldn't fire `.onChange`).
+    private func remapSelectionForKnownMove(oldPath: String, newPath: String) {
+        // #852 (Codex round-5): a DESELECTED anchor (with an empty selection) can
+        // still need remapping under a moved folder, so don't early-return on an
+        // empty selection when an anchor is present.
+        guard !multiSelection.isEmpty || selectionAnchor != nil else { return }
+        let result = Self.remapSelectionForMove(
+            selection: multiSelection, snapshot: selectionPaths,
+            focus: listSelection, anchor: selectionAnchor, anchorSnapshot: selectionAnchorPath,
+            oldPath: oldPath, newPath: newPath)
+        multiSelection = result.selection
+        selectionPaths = result.snapshot
+        selectionAnchor = result.anchor
+        selectionAnchorPath = result.anchorSnapshot
+        // A FILE rename/move re-keys the focus RowID (path-keyed) — reflect it,
+        // suppressing the open so re-anchoring can't re-open. A folder keeps its
+        // id, so this is a no-op (handled by applyPostMutationFocus + the mirror).
+        if let newFocus = result.focus, listSelection != newFocus {
+            suppressOpenForSelectionChange = true
+            listSelection = newFocus
+        }
+    }
+
+    /// Whether `rowID` (currently at `currentPath`) is a selected batch member —
+    /// drives the row's AX `.isSelected` trait so EVERY member of a multi-
+    /// selection reads as selected to VoiceOver, not just the single keyboard-
+    /// focus row (#852, Codex finding 1). Path-validated so a reused dir id
+    /// pointing at an unrelated folder is NOT reported selected (Codex finding 4).
+    private func isRowSelected(_ rowID: RowID, currentPath: String) -> Bool {
+        multiSelection.contains(rowID) && selectionPaths[rowID] == currentPath
+    }
+
+    /// Whether `rowID` should paint the custom multi-select fill: a selected
+    /// batch member that is NOT the focus row. The focus keeps the native `List`
+    /// selection highlight, so a SINGLE selection stays pixel-identical (its one
+    /// member is the focus → no custom fill); only the EXTRA batch members get
+    /// the selection-token wash, so every selected row is visibly selected
+    /// (#852, Codex finding 1 — the safety fix: ⌘⌫ acts on rows the user can now
+    /// see are selected). Path-validated like `isRowSelected` (Codex finding 4).
+    private func isMultiSelectFill(_ rowID: RowID, currentPath: String) -> Bool {
+        isRowSelected(rowID, currentPath: currentPath) && listSelection != rowID
+    }
+
+    /// A PLAIN row tap (no ⌘/⇧): collapse to a single selection of `row` and let
+    /// the existing `.onChange(of: listSelection)` path open it (files) / mirror
+    /// it (folders). Byte-identical to the pre-#852 single-select behavior, plus
+    /// the `multiSelection`/anchor bookkeeping so batch state never lingers.
+    private func applyPlainSelection(_ row: RowID) {
+        // #852 (Codex finding 2b): if `row` is ALREADY the focus, `listSelection
+        // = row` is a no-op that never fires `.onChange(of: listSelection)`, so a
+        // plain click on the already-focused (but not-open, because a multi-
+        // select had suppressed the open) row would NOT open it. Detect that and
+        // open it explicitly, mirroring the collapse-open in
+        // `applyMultiSelectClick`. (`openFile` guards `selectedFilePath != path`,
+        // so re-clicking the already-open file stays a no-op — no double-open.)
+        let sameFocus = (listSelection == row)
+        setMultiSelection([row])
+        setSelectionAnchor(row)
+        listSelection = row
+        if sameFocus, case let .node(.file(path)) = row, appState.selectedFilePath != path {
+            appState.openFile(path, target: .currentTab)
+        }
+    }
+
+    /// Route the ⌘⌫ Move-to-Trash chord (#852): the WHOLE multi-selection when
+    /// ≥2 rows are selected (a batch action, with its own #860-style
+    /// confirmation via `requestBatchDelete`), else the single focused node
+    /// through the existing per-item funnel. Move-to-Trash is one of the two
+    /// batch actions the issue arms, so it acts on the Set — Reveal / Copy Path /
+    /// Rename stay single-item (they read the focus mirror).
+    private func requestDeleteFromKeyboard() {
+        if hasMultiSelection {
+            appState.requestBatchDelete(selectedNodesForBatch)
+            return
+        }
+        guard let node = selectedTreeNode else { return }
+        // #860: the request funnel stages a confirmation for a non-empty folder;
+        // files + empty folders keep the direct path. The node's cached count
+        // rides along so no filesystem probe is needed.
+        appState.requestDeleteEntry(
+            path: node.path, isDirectory: node.isDirectory,
+            knownChildCount: node.isDirectory ? node.itemCount : nil)
+    }
+
+    /// A ⌘/⇧ multi-select tap: fold it through the pure model, update the set +
+    /// anchor + focus, and SUPPRESS the onChange open (the live ⌘ would otherwise
+    /// mis-route the focus move to a new tab). Per #852 point 4, a selection that
+    /// lands on exactly ONE row still opens that row (in the current tab, like a
+    /// plain click) — handled explicitly here so the modifier being live can't
+    /// change the target.
+    private func applyMultiSelectClick(_ clicked: RowID, click: SelectionClick) {
+        // #852 (Codex round-5): path-VALIDATE the anchor before the range span is
+        // computed — a reused/stale anchor id resolves to nil so a ⇧-range can't
+        // silently start at an unrelated entity (it degrades to a plain click).
+        let outcome = Self.applySelectionClick(
+            order: visibleRowOrder, current: multiSelection, anchor: pathValidatedAnchor(),
+            clicked: clicked, click: click)
+        setMultiSelection(outcome.selection)
+        setSelectionAnchor(outcome.anchor)
+        // Suppress the onChange-driven open; we decide it explicitly below.
+        // #852 red-team: ONLY arm the one-shot when the focus assignment will
+        // ACTUALLY fire `.onChange`. A same-value assignment (e.g. ⌘-removing
+        // an upper row keeps focus on the bottom-most still-selected row, or a
+        // repeat ⇧-click of the range endpoint) is a no-op that never fires
+        // onChange, so an unconditional flag would STRAND true — later
+        // swallowing a legitimate single-click open AND leaving `multiSelection`
+        // uncollapsed so a keyboard-nav'd ⌘⌫ trashes the wrong rows (data loss).
+        // When focus is unchanged there is nothing to suppress: `multiSelection`
+        // is already set directly above and the explicit collapse-open below
+        // still runs. Mirrors the `suppressOpenForPostMutationFocus` guard.
+        if listSelection != outcome.focus {
+            suppressOpenForSelectionChange = true
+        }
+        listSelection = outcome.focus
+        // #852 point 4: collapsed back to a single row → open it (current tab).
+        let count = outcome.selection.count
+        if count == 1, case let .node(.file(path)) = outcome.focus {
+            if appState.selectedFilePath != path {
+                appState.openFile(path, target: .currentTab)
+            }
+        }
+        // #852 VoiceOver (point 8): the selection COUNT must be discoverable.
+        // A file single-collapse speaks via the existing "Selected: <name>"
+        // path (openFile → selectedFilePath onChange); the multi (≥2) and
+        // emptied (0) cases have no such side-effect, so announce them here.
+        // #852 (Codex finding 3): announce the VISUALLY-selected count (pruned,
+        // path-valid, PRE-dedup) so it matches what the user sees highlighted —
+        // a folder + a child read "2 items selected" (the op then targets [F],
+        // labelled "Move 1 Item"). Both accurate.
+        let visibleCount = prunedSelectedNodes.count
+        if visibleCount >= 2 {
+            postAccessibilityAnnouncement(
+                "\(visibleCount) items selected", priority: .medium)
+        } else if outcome.selection.isEmpty {
+            postAccessibilityAnnouncement("No items selected", priority: .medium)
+        }
     }
 
     /// Mirror the current row selection (file OR folder) into
@@ -1178,7 +1749,11 @@ struct FileTreeSidebar: View {
     /// clear it. Post-update mutation point (#448 discipline): this runs inside
     /// the `.onChange` closure, not during the list's update pass.
     private func mirrorTreeSelectionToAppState(_ selection: RowID?) {
-        guard case let .node(id) = selection, let node = tree.node(for: id) else {
+        // FAIL-CLOSED (#852, Codex round-4 finding 1): resolve through
+        // `pathValidatedNode` so a reused dir id never mirrors an UNRELATED
+        // folder to AppState's single-item command target (Reveal / Copy Path /
+        // ⌘⇧M Move read `treeSelectedNode`).
+        guard let selection, let node = pathValidatedNode(for: selection) else {
             if appState.treeSelectedNode != nil { appState.treeSelectedNode = nil }
             return
         }
@@ -1227,7 +1802,26 @@ struct FileTreeSidebar: View {
         if appState.treeExpandedDirPaths != paths {
             appState.treeExpandedDirPaths = paths
         }
+        // #852 (Codex round-4 finding 2): this is a KNOWN in-app mutation, so we
+        // hold the old→new mapping — REMAP the selection's snapshots (rename/move
+        // preserve a dir's id but change its path) instead of letting the generic
+        // reconcile misread the intentional path change as a reused id and drop
+        // the still-selected folder. A delete/create doesn't repoint an existing
+        // selection identity, so it needs no remap (a delete's focus move + the
+        // onChange collapse handle it; the deleted rows fall out of the visible
+        // tree and are pruned lazily).
+        switch mutation.kind {
+        case let .rename(oldPath, newPath), let .move(oldPath, newPath, _, _):
+            remapSelectionForKnownMove(oldPath: oldPath, newPath: newPath)
+        case .delete, .createFolder, .createNote:
+            break
+        }
         applyPostMutationFocus(mutation, deleteTarget: preInvalidationDeleteTarget, proxy: proxy)
+        // The AppState mirror is re-synced on `.onChange(of: tree.visibleRows)`
+        // once the refetch lands (a folder rename/move preserves the dir id, so
+        // `applyPostMutationFocus`'s `listSelection` assignment is a same-value
+        // no-op that never fires `.onChange` — the mirror must be refreshed
+        // against the NEW path, and node resolution is only reliable post-refetch).
     }
 
     /// Move the tree selection to the post-mutation target and scroll it into
@@ -1439,9 +2033,19 @@ struct FileTreeSidebar: View {
             // activation) and the named Expand/Collapse rotor action (VO
             // users get an explicit verb), plus the AX value that states
             // expanded/collapsed + item count + level.
+            //
+            // #852: a ⌘/⇧ tap is a MULTI-SELECT gesture, not an activation — it
+            // toggles/ranges the folder in the batch set and does NOT disclose
+            // (Finder doesn't expand folders you ⌘-click into a selection). A
+            // plain tap is unchanged: select + toggle disclosure.
             .onTapGesture {
-                listSelection = .node(node.nodeID)
-                tree.toggle(node)
+                let click = Self.selectionClick(from: NSApp.currentEvent)
+                if click == .plain {
+                    applyPlainSelection(.node(node.nodeID))
+                    tree.toggle(node)
+                } else {
+                    applyMultiSelectClick(.node(node.nodeID), click: click)
+                }
             }
             // #851: HIG drag-and-drop "highlight the destination" — the
             // selection-token wash (rounded like every control fill, U5-2)
@@ -1453,10 +2057,21 @@ struct FileTreeSidebar: View {
                     RoundedRectangle(cornerRadius: Tokens.Radius.control)
                         .fill(Tokens.ColorRole.selection)
                         .accessibilityHidden(true)
+                } else if isMultiSelectFill(.node(node.nodeID), currentPath: node.path) {
+                    // #852 (Codex finding 1): paint the non-focus batch members
+                    // so every selected folder reads as selected (the focus row
+                    // keeps the native List highlight).
+                    RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                        .fill(Tokens.ColorRole.selection)
+                        .accessibilityHidden(true)
                 }
             }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
+            // #852 (Codex finding 1): every batch member carries the selected
+            // trait so VoiceOver announces it — not just the keyboard-focus row.
+            .accessibilityAddTraits(
+                isRowSelected(.node(node.nodeID), currentPath: node.path) ? .isSelected : [])
             .accessibilityLabel(node.name)
             .accessibilityValue(Self.folderAccessibilityValue(for: node, expanded: isExpanded))
             .accessibilityAction(named: Text(isExpanded ? "Collapse" : "Expand")) {
@@ -1480,7 +2095,15 @@ struct FileTreeSidebar: View {
             .accessibilityHint(
                 "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Rename, move, delete, and new-note actions are in the context menu.")
             .help(node.path)
-            .contextMenu { fileManagementMenu(for: node) }
+            // #852: batch actions when this folder is part of a ≥2-row
+            // multi-selection; the single-item management menu otherwise.
+            .contextMenu {
+                if isInMultiSelection(node) {
+                    batchManagementMenu(for: node)
+                } else {
+                    fileManagementMenu(for: node)
+                }
+            }
             // Drag source: a folder can be dragged onto another folder / root.
             .onDrag { dragItem(for: node) }
             // Drop target: dropping a file/folder onto this folder moves it
@@ -1531,34 +2154,46 @@ struct FileTreeSidebar: View {
             // doesn't open — only a click on the empty cell padding selects.
             // Drive selection with a PRIMARY tap, exactly as the folder rows
             // do for their toggle (a simultaneous tap loses the race to the
-            // drag; the primary tap wins). Sets the same `listSelection` the
-            // List would, flowing through `.onChange(of: listSelection)` →
-            // openFile (⌘-click new-tab honored, since the modifier is live).
-            // The a11y gate requires `.isButton` on any `.onTapGesture`
-            // target; a file row that opens on activation is an honest button
-            // (its hint already says "Opens the note").
+            // drag; the primary tap wins). A PLAIN tap sets `listSelection`,
+            // flowing through `.onChange(of: listSelection)` → openFile
+            // (current tab). The a11y gate requires `.isButton` on any
+            // `.onTapGesture` target; a file row that opens on activation is an
+            // honest button (its hint already says "Opens the note").
             //
-            // ⌘-click (U1-5 new-tab) is handled DIRECTLY, not via the
-            // selection mirror: routing it only through `listSelection`
-            // drops the open when the ⌘-clicked row is *already* selected
-            // (assigning the same value is a no-op, so `.onChange` never
-            // fires and the new tab is never created — a dead shortcut on
-            // the currently-open file). Opening here and returning keeps
-            // `listSelection` untouched, so `.onChange` can't double-open;
-            // the current tab's highlight is unchanged (a background tab
-            // was created), matching the mirror the onChange path restores.
-            // Plain click still flows through the mirror → `.onChange` →
-            // `openFile(.currentTab)` exactly as before.
+            // #852: ⌘-click and ⇧-click are now MULTI-SELECT gestures (Finder /
+            // Xcode parity — the affordance the whole PR adds), superseding
+            // U1-5's ⌘-click-opens-a-new-tab on the tree. ⌘ toggles this row in
+            // the batch set, ⇧ range-selects from the anchor; both SUPPRESS the
+            // open while ≥2 rows are held (`applyMultiSelectClick`). New-tab open
+            // stays reachable via the row context menu's "Open in New Tab" and
+            // ⌘O quick-open — only the pointer shortcut's meaning changed. A
+            // single selection (plain click, or a ⌘/⇧ gesture that lands on
+            // exactly one row) opens in the current tab, matching today.
             .onTapGesture {
-                if appState.openTargetFromCurrentEvent() == .newTab {
-                    appState.openFile(node.path, target: .newTab)
-                    return
+                let click = Self.selectionClick(from: NSApp.currentEvent)
+                if click == .plain {
+                    applyPlainSelection(.node(node.nodeID))
+                } else {
+                    applyMultiSelectClick(.node(node.nodeID), click: click)
                 }
-                if let rid = rowID(forPath: node.path) { listSelection = rid }
+            }
+            // #852 (Codex finding 1): paint the non-focus batch members so every
+            // selected file reads as selected (the focus keeps the native List
+            // highlight, so single-select stays pixel-identical).
+            .background {
+                if isMultiSelectFill(.node(node.nodeID), currentPath: node.path) {
+                    RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                        .fill(Tokens.ColorRole.selection)
+                        .accessibilityHidden(true)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
             .accessibilityAddTraits(.isButton)
+            // #852 (Codex finding 1): every batch member carries the selected
+            // trait so VoiceOver announces it — not just the keyboard-focus row.
+            .accessibilityAddTraits(
+                isRowSelected(.node(node.nodeID), currentPath: node.path) ? .isSelected : [])
             .accessibilityHint(
                 "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, duplicate, move, and delete actions are in the context menu.")
             // U2-5 file-management rotor actions.
@@ -1574,20 +2209,31 @@ struct FileTreeSidebar: View {
             }
             .help(node.path)
             .contextMenu {
-                // U1-5 (#457): open-in targets. The context menu is the
-                // keyboard-discoverable path (VoiceOver actions rotor); ⌘-click
-                // is the pointer shortcut for a new tab.
-                Button("Open") {
-                    appState.openFile(node.path, target: .currentTab)
+                // #852: right-clicking a row that's part of a ≥2-row multi-
+                // selection arms the BATCH actions over the whole set; the
+                // single-item open-in trio + management menu are meaningless for
+                // a batch. Right-clicking any OTHER row keeps the single menu
+                // (our selection is tap-driven, so a right-click never changes
+                // it — the gate is "is THIS row in the multi-selection").
+                if isInMultiSelection(node) {
+                    batchManagementMenu(for: node)
+                } else {
+                    // U1-5 (#457): open-in targets. The context menu is the
+                    // keyboard-discoverable path (VoiceOver actions rotor) and,
+                    // since #852 took ⌘-click for multi-select, the primary
+                    // way to open a note in a new tab from the pointer.
+                    Button("Open") {
+                        appState.openFile(node.path, target: .currentTab)
+                    }
+                    Button("Open in New Tab") {
+                        appState.openFile(node.path, target: .newTab)
+                    }
+                    Button("Open in Split") {
+                        appState.openFile(node.path, target: .newSplit(.horizontal))
+                    }
+                    Divider()
+                    fileManagementMenu(for: node)
                 }
-                Button("Open in New Tab") {
-                    appState.openFile(node.path, target: .newTab)
-                }
-                Button("Open in Split") {
-                    appState.openFile(node.path, target: .newSplit(.horizontal))
-                }
-                Divider()
-                fileManagementMenu(for: node)
             }
             // Drag source: a file can be dragged onto a folder / root.
             .onDrag { dragItem(for: node) }
@@ -1723,6 +2369,40 @@ struct FileTreeSidebar: View {
                 knownChildCount: node.isDirectory ? node.itemCount : nil)
         } label: {
             SlateSymbol.trash.label("Move to Trash")
+        }
+    }
+
+    /// True when `node` is one of the rows in an active ≥2-row multi-selection —
+    /// the gate that swaps the single-item context menu for the batch one (#852).
+    private func isInMultiSelection(_ node: TreeNode) -> Bool {
+        hasMultiSelection && multiSelection.contains(.node(node.nodeID))
+    }
+
+    /// The batch context menu (#852): Move N items to… / Move N items to Trash,
+    /// acting on the WHOLE multi-selection (deduplicated to top-level entries).
+    /// Move routes through `pendingBatchMove` → the batch `MoveToFolderSheet`;
+    /// Trash through `requestBatchDelete` (its own #860-style confirmation when
+    /// the batch holds a non-empty folder). Both funnel to the per-item
+    /// `moveEntry`/`deleteEntry` path with ONE summary announcement.
+    @ViewBuilder
+    private func batchManagementMenu(for node: TreeNode) -> some View {
+        let items = selectedNodesForBatch
+        let count = items.count
+        // #852 red-team: `selectedNodesForBatch` DEDUPS a folder + its
+        // descendants to just the folder, so the top-level count can be 1 even
+        // though ≥2 raw rows are selected (which is what arms this menu) —
+        // pluralize on the actual count so it never reads "Move 1 Items".
+        let noun = count == 1 ? "Item" : "Items"
+        Button {
+            appState.pendingBatchMove = AppState.BatchMove(items: items)
+        } label: {
+            SlateSymbol.moveTo.label("Move \(count) \(noun) to…")
+        }
+        Divider()
+        Button(role: .destructive) {
+            appState.requestBatchDelete(items)
+        } label: {
+            SlateSymbol.trash.label("Move \(count) \(noun) to Trash")
         }
     }
 

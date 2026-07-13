@@ -308,6 +308,13 @@ final class AppState: ObservableObject {
     /// carrying the node being moved. Cleared on commit/cancel.
     @Published var pendingMove: PendingMove?
 
+    /// Drives the BATCH Move-to-folder sheet (#852): a multi-selection's items
+    /// awaiting a destination. The same `MoveToFolderSheet` renders it (a batch
+    /// initializer); commit routes every item through `batchMove`. Separate from
+    /// `pendingMove` so the single-node path (U2-5) is untouched. Cleared on
+    /// commit/cancel.
+    @Published var pendingBatchMove: BatchMove?
+
     /// The tree's currently-selected node (file OR folder), mirrored from
     /// `FileTreeSidebar` so the file-management COMMANDS (which run from the
     /// palette / menu with no row context) know what to act on. A file
@@ -3933,6 +3940,10 @@ final class AppState: ObservableObject {
             // #860: a staged folder-delete confirmation belongs to the old
             // vault's tree; drop it so the alert can't fire cross-vault.
             pendingFolderDelete = nil
+            // #852: the batch move sheet / batch delete confirmation are tied
+            // to the old vault's selection — drop them for the same reason.
+            pendingBatchMove = nil
+            pendingBatchDelete = nil
             scanProgress = nil
             scanAnnouncementCount = 0
             scanAnnouncementLastMessage = nil
@@ -4453,6 +4464,8 @@ final class AppState: ObservableObject {
         treeSelectedNode = nil
         treeExpandedDirPaths = []  // #873: expansion dies with the vault
         pendingFolderDelete = nil  // #860: staged confirmation dies with it
+        pendingBatchMove = nil  // #852: batch sheet dies with the vault
+        pendingBatchDelete = nil  // #852: batch confirmation dies with the vault
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
@@ -6887,6 +6900,19 @@ final class AppState: ObservableObject {
         var name: String { (path as NSString).lastPathComponent }
     }
 
+    /// A multi-selection awaiting a Move-to-folder destination (#852). `items`
+    /// is the deduplicated top-level selection (a folder and something inside
+    /// it collapse to just the folder — see `topLevelSelection`). `id` is
+    /// content-stable so `.sheet(item:)`-style presentation is well-behaved.
+    struct BatchMove: Equatable, Identifiable {
+        let items: [TreeSelection]
+        var id: String { items.map(\.path).joined(separator: "\n") }
+        /// The sheet's title/hint noun phrase — "3 items".
+        var displayName: String {
+            "\(items.count) \(items.count == 1 ? "item" : "items")"
+        }
+    }
+
     /// True while any structural mutation FFI call is in flight — serializes the
     /// commands (the session lock does too, but this stops the UI from firing a
     /// second mutation before the first's tree refresh lands).
@@ -7005,9 +7031,21 @@ final class AppState: ObservableObject {
     /// (a create has none, but the discipline is uniform). A collision /
     /// invalid name surfaces through `lastError` (the tree's create affordance
     /// has no inline field; the palette/menu path reports via the alert).
+    ///
+    /// `onResult` (#852, Codex finding 2): the create's ACTUAL outcome — `true`
+    /// only on `.success`, `false` on failure OR a mid-flight vault switch. The
+    /// "New Folder… then move" flows gate the dependent move SOLELY on this (plus
+    /// session identity), never on folder existence — an empty pre-existing "New
+    /// Folder" would make the create fail with DestinationExists yet still be on
+    /// disk, so an existence check would wrongly move the selection into it.
     @discardableResult
-    func createFolder(name: String, in parent: String) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
+    func createFolder(
+        name: String, in parent: String, onResult: ((Bool) -> Void)? = nil
+    ) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else {
+            onResult?(false)
+            return nil
+        }
         let path = Self.joinVaultPath(parent, name)
         let token = beginStructuralMutation()
         let task = Task { [weak self] in
@@ -7018,7 +7056,10 @@ final class AppState: ObservableObject {
                 catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
-            guard let self, self.currentSession === session else { return }
+            guard let self, self.currentSession === session else {
+                onResult?(false)
+                return
+            }
             switch outcome {
             case .success(let report):
                 self.publishTreeMutation(
@@ -7026,11 +7067,13 @@ final class AppState: ObservableObject {
                     rewrittenCount: Self.distinctRewrittenCount(report))
                 self.postMutationAnnouncement(
                     "Created folder \((path as NSString).lastPathComponent).")
+                onResult?(true)
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
                     verb: "create folder",
                     name: (path as NSString).lastPathComponent, error: error)
+                onResult?(false)
             }
             self.endStructuralMutation(token)
         }
@@ -7310,10 +7353,18 @@ final class AppState: ObservableObject {
     /// onto the structural undo stack; `.undoing`/`.redoing` are how
     /// `structuralUndo/Redo` re-enter this same FFI path to move an entry back
     /// while feeding the opposite stack.
+    ///
+    /// `announce` (#852): the per-item VoiceOver sentence. A BATCH move
+    /// (`batchMove`) passes `false` so the individual "Moved <name> to <folder>."
+    /// sentences don't chatter — the batch posts ONE summary ("Moved 3 items to
+    /// Archive.") after every item's `moveEntry` (and its per-item link rewrite +
+    /// structural-undo push) has completed. Single-surface callers leave it true.
     @discardableResult
     func moveEntry(
         path: String, isDirectory: Bool, to newParent: String,
-        undoContext: StructuralUndoContext = .record
+        undoContext: StructuralUndoContext = .record,
+        announce: Bool = true,
+        onResult: ((Bool) -> Void)? = nil
     ) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
         let token = beginStructuralMutation()
@@ -7342,20 +7393,22 @@ final class AppState: ObservableObject {
                         oldPath: path, newPath: newPath,
                         oldParent: oldParent, newParent: newParent),
                     rewrittenCount: Self.distinctRewrittenCount(report))
-                if undoContext == .record {
-                    self.postMutationAnnouncement(
-                        self.mutationSentence(
-                            "Moved \((path as NSString).lastPathComponent) to "
-                                + "\(newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent).",
-                            report: report))
-                } else {
-                    // #871: an undo/redo of a move announces "Undid/Redid move
-                    // of <name>." instead of the fresh-op sentence.
-                    self.postMutationAnnouncement(
-                        self.structuralUndoRedoAnnouncement(
-                            executed: .move(
-                                path: path, isDirectory: isDirectory, targetParent: newParent),
-                            context: undoContext))
+                if announce {
+                    if undoContext == .record {
+                        self.postMutationAnnouncement(
+                            self.mutationSentence(
+                                "Moved \((path as NSString).lastPathComponent) to "
+                                    + "\(newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent).",
+                                report: report))
+                    } else {
+                        // #871: an undo/redo of a move announces "Undid/Redid move
+                        // of <name>." instead of the fresh-op sentence.
+                        self.postMutationAnnouncement(
+                            self.structuralUndoRedoAnnouncement(
+                                executed: .move(
+                                    path: path, isDirectory: isDirectory, targetParent: newParent),
+                                context: undoContext))
+                    }
                 }
                 // #871: record the inverse (move `newPath` back to `oldParent`)
                 // on the correct stack for the given context.
@@ -7366,18 +7419,113 @@ final class AppState: ObservableObject {
                 self.surfaceStructuralFailures(
                     report, verb: "move", name: (path as NSString).lastPathComponent)
                 await self.loadFiles()
+                onResult?(true)
             case .failure(let error):
                 // A move has no inline field — report through the alert path.
                 self.structuralFailureReport = StructuralFailureReport(
                     verb: "move", name: (path as NSString).lastPathComponent,
                     skipped: [])
                 self.lastError = self.humanReadable(error)
-                self.announceMutationFailure(
-                    verb: "move",
-                    name: (path as NSString).lastPathComponent, error: error)
+                // #852 red-team: the per-item VoiceOver failure is suppressed
+                // under a batch (`announce == false`) so the batch owns ONE
+                // summary; the alert (`lastError`) still surfaces the reason.
+                if announce {
+                    self.announceMutationFailure(
+                        verb: "move",
+                        name: (path as NSString).lastPathComponent, error: error)
+                }
+                onResult?(false)
             }
             self.endStructuralMutation(token)
         }
+        return task
+    }
+
+    // MARK: - Batch move / delete (#852)
+
+    /// Prune a multi-selection down to its TOP-LEVEL entries: drop any item that
+    /// lives inside another SELECTED folder. Trashing/moving both a folder AND a
+    /// file within it would leave the second op acting on a path the first
+    /// already relocated (an error or a wrong-target op) — Finder likewise only
+    /// operates on the outermost items. Pure + static so the dedup is regression-
+    /// locked (the `moveOutcome` pattern); order-preserving so the batch acts in
+    /// the caller's visible-row order.
+    static func topLevelSelection(_ items: [TreeSelection]) -> [TreeSelection] {
+        items.filter { item in
+            !items.contains { other in
+                other.path != item.path && other.isDirectory
+                    && pathIsWithin(item.path, path: other.path, isDirectory: true)
+            }
+        }
+    }
+
+    /// Pure (#852): the ONE summary sentence a batch move announces once every
+    /// item's `moveEntry` (announce:false) has landed. `count` is how many items
+    /// actually moved (no-ops skipped). Static so the phrasing is regression-
+    /// locked (the `withLinksSuffix` pattern).
+    static func batchMoveAnnouncement(count: Int, destination newParent: String) -> String {
+        let where_ = newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent
+        return "Moved \(count) \(count == 1 ? "item" : "items") to \(where_)."
+    }
+
+    /// Pure (#852): the ONE summary sentence a batch delete announces.
+    static func batchDeleteAnnouncement(count: Int) -> String {
+        "Moved \(count) \(count == 1 ? "item" : "items") to Trash."
+    }
+
+    /// Move every item of a multi-selection under `newParent` ("" = vault root),
+    /// then announce ONCE (#852). Each item routes through the existing per-item
+    /// `moveEntry` funnel — so per-item link rewrite AND the #871 per-item
+    /// structural-undo inverse both happen exactly as a single move would (a
+    /// K-item batch is K ⌘Z to fully undo; the structural stack is per-op and we
+    /// deliberately don't coalesce). `moveEntry` serializes on
+    /// `isMutatingStructure`, so the items are awaited SEQUENTIALLY — a second
+    /// `moveEntry` fired before the first's tree refresh lands would be rejected.
+    /// No-op items (already directly in `newParent`) and backend-illegal ones
+    /// (a folder into its own subtree) are skipped so the count is truthful.
+    @discardableResult
+    func batchMove(_ items: [TreeSelection], to newParent: String) -> Task<Void, Never> {
+        let targets = Self.topLevelSelection(items)
+        let task = Task { @MainActor [weak self] in
+            guard let self, let session = self.currentSession else { return }
+            var moved = 0
+            for item in targets {
+                // #852 red-team: a mid-batch DIRECT vault switch (Open Recent /
+                // Open Vault fires at a per-item await suspension) makes the
+                // remaining old-vault paths meaningless against the new vault —
+                // abort rather than move/announce against the wrong vault.
+                guard self.currentSession === session else { break }
+                let currentParent = TreeMutation.parentPath(of: item.path) ?? ""
+                if currentParent == newParent { continue }  // no-op: already here
+                if item.isDirectory,
+                    Self.pathIsWithin(newParent, path: item.path, isDirectory: true) {
+                    continue  // folder into its own subtree — backend rejects
+                }
+                var succeeded = false
+                if let t = self.moveEntry(
+                    path: item.path, isDirectory: item.isDirectory, to: newParent,
+                    announce: false, onResult: { succeeded = $0 }) {
+                    await t.value
+                    // #852 red-team: count only ACTUAL successes — moveEntry
+                    // returns a non-nil task even when the op then FAILS (e.g. a
+                    // name collision at the destination), so incrementing on
+                    // mere completion over-reported "Moved N items".
+                    if succeeded { moved += 1 }
+                }
+            }
+            // #852 (Codex finding 5): the post-loop writes must NOT touch a
+            // vault that was switched in mid-batch. A direct switch A→B during a
+            // per-item await suspension would otherwise clear B's freshly-opened
+            // batch-move sheet (`pendingBatchMove = nil`) and announce A's
+            // partial result under B. Recheck ownership before either write.
+            guard self.currentSession === session else { return }
+            self.pendingBatchMove = nil
+            if moved > 0 {
+                self.postMutationAnnouncement(
+                    Self.batchMoveAnnouncement(count: moved, destination: newParent))
+            }
+        }
+        pendingStructuralTaskForTesting = task
         return task
     }
 
@@ -7801,6 +7949,105 @@ final class AppState: ObservableObject {
         pendingFolderDelete = nil
     }
 
+    // MARK: - Batch delete (#852)
+
+    /// A multi-selection awaiting delete confirmation (#852). Staged by
+    /// `requestBatchDelete` only when the batch contains at least one non-empty
+    /// folder (the #860 heavier-loss event); an all-files / empty-folder batch
+    /// trashes straight through, Finder-parity. The MainSplitView alert consumes
+    /// it.
+    struct BatchDelete: Equatable, Identifiable {
+        /// The deduplicated top-level items to trash.
+        let items: [TreeSelection]
+        /// How many non-empty folders the batch includes — drives the alert
+        /// message ("including N folders with contents").
+        let nonEmptyFolderCount: Int
+        var id: String { items.map(\.path).joined(separator: "\n") }
+        var itemCount: Int { items.count }
+    }
+
+    @Published var pendingBatchDelete: BatchDelete?
+
+    /// The batch delete entry point (#852): trashes a whole multi-selection with
+    /// ONE summary announcement. Mirrors `requestDeleteEntry`'s #860 gate at the
+    /// batch level — if ANY selected item is a non-empty folder, stage
+    /// `pendingBatchDelete` (confirmation) rather than trashing unprompted; an
+    /// all-files / empty-folder batch falls straight through to `batchDelete`.
+    /// The selection is deduplicated to its top-level items first so a folder +
+    /// something inside it don't double-delete.
+    func requestBatchDelete(_ items: [TreeSelection]) {
+        guard isVaultOpen else { return }
+        let targets = Self.topLevelSelection(items)
+        guard !targets.isEmpty else { return }
+        // A single item routes through the single funnel so it gets the exact
+        // #860 single-folder confirmation copy (and its own announcement).
+        if targets.count == 1, let only = targets.first {
+            requestDeleteEntry(
+                path: only.path, isDirectory: only.isDirectory)
+            return
+        }
+        let nonEmptyFolders = targets.filter {
+            $0.isDirectory && shallowChildCount(ofFolder: $0.path) > 0
+        }
+        if !nonEmptyFolders.isEmpty {
+            pendingBatchDelete = BatchDelete(
+                items: targets, nonEmptyFolderCount: nonEmptyFolders.count)
+            return
+        }
+        pendingStructuralTaskForTesting = batchDelete(targets)
+    }
+
+    /// Alert "Move to Trash" — run the staged batch delete through the funnel.
+    func confirmPendingBatchDelete() {
+        guard let pending = pendingBatchDelete else { return }
+        pendingBatchDelete = nil
+        pendingStructuralTaskForTesting = batchDelete(pending.items)
+    }
+
+    /// Alert "Cancel" — nothing is deleted.
+    func cancelPendingBatchDelete() {
+        pendingBatchDelete = nil
+    }
+
+    /// Trash every item, then announce ONCE (#852). Each routes through the
+    /// per-item `deleteEntry` funnel (announce:false) — same tab-error-flip and
+    /// tree refresh a single delete does — awaited sequentially because
+    /// `deleteEntry` serializes on `isMutatingStructure`. `items` is expected
+    /// already deduplicated (`topLevelSelection`), so no item is nested in
+    /// another and no delete acts on an already-trashed path.
+    @discardableResult
+    func batchDelete(_ items: [TreeSelection]) -> Task<Void, Never> {
+        let targets = Self.topLevelSelection(items)
+        let task = Task { @MainActor [weak self] in
+            guard let self, let session = self.currentSession else { return }
+            var deleted = 0
+            for item in targets {
+                // #852 red-team: abort the rest if the vault switched mid-batch
+                // (the remaining old-vault paths are meaningless against a new
+                // vault).
+                guard self.currentSession === session else { break }
+                var succeeded = false
+                if let t = self.deleteEntry(
+                    path: item.path, isDirectory: item.isDirectory, announce: false,
+                    onResult: { succeeded = $0 }) {
+                    await t.value
+                    // #852 red-team: count only ACTUAL successes (deleteEntry
+                    // returns a non-nil task even when it fails), so the summary
+                    // doesn't claim a failed trash as trashed.
+                    if succeeded { deleted += 1 }
+                }
+            }
+            // #852 (Codex finding 5): don't announce the OLD vault's partial
+            // result under a vault switched in mid-batch — recheck ownership.
+            guard self.currentSession === session else { return }
+            if deleted > 0 {
+                self.postMutationAnnouncement(Self.batchDeleteAnnouncement(count: deleted))
+            }
+        }
+        pendingStructuralTaskForTesting = task
+        return task
+    }
+
     /// Immediate child count of a vault folder via a shallow FileManager
     /// enumerate (hidden entries COUNT — a folder holding only `.env`
     /// must confirm; only Finder-noise `.DS_Store` is ignored — and
@@ -7824,8 +8071,15 @@ final class AppState: ObservableObject {
     /// holding the file (or a descendant of the folder) flips to the missing-
     /// file error state (spec §U2-5). Refreshes the parent level + moves the
     /// selection to the next sibling / prev / parent (U2-6), and announces.
+    ///
+    /// `announce` (#852): mirrors `moveEntry` — a BATCH delete (`batchDelete`)
+    /// passes `false` so the per-item "Moved <name> to Trash." doesn't chatter;
+    /// the batch posts ONE summary after every item has been trashed.
     @discardableResult
-    func deleteEntry(path: String, isDirectory: Bool) -> Task<Void, Never>? {
+    func deleteEntry(
+        path: String, isDirectory: Bool, announce: Bool = true,
+        onResult: ((Bool) -> Void)? = nil
+    ) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
         let token = beginStructuralMutation()
         let task = Task { [weak self] in
@@ -7874,14 +8128,23 @@ final class AppState: ObservableObject {
                 self.publishTreeMutation(
                     .delete(path: path, parent: parent, wasDirectory: isDirectory),
                     rewrittenCount: 0)
-                self.postMutationAnnouncement(
-                    "Moved \((path as NSString).lastPathComponent) to Trash.")
+                if announce {
+                    self.postMutationAnnouncement(
+                        "Moved \((path as NSString).lastPathComponent) to Trash.")
+                }
                 await self.loadFiles()
+                onResult?(true)
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
-                self.announceMutationFailure(
-                    verb: "delete",
-                    name: (path as NSString).lastPathComponent, error: error)
+                // #852 red-team: batch (`announce == false`) suppresses the
+                // per-item VoiceOver failure; the batch announces one summary
+                // and the alert (`lastError`) still surfaces the reason.
+                if announce {
+                    self.announceMutationFailure(
+                        verb: "delete",
+                        name: (path as NSString).lastPathComponent, error: error)
+                }
+                onResult?(false)
             }
             self.endStructuralMutation(token)
         }
@@ -7903,26 +8166,77 @@ final class AppState: ObservableObject {
     func createFolderThenMove(
         newFolderName: String, in parent: String, movePath: String, isDirectory: Bool
     ) -> Task<Void, Never>? {
-        guard isVaultOpen else { return nil }
+        guard let session = currentSession else { return nil }
         // Suffix the name against the known set so the create doesn't collide.
         let suffixed = uniqueName(
             base: newFolderName, ext: nil, siblingsIn: parent)
         let newFolderPath = Self.joinVaultPath(parent, suffixed)
         return Task { [weak self] in
             guard let self else { return }
-            await self.createFolder(name: suffixed, in: parent)?.value
-            guard self.currentSession != nil, self.lastError == nil else { return }
+            // #852 (Codex finding 1): guard the CREATE itself against a vault
+            // switch — if B was opened before this task ran, `createFolder`
+            // would capture B's session and create/announce the folder in the
+            // WRONG vault. Abort before creating anything.
+            guard self.currentSession === session else { return }
+            // #852 (Codex finding 2): gate the move SOLELY on the create's actual
+            // success result (true only on .success) + same session — never
+            // folder existence (an empty pre-existing "New Folder" would false-
+            // pass an existence check while the create actually FAILED).
+            var created = false
+            await self.createFolder(name: suffixed, in: parent, onResult: { created = $0 })?.value
+            guard created, self.currentSession === session else { return }
             await self.moveEntry(path: movePath, isDirectory: isDirectory, to: newFolderPath)?.value
         }
     }
 
+    /// #852: the batch analog of `createFolderThenMove` — create a fresh folder,
+    /// then `batchMove` the whole selection into it (one summary announcement).
+    /// The Move sheet's "New Folder…" row for a multi-selection.
+    @discardableResult
+    func createFolderThenBatchMove(
+        newFolderName: String, in parent: String, items: [TreeSelection]
+    ) -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        let suffixed = uniqueName(base: newFolderName, ext: nil, siblingsIn: parent)
+        let newFolderPath = Self.joinVaultPath(parent, suffixed)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            // #852 (Codex finding 1): don't CREATE in a vault switched in before
+            // this task ran.
+            guard self.currentSession === session else { return }
+            // #852 (Codex finding 2): gate the batch move on the create's actual
+            // success result + same session, never folder existence.
+            var created = false
+            await self.createFolder(name: suffixed, in: parent, onResult: { created = $0 })?.value
+            guard created, self.currentSession === session else { return }
+            await self.batchMove(items, to: newFolderPath).value
+        }
+        pendingStructuralTaskForTesting = task
+        return task
+    }
+
     /// Generic non-colliding-name helper: `base`(+`.ext`), then `base N`(+ext).
-    /// `siblingsIn` scopes the collision check to one parent level (files +
-    /// derived folder names). Used by note/folder creation + the move-new-folder
-    /// flow so the auto-naming rule is single-source.
+    /// `siblingsIn` scopes the collision check to one parent level. Used by
+    /// note/folder creation + the move-new-folder flow so the auto-naming rule
+    /// is single-source.
+    ///
+    /// #852 (Codex finding 2): the sibling set is drawn from an AUTHORITATIVE
+    /// on-disk directory listing (files AND folders, including EMPTY folders),
+    /// not just `files` — which holds only openable DOCUMENTS. An existing empty
+    /// "New Folder" is invisible to `files`, so the old heuristic would pick
+    /// "New Folder" again and the create would FAIL with DestinationExists. The
+    /// known-file set is unioned in as a fallback (a not-yet-flushed index / the
+    /// no-vault path).
     private func uniqueName(base: String, ext: String?, siblingsIn parent: String) -> String {
-        let prefix = parent.isEmpty ? "" : parent + "/"
         var siblings: Set<String> = []
+        if let vault = currentVaultURL {
+            let dir = parent.isEmpty ? vault : vault.appendingPathComponent(parent)
+            if let entries = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil) {
+                for entry in entries { siblings.insert(entry.lastPathComponent.lowercased()) }
+            }
+        }
+        let prefix = parent.isEmpty ? "" : parent + "/"
         for file in files where file.path.hasPrefix(prefix) {
             let rest = String(file.path.dropFirst(prefix.count))
             if let slash = rest.firstIndex(of: "/") {
