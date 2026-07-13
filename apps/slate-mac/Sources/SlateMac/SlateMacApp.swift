@@ -139,8 +139,6 @@ struct SlateMacApp: App {
                         || !appState.hasUnsavedChanges
                 )
 
-                Divider()
-
                 Button("Rename…") {
                     appState.renameSelectedCommand()
                 }
@@ -251,6 +249,24 @@ struct SlateMacApp: App {
                 }
                 .disabled(!appState.isVaultOpen)
             }
+
+            // File ▸ Print… (#869, printing.md:24 "macOS: File menu > Print").
+            // Placed in the `.printItem` group so it REPLACES SwiftUI's default
+            // macOS Print / Page Setup — otherwise File would carry TWO Print
+            // items and TWO ⌘P claimants (Codex round 1). Prints the current
+            // note's rendered reading content via NSPrintOperation (Save-as-PDF
+            // for free). Enablement gates on the PUBLISHED `loadedFilePath`
+            // (stably disabled with no note open); the action re-guards +
+            // announces a nudge. ⇧⌘P stays the Command Palette (Page Setup
+            // lives inside the print panel, so it isn't displaced).
+            CommandGroup(replacing: .printItem) {
+                Button("Print…") {
+                    appState.printCurrentNote()
+                }
+                .keyboardShortcut("p", modifiers: [.command])
+                .disabled(appState.loadedFilePath == nil)
+            }
+
             // Tab navigation lives under View alongside the palette/search
             // items — one menu for "where am I looking" commands.
             // #372: ⌘Z / ⇧⌘Z route by focus — the canvas undo stack

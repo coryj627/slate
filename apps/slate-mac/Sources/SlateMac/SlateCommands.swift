@@ -33,6 +33,11 @@ enum SlateCommandID {
     /// palette, same three homes the inspection pair got. File-only;
     /// folders are out of #853's scope.
     static let duplicateEntry = "slate.file.duplicate"
+    /// Print… (#869). Prints the current note's rendered reading content
+    /// via NSPrintOperation (which also gives Save-as-PDF for free). ⌘P
+    /// was free — only ⇧⌘P (Command Palette) was claimed. Disabled with
+    /// no note open.
+    static let printNote = "slate.file.printNote"
 
     // Navigation
     static let jumpToBibliography = "slate.navigation.jumpToBibliography"
@@ -271,6 +276,7 @@ enum SlateCommandID {
         revealInFinder,
         copyPath,
         duplicateEntry,
+        printNote,
         jumpToBibliography,
         quickOpen,
         toggleSearch,
@@ -1183,6 +1189,18 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         // No chord (#853) — menu + palette + context menu only.
         hint: "Duplicate the selected file as a copy next to it."
     ) { [weak appState] in appState?.duplicateSelectedCommand() }
+
+    register(
+        SlateCommandID.printNote,
+        // Matches the File ▸ Print… menu item verbatim (menu↔palette
+        // label parity here — the label is state-free, unlike the
+        // show/hide toggles). ⌘P as the palette hotkeyHint mirrors the
+        // menu chord (the menu↔palette CHORD-parity invariant).
+        label: "Print…",
+        section: .file,
+        hotkey: "⌘P",
+        hint: "Print the current note's rendered reading content. Also offers Save as PDF."
+    ) { [weak appState] in appState?.printCurrentNote() }
 
     // ----- Navigation -----
 
