@@ -150,6 +150,33 @@ final class PreferencesStore {
         defaults.set(suppressed, forKey: Self.suppressCompactionFailureAlertKey)
     }
 
+    // MARK: - Restore last vault on launch (#872)
+
+    /// Bare-bool key (the editorSpellCheck / compaction-suppress pattern
+    /// above): reopen the most-recent vault automatically on launch
+    /// (launching.md — "Restore previous state on restart … avoid making
+    /// people retrace steps"; Obsidian / VS Code reopen the last
+    /// workspace). Default **ON** — the whole point of #872 is that a
+    /// returning user lands back in their vault. Holding ⌥ at launch is
+    /// the transient escape hatch; this toggle is the persistent one.
+    /// App-level (UserDefaults), NOT the CLI-shared vault `prefs.json`:
+    /// which vault a machine reopens is a per-machine launch preference,
+    /// not vault content.
+    ///
+    /// `defaults.bool(forKey:)` returns `false` for an absent key, which
+    /// would invert the ON default, so read through `object(forKey:)` and
+    /// fall back to `true` when unset (the `editorTextScale` object-read
+    /// pattern above).
+    static let restoreVaultOnLaunchKey = "slate.prefs.restoreVaultOnLaunch"
+
+    func loadRestoreVaultOnLaunch() -> Bool {
+        (defaults.object(forKey: Self.restoreVaultOnLaunchKey) as? Bool) ?? true
+    }
+
+    func saveRestoreVaultOnLaunch(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.restoreVaultOnLaunchKey)
+    }
+
     // MARK: - Internals
 
     private func decode<T: Codable>(_ type: T.Type, key: String) -> T? {

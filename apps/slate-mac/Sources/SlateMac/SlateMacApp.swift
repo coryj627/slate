@@ -44,6 +44,18 @@ struct SlateMacApp: App {
             RootView()
                 .environmentObject(appState)
                 .frame(minWidth: 640, minHeight: 480)
+                // #872: reopen the last vault on cold launch (HIG
+                // launching.md — "Restore previous state on restart …
+                // avoid making people retrace steps"; Obsidian / VS Code
+                // reopen the last workspace). Runs once — idempotent via
+                // `hasAttemptedLaunchRestore` — and a no-op if a vault is
+                // already open. Holding ⌥ at launch, or turning off
+                // Settings ▸ General ▸ "Reopen last vault at launch",
+                // lands on Welcome instead; a moved/missing last vault
+                // falls through the existing not-found flow. Deliberately
+                // NOT in AppState.init: constructing an AppState (incl.
+                // under XCTest) must never open a vault as a side effect.
+                .task { appState.restoreMostRecentVaultOnLaunch() }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
