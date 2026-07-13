@@ -1012,15 +1012,23 @@ final class GraphDiagramNSView: NSView {
     /// — `rebuildTopology` retries after each materialization.
     private func focusSelectedElementIfPending() {
         guard pendingSelectionFocus, window != nil else { return }
+        // Wait until the elements are materialized (async layout build).
         guard !axElements.isEmpty || summaryElement != nil else { return }
+        // Resolve the focus TARGET first: the selected node's element, or the
+        // Tier-B summary. If there is nothing to land on (Tier A with no
+        // selection), do NOT steal first-responder — leave focus where it is
+        // (review round-2 new defect: makeFirstResponder before confirming a
+        // target grabbed focus for no VoiceOver payoff).
+        guard let target: NSAccessibilityElement =
+            (model?.selection).flatMap({ sel in axElements.first { $0.nodeId == sel } })
+            ?? summaryElement
+        else {
+            pendingSelectionFocus = false
+            return
+        }
         pendingSelectionFocus = false
         window?.makeFirstResponder(self)
-        let target: NSAccessibilityElement? =
-            (model?.selection).flatMap { sel in axElements.first { $0.nodeId == sel } }
-            ?? summaryElement
-        if let target {
-            NSAccessibility.post(element: target, notification: .focusedUIElementChanged)
-        }
+        NSAccessibility.post(element: target, notification: .focusedUIElementChanged)
     }
 
     /// Keep the node inside the viewport (WCAG 2.4.11); silent.

@@ -26,12 +26,24 @@ struct GraphContainerView: View {
     let tabID: TabID
     @State private var mode: GraphTabMode = .table
     @State private var showInspector = false
-    /// Bumped on every mode switch so the newly-shown projection moves
+    /// Bumped on every USER mode switch so the newly-shown projection moves
     /// VoiceOver focus onto the shared-selected node — the row (Table) or
     /// the node's AX element (Diagram). WCAG 2.4.3 focus landing, P2-5 #561
-    /// review finding 3. Stays 0 on the initial mount (tab activation owns
-    /// that focus), so a plain open doesn't yank focus off the picker.
+    /// review finding 3. Stays 0 through the initial mount + the mode
+    /// RESTORE (tab activation owns that focus), so a plain open never yanks
+    /// focus off the picker.
     @State private var focusToken = 0
+    /// Set in `onAppear` when restoring a persisted NON-default mode, so the
+    /// restore-driven `onChange(mode)` doesn't count as a user switch and
+    /// bump `focusToken` (P2-5 review round-2 finding 3). Consumed once.
+    @State private var suppressFocusBumpOnce = false
+
+    /// The focus token to hand the active projection — gated to 0 (no
+    /// request) unless there's a shared selection to land on, so a mode
+    /// switch with nothing selected never steals focus (P2-5 review round-2).
+    private var effectiveFocusToken: Int {
+        appState.graphSelectedNodeKey != nil ? focusToken : 0
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +51,10 @@ struct GraphContainerView: View {
             Divider()
             switch mode {
             case .table:
-                GraphTableView(tabID: tabID, focusRequest: focusToken)
+                // Only request focus when there's a node to land on, so a
+                // mode switch with no shared selection doesn't steal focus
+                // (review round-2: no target ⇒ no grab).
+                GraphTableView(tabID: tabID, focusRequest: effectiveFocusToken)
             case .diagram:
                 diagramBody
             }
@@ -60,6 +75,10 @@ struct GraphContainerView: View {
         .onAppear {
             // Restore the last-used projection mode from the loaded config
             // (P2-4 #560); `activateGraphTab` loaded it before this mount.
+            // A non-default restore changes `mode`, which fires the
+            // `onChange` below — mark it so it isn't treated as a user
+            // switch that steals focus (review round-2 finding 3).
+            if appState.graphConfig.mode != mode { suppressFocusBumpOnce = true }
             mode = appState.graphConfig.mode
             if appState.graphTableSnapshot == nil && !appState.graphTableLoading {
                 appState.loadGraphTable()
@@ -74,8 +93,13 @@ struct GraphContainerView: View {
             appState.setGraphMode(newMode)
             // Land VoiceOver focus on the shared-selected node in the new
             // projection (finding 3) — the bump is read by the newly-mounted
-            // Table grid / Diagram view.
-            focusToken += 1
+            // Table grid / Diagram view. Skip the RESTORE-driven change (an
+            // initial open must not steal focus, round-2 finding 3).
+            if suppressFocusBumpOnce {
+                suppressFocusBumpOnce = false
+            } else {
+                focusToken += 1
+            }
             switch newMode {
             case .diagram:
                 appState.ensureGraphDiagram()
@@ -102,7 +126,7 @@ struct GraphContainerView: View {
         if let model = appState.graphDiagramModel {
             GraphDiagramView(
                 model: model, tabID: tabID, onSwitchToTable: { mode = .table },
-                focusRequest: focusToken)
+                focusRequest: effectiveFocusToken)
         } else if let error = appState.graphDiagramError {
             Text(error)
                 .foregroundStyle(Tokens.ColorRole.warningText)
