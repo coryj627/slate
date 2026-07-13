@@ -175,8 +175,13 @@ extension AppState {
     /// origin, and lose the first re-root's back step (review round 1
     /// finding 2).
     func reRootConnections(on path: String) {
-        // No-op if already rooted here (avoids a self back-step).
+        // No-op re-root if already rooted here (avoids a self back-step) —
+        // but still refresh the SHARED selection to this node, so a Table/
+        // Diagram selection that drifted elsewhere is repaired (P2-5 review
+        // finding 5: the same-root early return must not leave the shared
+        // key diverged).
         guard connectionsRootPath != path else {
+            graphSelectedNodeKey = GraphNodeKey.make(path: path, label: "")
             workspace.activeLeaf = .connections
             focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
             return
@@ -219,6 +224,10 @@ extension AppState {
         // follow-selection.
         openFile(prior.effective, target: .currentTab)
         loadConnections()
+        // Back also moves the SHARED selection to the restored node, so the
+        // Table/Diagram follow the leaf back rather than lingering on the
+        // forward destination (P2-5 review finding 5).
+        graphSelectedNodeKey = GraphNodeKey.make(path: prior.effective, label: "")
         graphAnnouncer.announce(.reRooted(label: filename(of: prior.effective)))
         return true
     }

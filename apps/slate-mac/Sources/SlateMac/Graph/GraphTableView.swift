@@ -26,6 +26,12 @@ struct GraphContainerView: View {
     let tabID: TabID
     @State private var mode: GraphTabMode = .table
     @State private var showInspector = false
+    /// Bumped on every mode switch so the newly-shown projection moves
+    /// VoiceOver focus onto the shared-selected node — the row (Table) or
+    /// the node's AX element (Diagram). WCAG 2.4.3 focus landing, P2-5 #561
+    /// review finding 3. Stays 0 on the initial mount (tab activation owns
+    /// that focus), so a plain open doesn't yank focus off the picker.
+    @State private var focusToken = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,7 +39,7 @@ struct GraphContainerView: View {
             Divider()
             switch mode {
             case .table:
-                GraphTableView(tabID: tabID)
+                GraphTableView(tabID: tabID, focusRequest: focusToken)
             case .diagram:
                 diagramBody
             }
@@ -66,6 +72,10 @@ struct GraphContainerView: View {
         // The chosen mode persists to graph.json (restored on next open).
         .onChange(of: mode) { _, newMode in
             appState.setGraphMode(newMode)
+            // Land VoiceOver focus on the shared-selected node in the new
+            // projection (finding 3) — the bump is read by the newly-mounted
+            // Table grid / Diagram view.
+            focusToken += 1
             switch newMode {
             case .diagram:
                 appState.ensureGraphDiagram()
@@ -90,7 +100,9 @@ struct GraphContainerView: View {
     @ViewBuilder
     private var diagramBody: some View {
         if let model = appState.graphDiagramModel {
-            GraphDiagramView(model: model, tabID: tabID, onSwitchToTable: { mode = .table })
+            GraphDiagramView(
+                model: model, tabID: tabID, onSwitchToTable: { mode = .table },
+                focusRequest: focusToken)
         } else if let error = appState.graphDiagramError {
             Text(error)
                 .foregroundStyle(Tokens.ColorRole.warningText)
@@ -187,6 +199,10 @@ struct GraphTableView: View {
     /// whichever split pane happens to hold global focus (review round 1
     /// finding 2).
     let tabID: TabID
+    /// Bumped by the container when Table becomes the active mode so the
+    /// grid takes first-responder on the selected row — the Diagram→Table
+    /// focus landing (P2-5 #561 review finding 3). 0 on plain mount.
+    var focusRequest: Int = 0
     @State private var sortState: DataGridSortState? = DataGridSortState(
         columnIndex: GraphTableColumn.linksIn.rawValue, ascending: false)
 
@@ -228,8 +244,8 @@ struct GraphTableView: View {
         // selection must be re-validated against the fresh row set (our
         // id is the stable path/ghost key) and dropped if gone (finding 3).
         .onChange(of: appState.graphTableSnapshot?.generation) { _, _ in
-            if let sel = appState.graphSelectedNodeKey, !allRows.contains(where: { $0.id == sel }) {
-                appState.graphSelectedNodeKey = nil
+            if let snap = appState.graphTableSnapshot {
+                appState.revalidateGraphSelection(against: snap)
             }
         }
         // Leaving the tab (switch/close) cancels any queued filter/nav
@@ -303,6 +319,7 @@ struct GraphTableView: View {
             onActivateModified: { row in activateInNewTab(row) },
             showsRowContextMenu: true,
             rowActions: rowActions,
+            focusRequest: focusRequest,
             announce: { [weak appState] text in
                 appState?.graphAnnouncer.announce(.status(text))
             })

@@ -154,6 +154,15 @@ extension AppState {
             for node in synced.2 { byID[node.id] = node }
             model.adopt(
                 nodeIDs: synced.0, nodesByID: byID, edges: synced.1, generation: synced.3)
+            // Remap the selection by its STABLE key against the refreshed
+            // topology (P2-5 review finding 1): a generation churn can
+            // reassign the old numeric id to a DIFFERENT node, so keeping
+            // `model.selection`'s raw UInt64 (as `adopt` does) would move the
+            // ring — and Return — to the wrong node, or drop a node that
+            // actually survived under a new id. The shared `GraphNodeKey` is
+            // the source of truth.
+            model.selection = Self.graphDiagramNodeID(
+                forKey: self.graphSelectedNodeKey, ids: synced.0, byID: byID)
         }
     }
 

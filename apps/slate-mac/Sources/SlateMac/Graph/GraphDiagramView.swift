@@ -34,6 +34,11 @@ struct GraphDiagramView: NSViewRepresentable {
     /// Invoked by the Tier-B summary's "Switch to Table" action (the mode
     /// is the container's `@State`, so the renderer can't flip it itself).
     let onSwitchToTable: () -> Void
+    /// A monotonic token the container bumps when the diagram becomes the
+    /// active mode — the diagram then moves VoiceOver focus to the selected
+    /// node's AX element (the Table→Diagram focus landing, P2-5 #561 review
+    /// finding 3). 0 = no request (initial mount).
+    var focusRequest: Int = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeNSView(context: Context) -> GraphDiagramNSView {
@@ -41,6 +46,7 @@ struct GraphDiagramView: NSViewRepresentable {
         view.configure(
             model: model, appState: appState, tabID: tabID, reduceMotion: reduceMotion,
             onSwitchToTable: onSwitchToTable)
+        view.requestSelectionFocus(token: focusRequest)
         return view
     }
 
@@ -48,6 +54,7 @@ struct GraphDiagramView: NSViewRepresentable {
         view.configure(
             model: model, appState: appState, tabID: tabID, reduceMotion: reduceMotion,
             onSwitchToTable: onSwitchToTable)
+        view.requestSelectionFocus(token: focusRequest)
     }
 
     static func dismantleNSView(_ view: GraphDiagramNSView, coordinator: ()) {
@@ -137,6 +144,11 @@ final class GraphDiagramNSView: NSView {
     /// the raw topology) — drives the relabel-on-zoom gate and the test
     /// seam. `lastTierB` doubles as the "announce once on entry" latch.
     private var lastTierB = false
+    /// Mode-switch focus landing (P2-5 #561, finding 3): `lastFocusRequest`
+    /// dedupes the container's focus token; `pendingSelectionFocus` defers
+    /// the VoiceOver focus move until the AX elements are materialized.
+    private var lastFocusRequest = 0
+    private var pendingSelectionFocus = false
 
     struct GridKey: Hashable { let x: Int; let y: Int }
     /// Spatial-grid cell in LAYOUT units (≈64 pt at 100% zoom, spec).
@@ -239,6 +251,17 @@ final class GraphDiagramNSView: NSView {
                         self?.rebuildTopology()
                         self?.applyTransform()
                     }
+                }
+                .store(in: &subscriptions)
+            // The SHARED selection can change from OUTSIDE the diagram while
+            // it's on screen — e.g. re-rooting the Connections leaf. Mirror
+            // it onto `model.selection` so the ring follows (P2-5 review
+            // finding 2). Guarded by equality so the diagram's own selects
+            // (which set the key) don't loop back.
+            appState.$graphSelectedNodeKey
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.syncSelectionFromSharedKey() }
                 }
                 .store(in: &subscriptions)
             didInitialFit = false
@@ -464,6 +487,9 @@ final class GraphDiagramNSView: NSView {
                         "Large graph: summary accessibility mode. Table mode has every node."))
             }
         }
+        // A mode-switch focus request that arrived before the elements
+        // existed lands now that they're materialized (finding 3).
+        focusSelectedElementIfPending()
     }
 
     private func rebuildTierA(_ model: GraphDiagramModel) {
@@ -953,6 +979,48 @@ final class GraphDiagramNSView: NSView {
         appState?.graphDiagramSelect(id, announce: announce)
         scrollNodeIntoView(id)
         updateSelectionIndicator()
+    }
+
+    /// Mirror the SHARED selection key onto `model.selection` when it
+    /// changed from OUTSIDE the diagram (e.g. a Connections re-root while
+    /// the diagram is on screen — P2-5 review finding 2). Equality-guarded
+    /// so the diagram's own selects (which set the key) don't loop back.
+    private func syncSelectionFromSharedKey() {
+        guard let model, let appState else { return }
+        let target = AppState.graphDiagramNodeID(
+            forKey: appState.graphSelectedNodeKey, ids: model.nodeIDs, byID: model.nodesByID)
+        guard model.selection != target else { return }
+        model.selection = target
+        if let t = target { scrollNodeIntoView(t) }
+        updateSelectionIndicator()
+    }
+
+    /// The container bumps `token` when the diagram becomes the active mode;
+    /// on a change, move VoiceOver focus to the selected node's element —
+    /// the Table→Diagram focus landing (P2-5 review finding 3). Deferred via
+    /// `pendingSelectionFocus` because the elements may not be materialized
+    /// yet (the layout builds asynchronously).
+    func requestSelectionFocus(token: Int) {
+        guard token != 0, token != lastFocusRequest else { return }
+        lastFocusRequest = token
+        pendingSelectionFocus = true
+        focusSelectedElementIfPending()
+    }
+
+    /// Once the AX elements exist, take first-responder and post focus to
+    /// the selected node's element (or the Tier-B summary). No-op until then
+    /// — `rebuildTopology` retries after each materialization.
+    private func focusSelectedElementIfPending() {
+        guard pendingSelectionFocus, window != nil else { return }
+        guard !axElements.isEmpty || summaryElement != nil else { return }
+        pendingSelectionFocus = false
+        window?.makeFirstResponder(self)
+        let target: NSAccessibilityElement? =
+            (model?.selection).flatMap { sel in axElements.first { $0.nodeId == sel } }
+            ?? summaryElement
+        if let target {
+            NSAccessibility.post(element: target, notification: .focusedUIElementChanged)
+        }
     }
 
     /// Keep the node inside the viewport (WCAG 2.4.11); silent.

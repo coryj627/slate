@@ -637,6 +637,31 @@ final class GraphDiagramTests: XCTestCase {
         XCTAssertNil(state.graphDiagramIDForSharedSelection())
     }
 
+    func testGenerationRefreshRemapsSelectionByStableKey() throws {
+        // A generation churn can reassign a node a NEW numeric id; the
+        // selection must follow the node by its STABLE key, not stick to the
+        // old id (which could now name a different node) — P2-5 review
+        // finding 1. This exercises the remap `refreshGraphDiagramIfGraph-
+        // Changed` applies after `adopt`.
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let snap = try session.graphSnapshot(filter: filter)
+        let a = snap.nodes.first { $0.label == "a" }!
+        let key = GraphNodeKey.make(for: a)
+        let newID = a.id &+ 1000
+        let aReassigned = GraphNode(
+            id: newID, path: a.path, label: a.label, kind: a.kind, inLinks: a.inLinks,
+            outLinks: a.outLinks, inEmbeds: a.inEmbeds, outEmbeds: a.outEmbeds,
+            component: a.component, isOrphan: a.isOrphan, pagerank: a.pagerank,
+            modifiedMs: a.modifiedMs)
+        model.adopt(
+            nodeIDs: [newID], nodesByID: [newID: aReassigned], edges: [],
+            generation: model.generation + 1)
+        XCTAssertEqual(
+            AppState.graphDiagramNodeID(forKey: key, ids: model.nodeIDs, byID: model.nodesByID),
+            newID, "the stable key follows the node to its reassigned id")
+    }
+
     func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
         let session = try makeSession()
         let model = try makeModel(session)
