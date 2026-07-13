@@ -276,11 +276,47 @@ impl VaultProvider for FsVaultProvider {
             }
             Err(e) => return Err(VaultError::Io(e)),
         }
+        // Structural moves are NO-CLOBBER (#871 Codex round 3): refuse if the
+        // DESTINATION entry already exists. `std::fs::rename` REPLACES its
+        // target, so without this a move/rename (or its undo replay) onto an
+        // occupied path silently destroys the file there. `symlink_metadata`
+        // (lstat) inspects the entry ITSELF — `exists()` follows symlinks and
+        // reports a DANGLING symlink as absent, letting `rename` obliterate it;
+        // it also catches a real file the SQLite index doesn't yet know about
+        // (an external write between scans), which the index-level collision
+        // check in `structural_move_file` misses. This is the fast early-out
+        // (and the only guard on platforms without an atomic no-replace rename);
+        // the atomic primitive below closes the check-to-rename TOCTOU race.
+        match to_path.symlink_metadata() {
+            Ok(_) => {
+                return Err(VaultError::DestinationExists {
+                    path: to.to_string(),
+                });
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(VaultError::Io(e)),
+        }
         if let Some(parent) = to_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::rename(&from_path, &to_path)?;
-        Ok(())
+        // Atomic no-replace (#871 Codex round 4): closes the window between the
+        // lstat check above and the rename, where an external writer could have
+        // created the destination — `fs::rename` would then destroy it. The
+        // kernel primitive fails with `EEXIST` if the destination exists,
+        // atomically, matching `atomic_create`'s `hard_link` no-replace publish.
+        match rename_no_replace(&from_path, &to_path) {
+            Ok(()) => Ok(()),
+            // `AlreadyExists` is the portable mapping of the atomic primitive's
+            // EEXIST (std maps it there) — referenced instead of `libc::EEXIST`
+            // so this arm compiles on Windows, where `libc` is not a dependency
+            // (#871 Codex round 5).
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                Err(VaultError::DestinationExists {
+                    path: to.to_string(),
+                })
+            }
+            Err(e) => Err(VaultError::Io(e)),
+        }
     }
 
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError> {
@@ -427,6 +463,64 @@ fn unlink_dangling_symlink(path: &Path, meta: &fs::Metadata) -> io::Result<()> {
 #[cfg(not(windows))]
 fn unlink_dangling_symlink(path: &Path, _meta: &fs::Metadata) -> io::Result<()> {
     fs::remove_file(path)
+}
+
+/// Atomically rename `from` → `to`, FAILING with `EEXIST` if `to` already
+/// exists (#871 Codex round 4). Unlike `fs::rename` — which silently REPLACES
+/// its target — this closes the check-to-rename TOCTOU window: an external
+/// process that creates the destination after the caller's lstat pre-check can
+/// no longer be clobbered. macOS uses `renamex_np(RENAME_EXCL)`, Linux
+/// `renameat2(RENAME_NOREPLACE)`. Other targets (Windows is parked) fall back
+/// to a plain `fs::rename` guarded only by the caller's pre-check.
+#[cfg(target_os = "macos")]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let from_c = std::ffi::CString::new(from.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let to_c = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    // SAFETY: both CStrings outlive the call and are valid NUL-terminated
+    // paths; RENAME_EXCL asks the kernel for atomic no-replace semantics.
+    let rc = unsafe { libc::renamex_np(from_c.as_ptr(), to_c.as_ptr(), libc::RENAME_EXCL) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// GNU only — `libc 0.2` exposes the `renameat2` wrapper under Linux glibc but
+// not musl (#871 Codex round 5), so musl falls to the portable branch below.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let from_c = std::ffi::CString::new(from.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let to_c = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    // SAFETY: valid NUL-terminated paths; RENAME_NOREPLACE = atomic no-replace.
+    let rc = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from_c.as_ptr(),
+            libc::AT_FDCWD,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// Portable fallback: no atomic no-replace primitive is wired for this target
+// (Windows — parked — and Linux musl). The caller's lstat pre-check is the
+// best-effort guard, with the residual check-to-rename TOCTOU window `fs::rename`
+// inherently has. None of slate's SHIPPING targets (macOS, Linux glibc) land
+// here; they take the atomic branches above.
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
 }
 
 /// Extract inode change time (ctime) as Unix epoch milliseconds.
@@ -889,6 +983,62 @@ mod tests {
             .symlink_metadata()
             .expect("renamed symlink should be a real entry at the destination");
         assert!(moved.file_type().is_symlink());
+    }
+
+    #[test]
+    fn rename_refuses_to_clobber_an_existing_destination() {
+        // #871 Codex round 3: structural rename/move is NO-CLOBBER — replacing
+        // the destination via `fs::rename` would be silent data loss.
+        let (tmp, p) = vault();
+        p.write_file("src.md", b"source").unwrap();
+        p.write_file("dst.md", b"victim").unwrap();
+
+        let err = p.rename("src.md", "dst.md").unwrap_err();
+        assert!(matches!(err, VaultError::DestinationExists { .. }));
+
+        // The victim is untouched and the source stays put.
+        assert_eq!(p.read_file("dst.md").unwrap(), b"victim");
+        assert!(tmp.path().join("src.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_refuses_to_clobber_a_dangling_symlink_destination() {
+        // A DANGLING symlink at the destination: `exists()` reports it absent,
+        // but the lstat-based guard must still refuse — else `fs::rename`
+        // destroys it (Codex round 3).
+        let (tmp, p) = vault();
+        p.write_file("src.md", b"source").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("nowhere.md"), tmp.path().join("dst.md"))
+            .unwrap();
+
+        let err = p.rename("src.md", "dst.md").unwrap_err();
+        assert!(matches!(err, VaultError::DestinationExists { .. }));
+
+        // The dangling symlink survives; the source stays put.
+        assert!(tmp.path().join("dst.md").symlink_metadata().is_ok());
+        assert!(tmp.path().join("src.md").exists());
+    }
+
+    /// #871 Codex round 4: the ATOMIC primitive itself must refuse an occupied
+    /// destination with `EEXIST` — this is the layer that closes the
+    /// check-to-rename TOCTOU window (an external writer winning the race after
+    /// `provider.rename`'s lstat pre-check). Tested directly, bypassing that
+    /// pre-check, since the window itself is inherently non-deterministic.
+    #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+    #[test]
+    fn rename_no_replace_atomic_refuses_occupied_destination() {
+        let (tmp, _p) = vault();
+        std::fs::write(tmp.path().join("src.md"), b"source").unwrap();
+        std::fs::write(tmp.path().join("dst.md"), b"victim").unwrap();
+
+        let err = rename_no_replace(&tmp.path().join("src.md"), &tmp.path().join("dst.md"))
+            .expect_err("atomic no-replace must refuse an occupied destination");
+
+        // EEXIST maps to `AlreadyExists` — the same portable check `rename` uses.
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(tmp.path().join("dst.md")).unwrap(), b"victim");
+        assert!(tmp.path().join("src.md").exists());
     }
 
     #[cfg(unix)]

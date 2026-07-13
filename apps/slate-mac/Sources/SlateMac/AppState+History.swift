@@ -546,6 +546,10 @@ extension AppState {
             }
             announcer.post(
                 "Restored \(sourceName) as \(filename(of: trimmed)).", priority: .high)
+            // #871 Codex round 2: Restore As creates a file outside the
+            // `publishTreeMutation` barrier — clear the structural undo history
+            // so a stale inverse can't target the restored path.
+            clearStructuralUndoStacks()
             await loadFiles()
             await loadDeletedFiles()
             // Selection carries focus to the new file (the funnel).

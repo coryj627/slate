@@ -162,6 +162,10 @@ extension AppState {
             // would overwrite it with "{}". The no-clobber primitive
             // surfaces DestinationExists instead.
             _ = try session.createExclusive(path: name, content: "{}\n")
+            // #871 Codex round 2: a non-undoable structural create that
+            // bypasses `publishTreeMutation` — clear the structural undo
+            // history (barrier) so no stale inverse targets this new path.
+            clearStructuralUndoStacks()
             openFile(name, target: .currentTab)
             canvasAnnouncer.announce(
                 .confirmation("Created canvas \"\((name as NSString).deletingPathExtension)\"."))
