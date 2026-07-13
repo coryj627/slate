@@ -58,6 +58,13 @@ struct SlateMacApp: App {
                 .task { appState.restoreMostRecentVaultOnLaunch() }
         }
         .commands {
+            // #880: makes the customizable `toolbar(id: "main")` reachable.
+            // On macOS this is what surfaces View ▸ Customize Toolbar… and the
+            // Control-click "Customize Toolbar…" editor (and the Show/Hide
+            // Toolbar item); without it the per-item `ToolbarItem(id:)`
+            // customization has no user-facing entry point.
+            ToolbarCommands()
+
             CommandGroup(replacing: .newItem) {
                 // ⇧⌘O (#863; was ⌘O): opening a vault is app-level and
                 // rare — bare ⌘O now belongs to Quick Open below, the
