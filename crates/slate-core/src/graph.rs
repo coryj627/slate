@@ -748,6 +748,31 @@ impl GraphIndex {
         }
     }
 
+    /// Test/bench fixture: build a note-only graph directly from `paths`
+    /// (each a markdown Note) and `links` (`(source, target)` index
+    /// pairs → a resolved `Link` edge). Repeated pairs collapse into
+    /// the edge's `count`. Bypasses SQLite for pure-Rust unit tests and
+    /// Criterion benches (e.g. the P2-1 layout kernel); the real path is
+    /// `build`. `#[doc(hidden)]` — not public API, only the test/bench
+    /// seam (mirrors the `*_for_bench` convention).
+    #[doc(hidden)]
+    pub fn from_test_links(paths: &[&str], links: &[(usize, usize)]) -> GraphIndex {
+        let mut index = GraphIndex {
+            graph: StableDiGraph::new(),
+            by_key: HashMap::new(),
+            generation: 0,
+        };
+        let idxs: Vec<NodeIndex> = paths
+            .iter()
+            .map(|p| index.insert_path_node((*p).to_string(), true))
+            .collect();
+        for &(s, t) in links {
+            let target_path = Some(paths[t].to_string());
+            index.add_reference(idxs[s], &target_path, paths[t], EdgeKind::Link);
+        }
+        index
+    }
+
     /// Recompute the source's collapsed out-edge multiset from `rows`,
     /// diff against current out-edges, apply. A ghost node is removed
     /// when its last in-edge goes; a Path node is never removed by

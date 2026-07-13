@@ -568,3 +568,25 @@ Note for future filtered runs: criterion name filters skip measurements
 but not group setup — a filtered `graph_bench` run still pays every
 group's vault generation + scan priming (both 50k primes included).
 Split hot groups into their own bench binary if this becomes a habit.
+
+---
+
+## V1 — 2026-07-12 (#557: deterministic force-layout kernel, Milestone P P2-1)
+
+`cargo bench -p slate-core --bench layout_bench` on Apple silicon (release,
+single-threaded). Synthetic graph: `n` notes with ~`2n` seeded-random links
+(`from_test_links`). The kernel is `graph_layout::LayoutEngine` — seeded
+Fruchterman–Reingold + gravity, `f64`, exact repulsion below 1,500 nodes and
+a Barnes–Hut quadtree tier (θ=0.9) at or above it.
+
+| Benchmark | Time | Budget (locked decision 10) |
+|---|---:|---|
+| `layout_cold/300` (300 iters, exact) | **38.0 ms** | baseline |
+| `layout_cold/1500` (300 iters, exact) | **808 ms** | baseline |
+| `layout_cold/10000` (300 iters, Barnes–Hut) | **2.14 s** | ≤ 3 s ✓ |
+| `layout_warm_tick/300` (one settled force pass) | **131 µs** | < 2 ms ✓ |
+
+Both gated budgets pass. Determinism (DoD §P-C) is enforced separately by the
+golden-digest unit tests (bit-identical positions at iters {60, 300} for the
+10- and 100-node fixtures) and the `census_barnes_hut_matches_exact` oracle
+(BH repulsion within 5% RMS of the exact solver on ≤500-node graphs).
