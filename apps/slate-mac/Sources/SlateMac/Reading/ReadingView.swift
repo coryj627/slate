@@ -118,6 +118,11 @@ struct ReadingView: View {
         var onOpenBaseEmbedInTab: (BaseEmbedOpenDestination) -> Void = { _ in }
         var baseEmbedHandleProvider: @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
             { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
+        /// #871: a reading-mode Dataview → .base conversion writes through an
+        /// NSSavePanel just like the editor path; report (url, existedBefore)
+        /// so AppState can barrier the structural undo history for a newly
+        /// created in-vault path.
+        var onWroteBaseSaveDestination: (URL, Bool) -> Void = { _, _ in }
 
         init(
             mathBlocks: [MathBlock] = [],
@@ -137,7 +142,8 @@ struct ReadingView: View {
             baseEmbedThisPath: String? = nil,
             onOpenBaseEmbedInTab: @escaping (BaseEmbedOpenDestination) -> Void = { _ in },
             baseEmbedHandleProvider: @escaping @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
-                { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
+                { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) },
+            onWroteBaseSaveDestination: @escaping (URL, Bool) -> Void = { _, _ in }
         ) {
             self.mathBlocks = mathBlocks
             self.codeBlocks = codeBlocks
@@ -156,6 +162,7 @@ struct ReadingView: View {
             self.baseEmbedThisPath = baseEmbedThisPath
             self.onOpenBaseEmbedInTab = onOpenBaseEmbedInTab
             self.baseEmbedHandleProvider = baseEmbedHandleProvider
+            self.onWroteBaseSaveDestination = onWroteBaseSaveDestination
         }
     }
 
@@ -537,7 +544,8 @@ struct ReadingView: View {
             sharedHandle: context.baseEmbedHandleProvider(request, context.baseEmbedThisPath),
             onOpenInTab: { destination in
                 context.onOpenBaseEmbedInTab(destination)
-            })
+            },
+            onWroteSaveDestination: context.onWroteBaseSaveDestination)
             .id(
                 BaseExactIdentity.key(
                     prefix: "reading-base-embed",

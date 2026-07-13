@@ -45,6 +45,11 @@ struct BaseEmbedView: View {
     let session: VaultSession?
     let thisPath: String?
     let onOpenInTab: (BaseEmbedOpenDestination) -> Void
+    /// #871: after a save-panel write (Dataview → .base), report the written
+    /// URL + whether it existed beforehand so AppState can apply the
+    /// structural-undo barrier. BaseEmbedView holds no AppState reference, so
+    /// the create-vs-overwrite + in-vault decision lives one hop up.
+    let onWroteSaveDestination: (URL, Bool) -> Void
 
     @StateObject private var document: BaseEmbedDocument
     @State private var interaction = BaseGridInteractionState()
@@ -58,12 +63,14 @@ struct BaseEmbedView: View {
         session: VaultSession?,
         thisPath: String?,
         sharedHandle: BaseEmbedHandle,
-        onOpenInTab: @escaping (BaseEmbedOpenDestination) -> Void
+        onOpenInTab: @escaping (BaseEmbedOpenDestination) -> Void,
+        onWroteSaveDestination: @escaping (URL, Bool) -> Void = { _, _ in }
     ) {
         self.request = request
         self.session = session
         self.thisPath = thisPath
         self.onOpenInTab = onOpenInTab
+        self.onWroteSaveDestination = onWroteSaveDestination
         _document = StateObject(
             wrappedValue: BaseEmbedDocument(
                 request: request, thisPath: thisPath, sharedHandle: sharedHandle))
@@ -335,16 +342,26 @@ struct BaseEmbedView: View {
             panel.nameFieldStringValue = "Converted.base"
             panel.begin { response in
                 guard response == .OK, let url = panel.url else { return }
+                // #871 post-merge audit: the save panel can target ANYWHERE, so
+                // snapshot existence BEFORE the write; the in-vault + create-vs-
+                // overwrite barrier decision is made in `onWroteSaveDestination`
+                // (BaseEmbedView has no AppState, so it delegates the clear).
+                let existedBefore = FileManager.default.fileExists(atPath: url.path)
                 DispatchQueue.global(qos: .userInitiated).async {
                     let message: String
+                    var wroteOK = false
                     do {
                         try text.write(to: url, atomically: true, encoding: .utf8)
                         message = "Converted Dataview block to .base."
+                        wroteOK = true
                     } catch {
                         message = "Dataview conversion could not be saved: \(error.localizedDescription)"
                     }
                     DispatchQueue.main.async {
                         postAccessibilityAnnouncement(message, priority: .medium)
+                        if wroteOK {
+                            onWroteSaveDestination(url, existedBefore)
+                        }
                     }
                 }
             }
@@ -416,6 +433,10 @@ struct VisibilityGatedBaseEmbed: View {
     let thisPath: String?
     let sharedHandle: BaseEmbedHandle
     let onOpenInTab: (BaseEmbedOpenDestination) -> Void
+    /// #871: forwarded to `BaseEmbedView` so a Dataview → .base save-panel
+    /// write can be barriered by AppState. Defaults to a no-op for callers
+    /// (previews / tests) that never convert.
+    var onWroteSaveDestination: (URL, Bool) -> Void = { _, _ in }
 
     @State private var visibility = BaseEmbedVisibilityState()
     @State private var ownsMountedLease = false
@@ -428,7 +449,8 @@ struct VisibilityGatedBaseEmbed: View {
                     session: session,
                     thisPath: thisPath,
                     sharedHandle: sharedHandle,
-                    onOpenInTab: onOpenInTab)
+                    onOpenInTab: onOpenInTab,
+                    onWroteSaveDestination: onWroteSaveDestination)
             } else {
                 deferredPlaceholder
             }
@@ -481,6 +503,9 @@ struct BaseEmbedPreviewList: View {
     let onOpenInTab: (BaseEmbedOpenDestination) -> Void
     let onJumpToSource: (Int) -> Void
     let handleProvider: @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle
+    /// #871: forwarded to each embed so a Dataview → .base save-panel write is
+    /// barriered by AppState.
+    let onWroteSaveDestination: (URL, Bool) -> Void
 
     init(
         text: String,
@@ -489,7 +514,8 @@ struct BaseEmbedPreviewList: View {
         onOpenInTab: @escaping (BaseEmbedOpenDestination) -> Void,
         onJumpToSource: @escaping (Int) -> Void = { _ in },
         handleProvider: @escaping @MainActor (BaseEmbedRequest, String?) -> BaseEmbedHandle =
-            { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) }
+            { request, thisPath in BaseEmbedHandle(request: request, thisPath: thisPath) },
+        onWroteSaveDestination: @escaping (URL, Bool) -> Void = { _, _ in }
     ) {
         self.text = text
         self.session = session
@@ -497,6 +523,7 @@ struct BaseEmbedPreviewList: View {
         self.onOpenInTab = onOpenInTab
         self.onJumpToSource = onJumpToSource
         self.handleProvider = handleProvider
+        self.onWroteSaveDestination = onWroteSaveDestination
     }
 
     private var previews: [BaseEmbedPreview] {
@@ -525,7 +552,8 @@ struct BaseEmbedPreviewList: View {
                                 session: session,
                                 thisPath: thisPath,
                                 sharedHandle: handleProvider(preview.request, thisPath),
-                                onOpenInTab: onOpenInTab)
+                                onOpenInTab: onOpenInTab,
+                                onWroteSaveDestination: onWroteSaveDestination)
                         }
                         .id(
                             BaseExactIdentity.key(

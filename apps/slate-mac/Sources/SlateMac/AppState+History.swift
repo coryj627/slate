@@ -473,6 +473,8 @@ extension AppState {
         guard !Task.isCancelled, currentSession === session else { return }
         switch result {
         case .success:
+            // #871 post-merge audit: bypasses publishTreeMutation — barrier the structural undo history so no stale inverse targets this new path.
+            clearStructuralUndoStacks()
             announcer.post("Restored \(filename(of: path)).", priority: .high)
             await loadFiles()
             await loadDeletedFiles()

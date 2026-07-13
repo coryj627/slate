@@ -6726,6 +6726,21 @@ final class AppState: ObservableObject {
             // Bases are session-global consumers. A same-session note switch
             // must not suppress their refresh after this write committed.
             refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+            // #871 post-merge audit: `expectedHash == ""` is the create-IF-ABSENT
+            // idiom — the app observed this path as MISSING, so a successful save
+            // just CREATED it (e.g. Keep Mine after the note's path was externally
+            // deleted). That bypassing create is SESSION-GLOBAL (a file landing on
+            // disk, not tied to the current note), so it barriers the structural
+            // undo history REGARDLESS of whether the note is still loaded. It is
+            // placed BEFORE the per-note `loadedFilePath` publication guard on
+            // purpose: a same-vault note/tab switch mid-write trips that guard and
+            // would otherwise skip the clear, leaving a stale inverse armed against
+            // the recreated path. A NORMAL save of an existing file (non-empty
+            // expected hash) leaves the history intact.
+            if expectedHash?.isEmpty == true {
+                barrierStructuralUndoForCreatedVaultPath(
+                    relativePath: path, existedBefore: false)
+            }
         }
         guard loadedFilePath == path else {
             isSaving = false
@@ -7778,6 +7793,47 @@ final class AppState: ObservableObject {
         structuralUndoStack = []
         structuralRedoStack = []
         noteUndoStacksChanged()
+    }
+
+    /// On-disk presence of a VAULT-RELATIVE path right now — the snapshot a
+    /// create-vs-overwrite barrier decision takes IMMEDIATELY BEFORE an
+    /// unconditional (create-OR-overwrite) write, so it can tell a newly
+    /// created path from an in-place overwrite of an already-present one.
+    func vaultPathExists(_ relativePath: String) -> Bool {
+        guard let vault = currentVaultURL else { return false }
+        return FileManager.default.fileExists(
+            atPath: vault.appendingPathComponent(relativePath).path)
+    }
+
+    /// The single place the #871 structural-undo barrier rule lives. The
+    /// barrier (`clearStructuralUndoStacks`) must fire EXACTLY when a write
+    /// makes a previously-ABSENT in-vault openable path become PRESENT, because
+    /// a pending move/rename inverse could name that path as its destination
+    /// and would then act on the wrong file. `relativePath` is the write target
+    /// as a VAULT-RELATIVE path, or nil when the write lands OUTSIDE the vault
+    /// (nothing to barrier). `existedBefore` is that path's on-disk presence
+    /// snapshotted IMMEDIATELY BEFORE the write. Fires ONLY for a newly created
+    /// in-vault path — never on an in-place OVERWRITE of an already-present path
+    /// (that would drop an unrelated legit undo) and never off-vault. Exclusive
+    /// funnels whose success already implies "created" (createExclusive /
+    /// create-if-absent saveText / a delete-remnant restore) call
+    /// `clearStructuralUndoStacks()` directly instead.
+    func barrierStructuralUndoForCreatedVaultPath(
+        relativePath: String?, existedBefore: Bool
+    ) {
+        guard relativePath != nil, !existedBefore else { return }
+        clearStructuralUndoStacks()
+    }
+
+    /// Save-panel convenience over `barrierStructuralUndoForCreatedVaultPath`:
+    /// resolve an arbitrary on-disk `url` (an NSSavePanel destination that may
+    /// target ANYWHERE) to a vault-relative path — out-of-vault → nil → no
+    /// barrier — and apply the create-vs-overwrite rule. `existedBefore` must be
+    /// snapshotted before the write.
+    func barrierStructuralUndoForExternalWrite(to url: URL, existedBefore: Bool) {
+        barrierStructuralUndoForCreatedVaultPath(
+            relativePath: Self.vaultRelativePath(of: url, vaultURL: currentVaultURL),
+            existedBefore: existedBefore)
     }
 
     // MARK: - Import (#870)

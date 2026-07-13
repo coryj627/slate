@@ -343,7 +343,15 @@ extension AppState {
             return
         }
         do {
+            // #871 post-merge audit: exportSavedQueryAsBase is an unconditional
+            // (create-OR-overwrite) write, so snapshot existence BEFORE it and
+            // barrier the structural undo history ONLY when a NEW in-vault path
+            // is created — overwriting an existing .base must not drop a legit
+            // move/rename undo.
+            let existedBefore = vaultPathExists(trimmed)
             try session.exportSavedQueryAsBase(id: id, path: trimmed)
+            barrierStructuralUndoForCreatedVaultPath(
+                relativePath: trimmed, existedBefore: existedBefore)
             refreshBaseQueries()
             postBaseActionAnnouncement("Exported saved query as \(trimmed).")
         } catch {
@@ -1496,7 +1504,14 @@ extension AppState {
             return
         }
         do {
+            // #871 post-merge audit: saveQueryAsBase is an unconditional
+            // (create-OR-overwrite) write — snapshot existence BEFORE it and
+            // barrier ONLY when a NEW in-vault path is created (an overwrite of
+            // an existing .base must not drop a legit move/rename undo).
+            let existedBefore = vaultPathExists(trimmed)
             try session.saveQueryAsBase(queryJson: model.draft.queryJSON(), path: trimmed)
+            barrierStructuralUndoForCreatedVaultPath(
+                relativePath: trimmed, existedBefore: existedBefore)
             refreshBaseQueries()
             refreshVisibleBasesAfterInAppWrite(session: session, changedPath: trimmed)
             postAccessibilityAnnouncement("Saved query as \(trimmed).", priority: .medium)
@@ -2116,16 +2131,27 @@ extension AppState {
             panel.nameFieldStringValue = "\(doc.displayName) — \(viewName).\(fileExtension)"
             panel.begin { [weak self] response in
                 guard response == .OK, let url = panel.url else { return }
+                // #871 post-merge audit: the save panel can target ANYWHERE, so
+                // snapshot existence BEFORE the write; the barrier below fires
+                // only when a NEW in-vault path is created (out-of-vault and
+                // overwrite both leave the structural undo history intact).
+                let existedBefore = FileManager.default.fileExists(atPath: url.path)
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     let message: String
+                    var wroteOK = false
                     do {
                         try text.write(to: url, atomically: true, encoding: .utf8)
                         message = "Exported base view."
+                        wroteOK = true
                     } catch {
                         message = "Base view could not be exported: \(error.localizedDescription)"
                     }
                     DispatchQueue.main.async { [weak self] in
                         self?.postBaseActionAnnouncement(message)
+                        if wroteOK {
+                            self?.barrierStructuralUndoForExternalWrite(
+                                to: url, existedBefore: existedBefore)
+                        }
                     }
                 }
             }

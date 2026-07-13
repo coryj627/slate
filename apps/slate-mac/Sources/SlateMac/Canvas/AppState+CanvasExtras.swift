@@ -233,6 +233,8 @@ extension AppState {
             // would save unconditionally and clobber it.
             _ = try session.saveText(
                 path: cleanPath, contents: text, expectedContentHash: "")
+            // #871 post-merge audit: bypasses publishTreeMutation — barrier the structural undo history so no stale inverse targets this new path.
+            clearStructuralUndoStacks()
         } catch let error as VaultError {
             if case .WriteConflict = error {
                 canvasAnnouncer.announce(
