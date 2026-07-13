@@ -524,4 +524,441 @@ final class StructuralUndoTests: XCTestCase {
             "the dangling symlink at a.md was not clobbered")
         XCTAssertTrue(exists(vault, "dest/a.md"), "the move was not wrongly reversed")
     }
+
+    // MARK: - Post-merge audit: bypassing-create funnels are all barriers
+
+    /// #871 post-merge audit (PR9/#901 Codex round): `recoverDeleted` restores
+    /// a trashed file via `session.recoverDeletedFile` — a structural CREATE
+    /// that BYPASSES `publishTreeMutation`, so it must clear the structural
+    /// undo history itself. Otherwise a stale move/rename inverse armed before
+    /// the restore could target the very path the restored file now occupies,
+    /// advertising a doomed one-keystroke undo. Behavioral proof: arm an
+    /// inverse AFTER the delete, restore, and confirm the stack is barriered
+    /// (and the file actually came back, so the barrier assertion is real).
+    func testRecoverDeletedIsAStructuralHistoryBarrier() async throws {
+        let (state, vault) = try await makeVault(files: ["b.md", "dest/x.md"])
+        guard let session = state.currentSession else { return XCTFail("no session") }
+
+        // Create a.md THROUGH the session (journaled, so its remnant is
+        // recoverable), then trash it and surface the remnant at scan reconcile
+        // — the proven recipe from HistoryPanelTests.
+        _ = try session.saveText(
+            path: "a.md", contents: "recover me\n", expectedContentHash: nil)
+        try session.deleteFile(path: "a.md")
+        _ = try session.scanInitial(cancel: CancelToken())
+        await state.loadDeletedFiles()
+        XCTAssertTrue(
+            state.deletedFiles.contains { $0.path == "a.md" && $0.recoverable },
+            "precondition: a.md is a recoverable remnant")
+
+        // Arm a structural inverse AFTER the delete, so a stale move-inverse sits
+        // on the stack when the restore (a bypassing create) lands.
+        await state.moveEntry(path: "b.md", isDirectory: false, to: "dest")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "the move armed an inverse")
+
+        await state.recoverDeleted(path: "a.md")
+
+        XCTAssertEqual(
+            try session.readText(path: "a.md"), "recover me\n",
+            "the success path ran — a.md was restored")
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty,
+            "recoverDeleted bypasses publishTreeMutation — it must barrier the stale inverse")
+        XCTAssertTrue(exists(vault, "dest/b.md"), "the arming move stands (only history cleared)")
+    }
+
+    /// #871 barrier-contract census (post-merge audit of PR9/#901). Every
+    /// creation funnel that BYPASSES the `publishTreeMutation` choke point must
+    /// apply the structural-undo barrier on its SUCCESS path — a stale
+    /// move/rename inverse could otherwise replay onto the path the new file
+    /// just filled ("Can't undo — the files have changed"). Reads each funnel's
+    /// brace-balanced body from source and asserts, per funnel, that the barrier
+    /// call is:
+    ///   - PRESENT (guards silent removal),
+    ///   - AFTER the create/write call (guards the clear being moved before the
+    ///     create — where it would drop a legit undo without protecting the new
+    ///     path), and
+    ///   - on the SUCCESS path — for a linear do/switch success the barrier is
+    ///     reached with NO intervening `catch`; for the two save-panel funnels
+    ///     (write in a do/catch, barrier gated by a success flag) the `if
+    ///     wroteOK` guard sits between the write and the barrier.
+    /// A missing funnel is an XCTFail, not a silent skip, so the census can't be
+    /// defeated by a rename.
+    func testEveryBypassingCreateFunnelBarriersOnItsSuccessPath() {
+        struct Funnel {
+            let name: String
+            let file: String
+            let createAnchor: String
+            let barrier: String
+            /// nil → linear success path (assert NO `catch` between the anchor
+            /// and the barrier); non-nil → the success-flag guard that must sit
+            /// between the write and the barrier (save-panel funnels).
+            let successGuard: String?
+            /// Optional: a token the barrier must appear strictly BEFORE — guards
+            /// a success-path ORDERING regression (performSave's session-global
+            /// barrier must precede the per-note `loadedFilePath` guard, or a
+            /// switch-away mid-write skips it).
+            var mustPrecede: String? = nil
+        }
+        let funnels = [
+            Funnel(
+                name: "recoverDeleted", file: "AppState+History.swift",
+                createAnchor: "case .success:",
+                barrier: "clearStructuralUndoStacks()", successGuard: nil),
+            Funnel(
+                name: "canvasConvertToNote", file: "Canvas/AppState+CanvasExtras.swift",
+                createAnchor: "session.saveText(",
+                barrier: "clearStructuralUndoStacks()", successGuard: nil),
+            Funnel(
+                name: "exportSavedQuery", file: "Bases/AppState+Bases.swift",
+                createAnchor: "exportSavedQueryAsBase(",
+                barrier: "barrierStructuralUndoForCreatedVaultPath(", successGuard: nil),
+            Funnel(
+                name: "basesBuilderSaveAsBase", file: "Bases/AppState+Bases.swift",
+                createAnchor: "saveQueryAsBase(",
+                barrier: "barrierStructuralUndoForCreatedVaultPath(", successGuard: nil),
+            Funnel(
+                name: "performSave", file: "AppState.swift",
+                createAnchor: "if case .success = outcome {",
+                barrier: "barrierStructuralUndoForCreatedVaultPath(", successGuard: nil,
+                mustPrecede: "guard loadedFilePath == path"),
+            Funnel(
+                name: "basesExportToSavePanel", file: "Bases/AppState+Bases.swift",
+                createAnchor: "text.write(to: url",
+                barrier: "barrierStructuralUndoForExternalWrite(", successGuard: "if wroteOK"),
+            Funnel(
+                name: "convertDataview", file: "Bases/BaseEmbedView.swift",
+                createAnchor: "text.write(to: url",
+                barrier: "onWroteSaveDestination(", successGuard: "if wroteOK"),
+        ]
+        for funnel in funnels {
+            guard let source = Self.slateMacSource(funnel.file) else {
+                XCTFail(
+                    "source \(funnel.file) not found relative to the test file — "
+                        + "the #871 barrier census can no longer read the funnel")
+                continue
+            }
+            guard let bodySub = Self.functionBody(funnel.name, in: source) else {
+                XCTFail(
+                    "func \(funnel.name) not found in \(funnel.file) — the #871 "
+                        + "barrier census can no longer locate the funnel")
+                continue
+            }
+            let body = String(bodySub)
+            guard let createRange = body.range(of: funnel.createAnchor) else {
+                XCTFail(
+                    "\(funnel.name): create/write anchor \"\(funnel.createAnchor)\" "
+                        + "not found in the funnel body")
+                continue
+            }
+            guard
+                let barrierRange = body.range(
+                    of: funnel.barrier,
+                    range: createRange.upperBound..<body.endIndex)
+            else {
+                XCTFail(
+                    "\(funnel.name): barrier \"\(funnel.barrier)\" missing or not "
+                        + "AFTER the create/write — the #871 barrier must be on "
+                        + "the success path")
+                continue
+            }
+            let between = body[createRange.upperBound..<barrierRange.lowerBound]
+            if let guardToken = funnel.successGuard {
+                XCTAssertTrue(
+                    between.contains(guardToken),
+                    "\(funnel.name): the barrier must be gated by \"\(guardToken)\" "
+                        + "(success-only) — not run on the write's failure path")
+            } else {
+                XCTAssertFalse(
+                    between.contains("catch"),
+                    "\(funnel.name): a `catch` between the create and the barrier "
+                        + "means the barrier isn't on the linear success path")
+            }
+            if let precedeToken = funnel.mustPrecede {
+                guard let precedeRange = body.range(of: precedeToken) else {
+                    XCTFail(
+                        "\(funnel.name): ordering anchor \"\(precedeToken)\" not "
+                            + "found — can't verify the barrier's position")
+                    continue
+                }
+                XCTAssertLessThan(
+                    barrierRange.lowerBound, precedeRange.lowerBound,
+                    "\(funnel.name): the session-global barrier must appear BEFORE "
+                        + "\"\(precedeToken)\" — placing it after that per-note guard "
+                        + "lets a switch-away mid-write skip the clear (ordering race)")
+            }
+        }
+    }
+
+    /// #871 over-clearing regression (Codex finding 3). `exportSavedQuery` calls
+    /// the UNCONDITIONAL (create-OR-overwrite) `exportSavedQueryAsBase`, so it
+    /// must barrier ONLY when a NEW in-vault `.base` is created — exporting OVER
+    /// an existing `.base` must leave an unrelated legit move/rename undo intact.
+    func testExportSavedQueryBarriersOnlyWhenCreatingANewBasePath() async throws {
+        let (state, vault) = try await makeVault(files: ["b.md", "dest/x.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        let queryID = try session.saveQuery(
+            name: "All Files", description: nil,
+            queryJson: Self.minimalSavedQueryJSON, sourceSyntax: .builder)
+
+        // NEW path: the export creates a .base that did not exist → barrier.
+        await state.moveEntry(path: "b.md", isDirectory: false, to: "dest")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "move armed an inverse")
+        state.exportSavedQuery(id: queryID, path: "new.base")
+        XCTAssertTrue(exists(vault, "new.base"), "the export created the file")
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty,
+            "exporting to a NEW in-vault path barriers the stale inverse")
+
+        // EXISTING path: the export OVERWRITES new.base → must NOT barrier.
+        await state.moveEntry(path: "dest/b.md", isDirectory: false, to: "")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "second move re-armed")
+        state.exportSavedQuery(id: queryID, path: "new.base")
+        XCTAssertEqual(
+            state.structuralUndoStack.count, 1,
+            "overwriting an EXISTING .base must NOT drop the legit move undo")
+    }
+
+    /// #871 Keep Mine create-from-missing barrier (Codex finding 2). Move an
+    /// open note's sibling to arm an inverse, externally delete the note, then
+    /// Keep Mine: the save observes the path as MISSING (empty expected hash)
+    /// and RECREATES it — a bypassing create that must barrier the stale
+    /// inverse. A normal save (non-empty expected hash) is covered by the
+    /// census; here we prove the create-from-missing transition end-to-end.
+    func testKeepMineRecreatingAMissingNoteIsAStructuralHistoryBarrier() async throws {
+        let (state, vault) = try await makeVault(files: ["note.md", "b.md"])
+
+        // Load note.md into the editor.
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.loadedFilePath, "note.md")
+
+        // Arm a structural inverse (rename a sibling) that must survive to Keep
+        // Mine — a stale inverse waiting when the recreate lands.
+        await state.renameEntry(path: "b.md", isDirectory: false, to: "c.md")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "rename armed an inverse")
+
+        // Externally DELETE the open note, then dirty + save → the save sees the
+        // file missing (hash mismatch) and raises a conflict (no barrier yet).
+        try FileManager.default.removeItem(at: vault.appendingPathComponent("note.md"))
+        state.updateEditorText("# note\n\nmy unsaved edit.\n")
+        await state.saveCurrentNote()?.value
+        let conflict = try XCTUnwrap(
+            state.currentSaveConflict, "a missing file surfaces a save conflict")
+        XCTAssertEqual(
+            conflict.currentContentHash, "", "the disk hash of a missing file is empty")
+        XCTAssertEqual(
+            state.structuralUndoStack.count, 1, "the conflict did not touch history")
+
+        // Keep Mine re-saves with the empty (missing) expected hash — a
+        // create-from-missing that recreates note.md and must barrier.
+        await state.resolveSaveConflictKeepMine()?.value
+
+        XCTAssertTrue(exists(vault, "note.md"), "Keep Mine recreated the note")
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty,
+            "a create-from-missing save is a structural-history barrier")
+    }
+
+    /// #871 the shared save-panel barrier helper's decision matrix (Codex
+    /// finding 1). `barrierStructuralUndoForExternalWrite` is what the two
+    /// save-panel funnels (Dataview → .base conversion, Export Markdown)
+    /// delegate to; NSSavePanel can target anywhere, so it must clear ONLY for a
+    /// newly created IN-VAULT path — never for an overwrite, never off-vault.
+    func testExternalWriteBarrierRespectsInVaultAndCreateVsOverwrite() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/x.md"])
+
+        // (1) A NEW in-vault path clears the history.
+        await state.moveEntry(path: "a.md", isDirectory: false, to: "dest")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1)
+        state.barrierStructuralUndoForExternalWrite(
+            to: vault.appendingPathComponent("fresh.base"), existedBefore: false)
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty, "a new in-vault path barriers")
+
+        // (2) An OVERWRITE of an existing in-vault path must NOT clear.
+        await state.moveEntry(path: "dest/a.md", isDirectory: false, to: "")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1)
+        state.barrierStructuralUndoForExternalWrite(
+            to: vault.appendingPathComponent("dest/x.md"), existedBefore: true)
+        XCTAssertEqual(
+            state.structuralUndoStack.count, 1, "overwriting keeps the legit undo")
+
+        // (3) A write OUTSIDE the vault must NOT clear, even for a new path.
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("outside-\(UUID().uuidString).base")
+        state.barrierStructuralUndoForExternalWrite(to: outside, existedBefore: false)
+        XCTAssertEqual(
+            state.structuralUndoStack.count, 1, "off-vault writes never barrier")
+    }
+
+    /// #871 Keep-Mine ORDERING race (Codex round 2, finding 1). The
+    /// create-from-missing barrier is SESSION-GLOBAL and must fire even when the
+    /// user switches to another note WHILE the recreate save is in flight —
+    /// i.e. `loadedFilePath != path` at completion. We park the Keep-Mine save
+    /// at the post-write gate, switch the loaded note, then release: the barrier
+    /// must still clear the stale inverse (it now runs BEFORE the per-note
+    /// `loadedFilePath` publication guard, not after it).
+    func testKeepMineBarriersEvenWhenTheNoteSwitchesAwayMidWrite() async throws {
+        let (state, vault) = try await makeVault(files: ["note.md", "other.md", "b.md"])
+
+        // Load note.md.
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.loadedFilePath, "note.md")
+
+        // Arm a structural inverse that must survive to Keep Mine.
+        await state.renameEntry(path: "b.md", isDirectory: false, to: "c.md")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "rename armed an inverse")
+
+        // Externally delete note.md, then save → missing-file conflict (empty
+        // hash). No dirtying — a clean save still conflicts and keeps the
+        // mid-flight note switch free of dirty-navigation entanglement.
+        try FileManager.default.removeItem(at: vault.appendingPathComponent("note.md"))
+        await state.saveCurrentNote()?.value
+        let conflict = try XCTUnwrap(state.currentSaveConflict)
+        XCTAssertEqual(conflict.currentContentHash, "", "missing file → empty hash")
+
+        // Park the Keep-Mine recreate save at the post-write seam so we can
+        // switch the loaded note WHILE the write is in flight.
+        let entered = expectation(description: "keep-mine reached the post-write gate")
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        state.basesPostWritePublishGate = {
+            entered.fulfill()
+            for await _ in gate {}
+        }
+        let keepMine = state.resolveSaveConflictKeepMine()
+        await fulfillment(of: [entered], timeout: 10)
+        state.basesPostWritePublishGate = nil
+
+        // Switch to a DIFFERENT note in the SAME vault → loadedFilePath diverges
+        // from the path the recreate save is committing.
+        state.selectedFilePath = "other.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.loadedFilePath, "other.md")
+
+        // Release the gate → the recreate completes with loadedFilePath !=
+        // "note.md". The session-global barrier must STILL have fired.
+        release.finish()
+        await keepMine?.value
+
+        XCTAssertTrue(exists(vault, "note.md"), "Keep Mine recreated the note on disk")
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty,
+            "the create-from-missing barrier is SESSION-GLOBAL — it must fire even "
+                + "when the note switched away mid-write (the ordering fix)")
+    }
+
+    /// #871 the empty-hash guard is REAL (Codex round 2, finding 2b). A NORMAL
+    /// save (non-empty expected hash, existing file) must NOT clear a pending
+    /// move/rename inverse — the barrier is create-from-missing only. The source
+    /// census can't see this condition, so lock it behaviorally: an
+    /// unconditional barrier would fail here.
+    func testNormalSaveDoesNotClearStructuralHistory() async throws {
+        let (state, _) = try await makeVault(files: ["note.md", "b.md"])
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        XCTAssertNotNil(
+            state.currentNoteContentHash, "a loaded existing note has a real hash")
+
+        // Arm a structural inverse.
+        await state.renameEntry(path: "b.md", isDirectory: false, to: "c.md")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "rename armed an inverse")
+
+        // A normal edit + save of an EXISTING file (non-empty expected hash).
+        state.updateEditorText("# note\n\nedited normally.\n")
+        await state.saveCurrentNote()?.value
+        XCTAssertFalse(state.hasUnsavedChanges, "the normal save committed")
+
+        XCTAssertEqual(
+            state.structuralUndoStack.count, 1,
+            "a normal save of an existing file must NOT drop the legit move undo")
+    }
+
+    /// #871 over-clearing regression for the builder funnel (Codex round 2,
+    /// finding 2c), mirroring the exportSavedQuery new-vs-overwrite test.
+    /// `basesBuilderSaveAsBase` calls the UNCONDITIONAL `saveQueryAsBase`, so it
+    /// must barrier ONLY when a NEW in-vault `.base` is created.
+    func testBasesBuilderSaveAsBaseBarriersOnlyWhenCreatingANewBasePath() async throws {
+        let (state, vault) = try await makeVault(files: ["b.md", "dest/x.md"])
+        state.activeBaseQueryBuilder = BaseQueryBuilderModel()
+
+        // NEW path: saving creates a .base that did not exist → barrier.
+        await state.moveEntry(path: "b.md", isDirectory: false, to: "dest")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "move armed an inverse")
+        state.basesBuilderSaveAsBase(path: "builder.base")
+        XCTAssertTrue(exists(vault, "builder.base"), "the builder save created the file")
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty,
+            "saving to a NEW in-vault path barriers the stale inverse")
+
+        // EXISTING path: saving OVER builder.base → must NOT barrier.
+        await state.moveEntry(path: "dest/b.md", isDirectory: false, to: "")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1, "second move re-armed")
+        state.basesBuilderSaveAsBase(path: "builder.base")
+        XCTAssertEqual(
+            state.structuralUndoStack.count, 1,
+            "overwriting an EXISTING .base must NOT drop the legit move undo")
+    }
+
+    /// A minimal valid saved-query envelope (mirrors BaseEmbedTests) — a
+    /// Files-over-Notes table with one column. Exporting it produces `.base`
+    /// text without needing the referenced folder to exist.
+    private static let minimalSavedQueryJSON = #"""
+        {
+          "source": { "Folder": "Notes" },
+          "row_source": "Files",
+          "filters": null,
+          "formulas": [],
+          "custom_summaries": [],
+          "group_by": null,
+          "sort": [],
+          "columns": [
+            { "id": "file.name", "display_name": null }
+          ],
+          "summaries": [],
+          "limit": null,
+          "view": { "Table": { "fallback_from": null } }
+        }
+        """#
+
+    /// Read a SlateMac source file by its path relative to `Sources/SlateMac`
+    /// (mirrors `slateMacAppSource`, parameterized). Returns nil when the file
+    /// can't be found/read; the census turns that into an XCTFail (not a skip),
+    /// so a moved/renamed source can't silently defeat the barrier guarantee.
+    private static func slateMacSource(_ relativePath: String) -> String? {
+        var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent(
+                "Sources/SlateMac/\(relativePath)")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try? String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor = cursor.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    /// The brace-balanced body of `func <name>` within `source`, from its
+    /// opening `{` to the matching `}`, or nil when the function or its braces
+    /// aren't found (the census turns nil into an XCTFail). Balancing (not
+    /// "next func") keeps a neighboring function's body out of the slice.
+    private static func functionBody(_ name: String, in source: String) -> Substring? {
+        guard let funcRange = source.range(of: "func \(name)"),
+            let open = source[funcRange.upperBound...].firstIndex(of: "{")
+        else { return nil }
+        var depth = 0
+        var i = open
+        while i < source.endIndex {
+            switch source[i] {
+            case "{": depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 { return source[open...i] }
+            default: break
+            }
+            i = source.index(after: i)
+        }
+        return nil
+    }
 }

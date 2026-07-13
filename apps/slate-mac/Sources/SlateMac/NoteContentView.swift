@@ -222,6 +222,10 @@ struct NoteContentView: View {
                 },
                 baseEmbedHandleProvider: { [appState] request, thisPath in
                     appState.baseEmbedHandle(for: request, thisPath: thisPath)
+                },
+                onWroteBaseSaveDestination: { [appState] url, existedBefore in
+                    appState.barrierStructuralUndoForExternalWrite(
+                        to: url, existedBefore: existedBefore)
                 }
             ),
             // #856: restore the parked offset (nil when none / other
@@ -341,6 +345,10 @@ struct NoteContentView: View {
                 },
                 handleProvider: { [appState] request, thisPath in
                     appState.baseEmbedHandle(for: request, thisPath: thisPath)
+                },
+                onWroteSaveDestination: { [appState] url, existedBefore in
+                    appState.barrierStructuralUndoForExternalWrite(
+                        to: url, existedBefore: existedBefore)
                 })
         }
     }
