@@ -1070,19 +1070,41 @@ final class ReadingViewTests: XCTestCase {
             ReadingBlockSource.quoteContent("> a\n> b", depth: 1), "a\nb")
     }
 
-    func testFenceInterior() {
-        XCTAssertEqual(
-            ReadingBlockSource.fenceInterior("```rust\nfn main() {}\n```"),
-            "fn main() {}")
-        XCTAssertEqual(
-            ReadingBlockSource.fenceInterior("    indented\n    code"),
-            "indented\ncode")
+    /// The code-block interior is now carried authoritatively from Rust
+    /// (`ReadingBlockKind.codeFence.interior`), so the `fenceInterior`
+    /// heuristic is retired. `fenceInteriorVerbatim` remains for YAML block
+    /// scalars, whose chomping semantics depend on the pre-closer newline.
+    func testFenceInteriorVerbatim() {
         XCTAssertEqual(
             ReadingBlockSource.fenceInteriorVerbatim("```yaml\nquery: |\n  Saved\n```"),
             "query: |\n  Saved\n")
         XCTAssertEqual(
             ReadingBlockSource.fenceInteriorVerbatim("~~~yaml\nquery: |+\n  Saved\n\n~~~\n"),
             "query: |+\n  Saved\n\n")
+    }
+
+    /// The authoritative interior (#869): the Rust parser carries the exact
+    /// code content on the block kind, so the reading view's fallback
+    /// `CodeBlock.source` and the print composer both use it directly. This
+    /// pins that `readingBlocksSource` surfaces it for the pathological cases
+    /// the old Swift heuristic got wrong.
+    func testCodeFenceInteriorIsAuthoritative() {
+        func interior(_ src: String) -> String? {
+            for block in readingBlocksSource(source: src) {
+                if case .codeFence(_, let interior) = block.kind { return interior }
+                if case .diagram(_, let interior) = block.kind { return interior }
+            }
+            return nil
+        }
+        // Well-formed fence: delimiters excluded, no trailing newline.
+        XCTAssertEqual(interior("```rust\nfn main() {}\n```\n"), "fn main() {}")
+        // Indented code block: dedented four spaces by the parser.
+        XCTAssertEqual(interior("para\n\n    indented\n    code\n"), "indented\ncode")
+        // Unterminated fence whose only closer candidate ends in a TAB: that
+        // ``` line is CONTENT, not a closer (the old heuristic dropped it).
+        XCTAssertEqual(interior("```\ncode line\n```\t\n"), "code line\n```\t")
+        // Indented block whose first line is triple-backticks: kept as content.
+        XCTAssertEqual(interior("    ```\n    code\n    more\n"), "```\ncode\nmore")
     }
 
     func testLineNumberMapping() {

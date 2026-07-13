@@ -4170,10 +4170,12 @@ pub enum ReadingBlockKind {
     },
     CodeFence {
         language: String,
+        interior: String,
     },
     MathBlock,
     Diagram {
         dialect: String,
+        interior: String,
     },
     Table,
     ThematicBreak,
@@ -4196,9 +4198,11 @@ impl From<core::reading::ReadingBlockKind> for ReadingBlockKind {
                 task: task.map(|c| c.to_string()),
             },
             K::BlockQuote { depth } => ReadingBlockKind::BlockQuote { depth },
-            K::CodeFence { language } => ReadingBlockKind::CodeFence { language },
+            K::CodeFence { language, interior } => {
+                ReadingBlockKind::CodeFence { language, interior }
+            }
             K::MathBlock => ReadingBlockKind::MathBlock,
-            K::Diagram { dialect } => ReadingBlockKind::Diagram { dialect },
+            K::Diagram { dialect, interior } => ReadingBlockKind::Diagram { dialect, interior },
             K::Table => ReadingBlockKind::Table,
             K::ThematicBreak => ReadingBlockKind::ThematicBreak,
             K::Html => ReadingBlockKind::Html,

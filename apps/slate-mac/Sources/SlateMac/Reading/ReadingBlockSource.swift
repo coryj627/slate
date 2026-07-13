@@ -171,36 +171,14 @@ enum ReadingBlockSource {
 
     // MARK: - Code fences
 
-    /// Drop the opening/closing fence lines (``` / ~~~), returning the code
-    /// interior for the fallback `CodeBlock` when no pipeline-extracted block
-    /// matched. Indented (non-fenced) blocks dedent four spaces.
-    static func fenceInterior(_ source: String) -> String {
-        var lines = source.split(separator: "\n", omittingEmptySubsequences: false)
-            .map(String.init)
-        guard let first = lines.first else { return source }
-        let trimmedFirst = first.trimmingCharacters(in: .whitespaces)
-        if trimmedFirst.hasPrefix("```") || trimmedFirst.hasPrefix("~~~") {
-            lines.removeFirst()
-            if let last = lines.last {
-                let trimmedLast = last.trimmingCharacters(in: .whitespaces)
-                if trimmedLast.hasPrefix("```") || trimmedLast.hasPrefix("~~~") {
-                    lines.removeLast()
-                }
-            }
-            return lines.joined(separator: "\n")
-        }
-        // Indented code block: strip the 4-space (or tab) indent.
-        return lines.map { line in
-            if line.hasPrefix("    ") { return String(line.dropFirst(4)) }
-            if line.hasPrefix("\t") { return String(line.dropFirst(1)) }
-            return line
-        }.joined(separator: "\n")
-    }
-
     /// Return the bytes authored between the opening and closing fence lines.
-    /// Unlike `fenceInterior`, this deliberately preserves the line ending
-    /// immediately before the closing fence. YAML block scalars use that byte
-    /// to distinguish clip/strip/keep chomping semantics.
+    ///
+    /// The code-block *interior* is carried authoritatively from the Rust
+    /// parser (`ReadingBlockKind.codeFence`/`.diagram`'s `interior`), so no
+    /// Swift-side fence-stripping heuristic exists for it. This helper stays
+    /// only for YAML block scalars, where it deliberately preserves the line
+    /// ending immediately before the closing fence — that byte distinguishes
+    /// clip/strip/keep chomping semantics.
     static func fenceInteriorVerbatim(_ source: String) -> String {
         guard let openingLineEnd = source.firstIndex(of: "\n") else { return source }
         let openingLine = source[..<openingLineEnd]

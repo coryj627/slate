@@ -95,13 +95,24 @@ pub enum ReadingBlockKind {
     /// A fenced or indented code block. `language` is the trimmed fence
     /// tag, or `""` for an untagged fence / indented block. `mermaid`
     /// fences are [`ReadingBlockKind::Diagram`] instead, never here.
-    CodeFence { language: String },
+    ///
+    /// `interior` is the **authoritative** code content pulldown-cmark
+    /// yields between the fence delimiters — fence lines excluded,
+    /// indented blocks dedented, and every CommonMark edge case (a fence
+    /// "closed" by a tab-trailing line, an unterminated fence, an indented
+    /// block whose first line is triple-backticks) resolved by the parser,
+    /// not re-derived downstream. Consumers render `interior` verbatim; the
+    /// raw `source` slice (with its delimiters) still equals
+    /// `full_source[byte_start..byte_end]` for the census.
+    CodeFence { language: String, interior: String },
     /// A display-math (`$$…$$`) block occupying a whole top-level
     /// paragraph.
     MathBlock,
     /// A diagram fence. `dialect` is the fence tag lowercased
-    /// (`"mermaid"` today).
-    Diagram { dialect: String },
+    /// (`"mermaid"` today). `interior` is the authoritative fence content
+    /// (see [`ReadingBlockKind::CodeFence`]) — a mermaid fence is a code
+    /// block to pulldown, so its interior is captured the same way.
+    Diagram { dialect: String, interior: String },
     /// A GFM table (raw block — the `source` slice carries the pipes).
     Table,
     /// A thematic break (`---` / `***` / `___` rule).
@@ -175,6 +186,15 @@ pub fn reading_blocks_source(source: &str) -> Vec<ReadingBlock> {
     let mut cuts: Vec<Cut> = Vec::new();
     let mut stack: Vec<Container> = Vec::new();
     let mut pending_container_start: Option<usize> = None;
+    // While inside a code block, `code_accum` is `Some((cut_index, interior))`:
+    // the index of the just-pushed CodeFence/Diagram cut and the running
+    // interior. pulldown emits the code content as `Event::Text` payloads
+    // between `Start(CodeBlock)` and `End(CodeBlock)`; we concatenate them
+    // verbatim (fence delimiters are NOT Text events, so they never appear;
+    // an indented block's Text is already dedented). On `End(CodeBlock)` the
+    // interior is written back into the recorded cut's kind. Code blocks never
+    // nest, so a single slot suffices.
+    let mut code_accum: Option<(usize, String)> = None;
 
     for (event, range) in Parser::new_ext(body, opts).into_offset_iter() {
         match event {
@@ -262,18 +282,54 @@ pub fn reading_blocks_source(source: &str) -> Vec<ReadingBlock> {
                 };
                 // Mermaid fence → Diagram, per diagram.rs's classify rule
                 // (case-insensitive, trimmed). Everything else → CodeFence.
+                // `interior` is filled from the Text events below; start empty.
                 let block_kind = if language.eq_ignore_ascii_case("mermaid") {
                     ReadingBlockKind::Diagram {
                         dialect: language.to_ascii_lowercase(),
+                        interior: String::new(),
                     }
                 } else {
-                    ReadingBlockKind::CodeFence { language }
+                    ReadingBlockKind::CodeFence {
+                        language,
+                        interior: String::new(),
+                    }
                 };
                 let cut = pending_container_start.take().unwrap_or(range.start);
                 cuts.push(Cut {
                     start: cut,
                     kind: block_kind,
                 });
+                // Begin accumulating this block's authoritative interior into
+                // the cut we just pushed.
+                code_accum = Some((cuts.len() - 1, String::new()));
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some((idx, interior)) = code_accum.take() {
+                    // pulldown appends the final content line's `\n`, so the
+                    // interior carries a trailing newline (empty blocks carry
+                    // none). Drop exactly that one terminator so the rendered
+                    // interior matches the historical fence-strip output for
+                    // well-formed fences while still carrying every authored
+                    // content line for the pathological cases.
+                    let interior = interior
+                        .strip_suffix('\n')
+                        .map(str::to_string)
+                        .unwrap_or(interior);
+                    match &mut cuts[idx].kind {
+                        ReadingBlockKind::CodeFence { interior: slot, .. }
+                        | ReadingBlockKind::Diagram { interior: slot, .. } => {
+                            *slot = interior;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::Text(text) => {
+                // Only meaningful inside a code block; elsewhere `code_accum`
+                // is None and the payload is inline prose we ignore here.
+                if let Some((_, interior)) = code_accum.as_mut() {
+                    interior.push_str(&text);
+                }
             }
             Event::Start(Tag::Table(_)) => {
                 let cut = pending_container_start.take().unwrap_or(range.start);
@@ -828,7 +884,8 @@ mod tests {
         assert_eq!(
             kinds(src),
             vec![ReadingBlockKind::CodeFence {
-                language: "rust".to_string()
+                language: "rust".to_string(),
+                interior: "fn main() {}".to_string(),
             }]
         );
         assert_slices_match(src);
@@ -840,7 +897,8 @@ mod tests {
         assert_eq!(
             kinds(src),
             vec![ReadingBlockKind::CodeFence {
-                language: String::new()
+                language: String::new(),
+                interior: "plain".to_string(),
             }]
         );
     }
@@ -852,8 +910,11 @@ mod tests {
             kinds(src),
             vec![
                 ReadingBlockKind::Paragraph,
+                // Indented code: pulldown dedents four spaces, so the
+                // authoritative interior carries the un-indented lines.
                 ReadingBlockKind::CodeFence {
-                    language: String::new()
+                    language: String::new(),
+                    interior: "indented code\nline two".to_string(),
                 },
             ]
         );
@@ -865,7 +926,8 @@ mod tests {
         assert_eq!(
             kinds(src),
             vec![ReadingBlockKind::Diagram {
-                dialect: "mermaid".to_string()
+                dialect: "mermaid".to_string(),
+                interior: "flowchart LR\nA --> B".to_string(),
             }]
         );
         assert_slices_match(src);
@@ -877,7 +939,8 @@ mod tests {
         assert_eq!(
             kinds(src),
             vec![ReadingBlockKind::Diagram {
-                dialect: "mermaid".to_string()
+                dialect: "mermaid".to_string(),
+                interior: "flowchart LR\nA --> B".to_string(),
             }]
         );
     }
@@ -890,10 +953,73 @@ mod tests {
         assert_eq!(
             kinds(src),
             vec![ReadingBlockKind::CodeFence {
-                language: String::new()
+                language: String::new(),
+                interior: "---\nnot a break\n---".to_string(),
             }]
         );
         assert_slices_match(src);
+    }
+
+    // --- authoritative interior: the pathological cases the Swift
+    //     `fenceInterior` heuristic got wrong (Codex review, #869). Each
+    //     asserts pulldown's exact code content is carried through, AND that
+    //     the raw `source` slice still equals `full_source[start..end]`. ---
+
+    /// The only interior of `src` (exactly one CodeFence/Diagram expected).
+    fn only_interior(src: &str) -> String {
+        let blocks = reading_blocks_source(src);
+        let interiors: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| match &b.kind {
+                ReadingBlockKind::CodeFence { interior, .. }
+                | ReadingBlockKind::Diagram { interior, .. } => Some(interior.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(interiors.len(), 1, "expected exactly one code block");
+        interiors.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn interior_normal_fence_is_the_code_content() {
+        // The well-formed case: interior is the body, delimiters excluded,
+        // no trailing newline (the historical fence-strip output).
+        assert_eq!(
+            only_interior("```rust\nfn main() {}\n```\n"),
+            "fn main() {}"
+        );
+    }
+
+    #[test]
+    fn interior_unterminated_fence_tab_closer_includes_backtick_line() {
+        // A fence whose only closing candidate is a ```-line ending in a TAB:
+        // pulldown does NOT treat it as a closer, so the fence is unterminated
+        // and that ``` line is CONTENT. The old Swift heuristic stripped it as
+        // a closer, silently losing the authored line. The authoritative
+        // interior must INCLUDE it.
+        let src = "```\ncode line\n```\t\n";
+        assert_eq!(only_interior(src), "code line\n```\t");
+        // The raw `source` slice invariant is untouched by the new field.
+        assert_slices_match(src);
+    }
+
+    #[test]
+    fn interior_indented_code_first_line_backticks_is_content() {
+        // A ≥4-space-indented block whose FIRST line is triple-backticks: to
+        // pulldown this is an INDENTED code block (not a fence), so the ```
+        // line is literal content and every line is dedented. The old Swift
+        // heuristic mis-read the first line as a fence opener and stripped it.
+        let src = "    ```\n    code\n    more\n";
+        assert_eq!(only_interior(src), "```\ncode\nmore");
+        assert_slices_match(src);
+    }
+
+    #[test]
+    fn interior_empty_code_block_is_empty() {
+        // An empty fence emits no Text events → empty interior (no phantom
+        // newline).
+        assert_eq!(only_interior("```\n```\n"), "");
+        assert_eq!(only_interior("```rust\n```\n"), "");
     }
 
     // --- math blocks ---
@@ -1087,7 +1213,8 @@ final para
                 },
                 ReadingBlockKind::BlockQuote { depth: 1 },
                 ReadingBlockKind::CodeFence {
-                    language: "python".to_string()
+                    language: "python".to_string(),
+                    interior: "print('hi')".to_string(),
                 },
                 ReadingBlockKind::MathBlock,
                 ReadingBlockKind::Table,
@@ -1109,10 +1236,12 @@ final para
             kinds(src),
             vec![
                 ReadingBlockKind::CodeFence {
-                    language: String::new()
+                    language: String::new(),
+                    interior: "a".to_string(),
                 },
                 ReadingBlockKind::CodeFence {
-                    language: String::new()
+                    language: String::new(),
+                    interior: "b".to_string(),
                 },
             ]
         );

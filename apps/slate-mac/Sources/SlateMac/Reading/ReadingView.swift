@@ -390,18 +390,24 @@ struct ReadingView: View {
             }
         case .blockQuote(let depth):
             quoteRow(block, depth: depth)
-        case .codeFence(let language):
+        case .codeFence(let language, let interior):
             if let request = BaseEmbedRequest.codeFence(language: language, source: block.source) {
                 baseEmbedBlock(request, identity: index)
             } else {
                 // Existing view, reused: visual highlight + the "Code block,
                 // <language>, N lines" preamble + copy affordance.
-                CodeBlockView(block: codeModel(block, language: language, lineStarts: lineStarts))
+                CodeBlockView(
+                    block: codeModel(
+                        block, language: language, interior: interior,
+                        lineStarts: lineStarts))
             }
         case .mathBlock:
             // Existing view, reused: MathCAT speech as the AX label.
             MathView(block: mathModel(block, lineStarts: lineStarts))
-        case .diagram(let dialect):
+        case .diagram(let dialect, _):
+            // The unmatched-diagram fallback renders the raw fenced `source`
+            // (delimiters and all) as labeled monospace — it never derived an
+            // interior, so the authoritative `interior` isn't needed here.
             diagramView(block, dialect: dialect)
         case .table:
             // Cells come from the Rust segmentation API (#510) — the honest
@@ -767,17 +773,21 @@ struct ReadingView: View {
     }
 
     private func codeModel(
-        _ block: ReadingBlock, language: String, lineStarts: [Int]
+        _ block: ReadingBlock, language: String, interior: String, lineStarts: [Int]
     ) -> CodeBlock {
         if let matched = context.codeBlocks.first(where: {
             contains(block, byteOffset: $0.byteOffset)
         }) {
+            // Matched: keep the pipeline's highlight tokens / semantic spans —
+            // the authoritative interior is only the plain-source fallback.
             return matched
         }
-        // Fallback: interior without highlight tokens — CodeBlockView still
+        // Fallback: the authoritative code interior from the Rust parser (#869)
+        // — fence delimiters excluded, indented blocks dedented, CommonMark
+        // edge cases resolved — without highlight tokens. CodeBlockView still
         // renders monospace source with the correct spoken preamble.
         return CodeBlock(
-            source: ReadingBlockSource.fenceInterior(block.source),
+            source: interior,
             language: language.isEmpty ? nil : language,
             tokens: [],
             semanticSpans: [],

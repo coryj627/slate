@@ -410,7 +410,10 @@ extension BaseEmbedRequest {
             case .paragraph:
                 request = ReadingInlineMapper.blockEmbedTarget(inSlice: block.source)
                     .flatMap(wikilinkTarget)
-            case .codeFence(let language):
+            case .codeFence(let language, _):
+                // `BaseEmbedRequest.codeFence` re-parses the RAW fenced source
+                // (language line + delimiters) to detect base/dataview queries,
+                // so the authoritative `interior` isn't used here.
                 request = codeFence(language: language, source: block.source)
             default:
                 request = nil
