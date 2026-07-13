@@ -223,6 +223,12 @@ enum SlateCommandID {
 
     // Editor
     static let save = "slate.editor.save"
+    /// Find-in-note (#874). ⌘F — Edit ▸ Find ▸ Find…, scoped to the open
+    /// editor (the NSTextView find bar). Reallocated from vault search,
+    /// which moved to ⇧⌘F (`toggleSearch`) per the Cory-confirmed
+    /// 2026-07-12 decision. Routes through `requestFindInFocusedSurface`,
+    /// so a focused canvas/base filter still wins ⌘F.
+    static let findInNote = "slate.editor.findInNote"
     static let citationSummary = "slate.editor.citationSummary"
     static let addProperty = "slate.editor.addProperty"
     static let bulkRenameProperties = "slate.editor.bulkRenameProperties"
@@ -380,6 +386,7 @@ enum SlateCommandID {
         openVault,
         closeVault,
         save,
+        findInNote,
         citationSummary,
         addProperty,
         bulkRenameProperties,
@@ -1201,9 +1208,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     register(
         SlateCommandID.toggleSearch,
-        label: "Search",
+        label: "Search Vault",
         section: .view,
-        hotkey: "⌘F",
+        // #874: moved from ⌘F to ⇧⌘F. Vault-wide search is the shifted
+        // "search all files" chord (Obsidian / VS Code); bare ⌘F is now
+        // find-in-note (`findInNote`). The menu item ("Search Vault…")
+        // carries the same chord — CHORD parity is the menu↔palette
+        // invariant.
+        hotkey: "⇧⌘F",
         hint: "Toggle the vault-wide search overlay."
     ) { [weak appState] in appState?.toggleSearchOverlay() }
 
@@ -1478,6 +1490,20 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌘S",
         hint: "Save the current note to disk."
     ) { [weak appState] in appState?.saveCurrentNote() }
+
+    register(
+        SlateCommandID.findInNote,
+        // Matches the Edit ▸ Find ▸ Find… menu item (menu↔palette
+        // unification).
+        label: "Find…",
+        section: .editor,
+        // #874: ⌘F, Edit ▸ Find ▸ Find… scoped to the open editor —
+        // reveals the note editor's find bar (searching.md:29). Routes
+        // through `requestFindInFocusedSurface`, the same method the menu
+        // item invokes, so a focused canvas/base filter keeps ⌘F.
+        hotkey: "⌘F",
+        hint: "Find and highlight text within the current note."
+    ) { [weak appState] in appState?.requestFindInFocusedSurface() }
 
     // #868: the MENU items for these two are changeable labels
     // (Enter/Exit Reading Mode, Show/Hide Properties Source — see

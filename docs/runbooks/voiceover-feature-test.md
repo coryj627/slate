@@ -89,7 +89,7 @@ Report PASS/FAIL per surface alongside the VO paths in §7.
 
 ## 4. Navigation primitives (the paths that work)
 
-- **Open any note: search-open.** Focus the editor region (see next bullet), `keys f cmd`, type a phrase unique to the target note (pull one from the note via grep), `wait-phrase "returned"`, then `key 36` — **Return on the field activates the top result** and announces `"Opened <file>, line N: …"`. This is the workhorse; it replaced fragile list walking entirely. (Return on a focused result *row* is a no-op — Space activates rows; #414.)
+- **Open any note: search-open.** Focus the editor region (see next bullet), `keys f cmd shift` (vault search moved to ⇧⌘F in #874; bare ⌘F now opens the note find bar), type a phrase unique to the target note (pull one from the note via grep), `wait-phrase "returned"`, then `key 36` — **Return on the field activates the top result** and announces `"Opened <file>, line N: …"`. This is the workhorse; it replaced fragile list walking entirely. (Return on a focused result *row* is a no-op — Space activates rows; #414.)
 - **Recover editor focus: palette round-trip.** `keys p cmd shift` then `key 53` (Esc) — the palette restores focus to the prior first responder and VO announces it ("Note content for <file>. edit text"). Works whenever the editor was the last responder; otherwise Tab once from the window (Tab 1 reaches the editor after a search-open).
 - **Select a file row deterministically (plumbing, not evidence):** AX-set `selected` on the matching row of the Files sidebar outline (match on the row's static-text concatenation). Selection opens the note. Use only to position; collect evidence via VO afterward.
 - **Open the vault from the welcome screen:** focus lands on "Open Vault…" at launch (VO announces it with its hint). `key 49` (Space) → panel announces "Choose a folder of Markdown files to open as a vault." → `key 5 cmd shift` (Go to Folder) → type the vault path → Return → click/act the panel's "Open" button (`button "Open" of splitter group 1 of window "Open vault"`).
@@ -136,7 +136,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 3. The vault's YAML-trap line (a task-shaped string inside frontmatter) must appear here as a list item and **never** in any Tasks surface.
 
 ### E — Full-text search (M5)
-1. From editor focus: `keys f cmd` → **"Search vault edit text"** + hint. (Cmd+F is focus-dependent at baseline — no-op from the sidebar tabs; #414.)
+1. From editor focus: `keys f cmd shift` → **"Search vault edit text"** + hint. (Vault search is ⇧⌘F since #874; bare ⌘F opens the note find bar — find-in-note. From the sidebar tabs, ⌘F focuses the editor first and still opens the find bar.)
 2. Type `xyzzyplover` (planted ×3 in `Search bait.md`) → `wait-phrase "Search returned"` → **"Search returned N results."**
 3. Tab three times when a query is present (Clear and Close buttons sit between field and list; Clear appears only with text) → row speaks **"<file>.md: …<snippet>"**.
 4. Return **on the field** → **"Opened <file>, line N: …"**.

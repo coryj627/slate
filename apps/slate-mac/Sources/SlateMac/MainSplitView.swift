@@ -622,16 +622,15 @@ struct MainSplitView: View {
                 } label: {
                     SlateSymbol.search.label()
                 }
-                // #422: ⌘F moved to the menu bar ("Search Vault…").
-                // The toolbar registration proved dead with sidebar
-                // focus (VO test); the menu equivalent works because
-                // nothing claims bare ⌘F in the key-window sweep
-                // (which AppKit runs BEFORE the menu — see the note
-                // in SlateMacApp). Two registrations of the same
-                // equivalent would be ambiguous, so the toolbar
+                // #422 / #874: vault search lives on the menu bar
+                // ("Search Vault…", ⇧⌘F since #874 — ⌘F is now
+                // find-in-note). The toolbar registration proved dead
+                // with sidebar focus (VO test); the menu equivalent is
+                // reachable regardless of focus. Two registrations of the
+                // same equivalent would be ambiguous, so the toolbar
                 // button is click/AX-activate only.
                 .accessibilityHint(
-                    "Opens the search overlay. Command-F to toggle, Escape to close."
+                    "Opens the search overlay. Shift-Command-F to toggle, Escape to close."
                 )
             }
             ToolbarItem(placement: .automatic) {

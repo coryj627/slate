@@ -1125,6 +1125,77 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertEqual(claimants.map(\.id), [SlateCommandID.reopenClosedTab])
     }
 
+    // MARK: - Find chord reallocation (#874)
+    //
+    // ⌘F = find-in-note (`findInNote`); ⇧⌘F = vault search
+    // (`toggleSearch`, moved off ⌘F). The Cory-confirmed 2026-07-12
+    // decision reverses the #422 vault-first ⌘F. Exact-string single-
+    // claimant filters guard against a stray double-binding surviving
+    // the swap.
+
+    @MainActor
+    func testFindInNoteCommandIsRegisteredWithCommandF() throws {
+        let appState = AppState()
+        let cmd = appState.commandRegistry.list().first { $0.id == SlateCommandID.findInNote }
+        let find = try XCTUnwrap(cmd, "findInNote must be registered")
+        XCTAssertEqual(find.label, "Find…")
+        XCTAssertEqual(find.section, .editor)
+        XCTAssertEqual(find.hotkeyHint, "⌘F", "⌘F is find-in-note (#874)")
+    }
+
+    @MainActor
+    func testVaultSearchCommandMovedToShiftCommandF() throws {
+        let appState = AppState()
+        let cmd = appState.commandRegistry.list().first { $0.id == SlateCommandID.toggleSearch }
+        let search = try XCTUnwrap(cmd, "toggleSearch must still be registered")
+        XCTAssertEqual(search.section, .view)
+        XCTAssertEqual(
+            search.hotkeyHint, "⇧⌘F",
+            "vault search moved from ⌘F to ⇧⌘F (#874)")
+    }
+
+    @MainActor
+    func testExactlyOneCommandClaimsCommandF() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘F" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.findInNote])
+    }
+
+    @MainActor
+    func testExactlyOneCommandClaimsShiftCommandF() {
+        let appState = AppState()
+        let claimants = appState.commandRegistry.list().filter { $0.hotkeyHint == "⇧⌘F" }
+        XCTAssertEqual(claimants.map(\.id), [SlateCommandID.toggleSearch])
+    }
+
+    /// Invoking `slate.editor.findInNote` through the registry routes to
+    /// `requestFindInFocusedSurface()` → `showFindInNote()`. With NO note
+    /// open AND no vault open (the welcome screen), the fallback runs the
+    /// vault-guarded `requestSearchOverlay()`, which announces "open a
+    /// vault first" instead of mounting a hostless overlay — so ⌘F does
+    /// not throw and does NOT open the overlay here. (The positive
+    /// vault-open fallback — overlay actually opens — is covered in
+    /// AppStateTests, which can open a real vault.)
+    @MainActor
+    func testInvokingFindInNoteWithNoVaultDoesNotOpenHostlessOverlay() throws {
+        let appState = AppState()
+        XCTAssertNil(appState.selectedFilePath)
+        XCTAssertFalse(appState.isVaultOpen)
+        XCTAssertFalse(appState.isSearchOpen)
+        try appState.commandRegistry.invokeById(id: SlateCommandID.findInNote)
+        XCTAssertFalse(
+            appState.isSearchOpen,
+            "⌘F with no vault open must route through the vault guard "
+                + "(announce), not mount a hostless search overlay (#874)")
+    }
+
+    // The positive "editing mode + markdown tab open publishes
+    // findInNoteRequest" test lives in BasesTabRoutingTests, which can
+    // open a REAL `.markdown` tab (a mounted NoteContentView is what the
+    // corrected `workspace.activeTabPath` guard requires — setting
+    // `selectedFilePath` alone no longer satisfies it, by design: a stale
+    // path on a Graph/Canvas/Base tab must NOT route to the absent editor).
+
     // MARK: - Unknown id
 
     /// Invoking a command id that isn't registered surfaces

@@ -2161,19 +2161,19 @@ final class AppState: ObservableObject {
     /// Right Pane (⌥⌘I) and the `slate.view.toggleRightPane` palette command.
     @Published var isRightPaneVisible: Bool = true
 
-    /// True while the search overlay is visible. Cmd+F toggles;
-    /// Esc clears.
+    /// True while the search overlay is visible. ⇧⌘F toggles it
+    /// (since #874; bare ⌘F is now find-in-note); Esc clears.
     @Published var isSearchOpen: Bool = false
     /// Live search query — bound to the overlay's TextField. Every
     /// edit feeds the debouncer; the actual search fires ~150 ms
     /// after the user stops typing.
     @Published var searchQuery: String = ""
-    /// Active search scope. `.vault` is the ⌘F default; the reading
-    /// view's tag activation sets `.tag(name:)` (#508) so the query
-    /// runs against the `file_tags` dimension. Reset to `.vault` on
-    /// overlay close / vault close (in `closeSearchOverlay()`) — a
-    /// sticky invisible tag filter would silently corrupt the next
-    /// ⌘F search. `private(set)`: callers mutate via `setSearchScope`
+    /// Active search scope. `.vault` is the ⇧⌘F default (since #874);
+    /// the reading view's tag activation sets `.tag(name:)` (#508) so
+    /// the query runs against the `file_tags` dimension. Reset to
+    /// `.vault` on overlay close / vault close (in
+    /// `closeSearchOverlay()`) — a sticky invisible tag filter would
+    /// silently corrupt the next vault search. `private(set)`: callers mutate via `setSearchScope`
     /// / `clearSearchScope` so scope changes always re-arm the search.
     @Published private(set) var searchScope: SearchScope = .vault
     /// Current state of the search overlay's results panel.
@@ -2182,6 +2182,16 @@ final class AppState: ObservableObject {
     /// `searchState`'s results.summary so the SwiftUI .onChange
     /// observer can fire a polite announcement.
     @Published private(set) var searchSummary: String = ""
+
+    /// The (trimmed) query that produced the currently-displayed
+    /// `.results` rows — captured when the search resolves, NOT read from
+    /// the live `searchQuery`. #876 Codex round 1: the 150 ms debounce
+    /// leaves the PREVIOUS query's rows on screen while the field already
+    /// holds a newer string; activating one of those rows must record
+    /// (and line-anchor against) the query that actually produced it, or
+    /// the recent list gets a query that reruns to different results. Nil
+    /// whenever the panel is not showing results (idle).
+    private(set) var lastResultsQuery: String?
 
     // MARK: Template flow (Milestone H)
 
@@ -2239,6 +2249,15 @@ final class AppState: ObservableObject {
     /// repeated clicks on the same heading re-trigger the scroll
     /// without needing a counter.
     let scrollAnchorRequest = PassthroughSubject<String, Never>()
+
+    /// #874 red-team: one-shot channel for "reveal the note find bar."
+    /// `showFindInNote` sends this in editing mode; `NoteEditorView`'s
+    /// `.onReceive` makes its `NSTextView` first responder AND opens the
+    /// find bar — so ⌘F works regardless of which surface holds focus
+    /// (opening a note from the tree leaves the TREE first responder, so
+    /// a bare `performTextFinderAction:` up the current chain would miss
+    /// the editor).
+    let findInNoteRequest = PassthroughSubject<Void, Never>()
 
     /// One-shot channel for "scroll to line N." Search-result
     /// activation (#59) sends a 1-based line number; the content
@@ -2437,6 +2456,23 @@ final class AppState: ObservableObject {
     /// changes with every vault switch.
     private var fileRecentsStore: FileRecentsStore? {
         currentVaultURL.map { FileRecentsStore(vaultRoot: $0) }
+    }
+
+    /// In-memory, most-recent-first list of vault search queries the
+    /// overlay's idle state offers as re-runnable "Recent Searches"
+    /// (#876; searching.md:37). Loaded from the vault's
+    /// `SearchRecentsStore` on vault open, refreshed on every committed
+    /// search via `recordSearchRecent(_:)`, wiped by `clearSearchRecents()`
+    /// (the privacy affordance, searching.md:38). Empty while no vault is
+    /// open — per-vault, like `fileRecents`, since queries are vault-
+    /// content-specific.
+    @Published private(set) var searchRecents: [String] = []
+
+    /// The current vault's search-recents store, or nil with no vault
+    /// open — the `fileRecentsStore` shape (vault-relative path, so a
+    /// computed value, repopulated on every vault switch).
+    private var searchRecentsStore: SearchRecentsStore? {
+        currentVaultURL.map { SearchRecentsStore(vaultRoot: $0) }
     }
 
     /// Accessibility-announcement seam (M-3, #534; shared with O-5).
@@ -2765,6 +2801,59 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Record a committed vault search into the recents so the overlay's
+    /// idle state can offer it again (#876; searching.md:37). Called from
+    /// ONE choke point — `openSearchResult(_:)`, i.e. when the user
+    /// activates a result — the unambiguous "this query was useful"
+    /// signal, NOT per-keystroke (recording every debounced prefix would
+    /// bury the list in noise). Mirrors `recordFileOpen`'s open-choke-point
+    /// discipline: in-memory-first, persist-second, non-fatal on write
+    /// failure. Blank / whitespace-only queries are never recorded. No-op
+    /// with no vault (the store is nil).
+    func recordSearchRecent(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let store = searchRecentsStore else { return }
+        // Red-team: route the LRU through the store's tested `add`
+        // (move-to-front + dedup + cap + atomic persist) rather than
+        // re-implementing it here — a single source of truth.
+        do {
+            searchRecents = try store.add(trimmed)
+        } catch {
+            NSLog("Failed to persist search recent '\(trimmed)': \(error)")
+        }
+    }
+
+    /// Forget every remembered search (the idle-state "Clear" affordance,
+    /// searching.md:38 privacy note). PERSIST-first, wipe-memory-on-success
+    /// — mirroring `recordSearchRecent` so the in-memory list never
+    /// diverges from disk. Red-team: clearing memory first and only
+    /// NSLog-ing a `clear()` failure would show an empty list while disk
+    /// still held the queries, and the very next `add()` (which rebuilds
+    /// from `load()`) — or simply reopening the vault — resurrected them,
+    /// silently defeating the privacy affordance. On a write failure the
+    /// list stays visible (honest: it was NOT forgotten). No-op with no
+    /// vault (the store is nil; the in-memory list is already empty).
+    func clearSearchRecents() {
+        guard let store = searchRecentsStore else {
+            searchRecents = []
+            return
+        }
+        do {
+            try store.clear()
+            searchRecents = []
+        } catch {
+            NSLog("Failed to clear search recents (list kept): \(error)")
+        }
+    }
+
+    /// Re-run a remembered query from the overlay's idle state (#876):
+    /// drop it into the field and push it through the debouncer, so the
+    /// same `searchQuery` → results path a keystroke takes fires.
+    func runRecentSearch(_ query: String) {
+        searchQuery = query
+        bumpSearchQuery()
+    }
+
     /// Push the current `searchQuery` through the debouncer. Called
     /// from the SwiftUI TextField's `.onChange` so the UI doesn't
     /// have to know about the subject.
@@ -2791,16 +2880,92 @@ final class AppState: ObservableObject {
         toggleSearchOverlay()
     }
 
-    /// Menu-owned Find routing. Editor-region Base/Canvas surfaces get their
-    /// local filter fields; tree/right-pane focus falls back to vault search.
+    /// Menu-owned Find routing (Edit ▸ Find ▸ Find…, ⌘F). Editor-region
+    /// Base/Canvas surfaces get their local filter fields; everything
+    /// else routes to `showFindInNote()` — which reveals the note
+    /// editor's find bar in editing mode (focusing the editor first, so
+    /// it works from the tree / right pane too) and falls back to vault
+    /// search in reading mode / with no note open (red-team: ⌘F must
+    /// never be inert).
+    ///
+    /// #874 (Cory-confirmed 2026-07-12): ⌘F is now **find-in-note**, not
+    /// vault search (which moved to ⇧⌘F). searching.md:29 — "macOS:
+    /// support Find-in-window/page for locating content in open
+    /// documents." This reverses the #422 vault-first ⌘F; the Base/Canvas
+    /// filter routing is unchanged (their ⌘F already focused a local
+    /// filter), only the fall-through — once vault search — now shows the
+    /// editor find bar.
     func requestFindInFocusedSurface() {
         if activeBaseDocument != nil, workspace.focusRegion == .editor {
             basesFocusQuickFilter()
         } else if activeCanvasDocument != nil, workspace.focusRegion == .editor {
             canvasFocusFilter()
         } else {
-            requestSearchOverlay()
+            showFindInNote()
         }
+    }
+
+    /// #874: reveal the note editor's find bar (the HIG Find-in-window
+    /// path, searching.md:29). ⌘F must NEVER be a dead keystroke
+    /// (red-team):
+    ///
+    /// - **Editing mode, note open** — send `findInNoteRequest`;
+    ///   `NoteEditorView` makes its `NSTextView` first responder and
+    ///   opens the find bar. Going through the request (not a bare
+    ///   `performTextFinderAction:` up the CURRENT chain) is what makes
+    ///   ⌘F work when the tree / right pane holds focus — the common
+    ///   case right after opening a note from the sidebar.
+    /// - **Reading mode, non-note tab (Graph / Canvas / Base / dashboard),
+    ///   or no tab open** — there is no mounted `NoteEditorView` subscribed
+    ///   to `findInNoteRequest` (reading mode's `ReadingView` is pure
+    ///   SwiftUI; the other surfaces mount their own container view). Fall
+    ///   back through `requestSearchOverlay()` (the SAME vault-guarded
+    ///   entry the ⇧⌘F menu item uses) so ⌘F still does something,
+    ///   preserving the #422 never-inert guarantee: with a vault open it
+    ///   reveals the search overlay; with none open it announces "Open a
+    ///   vault first" rather than mounting a hostless overlay on the
+    ///   welcome screen. (A reading-mode in-page find is a follow-up —
+    ///   filed separately.)
+    ///
+    /// The mounted-editor test is `isNoteEditorMounted` — true ONLY when
+    /// `NoteContentView.editorSurface` (which carries the
+    /// find-bar-subscribing `NoteEditorView`) is actually on screen.
+    /// Red-team: gating on `selectedFilePath` was wrong —
+    /// `activateGraphTab`/`activateBaseTab`/`activateCanvasTab` leave it
+    /// non-nil (a stale note path, or the base/canvas file's own path), so
+    /// ⌘F would publish into zero subscribers and become a dead keystroke
+    /// on those tabs. Codex round 1: gating on `activeTabPath` +
+    /// `.editing` alone was ALSO insufficient — a `.markdown` tab whose
+    /// note is still loading, or PERMANENTLY failed to load (deleted /
+    /// unreadable / invalid-UTF-8 / oversized → `noteLoadError`), shows
+    /// the loading/error state, NOT the editor, so `findInNoteRequest`
+    /// again has zero subscribers. `isNoteEditorMounted` mirrors
+    /// `NoteContentView.body`'s exact editor-mount conditions.
+    func showFindInNote() {
+        guard isNoteEditorMounted else {
+            requestSearchOverlay()
+            return
+        }
+        findInNoteRequest.send()
+    }
+
+    /// True exactly when `NoteContentView.editorSurface` — the only
+    /// `findInNoteRequest` subscriber — is mounted and on screen, so a
+    /// find request will actually reach an `NSTextView`. Mirrors
+    /// `NoteContentView.body`: an active `.markdown` tab
+    /// (`workspace.activeTabPath != nil`, so `NoteContentView` is the
+    /// mounted container rather than Graph/Canvas/Base), in `.editing`
+    /// mode (reading mode's `ReadingView` has no find bar), with the note
+    /// LOADED — no `noteLoadError`, not `isLoadingNote`, and
+    /// `currentNoteText` populated (the `contentState` arm). Any other
+    /// combination routes ⌘F to the vault-search fallback so it is never
+    /// inert (#422).
+    var isNoteEditorMounted: Bool {
+        workspace.activeTabPath != nil
+            && activeViewMode == .editing
+            && noteLoadError == nil
+            && !isLoadingNote
+            && currentNoteText != nil
     }
 
     func toggleSearchOverlay() {
@@ -2857,6 +3022,13 @@ final class AppState: ObservableObject {
         searchScope = .vault
         searchState = .idle
         searchSummary = ""
+        // No rows are displayed once the panel is idle, so the
+        // producing-query snapshot must go too (#876 Codex round 2) —
+        // otherwise a stale `lastResultsQuery` could survive into the
+        // next vault. This is the single teardown choke point (Esc,
+        // closeVault, and the openVault direct-switch reset all route
+        // here).
+        lastResultsQuery = nil
     }
 
     /// Enter tag scope and re-arm the search. Called by the reading
@@ -2902,6 +3074,7 @@ final class AppState: ObservableObject {
             cancelInFlightSearch()
             searchState = .idle
             searchSummary = ""
+            lastResultsQuery = nil
             return
         }
         guard let session = currentSession else {
@@ -2946,15 +3119,27 @@ final class AppState: ObservableObject {
             // Drop late results: another query may have taken over
             // while this one was in flight; tossing the result keeps
             // the overlay's panel coherent with the latest typed
-            // query.
+            // query. The `currentSession !== session` arm is the
+            // cross-vault guard (#876 Codex round 2): a direct vault
+            // switch that resolves after this search was dispatched must
+            // NOT publish vault A's rows into vault B's overlay (the same
+            // identity guard the note-load and history paths use). Belt
+            // and suspenders — the openVault teardown also cancels this
+            // search — but robust if a switch races the await.
             guard let self else { return }
-            if Task.isCancelled || self.searchCancelToken !== cancel {
+            if Task.isCancelled || self.searchCancelToken !== cancel
+                || self.currentSession !== session
+            {
                 return
             }
             switch outcome {
             case .success(let rs):
                 self.searchState = .results(rows: rs.rows, summary: rs.summary)
                 self.searchSummary = rs.summary
+                // #876 Codex round 1: remember WHICH query produced these
+                // rows, so activating one records/anchors that query — not
+                // a newer one the user may have typed during the debounce.
+                self.lastResultsQuery = trimmed
             case .failure(let error):
                 if case .Cancelled = error {
                     // Cancellation is a normal user action — keep
@@ -3343,12 +3528,23 @@ final class AppState: ObservableObject {
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
         let filename = (hit.path as NSString).lastPathComponent
-        // Capture the query that produced this hit ahead of the
-        // await — by the time the load resolves the user may have
-        // edited the field, but the line we want to scroll to is
-        // the one matching the query that was active when they
-        // pressed Return on this row.
-        let queryForLineLookup = searchQuery
+        // The query that PRODUCED the displayed rows, captured at result
+        // time (`lastResultsQuery`) — NOT the live field. #876 Codex
+        // round 1: the 150 ms debounce leaves the previous query's rows
+        // visible while `searchQuery` already holds a newer string; the
+        // row the user activated belongs to `lastResultsQuery`, so both
+        // the line-scroll anchor AND the recorded recent must use it (the
+        // `?? searchQuery` is a defensive fallback — row activation always
+        // implies a `.results` panel, which sets `lastResultsQuery`).
+        let queryForRow = lastResultsQuery ?? searchQuery
+        let queryForLineLookup = queryForRow
+
+        // #876: activating a result is the commit signal that a query
+        // was useful — remember it before `closeSearchOverlay()` (which
+        // preserves `searchQuery`, so order is not load-bearing) so the
+        // idle overlay can offer it next time. Record the PRODUCING query
+        // (`queryForRow`), not the live field (Codex round 1).
+        recordSearchRecent(queryForRow)
 
         // Close the overlay first so focus moves cleanly back to
         // the content area before the file load completes.
@@ -3575,6 +3771,19 @@ final class AppState: ObservableObject {
             propertyEditTask?.cancel()
             propertyEditTask = nil
             isEditingProperty = false
+            // #876 Codex round 2: Open Vault / Open Recent reach here
+            // WITHOUT `closeVault`, so vault A's live search must be torn
+            // down too — else the still-open overlay shows A's results
+            // while `currentVaultURL`/`searchRecentsStore` now name B, and
+            // activating a stale A row would persist A's query into B's
+            // per-vault recents and try to open A's path inside B. Mirror
+            // closeVault's teardown (closeSearchOverlay cancels the
+            // in-flight search and resets searchState + lastResultsQuery;
+            // clear the retained query), and do it while `currentSession`
+            // still names A so the cancellation targets A's search. The
+            // per-vault `searchRecents` load below then reflects B.
+            closeSearchOverlay()
+            searchQuery = ""
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -3582,6 +3791,10 @@ final class AppState: ObservableObject {
             // vault path resolves. Per-vault, so it's repopulated on
             // every vault switch; a missing / malformed file loads empty.
             fileRecents = fileRecentsStore?.load() ?? []
+            // #876: likewise this vault's recent search queries — per-
+            // vault, so the overlay's idle "Recent Searches" reflects the
+            // vault the user is actually in.
+            searchRecents = searchRecentsStore?.load() ?? []
             // Reset file-list state so the previous vault's contents
             // don't briefly flash in the new vault's sidebar.
             files = []
@@ -4031,6 +4244,9 @@ final class AppState: ObservableObject {
         // file-recents — it's per-vault, so the next vault reloads its own.
         isQuickSwitcherOpen = false
         fileRecents = []
+        // #876: drop the in-memory recent searches — per-vault, so the
+        // next vault reloads its own (mirrors `fileRecents` above).
+        searchRecents = []
         // #328 sheet-flag parity audit. Each `@Published var
         // is*Open` driving a `.sheet` binding must reset here for
         // the same reason as `isCommandPaletteOpen`: a vault close
