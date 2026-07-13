@@ -238,7 +238,8 @@ extension AppState {
 
     /// The ⌃⌘I "Where am I?" readback for the diagram (spec §P2-3): the
     /// selected node's row copy, its component, the zoom level, and the
-    /// active backend filters — assembled once and spoken assertively.
+    /// active filters — backend AND the client-side name query / preset kind
+    /// filter (review) — assembled once and spoken assertively.
     func graphDiagramWhereAmI() {
         guard let model = graphDiagramModel else { return }
         var parts: [String] = []
@@ -250,6 +251,12 @@ extension AppState {
         }
         parts.append("zoom \(model.viewport.zoomPercent) percent")
         parts.append(graphDiagramFilterPhrase(model.filter))
+        // The client-side filters the Diagram also honours (P2-4/P2-5) — the
+        // backend phrase above doesn't carry them, so the readback would
+        // otherwise under-report what's actually shown (review finding).
+        let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
+        if !needle.isEmpty { parts.append("name filter \u{201C}\(needle)\u{201D}") }
+        if graphTableKindFilter == .ghost { parts.append("unresolved only") }
         graphAnnouncer.announce(.summary(parts.joined(separator: ", ") + "."))
     }
 
@@ -295,6 +302,31 @@ extension AppState {
         case .canvas: canvasActualSize()
         case .graph: graphDiagramActualSize()
         case .editor: editorActualSize()
+        }
+    }
+
+    /// The single owner of the ⌃⌘I "Where am I?" routing decision — the same
+    /// focus-routed pattern as the zoom chords. WITHOUT this, the always-
+    /// enabled "Where Am I?" menu key-equivalent swallowed ⌃⌘I and only ever
+    /// ran the canvas readback (a no-op off a canvas tab), so the graph
+    /// diagram's readback was unreachable by keyboard. Priority mirrors
+    /// `zoomRouteTarget` (canvas → graph), extended with bases; there is no
+    /// editor "Where am I?", so a non-surface context is a no-op. Extracted
+    /// so the priority is unit-testable and the one menu item routes.
+    enum WhereAmIRouteTarget { case canvas, graph, bases, none }
+    var whereAmIRouteTarget: WhereAmIRouteTarget {
+        if activeCanvasDocument != nil { return .canvas }
+        if graphDiagramZoomActive { return .graph }
+        if activeBaseDocument != nil { return .bases }
+        return .none
+    }
+
+    func routedWhereAmI() {
+        switch whereAmIRouteTarget {
+        case .canvas: canvasWhereAmI()
+        case .graph: graphDiagramWhereAmI()
+        case .bases: _ = basesWhereAmI()
+        case .none: break
         }
     }
 

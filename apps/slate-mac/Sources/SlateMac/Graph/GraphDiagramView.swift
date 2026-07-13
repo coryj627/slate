@@ -1124,16 +1124,10 @@ final class GraphDiagramNSView: NSView {
         guard let model else { return super.keyDown(with: event) }
         let flags = event.modifierFlags
 
-        // ⌘=/⌘−/⌘0 and ⌥⌘0 (fit graph) are owned by the focus-routed menu
-        // items (one owner per chord, #848) — never handled here. ⌃⌘I
-        // "Where am I?" is a surface action (canvas precedent).
-        if flags.contains(.command), flags.contains(.control),
-            event.charactersIgnoringModifiers?.lowercased() == "i"
-        {
-            appState?.graphDiagramWhereAmI()
-            return
-        }
-
+        // ⌘=/⌘−/⌘0/⌥⌘0 (zoom/fit) AND ⌃⌘I ("Where am I?") are owned by the
+        // focus-routed menu items (one owner per chord) — never handled
+        // here. Handling ⌃⌘I in this keyDown was dead code anyway: the
+        // always-enabled menu key-equivalent consumes it first.
         switch event.keyCode {
         case 125: spatialMove(dx: 0, dy: 1); return  // ↓
         case 126: spatialMove(dx: 0, dy: -1); return  // ↑

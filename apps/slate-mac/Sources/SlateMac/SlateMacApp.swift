@@ -468,10 +468,13 @@ struct SlateMacApp: App {
 
                 // Milestone T (#518): the ⌃⌘I Where-am-I chord lives in
                 // the menu bar (single owner, survives focus changes —
-                // the #422 lesson). Palette equivalents exist for every
-                // canvas command (program rule R1).
-                Button("Canvas: Where Am I?") {
-                    appState.canvasWhereAmI()
+                // the #422 lesson). FOCUS-ROUTED (like the zoom chords):
+                // dispatches to the active surface's readback — canvas,
+                // graph diagram, or bases — so it isn't a canvas-only no-op
+                // on other surfaces (the graph diagram's ⌃⌘I was previously
+                // swallowed here). Palette mirrors exist per surface.
+                Button("Where Am I?") {
+                    appState.routedWhereAmI()
                 }
                 .keyboardShortcut("i", modifiers: [.control, .command])
                 .disabled(!appState.isVaultOpen)

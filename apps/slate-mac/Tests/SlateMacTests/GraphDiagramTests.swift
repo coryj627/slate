@@ -354,6 +354,43 @@ final class GraphDiagramTests: XCTestCase {
         XCTAssertEqual(state.zoomRouteTarget, .canvas)
     }
 
+    func testWhereAmIRoutePriorityGraphReachable() throws {
+        // The bug: the always-enabled "Where Am I?" menu item swallowed ⌃⌘I
+        // and only ran the canvas readback (a no-op off a canvas tab), so the
+        // graph diagram's readback was unreachable. The fix routes ⌃⌘I like
+        // the zoom chords. No surface ⇒ .none (harmless no-op, not the old
+        // canvas no-op); a live graph diagram ⇒ .graph (now reachable).
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let bare = AppState(recentsStore: store, externalOpener: { _ in true })
+        XCTAssertEqual(bare.whereAmIRouteTarget, .none)
+
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)  // opens + activates a graph tab
+        XCTAssertNil(state.activeCanvasDocument)
+        XCTAssertTrue(state.graphDiagramZoomActive)
+        XCTAssertEqual(state.whereAmIRouteTarget, .graph)
+    }
+
+    func testWhereAmIRoutePrefersCanvasOverGraph() async throws {
+        // canvas → graph → bases priority (mirrors the zoom router): an
+        // active canvas tab wins ⌃⌘I even if a graph diagram exists.
+        let vault = tempDir.appendingPathComponent("wai-canvas-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try #"{"nodes":[{"id":"c1","type":"text","text":"Card","x":0,"y":0,"width":200,"height":100}],"edges":[]}"#
+            .write(to: vault.appendingPathComponent("board.canvas"), atomically: true, encoding: .utf8)
+        let store = RecentVaultsStore(
+            fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        retainedStates.append(state)
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("board.canvas", target: .currentTab)
+        XCTAssertNotNil(state.activeCanvasDocument)
+        XCTAssertEqual(state.whereAmIRouteTarget, .canvas)
+    }
+
     func testApplyFrameDropsMismatchedGenerationFrame() throws {
         let session = try makeSession()
         let model = try makeModel(session)
