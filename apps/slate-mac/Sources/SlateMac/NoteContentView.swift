@@ -278,6 +278,9 @@ struct NoteContentView: View {
                     appState.clearPendingCursorByteOffset()
                 })
                 .eraseToAnyPublisher(),
+            // #874: only the ACTIVE editor gets the real find-in-note
+            // publisher (inactive-pane previews keep the default Empty).
+            findInNoteRequest: appState.findInNoteRequest.eraseToAnyPublisher(),
             previewEmbedAtCursor: { [appState] target, line in
                 appState.requestEmbedPreview(target: target, sourceLine: line)
             },

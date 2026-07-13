@@ -63,6 +63,13 @@ struct NoteEditorView: NSViewRepresentable {
     /// H). The coordinator converts the byte offset to UTF-16
     /// before talking to `NSTextView`.
     let cursorByteOffsetRequest: AnyPublisher<Int, Never>
+    /// #874: "reveal the find bar" requests (Edit ▸ Find ▸ Find…, ⌘F).
+    /// The coordinator focuses the `NSTextView` and shows its find bar,
+    /// so ⌘F works even when the tree / right pane holds focus. Only the
+    /// ACTIVE note editor (NoteContentView) is wired to the real
+    /// publisher; inactive-pane previews + the canvas card editor keep
+    /// the default `Empty` so a find request never steals focus to them.
+    var findInNoteRequest: AnyPublisher<Void, Never> = Empty().eraseToAnyPublisher()
     /// Cmd+E handler (#188): receives the `target` of the embed
     /// the cursor is currently inside, plus the 1-based source
     /// line number for the popover header's spatial-bearing cue
@@ -200,6 +207,19 @@ struct NoteEditorView: NSViewRepresentable {
         textView.smartInsertDeleteEnabled = false
         textView.usesFontPanel = false
         textView.usesRuler = false
+        // #874: enable the standard NSTextView find bar so Edit ▸ Find ▸
+        // Find… (⌘F) locates + highlights within the open note — HIG
+        // "macOS: support Find-in-window/page for locating content in
+        // open documents" (searching.md:29). #422 deliberately left this
+        // OFF so bare ⌘F stayed the vault-search chord ("no find bar/panel
+        // is enabled" — see SlateMacApp); the Cory-confirmed 2026-07-12
+        // decision on #874 reverses that: ⌘F is find-in-note, ⇧⌘F is vault
+        // search. The incremental flag gives the live "find as you type"
+        // filtering the find bar is expected to have. Read-only unfocused
+        // panes (`isEditable == false`) keep it too — finding within
+        // rendered/selectable text is valid and useful.
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         // #855: live spell checking is OPT-IN (default off — Markdown
         // source squiggles everywhere). Distinct from the automatic
         // spelling CORRECTION above, which stays off unconditionally:
@@ -292,6 +312,7 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.subscribe(
             scrollAnchorRequest: scrollAnchorRequest,
             lineScrollRequest: lineScrollRequest,
+            findInNoteRequest: findInNoteRequest,
             cursorByteOffsetRequest: cursorByteOffsetRequest
         )
         return scrollView
@@ -998,6 +1019,7 @@ struct NoteEditorView: NSViewRepresentable {
         func subscribe(
             scrollAnchorRequest: AnyPublisher<String, Never>,
             lineScrollRequest: AnyPublisher<Int, Never>,
+            findInNoteRequest: AnyPublisher<Void, Never>,
             cursorByteOffsetRequest: AnyPublisher<Int, Never>
         ) {
             // Cancel and re-subscribe on every makeNSView pass so a
@@ -1019,6 +1041,22 @@ struct NoteEditorView: NSViewRepresentable {
                     self?.placeCursorAtByteOffset(offset)
                 }
                 .store(in: &subscriptions)
+            findInNoteRequest
+                .sink { [weak self] in
+                    self?.showFindBar()
+                }
+                .store(in: &subscriptions)
+        }
+
+        /// #874: make the editor first responder (so the find action
+        /// resolves here even when the tree/right pane had focus) and
+        /// open the standard macOS find bar.
+        private func showFindBar() {
+            guard let textView else { return }
+            textView.window?.makeFirstResponder(textView)
+            let item = NSMenuItem()
+            item.tag = NSTextFinder.Action.showFindInterface.rawValue
+            textView.performTextFinderAction(item)
         }
 
         // MARK: - NSTextViewDelegate

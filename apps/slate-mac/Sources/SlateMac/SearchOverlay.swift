@@ -3,9 +3,9 @@
 
 import SwiftUI
 
-/// Cmd+F search overlay. Sits above the `MainSplitView` content
-/// area while open; Esc closes and returns focus to whatever
-/// element the user came from.
+/// Vault-search overlay (⇧⌘F since #874 — bare ⌘F is now find-in-note).
+/// Sits above the `MainSplitView` content area while open; Esc closes
+/// and returns focus to whatever element the user came from.
 ///
 /// VoiceOver story:
 ///   - Field announces "Search vault." on focus.
@@ -20,8 +20,10 @@ import SwiftUI
 ///     note's body).
 ///
 /// Keyboard:
-///   - Cmd+F (from MainSplitView) toggles the overlay.
+///   - ⇧⌘F (Edit ▸ Search Vault…) toggles the overlay.
 ///   - The field auto-focuses on open.
+///   - Before typing, the idle state offers recent vault searches
+///     (#876) as re-runnable rows, with a Clear affordance.
 ///   - Return on the field activates the top-ranked result.
 ///   - Tab moves focus from the field into the first result row;
 ///     arrow keys cycle within results.
@@ -40,6 +42,11 @@ struct SearchOverlay: View {
     private enum FocusTarget: Hashable {
         case field
         case result(Int)
+        // #876 red-team: the idle-state recent rows need the same
+        // focus scaffolding the result rows have, or a keyboard-only
+        // user (no VoiceOver, no Full Keyboard Access) can't Tab to a
+        // recent or Return-run it.
+        case recent(Int)
     }
 
     /// #422 (F-E2): local keyDown monitor for Return-on-row. SwiftUI
@@ -77,7 +84,7 @@ struct SearchOverlay: View {
             DispatchQueue.main.async { focus = .field }
             installReturnKeyMonitor()
             // #422 (F-E1 adjacent): closeSearchOverlay keeps
-            // searchQuery (so Cmd+F → Esc → Cmd+F lands back where
+            // searchQuery (so ⇧⌘F → Esc → ⇧⌘F lands back where
             // the user was) but resets searchState to .idle — on
             // reopen the retained query sat in the field with no
             // results until the user edited it. That idle-with-text
@@ -270,12 +277,102 @@ struct SearchOverlay: View {
         }
     }
 
+    /// Idle (pre-typing) state. #876 (searching.md:37 — "show recent
+    /// searches … before and during typing"): when the vault has
+    /// remembered queries, surface them as re-runnable rows with a Clear
+    /// affordance; otherwise keep the plain "Type to search." hint.
+    @ViewBuilder
     private var idleState: some View {
-        Text("Type to search.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding()
-            .accessibilityLabel("Type to search.")
+        if appState.searchRecents.isEmpty {
+            Text("Type to search.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding()
+                .accessibilityLabel("Type to search.")
+        } else {
+            recentSearchesList
+        }
+    }
+
+    /// "Recent Searches" section: a header with a Clear button, then a
+    /// scrollable list of selectable rows that re-run the query. Every
+    /// element is VoiceOver-labeled; the section is one AX container so
+    /// the list reads as a unit while each row stays independently
+    /// focusable (the results-list pattern above).
+    private var recentSearchesList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Tokens.Spacing.sm) {
+                Text("Recent Searches")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                Button {
+                    appState.clearSearchRecents()
+                    focus = .field
+                } label: {
+                    Text("Clear")
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.accentText)
+                        // HIG macOS default click target (28pt tall,
+                        // clears the WCAG 2.5.8 24pt minimum) — matches
+                        // the overlay's other bare-label buttons.
+                        .frame(minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear recent searches")
+                .accessibilityHint("Forgets every remembered search in this vault.")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, Tokens.Spacing.sm)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    // Stable id on the query string itself — recents are
+                    // deduped, so each is unique within the list. Indexed
+                    // so each row binds a `.recent(index)` focus target
+                    // (Tab-into + Return-activate), mirroring result rows.
+                    ForEach(Array(appState.searchRecents.enumerated()), id: \.element) {
+                        index, query in
+                        recentRow(query)
+                            .focused($focus, equals: .recent(index))
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 260)
+        }
+        // One AX container so VoiceOver reads the section as a unit; the
+        // rows and Clear button stay independently focusable/activatable.
+        .accessibilityElement(children: .contain)
+    }
+
+    /// A single recent-query row. Activating it re-runs the query
+    /// through the normal search path (`runRecentSearch`) and returns
+    /// focus to the field so the user can refine.
+    private func recentRow(_ query: String) -> some View {
+        Button {
+            appState.runRecentSearch(query)
+            focus = .field
+        } label: {
+            HStack(spacing: 8) {
+                // Decorative: the row's AX label already names it.
+                SlateSymbol.search.decorative
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                Text(query)
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Recent search: \(query)")
+        .accessibilityHint("Runs this search again.")
     }
 
     private var searchingState: some View {
@@ -431,15 +528,31 @@ struct SearchOverlay: View {
     /// the filename — the full row label (with snippet) stays on the
     /// element for VO-cursor interaction without forcing every focus
     /// hop through a paragraph of snippet speech.
+    ///
+    /// #876 red-team: the idle-state recent rows reuse the identical
+    /// silent `.plain`-button `.focused(...)` scaffolding, so they need
+    /// the same on-focus announcement — without it a VoiceOver user
+    /// Tabbing through recents hears nothing (unlike the result rows they
+    /// mirror). Announce the query itself.
     private func announceFocusedResult(_ newFocus: FocusTarget?) {
-        guard case .result(let idx) = newFocus else { return }
-        guard case .results(let rows, _) = appState.searchState,
-            rows.indices.contains(idx)
-        else { return }
-        postAccessibilityAnnouncement(
-            "Selected: \(filename(for: rows[idx].path))",
-            priority: .medium
-        )
+        if case .result(let idx) = newFocus {
+            guard case .results(let rows, _) = appState.searchState,
+                rows.indices.contains(idx)
+            else { return }
+            postAccessibilityAnnouncement(
+                "Selected: \(filename(for: rows[idx].path))",
+                priority: .medium
+            )
+            return
+        }
+        if case .recent(let idx) = newFocus,
+            appState.searchRecents.indices.contains(idx)
+        {
+            postAccessibilityAnnouncement(
+                "Recent search: \(appState.searchRecents[idx])",
+                priority: .medium
+            )
+        }
     }
 
     /// #422 (F-E2): Return activates the focused result row, with
@@ -466,13 +579,26 @@ struct SearchOverlay: View {
                 // would otherwise be hijacked into a result
                 // activation (the parent window keeps its
                 // firstResponder during sheets).
-                !appState.isCommandPaletteOpen,
-                case .result(let idx) = focus,
+                !appState.isCommandPaletteOpen
+            else { return event }
+            // A focused RESULT row → activate it (the #422 F-E2 path).
+            if case .result(let idx) = focus,
                 case .results(let rows, _) = appState.searchState,
                 rows.indices.contains(idx)
-            else { return event }
-            appState.openSearchResult(rows[idx])
-            return nil
+            {
+                appState.openSearchResult(rows[idx])
+                return nil
+            }
+            // #876 red-team: a focused RECENT row → re-run that query.
+            if case .recent(let idx) = focus,
+                appState.searchRecents.indices.contains(idx)
+            {
+                let query = appState.searchRecents[idx]
+                appState.runRecentSearch(query)
+                focus = .field
+                return nil
+            }
+            return event
         }
     }
 

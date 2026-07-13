@@ -1725,6 +1725,79 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.searchState, .idle)
     }
 
+    /// #876: clearing recents empties BOTH the in-memory list and disk,
+    /// so the queries do not resurrect on the next vault open.
+    func testClearSearchRecentsEmptiesMemoryAndDisk() throws {
+        let vault = tempDir.appendingPathComponent("recents-clear")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        state.recordSearchRecent("alpha")
+        state.recordSearchRecent("beta")
+        XCTAssertEqual(state.searchRecents, ["beta", "alpha"])
+
+        state.clearSearchRecents()
+
+        XCTAssertEqual(state.searchRecents, [], "in-memory list cleared")
+        XCTAssertEqual(
+            SearchRecentsStore(vaultRoot: vault).load(), [],
+            "disk file cleared too — no resurrection on reopen")
+    }
+
+    /// #876 red-team (finding 2): if the clear WRITE fails, the in-memory
+    /// list must NOT be wiped — otherwise the overlay shows an empty list
+    /// while disk still holds the queries, and the next `add()` (which
+    /// rebuilds from `load()`) or a vault reopen resurrects them, silently
+    /// defeating the privacy affordance. Force a persist failure by making
+    /// `.slate` a FILE (so `save()`'s `createDirectory` throws), then
+    /// assert the list is kept, not falsely emptied.
+    func testClearSearchRecentsKeepsListWhenPersistFails() throws {
+        let vault = tempDir.appendingPathComponent("recents-clear-fail")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        state.recordSearchRecent("alpha")
+        state.recordSearchRecent("beta")
+        XCTAssertEqual(state.searchRecents, ["beta", "alpha"])
+
+        // Sabotage the write path: replace the `.slate` directory with a
+        // regular file so any subsequent save() throws.
+        let dotSlate = vault.appendingPathComponent(".slate")
+        try FileManager.default.removeItem(at: dotSlate)
+        try Data("not a dir".utf8).write(to: dotSlate)
+
+        state.clearSearchRecents()
+
+        XCTAssertEqual(
+            state.searchRecents, ["beta", "alpha"],
+            "a failed clear must keep the list visible (not falsely empty)")
+    }
+
+    /// #874: ⌘F (find-in-note) with a vault open but NO note selected has
+    /// no editor find bar to reveal, so it falls through to the vault
+    /// search overlay — the never-inert degradation. This is the positive
+    /// counterpart to the welcome-screen guard test in SlateCommandsTests
+    /// (there, no vault → announce, no overlay).
+    func testFindInNoteWithVaultButNoNoteOpensSearchOverlay() throws {
+        let vault = tempDir.appendingPathComponent("find-fallback")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        XCTAssertTrue(state.isVaultOpen)
+        XCTAssertNil(state.selectedFilePath)
+        XCTAssertFalse(state.isSearchOpen)
+
+        state.showFindInNote()
+
+        XCTAssertTrue(
+            state.isSearchOpen,
+            "⌘F with a vault open and no note must degrade to vault search "
+                + "(never inert, #874)")
+    }
+
     func testEmptyQueryStaysIdle() async throws {
         let vault = tempDir.appendingPathComponent("search-empty")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
@@ -1785,6 +1858,88 @@ final class AppStateTests: XCTestCase {
         case let other:
             XCTFail("expected empty results, got \(String(describing: other))")
         }
+    }
+
+    /// #876 Codex round 1: activating a result during the 150 ms search
+    /// debounce — when the field already holds a NEWER query but the OLD
+    /// rows are still displayed — must record the query that PRODUCED the
+    /// row (`lastResultsQuery`), not the live `searchQuery`. Otherwise the
+    /// recent list gets a query that reruns to entirely different results.
+    func testActivatingResultRecordsProducingQueryNotLiveField() async throws {
+        let vault = tempDir.appendingPathComponent("recents-race")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try Data("hello uniquerecenttoken world".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.searchQuery = "uniquerecenttoken"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+
+        guard case .results(let rows, _) = state.searchState,
+            let row = rows.first
+        else {
+            return XCTFail("expected a result row")
+        }
+        XCTAssertEqual(state.lastResultsQuery, "uniquerecenttoken")
+
+        // Simulate the debounce race: the user edits the field to a newer
+        // query while the OLD rows are still on screen (no re-search has
+        // run), then presses Return on one of the old rows.
+        state.searchQuery = "uniquerecenttokenEDITED"
+        state.openSearchResult(row)
+
+        XCTAssertEqual(
+            state.searchRecents.first, "uniquerecenttoken",
+            "must record the query that PRODUCED the row, not the live field")
+    }
+
+    /// #876 Codex round 2: a DIRECT vault switch (Open Vault / Open
+    /// Recent bypasses `closeVault`) must tear down the previous vault's
+    /// live search. Otherwise the still-open overlay shows vault A's
+    /// results while the recents store now points at vault B, and
+    /// activating a stale row would persist A's query into B's per-vault
+    /// recents and try to open A's path inside B.
+    func testDirectVaultSwitchTearsDownSearchState() async throws {
+        let vaultA = tempDir.appendingPathComponent("switch-a")
+        try FileManager.default.createDirectory(
+            at: vaultA, withIntermediateDirectories: true)
+        try Data("hello switchtokenA world".utf8)
+            .write(to: vaultA.appendingPathComponent("a.md"))
+        let vaultB = tempDir.appendingPathComponent("switch-b")
+        try FileManager.default.createDirectory(
+            at: vaultB, withIntermediateDirectories: true)
+        try Data("unrelated content".utf8)
+            .write(to: vaultB.appendingPathComponent("b.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vaultA)
+        await state.scanTask?.value
+
+        state.toggleSearchOverlay()
+        state.searchQuery = "switchtokenA"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+        XCTAssertTrue(state.isSearchOpen)
+        XCTAssertEqual(state.lastResultsQuery, "switchtokenA")
+        guard case .results(let rows, _) = state.searchState, !rows.isEmpty else {
+            return XCTFail("expected vault A results")
+        }
+
+        // Direct switch to vault B — the Open Vault / Open Recent path.
+        state.openVault(at: vaultB)
+        await state.scanTask?.value
+
+        XCTAssertFalse(state.isSearchOpen, "overlay must close on direct switch")
+        XCTAssertEqual(state.searchQuery, "", "retained query must clear")
+        XCTAssertNil(state.lastResultsQuery, "producing-query snapshot must clear")
+        XCTAssertEqual(state.searchState, .idle, "result rows must reset")
+        XCTAssertEqual(
+            state.searchRecents, [],
+            "vault B starts from its own (empty) per-vault recents")
     }
 
     func testCloseSearchOverlayResetsState() async throws {
@@ -1961,6 +2116,122 @@ final class AppStateTests: XCTestCase {
             scrolledLine,
             "scroll request should be suppressed when selection changed mid-load; got \(String(describing: scrolledLine))"
         )
+    }
+
+    // MARK: - Recent searches (#876)
+
+    /// Activating a search result records the committed query into the
+    /// vault's recents (the choke point the idle overlay reads from) and
+    /// persists it so a fresh store instance reloads it.
+    func testOpenSearchResultRecordsTheCommittedQuery() async throws {
+        let vault = tempDir.appendingPathComponent("search-recents-record")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("alpha\nbeta\ngamma".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        XCTAssertTrue(state.searchRecents.isEmpty, "no recents before any search")
+
+        state.searchQuery = "beta"
+        state.openSearchResult(makeHit(path: "note.md"))
+
+        XCTAssertEqual(
+            state.searchRecents, ["beta"],
+            "activating a result records the committed query")
+        // Persisted per vault — a fresh store at the same path reloads it.
+        XCTAssertEqual(SearchRecentsStore(vaultRoot: vault).load(), ["beta"])
+    }
+
+    /// `recordSearchRecent` is LRU + deduped + most-recent-first, and
+    /// caps at `SearchRecentsStore.maxEntries` — the same discipline the
+    /// store enforces, exercised through AppState's in-memory mirror.
+    func testRecordSearchRecentDedupesReordersAndCaps() async throws {
+        let vault = tempDir.appendingPathComponent("search-recents-lru")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.recordSearchRecent("alpha")
+        state.recordSearchRecent("beta")
+        state.recordSearchRecent("alpha")  // re-commit: moves to front
+        XCTAssertEqual(
+            state.searchRecents, ["alpha", "beta"],
+            "re-committing a query moves it to front, no duplicate")
+
+        for i in 0..<(SearchRecentsStore.maxEntries + 5) {
+            state.recordSearchRecent("q\(i)")
+        }
+        XCTAssertEqual(state.searchRecents.count, SearchRecentsStore.maxEntries)
+        XCTAssertEqual(
+            state.searchRecents.first, "q\(SearchRecentsStore.maxEntries + 4)",
+            "most-recent-first after the cap")
+    }
+
+    /// Blank / whitespace-only queries are never recorded — the idle
+    /// list must not fill with empty rows.
+    func testRecordSearchRecentIgnoresBlankQueries() async throws {
+        let vault = tempDir.appendingPathComponent("search-recents-blank")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.recordSearchRecent("")
+        state.recordSearchRecent("   \n")
+        XCTAssertTrue(state.searchRecents.isEmpty, "blank queries are not recorded")
+    }
+
+    /// `clearSearchRecents` empties the in-memory list AND the persisted
+    /// file (the idle-state Clear affordance, searching.md:38).
+    func testClearSearchRecentsEmptiesMemoryAndDisk() async throws {
+        let vault = tempDir.appendingPathComponent("search-recents-clear")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.recordSearchRecent("alpha")
+        state.recordSearchRecent("beta")
+        XCTAssertFalse(state.searchRecents.isEmpty)
+
+        state.clearSearchRecents()
+        XCTAssertTrue(state.searchRecents.isEmpty, "clear empties the session list")
+        XCTAssertEqual(
+            SearchRecentsStore(vaultRoot: vault).load(), [],
+            "clear persists the empty list")
+    }
+
+    /// Recents are per-vault: they load on open and drop on close, so one
+    /// vault's queries never leak into another.
+    func testSearchRecentsAreLoadedOnOpenAndClearedOnClose() async throws {
+        let vault = tempDir.appendingPathComponent("search-recents-perVault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try SearchRecentsStore(vaultRoot: vault).save(["seeded"])
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        XCTAssertEqual(
+            state.searchRecents, ["seeded"], "recents load from the vault on open")
+
+        state.closeVault()
+        XCTAssertTrue(state.searchRecents.isEmpty, "recents drop on vault close")
+    }
+
+    /// `runRecentSearch` drops a remembered query back into the field and
+    /// re-arms the search — the idle-row activation path.
+    func testRunRecentSearchRepopulatesTheField() async throws {
+        let vault = tempDir.appendingPathComponent("search-recents-rerun")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+
+        state.runRecentSearch("budget 2026")
+        XCTAssertEqual(state.searchQuery, "budget 2026", "the query lands back in the field")
     }
 
     func testFirstTokenLineNumberFindsEarliestMatch() {

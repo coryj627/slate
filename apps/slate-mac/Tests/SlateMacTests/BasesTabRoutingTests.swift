@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 
@@ -854,7 +855,109 @@ final class BasesTabRoutingTests: XCTestCase {
             state.baseQuickFilterFocusToken,
             1,
             "right-pane focus must not be stolen by the active Base tab")
-        XCTAssertTrue(state.isSearchOpen, "non-Bases focus falls back to vault search")
+        // #874 + red-team (findings 1 & 4): with a Base tab active and
+        // focus OUTSIDE the editor region, the fall-through must NOT be a
+        // dead keystroke. The active tab is `.base`, so
+        // `workspace.activeTabPath` is nil (no mounted NoteEditorView to
+        // receive `findInNoteRequest`) and `showFindInNote()` degrades to
+        // the vault-guarded search overlay — never inert (#422). (The
+        // earlier "silent no-op" behavior published into zero subscribers
+        // because the guard trusted a stale `selectedFilePath`.)
+        XCTAssertTrue(
+            state.isSearchOpen,
+            "#874 never-inert: ⌘F on a non-note tab degrades to vault "
+                + "search, not a dead keystroke")
+    }
+
+    /// #874 + red-team (positive path): with a real `.markdown` note
+    /// LOADED as the active tab in editing mode, ⌘F publishes
+    /// `findInNoteRequest` (the mounted NoteEditorView reveals its find
+    /// bar) and does NOT open the vault-search overlay. Awaits the load so
+    /// `isNoteEditorMounted` holds (Codex round 1: a still-loading or
+    /// failed note has no mounted editor).
+    func testFindInMarkdownTabPublishesFindRequestNotVaultSearch() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Notes/Alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        XCTAssertNotNil(
+            state.workspace.activeTabPath, "active tab must be the markdown note")
+        XCTAssertNil(state.noteLoadError)
+        XCTAssertNotNil(state.currentNoteText, "note must be loaded (editor mounted)")
+        XCTAssertTrue(state.isNoteEditorMounted)
+
+        var fireCount = 0
+        let cancellable = state.findInNoteRequest.sink { fireCount += 1 }
+        defer { cancellable.cancel() }
+
+        state.requestFindInFocusedSurface()
+
+        XCTAssertEqual(
+            fireCount, 1,
+            "editing a loaded markdown tab must publish findInNoteRequest (#874)")
+        XCTAssertFalse(
+            state.isSearchOpen,
+            "the editor find-bar path must not open the vault-search overlay")
+    }
+
+    /// #874 + Codex round 1: a `.markdown` tab whose note FAILED to load
+    /// (deleted / unreadable / invalid-UTF-8 / oversized → `noteLoadError`)
+    /// shows the error state, NOT the editor — so there is no
+    /// `findInNoteRequest` subscriber. ⌘F must degrade to vault search
+    /// (never inert), not publish into the void. `activeTabPath` alone
+    /// would have wrongly admitted this.
+    func testFindOnMarkdownTabWithLoadErrorDegradesToVaultSearch() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Notes/Alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        // Simulate a load failure on the active markdown tab.
+        state.noteLoadError = "simulated read failure"
+        XCTAssertNotNil(state.workspace.activeTabPath, "tab is still .markdown")
+        XCTAssertFalse(
+            state.isNoteEditorMounted,
+            "a load-errored note has no mounted editor")
+
+        var fireCount = 0
+        let cancellable = state.findInNoteRequest.sink { fireCount += 1 }
+        defer { cancellable.cancel() }
+
+        state.requestFindInFocusedSurface()
+
+        XCTAssertEqual(fireCount, 0, "must NOT publish into the absent editor")
+        XCTAssertTrue(
+            state.isSearchOpen,
+            "#874 never-inert: load-errored note ⌘F degrades to vault search")
+    }
+
+    /// #874 + red-team (finding 1): a Graph tab is the cleanest
+    /// dead-keystroke case — `activateGraphTab` leaves the prior note's
+    /// `selectedFilePath` non-nil, so the OLD guard passed and published
+    /// into zero subscribers. With the corrected guard, ⌘F on a graph tab
+    /// degrades to vault search (never inert). Uses `openGraph()`-free
+    /// setup: open a note first (to set a stale path), then the graph.
+    func testFindOnGraphTabDegradesToVaultSearchNeverInert() async throws {
+        let state = try await makeQuickFilterAppState()
+        // Select a note first so selectedFilePath is a stale non-nil path
+        // — the exact precondition that broke the old guard.
+        state.openFile("Notes/Alpha.md", target: .currentTab)
+        XCTAssertNotNil(state.selectedFilePath)
+
+        state.openGraphTab()
+        XCTAssertNil(
+            state.workspace.activeTabPath,
+            "graph tab is not a markdown tab")
+
+        var fireCount = 0
+        let cancellable = state.findInNoteRequest.sink { fireCount += 1 }
+        defer { cancellable.cancel() }
+
+        state.requestFindInFocusedSurface()
+
+        XCTAssertEqual(
+            fireCount, 0,
+            "⌘F on a graph tab must NOT publish into the absent editor")
+        XCTAssertTrue(
+            state.isSearchOpen,
+            "#874 never-inert: graph-tab ⌘F degrades to vault search")
     }
 
     func testBasesWhereAmIIncludesQuickFilterReadback() async throws {

@@ -628,21 +628,34 @@ struct SlateMacApp: App {
             // which any menu satisfies — so the HIG-correct Edit
             // placement costs nothing.
             CommandGroup(after: .textEditing) {
-                // #422 (F-E1): Cmd+F lived only on the toolbar
-                // button's keyboardShortcut, which proved
-                // unreachable with focus in the sidebar (VO test).
-                // AppKit's actual order is key-window sweep FIRST,
-                // menu bar LAST — this works because nothing in the
-                // app claims bare ⌘F during the sweep (no find
-                // bar/panel is enabled; grep keyboardShortcut). If a
-                // future change enables NSTextView's find bar, IT
-                // will win ⌘F with editor focus and this menu item
-                // needs revisiting. Vault-scoped guard pattern as
-                // the palette item above (requestSearchOverlay).
-                Button("Search Vault…") {
+                // #874 (Cory-confirmed 2026-07-12): ⌘F is now
+                // find-in-note, reversing the #422 vault-first ⌘F.
+                // `requestFindInFocusedSurface()` routes to the focused
+                // surface — the note editor's find bar
+                // (`NoteEditorView` now sets `usesFindBar = true`), or a
+                // focused canvas/base's local filter field (unchanged).
+                // searching.md:29 ("support Find-in-window/page for
+                // locating content in open documents"). Menu-bar-homed
+                // so the chord is reachable regardless of focus (the #422
+                // rule). Never inert: editing mode reveals the editor
+                // find bar; reading mode / no note falls through the
+                // vault-guarded `requestSearchOverlay()` (opens vault
+                // search, or announces "open a vault first").
+                Button("Find…") {
                     appState.requestFindInFocusedSurface()
                 }
                 .keyboardShortcut("f", modifiers: [.command])
+
+                // #874: vault-wide search moved from ⌘F to ⇧⌘F (was
+                // unclaimed) — the Obsidian / VS Code "search all files"
+                // chord. The #422 vault-first identity is preserved, one
+                // shifted keystroke away. Vault-scoped guard +
+                // announcement live in `requestSearchOverlay()` (the
+                // welcome screen has no overlay host).
+                Button("Search Vault…") {
+                    appState.requestSearchOverlay()
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
 
                 Divider()
 
