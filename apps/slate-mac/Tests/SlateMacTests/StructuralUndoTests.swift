@@ -644,7 +644,12 @@ final class StructuralUndoTests: XCTestCase {
                         + "barrier census can no longer locate the funnel")
                 continue
             }
-            let body = String(bodySub)
+            // #912: blank comments + string literals before every source scan
+            // below, so an incidental "catch" (or any anchor token) sitting in a
+            // comment or string literal can't false-ALARM the census. The
+            // stripper is length-preserving, so anchor offsets are unchanged —
+            // only the *content* of comments/strings is blanked to spaces.
+            let body = SwiftSourceStripping.strippingCommentsAndStrings(String(bodySub))
             guard let createRange = body.range(of: funnel.createAnchor) else {
                 XCTFail(
                     "\(funnel.name): create/write anchor \"\(funnel.createAnchor)\" "
@@ -670,7 +675,7 @@ final class StructuralUndoTests: XCTestCase {
                         + "(success-only) — not run on the write's failure path")
             } else {
                 XCTAssertFalse(
-                    between.contains("catch"),
+                    Self.hasInterveningCatch(between),
                     "\(funnel.name): a `catch` between the create and the barrier "
                         + "means the barrier isn't on the linear success path")
             }
@@ -688,6 +693,53 @@ final class StructuralUndoTests: XCTestCase {
                         + "lets a switch-away mid-write skip the clear (ordering race)")
             }
         }
+    }
+
+    /// #912 meta-test: the barrier census's success-path `catch` scan
+    /// (`hasInterveningCatch`, used by
+    /// `testEveryBypassingCreateFunnelBarriersOnItsSuccessPath`) must ignore an
+    /// incidental "catch" token yet still flag a real intervening `catch`.
+    /// Without this hardening, a plain `contains("catch")` would false-ALARM on
+    /// a comment/string/identifier that merely spells "catch" between a funnel's
+    /// create anchor and its barrier — a loud spurious failure (never a
+    /// false-green). This pins the fix so it can't silently regress.
+    func testBarrierCensusCatchScanIgnoresIncidentalCatchTokens() {
+        // A "catch" inside a line comment is NOT a real success-path catch.
+        XCTAssertFalse(
+            Self.hasInterveningCatch(
+                """
+                let n = restore()  // this could catch you out
+                clearStructuralUndoStacks()
+                """),
+            "a `catch` in a line comment must not trip the success-path check")
+
+        // Nor inside a block comment…
+        XCTAssertFalse(
+            Self.hasInterveningCatch("/* catch */ clearStructuralUndoStacks()"),
+            "a `catch` in a block comment is incidental")
+
+        // …nor inside a string literal…
+        XCTAssertFalse(
+            Self.hasInterveningCatch(#"log("catch"); clearStructuralUndoStacks()"#),
+            "a `catch` in a string literal is incidental")
+
+        // …nor as a lowercase substring of a larger identifier. `catcher`
+        // deliberately contains "catch" as a sub-token, so a regressed
+        // `contains("catch")` would WRONGLY match (true) while `\bcatch\b`
+        // correctly does not — this is what pins the word-boundary behavior.
+        XCTAssertFalse(
+            Self.hasInterveningCatch("catcher.reset(); clearStructuralUndoStacks()"),
+            "`catch` inside the identifier `catcher` is not the keyword")
+
+        // But a REAL intervening `catch { … }` on the path is still detected —
+        // the invariant is unchanged, only the false-alarm surface shrank.
+        XCTAssertTrue(
+            Self.hasInterveningCatch(
+                """
+                do { try session.write() } catch { return }
+                clearStructuralUndoStacks()
+                """),
+            "a real `catch` block between the create and the barrier still fails")
     }
 
     /// #871 over-clearing regression (Codex finding 3). `exportSavedQuery` calls
@@ -960,5 +1012,22 @@ final class StructuralUndoTests: XCTestCase {
             i = source.index(after: i)
         }
         return nil
+    }
+
+    /// #912 false-ALARM hardening for the barrier census's linear-success
+    /// check. Reports whether a LIVE Swift `catch` keyword appears in `segment`
+    /// (the span between a funnel's create anchor and its barrier). It is
+    /// robust to incidental text in two independent ways:
+    ///   - comment + string-literal content is blanked first, so a `catch` in a
+    ///     `// …` / `/* … */` comment or a `"…catch…"` literal can't trip it, and
+    ///   - the keyword is matched on WORD BOUNDARIES (`\bcatch\b`), so a `catch`
+    ///     embedded in a larger identifier (e.g. `errorCatcher`) can't either.
+    /// The invariant the census proves is unchanged — a real `catch { … }` on
+    /// the path is still detected (see `testBarrierCensus…IgnoresIncidental…`);
+    /// only false-alarm tokens are ignored. This is never a false-GREEN: a real
+    /// intervening `catch` keyword still fails the check.
+    static func hasInterveningCatch(_ segment: some StringProtocol) -> Bool {
+        let stripped = SwiftSourceStripping.strippingCommentsAndStrings(String(segment))
+        return stripped.range(of: #"\bcatch\b"#, options: .regularExpression) != nil
     }
 }
