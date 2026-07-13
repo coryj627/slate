@@ -7619,6 +7619,19 @@ final class AppState: ObservableObject {
     /// external URL is an IMPORT. Rejects the no-ops the private-type move path
     /// also rejects early (already in the destination; a folder onto its own
     /// subtree) so the two drop routes behave the same.
+    /// Whether `url` points at a directory (#870, Codoki: extracted as a
+    /// testable seam with UNAMBIGUOUS optional handling). `try?` wraps ONLY the
+    /// throwing `resourceValues` call — yielding `URLResourceValues?` — then
+    /// `?.isDirectory` reads the (itself-optional) key and `?? false` lands a
+    /// plain `Bool`. The prior `(try? resourceValues(...).isDirectory) ?? false`
+    /// nested the property access inside `try?`, relying on Swift's flattening
+    /// and reading as a `Bool??` a reviewer (and a linter) can misjudge. An
+    /// unreadable value falls back to false (treat as a file) — the safe
+    /// default for the import path.
+    static func urlIsDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+    }
+
     static func fileURLDropAction(
         url: URL, vaultURL: URL?, destinationFolder: String, isDirectory: Bool
     ) -> StructuralDropAction {

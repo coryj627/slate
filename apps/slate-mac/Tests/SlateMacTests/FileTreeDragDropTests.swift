@@ -206,6 +206,21 @@ final class FileTreeDragDropTests: XCTestCase {
             "the vault root dropped onto itself is a no-op, not a text import")
     }
 
+    /// Codoki: the extracted `urlIsDirectory` seam classifies real directories
+    /// vs files correctly (the drop router feeds this into `fileURLDropAction`).
+    func testUrlIsDirectoryClassifiesDirectoriesAndFiles() throws {
+        let dir = tempDir.appendingPathComponent("a-folder")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = tempDir.appendingPathComponent("a-file.md")
+        try "# hi\n".write(to: file, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(AppState.urlIsDirectory(dir), "a real directory reads as a directory")
+        XCTAssertFalse(AppState.urlIsDirectory(file), "a real file does not")
+        XCTAssertFalse(
+            AppState.urlIsDirectory(tempDir.appendingPathComponent("does-not-exist")),
+            "an unreadable URL falls back to false (safe file default)")
+    }
+
     // MARK: - Import (external drop) end-to-end
 
     func testExternalFileDropImportsIntoVault() async throws {

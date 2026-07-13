@@ -1855,8 +1855,9 @@ struct FileTreeSidebar: View {
     @MainActor
     private func handleFileURLDrop(_ url: URL, into destinationFolder: String) {
         appState.dragSourceNode = nil
-        let isDirectory =
-            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        // Codoki: unambiguous directory detection via the extracted, tested
+        // `AppState.urlIsDirectory` seam (no `Bool??` optional-chaining trap).
+        let isDirectory = AppState.urlIsDirectory(url)
         switch AppState.fileURLDropAction(
             url: url, vaultURL: appState.currentVaultURL,
             destinationFolder: destinationFolder, isDirectory: isDirectory)
