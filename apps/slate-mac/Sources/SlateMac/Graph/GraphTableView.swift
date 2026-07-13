@@ -25,6 +25,7 @@ struct GraphContainerView: View {
     @EnvironmentObject private var appState: AppState
     let tabID: TabID
     @State private var mode: GraphTabMode = .table
+    @State private var showInspector = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,6 +39,12 @@ struct GraphContainerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The inspector (Filters / Groups / Display / Forces) is a trailing
+        // panel available in both modes (spec §P2-4).
+        .inspector(isPresented: $showInspector) {
+            GraphInspectorView()
+                .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
+        }
         .navigationTitle("Graph")
         // Lazy load ONLY when nothing is loaded or in flight (round 3
         // finding 1): opening/activating the tab already kicks off a load
@@ -45,6 +52,9 @@ struct GraphContainerView: View {
         // start a second redundant snapshot fetch. This still covers
         // session restore, where the tab mounts with no activation load.
         .onAppear {
+            // Restore the last-used projection mode from the loaded config
+            // (P2-4 #560); `activateGraphTab` loaded it before this mount.
+            mode = appState.graphConfig.mode
             if appState.graphTableSnapshot == nil && !appState.graphTableLoading {
                 appState.loadGraphTable()
             }
@@ -53,7 +63,9 @@ struct GraphContainerView: View {
         // The mode toggle owns the diagram's lifecycle: build on entering
         // Diagram, tear down on returning to Table so the settle loop and
         // layout session don't linger. One coherent AX tree per mode (U3).
+        // The chosen mode persists to graph.json (restored on next open).
         .onChange(of: mode) { _, newMode in
+            appState.setGraphMode(newMode)
             switch newMode {
             case .diagram:
                 appState.ensureGraphDiagram()
@@ -110,10 +122,9 @@ struct GraphContainerView: View {
             .accessibilityLabel("Graph view mode")
             .accessibilityHint("Switch between the accessible table and the visual diagram.")
 
-            // The client-side text filter is a Table affordance; the
-            // diagram's own filters (text query, groups) arrive with the
-            // P2-4 inspector, so hiding it here keeps Diagram mode honest
-            // rather than showing a field that doesn't affect the diagram.
+            // The quick name filter lives in the bar for Table mode; in
+            // Diagram mode it (and Groups) live in the P2-4 inspector,
+            // which applies the SAME name predicate to both projections.
             if mode == .table {
                 TextField(
                     "Filter notes", text: appStateTextFilterBinding
@@ -131,6 +142,14 @@ struct GraphContainerView: View {
                 .accessibilityHint("Show only notes with no links in or out.")
 
             Spacer()
+
+            Button {
+                showInspector.toggle()
+            } label: {
+                SlateSymbol.graphInspector.label("Inspector")
+            }
+            .help("Show the graph inspector — filters, colour groups, display, and forces.")
+            .accessibilityLabel("Toggle graph inspector")
         }
         .toggleStyle(.checkbox)
         .padding(.horizontal, Tokens.Spacing.sm)
@@ -140,7 +159,10 @@ struct GraphContainerView: View {
     private var appStateTextFilterBinding: Binding<String> {
         Binding(
             get: { appState.graphTableTextFilter },
-            set: { appState.graphTableTextFilter = $0 })
+            set: {
+                appState.graphTableTextFilter = $0
+                appState.scheduleGraphConfigSave()  // persist the name filter (P2-4)
+            })
     }
 
     /// A toggle bound to one field of the backend `GraphFilter`; setting
@@ -238,11 +260,10 @@ struct GraphTableView: View {
         if let kind = appState.graphTableKindFilter {
             rows = rows.filter { $0.kind == kind }
         }
-        let needle = appState.graphTableTextFilter.trimmingCharacters(in: .whitespaces)
-        guard !needle.isEmpty else { return rows }
-        return rows.filter {
-            $0.label.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-        }
+        // The SAME name predicate the Diagram applies (P2-4 single source
+        // of truth — asserted by the filter-equivalence test).
+        let needle = appState.graphTableTextFilter
+        return rows.filter { AppState.graphNameMatches($0.label, needle: needle) }
     }
 
     private func announceCount() {

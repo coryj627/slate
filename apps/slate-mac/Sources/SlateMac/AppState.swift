@@ -539,6 +539,18 @@ final class AppState: ObservableObject {
     @Published var graphDiagramLoading = false
     @Published var graphDiagramError: String?
 
+    /// Persisted graph-tab config (P2-4 #560): the LIVE holder for the
+    /// inspector's Groups / Display / Forces; filters, mode, and depth
+    /// are synced from their existing live state at the load/save
+    /// boundaries. Written to `.slate/graph.json` (debounced) via
+    /// `graphConfigSaveTask`.
+    @Published var graphConfig = GraphConfig.default
+    var graphConfigSaveTask: Task<Void, Never>?
+    /// The vault `graphConfig` was last loaded for — so the config loads
+    /// ONCE per vault (a per-activate reload would revert a debounced,
+    /// not-yet-written filter/force edit when the user tab-switches).
+    var graphConfigVaultURL: URL?
+
     /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
     /// focusable transient panel in the canvas container; Esc/Close
     /// dismisses (panel-local, not a t0 M5 ladder rung).
@@ -3892,6 +3904,10 @@ final class AppState: ObservableObject {
             resetGraphTableState()
             // Graph tab diagram (P2-3 #559): tear down the layout session too.
             resetGraphDiagramState()
+            // Graph config (P2-4 #560): the next vault reloads its own
+            // graph.json (a pending debounced save still targets the OLD
+            // vault via its captured root, so no edit is lost).
+            graphConfigVaultURL = nil
             // #871: the structural (file-op) undo/redo stacks are per-vault —
             // a direct Open Vault / Open Recent reaches here WITHOUT
             // `closeVault`, so an inverse move/rename staged against vault A
@@ -4441,6 +4457,8 @@ final class AppState: ObservableObject {
         resetGraphTableState()
         // Graph tab diagram (P2-3 #559): tear down the layout session too.
         resetGraphDiagramState()
+        // Graph config (P2-4 #560): next vault reloads its own graph.json.
+        graphConfigVaultURL = nil
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would

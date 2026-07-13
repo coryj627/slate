@@ -381,6 +381,82 @@ final class GraphDiagramTests: XCTestCase {
             view.nodeFramesForTesting(), before, "a matching-generation frame is applied")
     }
 
+    // MARK: P2-4 — filters / display / groups / forces
+
+    func testNameFilterHidesNonMatchingNodesInDiagram() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphTableTextFilter = "a"  // only the note "a" matches
+        view.tickOnceForTesting()
+        let visible = Set(view.nodeFramesForTesting().keys)
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let aID = snapshot.nodes.first { $0.label == "a" }!.id
+        XCTAssertEqual(visible, [aID], "only the name-matching node is materialized")
+    }
+
+    func testFilterEquivalenceTableAndDiagramShareOnePredicate() throws {
+        let session = try makeSession()
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let needle = "c"
+        // Table's visible set (its filteredRows use the same static).
+        let tableVisible = Set(
+            snapshot.nodes.filter { AppState.graphNameMatches($0.label, needle: needle) }.map(\.id))
+        // Diagram's visible set (the renderer applies the same static).
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphTableTextFilter = needle
+        view.tickOnceForTesting()
+        XCTAssertEqual(
+            Set(view.nodeFramesForTesting().keys), tableVisible,
+            "one name predicate ⇒ one node set across projections")
+    }
+
+    func testNodeSizeMultiplierScalesTheDrawnDiameter() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        view.tickOnceForTesting()
+        let id = model.nodeIDs.first!
+        let base = try XCTUnwrap(view.nodeFramesForTesting()[id]).width
+        state.graphConfig.display.nodeSizeMultiplier = 2.0
+        view.tickOnceForTesting()
+        let scaled = try XCTUnwrap(view.nodeFramesForTesting()[id]).width
+        XCTAssertEqual(scaled, base * 2, accuracy: 0.01)
+    }
+
+    func testGroupColoursMatchingNodesWithADistinctRing() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphConfig.groups = [
+            GraphGroup(query: "a", colorToken: .green, ringStyle: .dashed)
+        ]
+        view.tickOnceForTesting()
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let aID = snapshot.nodes.first { $0.label == "a" }!.id
+        let style = try XCTUnwrap(view.nodeStyleForTesting(nodeId: aID))
+        XCTAssertEqual(style.fill, GraphColorToken.green.color.cgColor, "group colour applied")
+        XCTAssertEqual(style.dash, GraphRingStyle.dashed.dashPattern, "group ring style applied")
+        // A non-matching node keeps the default (no dashed group ring).
+        let dID = snapshot.nodes.first { $0.label == "d" }!.id
+        XCTAssertNotEqual(
+            view.nodeStyleForTesting(nodeId: dID)?.fill, GraphColorToken.green.color.cgColor)
+    }
+
+    func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)
+        state.setGraphForces(
+            GraphForcesConfig(center: 0.1, repel: 0.9, link: 0.2, linkDistance: 0.8))
+        XCTAssertEqual(state.graphConfig.forces.repel, 0.9)
+        // set_forces reached the session (re-heat); a subsequent tick still
+        // produces a finite layout under the new forces.
+        let frame = model.session.tick(iterations: 5)
+        XCTAssertTrue(frame.positions.allSatisfy { $0.isFinite })
+    }
+
     // MARK: APCA contrast (both appearances)
 
     func testDiagramColorsMeetAPCAInBothAppearances() {

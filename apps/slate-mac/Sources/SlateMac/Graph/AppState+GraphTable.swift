@@ -70,6 +70,10 @@ extension AppState {
         clearActiveNoteFields()
         workspace.select(id)
         clearTransitionSensitiveCollections()
+        // Load the persisted graph config (filters/mode/depth) BEFORE the
+        // table load, so the first snapshot fetch uses the saved filter
+        // (P2-4 #560). Once per vault.
+        ensureGraphConfigLoaded()
         loadGraphTable()
     }
 
@@ -221,6 +225,10 @@ extension AppState {
         guard filter != graphTableFilter else { return }
         graphTableFilter = filter
         loadGraphTable(announce: .filterCount)
+        // Persist the backend filter to graph.json (P2-4 #560). The
+        // diagram rebuild on a filter change is driven by the container's
+        // `onChange(of: graphTableFilter)`, so it's not repeated here.
+        scheduleGraphConfigSave()
     }
 
     // MARK: - Presets (P1-3 #556)

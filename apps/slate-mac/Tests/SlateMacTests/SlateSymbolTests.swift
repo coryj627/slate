@@ -71,6 +71,9 @@ final class SlateSymbolTests: XCTestCase {
         // #879: vault-wide Tasks Review leaf. list.bullet.rectangle is
         // SF Symbols 1 (macOS 11), on the macOS 15 floor.
         "list.bullet.rectangle",
+        // Milestone P (P2-4, #560): Graph inspector toggle. sidebar.trailing
+        // is SF Symbols 1 (macOS 11), on the macOS 15 floor.
+        "sidebar.trailing",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated

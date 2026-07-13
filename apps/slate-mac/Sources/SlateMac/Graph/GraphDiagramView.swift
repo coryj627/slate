@@ -193,6 +193,31 @@ final class GraphDiagramNSView: NSView {
                     Task { @MainActor [weak self] in self?.applyTransform() }
                 }
                 .store(in: &subscriptions)
+            // Inspector edits (Filters name query / Groups / Display /
+            // Forces) live on `appState.graphConfig`; re-render and
+            // re-settle when they change (P2-4 #560). A display/groups
+            // change re-settles from the converged state (near no-op); a
+            // forces change re-heated the engine via `set_forces`.
+            appState.$graphConfig
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.rebuildTopology()
+                        self?.startSettling()
+                    }
+                }
+                .store(in: &subscriptions)
+            // The client name filter (shared with the Table) hides/shows
+            // nodes but doesn't move them — re-render without re-settling.
+            appState.$graphTableTextFilter
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.rebuildTopology()
+                        self?.applyTransform()
+                    }
+                }
+                .store(in: &subscriptions)
             didInitialFit = false
             startSettling()
         } else if motionFlip {
@@ -276,6 +301,22 @@ final class GraphDiagramNSView: NSView {
 
     private var viewport: CanvasViewport? { model?.viewport }
 
+    // MARK: Config-driven display / filter (P2-4 #560)
+
+    private var display: GraphDisplay { appState?.graphConfig.display ?? .default }
+    private var nameNeedle: String { appState?.graphTableTextFilter ?? "" }
+
+    /// The client name filter — the SAME predicate the Table applies.
+    private func nameMatches(_ label: String) -> Bool {
+        AppState.graphNameMatches(label, needle: nameNeedle)
+    }
+
+    /// Node diameter with the display multiplier applied (`nodeDiameter`
+    /// is the base spec formula, kept pure for the unit test).
+    private func scaledDiameter(inLinks: UInt32) -> CGFloat {
+        Self.nodeDiameter(inLinks: inLinks) * CGFloat(display.nodeSizeMultiplier)
+    }
+
     /// Layout → view point (`view = (p − offset) × scale`) — the mapping
     /// AX frames, the selection ring, and hit-testing use; the content
     /// layer applies the equivalent affine transform.
@@ -349,19 +390,23 @@ final class GraphDiagramNSView: NSView {
         clearTiles()
         summaryElement = nil
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let showLabels = (viewport?.scale ?? 1) >= Self.labelFadeZoom
+        let showLabels = (viewport?.scale ?? 1) >= display.textFadeZoom
         lastLabelsShown = showLabels
         let labelIDs = showLabels ? labelPriorityIDs(model) : []
 
         var seen: Set<UInt64> = []
         var elements: [GraphNodeAXElement] = []
-        // Tier A materializes EVERY filtered node (≤1,500), regardless of
-        // the viewport, so the AX tree is always complete and a pan never
-        // drops nodes (P2-3 distinguishes this from Canvas's windowing).
+        // Tier A materializes EVERY VISIBLE node (≤1,500) regardless of the
+        // viewport, so the AX tree is always complete and a pan never drops
+        // nodes (P2-3 vs Canvas windowing). The name filter (P2-4) hides
+        // non-matching nodes — the SAME predicate the Table applies — so
+        // both projections show one node set.
         for id in model.nodeIDs {
-            guard let node = model.node(id), let p = positions[id] else { continue }
+            guard let node = model.node(id), let p = positions[id], nameMatches(node.label) else {
+                continue
+            }
             seen.insert(id)
-            let diameter = Self.nodeDiameter(inLinks: node.inLinks)
+            let diameter = scaledDiameter(inLinks: node.inLinks)
             let rect = CGRect(
                 x: p.x - diameter / 2, y: p.y - diameter / 2, width: diameter, height: diameter)
 
@@ -370,7 +415,8 @@ final class GraphDiagramNSView: NSView {
             if dot.superlayer == nil { nodeContainer.addSublayer(dot) }
             dot.frame = rect
             dot.path = CGPath(ellipseIn: CGRect(origin: .zero, size: rect.size), transform: nil)
-            styleNode(dot, node: node, increaseContrast: increaseContrast)
+            let group = appState?.graphConfig.matchingGroup(for: node.label)
+            styleNode(dot, node: node, group: group, increaseContrast: increaseContrast)
 
             if labelIDs.contains(id) {
                 let label = labelLayers[id] ?? makeLabelLayer()
@@ -487,12 +533,23 @@ final class GraphDiagramNSView: NSView {
         return text
     }
 
-    /// Node styling — never color alone: ghosts (unresolved) draw hollow +
-    /// dashed, notes/attachments filled; Increase Contrast strengthens the
-    /// stroke.
-    private func styleNode(_ layer: CAShapeLayer, node: GraphNode, increaseContrast: Bool) {
+    /// Node styling — never color alone. A colour GROUP (P2-4) overrides
+    /// the kind fill and stamps its RING STYLE (dashed/dotted/double) so
+    /// group membership reads without relying on colour (WCAG 1.4.1).
+    /// Ungrouped: ghosts draw hollow + dashed, notes/attachments filled.
+    /// Increase Contrast strengthens the stroke.
+    private func styleNode(
+        _ layer: CAShapeLayer, node: GraphNode, group: GraphGroup?, increaseContrast: Bool
+    ) {
         let stroke = increaseContrast ? NSColor.labelColor : NSColor.secondaryLabelColor
         layer.strokeColor = stroke.cgColor
+        layer.lineWidth = 1.5
+        if let group {
+            layer.fillColor = group.colorToken.color.cgColor
+            layer.lineDashPattern = group.ringStyle.dashPattern
+            if group.ringStyle == .double { layer.lineWidth = 3 }  // double = thicker ring
+            return
+        }
         switch node.kind {
         case .ghost:
             layer.fillColor = NSColor.windowBackgroundColor.cgColor
@@ -508,20 +565,38 @@ final class GraphDiagramNSView: NSView {
 
     private func rebuildEdges(_ model: GraphDiagramModel) {
         let path = CGMutablePath()
-        // ALL edges are drawn in layout space (the content-layer clips
-        // off-screen geometry); this keeps a long segment whose endpoints
-        // both lie outside the viewport but which crosses it (round 1
-        // finding 13).
+        let arrows = display.arrows
+        // ALL edges among VISIBLE (name-matching) endpoints are drawn in
+        // layout space (the content-layer clips off-screen geometry) — a
+        // long segment crossing the viewport with both endpoints outside
+        // is kept (round 1 finding 13). Edges to a name-filtered-out node
+        // are dropped so the diagram matches the Table's visible set.
         for edge in model.edges {
-            guard let a = positions[edge.sourceId], let b = positions[edge.targetId] else {
-                continue
-            }
+            guard let a = positions[edge.sourceId], let b = positions[edge.targetId],
+                nameMatches(model.node(edge.sourceId)?.label ?? ""),
+                nameMatches(model.node(edge.targetId)?.label ?? "")
+            else { continue }
             path.move(to: a)
             path.addLine(to: b)
+            if arrows { addArrowhead(to: path, from: a, to: b) }
         }
         edgeLayer.path = path
         edgeLayer.strokeColor = NSColor.separatorColor.cgColor
-        edgeLayer.lineWidth = 1.0
+        edgeLayer.lineWidth = max(0.5, CGFloat(display.linkThickness))
+    }
+
+    /// A small arrowhead at `to`, pointing along `from → to` (layout
+    /// coords; scales with the content transform). Drawn only when the
+    /// Arrows display toggle is on (P2-4).
+    private func addArrowhead(to path: CGMutablePath, from: CGPoint, to end: CGPoint) {
+        let angle = atan2(end.y - from.y, end.x - from.x)
+        let size: CGFloat = 6
+        for spread in [CGFloat.pi * 0.85, -CGFloat.pi * 0.85] {
+            path.move(to: end)
+            path.addLine(
+                to: CGPoint(
+                    x: end.x + size * cos(angle + spread), y: end.y + size * sin(angle + spread)))
+        }
     }
 
     private func buildGrid() {
@@ -623,7 +698,7 @@ final class GraphDiagramNSView: NSView {
         // labels — they're materialized only in rebuildTierA, so relabel
         // here before applying the transform (round 2 finding 4).
         if let model, !model.isTierB,
-            ((viewport?.scale ?? 1) >= Self.labelFadeZoom) != lastLabelsShown
+            ((viewport?.scale ?? 1) >= display.textFadeZoom) != lastLabelsShown
         {
             rebuildTopology()
         }
@@ -651,7 +726,7 @@ final class GraphDiagramNSView: NSView {
             guard let node = model.node(element.nodeId), let p = positions[element.nodeId] else {
                 continue
             }
-            let d = Self.nodeDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+            let d = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
             let center = layoutToView(p)
             element.setAccessibilityFrame(
                 screenRect(
@@ -669,7 +744,7 @@ final class GraphDiagramNSView: NSView {
             selectionAccentLayer.path = nil
             return
         }
-        let diameter = Self.nodeDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+        let diameter = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
         let center = layoutToView(p)
         let ringRect = CGRect(
             x: center.x - diameter / 2 - 4, y: center.y - diameter / 2 - 4,
@@ -693,8 +768,10 @@ final class GraphDiagramNSView: NSView {
         for dx in -1...1 {
             for dy in -1...1 {
                 for id in grid[GridKey(x: base.x + dx, y: base.y + dy)] ?? [] {
-                    guard let p = positions[id], let node = model.node(id) else { continue }
-                    let radius = Self.nodeDiameter(inLinks: node.inLinks) / 2 + 2  // layout, +slop
+                    guard let p = positions[id], let node = model.node(id),
+                        nameMatches(node.label)  // name-filtered-out nodes aren't hittable
+                    else { continue }
+                    let radius = scaledDiameter(inLinks: node.inLinks) / 2 + 2  // layout, +slop
                     let dist = hypot(p.x - lp.x, p.y - lp.y)
                     if dist <= radius, best == nil || dist < best!.dist { best = (id, dist) }
                 }
@@ -941,6 +1018,12 @@ final class GraphDiagramNSView: NSView {
         var out: [UInt64: CGRect] = [:]
         for (id, layer) in nodeLayers { out[id] = layer.frame }
         return out
+    }
+
+    /// A materialized node's fill + ring dash pattern (group styling test).
+    func nodeStyleForTesting(nodeId: UInt64) -> (fill: CGColor?, dash: [NSNumber]?)? {
+        guard let layer = nodeLayers[nodeId] else { return nil }
+        return (layer.fillColor, layer.lineDashPattern)
     }
 
     func axLabelsForTesting() -> [String] { axElements.compactMap { $0.accessibilityLabel() } }
