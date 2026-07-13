@@ -525,6 +525,60 @@ final class GraphDiagramTests: XCTestCase {
             "with the .ghost kind filter the Diagram shows exactly the ghosts, as the Table would")
     }
 
+    func testNeighborContentExcludesFilteredOutNodes() throws {
+        // a links b and c; a name filter hides b. Node a's AX "Connects to"
+        // custom content must list only the VISIBLE neighbor (c), matching
+        // the drawn edges (review finding 5 — the AX path was unfiltered).
+        let session = try makeSession()
+        let base = try makeModel(session)
+        func node(_ id: UInt64, _ label: String) -> GraphNode {
+            GraphNode(
+                id: id, path: "\(label).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
+                inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: false, pagerank: 0,
+                modifiedMs: nil)
+        }
+        let ids: [UInt64] = [1, 2, 3]
+        let byID: [UInt64: GraphNode] = [
+            1: node(1, "keep-a"), 2: node(2, "hide-b"), 3: node(3, "keep-c"),
+        ]
+        let edges = [
+            GraphEdge(sourceId: 1, targetId: 2, kind: .link, count: 1),
+            GraphEdge(sourceId: 1, targetId: 3, kind: .link, count: 1),
+        ]
+        let model = GraphDiagramModel(
+            session: base.session, filter: filter, nodeIDs: ids, nodesByID: byID, edges: edges,
+            generation: 1)
+        let (state, view) = makeView(model)
+        state.graphTableTextFilter = "keep"
+        view.injectPositionsForTesting([
+            1: CGPoint(x: 0, y: 0), 2: CGPoint(x: 10, y: 0), 3: CGPoint(x: 0, y: 10),
+        ])
+        // "keep-a" is the first visible element (id order).
+        let content = try XCTUnwrap(view.axNeighborContentForTesting(nodeIndex: 0))
+        XCTAssertTrue(content.contains("keep-c"), "visible neighbor is listed")
+        XCTAssertFalse(content.contains("hide-b"), "a filtered-out neighbor is NOT listed")
+    }
+
+    func testSettleAnnouncementNotArmedWithoutADiagramAndClearedOnTeardown() throws {
+        // The settled-state announcement must arm ONLY with a live diagram
+        // and never survive teardown, or a later initial build would
+        // spuriously say "settled" (review finding 8).
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)  // sets graphDiagramModel
+        state.setGraphForces(
+            GraphForcesConfig(center: 0.1, repel: 0.9, link: 0.2, linkDistance: 0.8))
+        XCTAssertTrue(state.graphForcesSettlePending, "a live diagram arms the settled announcement")
+
+        state.resetGraphDiagramState()
+        XCTAssertFalse(state.graphForcesSettlePending, "teardown clears the pending flag")
+
+        state.setGraphForces(
+            GraphForcesConfig(center: 0.3, repel: 0.3, link: 0.3, linkDistance: 0.3))
+        XCTAssertFalse(
+            state.graphForcesSettlePending, "no live diagram ⇒ nothing to settle, nothing armed")
+    }
+
     func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
         let session = try makeSession()
         let model = try makeModel(session)

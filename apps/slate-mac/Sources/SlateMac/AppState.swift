@@ -545,16 +545,20 @@ final class AppState: ObservableObject {
     /// boundaries. Written to `.slate/graph.json` (debounced) via
     /// `graphConfigSaveTask`.
     @Published var graphConfig = GraphConfig.default
-    var graphConfigSaveTask: Task<Void, Never>?
+    /// Pending debounced saves keyed BY VAULT — genuine per-vault
+    /// bookkeeping (P2-4 review finding 3). A same-vault edit cancels only
+    /// that vault's pending task (coalescing); a save for a DIFFERENT vault
+    /// keeps its own entry and runs to completion, so a fast vault switch
+    /// can't drop vault A's final write and no stale same-vault task lingers.
+    var graphConfigSaveTasks: [URL: Task<Void, Never>] = [:]
+    /// A per-vault monotonic token so a completing save clears its dict
+    /// entry ONLY if a newer same-vault save hasn't already replaced it
+    /// (avoids a mid-write task dropping its successor's entry).
+    var graphConfigSaveGen: [URL: Int] = [:]
     /// The vault `graphConfig` was last loaded for — so the config loads
     /// ONCE per vault (a per-activate reload would revert a debounced,
     /// not-yet-written filter/force edit when the user tab-switches).
     var graphConfigVaultURL: URL?
-    /// The vault the currently-pending debounced save targets. A save for a
-    /// DIFFERENT vault is NEVER cancelled by a new edit (it captured its own
-    /// root+snapshot), so a fast vault switch can't drop vault A's final
-    /// write (P2-4 review finding 3).
-    var graphConfigSavePendingVault: URL?
     /// False when this vault's `graph.json` is unreadable / unparseable /
     /// a NEWER version — the file is then treated as read-only so a save
     /// can never clobber whatever a newer Slate (or a human) put there

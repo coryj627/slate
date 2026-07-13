@@ -53,13 +53,16 @@ extension AppState {
     }
 
     /// Apply the persisted backend + name filter to the live Table state
-    /// (which the Diagram also reads). Called on each PLAIN Graph-tab
-    /// activation — one with no pending preset — so close→reopen and
-    /// preset→plain BOTH restore the saved filter rather than leaving a
-    /// transient preset's filter installed (finding 4).
+    /// (which the Diagram also reads) and CLEAR any transient preset kind
+    /// filter. Called on each PLAIN Graph-tab activation — one with no
+    /// pending preset — so close→reopen and preset→plain BOTH restore the
+    /// saved view rather than leaving a transient preset installed. The
+    /// `.ghost` kind filter is a preset-only overlay, never persisted, so a
+    /// plain open must drop it too (finding 4).
     func applyPersistedGraphFilter() {
         graphTableFilter = graphConfig.filters.backend
         graphTableTextFilter = graphConfig.filters.nameQuery
+        graphTableKindFilter = nil
     }
 
     /// Snapshot the live filter / depth into `graphConfig` and persist the
@@ -81,17 +84,24 @@ extension AppState {
             nameQuery: graphTableTextFilter)
         graphConfig.connectionsDepth = Self.clampConnectionsDepth(connectionsDepth)
         let snapshot = graphConfig
-        // Coalesce ONLY a still-pending save for the SAME vault; a pending
-        // save for a DIFFERENT vault (captured its own root+snapshot) must
-        // run to completion so a fast vault switch loses no edit (finding 3).
-        if graphConfigSavePendingVault == root { graphConfigSaveTask?.cancel() }
-        graphConfigSavePendingVault = root
-        graphConfigSaveTask = Task { [weak self] in
+        // Coalesce ONLY this vault's still-pending save (per-vault keyed);
+        // a pending save for a DIFFERENT vault keeps its own entry and runs
+        // to completion, so a fast vault switch loses no edit and no stale
+        // same-vault task lingers (finding 3). The write itself is
+        // serialized by `GraphConfigWriter`.
+        graphConfigSaveTasks[root]?.cancel()
+        let gen = (graphConfigSaveGen[root] ?? 0) + 1
+        graphConfigSaveGen[root] = gen
+        graphConfigSaveTasks[root] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
             await GraphConfigWriter.shared.write(vault: root, config: snapshot)
-            guard let self else { return }
-            if self.graphConfigSavePendingVault == root { self.graphConfigSavePendingVault = nil }
+            // Clear our entry ONLY if a newer same-vault save hasn't
+            // replaced us (a task past its sleep can't be cancelled, so it
+            // must not drop its successor's entry).
+            guard let self, self.graphConfigSaveGen[root] == gen else { return }
+            self.graphConfigSaveTasks.removeValue(forKey: root)
+            self.graphConfigSaveGen.removeValue(forKey: root)
         }
     }
 
@@ -105,11 +115,17 @@ extension AppState {
     func setGraphForces(_ forces: GraphForcesConfig) {
         let old = graphConfig.forces
         graphConfig.forces = forces
-        graphDiagramModel?.session.setForces(forces: forces.layoutForces)
+        if let session = graphDiagramModel?.session {
+            session.setForces(forces: forces.layoutForces)
+            // Arm the settled-state announcement ONLY when a live diagram
+            // will actually re-heat + converge. Without a diagram (Table
+            // mode) there's no settle, so a stale flag must never survive to
+            // announce "settled" on a LATER initial build (finding 8).
+            graphForcesSettlePending = true
+        }
         if let phrase = Self.forcesChangePhrase(old: old, new: forces) {
             graphAnnouncer.announceForceValue(phrase)
         }
-        graphForcesSettlePending = true
         scheduleGraphConfigSave()
     }
 

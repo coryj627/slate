@@ -94,6 +94,10 @@ extension AppState {
         graphDiagramModel = nil
         graphDiagramLoading = false
         graphDiagramError = nil
+        // A forces edit may have armed the settled-state announcement; the
+        // diagram is gone now, so drop it — otherwise the NEXT diagram's
+        // initial settle would spuriously announce "settled" (finding 8).
+        graphForcesSettlePending = false
     }
 
     /// Re-sync the diagram after a graph-generation bump

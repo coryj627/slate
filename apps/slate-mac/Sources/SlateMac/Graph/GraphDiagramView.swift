@@ -310,6 +310,9 @@ final class GraphDiagramNSView: NSView {
                 x: CGFloat(frame.positions[2 * i]),
                 y: CGFloat(frame.positions[2 * i + 1]))
         }
+        // Refresh the visible set BEFORE measuring bounds so "fit" frames the
+        // VISIBLE nodes, not the filtered-out ones (finding 5).
+        refreshVisibleSet()
         model.contentBounds = positionsBounds()
         if !didInitialFit, !positions.isEmpty {
             didInitialFit = true
@@ -348,12 +351,26 @@ final class GraphDiagramNSView: NSView {
     /// A node is VISIBLE iff it passes BOTH client-side filters the Table
     /// applies — the name needle and the preset kind filter — on top of the
     /// backend filter the layout was built with. The single definition of
-    /// "shown" every tier/render/count/nav/hit-test/AX path consults so the
-    /// Diagram covers exactly the Table's node set (finding 5).
+    /// "shown" every tier/render/count/nav/hit-test/AX/fit path consults so
+    /// the Diagram covers exactly the Table's node set (finding 5).
     private func isVisible(_ node: GraphNode) -> Bool {
         guard nameMatches(node.label) else { return false }
         if let kind = kindFilter, node.kind != kind { return false }
         return true
+    }
+
+    /// Recompute `visibleIDs`/`visibleSet` from the model + current filters.
+    /// Called before ANY consumer of the visible set (fit bounds in
+    /// `applyFrame`, and `rebuildTopology`) so every path — render, count,
+    /// nav, hit-test, AX, and fit — agrees on one set (finding 5).
+    private func refreshVisibleSet() {
+        guard let model else {
+            visibleIDs = []
+            visibleSet = []
+            return
+        }
+        visibleIDs = model.nodeIDs.filter { id in model.node(id).map(isVisible) ?? false }
+        visibleSet = Set(visibleIDs)
     }
 
     /// Node diameter with the display multiplier applied (`nodeDiameter`
@@ -375,23 +392,31 @@ final class GraphDiagramNSView: NSView {
         return CGPoint(x: p.x / v.scale + v.offset.x, y: p.y / v.scale + v.offset.y)
     }
 
+    /// The layout-space bounding box of the VISIBLE nodes only, so "fit
+    /// graph" (⌥⌘0 / the initial frame) frames what's shown, not the
+    /// filtered-out nodes that would otherwise shrink the visible ones
+    /// (finding 5). Empty visible set ⇒ `.zero` (fit then no-ops/​inflates).
     private func positionsBounds() -> CGRect {
-        guard !positions.isEmpty else { return .zero }
         var minX = CGFloat.greatestFiniteMagnitude
         var minY = CGFloat.greatestFiniteMagnitude
         var maxX = -CGFloat.greatestFiniteMagnitude
         var maxY = -CGFloat.greatestFiniteMagnitude
-        for p in positions.values {
+        var any = false
+        for id in visibleSet {
+            guard let p = positions[id] else { continue }
+            any = true
             minX = min(minX, p.x)
             minY = min(minY, p.y)
             maxX = max(maxX, p.x)
             maxY = max(maxY, p.y)
         }
+        guard any else { return .zero }
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     func fitGraph() {
         guard bounds.width > 0, let model else { return }
+        refreshVisibleSet()  // fit the VISIBLE nodes (finding 5)
         model.contentBounds = positionsBounds()
         model.fitToContent()
         applyTransform()
@@ -419,8 +444,7 @@ final class GraphDiagramNSView: NSView {
         // all key off it — not the raw topology (finding 5). A 1,501-node
         // graph filtered to one match is a one-node Tier-A diagram, not a
         // 1,501-dot Tier-B summary.
-        visibleIDs = model.nodeIDs.filter { id in model.node(id).map(isVisible) ?? false }
-        visibleSet = Set(visibleIDs)
+        refreshVisibleSet()
         // A selection the filter just hid must drop — else the ring points
         // at a hidden node and keyboard nav resumes from an invisible one.
         if let sel = model.selection, !visibleSet.contains(sel) { model.selection = nil }
@@ -742,7 +766,10 @@ final class GraphDiagramNSView: NSView {
     }
 
     /// Neighbor labels as `accessibilityCustomContent` (spec §P2-3 — edges
-    /// aren't AX elements): first 10 unique, then "and k more".
+    /// aren't AX elements): first 10 unique, then "and k more". Only VISIBLE
+    /// neighbors are announced — a filtered-out node isn't in the shown
+    /// graph, so it must not surface in a visible node's connections
+    /// (finding 5, matching the drawn edges which are already visible-gated).
     private func neighborCustomContent(of id: UInt64, model: GraphDiagramModel)
         -> [AXCustomContent]
     {
@@ -752,7 +779,9 @@ final class GraphDiagramNSView: NSView {
         for edge in model.edges {
             let other: UInt64? =
                 edge.sourceId == id ? edge.targetId : (edge.targetId == id ? edge.sourceId : nil)
-            guard let other, seen.insert(other).inserted, let n = model.node(other) else { continue }
+            guard let other, visibleSet.contains(other), seen.insert(other).inserted,
+                let n = model.node(other)
+            else { continue }
             if labels.count < 10 { labels.append(n.label) } else { extra += 1 }
         }
         guard !labels.isEmpty else { return [] }
