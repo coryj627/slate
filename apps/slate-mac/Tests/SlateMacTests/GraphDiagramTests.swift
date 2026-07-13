@@ -524,6 +524,43 @@ final class GraphDiagramTests: XCTestCase {
             grouped, ungrouped, "a solid-ring group reads without colour via a heavier ring")
     }
 
+    func testUngroupingANodeClearsItsRingDashAndWidth() throws {
+        // Node layers are REUSED across rebuilds (`nodeLayers[id] ?? make…`),
+        // so when a group rule is removed the same `CAShapeLayer` is re-styled
+        // in place. `styleNode`'s ungrouped branch must therefore RESET both
+        // the group ring's dash pattern and its heavier line width — otherwise
+        // a dropped group leaves a stale dashed/thick ring on a now-ungrouped
+        // note (P2-4 Codoki nit). This guards that reset.
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        let snap = try session.graphSnapshot(filter: filter)
+        let aID = snap.nodes.first { $0.label == "a" }!.id  // a.md is a note
+
+        // Grouped: dashed ring, heavier width.
+        state.graphConfig.groups = [
+            GraphGroup(query: "a", colorToken: .green, ringStyle: .dashed)
+        ]
+        view.tickOnceForTesting()
+        XCTAssertEqual(
+            view.nodeStyleForTesting(nodeId: aID)?.dash, GraphRingStyle.dashed.dashPattern,
+            "grouped node shows the dashed ring")
+        let groupedWidth = try XCTUnwrap(view.nodeLineWidthForTesting(nodeId: aID))
+        XCTAssertEqual(groupedWidth, 3, accuracy: 0.001, "grouped node ring is heavier")
+
+        // Ungroup: the SAME reused layer must fall back to the plain note
+        // style — solid ring (no dash) at the default 1.5pt width.
+        state.graphConfig.groups = []
+        view.tickOnceForTesting()
+        XCTAssertNil(
+            view.nodeStyleForTesting(nodeId: aID)?.dash,
+            "ungrouped note clears the group ring's dash pattern")
+        let ungroupedWidth = try XCTUnwrap(view.nodeLineWidthForTesting(nodeId: aID))
+        XCTAssertEqual(
+            ungroupedWidth, 1.5, accuracy: 0.001,
+            "ungrouped note resets to the default ring width")
+    }
+
     func testNameFilterCollapsesTierBToTheVisibleSet() throws {
         // A name filter that drops a Tier-B graph below the threshold must
         // render Tier A over exactly the matching nodes — the tier

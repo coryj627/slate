@@ -234,6 +234,22 @@ actor GraphConfigWriter {
         // Reject a superseded snapshot regardless of delivery order.
         if let seen = written[vault], generation < seen { return }
         written[vault] = generation
-        try? GraphConfigStore(vaultRoot: vault).write(config)
+        // Best-effort persistence, but LOG failures rather than swallowing
+        // them (Codoki review): a permission / disk-full / refuse-to-clobber
+        // error must not crash or propagate (the caller's `graphConfigWritable`
+        // gate is the authoritative protection), yet a silent drop makes a
+        // field "my graph settings won't save" report undiagnosable.
+        do {
+            try GraphConfigStore(vaultRoot: vault).write(config)
+        } catch {
+            // Log the FULL vault path so the failing vault is uniquely
+            // identifiable (two vaults can share a folder name) — matching
+            // the AppState persistence-log convention. Fixed format string:
+            // a path / error can legally contain `%`, which NSLog would
+            // otherwise read as an unsupplied format specifier (corrupting
+            // the message, e.g. `%@` → `(null)`).
+            let message = "Failed to persist graph.json for vault '\(vault.path)': \(error)"
+            NSLog("%@", message)
+        }
     }
 }
