@@ -720,6 +720,30 @@ impl VaultSession {
         self.inner.graph_generation()
     }
 
+    /// Snapshot the current graph under `filter` and seed a
+    /// [`LayoutSession`] (#558). The session keeps the force-directed
+    /// layout state pointer-side; only flat position buffers cross the
+    /// FFI. All of its methods are off-main-callable — the host drives
+    /// ticks from a background task. Builds the graph index on first use.
+    pub fn start_graph_layout(
+        self: Arc<Self>,
+        filter: GraphFilter,
+        forces: LayoutForces,
+        config: LayoutConfig,
+    ) -> Result<Arc<LayoutSession>, VaultError> {
+        let core_filter: core::graph::GraphFilter = filter.into();
+        let core_config: core::graph_layout::LayoutConfig = config.into();
+        let (engine, topology) =
+            self.inner
+                .start_layout(core_filter, forces.into(), core_config)?;
+        let state = LayoutState::new(engine, topology, core_config.max_iterations);
+        Ok(Arc::new(LayoutSession {
+            session: Arc::clone(&self),
+            filter: core_filter,
+            state: std::sync::Mutex::new(state),
+        }))
+    }
+
     /// Paged list of files whose frontmatter contains property `key`
     /// with a value matching `value` (case-insensitive). For list /
     /// tag_list properties, each element is searched independently.
@@ -2217,6 +2241,314 @@ impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
             edges: n.edges.into_iter().map(Into::into).collect(),
             audio_summary: n.audio_summary,
         }
+    }
+}
+
+// --- Layout surface (Milestone P #558) ---------------------------------
+
+/// The four Obsidian-parity force sliders (each `0.0..=1.0`, default
+/// `0.5`), mapped 1:1 to `slate_core::graph_layout::LayoutForces`. The
+/// mapping to physical constants is normative in p2_spec §P2-1.
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct LayoutForces {
+    /// Gravity toward the origin (frames disconnected components).
+    #[uniffi(default = 0.5)]
+    pub center: f32,
+    /// Pairwise repulsion strength.
+    #[uniffi(default = 0.5)]
+    pub repel: f32,
+    /// Per-edge attraction strength.
+    #[uniffi(default = 0.5)]
+    pub link: f32,
+    /// Ideal edge length (maps to `k`).
+    #[uniffi(default = 0.5)]
+    pub link_distance: f32,
+}
+
+/// A non-finite slider value from the foreign side would poison the
+/// whole force pass (NaN `link_distance` ⇒ NaN `k` ⇒ every position NaN,
+/// breaking P2-1's no-NaN/Inf invariant), so we defensively fold NaN/±∞
+/// back to the `0.5` default at the boundary. Finite out-of-range values
+/// are left for the kernel's own `clamp(0.0, 1.0)`.
+fn finite_or_default(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.5 }
+}
+
+impl From<LayoutForces> for core::graph_layout::LayoutForces {
+    fn from(f: LayoutForces) -> Self {
+        core::graph_layout::LayoutForces {
+            center: finite_or_default(f.center),
+            repel: finite_or_default(f.repel),
+            link: finite_or_default(f.link),
+            link_distance: finite_or_default(f.link_distance),
+        }
+    }
+}
+
+/// Solve budgets and the deterministic jitter seed, mirroring
+/// `slate_core::graph_layout::LayoutConfig`. Defaults match the kernel:
+/// seed 0, 300 cold iterations, 60 warm.
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct LayoutConfig {
+    /// Same seed ⇒ same layout (jitter derivation only).
+    #[uniffi(default = 0)]
+    pub seed: u64,
+    /// Cold-solve iteration budget; also the per-call ceiling on extra
+    /// iterations `run_to_convergence` will spend.
+    #[uniffi(default = 300)]
+    pub max_iterations: u32,
+    /// Warm-start budget after a `refresh` re-seats nodes.
+    #[uniffi(default = 60)]
+    pub warm_iterations: u32,
+}
+
+impl From<LayoutConfig> for core::graph_layout::LayoutConfig {
+    fn from(c: LayoutConfig) -> Self {
+        core::graph_layout::LayoutConfig {
+            seed: c.seed,
+            max_iterations: c.max_iterations,
+            warm_iterations: c.warm_iterations,
+        }
+    }
+}
+
+/// One position frame from a [`LayoutSession`] (#558). `positions` is
+/// interleaved `x0,y0,x1,y1…` in `node_ids()` order — length is exactly
+/// `2 × node count`; `f32` at the boundary, `f64` inside the kernel.
+/// `generation` tags the graph the positions' ids belong to; a change
+/// means `node_ids()`/`edges()` must be re-fetched (a `refresh` reported
+/// topology churn).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LayoutFrame {
+    pub positions: Vec<f32>,
+    pub iteration: u32,
+    pub converged: bool,
+    pub generation: u64,
+}
+
+/// A running force-directed layout over one filtered graph projection
+/// (#558). The heavy state — positions, velocities, quadtree — lives
+/// here on the Rust side; the FFI hands back only flat `LayoutFrame`
+/// buffers. Every method is internally synchronized (one `Mutex`) and
+/// safe to call from any thread, so the host can drive `tick`s from a
+/// background task while the UI thread reads the last frame.
+#[derive(uniffi::Object)]
+pub struct LayoutSession {
+    /// Kept alive so `refresh` can re-read the live graph under the core
+    /// session's lock order (conn → graph).
+    session: Arc<VaultSession>,
+    /// The projection this layout is bound to; re-applied on `refresh`.
+    filter: core::graph::GraphFilter,
+    state: std::sync::Mutex<LayoutState>,
+}
+
+/// Mutable layout state behind the session's mutex. `ids`/`edges`/
+/// `generation` are the last-synced topology; `id_to_slot` maps a
+/// backend node id to its position slot for `pin_node`/`unpin_node`.
+struct LayoutState {
+    engine: core::graph_layout::LayoutEngine,
+    ids: Vec<u64>,
+    id_to_slot: std::collections::HashMap<u64, usize>,
+    edges: Vec<GraphEdge>,
+    generation: u64,
+    /// Result of the most recent step; reset to `false` whenever the
+    /// layout is perturbed (forces changed, node pinned, topology
+    /// re-synced) so a frame never claims convergence it hasn't earned.
+    converged: bool,
+    /// Per-call ceiling on extra iterations `run_to_convergence` spends
+    /// (the config's cold budget) — bounds work whether the engine is
+    /// cold (iteration 0) or warm (iteration already high after a
+    /// refresh).
+    max_iterations: u32,
+    /// Test-only seam: when set, `run_to_convergence` fires a cancel
+    /// exactly once, AFTER a top-of-loop cancel check has already passed,
+    /// so a test can deterministically exercise the "a cancel that arrives
+    /// mid-flight still lets at most one ≤10 chunk finish" bound without
+    /// racing an unsynchronized thread.
+    #[cfg(test)]
+    cancel_after_next_check: bool,
+}
+
+impl LayoutState {
+    fn new(
+        engine: core::graph_layout::LayoutEngine,
+        topology: core::graph_layout::LayoutTopology,
+        max_iterations: u32,
+    ) -> Self {
+        let mut state = LayoutState {
+            engine,
+            ids: Vec::new(),
+            id_to_slot: std::collections::HashMap::new(),
+            edges: Vec::new(),
+            generation: 0,
+            converged: false,
+            max_iterations,
+            #[cfg(test)]
+            cancel_after_next_check: false,
+        };
+        state.apply_topology(topology);
+        state
+    }
+
+    fn apply_topology(&mut self, topology: core::graph_layout::LayoutTopology) {
+        self.id_to_slot = topology
+            .ids
+            .iter()
+            .enumerate()
+            .map(|(slot, &id)| (id, slot))
+            .collect();
+        self.ids = topology.ids;
+        self.edges = topology.edges.into_iter().map(GraphEdge::from).collect();
+        self.generation = topology.generation;
+    }
+
+    fn frame(&self) -> LayoutFrame {
+        let mut positions = Vec::with_capacity(self.engine.node_count() * 2);
+        for &[x, y] in self.engine.positions() {
+            positions.push(x as f32);
+            positions.push(y as f32);
+        }
+        LayoutFrame {
+            positions,
+            iteration: self.engine.iteration(),
+            converged: self.converged,
+            generation: self.generation,
+        }
+    }
+}
+
+#[uniffi::export]
+impl LayoutSession {
+    /// Backend node ids in position order — `node_ids()[i]` names the
+    /// node whose coordinates are `positions[2i], positions[2i+1]` in
+    /// every frame. Fetch once and cache; re-fetch only after a
+    /// `refresh` reports topology change (the frame's `generation`
+    /// moved).
+    pub fn node_ids(&self) -> Vec<u64> {
+        self.state.lock().expect("layout state mutex").ids.clone()
+    }
+
+    /// The collapsed edges of this projection (deterministic order).
+    /// Same caching contract as [`Self::node_ids`].
+    pub fn edges(&self) -> Vec<GraphEdge> {
+        self.state.lock().expect("layout state mutex").edges.clone()
+    }
+
+    /// Advance the simulation `iterations` steps and return the new
+    /// frame. The host's interactive cadence is `tick(20)` per display
+    /// frame while sliders are engaged or a settle animation runs,
+    /// stopping once `converged`.
+    pub fn tick(&self, iterations: u32) -> LayoutFrame {
+        let mut state = self.state.lock().expect("layout state mutex");
+        let report = state.engine.step(iterations);
+        state.converged = report.converged;
+        state.frame()
+    }
+
+    /// Run until the deterministic convergence predicate holds, `cancel`
+    /// fires, or the per-call iteration ceiling is reached — checking
+    /// `cancel` every 10 iterations. This is the Reduce-Motion path: one
+    /// settled frame instead of an animated drift.
+    pub fn run_to_convergence(&self, cancel: Arc<CancelToken>) -> LayoutFrame {
+        let mut state = self.state.lock().expect("layout state mutex");
+        let start = state.engine.iteration();
+        let cap = state.max_iterations;
+        loop {
+            if cancel.inner.is_cancelled() {
+                break;
+            }
+            // Test seam: simulate a cancel that lands the instant AFTER the
+            // check above passed. The in-flight chunk must still complete
+            // (≤10), then the next top-of-loop check stops the run.
+            #[cfg(test)]
+            if state.cancel_after_next_check {
+                state.cancel_after_next_check = false;
+                cancel.inner.cancel();
+            }
+            // Size the chunk to the remaining budget FIRST, so the total
+            // never overshoots `cap` (a `cap` not divisible by 10 — or 0,
+            // or 1 — must still be honored exactly), while never stepping
+            // more than 10 between cancel checks.
+            let elapsed = state.engine.iteration().saturating_sub(start);
+            let remaining = cap.saturating_sub(elapsed);
+            if remaining == 0 {
+                break;
+            }
+            let report = state.engine.step(remaining.min(10));
+            state.converged = report.converged;
+            if report.converged {
+                break;
+            }
+        }
+        state.frame()
+    }
+
+    /// Retune the forces live and re-heat to the warm temperature (the
+    /// slider-drag path). The next `tick`s settle into the new field.
+    pub fn set_forces(&self, forces: LayoutForces) {
+        let mut state = self.state.lock().expect("layout state mutex");
+        state.engine.set_forces(forces.into());
+        state.converged = false;
+    }
+
+    /// Pin `id` at `(x, y)`: it stops accumulating displacement but
+    /// still repels its neighbors. Unknown ids (e.g. filtered out, or
+    /// from a stale generation) are ignored, as are non-finite
+    /// coordinates — pinning to NaN/∞ would plant that value directly in
+    /// the next frame and contaminate neighbors through the force pass.
+    pub fn pin_node(&self, id: u64, x: f32, y: f32) {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        let mut state = self.state.lock().expect("layout state mutex");
+        if let Some(&slot) = state.id_to_slot.get(&id) {
+            state.engine.pin(slot, f64::from(x), f64::from(y));
+            state.converged = false;
+        }
+    }
+
+    /// Release a previously pinned `id`. Unknown ids are ignored.
+    pub fn unpin_node(&self, id: u64) {
+        let mut state = self.state.lock().expect("layout state mutex");
+        if let Some(&slot) = state.id_to_slot.get(&id) {
+            state.engine.unpin(slot);
+            state.converged = false;
+        }
+    }
+
+    /// Re-sync with the live `GraphIndex`. Returns `None` when the graph
+    /// generation is unchanged (a cheap probe — no work done), otherwise
+    /// carries surviving nodes' positions over, seats newcomers, re-heats
+    /// the changed neighborhood, and returns the post-`warm_update`
+    /// frame. On any change the caller MUST re-fetch `node_ids()` /
+    /// `edges()`: the returned frame's `generation` moved and ids may
+    /// have been reassigned.
+    pub fn refresh(&self) -> Result<Option<LayoutFrame>, VaultError> {
+        let mut state = self.state.lock().expect("layout state mutex");
+        let last_generation = state.generation;
+        match self
+            .session
+            .inner
+            .refresh_layout(&mut state.engine, self.filter, last_generation)?
+        {
+            None => Ok(None),
+            Some((topology, _warm)) => {
+                state.apply_topology(topology);
+                state.converged = false;
+                Ok(Some(state.frame()))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl LayoutSession {
+    /// Arm the one-shot cancel seam (see `LayoutState::cancel_after_next_check`).
+    fn arm_cancel_after_next_check(&self) {
+        self.state
+            .lock()
+            .expect("layout state mutex")
+            .cancel_after_next_check = true;
     }
 }
 
@@ -7299,5 +7631,500 @@ mod canvas_mirror_tests {
 
         session.close_canvas(info.handle);
         assert!(session.canvas_outline(info.handle).is_err());
+    }
+
+    // --- Layout session FFI (Milestone P #558) -------------------------
+
+    const LAYOUT_FILTER: GraphFilter = GraphFilter {
+        include_attachments: false,
+        include_ghosts: true,
+        orphans_only: false,
+    };
+    const LAYOUT_FORCES: LayoutForces = LayoutForces {
+        center: 0.5,
+        repel: 0.5,
+        link: 0.5,
+        link_distance: 0.5,
+    };
+    const LAYOUT_CONFIG: LayoutConfig = LayoutConfig {
+        seed: 0,
+        max_iterations: 300,
+        warm_iterations: 60,
+    };
+
+    /// A tiny fixed link graph: a → b, a → c, b → c, plus an orphan d.
+    fn seed_layout_vault(dir: &std::path::Path) {
+        std::fs::write(dir.join("a.md"), "# A\n[[b]] and [[c]]\n").unwrap();
+        std::fs::write(dir.join("b.md"), "# B\n[[c]]\n").unwrap();
+        std::fs::write(dir.join("c.md"), "# C\n").unwrap();
+        std::fs::write(dir.join("d.md"), "# D, an orphan\n").unwrap();
+    }
+
+    fn open_layout_vault(dir: &std::path::Path) -> Arc<VaultSession> {
+        seed_layout_vault(dir);
+        let session =
+            VaultSession::open_filesystem(dir.to_string_lossy().into_owned()).expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+        session
+    }
+
+    #[test]
+    fn layout_frame_is_2n_f32s_and_locks_to_the_snapshot_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+
+        let ids = layout.node_ids();
+        let snapshot = session.graph_snapshot(LAYOUT_FILTER).unwrap();
+        let snapshot_ids: Vec<u64> = snapshot.nodes.iter().map(|n| n.id).collect();
+        // The layout's node order IS the P0-3 snapshot's key-sorted order —
+        // so positions[2i], positions[2i+1] name node_ids()[i] == snapshot
+        // row i. This is the id↔position order lock.
+        assert_eq!(ids, snapshot_ids);
+        assert_eq!(layout.edges().len(), snapshot.edges.len());
+
+        let frame = layout.tick(1);
+        assert_eq!(frame.positions.len(), ids.len() * 2, "frame is exactly 2×n");
+        assert_eq!(frame.generation, snapshot.generation);
+        assert!(frame.positions.iter().all(|c| c.is_finite()));
+    }
+
+    #[test]
+    fn layout_is_bit_identical_across_two_sessions() {
+        let t1 = tempfile::tempdir().unwrap();
+        let t2 = tempfile::tempdir().unwrap();
+        let s1 = open_layout_vault(t1.path());
+        let s2 = open_layout_vault(t2.path());
+        let l1 = s1
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+        let l2 = s2
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+
+        // Same content, same insertion order ⇒ same ids and, on a given
+        // platform, bit-identical frames after the same budget (DoD §P-C
+        // reaching through the FFI).
+        assert_eq!(l1.node_ids(), l2.node_ids());
+        let f1 = l1.tick(120);
+        let f2 = l2.tick(120);
+        assert_eq!(f1.iteration, f2.iteration);
+        assert_eq!(f1.positions, f2.positions);
+    }
+
+    #[test]
+    fn run_to_convergence_honors_cancel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+
+        // (a) Pre-cancelled from a COLD start: the loop checks before the
+        // first step, so zero iterations run.
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+        let token = CancelToken::new();
+        token.cancel();
+        assert_eq!(layout.run_to_convergence(token).iteration, 0);
+
+        // (b) Pre-cancelled from a WARM start ⇒ zero ADDITIONAL iterations,
+        // proving the top-of-loop cancel gate holds at any iteration count
+        // (a concrete instance of the "≤10 iterations after cancel" bound;
+        // the loop never steps more than 10 between cancel checks).
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+        let warm = layout.tick(37);
+        let token = CancelToken::new();
+        token.cancel();
+        assert_eq!(layout.run_to_convergence(token).iteration, warm.iteration);
+
+        // (c) Cancelled DURING a live solve from another thread: with a
+        // huge ceiling the run would never stop on its own, so returning
+        // far below the cap proves the in-loop cancel check interrupts it.
+        let cfg = LayoutConfig {
+            seed: 0,
+            max_iterations: 100_000,
+            warm_iterations: 60,
+        };
+        let layout = session
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, cfg)
+            .unwrap();
+        let token = CancelToken::new();
+        let canceller = {
+            let t = token.clone();
+            std::thread::spawn(move || t.cancel())
+        };
+        let frame = layout.run_to_convergence(token);
+        canceller.join().unwrap();
+        assert!(
+            frame.iteration < cfg.max_iterations,
+            "a live cancel interrupts the solve well before the ceiling"
+        );
+    }
+
+    #[test]
+    fn run_to_convergence_ceiling_is_exact_for_awkward_caps() {
+        // The 4-node graph never reaches the tight convergence tolerance,
+        // so the per-call iteration ceiling is exactly what bounds each
+        // run — proving the loop honors caps that aren't multiples of 10
+        // (and 0), never overshooting by up to a chunk.
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        for cap in [0u32, 1, 10, 11] {
+            let cfg = LayoutConfig {
+                seed: 0,
+                max_iterations: cap,
+                warm_iterations: 60,
+            };
+            let layout = session
+                .clone()
+                .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, cfg)
+                .unwrap();
+            let frame = layout.run_to_convergence(CancelToken::new());
+            assert_eq!(frame.iteration, cap, "cold cap {cap} honored exactly");
+        }
+
+        // The ceiling is per-call ADDITIONAL work, exact from a warm start
+        // too: a second run adds exactly `cap` more, never overshooting.
+        let cfg = LayoutConfig {
+            seed: 0,
+            max_iterations: 11,
+            warm_iterations: 60,
+        };
+        let layout = session
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, cfg)
+            .unwrap();
+        assert_eq!(layout.run_to_convergence(CancelToken::new()).iteration, 11);
+        assert_eq!(layout.run_to_convergence(CancelToken::new()).iteration, 22);
+    }
+
+    #[test]
+    fn run_to_convergence_reports_convergence_on_a_settling_graph() {
+        // One isolated node seeds AT the origin (golden-angle radius 0)
+        // with zero net force, so the convergence predicate holds on the
+        // very first step — proving `converged` is wired through the FFI.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("solo.md"), "# Solo\n").unwrap();
+        let session =
+            VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned()).unwrap();
+        session.scan_initial(CancelToken::new()).unwrap();
+        let layout = session
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+
+        let settled = layout.run_to_convergence(CancelToken::new());
+        assert!(settled.converged);
+        assert!(settled.iteration <= LAYOUT_CONFIG.max_iterations);
+    }
+
+    #[test]
+    fn pin_node_holds_a_slot_fixed_until_unpinned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        let layout = session
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+        let target = layout.node_ids()[0];
+
+        layout.pin_node(target, 42.0, -7.0);
+        let pinned = layout.tick(80);
+        assert_eq!((pinned.positions[0], pinned.positions[1]), (42.0, -7.0));
+
+        layout.unpin_node(target);
+        let released = layout.tick(80);
+        assert!(
+            (released.positions[0], released.positions[1]) != (42.0, -7.0),
+            "an unpinned node is free to move under the forces"
+        );
+    }
+
+    #[test]
+    fn refresh_is_a_noop_until_the_graph_changes_then_reflects_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+
+        let ids_before = layout.node_ids();
+        let gen_before = session.graph_generation();
+        // No change ⇒ cheap None probe, ids untouched.
+        assert!(layout.refresh().unwrap().is_none());
+        assert_eq!(layout.node_ids(), ids_before);
+
+        // Add a new note linking an existing one — the hooked write bumps
+        // the graph generation.
+        session
+            .save_text("e.md".into(), "# E\n[[a]]\n".into(), None)
+            .unwrap();
+        let gen_after = session.graph_generation();
+        assert!(gen_after > gen_before);
+
+        let frame = layout
+            .refresh()
+            .unwrap()
+            .expect("generation moved ⇒ a fresh frame");
+        assert_eq!(frame.generation, gen_after);
+
+        // The topology re-fetch reflects the new node, still in snapshot
+        // order (order lock preserved across churn), and the frame is 2×n.
+        let ids_after = layout.node_ids();
+        assert_eq!(ids_after.len(), ids_before.len() + 1);
+        assert_eq!(frame.positions.len(), ids_after.len() * 2);
+        let snapshot_ids: Vec<u64> = session
+            .graph_snapshot(LAYOUT_FILTER)
+            .unwrap()
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(ids_after, snapshot_ids);
+    }
+
+    /// Map each node's path to its `(x, y)` in `frame`, joining the frame's
+    /// position slots (in `ids` order) to paths via the current snapshot.
+    /// Ghost nodes (no path) are skipped.
+    fn coords_by_path(
+        session: &VaultSession,
+        ids: &[u64],
+        frame: &LayoutFrame,
+    ) -> std::collections::HashMap<String, (f32, f32)> {
+        let snapshot = session.graph_snapshot(LAYOUT_FILTER).unwrap();
+        let id_to_path: std::collections::HashMap<u64, String> = snapshot
+            .nodes
+            .iter()
+            .filter_map(|n| n.path.clone().map(|p| (n.id, p)))
+            .collect();
+        ids.iter()
+            .enumerate()
+            .filter_map(|(i, id)| {
+                id_to_path.get(id).map(|p| {
+                    (
+                        p.clone(),
+                        (frame.positions[2 * i], frame.positions[2 * i + 1]),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn forces_and_pins_reject_non_finite_inputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        let nan = f32::NAN;
+        let inf = f32::INFINITY;
+
+        // Non-finite force sliders are folded to the default at the FFI
+        // boundary, so cold positions stay finite — P2-1's no-NaN/Inf
+        // invariant, defended against foreign input (a NaN link_distance
+        // would otherwise make k, and every position, NaN).
+        let poison = LayoutForces {
+            center: nan,
+            repel: inf,
+            link: -inf,
+            link_distance: nan,
+        };
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, poison, LAYOUT_CONFIG)
+            .unwrap();
+        assert!(layout.tick(40).positions.iter().all(|c| c.is_finite()));
+
+        layout.set_forces(poison);
+        assert!(layout.tick(40).positions.iter().all(|c| c.is_finite()));
+
+        // A non-finite pin is ignored — otherwise it would plant NaN/∞ in
+        // the very next frame and contaminate neighbors through the forces.
+        let id = layout.node_ids()[0];
+        layout.pin_node(id, nan, inf);
+        assert!(layout.tick(20).positions.iter().all(|c| c.is_finite()));
+
+        // A finite pin still takes effect (the guard rejects only non-finite).
+        layout.pin_node(id, 5.0, 5.0);
+        let pinned = layout.tick(20);
+        assert_eq!((pinned.positions[0], pinned.positions[1]), (5.0, 5.0));
+    }
+
+    #[test]
+    fn refresh_carries_survivor_positions_by_key_across_slot_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+
+        // Move positions off the deterministic spiral so a wrongly-keyed
+        // carry-over would be detectable.
+        let before_frame = layout.tick(60);
+        let before = coords_by_path(&session, &layout.node_ids(), &before_frame);
+
+        // Add a note whose path sorts BEFORE every existing one, shifting
+        // every survivor's key-sorted slot by +1. If positions were carried
+        // by slot (the bug), survivors would inherit a neighbor's
+        // coordinates; carried by KEY (correct), each keeps its own.
+        session
+            .save_text("0_new.md".into(), "# New\n[[a]]\n".into(), None)
+            .unwrap();
+        let after_frame = layout
+            .refresh()
+            .unwrap()
+            .expect("added node bumps the generation");
+        let after_ids = layout.node_ids();
+        assert_eq!(after_ids.len(), before.len() + 1);
+        let after = coords_by_path(&session, &after_ids, &after_frame);
+
+        for note in ["a.md", "b.md", "c.md", "d.md"] {
+            assert_eq!(
+                before.get(note),
+                after.get(note),
+                "{note} kept its coordinates under its NEW slot (carry by key, not slot)"
+            );
+        }
+
+        // The rebuilt id_to_slot is correct: pinning a survivor by its NEW
+        // id fixes the RIGHT position slot.
+        let snapshot = session.graph_snapshot(LAYOUT_FILTER).unwrap();
+        let c_id = snapshot
+            .nodes
+            .iter()
+            .find(|n| n.path.as_deref() == Some("c.md"))
+            .unwrap()
+            .id;
+        let c_slot = after_ids.iter().position(|&id| id == c_id).unwrap();
+        layout.pin_node(c_id, 123.0, -45.0);
+        let pinned = layout.tick(50);
+        assert_eq!(
+            (
+                pinned.positions[2 * c_slot],
+                pinned.positions[2 * c_slot + 1]
+            ),
+            (123.0, -45.0),
+            "pin landed on c's rebuilt slot"
+        );
+    }
+
+    /// Map each note path to its current backend id via the snapshot.
+    fn id_by_path(session: &VaultSession) -> std::collections::HashMap<String, u64> {
+        session
+            .graph_snapshot(LAYOUT_FILTER)
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|n| n.path.clone().map(|p| (p, n.id)))
+            .collect()
+    }
+
+    #[test]
+    fn refresh_after_node_removal_rekeys_survivors_by_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path()); // a,b,c,d
+        let layout = session
+            .clone()
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, LAYOUT_CONFIG)
+            .unwrap();
+
+        let before_frame = layout.tick(60);
+        let before_ids = layout.node_ids();
+        let before_coords = coords_by_path(&session, &before_ids, &before_frame);
+        let ids_before = id_by_path(&session);
+
+        // Delete `a.md` — the source-only node at backend index 0 that
+        // nobody links to (so its removal creates no dangling ghost) — then
+        // reconcile it out of the cache and force a rebuild. Removing the
+        // FIRST index compacts every survivor's StableGraph index down by
+        // one, so b/c/d all get REASSIGNED backend ids. This is the case
+        // the previous test couldn't reach (its ids never changed).
+        std::fs::remove_file(tmp.path().join("a.md")).unwrap();
+        session.scan_initial(CancelToken::new()).unwrap();
+        session.inner.graph_drop_for_bench();
+
+        let after_frame = layout
+            .refresh()
+            .unwrap()
+            .expect("removal + rebuild moves the generation");
+        let after_ids = layout.node_ids();
+
+        // a is gone; b/c/d survive, still in fresh-snapshot order.
+        let snapshot_ids: Vec<u64> = session
+            .graph_snapshot(LAYOUT_FILTER)
+            .unwrap()
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(after_ids, snapshot_ids);
+        assert_eq!(after_ids.len(), before_ids.len() - 1);
+
+        // The hole-compacting rebuild reassigned survivor ids — so this
+        // genuinely exercises re-sync BY KEY, not stale-id reuse.
+        let ids_after = id_by_path(&session);
+        assert!(
+            ["b.md", "c.md", "d.md"]
+                .iter()
+                .any(|p| ids_before.get(*p) != ids_after.get(*p)),
+            "a hole-compacting rebuild must reassign at least one survivor id"
+        );
+
+        // Positions stayed associated by KEY across the rekey; a's are gone.
+        let after_coords = coords_by_path(&session, &after_ids, &after_frame);
+        for note in ["b.md", "c.md", "d.md"] {
+            assert_eq!(
+                before_coords.get(note),
+                after_coords.get(note),
+                "{note} kept its coordinates across removal + rekey"
+            );
+        }
+        assert!(!after_coords.contains_key("a.md"));
+
+        // Pinning a survivor by its NEW id lands on its new slot (id_to_slot
+        // rebuilt against the reassigned ids).
+        let c_id = *ids_after.get("c.md").unwrap();
+        let c_slot = after_ids.iter().position(|&id| id == c_id).unwrap();
+        layout.pin_node(c_id, 88.0, -88.0);
+        let pinned = layout.tick(40);
+        assert_eq!(
+            (
+                pinned.positions[2 * c_slot],
+                pinned.positions[2 * c_slot + 1]
+            ),
+            (88.0, -88.0),
+            "pin landed on c's rebuilt slot"
+        );
+    }
+
+    #[test]
+    fn run_to_convergence_runs_at_most_one_chunk_after_a_mid_flight_cancel() {
+        // The normative "≤10 iterations after cancel" bound: a cancel that
+        // arrives AFTER a top-of-loop check has passed must let the
+        // in-flight chunk finish (≤10) and then stop at the next check. The
+        // test seam fires the cancel at exactly that point, deterministically
+        // (no unsynchronized thread that might cancel before the run starts).
+        let tmp = tempfile::tempdir().unwrap();
+        let session = open_layout_vault(tmp.path());
+        let cfg = LayoutConfig {
+            seed: 0,
+            max_iterations: 1000,
+            warm_iterations: 60,
+        };
+        let layout = session
+            .start_graph_layout(LAYOUT_FILTER, LAYOUT_FORCES, cfg)
+            .unwrap();
+        layout.arm_cancel_after_next_check();
+        let frame = layout.run_to_convergence(CancelToken::new());
+        // The in-flight chunk ran (>0) and nothing beyond it did (≤10). The
+        // 4-node graph never converges, so only the cancel could stop it.
+        assert!(
+            frame.iteration > 0 && frame.iteration <= 10,
+            "at most one ≤10 chunk runs after a mid-flight cancel (got {})",
+            frame.iteration
+        );
     }
 }
