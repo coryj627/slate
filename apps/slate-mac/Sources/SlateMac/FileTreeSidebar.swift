@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A node in the file tree: either a directory or a Markdown file.
 ///
@@ -1055,7 +1056,7 @@ struct FileTreeSidebar: View {
         // is mirrored into `rootDropTargeted` for the drop-destination ring
         // below and for the drag-session bookkeeping.
         .onDrop(
-            of: [Self.nodeUTType], isTargeted: rootDropBinding,
+            of: [Self.nodeUTType, Self.fileURLUTType], isTargeted: rootDropBinding,
             perform: { providers in handleDrop(providers, into: "") })
         // #851: HIG drag-and-drop "highlight the destination" for the root
         // target — a selection-token ring hugging the tree, visible while
@@ -1487,7 +1488,8 @@ struct FileTreeSidebar: View {
             // spring-load timer (hover ≥ 600ms on a collapsed folder
             // expands it so nested collapsed destinations are reachable).
             .onDrop(
-                of: [Self.nodeUTType], isTargeted: dropTargetBinding(for: node),
+                of: [Self.nodeUTType, Self.fileURLUTType],
+                isTargeted: dropTargetBinding(for: node),
                 perform: { providers in handleDrop(providers, into: node.path) })
         }
     }
@@ -1737,9 +1739,16 @@ struct FileTreeSidebar: View {
     /// intra-tree moves.
     static let nodeUTType = "com.slate.tree-node-path"
 
+    /// The public file-URL flavor (#870). Carried OUT on every drag so a tree
+    /// item can be dragged to Finder / another app and reopened, and ACCEPTED
+    /// on drops so external files import (and vault files dragged in from
+    /// Finder move). `"public.file-url"` via the UTI constant.
+    static let fileURLUTType = UTType.fileURL.identifier
+
     /// Build the drag payload for `node`: an `NSItemProvider` carrying the
-    /// node's path under the private UTType. Also records the source in AppState
-    /// so the drop handler knows whether the dragged node is a directory.
+    /// node's path under the private UTType AND its real on-disk file URL
+    /// (#870). Also records the source in AppState so the drop handler knows
+    /// whether the dragged node is a directory.
     private func dragItem(for node: TreeNode) -> NSItemProvider {
         // #851: a NEW drag beginning with leftovers from a previous session
         // (a cancel the watchdog hasn't reaped yet) settles the old one
@@ -1749,12 +1758,37 @@ struct FileTreeSidebar: View {
         }
         appState.dragSourceNode = AppState.TreeSelection(
             path: node.path, isDirectory: node.isDirectory)
+        return Self.makeDragProvider(
+            nodePath: node.path,
+            fileURL: appState.currentVaultURL?.appendingPathComponent(node.path))
+    }
+
+    /// Pure builder for the drag payload (#870), extracted so the flavors it
+    /// registers are regression-locked without a live drag: the private
+    /// own-process type (exact vault-relative path — `handleDrop` prefers it
+    /// for precise, fast intra-tree moves) PLUS the public file URL so the item
+    /// can cross the process boundary to Finder / other apps. The vault file
+    /// already exists on disk, so a plain file-url is sufficient — no
+    /// `NSFilePromiseProvider` needed (#870).
+    static func makeDragProvider(nodePath: String, fileURL: URL?) -> NSItemProvider {
         let provider = NSItemProvider()
         provider.registerDataRepresentation(
             forTypeIdentifier: Self.nodeUTType, visibility: .ownProcess
         ) { completion in
-            completion(Data(node.path.utf8), nil)
+            completion(Data(nodePath.utf8), nil)
             return nil
+        }
+        if let fileURL {
+            provider.suggestedName = fileURL.lastPathComponent
+            // `.all` visibility — this flavor is exactly what must leave the
+            // app. `URL.dataRepresentation` is the canonical `public.file-url`
+            // pasteboard encoding Finder reads to copy the referenced file.
+            provider.registerDataRepresentation(
+                forTypeIdentifier: Self.fileURLUTType, visibility: .all
+            ) { completion in
+                completion(fileURL.dataRepresentation, nil)
+                return nil
+            }
         }
         return provider
     }
@@ -1767,31 +1801,74 @@ struct FileTreeSidebar: View {
     /// destination) and a folder-into-own-subtree drop (the backend also
     /// guards, but rejecting early avoids a wasted round-trip + error alert).
     private func handleDrop(_ providers: [NSItemProvider], into destinationFolder: String) -> Bool {
-        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(Self.nodeUTType) })
-        else { return false }
-        // #851: the drag session ends HERE with a known destination —
-        // spring-opened folders that the drop did NOT land in re-collapse;
-        // the destination's own chain stays open (the user is about to see
-        // the moved node inside it).
-        endDragSession(dropDestination: destinationFolder)
-        provider.loadDataRepresentation(forTypeIdentifier: Self.nodeUTType) { data, _ in
-            guard let data, let path = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in
-                let isDir = appState.dragSourceNode?.path == path
-                    ? (appState.dragSourceNode?.isDirectory ?? false)
-                    : false
-                appState.dragSourceNode = nil
-                // No-op: already directly in the destination folder.
-                let currentParent = AppState.TreeMutation.parentPath(of: path) ?? ""
-                if currentParent == destinationFolder { return }
-                // Folder into its own subtree (or onto itself) — reject early.
-                if isDir, AppState.pathIsWithin(destinationFolder, path: path, isDirectory: true) {
-                    return
+        // The private own-process type wins when present: our own drags carry
+        // it, and it names the exact vault-relative path (no filesystem
+        // round-trip, no ambiguity). An external drop never has it.
+        if let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(Self.nodeUTType)
+        }) {
+            // #851: the drag session ends HERE with a known destination —
+            // spring-opened folders that the drop did NOT land in re-collapse;
+            // the destination's own chain stays open (the user is about to see
+            // the moved node inside it).
+            endDragSession(dropDestination: destinationFolder)
+            provider.loadDataRepresentation(forTypeIdentifier: Self.nodeUTType) { data, _ in
+                guard let data, let path = String(data: data, encoding: .utf8) else { return }
+                Task { @MainActor in
+                    let isDir = appState.dragSourceNode?.path == path
+                        ? (appState.dragSourceNode?.isDirectory ?? false)
+                        : false
+                    appState.dragSourceNode = nil
+                    // No-op: already directly in the destination folder.
+                    let currentParent = AppState.TreeMutation.parentPath(of: path) ?? ""
+                    if currentParent == destinationFolder { return }
+                    // Folder into its own subtree (or onto itself) — reject early.
+                    if isDir, AppState.pathIsWithin(destinationFolder, path: path, isDirectory: true) {
+                        return
+                    }
+                    appState.moveEntry(path: path, isDirectory: isDir, to: destinationFolder)
                 }
-                appState.moveEntry(path: path, isDirectory: isDir, to: destinationFolder)
             }
+            return true
         }
-        return true
+        // #870: a file-URL drop from Finder / another app (or a vault file
+        // dragged back in from Finder). Inside the vault ⇒ move; external ⇒
+        // import — resolved by `AppState.fileURLDropAction`.
+        if let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(Self.fileURLUTType)
+        }) {
+            endDragSession(dropDestination: destinationFolder)
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.isFileURL else { return }
+                Task { @MainActor in handleFileURLDrop(url, into: destinationFolder) }
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Dispatch a resolved file-URL drop (#870). Reads `isDirectory` off the
+    /// URL, then routes through the pure `AppState.fileURLDropAction` decision:
+    /// an in-vault URL moves (undoable, via `moveEntry`, reusing the same
+    /// no-op / own-subtree guards as the private-type path); an external URL
+    /// imports a copy (via `importEntry`, reusing the collision machinery).
+    @MainActor
+    private func handleFileURLDrop(_ url: URL, into destinationFolder: String) {
+        appState.dragSourceNode = nil
+        // Codoki: unambiguous directory detection via the extracted, tested
+        // `AppState.urlIsDirectory` seam (no `Bool??` optional-chaining trap).
+        let isDirectory = AppState.urlIsDirectory(url)
+        switch AppState.fileURLDropAction(
+            url: url, vaultURL: appState.currentVaultURL,
+            destinationFolder: destinationFolder, isDirectory: isDirectory)
+        {
+        case .move(let path, let isDir, let dest):
+            appState.moveEntry(path: path, isDirectory: isDir, to: dest)
+        case .importFile(let externalURL, let dest):
+            appState.importEntry(externalURL: externalURL, into: dest)
+        case .none:
+            break
+        }
     }
 
     // MARK: - Drop feedback + spring-loading (#851)

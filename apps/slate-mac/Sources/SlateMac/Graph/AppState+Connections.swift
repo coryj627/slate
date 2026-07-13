@@ -237,6 +237,13 @@ extension AppState {
             guard let self, self.currentSession === session else { return }
             switch outcome {
             case .success:
+                // #871 Codex round 2: a ghost-note create is a non-undoable
+                // structural mutation that bypasses `publishTreeMutation`, so
+                // clear the structural undo history here too (the barrier) — a
+                // stale inverse could otherwise target the path this create
+                // just filled. The execution-time guard is the safety net; this
+                // keeps the Edit menu from advertising a doomed undo.
+                self.clearStructuralUndoStacks()
                 await self.loadFiles()
                 self.openFile(path, target: .currentTab)
                 self.renamingNode = RenamingNode(path: path, isDirectory: false)

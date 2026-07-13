@@ -1066,6 +1066,15 @@ final class AppState: ObservableObject {
             return Self.canvasUndoRedoMenuTitle(
                 base: "Undo", actionName: activeCanvasDocument?.undoStack.last?.name)
         }
+        // #871: the structural (file-op) domain — same composer as canvas,
+        // the action name describing the pending op read from the stack top
+        // ("Undo Move of Notes.md", "Undo Rename to Draft.md"). An empty
+        // stack composes to the bare "Undo".
+        if undoTargetsStructural {
+            return Self.canvasUndoRedoMenuTitle(
+                base: "Undo",
+                actionName: structuralUndoStack.last.map(Self.structuralUndoActionName))
+        }
         return Self.responderUndoMenuTitle(responderChainUndoManager)
     }
 
@@ -1074,6 +1083,11 @@ final class AppState: ObservableObject {
         if undoTargetsCanvas {
             return Self.canvasUndoRedoMenuTitle(
                 base: "Redo", actionName: activeCanvasDocument?.redoStack.last?.name)
+        }
+        if undoTargetsStructural {
+            return Self.canvasUndoRedoMenuTitle(
+                base: "Redo",
+                actionName: structuralRedoStack.last.map(Self.structuralUndoActionName))
         }
         return Self.responderRedoMenuTitle(responderChainUndoManager)
     }
@@ -1090,6 +1104,11 @@ final class AppState: ObservableObject {
     /// deliberate VoiceOver affordance a disabled item would silence.
     var undoMenuItemEnabled: Bool {
         if undoTargetsCanvas { return true }
+        // #871: the structural domain stays ALWAYS enabled while the tree
+        // owns the chord — an empty-stack ⌘Z announces "Nothing to undo."
+        // (`structuralUndo()`), the same deliberate VoiceOver affordance the
+        // canvas path keeps that a disabled item would silence.
+        if undoTargetsStructural { return true }
         guard let manager = responderChainUndoManager else { return true }
         return manager.canUndo
     }
@@ -1097,6 +1116,7 @@ final class AppState: ObservableObject {
     /// ⇧⌘Z symmetric to `undoMenuItemEnabled`.
     var redoMenuItemEnabled: Bool {
         if undoTargetsCanvas { return true }
+        if undoTargetsStructural { return true }
         guard let manager = responderChainUndoManager else { return true }
         return manager.canRedo
     }
@@ -1125,6 +1145,40 @@ final class AppState: ObservableObject {
     static func responderRedoMenuTitle(_ manager: UndoManager?) -> String {
         guard let manager, manager.canRedo else { return "Redo" }
         return manager.redoMenuItemTitle
+    }
+
+    /// The THIRD undo domain (#871): ⌘Z drives the structural (file move /
+    /// rename) undo stack when the FILE TREE owns focus.
+    ///
+    /// Precedence — MUST match the SlateMacApp `.undoRedo` routing and the
+    /// title/enablement getters above: canvas FIRST (#372/#867
+    /// route-by-active-tab, byte-for-byte unchanged), then structural, then
+    /// the responder chain. This property is explicitly FALSE whenever
+    /// `undoTargetsCanvas` is true, so the two domains are PROVABLY mutually
+    /// exclusive and the render-time title can never bake a different domain
+    /// than the press-time action resolves (the documented #867 desync).
+    ///
+    /// Gated on PUBLISHED state ONLY — `workspace.focusRegion`, which the
+    /// #868 `workspace.objectWillChange → appState.objectWillChange` bridge
+    /// forwards so `.commands` re-renders when focus crosses into/out of the
+    /// tree. NEVER an `NSApp.keyWindow.firstResponder` read for the routing
+    /// decision (constraint #871.2): that value is unpublished, so a title
+    /// computed from it at render time would desync from the action.
+    var undoTargetsStructural: Bool {
+        guard !undoTargetsCanvas else { return false }
+        // #871 red-team: EXCLUDE the inline tree-rename field. `RenameField`
+        // is a TextField descendant of the List that carries
+        // `.focused($fileTreeFocused)`, which has focus-WITHIN semantics — so
+        // `workspace.focusRegion` stays `.tree` while the user is typing a new
+        // name. Without this guard, ⌘Z to fix a typo mid-rename would route to
+        // `structuralUndo()` — reversing an UNRELATED prior move/rename on disk
+        // AND shadowing the field editor's own text undo (a regression: the
+        // pre-#871 `else` branch forwarded `undo:` to that editor). Mirrors the
+        // `!isRenaming` guard `treeKeyInterceptionActive` already uses for the
+        // List's key interceptors. `renamingNode` is @Published, so the Edit
+        // menu re-renders (and the routing flips back) the moment a rename
+        // begins or ends — the published-state-only rule is preserved.
+        return workspace.focusRegion == .tree && renamingNode == nil
     }
 
     // MARK: - Workspace persistence (U1-6, #458)
@@ -3816,6 +3870,24 @@ final class AppState: ObservableObject {
             resetConnectionsState()
             // Graph tab table (P1-2 #555): same cross-vault isolation.
             resetGraphTableState()
+            // #871: the structural (file-op) undo/redo stacks are per-vault —
+            // a direct Open Vault / Open Recent reaches here WITHOUT
+            // `closeVault`, so an inverse move/rename staged against vault A
+            // must not survive into vault B (it would move/rename the wrong
+            // file). Same reasoning as the fileRecents/searchRecents/graph
+            // resets in this block.
+            clearStructuralUndoStacks()
+            // #871 Codex round 2: INVALIDATE + release the structural-mutation
+            // guard. A move/rename/import in flight when the vault switches
+            // would otherwise leave `isMutatingStructure` stuck true (its
+            // completion returns early on the `currentSession === session`
+            // mismatch, before the release) — wedging every later structural op
+            // in the new vault. Clearing the flag un-wedges; BUMPING the
+            // ownership token (via `cancelStructuralMutationOwnership`) makes a
+            // stale completion that already passed its session guard and then
+            // suspended in `loadFiles` a no-op, so it can't clear a NEWER
+            // vault's op flag on resume.
+            cancelStructuralMutationOwnership()
             // #879 Codex red-team: the vault-wide Tasks Review surface must
             // die with the previous vault too — direct Open Vault routes
             // here without `closeVault`, so a stale review would survive and
@@ -4247,6 +4319,13 @@ final class AppState: ObservableObject {
         // #876: drop the in-memory recent searches — per-vault, so the
         // next vault reloads its own (mirrors `fileRecents` above).
         searchRecents = []
+        // #871: the structural (file-op) undo/redo stacks are per-vault;
+        // drop them so a stale inverse can't reverse against the next vault.
+        clearStructuralUndoStacks()
+        // #871 Codex round 2: invalidate + release the structural-mutation
+        // guard on vault close too (see the openVault reset for the full
+        // token rationale).
+        cancelStructuralMutationOwnership()
         // #328 sheet-flag parity audit. Each `@Published var
         // is*Open` driving a `.sheet` binding must reset here for
         // the same reason as `isCommandPaletteOpen`: a vault close
@@ -4479,7 +4558,15 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         isScanning = true
         scanError = nil
-        defer { isScanning = false }
+        // #871 Codex round 3: clear the spinner only if THIS scan's vault is
+        // still current (or the vault was closed) — a scan whose vault was
+        // switched out from under it must not stomp the NEW vault's in-flight
+        // `isScanning`. (closeVault also resets it, covering the closed case.)
+        defer {
+            if currentSession === session || currentSession == nil {
+                isScanning = false
+            }
+        }
 
         let cancel = CancelToken()
         // Adapter bridges scanner-thread `onProgress` callbacks back
@@ -4495,7 +4582,11 @@ final class AppState: ObservableObject {
         // concurrently-executing code" diagnostic on the CI toolchain.
         let adapter = ScanProgressAdapter { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.handleScanProgress(event)
+                // #871 Codex round 3: drop a late progress event whose vault is
+                // no longer current — it must not publish vault A's scan
+                // progress into vault B after a switch.
+                guard let self, self.currentSession === session else { return }
+                self.handleScanProgress(event)
             }
         }
 
@@ -4533,7 +4624,11 @@ final class AppState: ObservableObject {
             // If we were cancelled mid-flight (e.g. closeVault fired
             // between the detached task starting and finishing), don't
             // overwrite the freshly-cleared state with stale results.
-            guard !Task.isCancelled else { return }
+            // #871 Codex round 2: also re-check the SESSION is still current —
+            // a direct vault switch (Open Vault / Open Recent) may not cancel
+            // this task, and publishing vault A's file list after `currentSession`
+            // has become vault B would show A's files under B.
+            guard !Task.isCancelled, currentSession === session else { return }
             files = loaded.sorted { lhs, rhs in
                 lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
             }
@@ -4544,10 +4639,12 @@ final class AppState: ObservableObject {
             // Cancelled scans surface from Rust as VaultError.Cancelled
             // — also intentionally non-user-visible.
             if case .Cancelled = error { return }
-            guard !Task.isCancelled else { return }
+            // #871 Codex round 3: a stale scan's error must not surface under
+            // the new vault.
+            guard !Task.isCancelled, currentSession === session else { return }
             scanError = humanReadable(error)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, currentSession === session else { return }
             scanError = error.localizedDescription
         }
     }
@@ -6771,6 +6868,44 @@ final class AppState: ObservableObject {
     /// second mutation before the first's tree refresh lands).
     private var isMutatingStructure = false
 
+    /// Ownership token for the in-flight structural mutation (#871 Codex
+    /// round 2). Every structural op captures the token `beginStructuralMutation`
+    /// hands it, and its completion only releases `isMutatingStructure` if the
+    /// token still matches (`endStructuralMutation`). This closes a cross-vault
+    /// race the plain flag couldn't: an op that passes its `currentSession ===
+    /// session` guard and THEN suspends in `await loadFiles()` would, on resume,
+    /// unconditionally clear the flag — even though the user switched vaults
+    /// during the suspension and a NEW op already claimed it. A vault
+    /// open/close bumps the token, so any such stale completion is a no-op.
+    private var structuralMutationToken = 0
+
+    /// Claim the structural-mutation guard for a new op and return its
+    /// ownership token. Callers have already checked `!isMutatingStructure`.
+    private func beginStructuralMutation() -> Int {
+        structuralMutationToken &+= 1
+        isMutatingStructure = true
+        return structuralMutationToken
+    }
+
+    /// Release the structural-mutation guard IFF `token` still owns it — a
+    /// stale task whose vault was switched out from under it (its token was
+    /// bumped by open/close, or a newer op) must NOT clear a newer op's flag.
+    private func endStructuralMutation(_ token: Int) {
+        guard structuralMutationToken == token else { return }
+        isMutatingStructure = false
+    }
+
+    /// Invalidate any in-flight structural mutation's ownership and release the
+    /// guard — called from the vault open (direct-switch reset) and close
+    /// paths. Bumping the token means a stale completion's `endStructuralMutation`
+    /// no longer matches, so it can't clear a newer vault's op; clearing the
+    /// flag itself un-wedges the new vault (the stale task's own session guard
+    /// returns before its release, so nothing else clears it).
+    private func cancelStructuralMutationOwnership() {
+        structuralMutationToken &+= 1
+        isMutatingStructure = false
+    }
+
     /// Monotone token backing `TreeMutation.token`.
     private var treeMutationCounter = 0
 
@@ -6788,6 +6923,21 @@ final class AppState: ObservableObject {
         treeMutationCounter += 1
         treeMutation = TreeMutation(
             token: treeMutationCounter, kind: kind, rewrittenCount: rewrittenCount)
+        // #871 Codex round 1: every structural mutation that is NOT a recorded
+        // move/rename is a structural-history BARRIER — it clears the undo/redo
+        // stacks. A create / duplicate / import / delete can FREE or REFILL a
+        // path an existing inverse names (e.g. move a.md→dest, delete
+        // dest/a.md, import a different a.md→dest), so replaying that inverse
+        // afterward would move/rename the WRONG replacement file. move/rename
+        // are the only undoable ops; they push their own inverse immediately
+        // after this call, so they must NOT clear. This is the single choke
+        // point every structural op routes through on success.
+        switch kind {
+        case .move, .rename:
+            break
+        case .createFolder, .createNote, .delete:
+            clearStructuralUndoStacks()
+        }
     }
 
     /// Turn a `StructuralReport.failed` list into the user-facing skipped-files
@@ -6835,7 +6985,7 @@ final class AppState: ObservableObject {
     func createFolder(name: String, in parent: String) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
         let path = Self.joinVaultPath(parent, name)
-        isMutatingStructure = true
+        let token = beginStructuralMutation()
         let task = Task { [weak self] in
             let outcome: Result<StructuralReport, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -6858,7 +7008,7 @@ final class AppState: ObservableObject {
                     verb: "create folder",
                     name: (path as NSString).lastPathComponent, error: error)
             }
-            self.isMutatingStructure = false
+            self.endStructuralMutation(token)
         }
         return task
     }
@@ -6871,7 +7021,7 @@ final class AppState: ObservableObject {
     @discardableResult
     func createNote(in parent: String) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
-        isMutatingStructure = true
+        let token = beginStructuralMutation()
         // Compute a non-colliding name against the known file set. The backend
         // still guards the collision (DestinationExists) — this just spares the
         // user a failure on the common "several untitled notes" flow.
@@ -6911,7 +7061,7 @@ final class AppState: ObservableObject {
                     verb: "create note",
                     name: (path as NSString).lastPathComponent, error: error)
             }
-            self.isMutatingStructure = false
+            self.endStructuralMutation(token)
         }
         return task
     }
@@ -6933,7 +7083,7 @@ final class AppState: ObservableObject {
     @discardableResult
     func duplicateEntry(path: String) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
-        isMutatingStructure = true
+        let token = beginStructuralMutation()
         let sourceName = (path as NSString).lastPathComponent
         let parent = TreeMutation.parentPath(of: path) ?? ""
         let task = Task { [weak self] in
@@ -6987,7 +7137,7 @@ final class AppState: ObservableObject {
                 self.announceMutationFailure(
                     verb: "duplicate", name: sourceName, error: error)
             }
-            self.isMutatingStructure = false
+            self.endStructuralMutation(token)
         }
         return task
     }
@@ -7033,10 +7183,19 @@ final class AppState: ObservableObject {
     /// links-updated suffix), and surfaces any per-file rewrite failures. A
     /// collision / invalid name is returned via `structuralRenameError` so the
     /// inline field can show it and keep focus (spec §U2-5).
+    ///
+    /// `undoContext` (#871): `.record` (the default every user-facing caller
+    /// takes — inline rename, the command, undo/redo of a MOVE never lands
+    /// here) pushes the inverse rename onto the structural undo stack; the
+    /// `.undoing`/`.redoing` contexts are how `structuralUndo/Redo` re-enter
+    /// this same FFI path to reverse a rename while feeding the opposite stack.
     @discardableResult
-    func renameEntry(path: String, isDirectory: Bool, to newName: String) -> Task<Void, Never>? {
+    func renameEntry(
+        path: String, isDirectory: Bool, to newName: String,
+        undoContext: StructuralUndoContext = .record
+    ) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
-        isMutatingStructure = true
+        let token = beginStructuralMutation()
         structuralRenameError = nil
         let task = Task { [weak self] in
             let outcome: Result<StructuralReport, VaultError> = await Task.detached(
@@ -7060,21 +7219,52 @@ final class AppState: ObservableObject {
                 self.publishTreeMutation(
                     .rename(oldPath: path, newPath: newPath),
                     rewrittenCount: Self.distinctRewrittenCount(report))
-                self.postMutationAnnouncement(
-                    self.mutationSentence(
-                        "Renamed \((path as NSString).lastPathComponent) to \(newName).",
-                        report: report))
+                if undoContext == .record {
+                    self.postMutationAnnouncement(
+                        self.mutationSentence(
+                            "Renamed \((path as NSString).lastPathComponent) to \(newName).",
+                            report: report))
+                } else {
+                    // #871: an undo/redo of a rename announces "Undid/Redid
+                    // rename to <target>." instead of the fresh-op sentence.
+                    self.postMutationAnnouncement(
+                        self.structuralUndoRedoAnnouncement(
+                            executed: .rename(path: path, isDirectory: isDirectory, newName: newName),
+                            context: undoContext))
+                }
+                // #871: record the inverse (rename `newPath` back to the OLD
+                // name) on the correct stack for the given context.
+                self.recordStructuralUndo(
+                    inverse: .rename(
+                        path: newPath, isDirectory: isDirectory,
+                        newName: (path as NSString).lastPathComponent),
+                    context: undoContext)
                 self.surfaceStructuralFailures(
                     report, verb: "rename", name: (path as NSString).lastPathComponent)
                 await self.loadFiles()
             case .failure(let error):
-                // Keep the inline field open + focused with a specific message.
-                self.structuralRenameError = self.humanReadable(error)
+                if undoContext == .record {
+                    // Inline rename: keep the field open + focused with a
+                    // specific message it renders below itself.
+                    self.structuralRenameError = self.humanReadable(error)
+                } else {
+                    // #871 Codex round 1: an undo/redo rename has NO inline
+                    // field (structural undo routes only when
+                    // `renamingNode == nil`), so a failure — the target was
+                    // externally deleted, or the restored name now collides —
+                    // must surface through the general alert path a failed
+                    // MOVE takes, not `structuralRenameError` (which no
+                    // visible field would render → a silent failure).
+                    self.structuralFailureReport = StructuralFailureReport(
+                        verb: "rename", name: (path as NSString).lastPathComponent,
+                        skipped: [])
+                    self.lastError = self.humanReadable(error)
+                }
                 self.announceMutationFailure(
                     verb: "rename",
                     name: (path as NSString).lastPathComponent, error: error)
             }
-            self.isMutatingStructure = false
+            self.endStructuralMutation(token)
         }
         return task
     }
@@ -7090,10 +7280,19 @@ final class AppState: ObservableObject {
     /// affected levels, announce, surface failures). A collision / invalid
     /// destination (incl. moving a folder into its own subtree) surfaces via the
     /// skipped-files alert path's sibling — the move error alert.
+    ///
+    /// `undoContext` (#871): `.record` (the default — drag-drops, the Move
+    /// sheet, the `createFolderThenMove` inner move) pushes the inverse move
+    /// onto the structural undo stack; `.undoing`/`.redoing` are how
+    /// `structuralUndo/Redo` re-enter this same FFI path to move an entry back
+    /// while feeding the opposite stack.
     @discardableResult
-    func moveEntry(path: String, isDirectory: Bool, to newParent: String) -> Task<Void, Never>? {
+    func moveEntry(
+        path: String, isDirectory: Bool, to newParent: String,
+        undoContext: StructuralUndoContext = .record
+    ) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
-        isMutatingStructure = true
+        let token = beginStructuralMutation()
         let task = Task { [weak self] in
             let outcome: Result<StructuralReport, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -7119,11 +7318,27 @@ final class AppState: ObservableObject {
                         oldPath: path, newPath: newPath,
                         oldParent: oldParent, newParent: newParent),
                     rewrittenCount: Self.distinctRewrittenCount(report))
-                self.postMutationAnnouncement(
-                    self.mutationSentence(
-                        "Moved \((path as NSString).lastPathComponent) to "
-                            + "\(newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent).",
-                        report: report))
+                if undoContext == .record {
+                    self.postMutationAnnouncement(
+                        self.mutationSentence(
+                            "Moved \((path as NSString).lastPathComponent) to "
+                                + "\(newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent).",
+                            report: report))
+                } else {
+                    // #871: an undo/redo of a move announces "Undid/Redid move
+                    // of <name>." instead of the fresh-op sentence.
+                    self.postMutationAnnouncement(
+                        self.structuralUndoRedoAnnouncement(
+                            executed: .move(
+                                path: path, isDirectory: isDirectory, targetParent: newParent),
+                            context: undoContext))
+                }
+                // #871: record the inverse (move `newPath` back to `oldParent`)
+                // on the correct stack for the given context.
+                self.recordStructuralUndo(
+                    inverse: .move(
+                        path: newPath, isDirectory: isDirectory, targetParent: oldParent),
+                    context: undoContext)
                 self.surfaceStructuralFailures(
                     report, verb: "move", name: (path as NSString).lastPathComponent)
                 await self.loadFiles()
@@ -7137,9 +7352,371 @@ final class AppState: ObservableObject {
                     verb: "move",
                     name: (path as NSString).lastPathComponent, error: error)
             }
-            self.isMutatingStructure = false
+            self.endStructuralMutation(token)
         }
         return task
+    }
+
+    // MARK: - Structural undo/redo (#871)
+
+    /// A reversible structural op — enough to invert a move or a rename via the
+    /// SAME `moveEntry`/`renameEntry` FFI path the forward op used (constraint
+    /// #871: reverse the op, don't invent a parallel primitive). `path` is the
+    /// entry's CURRENT (post-forward-op) location; executing the case puts it
+    /// back.
+    enum StructuralUndoOp: Equatable {
+        /// Reverse a move: move `path` under `targetParent` ("" = vault root).
+        case move(path: String, isDirectory: Bool, targetParent: String)
+        /// Reverse a rename: rename `path` to `newName` (a single component).
+        case rename(path: String, isDirectory: Bool, newName: String)
+    }
+
+    /// Which structural-undo stack a completed move/rename feeds. Threaded
+    /// through `moveEntry`/`renameEntry` so undo/redo re-use the exact forward
+    /// path (constraint #871) without re-recording themselves onto the wrong
+    /// stack. Equatable so the wrappers can branch the fresh-op announcement.
+    enum StructuralUndoContext: Equatable {
+        /// A fresh user op: push its inverse to the UNDO stack, clear REDO.
+        case record
+        /// This call IS an undo executing an inverse: retire the undone entry
+        /// from the UNDO stack and stage its re-application on REDO.
+        case undoing
+        /// This call IS a redo: retire the redone entry from REDO and push its
+        /// inverse back onto UNDO (REDO is NOT cleared).
+        case redoing
+    }
+
+    /// Per-vault inverse-op stacks. Plain vars (not `@Published`): the Edit ▸
+    /// Undo/Redo menu re-renders off the debounced `undoMenuTick` pulse
+    /// (`noteUndoStacksChanged`), exactly like the canvas stacks that live on
+    /// `CanvasDocument`. `private(set)` so tests can read depth/contents.
+    ///
+    /// Cross-vault safety (constraint #871.6): cleared on vault close AND on the
+    /// direct-switch reset in `openVault` — an inverse resolved against the
+    /// wrong vault would move/rename the wrong file.
+    private(set) var structuralUndoStack: [StructuralUndoOp] = []
+    private(set) var structuralRedoStack: [StructuralUndoOp] = []
+
+    /// The menu action-name / announcement phrase for a structural op,
+    /// describing it AS EXECUTED (direction-truthful): a move reads
+    /// "move of <name>" (the item name is stable across the round-trip); a
+    /// rename reads "rename to <target>" (the name the executed op produces).
+    /// Reused by BOTH the "Undo/Redo …" menu title (the PENDING op, read from
+    /// the stack top) and the "Undid/Redid …" announcement (the EXECUTED op) so
+    /// the two phrasings can never drift. Static + pure → directly testable.
+    static func structuralUndoActionName(_ op: StructuralUndoOp) -> String {
+        switch op {
+        case .move(let path, _, _):
+            return "move of \((path as NSString).lastPathComponent)"
+        case .rename(_, _, let newName):
+            return "rename to \(newName)"
+        }
+    }
+
+    /// The VoiceOver sentence for a completed undo/redo of a structural op
+    /// (#871), e.g. "Undid move of Notes.md." / "Redid rename to Draft.md." —
+    /// composed from the EXECUTED op so the announced name matches what landed
+    /// on disk. `.record` never reaches here (the wrappers post the fresh-op
+    /// sentence for it).
+    private func structuralUndoRedoAnnouncement(
+        executed: StructuralUndoOp, context: StructuralUndoContext
+    ) -> String {
+        let verb = (context == .undoing) ? "Undid" : "Redid"
+        return "\(verb) \(Self.structuralUndoActionName(executed))."
+    }
+
+    /// Route a completed move/rename's inverse onto the correct stack for its
+    /// `context` and pulse the undo menu. On the main actor and (for
+    /// undo/redo) called from the SAME success handler that just executed the
+    /// top-of-stack inverse under the `isMutatingStructure` guard, so the LIFO
+    /// `removeLast()` retires exactly the entry we reversed — nothing can
+    /// interleave between the peek in `structuralUndo/Redo` and this call.
+    private func recordStructuralUndo(
+        inverse: StructuralUndoOp, context: StructuralUndoContext
+    ) {
+        switch context {
+        case .record:
+            structuralUndoStack.append(inverse)
+            structuralRedoStack.removeAll()
+        case .undoing:
+            if !structuralUndoStack.isEmpty { structuralUndoStack.removeLast() }
+            structuralRedoStack.append(inverse)
+        case .redoing:
+            if !structuralRedoStack.isEmpty { structuralRedoStack.removeLast() }
+            structuralUndoStack.append(inverse)
+        }
+        // #867/#871 debounced menu-title/enablement re-render pulse.
+        noteUndoStacksChanged()
+    }
+
+    /// Whether a stack-top inverse is still SAFE to replay against the current
+    /// filesystem (#871 Codex round 2). The `publishTreeMutation` barrier
+    /// clears the stacks on every in-app non-move/rename mutation, but a
+    /// file-creation FUNNEL that bypasses it (ghost note, new canvas, Restore
+    /// As, template) — or an EXTERNAL change — can free the inverse's SOURCE or
+    /// occupy its DESTINATION. Replaying then fails, or (worst case) touches a
+    /// replacement file. This execution-time guard is the funnel-independent
+    /// safety net: the source must still exist and the destination slot must be
+    /// free, or the whole (now-suspect) history is dropped rather than replayed.
+    private func structuralInverseIsExecutable(_ inverse: StructuralUndoOp) -> Bool {
+        guard let vault = currentVaultURL else { return false }
+        // lstat semantics (#871 Codex round 3): `attributesOfItem` does NOT
+        // follow symlinks, so a DANGLING symlink at the destination — which
+        // `fileExists` reports as absent — is correctly seen as an occupied
+        // entry the replay must not clobber. Matches the backend no-clobber
+        // check in `FilesystemProvider.rename`.
+        func exists(_ rel: String) -> Bool {
+            (try? FileManager.default.attributesOfItem(
+                atPath: vault.appendingPathComponent(rel).path)) != nil
+        }
+        switch inverse {
+        case .move(let path, _, let targetParent):
+            let dest = Self.joinVaultPath(targetParent, (path as NSString).lastPathComponent)
+            return exists(path) && !exists(dest)
+        case .rename(let path, _, let newName):
+            return exists(path) && !exists(Self.siblingPath(of: path, newName: newName))
+        }
+    }
+
+    /// ⌘Z routed to the structural domain (`undoTargetsStructural`): reverse
+    /// the most recent move/rename via the SAME forward FFI wrapper, then stage
+    /// its re-application on the redo stack. An empty stack ANNOUNCES rather
+    /// than no-oping silently — the canvas-parity VoiceOver affordance
+    /// (`undoMenuItemEnabled` keeps the item enabled to preserve it).
+    func structuralUndo() {
+        guard let inverse = structuralUndoStack.last else {
+            postMutationAnnouncement("Nothing to undo.")
+            return
+        }
+        guard structuralInverseIsExecutable(inverse) else {
+            // The files changed under the inverse (a bypassing create funnel or
+            // an external edit); drop the suspect history rather than replay it.
+            clearStructuralUndoStacks()
+            postMutationAnnouncement("Can't undo — the files have changed.")
+            return
+        }
+        pendingStructuralTaskForTesting = executeStructuralInverse(inverse, context: .undoing)
+    }
+
+    /// ⇧⌘Z twin of `structuralUndo`.
+    func structuralRedo() {
+        guard let inverse = structuralRedoStack.last else {
+            postMutationAnnouncement("Nothing to redo.")
+            return
+        }
+        guard structuralInverseIsExecutable(inverse) else {
+            clearStructuralUndoStacks()
+            postMutationAnnouncement("Can't redo — the files have changed.")
+            return
+        }
+        pendingStructuralTaskForTesting = executeStructuralInverse(inverse, context: .redoing)
+    }
+
+    /// Dispatch a stack-top inverse back through the forward wrappers with the
+    /// given context (so the success handler feeds the OPPOSITE stack). Returns
+    /// the wrapper's task so `structuralUndo/Redo` can park it in
+    /// `pendingStructuralTaskForTesting` for deterministic test awaits (the
+    /// same handle role the command funnels use).
+    ///
+    /// Constraint #871.5: the wrappers early-return under `isMutatingStructure`
+    /// — a second ⌘Z while an op is still in flight is simply dropped (the
+    /// entry stays put because the success handler that moves it never runs),
+    /// never a deadlock and never a lost entry. Cross-vault (constraint
+    /// #871.6): the wrappers' own `currentSession === session` guard after the
+    /// FFI await bails without touching the stacks if the vault switched, and
+    /// the stacks were already cleared by that switch.
+    @discardableResult
+    private func executeStructuralInverse(
+        _ inverse: StructuralUndoOp, context: StructuralUndoContext
+    ) -> Task<Void, Never>? {
+        switch inverse {
+        case .move(let path, let isDirectory, let targetParent):
+            return moveEntry(
+                path: path, isDirectory: isDirectory, to: targetParent, undoContext: context)
+        case .rename(let path, let isDirectory, let newName):
+            return renameEntry(
+                path: path, isDirectory: isDirectory, to: newName, undoContext: context)
+        }
+    }
+
+    /// Drop the per-vault structural undo/redo stacks (constraint #871.6),
+    /// pulsing the menu only when something actually changed. Called from
+    /// `closeVault` and the `openVault` direct-switch reset block.
+    func clearStructuralUndoStacks() {
+        guard !structuralUndoStack.isEmpty || !structuralRedoStack.isEmpty else { return }
+        structuralUndoStack = []
+        structuralRedoStack = []
+        noteUndoStacksChanged()
+    }
+
+    // MARK: - Import (#870)
+
+    /// Import an EXTERNAL file (dropped from Finder / another app) into
+    /// `destinationFolder` ("" = vault root) as a copy. Reuses the SAME
+    /// no-clobber collision surface as `moveEntry` (constraint #870): the
+    /// `create_exclusive` primitive throws `DestinationExists` on a name
+    /// collision, which surfaces through the identical `lastError` +
+    /// `announceMutationFailure` path a colliding move takes.
+    ///
+    /// Text-only: the vault has no bytes-import FFI, so a non-UTF-8 (binary)
+    /// file surfaces a clear failure rather than being copied corrupt — see the
+    /// PR's scope note. An import is a CREATE (like `createNote`/`duplicateEntry`
+    /// — not undoable; delete is the Trash-recoverable inverse), so it records
+    /// no structural-undo entry.
+    @discardableResult
+    func importEntry(externalURL: URL, into destinationFolder: String) -> Task<Void, Never>? {
+        guard !isMutatingStructure, let session = currentSession else { return nil }
+        let token = beginStructuralMutation()
+        let name = externalURL.lastPathComponent
+        let destPath = Self.joinVaultPath(destinationFolder, name)
+        let task = Task { [weak self] in
+            let outcome: Result<Void, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                // A dropped file URL may be security-scoped (sandboxed builds);
+                // the accessor is a harmless no-op otherwise (returns false, we
+                // still read). Balanced with a `defer`.
+                let scoped = externalURL.startAccessingSecurityScopedResource()
+                defer { if scoped { externalURL.stopAccessingSecurityScopedResource() } }
+                do {
+                    let content = try String(contentsOf: externalURL, encoding: .utf8)
+                    _ = try session.createExclusive(path: destPath, content: content)
+                    return .success(())
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self, self.currentSession === session else { return }
+            switch outcome {
+            case .success:
+                // A fresh file at the destination — the same `.createNote`
+                // mutation `duplicateEntry` publishes (a copy IS a created note).
+                self.publishTreeMutation(.createNote(path: destPath), rewrittenCount: 0)
+                self.postMutationAnnouncement("Imported \(name).")
+                await self.loadFiles()
+            case .failure(let error):
+                self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(verb: "import", name: name, error: error)
+            }
+            self.endStructuralMutation(token)
+        }
+        return task
+    }
+
+    /// The action a file-URL drop (#870) resolves to. Pure decision so the
+    /// import-vs-move branch is testable without a live drag.
+    enum StructuralDropAction: Equatable {
+        /// The dropped URL is INSIDE the current vault → move (existing
+        /// behavior), routed through `moveEntry` (undoable).
+        case move(path: String, isDirectory: Bool, to: String)
+        /// The dropped URL is EXTERNAL → import a copy via `importEntry`.
+        case importFile(url: URL, into: String)
+        /// No-op (already in the destination, or a folder onto its own subtree).
+        case none
+    }
+
+    /// Pure (#870): classify a file-URL drop. A URL under the current vault is
+    /// a MOVE (identical to an intra-tree drag — and thus undoable); an
+    /// external URL is an IMPORT. Rejects the no-ops the private-type move path
+    /// also rejects early (already in the destination; a folder onto its own
+    /// subtree) so the two drop routes behave the same.
+    /// Whether `url` points at a directory (#870, Codoki: extracted as a
+    /// testable seam with UNAMBIGUOUS optional handling). `try?` wraps ONLY the
+    /// throwing `resourceValues` call — yielding `URLResourceValues?` — then
+    /// `?.isDirectory` reads the (itself-optional) key and `?? false` lands a
+    /// plain `Bool`. The prior `(try? resourceValues(...).isDirectory) ?? false`
+    /// nested the property access inside `try?`, relying on Swift's flattening
+    /// and reading as a `Bool??` a reviewer (and a linter) can misjudge. An
+    /// unreadable value falls back to false (treat as a file) — the safe
+    /// default for the import path.
+    static func urlIsDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+    }
+
+    static func fileURLDropAction(
+        url: URL, vaultURL: URL?, destinationFolder: String, isDirectory: Bool
+    ) -> StructuralDropAction {
+        if let rel = vaultRelativePath(of: url, vaultURL: vaultURL) {
+            let currentParent = TreeMutation.parentPath(of: rel) ?? ""
+            if currentParent == destinationFolder { return .none }
+            if isDirectory, pathIsWithin(destinationFolder, path: rel, isDirectory: true) {
+                return .none
+            }
+            return .move(path: rel, isDirectory: isDirectory, to: destinationFolder)
+        }
+        // #870 Codex round 3: dragging the CURRENT VAULT ROOT onto its own tree
+        // is a no-op, NOT an external import. `vaultRelativePath` returns nil
+        // for BOTH the root and a truly-external URL, so distinguish them here
+        // before the import branch — otherwise Slate would try to text-import
+        // the vault directory and surface a spurious failure.
+        if isVaultRoot(url, vaultURL: vaultURL) { return .none }
+        return .importFile(url: url, into: destinationFolder)
+    }
+
+    /// Whether `url` IS the current vault root (#870 Codex round 3). Fully
+    /// resolves symlinks on both sides (the root is a container, so — unlike a
+    /// dropped item — its own final component is safe to resolve) and honors
+    /// the volume's case sensitivity, so a vault opened through a symlinked
+    /// spelling still matches.
+    private static func isVaultRoot(_ url: URL, vaultURL: URL?) -> Bool {
+        guard let vaultURL else { return false }
+        let vaultPath = vaultURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let droppedPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        return pathComponentsEqual(
+            droppedPath, vaultPath, caseInsensitive: volumeIsCaseInsensitive(vaultURL))
+    }
+
+    /// The vault-relative path of `url` if it lives inside `vaultURL`, else
+    /// nil (external). The vault root itself maps to nil (it isn't a movable
+    /// entry).
+    ///
+    /// #870 Codex round 1: containment is FILESYSTEM-AWARE, not a raw lexical
+    /// compare. Both paths are resolved through symlinks and standardized
+    /// (so a symlinked vault root, or a dropped URL that traverses a symlink
+    /// or `..`, still matches), and the prefix match honors the volume's
+    /// case sensitivity (defaulting to case-INSENSITIVE, the macOS APFS
+    /// default). Without this, the same in-vault file reached via a symlink
+    /// or a case-differing path was misclassified as external and IMPORTED
+    /// as a duplicate instead of performing the required undoable move. The
+    /// returned relative path keeps the resolved file's real component casing
+    /// (what the backend expects).
+    static func vaultRelativePath(of url: URL, vaultURL: URL?) -> String? {
+        guard let vaultURL else { return nil }
+        let vaultPath = vaultURL.resolvingSymlinksInPath().standardizedFileURL.path
+        // #870 Codex round 2: resolve symlinks in the CONTAINER only, then
+        // re-attach the dropped item's own final component UNRESOLVED. If the
+        // whole URL were resolved, an EXTERNAL symlink file (e.g.
+        // ~/Downloads/link.md → /vault/a.md) would dereference to its in-vault
+        // target and be classified as a move of the real note — breaking the
+        // external link — instead of importing the dropped entry. Resolving the
+        // ancestor still canonicalizes a symlinked vault root / parent dir.
+        let filePath =
+            url.deletingLastPathComponent().resolvingSymlinksInPath()
+            .appendingPathComponent(url.lastPathComponent).standardizedFileURL.path
+        let caseInsensitive = volumeIsCaseInsensitive(vaultURL)
+        if pathComponentsEqual(filePath, vaultPath, caseInsensitive: caseInsensitive) {
+            return nil  // the vault root itself
+        }
+        let prefix = vaultPath.hasSuffix("/") ? vaultPath : vaultPath + "/"
+        guard filePath.count > prefix.count else { return nil }
+        let head = String(filePath.prefix(prefix.count))
+        guard pathComponentsEqual(head, prefix, caseInsensitive: caseInsensitive) else {
+            return nil
+        }
+        return String(filePath.dropFirst(prefix.count))
+    }
+
+    /// Whether `url`'s volume treats names case-INSENSITIVELY (the macOS APFS
+    /// default). Defaults to `true` when the volume flag can't be read (#870).
+    private static func volumeIsCaseInsensitive(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        if let sensitive = values?.volumeSupportsCaseSensitiveNames { return !sensitive }
+        return true
+    }
+
+    private static func pathComponentsEqual(
+        _ a: String, _ b: String, caseInsensitive: Bool
+    ) -> Bool {
+        caseInsensitive ? (a.compare(b, options: .caseInsensitive) == .orderedSame) : (a == b)
     }
 
     // MARK: Delete
@@ -7226,7 +7803,7 @@ final class AppState: ObservableObject {
     @discardableResult
     func deleteEntry(path: String, isDirectory: Bool) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
-        isMutatingStructure = true
+        let token = beginStructuralMutation()
         let task = Task { [weak self] in
             let outcome: Result<Void, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -7282,7 +7859,7 @@ final class AppState: ObservableObject {
                     verb: "delete",
                     name: (path as NSString).lastPathComponent, error: error)
             }
-            self.isMutatingStructure = false
+            self.endStructuralMutation(token)
         }
         return task
     }
@@ -8543,6 +9120,10 @@ final class AppState: ObservableObject {
 
         switch outcome {
         case .success(let rendered):
+            // #871 Codex round 2: template creation writes a file outside the
+            // `publishTreeMutation` barrier — clear the structural undo history
+            // so a stale inverse can't target the created path.
+            clearStructuralUndoStacks()
             pendingTemplateFlow = .idle
             templateNoteNameError = nil
             // #421 (F-H1): .high, not .medium — the create

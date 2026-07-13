@@ -270,9 +270,19 @@ struct SlateMacApp: App {
             // plus every other appState publish; the titles are
             // computed live at render.
             CommandGroup(replacing: .undoRedo) {
+                // #871: ⌘Z / ⇧⌘Z now route across THREE domains, precedence
+                // canvas → structural → responder-chain. The order MUST match
+                // the title/enablement getters (undoMenuItemTitle etc.) so the
+                // render-time title and the press-time action always resolve
+                // the SAME domain; `undoTargetsStructural` is defined FALSE
+                // whenever `undoTargetsCanvas` is true, making the first two
+                // mutually exclusive. Both gates read PUBLISHED state only
+                // (never a live firstResponder probe — the #867/#871 desync).
                 Button(appState.undoMenuItemTitle) {
                     if appState.undoTargetsCanvas {
                         appState.canvasUndo()
+                    } else if appState.undoTargetsStructural {
+                        appState.structuralUndo()
                     } else {
                         NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
                     }
@@ -283,6 +293,8 @@ struct SlateMacApp: App {
                 Button(appState.redoMenuItemTitle) {
                     if appState.undoTargetsCanvas {
                         appState.canvasRedo()
+                    } else if appState.undoTargetsStructural {
+                        appState.structuralRedo()
                     } else {
                         NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
                     }
