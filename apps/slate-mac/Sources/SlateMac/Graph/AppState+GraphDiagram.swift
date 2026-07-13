@@ -241,7 +241,16 @@ extension AppState {
     /// active filters — backend AND the client-side name query / preset kind
     /// filter (review) — assembled once and spoken assertively.
     func graphDiagramWhereAmI() {
-        guard let model = graphDiagramModel else { return }
+        guard let text = graphDiagramWhereAmIText() else { return }
+        graphAnnouncer.announce(.summary(text))
+    }
+
+    /// The assembled ⌃⌘I readback string — the selected node's row copy, its
+    /// component, the zoom, and the active filters (backend AND the
+    /// client-side name query / Unresolved-preset kind, which the backend
+    /// phrase omits — review finding). Pure + testable; nil when no diagram.
+    func graphDiagramWhereAmIText() -> String? {
+        guard let model = graphDiagramModel else { return nil }
         var parts: [String] = []
         if let sel = model.selection, let node = model.node(sel), let ref = model.rowRef(sel) {
             parts.append(graphAnnouncer.rowPhrase(ref))
@@ -251,13 +260,10 @@ extension AppState {
         }
         parts.append("zoom \(model.viewport.zoomPercent) percent")
         parts.append(graphDiagramFilterPhrase(model.filter))
-        // The client-side filters the Diagram also honours (P2-4/P2-5) — the
-        // backend phrase above doesn't carry them, so the readback would
-        // otherwise under-report what's actually shown (review finding).
         let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
         if !needle.isEmpty { parts.append("name filter \u{201C}\(needle)\u{201D}") }
         if graphTableKindFilter == .ghost { parts.append("unresolved only") }
-        graphAnnouncer.announce(.summary(parts.joined(separator: ", ") + "."))
+        return parts.joined(separator: ", ") + "."
     }
 
     // MARK: Zoom router (join the #848 focus-routed menu owner)

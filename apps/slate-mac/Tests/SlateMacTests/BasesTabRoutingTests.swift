@@ -319,6 +319,18 @@ final class BasesTabRoutingTests: XCTestCase {
         return (state, openBase, openDashboard, dock)
     }
 
+    /// The focus-routed ⌃⌘I "Where Am I?" resolves to the Bases readback on
+    /// a base tab (graph-view #562 follow-up: the routed chord covers
+    /// canvas / graph / bases, not just canvas).
+    func testWhereAmIRouteResolvesToBasesOnABaseTab() async throws {
+        let state = try await makeAppState()
+        state.openBaseFile("Queries/Reading.base")
+        await state.basesDockRefreshTask?.value
+        XCTAssertNotNil(state.activeBaseDocument, "a base tab is active")
+        XCTAssertNil(state.activeCanvasDocument)
+        XCTAssertEqual(state.whereAmIRouteTarget, .bases)
+    }
+
     private func makeLivePropertySurfacesState() async throws -> (
         state: AppState,
         active: BaseDocument,

@@ -1304,12 +1304,15 @@ extension SlateCommandsTests {
     }
 
     /// Single-menu-owner (P2-3 #559, R3 / spec §P2-3): the focus-routed
-    /// zoom chords must each be declared EXACTLY ONCE in the menu bar
+    /// chords must each be declared EXACTLY ONCE in the menu bar
     /// (`SlateMacApp.swift`). The registry carries per-surface palette
     /// mirrors that share the chord as a `hotkeyHint` (canvas + graph +
-    /// editor), so ownership is a property of the MENU source, counted
-    /// with multiplicity — not the set-based drift scrape.
-    func testEachFocusRoutedZoomChordHasExactlyOneMenuOwner() throws {
+    /// editor/bases), so ownership is a property of the MENU source, counted
+    /// with multiplicity — not the set-based drift scrape. ⌃⌘I ("Where Am
+    /// I?") is focus-routed the same way (canvas/graph/bases → `routedWhereAmI`),
+    /// so it's here too: a second ⌃⌘I menu item would resurrect the
+    /// swallowed-chord bug this test now guards against.
+    func testEachFocusRoutedChordHasExactlyOneMenuOwner() throws {
         let appFile = Self.projectRoot
             .appendingPathComponent("apps/slate-mac/Sources/SlateMac/SlateMacApp.swift")
         let src = try String(contentsOf: appFile, encoding: .utf8)
@@ -1318,6 +1321,7 @@ extension SlateCommandsTests {
             ("⌘-", #".keyboardShortcut("-", modifiers: [.command])"#),
             ("⌘0", #".keyboardShortcut("0", modifiers: [.command])"#),
             ("⌥⌘0", #".keyboardShortcut("0", modifiers: [.command, .option])"#),
+            ("⌃⌘I", #".keyboardShortcut("i", modifiers: [.control, .command])"#),
         ]
         for (chord, decl) in declarations {
             let count = src.components(separatedBy: decl).count - 1

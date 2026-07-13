@@ -49,7 +49,7 @@ On the Diagram surface (when it holds focus):
 | ⌘0 | **Graph: Actual Size** — reset the diagram zoom to 100 percent. |
 | ⌥⌘0 | **Graph: Fit Graph** — zoom so every node is visible. |
 
-The zoom chords **and ⌃⌘I** are focus-routed: they drive the active surface — the visual canvas on a canvas tab, the visual diagram on a graph tab in Diagram mode (⌃⌘I also the Bases grid), and editor text zoom everywhere else. Each also has a Command-Palette entry (search "Graph:").
+The zoom chords **and ⌃⌘I** are focus-routed to the active surface: the visual canvas on a canvas tab, the visual diagram on a graph tab in Diagram mode, and — for ⌃⌘I — the Bases grid on a base tab. The zoom chords fall back to editor text zoom elsewhere; ⌃⌘I simply does nothing off those surfaces. Each also has a Command-Palette entry (search "Graph:").
 
 Each node's actions come from one **canonical set** shared across the projections: a real note offers **Open**, **Open in New Tab**, **Show connections** (re-roots the Connections panel on it), and **Reveal in File Tree**; a ghost offers **Create note** (materialise it). They're available from the keyboard, VoiceOver's actions rotor, and Voice Control. The Diagram adds **Pin** (freeze a node in place); pinning is diagram-only.
 
@@ -61,7 +61,7 @@ A pure-VoiceOver pass across the projections:
 2. Move to the **first row** — VoiceOver reads the row's cells (label, links in, links out, and the rest of the columns).
 3. Switch to **Diagram** — the selection ring and VoiceOver focus land on the *same* node; "Diagram mode." is announced.
 4. **Arrow** to a neighbour — spatial navigation prefers graph neighbours; you hear the node's spoken copy (*"{label}, {n} links in, {m} links out"*; ghosts: *"{label}, unresolved, {n} references"*), and its neighbours ride a "Connects to" custom-content field.
-5. **⌃⌘I "Where am I?"** — node copy + component + zoom + active filters, spoken as one assertive summary.
+5. **⌃⌘I "Where am I?"** — node copy + component + zoom + active filters, spoken as one summary.
 6. Node action **"Show connections"** — the Connections leaf re-roots on that node; set depth to 2; the neighbourhood's audio summary plays.
 7. **⌘[** — step back to the previous root.
 8. Switch back to **Table** — focus lands on the shared-selected node's row.

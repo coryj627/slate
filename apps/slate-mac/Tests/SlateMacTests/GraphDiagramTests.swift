@@ -391,6 +391,28 @@ final class GraphDiagramTests: XCTestCase {
         XCTAssertEqual(state.whereAmIRouteTarget, .canvas)
     }
 
+    func testWhereAmIReadbackIncludesClientFilters() throws {
+        // The ⌃⌘I readback must report the CLIENT-side filters (name query +
+        // Unresolved-preset kind), which the backend filter phrase omits
+        // (review finding). Exercises the pure text builder.
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)
+        state.graphTableTextFilter = "alpha"
+        state.graphTableKindFilter = .ghost
+        let text = try XCTUnwrap(state.graphDiagramWhereAmIText())
+        XCTAssertTrue(text.contains("filters:"), "still reports the backend filters")
+        XCTAssertTrue(text.contains("name filter"), "reports the client name query")
+        XCTAssertTrue(text.contains("alpha"), "includes the needle")
+        XCTAssertTrue(text.contains("unresolved only"), "reports the preset kind filter")
+        // No client filters ⇒ neither clause appears.
+        state.graphTableTextFilter = ""
+        state.graphTableKindFilter = nil
+        let plain = try XCTUnwrap(state.graphDiagramWhereAmIText())
+        XCTAssertFalse(plain.contains("name filter"))
+        XCTAssertFalse(plain.contains("unresolved only"))
+    }
+
     func testApplyFrameDropsMismatchedGenerationFrame() throws {
         let session = try makeSession()
         let model = try makeModel(session)
