@@ -38,23 +38,13 @@ struct GraphContainerView: View {
     /// bump `focusToken` (P2-5 review round-2 finding 3). Consumed once.
     @State private var suppressFocusBumpOnce = false
 
-    /// The focus token to hand the active projection — gated to 0 (no
-    /// request) unless there's a shared selection to land on, so a mode
-    /// switch with nothing selected never steals focus (P2-5 review round-2).
-    private var effectiveFocusToken: Int {
-        appState.graphSelectedNodeKey != nil ? focusToken : 0
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             filterBar
             Divider()
             switch mode {
             case .table:
-                // Only request focus when there's a node to land on, so a
-                // mode switch with no shared selection doesn't steal focus
-                // (review round-2: no target ⇒ no grab).
-                GraphTableView(tabID: tabID, focusRequest: effectiveFocusToken)
+                GraphTableView(tabID: tabID, focusRequest: focusToken)
             case .diagram:
                 diagramBody
             }
@@ -92,12 +82,16 @@ struct GraphContainerView: View {
         .onChange(of: mode) { _, newMode in
             appState.setGraphMode(newMode)
             // Land VoiceOver focus on the shared-selected node in the new
-            // projection (finding 3) — the bump is read by the newly-mounted
-            // Table grid / Diagram view. Skip the RESTORE-driven change (an
-            // initial open must not steal focus, round-2 finding 3).
+            // projection (finding 3). The bump is a ONE-SHOT decided HERE,
+            // at switch time: only on a genuine USER switch (not the restore,
+            // round-2 finding 3) AND only when there's a node to land on RIGHT
+            // NOW. Deciding at switch time — rather than a reactive
+            // `selection != nil ? token : 0` — means a LATER selection change
+            // can't retroactively unmask a stale token and steal focus from
+            // another split (round-3 finding c).
             if suppressFocusBumpOnce {
                 suppressFocusBumpOnce = false
-            } else {
+            } else if appState.graphSelectedNodeKey != nil {
                 focusToken += 1
             }
             switch newMode {
@@ -126,7 +120,7 @@ struct GraphContainerView: View {
         if let model = appState.graphDiagramModel {
             GraphDiagramView(
                 model: model, tabID: tabID, onSwitchToTable: { mode = .table },
-                focusRequest: effectiveFocusToken)
+                focusRequest: focusToken)
         } else if let error = appState.graphDiagramError {
             Text(error)
                 .foregroundStyle(Tokens.ColorRole.warningText)
