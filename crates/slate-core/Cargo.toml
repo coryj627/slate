@@ -104,3 +104,7 @@ harness = false
 [[bench]]
 name = "graph_bench"
 harness = false
+
+[[bench]]
+name = "layout_bench"
+harness = false
