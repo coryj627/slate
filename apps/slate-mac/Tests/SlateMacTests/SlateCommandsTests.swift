@@ -1279,6 +1279,52 @@ extension SlateCommandsTests {
         }
     }
 
+    /// Graph help table drift (P2-3 #559, R3): every `.graph`-section
+    /// chord must appear in `docs/help/graph.md`'s keyboard reference.
+    func testGraphHelpDocCarriesEveryGraphChord() throws {
+        let docURL = Self.projectRoot
+            .appendingPathComponent("docs")
+            .appendingPathComponent("help")
+            .appendingPathComponent("graph.md")
+        let doc = try String(contentsOf: docURL, encoding: .utf8)
+        let appState = AppState()
+        let graphChords = appState.commandRegistry.list()
+            .filter { $0.section == .graph }
+            .compactMap { command in command.hotkeyHint.map { (command.label, $0) } }
+        XCTAssertFalse(graphChords.isEmpty, "registry lists graph chords")
+        for (label, hotkey) in graphChords {
+            // Match the chord as a whole table cell (`| ⌘0 |`), not a bare
+            // substring — otherwise `⌥⌘0` would satisfy a search for `⌘0`
+            // and a dropped Actual-Size row would pass (round 4 finding).
+            XCTAssertTrue(
+                doc.contains("| \(hotkey) |"),
+                "docs/help/graph.md keyboard table is missing a row for \(hotkey) (\(label))"
+            )
+        }
+    }
+
+    /// Single-menu-owner (P2-3 #559, R3 / spec §P2-3): the focus-routed
+    /// zoom chords must each be declared EXACTLY ONCE in the menu bar
+    /// (`SlateMacApp.swift`). The registry carries per-surface palette
+    /// mirrors that share the chord as a `hotkeyHint` (canvas + graph +
+    /// editor), so ownership is a property of the MENU source, counted
+    /// with multiplicity — not the set-based drift scrape.
+    func testEachFocusRoutedZoomChordHasExactlyOneMenuOwner() throws {
+        let appFile = Self.projectRoot
+            .appendingPathComponent("apps/slate-mac/Sources/SlateMac/SlateMacApp.swift")
+        let src = try String(contentsOf: appFile, encoding: .utf8)
+        let declarations: [(String, String)] = [
+            ("⌘=", #".keyboardShortcut("=", modifiers: [.command])"#),
+            ("⌘-", #".keyboardShortcut("-", modifiers: [.command])"#),
+            ("⌘0", #".keyboardShortcut("0", modifiers: [.command])"#),
+            ("⌥⌘0", #".keyboardShortcut("0", modifiers: [.command, .option])"#),
+        ]
+        for (chord, decl) in declarations {
+            let count = src.components(separatedBy: decl).count - 1
+            XCTAssertEqual(count, 1, "\(chord) must have exactly one menu owner (found \(count))")
+        }
+    }
+
     func testBasesHelpDocCoversEveryStaticBasesCommand() throws {
         let docURL = Self.projectRoot
             .appendingPathComponent("docs")

@@ -3,16 +3,17 @@
 
 import SwiftUI
 
-/// The Graph tab's modes. Table is the only live mode until P2 adds the
-/// visual Diagram + the U3-style mode toggle; the seam (an enum + the
-/// switch container) is in place now so P2 is additive.
+/// The Graph tab's modes (U3 toggle pattern: one coherent AX tree per
+/// mode). Table is the accessible-first grid; Diagram is the visual
+/// force-directed projection (P2-3 #559).
 enum GraphTabMode: String, CaseIterable {
     case table
-    // case diagram  // P2-3
+    case diagram
 
     var title: String {
         switch self {
         case .table: return "Table"
+        case .diagram: return "Diagram"
         }
     }
 }
@@ -32,6 +33,8 @@ struct GraphContainerView: View {
             switch mode {
             case .table:
                 GraphTableView(tabID: tabID)
+            case .diagram:
+                diagramBody
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -45,6 +48,51 @@ struct GraphContainerView: View {
             if appState.graphTableSnapshot == nil && !appState.graphTableLoading {
                 appState.loadGraphTable()
             }
+            if mode == .diagram { appState.ensureGraphDiagram() }
+        }
+        // The mode toggle owns the diagram's lifecycle: build on entering
+        // Diagram, tear down on returning to Table so the settle loop and
+        // layout session don't linger. One coherent AX tree per mode (U3).
+        .onChange(of: mode) { _, newMode in
+            switch newMode {
+            case .diagram:
+                appState.ensureGraphDiagram()
+                appState.graphAnnouncer.announce(.status("Diagram mode."))
+            case .table:
+                appState.resetGraphDiagramState()
+                appState.graphAnnouncer.announce(.status("Table mode."))
+            }
+        }
+        // A backend-filter change rebuilds the diagram's layout too, so
+        // both projections track the same node set.
+        .onChange(of: appState.graphTableFilter) { _, _ in
+            if mode == .diagram { appState.buildGraphDiagram() }
+        }
+        .onDisappear {
+            if mode == .diagram { appState.resetGraphDiagramState() }
+        }
+    }
+
+    // MARK: Diagram mode (spec §P2-3)
+
+    @ViewBuilder
+    private var diagramBody: some View {
+        if let model = appState.graphDiagramModel {
+            GraphDiagramView(model: model, tabID: tabID, onSwitchToTable: { mode = .table })
+        } else if let error = appState.graphDiagramError {
+            Text(error)
+                .foregroundStyle(Tokens.ColorRole.warningText)
+                .padding(Tokens.Spacing.md)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Graph diagram error: \(error)")
+        } else {
+            HStack(spacing: Tokens.Spacing.sm) {
+                ProgressView().controlSize(.small)
+                Text("Laying out graph…").foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Laying out graph.")
         }
     }
 
@@ -52,12 +100,28 @@ struct GraphContainerView: View {
 
     private var filterBar: some View {
         HStack(spacing: Tokens.Spacing.sm) {
-            TextField(
-                "Filter notes", text: appStateTextFilterBinding
-            )
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 240)
-            .accessibilityLabel("Filter graph by note name")
+            Picker("View", selection: $mode) {
+                ForEach(GraphTabMode.allCases, id: \.self) { m in
+                    Text(m.title).tag(m)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .accessibilityLabel("Graph view mode")
+            .accessibilityHint("Switch between the accessible table and the visual diagram.")
+
+            // The client-side text filter is a Table affordance; the
+            // diagram's own filters (text query, groups) arrive with the
+            // P2-4 inspector, so hiding it here keeps Diagram mode honest
+            // rather than showing a field that doesn't affect the diagram.
+            if mode == .table {
+                TextField(
+                    "Filter notes", text: appStateTextFilterBinding
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 240)
+                .accessibilityLabel("Filter graph by note name")
+            }
 
             Toggle("Attachments", isOn: filterToggle(\.includeAttachments))
                 .accessibilityHint("Include attachment nodes.")

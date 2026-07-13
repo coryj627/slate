@@ -121,7 +121,13 @@ pub struct LayoutTopology {
     /// Collapsed edges among `ids`, in the deterministic
     /// `(source key, target key, kind)` order P0-3 snapshots use.
     pub edges: Vec<crate::graph::GraphEdge>,
-    /// The graph generation `ids` were derived against.
+    /// Full node metadata (labels, link counts, kind, metrics …) for the
+    /// same `ids`, in the SAME order — computed under one graph lock with
+    /// the topology so the diagram's labels can never come from a
+    /// different generation than its ids (P2-3 #559 review). Empty when
+    /// [`layout_topology`] builds a bare topology; the session fills it.
+    pub nodes: Vec<crate::graph::GraphNode>,
+    /// The graph generation `ids`/`nodes` were derived against.
     pub generation: u64,
 }
 
@@ -708,6 +714,9 @@ pub fn layout_topology(engine: &LayoutEngine, graph: &GraphIndex) -> LayoutTopol
     LayoutTopology {
         ids,
         edges,
+        // Metadata is filled by the session under the graph lock (it needs
+        // metrics + file mtimes, which this pure graph fn can't reach).
+        nodes: Vec::new(),
         generation: graph.generation(),
     }
 }

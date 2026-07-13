@@ -1490,8 +1490,32 @@ impl VaultSession {
         self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
         let engine = crate::graph_layout::LayoutEngine::new(index, &filter, forces, config);
-        let topology = crate::graph_layout::layout_topology(&engine, index);
+        let mut topology = crate::graph_layout::layout_topology(&engine, index);
+        // Node metadata under the SAME lock as the topology, so the
+        // diagram's labels can never come from a different generation than
+        // its ids (P2-3 #559 review — eliminates the snapshot handshake).
+        topology.nodes = self.graph_nodes_locked(&conn, index, &filter)?;
         Ok((engine, topology))
+    }
+
+    /// The full `GraphNode` metadata for `filter`, built under the
+    /// already-held conn + graph locks — the shared node-payload path of
+    /// `graph_snapshot` and the layout builders (key-sorted, so it aligns
+    /// index-for-index with [`layout_topology`]'s ids).
+    fn graph_nodes_locked(
+        &self,
+        conn: &Connection,
+        index: &crate::graph::GraphIndex,
+        filter: &crate::graph::GraphFilter,
+    ) -> Result<Vec<crate::graph::GraphNode>, VaultError> {
+        let metrics = self.graph_metrics_cached(index);
+        let filtered =
+            index.filtered_nodes(filter, |key| metrics.get(key).is_some_and(|m| m.is_orphan));
+        let mtimes = file_mtimes(conn)?;
+        Ok(filtered
+            .iter()
+            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
+            .collect())
     }
 
     /// Re-sync `engine` with the live graph iff its generation moved
@@ -1522,8 +1546,18 @@ impl VaultSession {
         if index.generation() == last_generation {
             return Ok(None);
         }
+        // Compute the FALLIBLE metadata BEFORE mutating the shared engine
+        // (round 3 finding): if `file_mtimes` errors, `warm_update` must
+        // not have run — otherwise the engine would advance to the new
+        // topology while the caller keeps the old ids/generation (the
+        // error path adopts nothing), and a same-node-count tick would
+        // then apply new-topology positions under old ids. `warm_update`
+        // and `layout_topology` are both infallible, so once the metadata
+        // read succeeds the rest commits cleanly.
+        let nodes = self.graph_nodes_locked(&conn, index, &filter)?;
         let warm = engine.warm_update(index, &filter);
-        let topology = crate::graph_layout::layout_topology(engine, index);
+        let mut topology = crate::graph_layout::layout_topology(engine, index);
+        topology.nodes = nodes;
         Ok(Some((topology, warm)))
     }
 

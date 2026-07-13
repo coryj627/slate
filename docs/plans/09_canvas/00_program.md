@@ -68,6 +68,8 @@ Rules first — they matter more than any single chord:
 
 *Amendment (2026-07-11, #863):* the inventory line above predates the chord reallocation — ⌘O is now Quick Open (⇧⌘O Open Vault), ⌘T Duplicate Tab, ⇧⌘T Reopen Closed Tab, ⌘R Tasks Review. The line is retained as the historical snapshot the gap analysis was computed against.
 
+*Amendment (2026-07-13, #559, Milestone P P2-3):* the graph Diagram mode joins the focus-routed zoom router (⌘=/⌘−/⌘0 → graph viewport when a graph tab is in Diagram mode, ahead of the editor fallback; one menu owner per chord, #848) and registers the new **⌥⌘0 "Fit Graph"** chord (verified unclaimed against this inventory + VO/FKA reserved combos). All four are `CommandSection.graph` registry commands (palette-mirrored per R2) and are covered by the existing menu↔registry chord drift tests (`SlateCommandsTests`, forward + reverse); the user-facing graph keyboard reference table lands with P-D (#562, `docs/help/graph.md`).
+
 **Canvas allocations (proposed here; final binding in the registering PR, drift-tested):**
 
 | Command | Chord | Scope | Notes |

@@ -532,35 +532,27 @@ struct SlateMacApp: App {
                 // (WCAG 1.4.4), so zooming it too would double-scale.
                 // Obsidian's zoom is window-wide; Slate trades that
                 // parity for not fighting the system setting.
-                Button("Zoom In") {
-                    if appState.activeCanvasDocument != nil {
-                        appState.canvasZoomIn()
-                    } else {
-                        appState.editorZoomIn()
-                    }
-                }
-                .keyboardShortcut("=", modifiers: [.command])
-                .disabled(!appState.isVaultOpen)
+                // Routing order (#848 + P2-3): canvas tab → canvas
+                // viewport; graph tab in Diagram mode → graph viewport;
+                // else editor text zoom. One menu owner per chord.
+                Button("Zoom In") { appState.routedZoomIn() }
+                    .keyboardShortcut("=", modifiers: [.command])
+                    .disabled(!appState.isVaultOpen)
 
-                Button("Zoom Out") {
-                    if appState.activeCanvasDocument != nil {
-                        appState.canvasZoomOut()
-                    } else {
-                        appState.editorZoomOut()
-                    }
-                }
-                .keyboardShortcut("-", modifiers: [.command])
-                .disabled(!appState.isVaultOpen)
+                Button("Zoom Out") { appState.routedZoomOut() }
+                    .keyboardShortcut("-", modifiers: [.command])
+                    .disabled(!appState.isVaultOpen)
 
-                Button("Actual Size") {
-                    if appState.activeCanvasDocument != nil {
-                        appState.canvasActualSize()
-                    } else {
-                        appState.editorActualSize()
-                    }
-                }
-                .keyboardShortcut("0", modifiers: [.command])
-                .disabled(!appState.isVaultOpen)
+                Button("Actual Size") { appState.routedActualSize() }
+                    .keyboardShortcut("0", modifiers: [.command])
+                    .disabled(!appState.isVaultOpen)
+
+                // ⌥⌘0 "Fit Graph" — a new, graph-only chord (spec §P2-3,
+                // verified unclaimed). Enabled only when the diagram is the
+                // active graph surface.
+                Button("Fit Graph") { appState.graphDiagramFit() }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
+                    .disabled(!appState.graphDiagramZoomActive)
 
                 Divider()
 
