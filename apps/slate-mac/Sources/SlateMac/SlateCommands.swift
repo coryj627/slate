@@ -97,6 +97,14 @@ enum SlateCommandID {
     /// `CommandSection.graph` in P1-3 alongside the presets below).
     static let openGraphTab = "slate.graph.openTab"
 
+    /// Diagram-mode viewport (P2-3 #559). ⌘=/⌘−/⌘0 are palette mirrors of
+    /// the focus-routed menu chords (R2 — the chord IS what it does on the
+    /// diagram); Fit Graph owns the new ⌥⌘0 chord (R3).
+    static let graphZoomIn = "slate.graph.zoomIn"
+    static let graphZoomOut = "slate.graph.zoomOut"
+    static let graphActualSize = "slate.graph.actualSize"
+    static let graphFitGraph = "slate.graph.fitGraph"
+
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
     // Program rule R1: every canvas action is a registry command; these
@@ -290,6 +298,10 @@ enum SlateCommandID {
         graphMostLinked,
         toggleRightPane,
         openGraphTab,
+        graphZoomIn,
+        graphZoomOut,
+        graphActualSize,
+        graphFitGraph,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1316,6 +1328,43 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .graph,
         hint: "Open the global graph as a sortable table."
     ) { [weak appState] in appState?.openGraphTab() }
+
+    // Diagram-mode viewport (P2-3 #559). ⌘=/⌘−/⌘0 mirror the focus-routed
+    // menu chords (canvas program rule R2 — palette-mirrored per surface);
+    // these palette rows carry the chords as hotkeyHints and drive the
+    // graph viewport when the diagram is active. Fit Graph is the new
+    // ⌥⌘0 chord (R3): registered here + owned by the menu item.
+    register(
+        SlateCommandID.graphZoomIn,
+        label: "Graph: Zoom In",
+        section: .graph,
+        hotkey: "⌘=",
+        hint: "Zoom the visual diagram in. The zoom level is announced."
+    ) { [weak appState] in appState?.graphDiagramZoomIn() }
+
+    register(
+        SlateCommandID.graphZoomOut,
+        label: "Graph: Zoom Out",
+        section: .graph,
+        hotkey: "⌘-",
+        hint: "Zoom the visual diagram out."
+    ) { [weak appState] in appState?.graphDiagramZoomOut() }
+
+    register(
+        SlateCommandID.graphActualSize,
+        label: "Graph: Actual Size",
+        section: .graph,
+        hotkey: "⌘0",
+        hint: "Reset the visual diagram zoom to 100 percent."
+    ) { [weak appState] in appState?.graphDiagramActualSize() }
+
+    register(
+        SlateCommandID.graphFitGraph,
+        label: "Graph: Fit Graph",
+        section: .graph,
+        hotkey: "⌥⌘0",
+        hint: "Zoom so every node is visible. Option-Command-0 on the diagram."
+    ) { [weak appState] in appState?.graphDiagramFit() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 

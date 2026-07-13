@@ -519,6 +519,26 @@ final class AppState: ObservableObject {
         workspace.model.groupsInOrder.contains { $0.activeTab?.item == .graph }
     }
 
+    // MARK: Graph tab, Diagram mode (Milestone P, P2-3 #559)
+
+    /// The live visual-diagram model — nil until the Graph tab enters
+    /// Diagram mode, torn down on graph-tab close / vault change. Owns the
+    /// running `LayoutSession` and the id→metadata join for accessible
+    /// labels and actions.
+    @Published var graphDiagramModel: GraphDiagramModel?
+    /// Monotonic build sequence: an in-flight diagram build is stale once
+    /// this advances (tab close, vault change, rebuild).
+    var graphDiagramBuildSeq: UInt64 = 0
+    /// Serializes generation-refreshes: each waits for the prior to adopt
+    /// before probing, so two file-change-driven refreshes can't race
+    /// (the second would otherwise get `nil` from an already-advanced
+    /// layout while the first is rejected, stranding the model on the old
+    /// generation). Adoption additionally requires a strictly newer
+    /// generation (monotonic).
+    var graphDiagramRefreshTask: Task<Void, Never>?
+    @Published var graphDiagramLoading = false
+    @Published var graphDiagramError: String?
+
     /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
     /// focusable transient panel in the canvas container; Esc/Close
     /// dismisses (panel-local, not a t0 M5 ladder rung).
@@ -3870,6 +3890,8 @@ final class AppState: ObservableObject {
             resetConnectionsState()
             // Graph tab table (P1-2 #555): same cross-vault isolation.
             resetGraphTableState()
+            // Graph tab diagram (P2-3 #559): tear down the layout session too.
+            resetGraphDiagramState()
             // #871: the structural (file-op) undo/redo stacks are per-vault —
             // a direct Open Vault / Open Recent reaches here WITHOUT
             // `closeVault`, so an inverse move/rename staged against vault A
@@ -4417,6 +4439,8 @@ final class AppState: ObservableObject {
         resetConnectionsState()
         // Graph tab table (P1-2 #555): same cross-vault isolation.
         resetGraphTableState()
+        // Graph tab diagram (P2-3 #559): tear down the layout session too.
+        resetGraphDiagramState()
         // U1-2: drop every tab + parked document BEFORE clearing the
         // selection — the selection funnel's snapshot would otherwise park
         // the about-to-be-discarded buffer, and mirrorSingleSelection would

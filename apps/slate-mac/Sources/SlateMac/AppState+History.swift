@@ -657,6 +657,7 @@ extension AppState {
                 Task { @MainActor [weak self] in
                     self?.refreshConnectionsIfGraphChanged()
                     self?.refreshGraphTableIfGraphChanged()
+                    self?.refreshGraphDiagramIfGraphChanged()
                 }
             },
             onIndexPhaseHook: { [weak self] phase, _ in
@@ -664,6 +665,7 @@ extension AppState {
                 Task { @MainActor [weak self] in
                     self?.refreshConnectionsIfGraphChanged()
                     self?.refreshGraphTableIfGraphChanged()
+                    self?.refreshGraphDiagramIfGraphChanged()
                 }
             })
         vaultEventAdapter = adapter

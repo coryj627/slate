@@ -85,6 +85,7 @@ extension AppState {
         guard case .graph = item else { return }
         guard !workspace.model.allTabs.contains(where: { $0.item == .graph }) else { return }
         resetGraphTableState()
+        resetGraphDiagramState()
     }
 
     /// Clear graph-table state (vault open/close, and graph-tab close) so

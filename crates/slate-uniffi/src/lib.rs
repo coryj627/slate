@@ -2350,6 +2350,10 @@ struct LayoutState {
     ids: Vec<u64>,
     id_to_slot: std::collections::HashMap<u64, usize>,
     edges: Vec<GraphEdge>,
+    /// Full node metadata in `ids` order, computed atomically with the
+    /// topology under one graph lock (#559) — so the diagram's labels
+    /// can never come from a different generation than its ids.
+    nodes: Vec<GraphNode>,
     generation: u64,
     /// Result of the most recent step; reset to `false` whenever the
     /// layout is perturbed (forces changed, node pinned, topology
@@ -2380,6 +2384,7 @@ impl LayoutState {
             ids: Vec::new(),
             id_to_slot: std::collections::HashMap::new(),
             edges: Vec::new(),
+            nodes: Vec::new(),
             generation: 0,
             converged: false,
             max_iterations,
@@ -2399,6 +2404,7 @@ impl LayoutState {
             .collect();
         self.ids = topology.ids;
         self.edges = topology.edges.into_iter().map(GraphEdge::from).collect();
+        self.nodes = topology.nodes.into_iter().map(GraphNode::from).collect();
         self.generation = topology.generation;
     }
 
@@ -2432,6 +2438,23 @@ impl LayoutSession {
     /// Same caching contract as [`Self::node_ids`].
     pub fn edges(&self) -> Vec<GraphEdge> {
         self.state.lock().expect("layout state mutex").edges.clone()
+    }
+
+    /// Full node metadata (labels, link counts, kind, path, metrics) in
+    /// `node_ids()` order — computed ATOMICALLY with the topology under
+    /// one graph lock at build/refresh, so the host never has to pair it
+    /// with a separately-fetched snapshot that could belong to a
+    /// different generation (#559). Same fetch-once/re-fetch-on-change
+    /// contract as [`Self::node_ids`].
+    pub fn node_metadata(&self) -> Vec<GraphNode> {
+        self.state.lock().expect("layout state mutex").nodes.clone()
+    }
+
+    /// The graph generation the current `node_ids()`/`edges()`/
+    /// `node_metadata()` belong to. The host tags its model with this so
+    /// it can drop stale frames after a `refresh` reassigns ids.
+    pub fn generation(&self) -> u64 {
+        self.state.lock().expect("layout state mutex").generation
     }
 
     /// Advance the simulation `iterations` steps and return the new
