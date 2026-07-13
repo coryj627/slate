@@ -96,6 +96,11 @@ enum SlateSymbol: CaseIterable {
     case embed
     /// Diagrams leaf — Mermaid diagram blocks in the active note.
     case diagram
+    /// Graph-tab inspector toggle (Milestone P, P2-4 #560): reveal/hide the
+    /// trailing inspector (Filters / Groups / Display / Forces).
+    /// `sidebar.trailing` is SF Symbols 1 (macOS 11), on the macOS 15 floor,
+    /// so v7 == fallback.
+    case graphInspector
     /// Tasks leaf. Deliberately shares `.tasksReview`'s `checklist` glyph
     /// (same metaphor, same glyph — the DoD §B consistency rule); the two
     /// roles stay distinct so their labels differ ("Tasks" vs "Tasks Review").
@@ -210,6 +215,7 @@ enum SlateSymbol: CaseIterable {
         case .graph: return "Graph"
         case .embed: return "Embed"
         case .diagram: return "Diagram"
+        case .graphInspector: return "Inspector"
         case .tasksLeaf: return "Tasks"
         case .tasksReviewLeaf: return "Tasks Review"
         case .showSource: return "Show source"
@@ -310,6 +316,7 @@ enum SlateSymbol: CaseIterable {
         case .diagram:
             return ("point.3.connected.trianglepath.dotted",
                     "point.3.connected.trianglepath.dotted")
+        case .graphInspector: return ("sidebar.trailing", "sidebar.trailing")
         // Shares `.tasksReview`'s glyph deliberately (DoD §B).
         case .tasksLeaf: return ("checklist", "checklist")
         // Distinct from `.tasksLeaf`'s `checklist` (#879 — see the case doc):

@@ -288,6 +288,38 @@ final class GraphTabRoutingTests: XCTestCase {
         try await pollUntil { state.graphTableSnapshot != nil }
     }
 
+    /// The PERSISTED filter is restored on every plain reopen, not just
+    /// reset to the default — the fix for the once-per-vault load that left
+    /// the saved filter unrestored after the first open (P2-4 review
+    /// finding 4). A transient preset must NOT become the persisted filter.
+    func testPersistedFilterIsRestoredOnPlainReopen() async throws {
+        let state = try await makeAppState()
+        state.openGraphTab()
+        try await pollUntil { state.graphTableSnapshot != nil }
+        // Persist a NON-default backend filter (this writes graphConfig
+        // synchronously before the debounced disk write).
+        state.setGraphTableFilter(
+            GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: false))
+        XCTAssertTrue(state.graphConfig.filters.includeAttachments, "persisted into graphConfig")
+
+        // Open a transient preset, then close: the preset must not have
+        // overwritten the persisted filter.
+        state.openGraphPreset(.orphans)
+        try await pollUntil { state.graphTableSnapshot != nil }
+        let graphID = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.requestCloseTab(graphID)
+        XCTAssertFalse(state.graphTableFilter.includeAttachments, "close resets the live filter")
+
+        // A plain reopen restores the PERSISTED filter (Attachments on),
+        // not the default and not the orphans preset.
+        state.openGraphTab()
+        XCTAssertTrue(
+            state.graphTableFilter.includeAttachments,
+            "plain reopen restores the persisted Attachments filter")
+        XCTAssertFalse(state.graphTableFilter.orphansOnly, "the transient preset did not persist")
+        XCTAssertTrue(state.graphConfig.filters.includeAttachments)
+    }
+
     /// A generation-refresh probe that resumes after its graph-table
     /// lifecycle moved on must not reload — covers both "closed and stayed
     /// closed" and the "close → quick preset reopen" zombie that a bare

@@ -32,6 +32,12 @@ extension AppState {
         graphDiagramBuildSeq += 1
         let seq = graphDiagramBuildSeq
         let filter = graphTableFilter
+        // Seed the kernel with the PERSISTED forces (captured on the main
+        // actor before hopping off it), so a graph built (or rebuilt after
+        // a backend-filter change) runs the user's saved forces instead of
+        // silently reverting to defaults while the inspector shows the
+        // saved values (P2-4 review finding 6).
+        let forces = graphConfig.forces.layoutForces
         graphDiagramLoading = true
         graphDiagramError = nil
 
@@ -46,7 +52,7 @@ extension AppState {
                             // can never disagree on generation — no separate
                             // snapshot, no handshake (round 2 finding 2).
                             let layout = try session.startGraphLayout(
-                                filter: filter, forces: LayoutForces(), config: LayoutConfig())
+                                filter: filter, forces: forces, config: LayoutConfig())
                             return .success((
                                 layout, layout.nodeIds(), layout.edges(),
                                 layout.nodeMetadata(), layout.generation()))
@@ -88,6 +94,10 @@ extension AppState {
         graphDiagramModel = nil
         graphDiagramLoading = false
         graphDiagramError = nil
+        // A forces edit may have armed the settled-state announcement; the
+        // diagram is gone now, so drop it — otherwise the NEXT diagram's
+        // initial settle would spuriously announce "settled" (finding 8).
+        graphForcesSettlePending = false
     }
 
     /// Re-sync the diagram after a graph-generation bump
@@ -138,6 +148,17 @@ extension AppState {
             model.adopt(
                 nodeIDs: synced.0, nodesByID: byID, edges: synced.1, generation: synced.3)
         }
+    }
+
+    /// The renderer calls this when the settle loop converges. Only a
+    /// re-settle triggered by a FORCES edit announces a final "settled"
+    /// state (debounced) — the initial build and background refreshes
+    /// converge silently (they have their own summaries), so the user
+    /// isn't told "settled" on every load (P2-4 review finding 8).
+    func graphDiagramDidConverge() {
+        guard graphForcesSettlePending else { return }
+        graphForcesSettlePending = false
+        graphAnnouncer.announceSettle("Graph layout settled.")
     }
 
     // MARK: Selection + readback

@@ -118,7 +118,6 @@ final class GraphDiagramNSView: NSView {
     private var settleTask: Task<Void, Never>?
     private var settleCancel: CancelToken?
     private var didInitialFit = false
-    private var lastTierB = false
     /// The label-visibility state (zoom ≥ fade threshold) the last
     /// `rebuildTierA` materialized labels for — so a zoom that crosses the
     /// threshold can re-materialize/remove them (labels are created only
@@ -126,6 +125,18 @@ final class GraphDiagramNSView: NSView {
     private var lastLabelsShown = false
     private var typeAheadBuffer = ""
     private var typeAheadStamp: TimeInterval = 0
+    /// The name/kind-filtered node ids the diagram actually shows — the
+    /// ONE "visible" definition every tier / render / count / navigation /
+    /// hit-test / AX path reads, so the Diagram covers exactly the Table's
+    /// node set (P2-4 review finding 5). Recomputed at the top of
+    /// `rebuildTopology`; `visibleIDs` keeps position order, `visibleSet`
+    /// is the O(1) membership test.
+    private var visibleIDs: [UInt64] = []
+    private var visibleSet: Set<UInt64> = []
+    /// The tier actually rendered last (keyed off the VISIBLE count, not
+    /// the raw topology) — drives the relabel-on-zoom gate and the test
+    /// seam. `lastTierB` doubles as the "announce once on entry" latch.
+    private var lastTierB = false
 
     struct GridKey: Hashable { let x: Int; let y: Int }
     /// Spatial-grid cell in LAYOUT units (≈64 pt at 100% zoom, spec).
@@ -193,6 +204,43 @@ final class GraphDiagramNSView: NSView {
                     Task { @MainActor [weak self] in self?.applyTransform() }
                 }
                 .store(in: &subscriptions)
+            // Inspector edits (Filters name query / Groups / Display /
+            // Forces) live on `appState.graphConfig`; re-render and
+            // re-settle when they change (P2-4 #560). A display/groups
+            // change re-settles from the converged state (near no-op); a
+            // forces change re-heated the engine via `set_forces`.
+            appState.$graphConfig
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.rebuildTopology()
+                        self?.startSettling()
+                    }
+                }
+                .store(in: &subscriptions)
+            // The client name filter (shared with the Table) hides/shows
+            // nodes but doesn't move them — re-render without re-settling.
+            appState.$graphTableTextFilter
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.rebuildTopology()
+                        self?.applyTransform()
+                    }
+                }
+                .store(in: &subscriptions)
+            // The preset kind filter (`.ghost` for Unresolved) likewise
+            // hides/shows nodes — re-render so the Diagram's visible set
+            // tracks the Table's when a preset is active (finding 5).
+            appState.$graphTableKindFilter
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.rebuildTopology()
+                        self?.applyTransform()
+                    }
+                }
+                .store(in: &subscriptions)
             didInitialFit = false
             startSettling()
         } else if motionFlip {
@@ -215,6 +263,7 @@ final class GraphDiagramNSView: NSView {
                 }.value
                 guard !Task.isCancelled else { return }
                 self?.applyFrame(frame)
+                self?.appState?.graphDiagramDidConverge()
                 return
             }
             while !Task.isCancelled {
@@ -223,7 +272,13 @@ final class GraphDiagramNSView: NSView {
                 }.value
                 guard !Task.isCancelled else { break }
                 self?.applyFrame(frame)
-                if frame.converged { break }
+                if frame.converged {
+                    // A forces edit that re-heated the layout announces its
+                    // settled state here, once (finding 8); other settles
+                    // (build/refresh) converge silently.
+                    self?.appState?.graphDiagramDidConverge()
+                    break
+                }
                 try? await Task.sleep(nanoseconds: 16_000_000)  // ~60 fps
             }
         }
@@ -255,6 +310,9 @@ final class GraphDiagramNSView: NSView {
                 x: CGFloat(frame.positions[2 * i]),
                 y: CGFloat(frame.positions[2 * i + 1]))
         }
+        // Refresh the visible set BEFORE measuring bounds so "fit" frames the
+        // VISIBLE nodes, not the filtered-out ones (finding 5).
+        refreshVisibleSet()
         model.contentBounds = positionsBounds()
         if !didInitialFit, !positions.isEmpty {
             didInitialFit = true
@@ -276,6 +334,51 @@ final class GraphDiagramNSView: NSView {
 
     private var viewport: CanvasViewport? { model?.viewport }
 
+    // MARK: Config-driven display / filter (P2-4 #560)
+
+    private var display: GraphDisplay { appState?.graphConfig.display ?? .default }
+    private var nameNeedle: String { appState?.graphTableTextFilter ?? "" }
+    /// The preset client-side kind filter (`.ghost` for the Unresolved
+    /// preset; nil = all) — the SAME filter the Table applies on top of the
+    /// backend filter, so the two projections show one node set (finding 5).
+    private var kindFilter: GraphNodeKind? { appState?.graphTableKindFilter }
+
+    /// The client name filter — the SAME predicate the Table applies.
+    private func nameMatches(_ label: String) -> Bool {
+        AppState.graphNameMatches(label, needle: nameNeedle)
+    }
+
+    /// A node is VISIBLE iff it passes BOTH client-side filters the Table
+    /// applies — the name needle and the preset kind filter — on top of the
+    /// backend filter the layout was built with. The single definition of
+    /// "shown" every tier/render/count/nav/hit-test/AX/fit path consults so
+    /// the Diagram covers exactly the Table's node set (finding 5).
+    private func isVisible(_ node: GraphNode) -> Bool {
+        guard nameMatches(node.label) else { return false }
+        if let kind = kindFilter, node.kind != kind { return false }
+        return true
+    }
+
+    /// Recompute `visibleIDs`/`visibleSet` from the model + current filters.
+    /// Called before ANY consumer of the visible set (fit bounds in
+    /// `applyFrame`, and `rebuildTopology`) so every path — render, count,
+    /// nav, hit-test, AX, and fit — agrees on one set (finding 5).
+    private func refreshVisibleSet() {
+        guard let model else {
+            visibleIDs = []
+            visibleSet = []
+            return
+        }
+        visibleIDs = model.nodeIDs.filter { id in model.node(id).map(isVisible) ?? false }
+        visibleSet = Set(visibleIDs)
+    }
+
+    /// Node diameter with the display multiplier applied (`nodeDiameter`
+    /// is the base spec formula, kept pure for the unit test).
+    private func scaledDiameter(inLinks: UInt32) -> CGFloat {
+        Self.nodeDiameter(inLinks: inLinks) * CGFloat(display.nodeSizeMultiplier)
+    }
+
     /// Layout → view point (`view = (p − offset) × scale`) — the mapping
     /// AX frames, the selection ring, and hit-testing use; the content
     /// layer applies the equivalent affine transform.
@@ -289,23 +392,31 @@ final class GraphDiagramNSView: NSView {
         return CGPoint(x: p.x / v.scale + v.offset.x, y: p.y / v.scale + v.offset.y)
     }
 
+    /// The layout-space bounding box of the VISIBLE nodes only, so "fit
+    /// graph" (⌥⌘0 / the initial frame) frames what's shown, not the
+    /// filtered-out nodes that would otherwise shrink the visible ones
+    /// (finding 5). Empty visible set ⇒ `.zero` (fit then no-ops/​inflates).
     private func positionsBounds() -> CGRect {
-        guard !positions.isEmpty else { return .zero }
         var minX = CGFloat.greatestFiniteMagnitude
         var minY = CGFloat.greatestFiniteMagnitude
         var maxX = -CGFloat.greatestFiniteMagnitude
         var maxY = -CGFloat.greatestFiniteMagnitude
-        for p in positions.values {
+        var any = false
+        for id in visibleSet {
+            guard let p = positions[id] else { continue }
+            any = true
             minX = min(minX, p.x)
             minY = min(minY, p.y)
             maxX = max(maxX, p.x)
             maxY = max(maxY, p.y)
         }
+        guard any else { return .zero }
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     func fitGraph() {
         guard bounds.width > 0, let model else { return }
+        refreshVisibleSet()  // fit the VISIBLE nodes (finding 5)
         model.contentBounds = positionsBounds()
         model.fitToContent()
         applyTransform()
@@ -328,16 +439,26 @@ final class GraphDiagramNSView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+        // Recompute the VISIBLE set first: the name/kind filter can hide
+        // nodes, so the tier decision, rendering, counts, and navigation
+        // all key off it — not the raw topology (finding 5). A 1,501-node
+        // graph filtered to one match is a one-node Tier-A diagram, not a
+        // 1,501-dot Tier-B summary.
+        refreshVisibleSet()
+        // A selection the filter just hid must drop — else the ring points
+        // at a hidden node and keyboard nav resumes from an invisible one.
+        if let sel = model.selection, !visibleSet.contains(sel) { model.selection = nil }
         buildGrid()
-        if model.isTierB {
+        let tierB = visibleIDs.count > GraphDiagramModel.tierBThreshold
+        if tierB {
             rebuildTierB(model)
         } else {
             rebuildTierA(model)
         }
         rebuildEdges(model)
-        if model.isTierB != lastTierB {
-            lastTierB = model.isTierB
-            if model.isTierB {
+        if tierB != lastTierB {
+            lastTierB = tierB
+            if tierB {
                 appState?.graphAnnouncer.announce(
                     .status(
                         "Large graph: summary accessibility mode. Table mode has every node."))
@@ -349,19 +470,21 @@ final class GraphDiagramNSView: NSView {
         clearTiles()
         summaryElement = nil
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        let showLabels = (viewport?.scale ?? 1) >= Self.labelFadeZoom
+        let showLabels = (viewport?.scale ?? 1) >= display.textFadeZoom
         lastLabelsShown = showLabels
         let labelIDs = showLabels ? labelPriorityIDs(model) : []
 
         var seen: Set<UInt64> = []
         var elements: [GraphNodeAXElement] = []
-        // Tier A materializes EVERY filtered node (≤1,500), regardless of
-        // the viewport, so the AX tree is always complete and a pan never
-        // drops nodes (P2-3 distinguishes this from Canvas's windowing).
-        for id in model.nodeIDs {
+        // Tier A materializes EVERY VISIBLE node (≤1,500) regardless of the
+        // viewport, so the AX tree is always complete and a pan never drops
+        // nodes (P2-3 vs Canvas windowing). `visibleIDs` already applied the
+        // name + kind filter — the SAME filters the Table applies — so both
+        // projections show one node set (finding 5).
+        for id in visibleIDs {
             guard let node = model.node(id), let p = positions[id] else { continue }
             seen.insert(id)
-            let diameter = Self.nodeDiameter(inLinks: node.inLinks)
+            let diameter = scaledDiameter(inLinks: node.inLinks)
             let rect = CGRect(
                 x: p.x - diameter / 2, y: p.y - diameter / 2, width: diameter, height: diameter)
 
@@ -370,7 +493,8 @@ final class GraphDiagramNSView: NSView {
             if dot.superlayer == nil { nodeContainer.addSublayer(dot) }
             dot.frame = rect
             dot.path = CGPath(ellipseIn: CGRect(origin: .zero, size: rect.size), transform: nil)
-            styleNode(dot, node: node, increaseContrast: increaseContrast)
+            let group = appState?.graphConfig.matchingGroup(for: node.label)
+            styleNode(dot, node: node, group: group, increaseContrast: increaseContrast)
 
             if labelIDs.contains(id) {
                 let label = labelLayers[id] ?? makeLabelLayer()
@@ -401,22 +525,32 @@ final class GraphDiagramNSView: NSView {
         setAccessibilityChildren(elements)
     }
 
-    /// Tier B (> 1,500 nodes): manual tiling (spec §P2-3). Nodes batch
-    /// into one rasterized `CAShapeLayer` per occupied tile — no per-node
-    /// layers/labels/elements — so pan/zoom is a content-layer transform
-    /// over cached per-tile bitmaps (Core Animation frame-culls off-screen
-    /// tiles, nothing re-rasterizes per frame). Accessibility is a single
-    /// summary element whose press/action switches to Table mode (which
-    /// always has every node).
+    /// Tier B (> 1,500 VISIBLE nodes): manual tiling (spec §P2-3). Nodes
+    /// batch into one rasterized `CAShapeLayer` per occupied tile — no
+    /// per-node layers/labels/elements — so pan/zoom is a content-layer
+    /// transform over cached per-tile bitmaps (Core Animation frame-culls
+    /// off-screen tiles, nothing re-rasterizes per frame). Accessibility is
+    /// a single summary element whose press/action switches to Table mode
+    /// (which always has every node).
+    ///
+    /// Only VISIBLE nodes tile (finding 5) — a name/kind filter that leaves
+    /// >1,500 matches still summarises exactly the Table's set, and the
+    /// spoken count matches. Tier B is DELIBERATELY a uniform density map:
+    /// it does NOT tint dots by colour group, because at this scale the
+    /// per-node ring styles that carry group membership without colour
+    /// (WCAG 1.4.1) can't render on sub-pixel dots — encoding groups by
+    /// colour alone here would itself violate 1.4.1. Group highlighting is
+    /// a Tier-A affordance; the summary directs users to Table for the full
+    /// per-node detail (finding 7).
     private func rebuildTierB(_ model: GraphDiagramModel) {
         for (_, layer) in nodeLayers { layer.removeFromSuperlayer() }
         nodeLayers.removeAll()
         for (_, layer) in labelLayers { layer.removeFromSuperlayer() }
         labelLayers.removeAll()
 
-        // Group node positions into fixed layout-space tiles.
+        // Group VISIBLE node positions into fixed layout-space tiles.
         var byTile: [GridKey: [CGPoint]] = [:]
-        for id in model.nodeIDs {
+        for id in visibleIDs {
             guard let p = positions[id] else { continue }
             let key = GridKey(
                 x: Int((p.x / Self.tileSize).rounded(.down)),
@@ -454,7 +588,7 @@ final class GraphDiagramNSView: NSView {
         summary.setAccessibilityRole(.button)
         summary.setAccessibilityParent(self)
         summary.setAccessibilityLabel(
-            "\(model.nodeCount) nodes — too many for per-node navigation. "
+            "\(visibleIDs.count) nodes — too many for per-node navigation. "
                 + "Switch to Table mode for the full, navigable list.")
         summary.onPress = { [weak self] in self?.onSwitchToTable?() }
         let switchAction = NSAccessibilityCustomAction(name: "Switch to Table") { [weak self] in
@@ -467,8 +601,10 @@ final class GraphDiagramNSView: NSView {
     }
 
     private func labelPriorityIDs(_ model: GraphDiagramModel) -> Set<UInt64> {
-        if model.nodeIDs.count <= Self.labelCap { return Set(model.nodeIDs) }
-        let ranked = model.nodeIDs.sorted { a, b in
+        // Rank the VISIBLE nodes only — a filtered-out node never gets a
+        // label slot (finding 5).
+        if visibleIDs.count <= Self.labelCap { return visibleSet }
+        let ranked = visibleIDs.sorted { a, b in
             (model.node(a)?.inLinks ?? 0) > (model.node(b)?.inLinks ?? 0)
         }
         return Set(ranked.prefix(Self.labelCap))
@@ -487,12 +623,32 @@ final class GraphDiagramNSView: NSView {
         return text
     }
 
-    /// Node styling — never color alone: ghosts (unresolved) draw hollow +
-    /// dashed, notes/attachments filled; Increase Contrast strengthens the
-    /// stroke.
-    private func styleNode(_ layer: CAShapeLayer, node: GraphNode, increaseContrast: Bool) {
+    /// Node styling — never color alone. A colour GROUP (P2-4) overrides
+    /// the kind fill and stamps a RING that is a NON-COLOUR channel two
+    /// ways (WCAG 1.4.1): (1) a grouped node's ring is always THICKER and
+    /// full-contrast vs an ungrouped node's thin secondary outline, so
+    /// "grouped vs ungrouped" reads without colour even for the solid
+    /// style; and (2) the ring's dash PATTERN (solid/dashed/dotted, +extra
+    /// width for double) distinguishes the groups FROM EACH OTHER. Ungrouped:
+    /// ghosts draw hollow + dashed, notes/attachments filled. Increase
+    /// Contrast strengthens the ungrouped stroke.
+    private func styleNode(
+        _ layer: CAShapeLayer, node: GraphNode, group: GraphGroup?, increaseContrast: Bool
+    ) {
+        if let group {
+            layer.fillColor = group.colorToken.color.cgColor
+            layer.lineDashPattern = group.ringStyle.dashPattern
+            // A grouped ring is ALWAYS heavier + full-contrast than the
+            // ungrouped 1.5pt secondary outline, so membership is a
+            // non-colour signal even when the style is solid (finding 7a);
+            // `double` adds still more width as its own channel.
+            layer.strokeColor = NSColor.labelColor.cgColor
+            layer.lineWidth = group.ringStyle == .double ? 4 : 3
+            return
+        }
         let stroke = increaseContrast ? NSColor.labelColor : NSColor.secondaryLabelColor
         layer.strokeColor = stroke.cgColor
+        layer.lineWidth = 1.5
         switch node.kind {
         case .ghost:
             layer.fillColor = NSColor.windowBackgroundColor.cgColor
@@ -508,25 +664,46 @@ final class GraphDiagramNSView: NSView {
 
     private func rebuildEdges(_ model: GraphDiagramModel) {
         let path = CGMutablePath()
-        // ALL edges are drawn in layout space (the content-layer clips
-        // off-screen geometry); this keeps a long segment whose endpoints
-        // both lie outside the viewport but which crosses it (round 1
-        // finding 13).
+        let arrows = display.arrows
+        // ALL edges among VISIBLE endpoints are drawn in layout space (the
+        // content-layer clips off-screen geometry) — a long segment
+        // crossing the viewport with both endpoints outside is kept (round
+        // 1 finding 13). An edge to a filtered-out node (name OR kind) is
+        // dropped so the diagram's edges match the Table's visible set
+        // (finding 5 — `visibleSet` is the one definition).
         for edge in model.edges {
-            guard let a = positions[edge.sourceId], let b = positions[edge.targetId] else {
-                continue
-            }
+            guard let a = positions[edge.sourceId], let b = positions[edge.targetId],
+                visibleSet.contains(edge.sourceId), visibleSet.contains(edge.targetId)
+            else { continue }
             path.move(to: a)
             path.addLine(to: b)
+            if arrows { addArrowhead(to: path, from: a, to: b) }
         }
         edgeLayer.path = path
         edgeLayer.strokeColor = NSColor.separatorColor.cgColor
-        edgeLayer.lineWidth = 1.0
+        edgeLayer.lineWidth = max(0.5, CGFloat(display.linkThickness))
+    }
+
+    /// A small arrowhead at `to`, pointing along `from → to` (layout
+    /// coords; scales with the content transform). Drawn only when the
+    /// Arrows display toggle is on (P2-4).
+    private func addArrowhead(to path: CGMutablePath, from: CGPoint, to end: CGPoint) {
+        let angle = atan2(end.y - from.y, end.x - from.x)
+        let size: CGFloat = 6
+        for spread in [CGFloat.pi * 0.85, -CGFloat.pi * 0.85] {
+            path.move(to: end)
+            path.addLine(
+                to: CGPoint(
+                    x: end.x + size * cos(angle + spread), y: end.y + size * sin(angle + spread)))
+        }
     }
 
     private func buildGrid() {
+        // Only VISIBLE nodes go in the hit-test grid, so a filtered-out
+        // node can never be clicked/selected (finding 5). Rebuilt after
+        // `visibleSet` is recomputed in `rebuildTopology`.
         grid.removeAll(keepingCapacity: true)
-        for (id, p) in positions {
+        for (id, p) in positions where visibleSet.contains(id) {
             grid[gridKey(p), default: []].append(id)
         }
     }
@@ -589,7 +766,10 @@ final class GraphDiagramNSView: NSView {
     }
 
     /// Neighbor labels as `accessibilityCustomContent` (spec §P2-3 — edges
-    /// aren't AX elements): first 10 unique, then "and k more".
+    /// aren't AX elements): first 10 unique, then "and k more". Only VISIBLE
+    /// neighbors are announced — a filtered-out node isn't in the shown
+    /// graph, so it must not surface in a visible node's connections
+    /// (finding 5, matching the drawn edges which are already visible-gated).
     private func neighborCustomContent(of id: UInt64, model: GraphDiagramModel)
         -> [AXCustomContent]
     {
@@ -599,7 +779,9 @@ final class GraphDiagramNSView: NSView {
         for edge in model.edges {
             let other: UInt64? =
                 edge.sourceId == id ? edge.targetId : (edge.targetId == id ? edge.sourceId : nil)
-            guard let other, seen.insert(other).inserted, let n = model.node(other) else { continue }
+            guard let other, visibleSet.contains(other), seen.insert(other).inserted,
+                let n = model.node(other)
+            else { continue }
             if labels.count < 10 { labels.append(n.label) } else { extra += 1 }
         }
         guard !labels.isEmpty else { return [] }
@@ -622,8 +804,8 @@ final class GraphDiagramNSView: NSView {
         // A zoom that crosses the label-fade threshold must add/remove
         // labels — they're materialized only in rebuildTierA, so relabel
         // here before applying the transform (round 2 finding 4).
-        if let model, !model.isTierB,
-            ((viewport?.scale ?? 1) >= Self.labelFadeZoom) != lastLabelsShown
+        if model != nil, !lastTierB,
+            ((viewport?.scale ?? 1) >= display.textFadeZoom) != lastLabelsShown
         {
             rebuildTopology()
         }
@@ -651,7 +833,7 @@ final class GraphDiagramNSView: NSView {
             guard let node = model.node(element.nodeId), let p = positions[element.nodeId] else {
                 continue
             }
-            let d = Self.nodeDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+            let d = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
             let center = layoutToView(p)
             element.setAccessibilityFrame(
                 screenRect(
@@ -669,7 +851,7 @@ final class GraphDiagramNSView: NSView {
             selectionAccentLayer.path = nil
             return
         }
-        let diameter = Self.nodeDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+        let diameter = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
         let center = layoutToView(p)
         let ringRect = CGRect(
             x: center.x - diameter / 2 - 4, y: center.y - diameter / 2 - 4,
@@ -693,8 +875,12 @@ final class GraphDiagramNSView: NSView {
         for dx in -1...1 {
             for dy in -1...1 {
                 for id in grid[GridKey(x: base.x + dx, y: base.y + dy)] ?? [] {
-                    guard let p = positions[id], let node = model.node(id) else { continue }
-                    let radius = Self.nodeDiameter(inLinks: node.inLinks) / 2 + 2  // layout, +slop
+                    // The grid already holds only visible ids; the
+                    // membership check is belt-and-suspenders (finding 5).
+                    guard let p = positions[id], let node = model.node(id),
+                        visibleSet.contains(id)
+                    else { continue }
+                    let radius = scaledDiameter(inLinks: node.inLinks) / 2 + 2  // layout, +slop
                     let dist = hypot(p.x - lp.x, p.y - lp.y)
                     if dist <= radius, best == nil || dist < best!.dist { best = (id, dist) }
                 }
@@ -861,8 +1047,10 @@ final class GraphDiagramNSView: NSView {
     /// with the arrow direction (angle then distance, id tie-break).
     func spatialMove(dx: CGFloat, dy: CGFloat) {
         guard let model else { return }
+        // Navigation traverses only VISIBLE nodes — a filtered-out node is
+        // never a landing target (finding 5).
         guard let current = model.selection, let from = positions[current] else {
-            if let first = model.nodeIDs.first { select(first) }
+            if let first = visibleIDs.first { select(first) }
             return
         }
         let dir = CGVector(dx: dx, dy: dy)
@@ -873,17 +1061,19 @@ final class GraphDiagramNSView: NSView {
             return
         }
         if let best = bestInDirection(
-            from: from, dir: dir, candidates: model.nodeIDs.filter { $0 != current }, model: model)
+            from: from, dir: dir, candidates: visibleIDs.filter { $0 != current }, model: model)
         {
             select(best)
         }
     }
 
+    /// Graph neighbors of `id` that are currently VISIBLE — spatial nav's
+    /// neighbor-first step must not jump to a filtered-out node (finding 5).
     private func graphNeighbors(of id: UInt64, model: GraphDiagramModel) -> [UInt64] {
         var out: [UInt64] = []
         for edge in model.edges {
-            if edge.sourceId == id { out.append(edge.targetId) }
-            if edge.targetId == id { out.append(edge.sourceId) }
+            if edge.sourceId == id, visibleSet.contains(edge.targetId) { out.append(edge.targetId) }
+            if edge.targetId == id, visibleSet.contains(edge.sourceId) { out.append(edge.sourceId) }
         }
         return out
     }
@@ -910,11 +1100,12 @@ final class GraphDiagramNSView: NSView {
         return best?.id
     }
 
-    /// Tab/⇧Tab: next/previous node in KEY order (structural), wrapping.
+    /// Tab/⇧Tab: next/previous VISIBLE node in KEY order (structural),
+    /// wrapping — filtered-out nodes are skipped entirely (finding 5).
     func structuralMove(forward: Bool) {
-        guard let model, !model.nodeIDs.isEmpty else { return }
-        let ids = model.nodeIDs
-        guard let current = model.selection, let idx = ids.firstIndex(of: current) else {
+        guard model != nil, !visibleIDs.isEmpty else { return }
+        let ids = visibleIDs
+        guard let current = model?.selection, let idx = ids.firstIndex(of: current) else {
             select(forward ? ids.first! : ids.last!)
             return
         }
@@ -928,7 +1119,8 @@ final class GraphDiagramNSView: NSView {
         typeAheadStamp = now
         typeAheadBuffer += chars.lowercased()
         let prefix = typeAheadBuffer
-        if let match = model.nodeIDs.first(where: {
+        // Match within the VISIBLE set only (finding 5).
+        if let match = visibleIDs.first(where: {
             (model.node($0)?.label.lowercased().hasPrefix(prefix)) == true
         }) {
             select(match)
@@ -942,6 +1134,20 @@ final class GraphDiagramNSView: NSView {
         for (id, layer) in nodeLayers { out[id] = layer.frame }
         return out
     }
+
+    /// A materialized node's fill + ring dash pattern (group styling test).
+    func nodeStyleForTesting(nodeId: UInt64) -> (fill: CGColor?, dash: [NSNumber]?)? {
+        guard let layer = nodeLayers[nodeId] else { return nil }
+        return (layer.fillColor, layer.lineDashPattern)
+    }
+
+    /// A materialized node's ring width — grouped rings are thicker than
+    /// the ungrouped 1.5pt outline, the non-colour group channel (finding 7a).
+    func nodeLineWidthForTesting(nodeId: UInt64) -> CGFloat? { nodeLayers[nodeId]?.lineWidth }
+
+    /// The count of nodes the diagram currently RENDERS (Tier A materialized
+    /// dots) — i.e. the visible set after the name/kind filter (finding 5).
+    func visibleNodeCountForTesting() -> Int { visibleIDs.count }
 
     func axLabelsForTesting() -> [String] { axElements.compactMap { $0.accessibilityLabel() } }
 
@@ -985,7 +1191,9 @@ final class GraphDiagramNSView: NSView {
         _ = axElements[nodeIndex].accessibilityPerformPress()
     }
 
-    func isTierBForTesting() -> Bool { model?.isTierB ?? false }
+    /// The tier actually RENDERED (keyed off the visible count) — reflects
+    /// a name/kind filter dropping the graph below the threshold (finding 5).
+    func isTierBForTesting() -> Bool { lastTierB }
 
     func tickOnceForTesting() {
         guard let session = model?.session else { return }

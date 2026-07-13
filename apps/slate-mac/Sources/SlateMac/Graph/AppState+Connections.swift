@@ -153,6 +153,8 @@ extension AppState {
         guard clamped != connectionsDepth else { return }
         connectionsDepth = clamped
         loadConnections()
+        // The depth setting migrated into graph.json (P2-4 #560): persist.
+        scheduleGraphConfigSave()
     }
 
     func connectionsDeeper() { setConnectionsDepth(connectionsDepth + 1) }

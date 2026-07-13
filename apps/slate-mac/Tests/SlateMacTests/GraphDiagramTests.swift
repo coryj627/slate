@@ -381,6 +381,217 @@ final class GraphDiagramTests: XCTestCase {
             view.nodeFramesForTesting(), before, "a matching-generation frame is applied")
     }
 
+    // MARK: P2-4 — filters / display / groups / forces
+
+    func testNameFilterHidesNonMatchingNodesInDiagram() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphTableTextFilter = "a"  // only the note "a" matches
+        view.tickOnceForTesting()
+        let visible = Set(view.nodeFramesForTesting().keys)
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let aID = snapshot.nodes.first { $0.label == "a" }!.id
+        XCTAssertEqual(visible, [aID], "only the name-matching node is materialized")
+    }
+
+    func testFilterEquivalenceTableAndDiagramShareOnePredicate() throws {
+        let session = try makeSession()
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let needle = "c"
+        // Table's visible set (its filteredRows use the same static).
+        let tableVisible = Set(
+            snapshot.nodes.filter { AppState.graphNameMatches($0.label, needle: needle) }.map(\.id))
+        // Diagram's visible set (the renderer applies the same static).
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphTableTextFilter = needle
+        view.tickOnceForTesting()
+        XCTAssertEqual(
+            Set(view.nodeFramesForTesting().keys), tableVisible,
+            "one name predicate ⇒ one node set across projections")
+    }
+
+    func testNodeSizeMultiplierScalesTheDrawnDiameter() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        view.tickOnceForTesting()
+        let id = model.nodeIDs.first!
+        let base = try XCTUnwrap(view.nodeFramesForTesting()[id]).width
+        state.graphConfig.display.nodeSizeMultiplier = 2.0
+        view.tickOnceForTesting()
+        let scaled = try XCTUnwrap(view.nodeFramesForTesting()[id]).width
+        XCTAssertEqual(scaled, base * 2, accuracy: 0.01)
+    }
+
+    func testGroupColoursMatchingNodesWithADistinctRing() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphConfig.groups = [
+            GraphGroup(query: "a", colorToken: .green, ringStyle: .dashed)
+        ]
+        view.tickOnceForTesting()
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let aID = snapshot.nodes.first { $0.label == "a" }!.id
+        let style = try XCTUnwrap(view.nodeStyleForTesting(nodeId: aID))
+        XCTAssertEqual(style.fill, GraphColorToken.green.color.cgColor, "group colour applied")
+        XCTAssertEqual(style.dash, GraphRingStyle.dashed.dashPattern, "group ring style applied")
+        // A non-matching node keeps the default (no dashed group ring).
+        let dID = snapshot.nodes.first { $0.label == "d" }!.id
+        XCTAssertNotEqual(
+            view.nodeStyleForTesting(nodeId: dID)?.fill, GraphColorToken.green.color.cgColor)
+    }
+
+    func testGroupedNodeRingIsThickerThanUngroupedEvenWhenSolid() throws {
+        // A SOLID-ring group must still be distinguishable from an
+        // ungrouped node WITHOUT relying on colour — the ring is heavier
+        // (review finding 7a, WCAG 1.4.1). This is the case the reviewer
+        // flagged: solid dash == ungrouped dash, so width must differ.
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        state.graphConfig.groups = [
+            GraphGroup(query: "a", colorToken: .green, ringStyle: .solid)
+        ]
+        view.tickOnceForTesting()
+        let snap = try session.graphSnapshot(filter: filter)
+        let aID = snap.nodes.first { $0.label == "a" }!.id
+        let dID = snap.nodes.first { $0.label == "d" }!.id
+        let grouped = try XCTUnwrap(view.nodeLineWidthForTesting(nodeId: aID))
+        let ungrouped = try XCTUnwrap(view.nodeLineWidthForTesting(nodeId: dID))
+        XCTAssertGreaterThan(
+            grouped, ungrouped, "a solid-ring group reads without colour via a heavier ring")
+    }
+
+    func testNameFilterCollapsesTierBToTheVisibleSet() throws {
+        // A name filter that drops a Tier-B graph below the threshold must
+        // render Tier A over exactly the matching nodes — the tier
+        // decision, the count, and the AX tree all key off the VISIBLE set
+        // (review finding 5), not the raw 1,501-node topology.
+        let session = try makeSession()
+        let base = try makeModel(session)
+        let n = GraphDiagramModel.tierBThreshold + 1  // 1,501
+        var ids: [UInt64] = []
+        var byID: [UInt64: GraphNode] = [:]
+        var positions: [UInt64: CGPoint] = [:]
+        for i in 1...n {
+            let id = UInt64(i)
+            ids.append(id)
+            let label = i <= 3 ? "keep\(i)" : "n\(i)"
+            byID[id] = GraphNode(
+                id: id, path: "n\(id).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
+                inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true, pagerank: 0, modifiedMs: nil)
+            positions[id] = CGPoint(x: Double(i), y: Double(i))
+        }
+        let big = GraphDiagramModel(
+            session: base.session, filter: filter, nodeIDs: ids, nodesByID: byID, edges: [],
+            generation: 1)
+        let (state, view) = makeView(big)
+        view.injectPositionsForTesting(positions)
+        XCTAssertTrue(view.isTierBForTesting(), "1,501 unfiltered ⇒ Tier B")
+
+        state.graphTableTextFilter = "keep"
+        view.injectPositionsForTesting(positions)  // drive a deterministic rebuild
+        XCTAssertFalse(view.isTierBForTesting(), "3 visible ⇒ Tier A")
+        XCTAssertEqual(view.visibleNodeCountForTesting(), 3)
+        XCTAssertEqual(
+            view.axChildCountForTesting(), 3, "per-node AX for the 3 visible, not a summary element")
+    }
+
+    func testDiagramHonoursThePresetKindFilterLikeTheTable() throws {
+        // The Unresolved preset sets `graphTableKindFilter = .ghost`; the
+        // Diagram must apply it too, so both projections show one node set
+        // (review finding 5). A note linking a missing target yields one
+        // note + one ghost.
+        let vault = tempDir.appendingPathComponent("kind-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# A\n[[Missing Target]]\n".write(
+            to: vault.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let session = try VaultSession.openFilesystem(rootPath: vault.path)
+        try session.scanInitial(cancel: CancelToken())
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        view.tickOnceForTesting()
+        let ghosts = Set(model.nodesByID.values.filter { $0.kind == .ghost }.map(\.id))
+        XCTAssertFalse(ghosts.isEmpty, "fixture has an unresolved target")
+        XCTAssertGreaterThan(view.nodeFramesForTesting().count, ghosts.count, "notes shown too")
+
+        state.graphTableKindFilter = .ghost
+        view.tickOnceForTesting()  // rebuild
+        XCTAssertEqual(
+            Set(view.nodeFramesForTesting().keys), ghosts,
+            "with the .ghost kind filter the Diagram shows exactly the ghosts, as the Table would")
+    }
+
+    func testNeighborContentExcludesFilteredOutNodes() throws {
+        // a links b and c; a name filter hides b. Node a's AX "Connects to"
+        // custom content must list only the VISIBLE neighbor (c), matching
+        // the drawn edges (review finding 5 — the AX path was unfiltered).
+        let session = try makeSession()
+        let base = try makeModel(session)
+        func node(_ id: UInt64, _ label: String) -> GraphNode {
+            GraphNode(
+                id: id, path: "\(label).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
+                inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: false, pagerank: 0,
+                modifiedMs: nil)
+        }
+        let ids: [UInt64] = [1, 2, 3]
+        let byID: [UInt64: GraphNode] = [
+            1: node(1, "keep-a"), 2: node(2, "hide-b"), 3: node(3, "keep-c"),
+        ]
+        let edges = [
+            GraphEdge(sourceId: 1, targetId: 2, kind: .link, count: 1),
+            GraphEdge(sourceId: 1, targetId: 3, kind: .link, count: 1),
+        ]
+        let model = GraphDiagramModel(
+            session: base.session, filter: filter, nodeIDs: ids, nodesByID: byID, edges: edges,
+            generation: 1)
+        let (state, view) = makeView(model)
+        state.graphTableTextFilter = "keep"
+        view.injectPositionsForTesting([
+            1: CGPoint(x: 0, y: 0), 2: CGPoint(x: 10, y: 0), 3: CGPoint(x: 0, y: 10),
+        ])
+        // "keep-a" is the first visible element (id order).
+        let content = try XCTUnwrap(view.axNeighborContentForTesting(nodeIndex: 0))
+        XCTAssertTrue(content.contains("keep-c"), "visible neighbor is listed")
+        XCTAssertFalse(content.contains("hide-b"), "a filtered-out neighbor is NOT listed")
+    }
+
+    func testSettleAnnouncementNotArmedWithoutADiagramAndClearedOnTeardown() throws {
+        // The settled-state announcement must arm ONLY with a live diagram
+        // and never survive teardown, or a later initial build would
+        // spuriously say "settled" (review finding 8).
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)  // sets graphDiagramModel
+        state.setGraphForces(
+            GraphForcesConfig(center: 0.1, repel: 0.9, link: 0.2, linkDistance: 0.8))
+        XCTAssertTrue(state.graphForcesSettlePending, "a live diagram arms the settled announcement")
+
+        state.resetGraphDiagramState()
+        XCTAssertFalse(state.graphForcesSettlePending, "teardown clears the pending flag")
+
+        state.setGraphForces(
+            GraphForcesConfig(center: 0.3, repel: 0.3, link: 0.3, linkDistance: 0.3))
+        XCTAssertFalse(
+            state.graphForcesSettlePending, "no live diagram ⇒ nothing to settle, nothing armed")
+    }
+
+    func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)
+        state.setGraphForces(
+            GraphForcesConfig(center: 0.1, repel: 0.9, link: 0.2, linkDistance: 0.8))
+        XCTAssertEqual(state.graphConfig.forces.repel, 0.9)
+        // set_forces reached the session (re-heat); a subsequent tick still
+        // produces a finite layout under the new forces.
+        let frame = model.session.tick(iterations: 5)
+        XCTAssertTrue(frame.positions.allSatisfy { $0.isFinite })
+    }
+
     // MARK: APCA contrast (both appearances)
 
     func testDiagramColorsMeetAPCAInBothAppearances() {

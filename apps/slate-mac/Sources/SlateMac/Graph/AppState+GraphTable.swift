@@ -70,6 +70,20 @@ extension AppState {
         clearActiveNoteFields()
         workspace.select(id)
         clearTransitionSensitiveCollections()
+        // Load the persisted graph config OBJECT (safety net — the eager
+        // vault-open load normally already did this), then restore the
+        // persisted backend + name filter (and clear any transient preset
+        // kind filter) into the live Table state BEFORE the fetch — but
+        // ONLY on a FRESH open (no cached snapshot), never a preset
+        // activation. This is the fix for the once-per-vault load that left
+        // the saved filter unrestored on close→reopen (P2-4 #560, review
+        // finding 4), while still PRESERVING the view when merely switching
+        // back to an already-loaded graph tab (`graphTableSnapshot != nil`)
+        // — the "re-activating preserves, fresh open resets" contract.
+        ensureGraphConfigLoaded()
+        if graphTablePendingPreset == nil, graphTableSnapshot == nil {
+            applyPersistedGraphFilter()
+        }
         loadGraphTable()
     }
 
@@ -221,6 +235,10 @@ extension AppState {
         guard filter != graphTableFilter else { return }
         graphTableFilter = filter
         loadGraphTable(announce: .filterCount)
+        // Persist the backend filter to graph.json (P2-4 #560). The
+        // diagram rebuild on a filter change is driven by the container's
+        // `onChange(of: graphTableFilter)`, so it's not repeated here.
+        scheduleGraphConfigSave()
     }
 
     // MARK: - Presets (P1-3 #556)
