@@ -112,6 +112,9 @@ extension AppState {
         graphTableTextFilter = ""
         graphTableKindFilter = nil
         graphTablePendingPreset = nil
+        // Drop the shared cross-projection selection (P2-5 #561) so a key
+        // from the closing vault / prior graph tab can't bleed into the next.
+        graphSelectedNodeKey = nil
         graphTableFilter = GraphFilter(
             includeAttachments: false, includeGhosts: true, orphansOnly: false)
         graphTableSeenGraphGeneration = 0
@@ -171,6 +174,11 @@ extension AppState {
                 self.graphTableSnapshot = snap
                 self.graphTableError = nil
                 self.graphTableSeenGraphGeneration = snap.generation
+                // Drop a shared selection whose node is gone from the fresh
+                // snapshot — at the PUBLISH point, so it fires even while the
+                // Table view isn't mounted (e.g. a delete during Diagram
+                // mode; P2-5 review finding 4).
+                self.revalidateGraphSelection(against: snap)
                 // A pending preset consumes THIS load's fresh snapshot for
                 // its headline; clear it unconditionally so a later refresh
                 // can't replay a stale preset announcement (P1-3 #556).
@@ -217,6 +225,19 @@ extension AppState {
                 $0.label.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
             }.count
         return "\(shown) of \(total) shown"
+    }
+
+    /// Drop the shared cross-projection selection if the node it names is
+    /// no longer in `snap` — deleted, or dropped by a backend-filter change
+    /// (P2-5 review finding 4). Keyed by the stable `GraphNodeKey`, so it's
+    /// robust across id-reassigning generation bumps. Called at the snapshot
+    /// publish point (view-independent) AND from the Table's generation
+    /// `onChange`, so a churn during Diagram mode doesn't strand a stale key.
+    func revalidateGraphSelection(against snap: GraphSnapshot) {
+        guard let key = graphSelectedNodeKey else { return }
+        if !snap.nodes.contains(where: { GraphNodeKey.make(for: $0) == key }) {
+            graphSelectedNodeKey = nil
+        }
     }
 
     /// Change the backend filter (Attachments / Unresolved / Orphans)

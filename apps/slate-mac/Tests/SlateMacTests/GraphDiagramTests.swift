@@ -579,6 +579,89 @@ final class GraphDiagramTests: XCTestCase {
             state.graphForcesSettlePending, "no live diagram ⇒ nothing to settle, nothing armed")
     }
 
+    // MARK: Projection sync (P2-5 #561)
+
+    func testDiagramNodeActionsMatchTheCanonicalSetPlusPin() throws {
+        // The Diagram's per-node VoiceOver actions must be exactly the
+        // shared canonical set (+ diagram-only Pin), so the three
+        // projections don't drift (DoD §P-B parity). A note linking a
+        // missing target gives one note + one ghost.
+        let vault = tempDir.appendingPathComponent("actions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# A\n[[Missing Target]]\n".write(
+            to: vault.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let session = try VaultSession.openFilesystem(rootPath: vault.path)
+        try session.scanInitial(cancel: CancelToken())
+        let model = try makeModel(session)
+        let (_, view) = makeView(model)
+        view.tickOnceForTesting()
+        let note = try XCTUnwrap(model.nodesByID.values.first { $0.kind == .note })
+        let ghost = try XCTUnwrap(model.nodesByID.values.first { $0.kind == .ghost })
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: note.id),
+            GraphRowAction.actions(forGhost: false).map(\.title) + ["Pin"],
+            "a real note exposes the four canonical nav actions + Pin")
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: ghost.id),
+            GraphRowAction.actions(forGhost: true).map(\.title) + ["Pin"],
+            "a ghost exposes Create note + Pin")
+    }
+
+    func testDiagramSelectionMirrorsToTheSharedKey() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)
+        let snap = try session.graphSnapshot(filter: filter)
+        let aNode = snap.nodes.first { $0.label == "a" }!
+        state.graphDiagramSelect(aNode.id)
+        XCTAssertEqual(model.selection, aNode.id)
+        XCTAssertEqual(
+            state.graphSelectedNodeKey, GraphNodeKey.make(for: aNode),
+            "selecting in the Diagram writes the shared cross-projection key")
+    }
+
+    func testSharedKeySeedsTheDiagramSelectionAndMissesGracefully() throws {
+        // The mapping used to seed the Diagram's selection on a Table→
+        // Diagram switch: a shared key present in the diagram maps to its
+        // id; an absent key maps to nil (no crash, no stale selection).
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)  // sets graphDiagramModel
+        let snap = try session.graphSnapshot(filter: filter)
+        let cNode = snap.nodes.first { $0.label == "c" }!
+        state.graphSelectedNodeKey = GraphNodeKey.make(for: cNode)
+        XCTAssertEqual(state.graphDiagramIDForSharedSelection(), cNode.id)
+        state.graphSelectedNodeKey = "p:/does-not-exist.md"
+        XCTAssertNil(state.graphDiagramIDForSharedSelection())
+        state.graphSelectedNodeKey = nil
+        XCTAssertNil(state.graphDiagramIDForSharedSelection())
+    }
+
+    func testGenerationRefreshRemapsSelectionByStableKey() throws {
+        // A generation churn can reassign a node a NEW numeric id; the
+        // selection must follow the node by its STABLE key, not stick to the
+        // old id (which could now name a different node) — P2-5 review
+        // finding 1. This exercises the remap `refreshGraphDiagramIfGraph-
+        // Changed` applies after `adopt`.
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let snap = try session.graphSnapshot(filter: filter)
+        let a = snap.nodes.first { $0.label == "a" }!
+        let key = GraphNodeKey.make(for: a)
+        let newID = a.id &+ 1000
+        let aReassigned = GraphNode(
+            id: newID, path: a.path, label: a.label, kind: a.kind, inLinks: a.inLinks,
+            outLinks: a.outLinks, inEmbeds: a.inEmbeds, outEmbeds: a.outEmbeds,
+            component: a.component, isOrphan: a.isOrphan, pagerank: a.pagerank,
+            modifiedMs: a.modifiedMs)
+        model.adopt(
+            nodeIDs: [newID], nodesByID: [newID: aReassigned], edges: [],
+            generation: model.generation + 1)
+        XCTAssertEqual(
+            AppState.graphDiagramNodeID(forKey: key, ids: model.nodeIDs, byID: model.nodesByID),
+            newID, "the stable key follows the node to its reassigned id")
+    }
+
     func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
         let session = try makeSession()
         let model = try makeModel(session)

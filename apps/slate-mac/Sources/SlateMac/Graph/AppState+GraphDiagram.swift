@@ -74,9 +74,16 @@ extension AppState {
                 for node in nodes { byID[node.id] = node }
                 // `generation` is the LAYOUT's (what tick frames carry), so
                 // the renderer's frame-generation guard lines up.
-                self.graphDiagramModel = GraphDiagramModel(
+                let model = GraphDiagramModel(
                     session: layout, filter: filter, nodeIDs: ids,
                     nodesByID: byID, edges: edges, generation: gen)
+                // Seed the diagram's selection from the SHARED key (P2-5
+                // #561) so a Table→Diagram switch lands on the same node
+                // (the ring brings it into view). Keyed stably; a shared
+                // selection the diagram's filter hides simply seeds nothing.
+                model.selection = Self.graphDiagramNodeID(
+                    forKey: self.graphSelectedNodeKey, ids: ids, byID: byID)
+                self.graphDiagramModel = model
             case .failure(let error):
                 self.graphDiagramError = self.humanReadable(error)
                 self.graphDiagramModel = nil
@@ -147,6 +154,15 @@ extension AppState {
             for node in synced.2 { byID[node.id] = node }
             model.adopt(
                 nodeIDs: synced.0, nodesByID: byID, edges: synced.1, generation: synced.3)
+            // Remap the selection by its STABLE key against the refreshed
+            // topology (P2-5 review finding 1): a generation churn can
+            // reassign the old numeric id to a DIFFERENT node, so keeping
+            // `model.selection`'s raw UInt64 (as `adopt` does) would move the
+            // ring — and Return — to the wrong node, or drop a node that
+            // actually survived under a new id. The shared `GraphNodeKey` is
+            // the source of truth.
+            model.selection = Self.graphDiagramNodeID(
+                forKey: self.graphSelectedNodeKey, ids: synced.0, byID: byID)
         }
     }
 
@@ -171,9 +187,36 @@ extension AppState {
         guard let model = graphDiagramModel else { return }
         guard model.selection != id else { return }
         model.selection = id
+        // Mirror into the SHARED cross-projection selection (P2-5 #561) so
+        // the Table lands on the same row on a Diagram→Table switch. Keyed by
+        // the stable `GraphNodeKey`, never the volatile layout id.
+        if let node = model.node(id) {
+            graphSelectedNodeKey = GraphNodeKey.make(for: node)
+        }
         if announce, let ref = model.rowRef(id) {
             graphAnnouncer.announce(.rowFocused(ref))
         }
+    }
+
+    /// The layout id of the node whose stable `GraphNodeKey` equals `key`,
+    /// among `ids`/`byID` — the ONE mapping that both the build-time seeding
+    /// and the live lookup use, so they can't drift (P2-5 #561). Pure +
+    /// `nonisolated` for unit testing.
+    nonisolated static func graphDiagramNodeID(
+        forKey key: String?, ids: [UInt64], byID: [UInt64: GraphNode]
+    ) -> UInt64? {
+        guard let key else { return nil }
+        return ids.first { id in byID[id].map { GraphNodeKey.make(for: $0) == key } ?? false }
+    }
+
+    /// The layout id of the node matching the shared `graphSelectedNodeKey`
+    /// in the current diagram, if present (a Table selection may be a node
+    /// the diagram's filter hides, or a ghost). Used to seed the Diagram's
+    /// selection on a Table→Diagram switch (P2-5 #561).
+    func graphDiagramIDForSharedSelection() -> UInt64? {
+        guard let model = graphDiagramModel else { return nil }
+        return Self.graphDiagramNodeID(
+            forKey: graphSelectedNodeKey, ids: model.nodeIDs, byID: model.nodesByID)
     }
 
     /// Toggle a node's pin at the layout-space position `(x, y)` it

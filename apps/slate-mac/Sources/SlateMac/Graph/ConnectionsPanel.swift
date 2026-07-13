@@ -229,13 +229,26 @@ struct ConnectionsPanel: View {
 
     @ViewBuilder
     private func rowMenu(_ row: ConnectionRow) -> some View {
-        if row.isGhost {
-            Button("Create note") { appState.createNoteFromGhost(targetRaw: row.targetRaw) }
-        } else if let path = row.path {
-            Button("Open") { appState.openFile(path, target: .currentTab) }
-            Button("Open in New Tab") { appState.openFile(path, target: .newTab) }
-            Button("Show connections") { appState.reRootConnections(on: path) }
-            Button("Reveal in File Tree") { appState.revealInFileTree(path) }
+        // Built from the CANONICAL `GraphRowAction` set shared by every
+        // projection (P2-5 #561, DoD §P-B parity) — same labels, same
+        // order, same ghost/real availability as the Table and Diagram.
+        ForEach(GraphRowAction.actions(forGhost: row.isGhost), id: \.self) { action in
+            Button(action.title) { performRowAction(action, row: row) }
+        }
+    }
+
+    private func performRowAction(_ action: GraphRowAction, row: ConnectionRow) {
+        switch action {
+        case .open:
+            if let p = row.path { appState.openFile(p, target: .currentTab) }
+        case .openInNewTab:
+            if let p = row.path { appState.openFile(p, target: .newTab) }
+        case .showConnections:
+            if let p = row.path { appState.reRootConnections(on: p) }
+        case .reveal:
+            if let p = row.path { appState.revealInFileTree(p) }
+        case .createNote:
+            appState.createNoteFromGhost(targetRaw: row.targetRaw)
         }
     }
 

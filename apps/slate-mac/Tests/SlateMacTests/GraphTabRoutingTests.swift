@@ -320,6 +320,54 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertTrue(state.graphConfig.filters.includeAttachments)
     }
 
+    /// Re-rooting the Connections leaf writes the SHARED cross-projection
+    /// selection key (P2-5 #561), so the Table/Diagram reflect that node.
+    /// Closing the graph tab clears it (no bleed into the next vault/tab).
+    func testReRootConnectionsWritesSharedSelectionAndCloseClearsIt() async throws {
+        let state = try await makeAppState()
+        state.reRootConnections(on: "a.md")
+        XCTAssertEqual(
+            state.graphSelectedNodeKey, "p:a.md", "re-root writes the shared 'p:' key")
+
+        state.openGraphTab()
+        try await pollUntil { state.graphTableSnapshot != nil }
+        let graphID = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.requestCloseTab(graphID)
+        XCTAssertNil(state.graphSelectedNodeKey, "closing the graph tab clears the shared selection")
+    }
+
+    /// The shared selection is revalidated at the snapshot PUBLISH point
+    /// (view-independent), so a node that vanishes while Diagram mode is
+    /// active doesn't strand a stale key (P2-5 review finding 4).
+    func testSharedSelectionRevalidatesAgainstSnapshot() async throws {
+        let state = try await makeAppState()
+        state.openGraphTab()
+        try await pollUntil { state.graphTableSnapshot != nil }
+        let snap = try XCTUnwrap(state.graphTableSnapshot)
+        let real = try XCTUnwrap(snap.nodes.first { $0.path != nil })
+        state.graphSelectedNodeKey = GraphNodeKey.make(for: real)
+        state.revalidateGraphSelection(against: snap)
+        XCTAssertEqual(
+            state.graphSelectedNodeKey, GraphNodeKey.make(for: real),
+            "a node present in the snapshot keeps its selection")
+        state.graphSelectedNodeKey = "p:/vanished-note.md"
+        state.revalidateGraphSelection(against: snap)
+        XCTAssertNil(state.graphSelectedNodeKey, "a node absent from the snapshot is deselected")
+    }
+
+    /// Connections back-navigation moves the shared selection to the
+    /// RESTORED node, so the Table/Diagram follow the leaf back rather than
+    /// lingering on the forward destination (P2-5 review finding 5).
+    func testConnectionsBackWritesSharedSelection() async throws {
+        let state = try await makeAppState()  // vault: a.md ↔ b.md
+        state.reRootConnections(on: "a.md")
+        state.reRootConnections(on: "b.md")
+        XCTAssertEqual(state.graphSelectedNodeKey, "p:b.md")
+        XCTAssertTrue(state.connectionsBack())
+        XCTAssertEqual(
+            state.graphSelectedNodeKey, "p:a.md", "back moves the shared selection to the prior node")
+    }
+
     /// A generation-refresh probe that resumes after its graph-table
     /// lifecycle moved on must not reload — covers both "closed and stayed
     /// closed" and the "close → quick preset reopen" zombie that a bare
