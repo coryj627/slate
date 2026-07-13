@@ -104,6 +104,10 @@ enum SlateCommandID {
     static let graphZoomOut = "slate.graph.zoomOut"
     static let graphActualSize = "slate.graph.actualSize"
     static let graphFitGraph = "slate.graph.fitGraph"
+    /// Diagram "Where am I?" (⌃⌘I) — a palette mirror of the focus-routed
+    /// chord (R2), same pattern as the graph zoom commands. The chord is
+    /// owned by the one routed "Where Am I?" menu item.
+    static let graphWhereAmI = "slate.graph.whereAmI"
 
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
@@ -302,6 +306,7 @@ enum SlateCommandID {
         graphZoomOut,
         graphActualSize,
         graphFitGraph,
+        graphWhereAmI,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1365,6 +1370,14 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hotkey: "⌥⌘0",
         hint: "Zoom so every node is visible. Option-Command-0 on the diagram."
     ) { [weak appState] in appState?.graphDiagramFit() }
+
+    register(
+        SlateCommandID.graphWhereAmI,
+        label: "Graph: Where Am I?",
+        section: .graph,
+        hotkey: "⌃⌘I",
+        hint: "Read the selected node's row copy, its component, the zoom level, and the active filters."
+    ) { [weak appState] in appState?.graphDiagramWhereAmI() }
 
     // ----- Workspace tabs (U1-2, #454) -----
 

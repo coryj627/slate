@@ -238,9 +238,19 @@ extension AppState {
 
     /// The ⌃⌘I "Where am I?" readback for the diagram (spec §P2-3): the
     /// selected node's row copy, its component, the zoom level, and the
-    /// active backend filters — assembled once and spoken assertively.
+    /// active filters — backend AND the client-side name query / preset kind
+    /// filter (review) — assembled once and spoken assertively.
     func graphDiagramWhereAmI() {
-        guard let model = graphDiagramModel else { return }
+        guard let text = graphDiagramWhereAmIText() else { return }
+        graphAnnouncer.announce(.summary(text))
+    }
+
+    /// The assembled ⌃⌘I readback string — the selected node's row copy, its
+    /// component, the zoom, and the active filters (backend AND the
+    /// client-side name query / Unresolved-preset kind, which the backend
+    /// phrase omits — review finding). Pure + testable; nil when no diagram.
+    func graphDiagramWhereAmIText() -> String? {
+        guard let model = graphDiagramModel else { return nil }
         var parts: [String] = []
         if let sel = model.selection, let node = model.node(sel), let ref = model.rowRef(sel) {
             parts.append(graphAnnouncer.rowPhrase(ref))
@@ -250,7 +260,10 @@ extension AppState {
         }
         parts.append("zoom \(model.viewport.zoomPercent) percent")
         parts.append(graphDiagramFilterPhrase(model.filter))
-        graphAnnouncer.announce(.summary(parts.joined(separator: ", ") + "."))
+        let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
+        if !needle.isEmpty { parts.append("name filter \u{201C}\(needle)\u{201D}") }
+        if graphTableKindFilter == .ghost { parts.append("unresolved only") }
+        return parts.joined(separator: ", ") + "."
     }
 
     // MARK: Zoom router (join the #848 focus-routed menu owner)
@@ -295,6 +308,31 @@ extension AppState {
         case .canvas: canvasActualSize()
         case .graph: graphDiagramActualSize()
         case .editor: editorActualSize()
+        }
+    }
+
+    /// The single owner of the ⌃⌘I "Where am I?" routing decision — the same
+    /// focus-routed pattern as the zoom chords. WITHOUT this, the always-
+    /// enabled "Where Am I?" menu key-equivalent swallowed ⌃⌘I and only ever
+    /// ran the canvas readback (a no-op off a canvas tab), so the graph
+    /// diagram's readback was unreachable by keyboard. Priority mirrors
+    /// `zoomRouteTarget` (canvas → graph), extended with bases; there is no
+    /// editor "Where am I?", so a non-surface context is a no-op. Extracted
+    /// so the priority is unit-testable and the one menu item routes.
+    enum WhereAmIRouteTarget { case canvas, graph, bases, none }
+    var whereAmIRouteTarget: WhereAmIRouteTarget {
+        if activeCanvasDocument != nil { return .canvas }
+        if graphDiagramZoomActive { return .graph }
+        if activeBaseDocument != nil { return .bases }
+        return .none
+    }
+
+    func routedWhereAmI() {
+        switch whereAmIRouteTarget {
+        case .canvas: canvasWhereAmI()
+        case .graph: graphDiagramWhereAmI()
+        case .bases: _ = basesWhereAmI()
+        case .none: break
         }
     }
 
