@@ -106,6 +106,25 @@ pub struct WarmReport {
     pub awake: usize,
 }
 
+/// The FFI-facing topology of a live layout (P2-2 #558): the backend
+/// node id for each position slot (in `keys()` / `positions()` order)
+/// plus the id-keyed collapsed edges, tagged with the graph
+/// `generation` those ids belong to. A generation change may reassign
+/// ids, so the FFI re-derives this whenever [`LayoutEngine::warm_update`]
+/// runs and carries `generation` on every frame so stale buffers are
+/// detectable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayoutTopology {
+    /// Backend id (the `filtered_nodes` id space) per position slot;
+    /// `ids[i]` names `positions()[i]`.
+    pub ids: Vec<u64>,
+    /// Collapsed edges among `ids`, in the deterministic
+    /// `(source key, target key, kind)` order P0-3 snapshots use.
+    pub edges: Vec<crate::graph::GraphEdge>,
+    /// The graph generation `ids` were derived against.
+    pub generation: u64,
+}
+
 /// Which repulsion solver the force pass uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutTier {
@@ -654,6 +673,42 @@ impl LayoutEngine {
             seeded,
             awake: awake_count,
         }
+    }
+}
+
+/// Derive the FFI [`LayoutTopology`] of `engine` against `graph` — the
+/// graph the engine was last projected from (P2-2 #558). Every engine
+/// key is a live node of that graph (the engine only ever projects from
+/// `filtered_nodes`), so each maps to a backend id; edges come from
+/// [`GraphIndex::edges_among`] over the surviving ids, preserving the
+/// deterministic `(source key, target key, kind)` order.
+pub fn layout_topology(engine: &LayoutEngine, graph: &GraphIndex) -> LayoutTopology {
+    let ids: Vec<u64> = engine
+        .keys()
+        .iter()
+        .map(|key| {
+            graph
+                .id_of(key)
+                .expect("engine key is a live node of the projected graph")
+        })
+        .collect();
+    let surviving: std::collections::HashSet<u64> = ids.iter().copied().collect();
+    let edges = graph
+        .edges_among(&surviving)
+        .into_iter()
+        .map(
+            |(source_id, target_id, kind, count)| crate::graph::GraphEdge {
+                source_id,
+                target_id,
+                kind,
+                count,
+            },
+        )
+        .collect();
+    LayoutTopology {
+        ids,
+        edges,
+        generation: graph.generation(),
     }
 }
 

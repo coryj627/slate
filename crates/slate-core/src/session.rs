@@ -1467,6 +1467,66 @@ impl VaultSession {
         })
     }
 
+    /// Snapshot the current graph under `filter` and seed a cold
+    /// force-layout (P2-2 #558). Returns the fresh [`LayoutEngine`]
+    /// (state stays pointer-side; the FFI keeps it behind a mutex) plus
+    /// its id/edge topology tagged with the graph generation. Builds the
+    /// index on first use. LOCK ORDER: conn → graph (→ never metrics
+    /// here; the engine computes its own).
+    pub fn start_layout(
+        &self,
+        filter: crate::graph::GraphFilter,
+        forces: crate::graph_layout::LayoutForces,
+        config: crate::graph_layout::LayoutConfig,
+    ) -> Result<
+        (
+            crate::graph_layout::LayoutEngine,
+            crate::graph_layout::LayoutTopology,
+        ),
+        VaultError,
+    > {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        self.graph_ensure_built(&conn, &mut guard)?;
+        let index = guard.as_ref().expect("graph index just ensured");
+        let engine = crate::graph_layout::LayoutEngine::new(index, &filter, forces, config);
+        let topology = crate::graph_layout::layout_topology(&engine, index);
+        Ok((engine, topology))
+    }
+
+    /// Re-sync `engine` with the live graph iff its generation moved
+    /// past `last_generation` (P2-2 #558). Returns the refreshed
+    /// topology + [`WarmReport`], or `None` when the generation is
+    /// unchanged — a cheap no-op probe taken under the same lock, so the
+    /// decision is atomic (no build/mutation can interleave between the
+    /// probe and the `warm_update`). A defensive rebuild seats a fresh
+    /// generation above the floor, so a dropped-and-rebuilt index reads
+    /// as "changed" and re-syncs rather than silently reusing stale ids.
+    /// LOCK ORDER: conn → graph.
+    pub fn refresh_layout(
+        &self,
+        engine: &mut crate::graph_layout::LayoutEngine,
+        filter: crate::graph::GraphFilter,
+        last_generation: u64,
+    ) -> Result<
+        Option<(
+            crate::graph_layout::LayoutTopology,
+            crate::graph_layout::WarmReport,
+        )>,
+        VaultError,
+    > {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        self.graph_ensure_built(&conn, &mut guard)?;
+        let index = guard.as_ref().expect("graph index just ensured");
+        if index.generation() == last_generation {
+            return Ok(None);
+        }
+        let warm = engine.warm_update(index, &filter);
+        let topology = crate::graph_layout::layout_topology(engine, index);
+        Ok(Some((topology, warm)))
+    }
+
     /// Open or create a vault session against the given provider.
     ///
     /// Creates `config.cache_dir` if missing, opens/creates the SQLite
