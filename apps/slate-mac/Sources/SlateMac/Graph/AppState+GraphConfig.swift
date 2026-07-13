@@ -90,18 +90,22 @@ extension AppState {
         // same-vault task lingers (finding 3). The write itself is
         // serialized by `GraphConfigWriter`.
         graphConfigSaveTasks[root]?.cancel()
+        // Strictly-increasing per-vault generation, NEVER reset — the
+        // writer actor's monotonic gate depends on it (an older generation
+        // can never clobber a newer one even if the actor reorders the two
+        // queued writes; finding 3 round-3).
         let gen = (graphConfigSaveGen[root] ?? 0) + 1
         graphConfigSaveGen[root] = gen
         graphConfigSaveTasks[root] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            await GraphConfigWriter.shared.write(vault: root, config: snapshot)
-            // Clear our entry ONLY if a newer same-vault save hasn't
-            // replaced us (a task past its sleep can't be cancelled, so it
-            // must not drop its successor's entry).
+            await GraphConfigWriter.shared.write(vault: root, config: snapshot, generation: gen)
+            // Clear only the TASK entry, only if a newer same-vault save
+            // hasn't replaced us (a task past its sleep can't be cancelled,
+            // so it must not drop its successor's entry). `graphConfigSaveGen`
+            // stays monotonic — never removed.
             guard let self, self.graphConfigSaveGen[root] == gen else { return }
             self.graphConfigSaveTasks.removeValue(forKey: root)
-            self.graphConfigSaveGen.removeValue(forKey: root)
         }
     }
 

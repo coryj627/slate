@@ -110,6 +110,23 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertNil(AppState.forcesChangePhrase(old: base, new: base), "no change ⇒ nothing spoken")
     }
 
+    func testWriterDropsASupersededGeneration() async throws {
+        // The writer actor is monotonic per vault: a write with an OLDER
+        // generation is dropped even if it is delivered AFTER a newer one,
+        // so actor reordering can never let a stale snapshot win (review
+        // finding 3, round 3).
+        let writer = GraphConfigWriter()
+        var newer = GraphConfig.default
+        newer.mode = .diagram
+        var older = GraphConfig.default
+        older.mode = .table
+        await writer.write(vault: tempDir, config: newer, generation: 2)
+        await writer.write(vault: tempDir, config: older, generation: 1)  // superseded ⇒ dropped
+        XCTAssertEqual(
+            try GraphConfigStore(vaultRoot: tempDir).read().mode, .diagram,
+            "an older generation must not overwrite the newer one")
+    }
+
     func testClampsOutOfRangeValues() throws {
         let slate = tempDir.appendingPathComponent(".slate")
         try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)

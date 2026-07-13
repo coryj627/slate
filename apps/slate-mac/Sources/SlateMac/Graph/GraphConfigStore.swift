@@ -210,6 +210,13 @@ struct GraphConfigStore {
 /// read-merge-write atomic w.r.t. other writes in THIS process — a `write`
 /// runs to completion before the next queued one starts.
 ///
+/// MONOTONIC: each write carries a per-vault, strictly-increasing
+/// `generation`; the actor records the newest generation it has written
+/// per vault and DROPS any write whose generation is older. So even if the
+/// actor executor delivers two queued writes out of order, a stale snapshot
+/// can never clobber a newer one (finding 3 round-3 — the check must live
+/// in the actor, not after the write on the caller side).
+///
 /// SINGLE-INSTANCE scope: Slate's Mac app is single-instance, so this is
 /// the only writer of any vault's `graph.json`; cross-PROCESS contention
 /// (two app instances on one vault) is out of scope and not locked (unlike
@@ -220,7 +227,13 @@ struct GraphConfigStore {
 actor GraphConfigWriter {
     static let shared = GraphConfigWriter()
 
-    func write(vault: URL, config: GraphConfig) {
+    /// Newest generation actually written per vault (monotonic gate).
+    private var written: [URL: Int] = [:]
+
+    func write(vault: URL, config: GraphConfig, generation: Int) {
+        // Reject a superseded snapshot regardless of delivery order.
+        if let seen = written[vault], generation < seen { return }
+        written[vault] = generation
         try? GraphConfigStore(vaultRoot: vault).write(config)
     }
 }
