@@ -62,8 +62,12 @@ enum GraphNodeKey {
         // The backend keys ghosts on the raw UTF-8 bytes of the folded
         // target (no Unicode NFC), so percent-encode to keep byte-distinct
         // labels distinct while ASCII stays readable ("missing note" →
-        // "missing%20note").
-        let folded = label.lowercased()
+        // "missing%20note"). Fold with the INVARIANT (en_US_POSIX) locale,
+        // not bare `lowercased()`, so the key is byte-stable regardless of
+        // the user's system locale (e.g. Turkish "I"→"ı") — the Table and
+        // Diagram must derive the SAME key for the same label on every
+        // machine (Codoki review).
+        let folded = label.lowercased(with: Locale(identifier: "en_US_POSIX"))
         let encoded = folded.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? folded
         return "g:\(encoded)"
     }
