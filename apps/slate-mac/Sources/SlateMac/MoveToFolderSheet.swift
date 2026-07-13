@@ -20,10 +20,28 @@ struct MoveToFolderSheet: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
-    /// The node being moved (path + isDirectory). The sheet is only presented
-    /// when `appState.pendingMove` is non-nil; this is a copy so the body has a
-    /// stable value even if the published field clears mid-dismiss.
-    let move: AppState.PendingMove
+    /// The item(s) being moved (path + isDirectory). One element for the U2-5
+    /// single-node path, several for a #852 batch. A copy of the pending value
+    /// so the body stays stable even if the published field clears mid-dismiss.
+    private let items: [AppState.TreeSelection]
+    /// The noun phrase the title/hint speak — a single node's name, or "N items".
+    private let displayName: String
+
+    /// Single-node move (U2-5) — the sheet drives one `moveEntry`.
+    init(move: AppState.PendingMove) {
+        self.items = [AppState.TreeSelection(path: move.path, isDirectory: move.isDirectory)]
+        self.displayName = move.name
+    }
+
+    /// Batch move (#852) — the sheet drives `batchMove` over the whole
+    /// selection, offering only destinations legal for EVERY item.
+    init(batch: AppState.BatchMove) {
+        self.items = batch.items
+        self.displayName = batch.displayName
+    }
+
+    /// Whether this is a batch (≥2 items) — routes the commit + no-op skipping.
+    private var isBatch: Bool { items.count > 1 }
 
     @State private var query: String = ""
     /// All folder paths in the vault (loaded on appear). "" is not in here — the
@@ -92,7 +110,7 @@ struct MoveToFolderSheet: View {
 
     private var header: some View {
         HStack {
-            Text("Move \(move.name)")
+            Text("Move \(displayName)")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
@@ -113,7 +131,7 @@ struct MoveToFolderSheet: View {
                 .focused($searchFocused)
                 .accessibilityLabel("Search folders")
                 .accessibilityHint(
-                    "Arrow up and down to move selection. Return moves \(move.name) to the selected folder."
+                    "Arrow up and down to move selection. Return moves \(displayName) to the selected folder."
                 )
                 .onSubmit(commitSelected)
         }
@@ -248,9 +266,9 @@ struct MoveToFolderSheet: View {
         if q.isEmpty || "new folder".contains(q) {
             rows.append(.newFolder)
         }
-        let currentParent = AppState.TreeMutation.parentPath(of: move.path) ?? ""
-        // Vault root — unless the node already lives at root (no-op).
-        if currentParent != "", q.isEmpty || "vault root".contains(q) {
+        // Vault root — unless it's a no-op / illegal for the selection (#852:
+        // "" is offered only when at least one item can legally move there).
+        if isLegalTarget(""), q.isEmpty || "vault root".contains(q) {
             rows.append(.root)
         }
         for folder in allFolders where isLegalTarget(folder) {
@@ -261,15 +279,20 @@ struct MoveToFolderSheet: View {
         return rows
     }
 
-    /// Whether `folder` is a legal move destination for the node: not its
-    /// current parent (no-op), and — for a folder node — not itself or its own
-    /// subtree (the backend rejects those).
+    /// Whether `folder` is a legal move destination for the selection: not the
+    /// self/subtree of ANY selected folder (the backend rejects those), and not
+    /// a pure no-op — i.e. NOT the case where every selected item already lives
+    /// directly in `folder` (#852). For a single node this reduces exactly to
+    /// the U2-5 rule (not its current parent, not its own subtree).
     private func isLegalTarget(_ folder: String) -> Bool {
-        let currentParent = AppState.TreeMutation.parentPath(of: move.path) ?? ""
-        if folder == currentParent { return false }
-        if move.isDirectory {
-            if folder == move.path { return false }
-            if folder.hasPrefix(move.path + "/") { return false }
+        // Backend-illegal: dropping a folder into itself or its own subtree.
+        for item in items where item.isDirectory {
+            if folder == item.path { return false }
+            if folder.hasPrefix(item.path + "/") { return false }
+        }
+        // Pure no-op: every item is already directly inside `folder`.
+        if items.allSatisfy({ (AppState.TreeMutation.parentPath(of: $0.path) ?? "") == folder }) {
+            return false
         }
         return true
     }
@@ -284,28 +307,43 @@ struct MoveToFolderSheet: View {
     private func commit(_ destination: Destination) {
         switch destination {
         case .root:
-            appState.moveEntry(path: move.path, isDirectory: move.isDirectory, to: "")
-            dismissSheet()
+            performMove(to: "")
         case .folder(let target):
-            appState.moveEntry(path: move.path, isDirectory: move.isDirectory, to: target)
-            dismissSheet()
+            performMove(to: target)
         case .newFolder:
             // Create a folder at the vault root, then move into it. The create
             // enters inline rename in the tree, but the move should go into the
             // freshly-created folder — so we create with a concrete name here
             // and move into it directly (no rename detour), keeping the picker
             // flow atomic from the user's view.
-            let newParent = ""  // root
             let name = "New Folder"
-            appState.createFolderThenMove(
-                newFolderName: name, in: newParent,
-                movePath: move.path, isDirectory: move.isDirectory)
-            dismissSheet()
+            if isBatch {
+                appState.createFolderThenBatchMove(
+                    newFolderName: name, in: "", items: items)
+            } else if let only = items.first {
+                appState.createFolderThenMove(
+                    newFolderName: name, in: "",
+                    movePath: only.path, isDirectory: only.isDirectory)
+            }
+        }
+        dismissSheet()
+    }
+
+    /// Route the move: a batch through `batchMove` (one announcement), a single
+    /// node through `moveEntry` — the #852 vs U2-5 fork.
+    private func performMove(to target: String) {
+        if isBatch {
+            appState.batchMove(items, to: target)
+        } else if let only = items.first {
+            appState.moveEntry(path: only.path, isDirectory: only.isDirectory, to: target)
         }
     }
 
     private func dismissSheet() {
+        // Clear whichever pending field drove this presentation (#852: the
+        // batch sheet reads `pendingBatchMove`, the single reads `pendingMove`).
         appState.pendingMove = nil
+        appState.pendingBatchMove = nil
         dismiss()
     }
 
