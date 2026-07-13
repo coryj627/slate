@@ -579,6 +579,64 @@ final class GraphDiagramTests: XCTestCase {
             state.graphForcesSettlePending, "no live diagram ⇒ nothing to settle, nothing armed")
     }
 
+    // MARK: Projection sync (P2-5 #561)
+
+    func testDiagramNodeActionsMatchTheCanonicalSetPlusPin() throws {
+        // The Diagram's per-node VoiceOver actions must be exactly the
+        // shared canonical set (+ diagram-only Pin), so the three
+        // projections don't drift (DoD §P-B parity). A note linking a
+        // missing target gives one note + one ghost.
+        let vault = tempDir.appendingPathComponent("actions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# A\n[[Missing Target]]\n".write(
+            to: vault.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let session = try VaultSession.openFilesystem(rootPath: vault.path)
+        try session.scanInitial(cancel: CancelToken())
+        let model = try makeModel(session)
+        let (_, view) = makeView(model)
+        view.tickOnceForTesting()
+        let note = try XCTUnwrap(model.nodesByID.values.first { $0.kind == .note })
+        let ghost = try XCTUnwrap(model.nodesByID.values.first { $0.kind == .ghost })
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: note.id),
+            GraphRowAction.actions(forGhost: false).map(\.title) + ["Pin"],
+            "a real note exposes the four canonical nav actions + Pin")
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: ghost.id),
+            GraphRowAction.actions(forGhost: true).map(\.title) + ["Pin"],
+            "a ghost exposes Create note + Pin")
+    }
+
+    func testDiagramSelectionMirrorsToTheSharedKey() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)
+        let snap = try session.graphSnapshot(filter: filter)
+        let aNode = snap.nodes.first { $0.label == "a" }!
+        state.graphDiagramSelect(aNode.id)
+        XCTAssertEqual(model.selection, aNode.id)
+        XCTAssertEqual(
+            state.graphSelectedNodeKey, GraphNodeKey.make(for: aNode),
+            "selecting in the Diagram writes the shared cross-projection key")
+    }
+
+    func testSharedKeySeedsTheDiagramSelectionAndMissesGracefully() throws {
+        // The mapping used to seed the Diagram's selection on a Table→
+        // Diagram switch: a shared key present in the diagram maps to its
+        // id; an absent key maps to nil (no crash, no stale selection).
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, _) = makeView(model)  // sets graphDiagramModel
+        let snap = try session.graphSnapshot(filter: filter)
+        let cNode = snap.nodes.first { $0.label == "c" }!
+        state.graphSelectedNodeKey = GraphNodeKey.make(for: cNode)
+        XCTAssertEqual(state.graphDiagramIDForSharedSelection(), cNode.id)
+        state.graphSelectedNodeKey = "p:/does-not-exist.md"
+        XCTAssertNil(state.graphDiagramIDForSharedSelection())
+        state.graphSelectedNodeKey = nil
+        XCTAssertNil(state.graphDiagramIDForSharedSelection())
+    }
+
     func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
         let session = try makeSession()
         let model = try makeModel(session)

@@ -740,16 +740,19 @@ final class GraphDiagramNSView: NSView {
             if self.model?.selection != id { self.appState?.graphDiagramSelect(id, announce: false) }
             self.scrollNodeIntoView(id)
         }
-        // "Show connections" only where it can execute (a ghost has no
-        // note to re-root on); Pin/Unpin always applies.
-        var actions: [NSAccessibilityCustomAction] = []
-        if node.kind != .ghost, node.path != nil {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Show connections") { [weak self] in
-                    self?.showConnections(id)
-                    return true
-                })
+        // Build the shared, canonical action set (P2-5 #561, DoD §P-B
+        // parity): the SAME `GraphRowAction`s the Table and Connections
+        // expose, in the same order with the same labels — so the three
+        // projections can't drift. A ghost gets "Create note"; a real note
+        // gets Open / Open in New Tab / Show connections / Reveal.
+        var actions = GraphRowAction.actions(forGhost: node.kind == .ghost).map { action in
+            NSAccessibilityCustomAction(name: action.title) { [weak self] in
+                self?.performRowAction(action, id: id)
+                return true
+            }
         }
+        // Pin/Unpin is DELIBERATELY diagram-only (a layout affordance with
+        // no meaning in a list) — exempted from parity.
         actions.append(
             NSAccessibilityCustomAction(name: model.pinned.contains(id) ? "Unpin" : "Pin") {
                 [weak self] in
@@ -758,6 +761,19 @@ final class GraphDiagramNSView: NSView {
             })
         element.setAccessibilityCustomActions(actions)
         return element
+    }
+
+    /// Dispatch a canonical `GraphRowAction` on the diagram node `id` — the
+    /// diagram's half of the shared action contract (P2-5 #561). `.open`
+    /// and `.createNote` both route through `activate` (which branches
+    /// ghost→create, note→open); the two never coexist for one node.
+    private func performRowAction(_ action: GraphRowAction, id: UInt64) {
+        switch action {
+        case .open, .createNote: activate(id)
+        case .openInNewTab: openInNewTab(id)
+        case .showConnections: showConnections(id)
+        case .reveal: reveal(id)
+        }
     }
 
     private func axLabel(_ node: GraphNode, model: GraphDiagramModel) -> String {
@@ -908,10 +924,22 @@ final class GraphDiagramNSView: NSView {
         }
     }
 
+    private func openInNewTab(_ id: UInt64) {
+        guard let appState, let path = model?.node(id)?.path else { return }
+        focusOwningGroup()
+        appState.openFile(path, target: .newTab)
+    }
+
     private func showConnections(_ id: UInt64) {
         guard let appState, let path = model?.node(id)?.path else { return }
         focusOwningGroup()
         appState.reRootConnections(on: path)
+    }
+
+    private func reveal(_ id: UInt64) {
+        guard let appState, let path = model?.node(id)?.path else { return }
+        focusOwningGroup()
+        appState.revealInFileTree(path)
     }
 
     private func togglePin(_ id: UInt64) {

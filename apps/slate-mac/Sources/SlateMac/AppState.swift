@@ -575,6 +575,17 @@ final class AppState: ObservableObject {
     /// single "settled" state once the layout converges, then clears it
     /// (P2-4 review finding 8 — the settled-state announcement).
     var graphForcesSettlePending = false
+    /// The graph tab's SHARED selected-node key (Milestone P, P2-5 #561 —
+    /// the `GraphViewState` selection channel). The ONE cross-projection-
+    /// stable identity (`GraphNodeKey`: `"p:<path>"` / `"g:<label>"`, never
+    /// a generation-volatile `UInt64`). The Table binds its row selection to
+    /// this; the Diagram mirrors it to/from `GraphDiagramModel.selection`;
+    /// Connections re-rooting writes it — so a selection in any projection
+    /// reflects in the others within one runloop tick, and a Table↔Diagram
+    /// mode switch lands on the same node. Filters and groups (the other
+    /// GraphViewState fields) were already unified in P2-4 (`graphTableFilter`
+    /// + `graphConfig.groups`); this closes the selection axis.
+    @Published var graphSelectedNodeKey: String?
 
     /// The ⌃⌘I "Where am I?" readback (t0 §1.4): non-nil presents the
     /// focusable transient panel in the canvas container; Esc/Close

@@ -112,6 +112,9 @@ extension AppState {
         graphTableTextFilter = ""
         graphTableKindFilter = nil
         graphTablePendingPreset = nil
+        // Drop the shared cross-projection selection (P2-5 #561) so a key
+        // from the closing vault / prior graph tab can't bleed into the next.
+        graphSelectedNodeKey = nil
         graphTableFilter = GraphFilter(
             includeAttachments: false, includeGhosts: true, orphansOnly: false)
         graphTableSeenGraphGeneration = 0

@@ -187,9 +187,18 @@ struct GraphTableView: View {
     /// whichever split pane happens to hold global focus (review round 1
     /// finding 2).
     let tabID: TabID
-    @State private var selection: GraphTableRow.ID?
     @State private var sortState: DataGridSortState? = DataGridSortState(
         columnIndex: GraphTableColumn.linksIn.rawValue, ascending: false)
+
+    /// The grid's selection is the SHARED `graphSelectedNodeKey` (P2-5
+    /// #561): the Table row id IS that cross-projection key, so binding the
+    /// grid straight to it makes a Table selection visible to the Diagram
+    /// (and vice versa) with no translation.
+    private var selection: Binding<GraphTableRow.ID?> {
+        Binding(
+            get: { appState.graphSelectedNodeKey },
+            set: { appState.graphSelectedNodeKey = $0 })
+    }
 
     var body: some View {
         Group {
@@ -219,8 +228,8 @@ struct GraphTableView: View {
         // selection must be re-validated against the fresh row set (our
         // id is the stable path/ghost key) and dropped if gone (finding 3).
         .onChange(of: appState.graphTableSnapshot?.generation) { _, _ in
-            if let sel = selection, !allRows.contains(where: { $0.id == sel }) {
-                selection = nil
+            if let sel = appState.graphSelectedNodeKey, !allRows.contains(where: { $0.id == sel }) {
+                appState.graphSelectedNodeKey = nil
             }
         }
         // Leaving the tab (switch/close) cancels any queued filter/nav
@@ -287,7 +296,7 @@ struct GraphTableView: View {
             rows: rows,
             summary: appState.graphTableSnapshot?.audioSummary ?? "",
             accessibilityLabel: "Graph, data grid",
-            selection: $selection,
+            selection: selection,
             sortState: $sortState,
             sortsRowsLocally: true,
             onActivate: { row in activate(row) },
@@ -330,39 +339,44 @@ struct GraphTableView: View {
         appState.activateTab(tabID)
     }
 
-    /// The row-action availability policy (finding 4), extracted so the
-    /// ghost/real split is unit-testable without a live AppState: the
-    /// four navigation actions need a real file; "Create note" applies
-    /// only to a ghost. No row ever exposes an action that would
-    /// silently do nothing.
+    /// The row-action availability policy, now delegating to the CANONICAL
+    /// `GraphRowAction` set shared by every projection (P2-5 #561): the four
+    /// navigation actions need a real file; "Create note" applies only to a
+    /// ghost. Kept as a thin wrapper so the existing unit tests (which key
+    /// off the label string) still pass.
     static func rowActionEnabled(_ name: String, isGhost: Bool) -> Bool {
-        name == "Create note" ? isGhost : !isGhost
+        GraphRowAction.allCases.first { $0.title == name }?.applies(toGhost: isGhost) ?? false
     }
 
+    /// The grid's row actions, built from the ONE canonical `GraphRowAction`
+    /// set so the Table's action labels + availability can never drift from
+    /// the Diagram's / Connections' (P2-5 #561, DoD §P-B parity). Every
+    /// open/re-root path first activates the graph's own group so it lands
+    /// in this pane (finding 2).
     private var rowActions: [AccessibleDataGrid<GraphTableRow>.RowAction] {
-        func enabled(_ name: String) -> (GraphTableRow) -> Bool {
-            { Self.rowActionEnabled(name, isGhost: $0.isGhost) }
+        GraphRowAction.allCases.map { action in
+            .init(action.title, isEnabled: { action.applies(toGhost: $0.isGhost) }) { row in
+                focusOwningGroup()
+                Self.perform(action, row: row, appState: appState)
+            }
         }
-        return [
-            .init("Open", isEnabled: enabled("Open")) { row in
-                if let p = row.path { focusOwningGroup(); appState.openFile(p, target: .currentTab) }
-            },
-            .init("Open in New Tab", isEnabled: enabled("Open in New Tab")) { row in
-                if let p = row.path { focusOwningGroup(); appState.openFile(p, target: .newTab) }
-            },
-            .init("Show connections", isEnabled: enabled("Show connections")) { row in
-                // reRootConnections funnels through openFile(.currentTab),
-                // so it too must target the graph's own pane (finding 2).
-                if let p = row.path { focusOwningGroup(); appState.reRootConnections(on: p) }
-            },
-            .init("Reveal in File Tree", isEnabled: enabled("Reveal in File Tree")) { row in
-                // revealInFileTree also opens the file (.currentTab).
-                if let p = row.path { focusOwningGroup(); appState.revealInFileTree(p) }
-            },
-            .init("Create note", isEnabled: enabled("Create note")) { row in
-                if row.isGhost { focusOwningGroup(); appState.createNoteFromGhost(targetRaw: row.label) }
-            },
-        ]
+    }
+
+    /// Run a canonical action against a table row — the single dispatch the
+    /// grid actions and (via the same enum) every projection route through.
+    static func perform(_ action: GraphRowAction, row: GraphTableRow, appState: AppState) {
+        switch action {
+        case .open:
+            if let p = row.path { appState.openFile(p, target: .currentTab) }
+        case .openInNewTab:
+            if let p = row.path { appState.openFile(p, target: .newTab) }
+        case .showConnections:
+            if let p = row.path { appState.reRootConnections(on: p) }
+        case .reveal:
+            if let p = row.path { appState.revealInFileTree(p) }
+        case .createNote:
+            if row.isGhost { appState.createNoteFromGhost(targetRaw: row.label) }
+        }
     }
 }
 
@@ -409,27 +423,15 @@ struct GraphTableRow: Identifiable {
     }
 
     init(node: GraphNode, folder: String) {
-        // Stable, collision-proof identity in two DISJOINT namespaces so
-        // a real vault file can never share an id with a ghost (round 2
-        // finding 3): real nodes key on their unique path under "p:";
-        // ghosts (no path) key on their normalized label under "g:".
-        //
-        // The ghost key is PERCENT-ENCODED (round 3 finding 1): the
-        // backend keys ghosts on the raw UTF-8 bytes of the folded target
-        // (no Unicode NFC), so two normalization-variant targets (e.g.
-        // "café" composed vs decomposed) are DISTINCT backend nodes — but
-        // their Swift `String` labels compare canonically EQUAL, which
-        // would collapse two rows onto one id. Percent-encoding keys on
-        // the UTF-8 bytes, so byte-distinct labels stay distinct ids while
-        // ASCII labels remain legible ("missing note" → "missing%20note").
-        if let path = node.path {
-            self.id = "p:\(path)"
-        } else {
-            let folded = node.label.lowercased()
-            let encoded =
-                folded.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? folded
-            self.id = "g:\(encoded)"
-        }
+        // Stable, collision-proof identity via the SHARED cross-projection
+        // key (P2-5 #561, `GraphNodeKey`): real nodes key on their unique
+        // path under "p:", ghosts (no path) on their percent-encoded folded
+        // label under "g:" — two disjoint namespaces so a real vault file
+        // can never share an id with a ghost, byte-distinct so two Unicode
+        // normalization variants stay distinct rows. This is now the SAME
+        // key the Diagram selection and the shared `graphSelectedNodeKey`
+        // use, so a selection round-trips across projections.
+        self.id = GraphNodeKey.make(for: node)
         self.nodeID = node.id
         self.label = node.label
         self.path = node.path

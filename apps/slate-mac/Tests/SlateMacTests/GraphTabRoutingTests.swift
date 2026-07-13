@@ -320,6 +320,22 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertTrue(state.graphConfig.filters.includeAttachments)
     }
 
+    /// Re-rooting the Connections leaf writes the SHARED cross-projection
+    /// selection key (P2-5 #561), so the Table/Diagram reflect that node.
+    /// Closing the graph tab clears it (no bleed into the next vault/tab).
+    func testReRootConnectionsWritesSharedSelectionAndCloseClearsIt() async throws {
+        let state = try await makeAppState()
+        state.reRootConnections(on: "a.md")
+        XCTAssertEqual(
+            state.graphSelectedNodeKey, "p:a.md", "re-root writes the shared 'p:' key")
+
+        state.openGraphTab()
+        try await pollUntil { state.graphTableSnapshot != nil }
+        let graphID = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.requestCloseTab(graphID)
+        XCTAssertNil(state.graphSelectedNodeKey, "closing the graph tab clears the shared selection")
+    }
+
     /// A generation-refresh probe that resumes after its graph-table
     /// lifecycle moved on must not reload — covers both "closed and stayed
     /// closed" and the "close → quick preset reopen" zombie that a bare

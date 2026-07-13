@@ -194,6 +194,10 @@ extension AppState {
         workspace.activeLeaf = .connections
         loadConnections()
         focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
+        // Write the SHARED cross-projection selection (P2-5 #561): re-rooting
+        // the local graph on `path` makes that the selected node, so the
+        // Table/Diagram reflect it. Real note ⇒ the "p:" key.
+        graphSelectedNodeKey = GraphNodeKey.make(path: path, label: "")
         // Label only; the authoritative summary follows from the load.
         graphAnnouncer.announce(.reRooted(label: filename(of: path)))
     }
