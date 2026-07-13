@@ -85,7 +85,17 @@ struct MainSplitView: View {
             }
         }
         .navigationTitle(vaultTitle)
-        .toolbar { mainToolbar }
+        // #880 (HIG toolbars.md:33 — editing apps with many items should
+        // let people customize the toolbar): the customizable form. The
+        // `id:` names this toolbar's persisted customization; every item
+        // below carries its own STABLE `ToolbarItem(id:)` (see `mainToolbar`).
+        // The customization editor is reached via `ToolbarCommands()` in
+        // SlateMacApp's `.commands` (View ▸ Customize Toolbar… + the
+        // Control-click menu). No `.toolbarRole(.editor)`: it would
+        // de-emphasize the `vaultTitle` presentation this window relies on
+        // (the requirement's "only if it does not disturb existing layout/AX"
+        // guard), so the default role stays.
+        .toolbar(id: "main") { mainToolbar }
         // Toolbar command glyphs render monochrome (U5-1, DoD §B rendering-mode
         // consistency): flat single-weight icons, the command-bar convention.
         // The environment set here propagates into the toolbar items' glyphs.
@@ -638,25 +648,61 @@ struct MainSplitView: View {
     /// Toolbar contents, extracted from `body` for type-checker budget
     /// (U1-2) — the close-gate alerts must stay inline in `body` next to
     /// `alertFocusReturn`, so the toolbar is what moves. Content verbatim.
+    ///
+    /// #880 — customizable toolbar (`toolbar(id: "main")`). The item set is
+    /// STATIC: every `ToolbarItem(id:)` is emitted on every render with a
+    /// STABLE, unique id (persisted in the user's customization). Nothing
+    /// is conditionally included/excluded at the ToolbarContent level —
+    /// conditionally emitting a `ToolbarItem` corrupts the customization
+    /// model (dropped/crashed layout). Per-state visibility uses the
+    /// `.hidden(_:)` modifier instead (see `saveStatus`) — Apple's mechanism
+    /// for conditional toolbar-item display: it drops an item from the LIVE
+    /// toolbar while keeping its stable id available in the customization
+    /// palette. Type is `CustomizableToolbarContent`, not `ToolbarContent`,
+    /// for `toolbar(id:)`.
+    ///
+    /// Grouping (toolbars.md:69 — critical actions visually distinct):
+    /// Save + its status form the `.primaryAction` group; the navigation /
+    /// reference cluster is `.secondaryAction`. On macOS `.primaryAction`
+    /// sits at the LEADING edge and `.secondaryAction` follows toward the
+    /// trailing edge, so the leading→trailing order is preserved EXACTLY as
+    /// the pre-#880 all-`.automatic` layout: saveStatus, save, search,
+    /// template, tasksReview, citationSummary, bibliography. That order is
+    /// also the DEFAULT customization set — nothing hidden by default.
+    ///
+    /// customizationBehavior: the Save group is `.disabled` (a critical
+    /// action + its status must never be removed or moved — "Save must
+    /// remain reachable"); the reference cluster keeps the default behavior
+    /// so users may reorder/remove/re-add those five to taste.
     @ToolbarContentBuilder
-    private var mainToolbar: some ToolbarContent {
+    private var mainToolbar: some CustomizableToolbarContent {
             // Save status indicator: a Modified/Saved label that
             // VoiceOver reads when the toolbar focus lands on it.
             // Hidden when no note is loaded so the toolbar doesn't
             // claim "Saved" against an empty editor.
-            if appState.loadedFilePath != nil {
-                ToolbarItem(placement: .automatic) {
-                    Text(appState.hasUnsavedChanges ? "Modified" : "Saved")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel(
-                            appState.hasUnsavedChanges
-                                ? "Modified. Unsaved changes in the editor."
-                                : "Saved. Editor matches the on-disk file."
-                        )
-                }
+            //
+            // #880: ALWAYS emitted (stable item set) so the customization
+            // set never changes shape. The "hidden when no note is loaded"
+            // behavior uses `.hidden(_:)` — Apple's mechanism for conditional
+            // toolbar-item display: it removes the item from the LIVE toolbar
+            // while its stable id stays available in the customization palette.
+            // (An inner `if` over the CONTENT is NOT a documented equivalent —
+            // it risks a reachable blank slot / empty AX stop.) Pinned with the
+            // Save button (`.disabled` behavior) as the critical
+            // `.primaryAction` group.
+            ToolbarItem(id: "saveStatus", placement: .primaryAction) {
+                Text(appState.hasUnsavedChanges ? "Modified" : "Saved")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(
+                        appState.hasUnsavedChanges
+                            ? "Modified. Unsaved changes in the editor."
+                            : "Saved. Editor matches the on-disk file."
+                    )
             }
-            ToolbarItem(placement: .automatic) {
+            .customizationBehavior(.disabled)
+            .hidden(appState.loadedFilePath == nil)
+            ToolbarItem(id: "save", placement: .primaryAction) {
                 Button {
                     appState.saveCurrentNote()
                 } label: {
@@ -674,7 +720,10 @@ struct MainSplitView: View {
                     "Save the current note to disk. Command-S."
                 )
             }
-            ToolbarItem(placement: .automatic) {
+            // #880: Save is the critical action — pinned (not removable or
+            // movable), keeping it and its status as the fixed leading group.
+            .customizationBehavior(.disabled)
+            ToolbarItem(id: "search", placement: .secondaryAction) {
                 Button {
                     appState.toggleSearchOverlay()
                 } label: {
@@ -691,7 +740,7 @@ struct MainSplitView: View {
                     "Opens the search overlay. Shift-Command-F to toggle, Escape to close."
                 )
             }
-            ToolbarItem(placement: .automatic) {
+            ToolbarItem(id: "template", placement: .secondaryAction) {
                 Button {
                     appState.openTemplatePicker()
                 } label: {
@@ -703,7 +752,7 @@ struct MainSplitView: View {
                     "Opens the template picker. Command-Shift-N. Escape closes."
                 )
             }
-            ToolbarItem(placement: .automatic) {
+            ToolbarItem(id: "tasksReview", placement: .secondaryAction) {
                 Button {
                     appState.openTasksReview()
                 } label: {
@@ -721,7 +770,7 @@ struct MainSplitView: View {
             // Milestone L #282: Citation Summary. Cmd+Shift+J opens
             // the sheet showing N citations / M unique sources for
             // the current note. Disabled with no note selected.
-            ToolbarItem(placement: .automatic) {
+            ToolbarItem(id: "citationSummary", placement: .secondaryAction) {
                 Button {
                     appState.isCitationSummaryOpen = true
                 } label: {
@@ -737,7 +786,7 @@ struct MainSplitView: View {
             // Milestone L #282: Jump to bibliography from the
             // currently-expanded citation. Command-J. Active only when
             // a citation popover is open.
-            ToolbarItem(placement: .automatic) {
+            ToolbarItem(id: "bibliography", placement: .secondaryAction) {
                 Button {
                     appState.jumpToBibliographyFromExpandedCitation()
                 } label: {
