@@ -223,6 +223,12 @@ struct GraphTableView: View {
     var focusRequest: Int = 0
     @State private var sortState: DataGridSortState? = DataGridSortState(
         columnIndex: GraphTableColumn.linksIn.rawValue, ascending: false)
+    /// The token actually handed to the grid — captured ONCE at appear (this
+    /// view is recreated per switch) and ONLY when the selected row is
+    /// currently visible, so a selection that cleared between the switch-time
+    /// bump and consumption doesn't leave the grid focused on nothing (P2-5
+    /// review round-4 race). Not reactive to later selection changes.
+    @State private var gridFocusRequest = 0
 
     /// The grid's selection is the SHARED `graphSelectedNodeKey` (P2-5
     /// #561): the Table row id IS that cross-projection key, so binding the
@@ -257,6 +263,18 @@ struct GraphTableView: View {
         // async re-fetch, so their count is announced only after the
         // fresh snapshot publishes — in `loadGraphTable` — never against
         // the stale one (round 2 finding 7).
+        // Capture the focus request ONCE, here, re-checking that the shared
+        // selection is a CURRENTLY-visible row — closes the round-4 race
+        // where the selection cleared after the switch-time bump. Only a
+        // present, visible selection hands the grid a non-zero request.
+        .onAppear {
+            if focusRequest != 0,
+                let key = appState.graphSelectedNodeKey,
+                filteredRows.contains(where: { $0.id == key })
+            {
+                gridFocusRequest = focusRequest
+            }
+        }
         .onChange(of: appState.graphTableTextFilter) { _, _ in announceCount() }
         // A generation bump can reassign backend node ids, so any stale
         // selection must be re-validated against the fresh row set (our
@@ -337,7 +355,7 @@ struct GraphTableView: View {
             onActivateModified: { row in activateInNewTab(row) },
             showsRowContextMenu: true,
             rowActions: rowActions,
-            focusRequest: focusRequest,
+            focusRequest: gridFocusRequest,
             announce: { [weak appState] text in
                 appState?.graphAnnouncer.announce(.status(text))
             })

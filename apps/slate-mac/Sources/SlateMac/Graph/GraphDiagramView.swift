@@ -1011,18 +1011,27 @@ final class GraphDiagramNSView: NSView {
     /// the selected node's element (or the Tier-B summary). No-op until then
     /// — `rebuildTopology` retries after each materialization.
     private func focusSelectedElementIfPending() {
-        guard pendingSelectionFocus, window != nil else { return }
+        guard pendingSelectionFocus, let model, window != nil else { return }
         // Wait until the elements are materialized (async layout build).
         guard !axElements.isEmpty || summaryElement != nil else { return }
-        // Resolve the focus TARGET first: the selected node's element, or the
-        // Tier-B summary. If there is nothing to land on (Tier A with no
-        // selection), do NOT steal first-responder — leave focus where it is
-        // (review round-2 new defect: makeFirstResponder before confirming a
-        // target grabbed focus for no VoiceOver payoff).
-        guard let target: NSAccessibilityElement =
-            (model?.selection).flatMap({ sel in axElements.first { $0.nodeId == sel } })
-            ?? summaryElement
-        else {
+        // Resolve the focus TARGET at CONSUMPTION time from the CURRENT shared
+        // key — NOT a possibly-stale `model.selection` (review round-4: the
+        // selection can clear between the switch-time bump and here, so we
+        // must re-check now). Tier B: the summary is the sole element. Tier A:
+        // the element for the current key, or nothing. No target ⇒ don't steal
+        // first-responder (round-2 defect).
+        let target: NSAccessibilityElement?
+        if let summary = summaryElement {
+            target = summary
+        } else if let id = AppState.graphDiagramNodeID(
+            forKey: appState?.graphSelectedNodeKey, ids: model.nodeIDs, byID: model.nodesByID),
+            let element = axElements.first(where: { $0.nodeId == id })
+        {
+            target = element
+        } else {
+            target = nil
+        }
+        guard let target else {
             pendingSelectionFocus = false
             return
         }
