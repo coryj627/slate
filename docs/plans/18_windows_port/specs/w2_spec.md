@@ -16,7 +16,7 @@ Baseline facts:
 1. Editor host: AvalonEdit `TextEditor` wired so every text change produces an edit delta to `DocumentBuffer` (single keystrokes, IME composition commits, paste, drag, undo/redo). AvalonEdit is the *view*; the rope is truth (decision 8).
 2. Offset discipline: one mapping module (UTF-16 code units ⇄ byte offsets), property-tested against multibyte/astral fixtures — the C# twin of `EditorSpanMapping` (same fixture corpus: the ASCII/2-byte/3-byte(中)/astral(😀) cases documented in `EditorSpanMappingTests.swift:15`; §W-A row).
 3. Drift guard: periodic + on-suspect full-text compare (buffer read-back vs `TextDocument`) behind the same clean-break reconvergence semantics the mac coordinator uses; census under randomized edit storms (§W-E).
-4. Undo/redo routes through the core op-log (parity with mac ⌘Z routing; Ctrl+Z/Ctrl+Y).
+4. Undo/redo is focus-routed across the same three domains as mac: AvalonEdit's `UndoStack` owns note-editor text undo (the analogue of the responder-chain `NSUndoManager`); canvas and structural file operations keep their separate core-backed undo stacks. Ctrl+Z/Ctrl+Y text mutations must travel through the same AvalonEdit-change → `DocumentBuffer` delta feed as typing, then save through the normal core save/op-log pipeline — there is no invented core text-undo API.
 5. Save flow: debounce/save-state parity with the mac typing-save flow (dirty tracking, atomic write via core).
 6. IME: CJK composition correctness smoke (decision 15) — composition events must not feed partial deltas.
 

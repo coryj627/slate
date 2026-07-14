@@ -12,8 +12,8 @@ Program: [00_program.md](../00_program.md) (decisions 10, 11, 15, 16, 20; DoD §
 
 ## W8-2 · Theming & contrast — PR 2
 
-1. Token-based theme: dark/light + `SystemParameters.HighContrast` reactive switching; system font-size respect (per-monitor DPI already in W1-1).
-2. **APCA Lc ≥ 75 gate ported**: the shared contrast spec (R milestone's shared-spec artifact, or its Swift-test predecessor translated) runs over the WPF token pairs in CI, both appearances + high-contrast — measured, not eyeballed.
+1. Token-based dark/light theme plus reactive `SystemParameters.HighContrast` switching; system font-size respect (per-monitor DPI already in W1-1). Contrast-theme resources bind semantic roles to compatible dynamic Windows `SystemColors` pairs — no hard-coded Contrast-theme colors — and update while the app is running.
+2. **APCA Lc ≥ 75 gate ported for Slate-owned dark/light pairs**: the shared contrast spec (R milestone's shared-spec artifact, or its Swift-test predecessor translated) runs over those WPF token pairs in CI. Contrast-theme acceptance instead verifies all four built-in Windows themes plus a user-customized theme, compatible system foreground/background pairings, selected/disabled states, visible boundaries, and no color-only meaning; user-controlled system colors are not an APCA gate.
 
 ## W8-3 · MSIX packaging + auto-update — PR 3
 
@@ -22,7 +22,7 @@ Program: [00_program.md](../00_program.md) (decisions 10, 11, 15, 16, 20; DoD §
 
 ## W8-4 · Differential parity harness (§W-A) — PR 4
 
-1. Three-job CI pipeline: mac + windows jobs run the same fixture corpus (`crates/slate-core/tests/fixtures/**` — today only `{bases, canvas, dql, oplog}`; the editor-span/structure/search/backlink rows need new Markdown fixtures or the bench generators, added under this issue) plus a generated vault (the existing generators: `crates/slate-core/benches/common/mod.rs` — `generate_vault`/`generate_tasks_vault`; **deterministic by construction, parameterized only by `file_count` — no seed knob exists today**: add one here if corpus variation is wanted, else pin the fixed corpus) through every read-side FFI surface, emit canonical serializations; a diff job compares. Normalization list (path separators; upstream-designated engine-dependent surfaces, e.g. PD OCR text per program decision 4/§W-A) lives here and is exhaustive; line endings are deliberately **not** normalized (LF canonical, decision 9) — anything not on the list must match byte-for-byte.
+1. Three-job CI pipeline: mac + windows jobs run the same fixture corpus (`crates/slate-core/tests/fixtures/**` — today only `{bases, canvas, dql, oplog}`; the editor-span/structure/search/backlink rows need new Markdown fixtures or the bench generators, added under this issue) plus a generated vault (the existing generators: `crates/slate-core/benches/common/mod.rs` — `generate_vault`/`generate_tasks_vault`; **deterministic by construction, parameterized only by `file_count` — no seed knob exists today**: add one here if corpus variation is wanted, else pin the fixed corpus) through every read-side FFI surface, emit canonical serializations; a diff job compares. Normalization list (path separators; upstream-designated engine-dependent surfaces, e.g. PD OCR text per program decision 4/§W-A) lives here and is exhaustive. Line endings are deliberately **not** normalized: LF, CRLF, and mixed-ending fixtures must preserve identical bytes and produce identical bytes after the same edit sequence (decision 9); anything not on the list must match byte-for-byte.
 2. Runs on every PR touching `crates/**` or either app's consumption layer (path filters); failure is release-blocking from the moment it lands.
 
 ## W8-5 · Performance gates (§W-B) — PR 5
@@ -35,4 +35,4 @@ Program: [00_program.md](../00_program.md) (decisions 10, 11, 15, 16, 20; DoD §
 2. E2E authoring-loop suite (the T E2E precedent, cross-surface: vault open → edit → panels → canvas → search → save/undo chain) via FlaUI.
 3. §W-F: `parity_matrix.md` at zero (every row shipped or owner-waived-with-reason). §W-G audit recorded — mechanically: a dependency deny-list step in `windows.yml` that fails on any WebView2/webview package in the solution's lock file/manifest, plus a committed grep-audit (script in `scripts/`) over `apps/slate-windows/` for re-implemented core logic. The human JAWS + NVDA full pass is the release residual (mirrors T's convention — recorded, and the milestone stays open until done).
 
-- [ ] (each) gates green; W8-6 closes the milestone modulo the human AT residual
+- [ ] (each) gates green; W8-6 closes the milestone **only after** the human JAWS + NVDA residual is recorded
