@@ -1,71 +1,80 @@
 # FL2 executable spec — Selection & operations: multi-select, batch ops, menu completeness, templates, Finder drop
 
-Issues: FL2-1 ([#655](https://github.com/coryj627/slate/issues/655)) · FL2-2 ([#656](https://github.com/coryj627/slate/issues/656)) · FL2-3 ([#657](https://github.com/coryj627/slate/issues/657)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). One PR per issue. No FL0 dependency — may start immediately.
-Program: [00_program.md](../00_program.md) (locked decisions 11, 13, 14; DoD §FL-A). U §A–§G apply.
+Issues: FL2-1 ([#655](https://github.com/coryj627/slate/issues/655)) · FL2-2 ([#656](https://github.com/coryj627/slate/issues/656)) · FL2-3 ([#657](https://github.com/coryj627/slate/issues/657)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). Grouped delivery: FL-03 closes #655 and references the batch part of #656; FL-04 closes #656 and references the template part of #657; FL-05 depends on FL-04 and closes #657.
+Program: [00_program.md](../00_program.md) (locked decisions 11, 13–15; DoD §FL-A). U §A–§G apply.
 
-**Execution order: FL2-1 → FL2-2; FL2-3 independent after FL2-1.**
+**Execution order: FL-03 residual selection + one logical batch → FL-04 action/template completion → FL-05 bounded multi-import.** FL-05 depends on FL-04 because FL-04 owns the template acceptance criteria for #657 and only FL-05 closes the issue.
 
-Baseline facts (verified 2026-07-05):
+Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
-- Selection is single (`@State private var listSelection: RowID?`, FileTreeSidebar.swift:546); selection→open wiring :752–782; editor→tree mirror :791–810. Single-click fix uses primary `.onTapGesture` (PR #643 — onDrag swallows label clicks; do not regress).
-- Drag & drop: internal moves only, private UTType `com.slate.tree-node-path` (:1273–1324, :1278).
-- Context menus :1154–1169 (open actions) and :1235–1271 (file management). Inline rename `RenameField` :1558–1617 (commit/cancel/collision rules). Move sheet `MoveToFolderSheet.swift`.
-- Mutations route through AppState wrappers (`createFolder` :5224, `createNote` :5261, rename/move/delete nearby); each publishes `TreeMutation` (:5176–5180, Kind enum :5082–5093) driving announcement + scoped tree invalidation; tabs retarget on rename/move, error-state on delete (U2-5). Link-rewrite skips surface as a consolidated alert.
-- Templates in core: `list_templates()` (session.rs:570–577; `Templates/` default, alphabetical) and `render_template(path, ctx) -> RenderedTemplate { body, cursor_byte_offset }` (:751–758; allowlist `{{date}}`, `{{time}}`, `{{title}}`, `{{vault}}`, `{{cursor}}`, `{{prompt:Label}}`; unknown variables survive verbatim). An app-side template picker exists (M-6/U-era); locate its view for reuse at implementation.
-- Scanner picks up external filesystem changes via the rescan path; `list_dir_children` is the refresh seam the tree already uses after mutations.
+- Pointer multi-selection has shipped: `FileTreeSidebar` keeps a focused `listSelection`, a `multiSelection` set, a stable anchor/snapshot, range and toggle click handling, top-level batch-target pruning, one count announcement, and batch Move/Trash context actions. Preserve the #643 primary-click behavior. Missing FL work is Command-A, Shift-arrow range extension, Return/Command-Down multi-open confirmation, and multi-item drag payloads.
+- Batch Move/Trash currently loop K independent AppState/core operations. Move produces K structural undo entries. Trash calls `delete_file`/`delete_folder`, which return no restore receipt, send bytes to the system Trash, and are explicitly rejected by `undo_structural`; it is non-undoable inside Slate. FL-03 replaces the Swift loop with one operation-specific core request and result, not a parallel batch path.
+- Duplicate already ships through context menu, File menu, palette, and rotor with exclusive-create `<stem> copy`, then `<stem> copy 2`, … naming. Reveal in Finder and vault-relative Copy Path also ship. Structural move/rename undo, non-undoable system Trash, pointer drag/drop, drop highlighting, 600 ms spring-loading/re-collapse, and expansion persistence are present and must not regress.
+- File-URL drops already distinguish in-vault moves from external imports and can import a Finder file. FL-05 adds the missing all-provider, file-and-directory, bounded/cancellable multi-import pipeline while preserving current feedback and spring-loading.
+- Templates already have `list_templates`, `render_template`, and an app-side picker/render/name/caret flow. FL-04 injects only the selected destination folder; it must not fork the template engine.
+- Mutations continue through AppState action funnels and `TreeMutation` publication. Exact July 5 line references are obsolete; implementation follows the named seams.
 
 ---
 
-## FL2-1 · Multi-selection model (#655) — PR 1
+## FL2-1 · Residual selection and multi-drag (#655) — closing PR FL-03
 
-1. `listSelection` becomes `Set<RowID>` (SwiftUI `List(selection: Binding<Set<RowID>>)`) with a separate `anchorRow: RowID?` for range semantics. Native List behavior supplies ⇧/⌘-click and ⇧↑/⇧↓; verify against the #643 tap-gesture fix — the primary-click open must fire only on single, unmodified selection.
-2. **Open semantics:** single selection opens as today; a modifier/multi selection **never** auto-opens (opening 12 files because ⌘A is a bug, not a feature). Return/⌘↓ on a multi-selection opens all, gated by a confirmation ≥ 10 items.
-3. ⌘A selects all **visible rows of the current level scope** (the flattened visible tree), matching List default; document it in help.
-4. **AX:** selection changes announce count when > 1: `"5 selected."` (single-selection announce unchanged: `"Selected: <name>."`). The announce dedup keys on the selection set, not the last row.
-5. **Multi-drag:** dragging a selected row carries the whole selection (array of path payloads in the existing private UTType); dragging an unselected row carries just it (Finder convention). Drop applies the FL2-2 batch move.
-6. Programmatic single-select reveal (editor→tree mirror :791–810) still works and collapses the set to one.
-7. Mixed dir+file selections are legal; capability gating is FL2-2's job.
+1. Extract the shipped focus/set/anchor behavior into `SidebarSelectionModel` without changing pointer semantics. Add Shift-arrow range extension and Command-A over the flattened visible rows; hidden/collapsed rows are not selected.
+2. **Open semantics:** modifier/multi selection never auto-opens. Return/Command-Down opens the selected files and requires confirmation at 10 or more items.
+3. **Multi-drag:** dragging a selected row carries the whole path-validated visible selection; dragging an unselected row carries only that row. Preserve the selection while dragging.
+4. Preserve the existing count announcement and programmatic single-select reveal. A reveal collapses the selection to the revealed path; reused/stale row IDs remain fail-closed.
+5. Mixed directory+file selections remain legal; capability gating belongs to the shared action catalog.
 
-Tests: set-selection state transitions (click, ⇧-click, ⌘-click, ⇧↑↓, ⌘A); no-auto-open on multi; announce composition; drag payload contents for selected vs unselected origin; reveal collapses set.
+Tests: shipped pointer click/range/toggle matrix including #643; Shift-arrow; Command-A with collapsed rows; no-auto-open; 10-item confirmation; multi-drag payload; reveal and stale-ID fail-closed behavior.
 
-- [ ] `Set<RowID>` selection + anchor; open semantics; ⌘A
-- [ ] Multi-drag payload
-- [ ] AX announcements
-- [ ] Tests incl. #643 regression
-
-## FL2-2 · Batch operations + context-menu completeness (#656) — PR 2
-
-**Batch operations** (enabled on multi-selection; one operation = one confirmation, one announcement, one tree refresh, one consolidated skip-alert — locked decision 11):
-
-1. **Move** — `MoveToFolderSheet` accepts N sources; AppState gains `moveItems(_ paths: [String], to: String)` looping the existing per-item core move inside **one** Task, collecting per-item outcomes; destination-descendant-of-source guarded per item; announce `"Moved 12 items to Research."`; partial failure alert lists failures, successes stand.
-2. **Delete** — confirmation names count and kinds (`"Move 3 files and 1 folder to Trash?"`); announce `"Moved 4 items to Trash."`; open tabs flip to error state per existing U2-5 behavior.
-3. Menu verbs on multi-selection: Move To…, Move to Trash only (plus Open per FL2-1). Everything else (rename, duplicate, …) requires single selection — items disable, never hide (VO users must hear why-not: disabled items expose the standard AX disabled state).
-
-**Context-menu completeness** (single selection):
-
-4. **Duplicate** (files only): copy `<stem> 2.<ext>` (increment until free — Finder convention) in the same folder via core read+create (no link rewrite: duplicates keep their outgoing links verbatim); announce + select the copy.
-   *Amendment (2026-07-12, #853):* Duplicate SHIPPED ahead of FL with a `<stem> copy.<ext>` suffix walk (not `<stem> 2.<ext>`) over exclusive-create, via context menu + File menu + palette + rotor. When FL lands, inherit the shipped naming — do not introduce the ` 2` convention alongside it. Folders remain unshipped.
-5. **Reveal in Finder**: `NSWorkspace.shared.activateFileViewerSelecting` on the absolute URL (files and folders).
-6. **Copy Wikilink** (markdown files): `[[stem]]` when the stem is unique vault-wide under the resolver's case-insensitive convention, else `[[<vault-relative path sans .md>]]`; uniqueness via one indexed query. **Copy Path**: vault-relative path verbatim. Both announce `"Copied."`.
-7. **Name-validity warnings** in `RenameField` (and the new-folder/new-note flows): live inline warning line for `/` `:` `\0` (filesystem) and `[ ] # ^ |` (link-breaking) — warn-don't-block until commit; committing a filesystem-invalid name keeps the existing error path. AX: warning is a live region, polite.
-
-Tests: batch move/delete outcome aggregation + announce strings; duplicate suffix walk; wikilink uniqueness both branches; warning triggers per character class; disabled-not-hidden menu state.
-
-- [ ] `moveItems`/batch delete + consolidated alerts
-- [ ] Duplicate / Reveal / Copy Wikilink / Copy Path
-- [ ] Rename-field warnings (live region)
+- [ ] Extract the shipped selection model; add keyboard parity
+- [ ] Add multi-item drag payloads
+- [ ] Preserve announcements, #643 behavior, and path validation
 - [ ] Tests; a11y 100/100 on tip
 
-## FL2-3 · Template creation + Finder drop-in (#657) — PR 3
+## FL2-2a · One logical batch contract (#656 prerequisite) — FL-03 (`Refs #656`)
 
-1. **New Note from Template…** on folder rows + palette. Reuses the existing template picker view and `list_templates`/`render_template` (baseline facts) — no sidebar-private template list (locked decision 14). Flow: pick template → name prompt (default `Untitled`) → `render_template` with `{{title}}` = chosen name → create in folder → open → caret at `cursor_byte_offset` when present. Empty `Templates/` ⇒ item disabled with tooltip/AX hint "No templates in Templates/".
-2. **Finder drop-in** (locked decision 13): accept `.fileURL` drops on folder rows and tree background (= root). Files **copy** into the vault via `FileManager` (never move; security-scoped access if sandboxed); collision → ` 2` suffix walk; directories copy recursively. After the copy batch, trigger the existing rescan/invalidation seam for the target level and announce `"Imported 3 files into Research."`. Drops of already-in-vault URLs are ignored (internal moves use the private UTType path).
-3. Drop feedback: folder rows highlight on hover (existing internal-drag affordance reused); spring-loaded expansion explicitly **out of scope** (FL has no hover-timer interactions; keyboard path is Move To…).
-   *Amendment (2026-07-12, #851):* superseded — drop-target highlight AND spring-loaded expansion (600ms, watchdog re-collapse) shipped via the tree-UX PR. FL inherits both; the out-of-scope premise no longer holds.
-4. AX: import announce; a failed/partial import lists failures in one alert.
+Move and Trash each become one logical core request per user action, with a shared preflight/result envelope but different recovery semantics:
 
-Tests: template render→create→caret; empty-templates disabled state; import collision suffix; directory recursion; in-vault URL ignored; partial-failure aggregation.
+1. Prune descendants of selected folders, validate session/vault ownership, and complete collision/subtree/permission preflight before the first mutation.
+2. **Move:** journal progress, apply deterministic operations, attempt rollback on runtime failure, and name every unrecovered path if rollback is incomplete. A successful batch Move records one structural undo group.
+3. **Trash:** apply the existing system-Trash primitive in deterministic order after complete preflight. It remains non-undoable in Slate and does not attempt rollback because the primitive returns no restore receipt. If a runtime failure occurs after earlier items reached Trash, the consolidated result names every trashed and untrashed/failed path; never describe the result as rolled back or atomic.
+4. AppState publishes one refresh, one announcement, and one consolidated skip/error report. It registers one undo group only for Move and none for Trash. While running, affected actions that are otherwise relevant to the current surface are disabled with an accessible reason; double submission and stale completion after a vault switch are rejected.
+5. Preserve the shipped confirmation threshold for destructive non-empty-folder batches and tab error/retarget semantics. Trash labels, confirmations, announcements, menus, and palette help may say system Trash but must never promise Slate undo, ⌘Z, or rollback.
 
-- [ ] Template flow wired to existing picker + core API
-- [ ] `.fileURL` drop targets (rows + background), copy-in + rescan + announce
+Tests: top-level pruning; complete preflight for both operations; Move mid-batch failure/rollback and rollback-failure honesty; one Move undo group; Trash success with no undo entry; injected Trash failure after one success with exact trashed/untrashed paths and no rollback claim; vault switch; double submission; one refresh/announcement/result; UI-copy scan proving no Trash undo promise.
+
+- [ ] Core batch requests/report + Move progress journal/rollback/one undo
+- [ ] Non-undoable Trash partial-result contract with no restore/rollback fiction
+- [ ] AppState single-result funnel + disabled reasons
+- [ ] Move/Trash regression and failure-path tests
+
+## FL2-2b · Shared action/menu completion (#656 remainder) — closing PR FL-04
+
+1. Append `.sidebar` to the existing cross-language `CommandSection`, add exhaustive conversion/order tests, and define one `SidebarAction` catalog. The catalog owns verb identity, capability, enablement, disabled reason, and the shared AppState action funnel; surfaces own projection. Menu bar and palette retain a stable full command inventory and disable unavailable commands with an accessible reason. Context menus and the VoiceOver rotor omit structurally inapplicable verbs and stay concise; an otherwise relevant action that is only temporarily blocked (for example, while a batch runs or Templates is empty) may remain present and disabled with its accessible reason. Toolbar and keyboard paths invoke the same applicable catalog entries. The Move-to-Trash action metadata is explicitly non-undoable and no projected hint/copy may advertise ⌘Z or app rollback.
+2. Preserve shipped Duplicate exactly: files only, exclusive-create `<stem> copy`, `<stem> copy 2`, … naming, outgoing links unchanged, one announcement, copied row selected. Preserve shipped Reveal in Finder and vault-relative Copy Path.
+3. Add resolver-correct **Copy Wikilink**: `[[stem]]` only when unambiguous under the live resolver; otherwise use the vault-relative path without `.md`. Copy Path and Copy Wikilink announce one `"Copied."`.
+4. Add live polite warnings for filesystem-invalid and link-breaking characters to rename, new-note, and new-folder flows. Warnings do not replace backend commit validation.
+5. Multi-selection uses the catalog's same capability evaluation on every surface. Structural inapplicability (for example, Duplicate on a mixed file/folder selection) is omitted from context menus and the rotor but remains in the menu bar/palette's full inventory as disabled with the same accessible reason. Temporary unavailability never creates a second verb or action path.
+
+Tests: command/action parity and unique IDs; exhaustive `CommandSection.sidebar` mapping; surface projection matrix (context/rotor structural omission, concise ordering, menu bar/palette stable disabled inventory, temporarily blocked contextual action + reason); shipped Duplicate suffix; Reveal/Copy Path regression; both wikilink branches; warning character table. Review the interaction against Apple's [Menus](https://developer.apple.com/design/human-interface-guidelines/menus), [Drag and drop](https://developer.apple.com/design/human-interface-guidelines/drag-and-drop), and [Focus and selection](https://developer.apple.com/design/human-interface-guidelines/focus-and-selection) guidance.
+
+- [ ] Existing registry `.sidebar` section + shared action catalog
+- [ ] Preserve shipped actions; add Copy Wikilink and warnings
+- [ ] Tests; a11y 100/100 on tip
+
+## FL2-3a · Template creation (#657 prerequisite) — FL-04 (`Refs #657`)
+
+**New Note from Template…** is available from folder actions and the complete command inventory. Reuse the existing picker/render/name/caret pipeline and inject only the selected destination folder. Empty Templates is a temporary availability state: the relevant folder context action may remain disabled with its accessible reason, and the menu bar/palette command remains in the stable inventory disabled for the same reason. Test destination, title/prompts, caret, and both projections of the empty state.
+
+## FL2-3b · Bounded multi-item Finder import (#657 remainder) — closing PR FL-05 after FL-04
+
+1. Consume every file-URL provider exactly once and preserve provider order. Classify in-vault URLs as the shipped undoable move before mutation; external URLs copy into the selected vault folder.
+2. Copy files and directories recursively without following symlink cycles or escaping the selected root. Preserve raw bytes and security-scoped access.
+3. Use exclusive destination creation with deterministic ` 2`, ` 3`, … collision suffixes, per-entry and total size guards, cancellation, and bounded concurrency.
+4. Aggregate partial failures, refresh affected levels once, select successful imports, and announce truthful file/folder counts. Preserve shipped drop highlighting and 600 ms spring-load/re-collapse behavior.
+
+Tests: multiple providers; binary/non-UTF8 file; directory and empty directory; collision race; symlink loop/escape; unreadable/oversized entry; cancel; partial success; vault switch; in-vault move; external-copy semantics; spring-load regression.
+
+- [ ] All-provider bounded import coordinator
+- [ ] Recursive safe copy, collision, cancellation, and aggregation
 - [ ] Tests; a11y 100/100 on tip

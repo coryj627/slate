@@ -1,52 +1,51 @@
 # FL0 executable spec — Derived note metadata: scanner pipeline, schema, FFI, censuses
 
-Issues: FL0-1 ([#650](https://github.com/coryj627/slate/issues/650)) · FL0-2 ([#651](https://github.com/coryj627/slate/issues/651)) · FL0-3 ([#652](https://github.com/coryj627/slate/issues/652)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). One PR per issue.
+Issues: FL0-1 ([#650](https://github.com/coryj627/slate/issues/650)) · FL0-2 ([#651](https://github.com/coryj627/slate/issues/651)) · FL0-3 ([#652](https://github.com/coryj627/slate/issues/652)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). Grouped delivery: FL-01 closes all three issues; see the program's authoritative ownership-table link.
 Program: [00_program.md](../00_program.md) (locked decisions 3–5; DoD §FL-B/§FL-C). Backend norms apply: fmt/clippy pre-push, censuses for correctness invariants, host-independent slate-core (no macOS deps).
 
-**Execution order: FL0-1 → FL0-2 → FL0-3.** (FL0-3's census harness may be developed alongside FL0-1; it gates the wave.)
+**Execution order inside FL-01: FL0-1 → FL0-2 → FL0-3.** (FL0-3's census harness may be developed alongside FL0-1; the complete group gates the PR.)
 
-Baseline facts (verified 2026-07-05, this worktree):
+Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
-- `files` table (migrations/001_init.sql): `id` INTEGER PK, `path` TEXT UNIQUE (vault-relative, `/`-separated), `is_markdown` 0|1, `mtime_ms`, `size_bytes`, `ctime_ms`, `content_hash` (blake3). Change detection: slow path runs when the `(mtime_ms, size_bytes, ctime_ms)` triple differs from the cached row.
-- Derived-data pipeline: the slow path and the save path each call, inside one transaction, `headings_db::replace_headings_for_file`, `links_db::replace_links_for_file` (session.rs:968–972 scan; :3233–3236 save), `properties_db::replace_properties_for_file`, `tasks_db::replace_tasks_for_file` (tasks_db.rs:41–73), `tags_db::replace_tags_for_file` (tags_db.rs:50–71). **These two call sites are the complete set of derived-data hook points; FL0 adds one more `replace_*` call at each, nothing else.**
-- `tasks` table already exists (migrations/008_tasks.sql): per-task rows `(file_id, ordinal, text, status_char, completed, due_ms, scheduled_ms, priority, recurrence, line, byte_offset)`, PK `(file_id, ordinal)`, extraction in tasks.rs (`extract_tasks`, :81; frontmatter/fence-aware; `[`+`]` byte prefilter :89). **Per-file task counts are therefore an aggregate query, not new derived state.**
-- `properties` table already exists (migrations/005_properties.sql): `(file_id, ordinal, key, value_kind ∈ {text,number,boolean,date,datetime,wikilink,list,tag_list}, value_text)`; frontmatter parsed by frontmatter.rs (`extract_frontmatter` :465, yaml-rust2). **Frontmatter `title`/`created` lookups are joins, not new extraction.**
-- Latest migration at spec time: `020_canvas.sql` (verified in `db.rs::MIGRATIONS`). FL0-1 takes `021` — verify it is still the next free number at implementation. Migrations are an append-only `const MIGRATIONS: &[Migration]` array in `crates/slate-core/src/db.rs:57` (each `include_str!`s its `.sql`); the runner (`db::migrate`, db.rs:178) applies pending steps in a per-migration transaction and refuses a DB whose `schema_version` exceeds the build's max. Adding a migration = new `.sql` file + new `Migration{}` entry appended to the array.
-- FFI records: `FileSummary { path, name, mtime_ms, size_bytes, is_markdown }` (slate-uniffi/src/lib.rs:1159–1166); `DirNodeSummary { id, path, name, child_dir_count, child_file_count }` (:1376–1383); `DirListing { dirs, files: FileSummaryPage }` (:1482–1486). Session methods: `list_files(filter, paging)` (:273–280), `list_dir_children(parent_path, paging)` (:336–343). Swift bindings regenerate via `scripts/build-mac-app.sh:61–75` / `make regenerate-bindings`.
+- `files` table includes `birthtime_ms` from migration `030_files_birthtime.sql`, populated by scanner/save-path `FileStat` upserts and preserved when a later stat cannot supply it. Change detection still uses the cached `(mtime_ms, size_bytes, ctime_ms)` triple. FL0 reuses `files.birthtime_ms`; it does not add another filesystem-created column.
+- The scan slow path and save path refresh headings, links, properties, tags, and tasks inside their existing transaction seams in `session.rs`. FL0 adds `file_meta_db::replace_meta_for_file` to those same seams; implementation must locate the symbols rather than rely on the obsolete July 5 line numbers.
+- `tasks` table already exists (migration `008_tasks.sql`) and is maintained through `tasks_db::replace_tasks_for_file`; per-file task counts are aggregate queries, not new derived state.
+- `properties` table already exists (migration `005_properties.sql`) and frontmatter is parsed by `frontmatter::extract_frontmatter`; `title`/`created` lookups are joins, not new extraction.
+- Latest migration is `030_files_birthtime.sql` in `db.rs::MIGRATIONS`; FL0-1 takes migration **031**. Migrations remain append-only and transactionally applied; adding one means a new `.sql` file plus a final `Migration` entry.
+- Current FFI seams are the `FileSummary`, `DirNodeSummary`, `FileSummaryPage`, and `DirListing` records plus `VaultSession::list_files` and `VaultSession::list_dir_children` in `crates/slate-uniffi/src/lib.rs`. Their July 5 line references are stale; extend the named records and conversions additively, and regenerate Swift bindings with `make regenerate-bindings`.
+- FL-01 also owns the one production app-side civil-date seam, `Sidebar/SidebarCivilDateResolver.swift`, plus direct unit tests. Later FL work consumes that symbol; it must not copy its parsing logic into a row or organization view model.
 - **CLI coupling:** `FileSummary` shapes the `slate.cli.v1` JSON for M-5 `read`/`list`/`search` (PR #646). The contract treats *additive* fields as non-breaking; FL0-2 must verify this against the contract doc (docs/plans/09_sync_cli/) and add fields only, never rename/retype.
 - Census convention: `census_*` test fns, `SLATE_CENSUS_FULL=1` scaling via `census_scale()`; bench harness `crates/slate-core/benches/scan_bench.rs` (criterion, 1k/10k/50k synthetic vaults via `benches/common`); baselines in `BENCHMARKS.md` (v1 gates: first-open < 15 s @10k, < 60 s @50k).
 
 ---
 
-## FL0-1 · `file_meta` derived table + scanner hook (#650) — PR 1
+## FL0-1 · `file_meta` derived table + scanner hook (#650) — closing PR FL-01
 
-### Schema (new migration `021`, next free number — verify at implementation)
+### Schema (new migration `031`)
 
 ```sql
 CREATE TABLE file_meta (
     file_id     INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
     word_count  INTEGER NOT NULL,
     char_count  INTEGER NOT NULL,
-    preview     TEXT NOT NULL,        -- normalized excerpt, ≤ 300 chars, '' for empty body
-    created_ms  INTEGER               -- filesystem birthtime; NULL when the platform can't provide one
+    preview     TEXT NOT NULL         -- normalized excerpt, ≤ 300 chars, '' for empty body
 );
 ```
 
-Existing vaults are backfilled by the **established derived-table pattern** (migrations 012/014/015/018, all tested in `db.rs`): the migration SQL ends with `UPDATE files SET mtime_ms = 0;`, which forces every file onto the scanner's slow path on the next open (the fast path skips a file only when its cached `(mtime_ms, size_bytes, ctime_ms)` triple matches — zeroing `mtime_ms` guarantees a miss). That one slow-path pass populates `file_meta` for every file exactly once. No explicit row backfill is needed in the migration, and `list_*` queries LEFT JOIN so an absent row ⇒ NULL fields ⇒ Swift fallbacks even before the reindex completes. Trade-off to note in the PR: a one-time full reindex on first open after upgrade (same cost every prior derived-table migration paid; acceptable per the regenerable-index doctrine, db.rs:12–15).
+Existing vaults are backfilled by the established derived-table slow-path replay: migration 031 ends with `UPDATE files SET mtime_ms = 0;`. The next scan populates `file_meta`; listing queries LEFT JOIN so an absent row has safe Swift fallbacks during replay. Record the one-time full reindex cost in FL-01. Migration 031 leaves `files.birthtime_ms` untouched.
 
 ### Rust: new module `crates/slate-core/src/file_meta_db.rs`
 
-`pub fn replace_meta_for_file(tx: &Transaction, file_id: i64, path: &Path, contents: &str) -> Result<(), VaultError>` — called at exactly the two hook sites (scan slow path, save path), after `properties_db` in the sequence. Non-markdown files get a row with `word_count = 0, char_count = 0, preview = ''` (uniform LEFT JOIN semantics; `created_ms` still populated).
+`pub fn replace_meta_for_file(tx: &Transaction, file_id: i64, contents: &str) -> Result<(), VaultError>` — called at the scan slow path and save path, after `properties_db` in the sequence. Non-markdown files get a row with `word_count = 0, char_count = 0, preview = ''` for uniform LEFT JOIN semantics.
 
 **Normative derivation rules:**
 
-1. **Body** = `contents` minus the frontmatter block per `frontmatter_range` (frontmatter.rs:137) — reuse it, never re-implement detection.
+1. **Body** = `contents` minus the frontmatter block per `frontmatter::frontmatter_range` — reuse it, never re-implement detection.
 2. **`word_count`** = count of maximal runs of non-whitespace `char`s in body (Unicode `char::is_whitespace`). Code fences and inline code **count** (matches Obsidian's status-bar convention; cheaper; normative so the census is exact). **`char_count`** = body `chars().count()`.
 3. **`preview`**: take body; drop fenced code blocks (``` and ~~~ fences, the fence lines and their content) and HTML blocks; per remaining line, strip leading heading markers (`#`+space), blockquote `>` runs, list markers (`-`/`*`/`+`/`1.` + space), and task prefixes (`- [x] ` any status char); replace wikilinks `[[t|alias]]`→alias, `[[t]]`→t (anchor-stripped), markdown links `[l](u)`→l; remove emphasis/strike markers (`*`, `_`, `~~`) and inline-code backticks; collapse all whitespace runs to single spaces; trim; truncate to **300 chars on a char boundary** (no ellipsis in storage — presentation adds it). Empty result ⇒ `''`.
-4. **`created_ms`** = filesystem birthtime (`std::fs::Metadata::created()`), millis; `Err` ⇒ NULL. Captured on **insert only** — never updated by later scans (birthtime is immutable; rename/move keeps the row via `file_id`). Frontmatter `created` overrides happen at *query* time (FL0-2), not here — derived state stays a pure function of (file bytes, fs metadata).
-5. Determinism: no wall clock, no locale; the same `contents` bytes always produce identical `(word_count, char_count, preview)`.
+4. Determinism: no wall clock, no locale; the same `contents` bytes always produce identical `(word_count, char_count, preview)`. Preview stripping stays isolated in `file_meta_db` and reuses the existing frontmatter and Markdown/source-span machinery; it must not create a second editor parser.
 
-### Tests (PR 1)
+### Tests (FL-01)
 
 - Unit fixtures: frontmatter-only file, fences (nested/tilde/unclosed), wikilinks with aliases+anchors, task lines, unicode whitespace, > 300-char bodies (boundary on a multibyte char), non-markdown file.
 - Property (proptest): `word_count` ≡ naive split-whitespace count on the stripped body; preview never contains `\n` and never exceeds 300 chars.
@@ -54,10 +53,10 @@ Existing vaults are backfilled by the **established derived-table pattern** (mig
 
 - [ ] Migration + schema-cookie slow-path replay
 - [ ] `file_meta_db::replace_meta_for_file` + both hook sites
-- [ ] Normative rules 1–5 with unit + property tests
+- [ ] Normative rules 1–4 with unit + property tests
 - [ ] fmt/clippy clean; host-independent
 
-## FL0-2 · FFI: enriched `FileSummary` (#651) — PR 2
+## FL0-2 · FFI: enriched `FileSummary` (#651) — closing PR FL-01
 
 Extend `FileSummary` (additive only — CLI coupling above):
 
@@ -65,7 +64,8 @@ Extend `FileSummary` (additive only — CLI coupling above):
 pub struct FileSummary {
     // existing five fields unchanged …
     pub display_name: Option<String>, // frontmatter `title` (value_kind='text', non-empty after trim); None ⇒ caller falls back to stem
-    pub created_ms: Option<i64>,      // frontmatter `created` (date|datetime, parsed to UTC-midnight/instant ms) if present, else file_meta.created_ms
+    pub created_date: Option<String>, // validated canonical proleptic-Gregorian frontmatter date-only `YYYY-MM-DD`
+    pub created_ms: Option<i64>,      // parsed frontmatter datetime instant, else files.birthtime_ms when > 0; never UTC midnight for a date-only value
     pub word_count: Option<u32>,      // None for non-markdown or missing meta row
     pub preview: Option<String>,      // None when empty/missing
     pub task_total: u32,              // aggregate over tasks table
@@ -77,20 +77,23 @@ Rules:
 
 - Populated by **one SQL statement** per listing (LEFT JOIN `file_meta`, LEFT JOIN a `tasks` GROUP BY subquery, LEFT JOIN `properties` on `key='title'` / `key='created'`) — no per-row query loops, no N+1. Applies to both `list_files` and `list_dir_children`; paging and the existing case-insensitive name ordering are unchanged (sorting by the new fields is app-side, locked decision 5).
 - `display_name`: `properties.value_kind='text'` and trimmed-non-empty only; any other kind ⇒ None (a list-valued `title:` is authoring noise, not a name).
-- `created` property parse: `date` ⇒ UTC midnight ms; `datetime` ⇒ instant ms; unparseable ⇒ fall back to `file_meta.created_ms`.
+- Resolve the scalar `created` value in this order: a strict canonical `YYYY-MM-DD` whose numeric components form a valid date in the **proleptic Gregorian calendar**; a valid datetime with an explicit or parser-defined offset; then positive `files.birthtime_ms`. A valid date-only value is copied unchanged into `created_date`; it never becomes an epoch value in Rust. A datetime becomes `created_ms`. Missing/invalid Gregorian date syntax falls through to datetime parsing, and missing/invalid datetime falls through to birthtime.
+- `created_ms` may carry the birthtime fallback alongside a non-NULL `created_date`; consumers must give `created_date` presentation and created-sort/group precedence. The fallback remains useful to older/additive-field consumers, but it cannot override the authored civil day.
+- FL-01's production `SidebarCivilDateResolver` splits `created_date` into exact numeric year/month/day components, configures `Calendar(identifier: .gregorian)` with an injected user time zone, and rejects the value unless constructing and decomposing the date round-trips to the same Gregorian components (Foundation can otherwise normalize invalid dates). The result is one absolute `Date` at that Gregorian civil day's local start. Never pass the numeric components to `Calendar.current` or reinterpret them through a Buddhist, Hebrew, Islamic, or other non-Gregorian calendar.
+- Presentation may localize language, component order, and calendar rendering **from that resolved absolute `Date`**. Created rows, sorting/grouping, and literal filter-day boundaries consume the same production resolver/result; no consumer reparses the ISO components. The represented Gregorian day must remain unchanged in positive and negative UTC offsets and across DST. A date-only value is never encoded as UTC midnight. Datetime and birthtime values remain ordinary instants in `created_ms`.
 - Verify additive-fields stance against the `slate.cli.v1` contract doc and note the verification in the PR; regenerate bindings (`make regenerate-bindings`).
 - Budget: `list_dir_children` on the 10k-vault root ≤ **10 ms** (it is on the sidebar's first-paint path; bench in FL0-3).
 
 - [ ] Record extension + single-statement joins in both listings
 - [ ] `slate.cli.v1` additive-check noted in PR; bindings regenerated
-- [ ] FFI-shape unit tests: title precedence, created precedence, task aggregates, non-markdown rows
-- [ ] Swift binding smoke test
+- [ ] FFI-shape unit tests: title precedence; valid/leap/invalid proleptic-Gregorian date-only; datetime offsets; date-only + birthtime coexistence and precedence; datetime/birthtime fallback; task aggregates; non-markdown rows
+- [ ] Production `SidebarCivilDateResolver` + direct tests: Gregorian round-trip validation; positive/negative UTC offsets and DST; injected Buddhist and Hebrew (or Islamic) system calendars prove the same authored Gregorian civil day and absolute local-start value
 
-## FL0-3 · Censuses + benchmarks — the wave gate (#652) — PR 3
+## FL0-3 · Censuses + benchmarks — the wave gate (#652) — closing PR FL-01
 
 **Censuses** (`crates/slate-core/src/session/tests/file_meta.rs`, `census_*` convention):
 
-1. `census_file_meta_matches_rescan` — adversarial random walk (N ops from {create/edit/save/rename/move/delete, frontmatter add/remove/retype of `title`/`created`, task-list edits}); after **every** op, every file's `file_meta` row and the joined `FileSummary` fields ≡ a from-scratch recompute of the same file's bytes. Random + exhaustive small-vault sweep per the adversarial-census methodology.
+1. `census_file_meta_matches_rescan` — adversarial random walk (N ops from {create/edit/save/rename/move/delete, frontmatter add/remove/retype of `title`/`created`, task-list edits}); after **every** op, every file's `file_meta` row and the joined `FileSummary` fields (including the distinct `created_date`/`created_ms` resolution) ≡ a from-scratch recompute of the same file's bytes. Random + exhaustive small-vault sweep per the adversarial-census methodology.
 2. `census_file_meta_scan_parity` — full vault scanned cold ≡ vault built incrementally op-by-op (catches hook-site omissions).
 
 **Benchmarks** (`scan_bench.rs` additions): `scan_initial/{1k,10k,50k}` re-run — overhead vs. recorded baseline ≤ **5%** (DoD §FL-C); `list_dir_children_meta/{10k}` ≤ 10 ms; `save_path/{10k}` unchanged O(changed-file). Record in `BENCHMARKS.md`.
